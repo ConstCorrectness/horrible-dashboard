@@ -135,6 +135,7 @@ apps/desktop/src-tauri/gen/
 
 # Claude Code local overrides
 .claude/settings.local.json
+.claude/.docs_check_state
 
 # IDEs and Editors
 .vscode/

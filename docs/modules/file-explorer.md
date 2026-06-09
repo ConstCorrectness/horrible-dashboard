@@ -1,0 +1,37 @@
+# Module: file explorer
+
+Tree view over the workspace for browsing, opening, and organizing files.
+
+## Contributions to the layout shell
+
+- **Panels:** `files.tree` (default: left dock, alongside `chat.sessions`).
+- **Commands:** `files.newFile`, `files.newFolder`, `files.rename`,
+  `files.delete`, `files.revealActiveBuffer`, `files.revealInOS` (desktop only —
+  registered only when `shell.revealInOS` capability is present, so the palette
+  never shows dead commands).
+- **Interactions with other modules:** opening a file calls
+  `editor.openBuffer('workspace-file:...')`; "open terminal here" calls
+  `terminal.new` with a cwd; agent chat can reference tree selections as context.
+
+## Backend surface
+
+`backend/modules/files/` — directory listing, watch events (over the shared
+WebSocket, `files.*` channels), and file operations, all **rooted at configured
+workspace roots**. The backend never serves paths outside those roots; path
+traversal checks live here, not in the UI.
+
+## Browser vs desktop
+
+The tree itself is identical — it always shows the backend's workspace roots.
+Desktop adds OS integration around the edges:
+
+| Concern                  | Browser                                  | Desktop                                   |
+| ------------------------ | ---------------------------------------- | ----------------------------------------- |
+| Browse/CRUD workspace roots | full, via backend FS API              | full, same path                           |
+| Add a new workspace root | type/paste a backend-host path           | native folder picker (`fs.nativeDialogs`) |
+| Reveal in Explorer/Finder | not available (command not registered)  | yes, via Tauri shell API                  |
+| Drag file out of the app | no                                       | yes (native drag out)                     |
+| Drag file in             | uploads into the selected folder via backend | moves/copies natively, tree refreshes via watch events |
+
+As with the terminal: in the browser against a remote backend, this tree shows
+the **backend host's** files.

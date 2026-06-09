@@ -62,3 +62,13 @@ JS/Rust (once scaffolded — keep this section updated):
   platform — branch on a platform capability check instead.
 - Formatting/linting is automatic: a PostToolUse hook runs ruff (Python), prettier +
   eslint (TS/JS), and rustfmt (Rust) on every file you edit. Don't hand-format.
+
+## Documentation (docs/)
+
+`docs/` documents the layout shell and every module — see
+[docs/README.md](docs/README.md) for the index and the full sync policy. The short
+version: adding or changing a module, panel, command, capability, backend route, or
+layout-shell behavior must update the matching `docs/` page **in the same change**
+(new module → new `docs/modules/<name>.md`). A Stop hook flags code changes under
+`apps/`, `packages/`, or `backend/` that don't touch `docs/`; pure refactors are
+exempt — just say so.

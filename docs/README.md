@@ -1,0 +1,44 @@
+# horrible-dashboard documentation
+
+Architecture and module documentation. These pages are the contract between the
+code and anyone (human or agent) working on it — they must describe the codebase
+as it is, not as it once was.
+
+## Contents
+
+- [architecture/layout-shell.md](architecture/layout-shell.md) — the shared
+  frontend layout (workspace, panels, command palette) and how the browser and
+  desktop (Tauri) versions differ.
+- `modules/` — one page per feature module, each describing how it plugs into the
+  layout shell and how it behaves in the browser vs the desktop app:
+  - [modules/agent-chat.md](modules/agent-chat.md)
+  - [modules/dashboard.md](modules/dashboard.md)
+  - [modules/editor.md](modules/editor.md)
+  - [modules/terminal.md](modules/terminal.md)
+  - [modules/file-explorer.md](modules/file-explorer.md)
+
+## Sync policy (enforced)
+
+Docs live next to the code on purpose, and changes that affect them must update
+them **in the same change**:
+
+- New module → new `docs/modules/<name>.md` page following the existing template
+  (purpose, panels/commands contributed, backend surface, browser vs desktop
+  behavior).
+- New panel, command, capability, or backend route on an existing module → update
+  that module's page.
+- Changes to the workspace/docking system, command palette, keybindings, platform
+  capability service, or either app entry → update `architecture/layout-shell.md`.
+- Renaming or removing any of the above → same rule, including deleting docs for
+  removed features.
+
+A Stop hook (`.claude/hooks/docs_check.py`) flags any change set that touches
+`apps/`, `packages/`, or `backend/` without touching `docs/`, as a safety net.
+Pure refactors with no behavioral or interface change don't need doc edits — say
+so when the hook asks.
+
+## Status
+
+The repo is pre-scaffold: these pages currently document the agreed design.
+As each piece is implemented, the relevant page must be updated to match reality
+(real file paths, real ports, real capability names) in the same change.

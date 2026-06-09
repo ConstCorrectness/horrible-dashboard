@@ -48,6 +48,11 @@ backend/modules/notes/
    only via a hardcoded route or import elsewhere.
 4. Backend side ships with pytest coverage for its routes; frontend commands get
    at least a registration smoke test.
+5. Every module has a docs page: create `docs/modules/<name>.md` in the same
+   change, following the existing pages' template (contributions to the layout
+   shell, backend surface, browser vs desktop table). Changing a module's
+   panels/commands/capabilities later means updating its page — a Stop hook
+   checks for this.
 
 ## If the registry doesn't exist yet
 
