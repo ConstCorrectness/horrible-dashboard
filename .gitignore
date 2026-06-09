@@ -123,6 +123,19 @@ dmypy.json
 # Cython debug symbols
 cython_debug/
 
+# Node / frontend
+node_modules/
+.pnpm-store/
+*.tsbuildinfo
+.vite/
+
+# Tauri / Rust
+src-tauri/target/
+apps/desktop/src-tauri/gen/
+
+# Claude Code local overrides
+.claude/settings.local.json
+
 # IDEs and Editors
 .vscode/
 .idea/
