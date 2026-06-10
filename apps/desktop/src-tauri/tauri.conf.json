@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "horrible-dashboard",
+  "version": "0.1.0",
+  "identifier": "com.horrible.dashboard",
+  "build": {
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "pnpm --filter @horrible/web dev",
+    "frontendDist": "../../web/dist",
+    "beforeBuildCommand": "pnpm --filter @horrible/web build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "horrible-dashboard",
+        "width": 1280,
+        "height": 800
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}

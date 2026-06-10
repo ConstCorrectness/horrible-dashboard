@@ -1,0 +1,19 @@
+{
+  "name": "horrible-dashboard",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --filter @horrible/web dev",
+    "build": "pnpm --filter @horrible/web build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "eslint .",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.30.0",
+    "eslint": "^9.30.0",
+    "prettier": "^3.5.0",
+    "typescript": "^5.8.0",
+    "typescript-eslint": "^8.35.0"
+  }
+}

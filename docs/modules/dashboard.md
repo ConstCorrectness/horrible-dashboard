@@ -3,6 +3,14 @@
 The "one-stop" landing surface: a grid of composable widgets showing status at a
 glance (recent agent sessions, tasks, feeds, metrics).
 
+**Status: implemented** — frontend in `packages/core/src/modules/dashboard/`,
+backend in `backend/modules/dashboard/`. Current widgets: `dashboard.welcome`
+and `dashboard.backendStatus` (polls `/api/health` every 10s). Layout (ordered
+widget ids) is persisted via `GET/PUT /api/dashboard/layout` to
+`$HORRIBLE_DATA_DIR/dashboard-layout.json` (default `.data/`). Widgets are
+added from a toolbar picker and removed per-widget; capability-gated widgets are
+filtered by the capability service before display.
+
 ## Contributions to the layout shell
 
 - **Panels:** `dashboard.home` (widget grid, default: the initial center panel on

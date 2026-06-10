@@ -6,9 +6,12 @@ same frontend).
 
 ## Current state
 
-Pre-scaffold. Only the Python backend skeleton exists ([main.py](main.py),
-`pyproject.toml`). The layout below is the agreed target — when you scaffold a piece of
-it, update this file so "planned" becomes real.
+Scaffolded and verified: pnpm monorepo (apps/web, apps/desktop, packages/core,
+packages/ui), FastAPI backend, and the **dashboard module** working end to end
+(registry → panel → widgets → persisted layout). The shell is a sidebar panel
+switcher for now; dockable workspace is the target. An experimental Electron shell
+lives on the `electron-shell` branch. Remaining modules (chat, editor, terminal,
+files) are unimplemented — see docs/ for their designs.
 
 ## Stack (decided, do not re-litigate)
 
@@ -38,17 +41,14 @@ buffers, terminal + file explorer.
 
 ## Commands
 
-Python (works today):
-
-- `uv run pytest` — tests
-- `uv run ruff format .` and `uv run ruff check --fix .` — format/lint
-- `uv add <pkg>` / `uv add --dev <pkg>` — dependencies (never pip)
-
-JS/Rust (once scaffolded — keep this section updated):
-
-- `pnpm dev` — browser layout dev server
-- `pnpm tauri dev` — desktop layout (run from `apps/desktop`)
-- `pnpm typecheck`, `pnpm test`, `pnpm lint`
+- `uv run pytest` — backend tests
+- `uv run uvicorn backend.app:app --reload --port 8000` — backend dev server
+- `uv run ruff format .` and `uv run ruff check --fix .` — Python format/lint
+- `uv add <pkg>` / `uv add --dev <pkg>` — Python dependencies (never pip)
+- `pnpm dev` — browser layout dev server (port 5173, proxies /api and /ws to 8000)
+- `pnpm dev` in `apps/desktop` — desktop layout (Tauri; starts the web dev server)
+- `pnpm typecheck`, `pnpm lint` — whole workspace, from the root
+- `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` — Rust check
 
 ## Conventions
 

@@ -39,6 +39,9 @@ so when the hook asks.
 
 ## Status
 
-The repo is pre-scaffold: these pages currently document the agreed design.
-As each piece is implemented, the relevant page must be updated to match reality
-(real file paths, real ports, real capability names) in the same change.
+Scaffolded: the monorepo (apps/web, apps/desktop, packages/core, packages/ui,
+backend/) exists and the **dashboard module** is implemented end to end. The
+other module pages (agent-chat, editor, terminal, file-explorer) still document
+design only — update each to match reality when it gets implemented. An
+experimental Electron shell lives on the `electron-shell` branch
+(`docs/architecture/electron-shell.md` there).

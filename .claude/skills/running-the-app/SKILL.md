@@ -14,8 +14,7 @@ the desktop layout is the same UI inside a Tauri window.
 uv run uvicorn backend.app:app --reload --port 8000
 ```
 
-- Run from the repo root. Health check: `GET http://localhost:8000/health`.
-- Until the FastAPI app is scaffolded, only `uv run python main.py` exists.
+- Run from the repo root. Health check: `GET http://localhost:8000/api/health`.
 
 ## Browser layout (web)
 
@@ -30,7 +29,7 @@ show connection errors (that is not a frontend bug).
 ## Desktop layout (Tauri)
 
 ```
-pnpm tauri dev      # from apps/desktop
+pnpm dev            # from apps/desktop (runs `tauri dev`, which also starts the web dev server)
 ```
 
 - First build compiles Rust and takes several minutes — don't kill it for being slow.
@@ -44,7 +43,14 @@ pnpm tauri dev      # from apps/desktop
    chrome, tray, native menus, platform capability branches) — otherwise the
    browser layout is sufficient and much faster.
 
+## Other checks
+
+- `pnpm typecheck` and `pnpm lint` from the root cover all TS packages.
+- `uv run pytest` covers the backend (`backend/tests/`).
+- Electron experiment: branch `electron-shell`, `apps/desktop-electron`,
+  `pnpm dev` there after starting the web dev server.
+
 ## Keep this file honest
 
-The repo is pre-scaffold. As pieces become real (ports, entry points, scripts),
-update this skill in the same change.
+As pieces become real (ports, entry points, scripts), update this skill in the
+same change.

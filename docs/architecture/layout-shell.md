@@ -21,6 +21,16 @@ to modules.
                 agents · PTYs · files · notes · widgets data
 ```
 
+## Implementation status
+
+Implemented: module registry, command palette (Ctrl+K), keybinding service
+(`mod+` prefix), capability service, and both entries (`apps/web` on port 5173
+proxying `/api` and `/ws` to the backend on port 8000; `apps/desktop` Tauri shell
+loading the same dev server). The workspace is currently a **sidebar panel
+switcher**, not yet the dockable split/tab system described below — that remains
+the target. The backend exposes the shared `/ws` socket but the frontend does
+not consume it yet.
+
 ## The workspace
 
 The shell owns a dockable workspace: panels arranged in split panes and tab

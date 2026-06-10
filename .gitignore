@@ -133,9 +133,13 @@ node_modules/
 src-tauri/target/
 apps/desktop/src-tauri/gen/
 
+# App local data
+.data/
+
 # Claude Code local overrides
 .claude/settings.local.json
 .claude/.docs_check_state
+.claude/worktrees/
 
 # IDEs and Editors
 .vscode/
