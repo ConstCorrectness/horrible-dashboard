@@ -22,6 +22,7 @@ from backend.modules.clubhouse.models import (
     StartAuthRequest,
     StartAuthResult,
 )
+from backend.modules.telemetry.instrument import instrumented_client
 
 router = APIRouter(prefix="/clubhouse", tags=["clubhouse"])
 
@@ -63,7 +64,7 @@ def _headers() -> dict[str, str]:
 async def _ch_post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
     """POST to the Clubhouse API; tests monkeypatch this seam."""
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with instrumented_client(timeout=15) as client:
             res = await client.post(
                 f"{_api_base()}{path}", json=payload, headers=_headers()
             )

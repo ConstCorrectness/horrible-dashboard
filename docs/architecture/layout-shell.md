@@ -26,8 +26,10 @@ to modules.
 Implemented: module registry, command palette (Ctrl+K), keybinding service
 (`mod+` prefix), capability service, and both entries (`apps/web` on port 5173
 proxying `/api` and `/ws` to the backend on port 8000; `apps/desktop` Tauri shell
-loading the same dev server). The backend exposes the shared `/ws` socket but the
-frontend does not consume it yet.
+loading the same dev server). The shared `/ws` socket is consumed via a single
+multiplexed client (`packages/core/src/ws.ts`, channel subscriptions) — its first
+user is the observability `telemetry` channel (see
+[../modules/observability.md](../modules/observability.md)).
 
 The shell has two top-level **views** (`registry.openView`):
 

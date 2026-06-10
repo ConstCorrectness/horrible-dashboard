@@ -3,14 +3,43 @@
  * base: the web dev server proxies /api to localhost:8000, and the Tauri shell
  * loads the same frontend from that dev server (dev) or a configured origin.
  */
+import { recordClientIo } from './telemetry';
+
 const BASE = '/api';
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, init);
-  if (!res.ok) {
-    throw new Error(`API ${init?.method ?? 'GET'} ${path} failed: ${res.status}`);
+  const method = init?.method ?? 'GET';
+  const start = performance.now();
+  const requestBytes = typeof init?.body === 'string' ? init.body.length : null;
+  try {
+    const res = await fetch(`${BASE}${path}`, init);
+    const text = await res.text();
+    recordClientIo({
+      method,
+      target: path,
+      status: res.status,
+      duration_ms: performance.now() - start,
+      request_bytes: requestBytes,
+      response_bytes: text.length,
+    });
+    if (!res.ok) {
+      throw new Error(`API ${method} ${path} failed: ${res.status}`);
+    }
+    return JSON.parse(text) as T;
+  } catch (err) {
+    if (err instanceof TypeError) {
+      // fetch rejected (network/CORS) — no response was recorded above.
+      recordClientIo({
+        method,
+        target: path,
+        status: null,
+        duration_ms: performance.now() - start,
+        request_bytes: requestBytes,
+        error: String(err),
+      });
+    }
+    throw err;
   }
-  return (await res.json()) as T;
 }
 
 export function apiGet<T>(path: string): Promise<T> {

@@ -7,6 +7,8 @@ export {
 } from './capabilities';
 export { apiDelete, apiGet, apiPost, apiPut } from './api';
 export { getWorkspaceLayout, saveWorkspaceLayout, type SerializedLayout } from './workspace';
+export { subscribeChannel, type WsMessage } from './ws';
+export { recordClientIo, telemetryStore, type IoEvent, type IoSource } from './telemetry';
 export {
   registry,
   type CommandDecl,
@@ -26,6 +28,7 @@ export {
   startClubhouseAuth,
   type ClubhouseStatus,
 } from './modules/clubhouse';
+export { observabilityModule } from './modules/observability';
 export {
   agentModule,
   DEFAULT_AGENT_MODEL,

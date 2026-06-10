@@ -13,6 +13,7 @@ from backend.modules.agent.models import (
     ChatRequest,
     PullRequest,
 )
+from backend.modules.telemetry.instrument import instrumented_client
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -41,7 +42,7 @@ async def status() -> AgentStatus:
     reachable = False
     models: list[str] = []
     try:
-        async with httpx.AsyncClient(timeout=2) as client:
+        async with instrumented_client(timeout=2) as client:
             res = await client.get(f"{endpoint}/api/tags")
             res.raise_for_status()
             reachable = True
@@ -67,7 +68,7 @@ def put_config(config: AgentConfig) -> AgentConfig:
 
 async def _proxy_ndjson(url: str, payload: dict[str, object]) -> AsyncIterator[str]:
     """Stream Ollama's NDJSON responses through to the client line by line."""
-    async with httpx.AsyncClient(timeout=None) as client:
+    async with instrumented_client(timeout=None) as client:
         async with client.stream("POST", url, json=payload) as res:
             async for line in res.aiter_lines():
                 if line:
@@ -78,7 +79,9 @@ async def _proxy_ndjson(url: str, payload: dict[str, object]) -> AsyncIterator[s
 async def chat(req: ChatRequest) -> StreamingResponse:
     config = _load_config()
     if config is None:
-        raise HTTPException(status_code=409, detail="Agent not configured — finish onboarding")
+        raise HTTPException(
+            status_code=409, detail="Agent not configured — finish onboarding"
+        )
     return StreamingResponse(
         _proxy_ndjson(
             f"{config.endpoint}/api/generate",

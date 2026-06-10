@@ -18,6 +18,7 @@ as it is, not as it once was.
   - [modules/dashboard.md](modules/dashboard.md)
   - [modules/scratch.md](modules/scratch.md)
   - [modules/clubhouse.md](modules/clubhouse.md)
+  - [modules/observability.md](modules/observability.md)
   - [modules/editor.md](modules/editor.md)
   - [modules/terminal.md](modules/terminal.md)
   - [modules/file-explorer.md](modules/file-explorer.md)

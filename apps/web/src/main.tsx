@@ -6,6 +6,7 @@ import {
   clubhouseModule,
   dashboardModule,
   initCapabilities,
+  observabilityModule,
   registry,
   scratchModule,
 } from '@horrible/core';
@@ -17,6 +18,7 @@ registry.register(dashboardModule);
 registry.register(agentModule);
 registry.register(scratchModule);
 registry.register(clubhouseModule);
+registry.register(observabilityModule);
 
 const root = document.getElementById('root');
 if (!root) throw new Error('Missing #root element');

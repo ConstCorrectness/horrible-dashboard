@@ -1,11 +1,14 @@
 """horrible-dashboard backend: the app's brain, serving both layouts."""
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.modules.agent import router as agent_router
 from backend.modules.clubhouse import router as clubhouse_router
 from backend.modules.dashboard import router as dashboard_router
+from backend.modules.telemetry import router as telemetry_router
+from backend.modules.telemetry import stream_telemetry
+from backend.modules.telemetry.instrument import telemetry_middleware
 from backend.modules.workspace import router as workspace_router
 
 APP_VERSION = "0.1.0"
@@ -24,6 +27,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Observe every inbound /api request (metadata only) — see modules/telemetry.
+app.middleware("http")(telemetry_middleware)
+
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
@@ -34,17 +40,14 @@ app.include_router(dashboard_router, prefix="/api")
 app.include_router(agent_router, prefix="/api")
 app.include_router(workspace_router, prefix="/api")
 app.include_router(clubhouse_router, prefix="/api")
+app.include_router(telemetry_router, prefix="/api")
 
 
 @app.websocket("/ws")
 async def ws(websocket: WebSocket) -> None:
-    """Shared multiplexed socket. Scaffold: greets, then holds the connection."""
+    """Shared multiplexed socket: greets, then streams the telemetry channel."""
     await websocket.accept()
     await websocket.send_json(
         {"channel": "system", "event": "hello", "version": APP_VERSION}
     )
-    try:
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        pass
+    await stream_telemetry(websocket)

@@ -160,6 +160,123 @@ body {
   font-size: 0.85rem;
 }
 
+/* Observability: I/O badges shared by widget + panel */
+.io-badge {
+  display: inline-block;
+  padding: 0 0.35rem;
+  border-radius: 4px;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.io-client {
+  background: rgb(110 168 254 / 20%);
+  color: #6ea8fe;
+}
+
+.io-inbound {
+  background: rgb(46 213 115 / 18%);
+  color: #2ed573;
+}
+
+.io-outbound {
+  background: rgb(255 165 2 / 20%);
+  color: #ffa502;
+}
+
+.io-status-ok {
+  color: #2ed573;
+}
+
+.io-status-bad {
+  color: #f08c8c;
+}
+
+.io-dim {
+  color: var(--text-dim);
+}
+
+.io-target {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+/* Observability panel */
+.obs-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.obs-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.5rem;
+}
+
+.obs-table-wrap {
+  flex: 1;
+  overflow: auto;
+}
+
+.obs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.obs-table th {
+  text-align: left;
+  position: sticky;
+  top: 0;
+  background: var(--bg-raised);
+  color: var(--text-dim);
+  font-weight: 500;
+  padding: 0.3rem 0.5rem;
+}
+
+.obs-table td {
+  padding: 0.25rem 0.5rem;
+  border-top: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.obs-table .io-target {
+  max-width: 26rem;
+}
+
+/* Observability widget */
+.obs-summary {
+  margin-bottom: 0.5rem;
+}
+
+.obs-recent {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+}
+
+.obs-recent li {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.obs-recent .io-target {
+  flex: 1;
+  min-width: 0;
+}
+
 .scratch {
   width: 100%;
   height: 100%;

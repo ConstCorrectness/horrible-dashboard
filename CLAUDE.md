@@ -14,7 +14,9 @@ streaming ask bar. The `workspace` view is a **dockable window manager** (dockvi
 wrapped) — panels open as tabbed/split/floating windows with persisted layout; a
 minimal `scratch` panel is the reference non-singleton panel. A `clubhouse`
 module onboards a Clubhouse account via a dashboard widget (unofficial API,
-token held server-side). An experimental Electron shell lives on the
+token held server-side). An `observability` module shows live data flow
+(client/inbound/outbound I/O) — instrumented at the chokepoints, streamed over
+the shared `/ws` socket. An experimental Electron shell lives on the
 `electron-shell` branch. Remaining modules (editor,
 terminal, files, full chat cockpit) are unimplemented — see docs/ for their designs.
 
