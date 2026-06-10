@@ -1,22 +1,48 @@
 import { useEffect, useRef } from 'react';
-// Type-only import — erased at build time, so three stays lazy-loaded below.
-import type { AnimationMixer } from 'three';
+// Type-only imports — erased at build time, so three stays lazy-loaded below.
+import type { AnimationAction, AnimationMixer } from 'three';
+
+/** Maps a mood name to the animation clip (a .glb in apps/web/public) that expresses it. */
+export type AvatarMoodMap = Record<string, string>;
 
 /**
- * The dashboard friend: updated to load a custom GLB avatar,
- * retarget a looping animation from a separate GLB file,
- * and correct the Mixamo Y-up to glTF Z-up rotation.
+ * The avatar's emotional moods → animation clips. To add a mood, drop a .glb in
+ * apps/web/public and add a line here; pass `mood` to switch (it cross-fades).
+ */
+export const DEFAULT_AVATAR_MOODS: AvatarMoodMap = {
+  happy: '/dancing.glb',
+  flair: '/flair.glb',
+};
+
+export const DEFAULT_AVATAR_MOOD = 'happy';
+
+/**
+ * The dashboard friend: a rigged glTF avatar that plays one of several mood
+ * animations (retargeted onto its skeleton) and cross-fades when the mood
+ * changes. Corrects the Mixamo Y-up to glTF Z-up orientation. three and the
+ * loader are dynamically imported so non-home views never pay for them.
  */
 export function Avatar3D({
   size = 180,
   modelUrl = '/my-avatar.glb',
-  animUrl = '/dancing.glb',
+  moods = DEFAULT_AVATAR_MOODS,
+  mood = DEFAULT_AVATAR_MOOD,
 }: {
   size?: number;
   modelUrl?: string;
-  animUrl?: string;
+  /** Memoize this if you pass a literal, or the scene rebuilds each render. */
+  moods?: AvatarMoodMap;
+  mood?: string;
 }) {
   const mount = useRef<HTMLDivElement>(null);
+  // Bridge mood changes into the running scene without tearing it down.
+  const desiredMood = useRef(mood);
+  const applyMood = useRef<(mood: string) => void>(() => {});
+
+  useEffect(() => {
+    desiredMood.current = mood;
+    applyMood.current(mood);
+  }, [mood]);
 
   useEffect(() => {
     const el = mount.current;
@@ -44,43 +70,50 @@ export function Avatar3D({
         const friend = new THREE.Group();
         scene.add(friend);
 
+        // Animation state, populated once assets load.
         let mixer: AnimationMixer | undefined;
+        const actions: Record<string, AnimationAction> = {};
+        let active: AnimationAction | undefined;
+        const setMood = (next: string) => {
+          const action = actions[next] ?? actions[DEFAULT_AVATAR_MOOD];
+          if (!action || action === active) return;
+          action.reset().setLoop(THREE.LoopRepeat, Infinity).setEffectiveWeight(1).play();
+          if (active) active.crossFadeTo(action, 0.4, false);
+          active = action;
+        };
 
         const loader = new GLTFLoader();
+        const moodEntries = Object.entries(moods);
 
-        // Load BOTH the avatar mesh and the dancing animation simultaneously
-        Promise.all([loader.loadAsync(modelUrl), loader.loadAsync(animUrl)])
-          .then(([avatarGltf, animGltf]) => {
+        // Load the avatar mesh and every mood's animation clip together.
+        Promise.all([
+          loader.loadAsync(modelUrl),
+          ...moodEntries.map(([, url]) => loader.loadAsync(url)),
+        ])
+          .then(([avatarGltf, ...animGltfs]) => {
             if (disposed) return;
 
             const model = avatarGltf.scene;
-
-            // Scale the avatar
             model.scale.set(2.5, 2.5, 2.5);
-
-            // --- THE FIX: Rotate 90 degrees to counter the Mixamo orientation ---
+            // Counter the Mixamo orientation so the character stands upright.
             model.rotation.x = Math.PI / 2;
 
-            // Center the model mathematically
+            // Center horizontally, drop to frame the upper body.
             const box = new THREE.Box3().setFromObject(model);
             const center = box.getCenter(new THREE.Vector3());
-
-            // Framing for the new upright position
             model.position.x = -center.x;
             model.position.z = -center.z;
             model.position.y = -1.5;
-
             friend.add(model);
 
-            // Apply the dancing animation to the avatar's skeleton
-            if (animGltf.animations && animGltf.animations.length > 0) {
-              mixer = new THREE.AnimationMixer(model);
-              const action = mixer.clipAction(animGltf.animations[0]);
+            mixer = new THREE.AnimationMixer(model);
+            moodEntries.forEach(([moodName], i) => {
+              const clip = animGltfs[i].animations[0];
+              if (clip) actions[moodName] = mixer!.clipAction(clip);
+            });
 
-              // Ensure the animation loops infinitely
-              action.setLoop(THREE.LoopRepeat, Infinity);
-              action.play();
-            }
+            applyMood.current = setMood;
+            setMood(desiredMood.current); // honor the latest requested mood
           })
           .catch((error) => {
             console.error('Error loading 3D assets:', error);
@@ -116,17 +149,12 @@ export function Avatar3D({
 
         let frame = 0;
         const clock = new THREE.Clock();
-
         const tick = () => {
           const delta = clock.getDelta();
           const t = clock.getElapsedTime();
+          mixer?.update(delta);
 
-          // Step the animation mixer forward
-          if (mixer) {
-            mixer.update(delta);
-          }
-
-          // Keep the subtle floating and cursor-tracking effect
+          // Subtle floating + cursor tracking
           friend.position.y = Math.sin(t * 1.5) * 0.05;
           friend.rotation.y += (pointer.x * 0.5 - friend.rotation.y) * 0.05;
           friend.rotation.x += (-pointer.y * 0.3 - friend.rotation.x) * 0.05;
@@ -145,6 +173,7 @@ export function Avatar3D({
 
         cleanup = () => {
           cancelAnimationFrame(frame);
+          applyMood.current = () => {};
           window.removeEventListener('pointermove', onPointer);
           renderer.dispose();
           renderer.domElement.remove();
@@ -156,7 +185,7 @@ export function Avatar3D({
       disposed = true;
       cleanup?.();
     };
-  }, [size, modelUrl, animUrl]);
+  }, [size, modelUrl, moods]);
 
   return <div ref={mount} className="avatar3d" style={{ width: size, height: size }} aria-hidden />;
 }
