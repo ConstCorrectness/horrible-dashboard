@@ -38,9 +38,13 @@ export interface ModuleManifest {
   keybindings?: KeybindingDecl[];
 }
 
+/** Top-level shell surfaces. `home` is the first-open view; `workspace` hosts panels. */
+export type ShellView = 'home' | 'workspace';
+
 class ModuleRegistry {
   private modules = new Map<string, ModuleManifest>();
   private panelOpener: ((panelId: string) => void) | null = null;
+  private viewOpener: ((view: ShellView) => void) | null = null;
 
   /** Idempotent: re-registering the same module id is a no-op (StrictMode-safe). */
   register(manifest: ModuleManifest): void {
@@ -77,6 +81,14 @@ class ModuleRegistry {
 
   openPanel(panelId: string): void {
     this.panelOpener?.(panelId);
+  }
+
+  setViewOpener(opener: (view: ShellView) => void): void {
+    this.viewOpener = opener;
+  }
+
+  openView(view: ShellView): void {
+    this.viewOpener?.(view);
   }
 }
 
