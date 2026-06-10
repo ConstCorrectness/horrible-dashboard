@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>horrible-dashboard (electron)</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        margin: 0;
+        background: #1e1e2e;
+        color: #cdd6f4;
+      }
+      main {
+        max-width: 32rem;
+        text-align: center;
+        padding: 2rem;
+      }
+      code {
+        background: #313244;
+        padding: 0.15rem 0.4rem;
+        border-radius: 4px;
+      }
+      button {
+        margin-top: 1.5rem;
+        padding: 0.5rem 1.5rem;
+        font-size: 1rem;
+        border: none;
+        border-radius: 6px;
+        background: #89b4fa;
+        color: #1e1e2e;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Web dev server not running</h1>
+      <p>
+        The Electron shell could not reach the frontend dev server. Start the web dev
+        server (<code>pnpm dev</code>) and reload.
+      </p>
+      <button id="retry">Reload</button>
+    </main>
+    <script>
+      const devUrl = new URLSearchParams(window.location.search).get("devUrl");
+      document.getElementById("retry").addEventListener("click", () => {
+        if (devUrl) {
+          window.location.href = devUrl;
+        } else {
+          window.location.reload();
+        }
+      });
+    </script>
+  </body>
+</html>

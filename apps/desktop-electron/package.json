@@ -1,0 +1,17 @@
+{
+  "name": "@horrible-dashboard/desktop-electron",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Experimental Electron desktop shell for horrible-dashboard (parallel to the Tauri shell)",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc && electron .",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.2",
+    "electron": "^42.4.0",
+    "typescript": "^6.0.3"
+  }
+}
