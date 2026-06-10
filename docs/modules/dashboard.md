@@ -11,6 +11,11 @@ widget ids) is persisted via `GET/PUT /api/dashboard/layout` to
 added from a toolbar picker and removed per-widget; capability-gated widgets are
 filtered by the capability service before display.
 
+The dashboard panel (`dashboard.home`) is a **singleton** window in the workspace
+(opening it again focuses the existing one). Its widget grid is the inner,
+second level of the two-level model — see
+[../architecture/windowing.md](../architecture/windowing.md).
+
 ## Contributions to the layout shell
 
 - **Panels:** `dashboard.home` (widget grid, default: the initial center panel on
@@ -35,10 +40,10 @@ per user/profile.
 The grid behaves identically in both layouts. Differences come from individual
 widgets' capability requirements:
 
-| Concern                | Browser                                   | Desktop                          |
-| ---------------------- | ----------------------------------------- | -------------------------------- |
+| Concern                                                                            | Browser                                    | Desktop   |
+| ---------------------------------------------------------------------------------- | ------------------------------------------ | --------- |
 | Capability-gated widgets (e.g. a local system-metrics widget needing desktop APIs) | hidden from the picker, slot shows nothing | available |
-| Backend-sourced widgets (sessions, tasks, feeds) | identical                                  | identical                        |
+| Backend-sourced widgets (sessions, tasks, feeds)                                   | identical                                  | identical |
 
 A widget that is available in one layout and not the other must come from a
 `requiredCapabilities` declaration — never from platform sniffing inside the

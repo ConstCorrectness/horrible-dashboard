@@ -6,6 +6,7 @@ export {
   type Capability,
 } from './capabilities';
 export { apiGet, apiPut } from './api';
+export { getWorkspaceLayout, saveWorkspaceLayout, type SerializedLayout } from './workspace';
 export {
   registry,
   type CommandDecl,
@@ -16,6 +17,7 @@ export {
   type WidgetDecl,
 } from './registry';
 export { dashboardModule } from './modules/dashboard';
+export { scratchModule } from './modules/scratch';
 export {
   agentModule,
   DEFAULT_AGENT_MODEL,

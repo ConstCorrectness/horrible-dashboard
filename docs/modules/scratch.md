@@ -1,0 +1,27 @@
+# Module: scratch
+
+A minimal notes panel — and the reference example for the
+[windowing system](../architecture/windowing.md). It exists so the workspace has
+a non-singleton panel to open multiple of, split, tab, and float, until richer
+modules (editor, terminal) land.
+
+## Contributions to the layout shell
+
+- **Panels:** `scratch.note` (a textarea, `defaultPlacement: center`,
+  **non-singleton** — every open creates a new window).
+- **Commands:** `scratch.open` (Scratch: New note).
+
+## Backend surface
+
+None. Content is persisted client-side to `localStorage` under
+`horrible.scratch`.
+
+## Browser vs desktop
+
+Identical in both layouts.
+
+## Known limitation
+
+All `scratch.note` instances currently share one `localStorage` key, so multiple
+windows show the same text. Per-instance content arrives with real buffer
+identity (the editor module) — see [editor.md](editor.md).

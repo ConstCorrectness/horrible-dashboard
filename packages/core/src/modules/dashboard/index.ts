@@ -12,6 +12,7 @@ export const dashboardModule: ModuleManifest = {
       title: 'Dashboard',
       component: DashboardPanel,
       defaultPlacement: 'center',
+      singleton: true,
     },
   ],
   commands: [

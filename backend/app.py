@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.modules.agent import router as agent_router
 from backend.modules.dashboard import router as dashboard_router
+from backend.modules.workspace import router as workspace_router
 
 APP_VERSION = "0.1.0"
 
@@ -30,13 +31,16 @@ def health() -> dict[str, str]:
 
 app.include_router(dashboard_router, prefix="/api")
 app.include_router(agent_router, prefix="/api")
+app.include_router(workspace_router, prefix="/api")
 
 
 @app.websocket("/ws")
 async def ws(websocket: WebSocket) -> None:
     """Shared multiplexed socket. Scaffold: greets, then holds the connection."""
     await websocket.accept()
-    await websocket.send_json({"channel": "system", "event": "hello", "version": APP_VERSION})
+    await websocket.send_json(
+        {"channel": "system", "event": "hello", "version": APP_VERSION}
+    )
     try:
         while True:
             await websocket.receive_text()

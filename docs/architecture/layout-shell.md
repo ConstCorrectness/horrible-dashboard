@@ -46,13 +46,16 @@ The shell has two top-level **views** (`registry.openView`):
   mascot — a cute glowing orb with eyes that face the viewer, whose glow doubles
   as the agent status light. three is dynamically imported so the workspace view
   never loads it.
-- **`workspace`** — hosts module panels. Currently a panel switcher (panels
-  listed as icons in the rail), not yet the dockable split/tab system described
-  below — that remains the target.
+- **`workspace`** — a **dockable window manager**: module panels open as windows
+  that can be tabbed, split, resized, and floated; the layout persists. Built on
+  dockview, wrapped so the registry stays the public API. See
+  [windowing.md](windowing.md) for the model, panel types vs instances, and
+  persistence.
 
 A persistent **icon rail** (logo/home on top, panel icons, command palette at the
 bottom) is the only chrome shared by both views. Opening a panel from anywhere
-switches to the workspace view.
+switches to the workspace view. The Workspace stays mounted across view switches
+so its layout survives a trip home.
 
 Branding: source art lives in `assets/` (`logo.svg`, `banner.svg`) —
 `pnpm build:icons` regenerates the web favicon (`apps/web/public/favicon.ico`,

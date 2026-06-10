@@ -14,6 +14,12 @@ export interface PanelDecl {
   title: string;
   component: ComponentType;
   defaultPlacement: 'left' | 'center' | 'right' | 'bottom';
+  /**
+   * When true, only one window of this panel can exist — opening it again
+   * focuses the existing one (e.g. the dashboard). When false/omitted, each
+   * open creates a new instance (e.g. terminals, editor buffers).
+   */
+  singleton?: boolean;
 }
 
 export interface WidgetDecl {

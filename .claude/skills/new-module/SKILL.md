@@ -17,12 +17,19 @@ manifest object:
 - **Commands** — named actions invokable from the command palette (`id`, `title`,
   `run()`). Every user-facing capability must be a command first; UI buttons call
   commands, never the other way around.
-- **Panels** — React components the docking layout can host (`id`, `title`,
-  `component`, default placement).
+- **Panels** — React components the dockable workspace hosts as windows (`id`,
+  `title`, `component`, `defaultPlacement`). Set `singleton: true` if only one
+  window of the panel should exist (opening again focuses it, e.g. the
+  dashboard); omit it for panels you open many of (terminals, editor buffers).
+  Panels render registry-side — they don't import the windowing engine. See
+  [docs/architecture/windowing.md](../../docs/architecture/windowing.md);
+  `scratch` is the reference panel.
 - **Keybindings** — default bindings that map keys to command ids. Never hardcode
   key handlers inside components.
 - **Backend routes** (optional) — a FastAPI router in `backend/modules/<name>/`
   mounted under `/api/<name>`, with pydantic models for every request/response.
+  Add the `include_router` usage in the same edit as the import, or the ruff
+  autofix hook will strip the "unused" import between edits.
 
 ## Layout for a module named `notes`
 

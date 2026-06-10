@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { registry, type ShellView } from '@horrible/core';
 
 import { CommandPalette } from './CommandPalette';
 import { HomeView } from './HomeView';
+import { Workspace } from './Workspace';
 import './styles.css';
 
 function matchesBinding(e: KeyboardEvent, key: string): boolean {
@@ -15,7 +16,13 @@ function matchesBinding(e: KeyboardEvent, key: string): boolean {
 export function AppShell({ appTitle }: { appTitle: string }) {
   const [view, setView] = useState<ShellView>('home');
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [activePanelId, setActivePanelId] = useState<string | null>(null);
+  // Bumped each time a panel should open, so the Workspace reacts even to repeats.
+  const [pendingOpen, setPendingOpen] = useState<{ panelId: string; nonce: number }>();
+  const nonce = useRef(0);
+
+  useEffect(() => {
+    document.title = appTitle;
+  }, [appTitle]);
 
   useEffect(() => {
     registry.register({
@@ -28,13 +35,14 @@ export function AppShell({ appTitle }: { appTitle: string }) {
           run: () => setPaletteOpen(true),
         },
         { id: 'shell.home', title: 'Go home', run: () => setView('home') },
+        { id: 'shell.workspace', title: 'Go to workspace', run: () => setView('workspace') },
       ],
       keybindings: [{ key: 'mod+k', command: 'shell.commandPalette' }],
     });
-    registry.setViewOpener(setView);
-    registry.setPanelOpener((id) => {
-      setActivePanelId(id);
+    // Opening any panel switches to the workspace and tells it which to open.
+    registry.setPanelOpener((panelId) => {
       setView('workspace');
+      setPendingOpen({ panelId, nonce: nonce.current++ });
     });
   }, []);
 
@@ -50,8 +58,12 @@ export function AppShell({ appTitle }: { appTitle: string }) {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const panels = registry.panels;
-  const active = panels.find((p) => p.id === activePanelId) ?? panels[0];
+  // Mount the Workspace the first time it's shown (mounting dockview inside a
+  // hidden, zero-size container mis-measures), then keep it alive across views.
+  const [workspaceMounted, setWorkspaceMounted] = useState(false);
+  useEffect(() => {
+    if (view === 'workspace') setWorkspaceMounted(true);
+  }, [view]);
 
   return (
     <div className="shell">
@@ -63,13 +75,8 @@ export function AppShell({ appTitle }: { appTitle: string }) {
         >
           <img src="/logo.svg" alt="Home" />
         </button>
-        {panels.map((p) => (
-          <button
-            key={p.id}
-            title={p.title}
-            className={view === 'workspace' && p.id === active?.id ? 'active' : ''}
-            onClick={() => registry.openPanel(p.id)}
-          >
+        {registry.panels.map((p) => (
+          <button key={p.id} title={`Open ${p.title}`} onClick={() => registry.openPanel(p.id)}>
             {p.title[0]}
           </button>
         ))}
@@ -79,18 +86,13 @@ export function AppShell({ appTitle }: { appTitle: string }) {
         </button>
       </nav>
       <div className="shell-content">
-        {view === 'home' ? (
+        <div hidden={view !== 'home'} className="shell-view">
           <HomeView />
-        ) : (
-          <>
-            <header className="shell-header">
-              <h1>{appTitle}</h1>
-              <button onClick={() => setPaletteOpen(true)}>Commands (Ctrl+K)</button>
-            </header>
-            <main className="shell-main">
-              {active ? <active.component /> : <p className="shell-empty">No panels registered.</p>}
-            </main>
-          </>
+        </div>
+        {workspaceMounted && (
+          <div hidden={view !== 'workspace'} className="shell-view">
+            <Workspace pendingOpen={pendingOpen} />
+          </div>
         )}
       </div>
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />

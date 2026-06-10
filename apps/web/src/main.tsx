@@ -6,6 +6,7 @@ import {
   dashboardModule,
   initCapabilities,
   registry,
+  scratchModule,
 } from '@horrible/core';
 import { AppShell } from '@horrible/ui';
 
@@ -13,6 +14,7 @@ import { AppShell } from '@horrible/ui';
 initCapabilities(BROWSER_CAPABILITIES);
 registry.register(dashboardModule);
 registry.register(agentModule);
+registry.register(scratchModule);
 
 const root = document.getElementById('root');
 if (!root) throw new Error('Missing #root element');

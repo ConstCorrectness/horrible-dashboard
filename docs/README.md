@@ -9,10 +9,14 @@ as it is, not as it once was.
 - [architecture/layout-shell.md](architecture/layout-shell.md) — the shared
   frontend layout (workspace, panels, command palette) and how the browser and
   desktop (Tauri) versions differ.
+- [architecture/windowing.md](architecture/windowing.md) — the dockable
+  workspace: how panels open as tabbed/split/floating windows, panel
+  types vs instances, and layout persistence.
 - `modules/` — one page per feature module, each describing how it plugs into the
   layout shell and how it behaves in the browser vs the desktop app:
   - [modules/agent-chat.md](modules/agent-chat.md)
   - [modules/dashboard.md](modules/dashboard.md)
+  - [modules/scratch.md](modules/scratch.md)
   - [modules/editor.md](modules/editor.md)
   - [modules/terminal.md](modules/terminal.md)
   - [modules/file-explorer.md](modules/file-explorer.md)
