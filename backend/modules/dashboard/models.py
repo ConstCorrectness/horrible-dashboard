@@ -7,4 +7,4 @@ class DashboardLayout(BaseModel):
     widgets: list[str]
 
 
-DEFAULT_LAYOUT = DashboardLayout(widgets=["dashboard.welcome", "dashboard.backendStatus"])
+DEFAULT_LAYOUT = DashboardLayout(widgets=["dashboard.welcome", "dashboard.backendStatus", "dashboard.gameWidget"])

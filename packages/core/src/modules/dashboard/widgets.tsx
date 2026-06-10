@@ -58,3 +58,43 @@ export function BackendStatusWidget() {
     </p>
   );
 }
+
+
+export function GameWidget() {
+  const [size, setSize] = useState({ width: 640, height: 480 });
+  const [src, setSrc] = useState('https://assault.cubers.net/play'); // generic assault cube web port placeholder
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+        <label style={{ fontSize: '12px' }}>
+          URL: <input type="text" value={src} onChange={e => setSrc(e.target.value)} style={{ padding: '2px' }} />
+        </label>
+        <label style={{ fontSize: '12px' }}>
+          W: <input type="number" value={size.width} onChange={e => setSize({ ...size, width: Number(e.target.value) })} style={{ width: '60px', padding: '2px' }} />
+        </label>
+        <label style={{ fontSize: '12px' }}>
+          H: <input type="number" value={size.height} onChange={e => setSize({ ...size, height: Number(e.target.value) })} style={{ width: '60px', padding: '2px' }} />
+        </label>
+      </div>
+      <div style={{
+        resize: 'both',
+        overflow: 'hidden',
+        width: size.width,
+        height: size.height,
+        minWidth: '300px',
+        minHeight: '200px',
+        border: '1px solid #ccc',
+        background: '#000'
+      }}>
+        <iframe
+          src={src}
+          style={{ width: '100%', height: '100%', border: 'none' }}
+          title="Game Harness"
+          allowFullScreen
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+        />
+      </div>
+    </div>
+  );
+}

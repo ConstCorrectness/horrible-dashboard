@@ -1,6 +1,6 @@
 import { registry, type ModuleManifest } from '../../registry';
 import { DashboardPanel } from './DashboardPanel';
-import { BackendStatusWidget, WelcomeWidget } from './widgets';
+import { BackendStatusWidget, WelcomeWidget, GameWidget } from './widgets';
 
 /** See docs/modules/dashboard.md. */
 export const dashboardModule: ModuleManifest = {
@@ -24,5 +24,6 @@ export const dashboardModule: ModuleManifest = {
   widgets: [
     { id: 'dashboard.welcome', title: 'Welcome', component: WelcomeWidget },
     { id: 'dashboard.backendStatus', title: 'Backend status', component: BackendStatusWidget },
+    { id: 'dashboard.gameWidget', title: 'Game Harness', component: GameWidget },
   ],
 };
