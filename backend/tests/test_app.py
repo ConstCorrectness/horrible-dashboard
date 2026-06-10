@@ -21,7 +21,7 @@ def test_health(client: TestClient) -> None:
 def test_dashboard_layout_default_then_roundtrip(client: TestClient) -> None:
     res = client.get("/api/dashboard/layout")
     assert res.status_code == 200
-    assert res.json()["widgets"] == ["dashboard.welcome", "dashboard.backendStatus"]
+    assert res.json()["widgets"] == ["dashboard.welcome", "dashboard.backendStatus", "dashboard.gameWidget"]
 
     new_layout = {"widgets": ["dashboard.backendStatus"]}
     res = client.put("/api/dashboard/layout", json=new_layout)
