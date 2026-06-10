@@ -12,6 +12,7 @@ export type AvatarMoodMap = Record<string, string>;
 export const DEFAULT_AVATAR_MOODS: AvatarMoodMap = {
   happy: '/dancing.glb',
   flair: '/flair.glb',
+  error: '/falling-over.glb',
 };
 
 export const DEFAULT_AVATAR_MOOD = 'happy';
@@ -119,16 +120,30 @@ export function Avatar3D({
             console.error('Error loading 3D assets:', error);
           });
 
-        // Status orb
-        const statusOrb = new THREE.Mesh(
-          new THREE.SphereGeometry(0.12, 16, 16),
-          new THREE.MeshStandardMaterial({
-            color: 0x2ed573,
-            emissive: 0x2ed573,
-            emissiveIntensity: 0.6,
-          }),
+        // Dashy — the dashboard mascot: a cute orb that orbits the avatar and
+        // faces the viewer. Its glow doubles as the agent status light (green = ready).
+        const dashy = new THREE.Group();
+        dashy.add(
+          new THREE.Mesh(
+            new THREE.SphereGeometry(0.16, 24, 24),
+            new THREE.MeshStandardMaterial({
+              color: 0x2ed573,
+              emissive: 0x2ed573,
+              emissiveIntensity: 0.6,
+            }),
+          ),
         );
-        scene.add(statusOrb);
+        const eyeMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        const pupilMat = new THREE.MeshBasicMaterial({ color: 0x1e1e2f });
+        for (const ex of [-0.06, 0.06]) {
+          const eye = new THREE.Mesh(new THREE.SphereGeometry(0.05, 16, 16), eyeMat);
+          eye.position.set(ex, 0.03, 0.14);
+          dashy.add(eye);
+          const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.022, 12, 12), pupilMat);
+          pupil.position.set(ex, 0.03, 0.18);
+          dashy.add(pupil);
+        }
+        scene.add(dashy);
 
         // Lighting
         scene.add(new THREE.AmbientLight(0xffffff, 1.2));
@@ -159,12 +174,13 @@ export function Avatar3D({
           friend.rotation.y += (pointer.x * 0.5 - friend.rotation.y) * 0.05;
           friend.rotation.x += (-pointer.y * 0.3 - friend.rotation.x) * 0.05;
 
-          // Orb orbits the head
-          statusOrb.position.set(
+          // Dashy orbits the head and keeps its face toward the viewer
+          dashy.position.set(
             Math.cos(t * 0.8) * 0.8,
             1.7 + Math.sin(t * 1.2) * 0.1,
             Math.sin(t * 0.8) * 0.8,
           );
+          dashy.lookAt(camera.position);
 
           renderer.render(scene, camera);
           frame = requestAnimationFrame(tick);

@@ -37,13 +37,15 @@ The shell has two top-level **views** (`registry.openView`):
   `docs/modules/agent-chat.md`). Modeled on chat-first launchers, deliberately
   free of workspace chrome. The avatar (`packages/ui/src/Avatar3D.tsx`) is a
   rigged glTF character (`/my-avatar.glb`) loaded with three's `GLTFLoader`,
-  with pointer-tracking and an orbiting status orb. It expresses the agent's
-  **emotional mood** as a looping animation: the `moods` prop maps mood names to
-  animation clips (`DEFAULT_AVATAR_MOODS` — e.g. `happy → /dancing.glb`,
-  `flair → /flair.glb`, all in `apps/web/public/`) and the `mood` prop selects
-  the active one, cross-fading on change. Adding a mood is one `.glb` plus one
-  line in the map. three is dynamically imported so the workspace view never
-  loads it.
+  with pointer-tracking. It expresses the agent's **emotional mood** as a looping
+  animation: the `moods` prop maps mood names to animation clips
+  (`DEFAULT_AVATAR_MOODS` — `happy → /dancing.glb`, `flair → /flair.glb`,
+  `error → /falling-over.glb`, all in `apps/web/public/`) and the `mood` prop
+  selects the active one, cross-fading on change. Adding a mood is one `.glb`
+  plus one line in the map. Orbiting the avatar is **Dashy**, the dashboard
+  mascot — a cute glowing orb with eyes that face the viewer, whose glow doubles
+  as the agent status light. three is dynamically imported so the workspace view
+  never loads it.
 - **`workspace`** — hosts module panels. Currently a panel switcher (panels
   listed as icons in the rail), not yet the dockable split/tab system described
   below — that remains the target.
