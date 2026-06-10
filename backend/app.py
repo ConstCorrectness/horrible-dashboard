@@ -4,6 +4,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.modules.agent import router as agent_router
+from backend.modules.clubhouse import router as clubhouse_router
 from backend.modules.dashboard import router as dashboard_router
 from backend.modules.workspace import router as workspace_router
 
@@ -32,6 +33,7 @@ def health() -> dict[str, str]:
 app.include_router(dashboard_router, prefix="/api")
 app.include_router(agent_router, prefix="/api")
 app.include_router(workspace_router, prefix="/api")
+app.include_router(clubhouse_router, prefix="/api")
 
 
 @app.websocket("/ws")

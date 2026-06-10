@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import {
   agentModule,
   BROWSER_CAPABILITIES,
+  clubhouseModule,
   dashboardModule,
   initCapabilities,
   registry,
@@ -15,6 +16,7 @@ initCapabilities(BROWSER_CAPABILITIES);
 registry.register(dashboardModule);
 registry.register(agentModule);
 registry.register(scratchModule);
+registry.register(clubhouseModule);
 
 const root = document.getElementById('root');
 if (!root) throw new Error('Missing #root element');

@@ -17,6 +17,7 @@ as it is, not as it once was.
   - [modules/agent-chat.md](modules/agent-chat.md)
   - [modules/dashboard.md](modules/dashboard.md)
   - [modules/scratch.md](modules/scratch.md)
+  - [modules/clubhouse.md](modules/clubhouse.md)
   - [modules/editor.md](modules/editor.md)
   - [modules/terminal.md](modules/terminal.md)
   - [modules/file-explorer.md](modules/file-explorer.md)

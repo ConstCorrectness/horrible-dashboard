@@ -12,8 +12,10 @@ packages/ui), FastAPI backend, the **dashboard module** end to end, and the
 3D avatar, local-model onboarding via Ollama (default `gemma4:e2b`), and a
 streaming ask bar. The `workspace` view is a **dockable window manager** (dockview,
 wrapped) — panels open as tabbed/split/floating windows with persisted layout; a
-minimal `scratch` panel is the reference non-singleton panel. An experimental
-Electron shell lives on the `electron-shell` branch. Remaining modules (editor,
+minimal `scratch` panel is the reference non-singleton panel. A `clubhouse`
+module onboards a Clubhouse account via a dashboard widget (unofficial API,
+token held server-side). An experimental Electron shell lives on the
+`electron-shell` branch. Remaining modules (editor,
 terminal, files, full chat cockpit) are unimplemented — see docs/ for their designs.
 
 ## Stack (decided, do not re-litigate)

@@ -5,7 +5,7 @@ export {
   initCapabilities,
   type Capability,
 } from './capabilities';
-export { apiGet, apiPut } from './api';
+export { apiDelete, apiGet, apiPost, apiPut } from './api';
 export { getWorkspaceLayout, saveWorkspaceLayout, type SerializedLayout } from './workspace';
 export {
   registry,
@@ -18,6 +18,14 @@ export {
 } from './registry';
 export { dashboardModule } from './modules/dashboard';
 export { scratchModule } from './modules/scratch';
+export {
+  clubhouseModule,
+  completeClubhouseAuth,
+  disconnectClubhouse,
+  getClubhouseStatus,
+  startClubhouseAuth,
+  type ClubhouseStatus,
+} from './modules/clubhouse';
 export {
   agentModule,
   DEFAULT_AGENT_MODEL,
