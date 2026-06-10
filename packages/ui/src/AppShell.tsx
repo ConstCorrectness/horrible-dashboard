@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { registry } from '@horrible/core';
+import { registry, type ShellView } from '@horrible/core';
 
 import { CommandPalette } from './CommandPalette';
+import { HomeView } from './HomeView';
 import './styles.css';
 
 function matchesBinding(e: KeyboardEvent, key: string): boolean {
@@ -12,6 +13,7 @@ function matchesBinding(e: KeyboardEvent, key: string): boolean {
 }
 
 export function AppShell({ appTitle }: { appTitle: string }) {
+  const [view, setView] = useState<ShellView>('home');
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [activePanelId, setActivePanelId] = useState<string | null>(null);
 
@@ -25,10 +27,15 @@ export function AppShell({ appTitle }: { appTitle: string }) {
           title: 'Open command palette',
           run: () => setPaletteOpen(true),
         },
+        { id: 'shell.home', title: 'Go home', run: () => setView('home') },
       ],
       keybindings: [{ key: 'mod+k', command: 'shell.commandPalette' }],
     });
-    registry.setPanelOpener(setActivePanelId);
+    registry.setViewOpener(setView);
+    registry.setPanelOpener((id) => {
+      setActivePanelId(id);
+      setView('workspace');
+    });
   }, []);
 
   useEffect(() => {
@@ -48,28 +55,43 @@ export function AppShell({ appTitle }: { appTitle: string }) {
 
   return (
     <div className="shell">
-      <header className="shell-header">
-        <div className="shell-brand">
-          <img src="/logo.svg" alt="" className="shell-logo" />
-          <h1>{appTitle}</h1>
-        </div>
-        <button onClick={() => setPaletteOpen(true)}>Commands (Ctrl+K)</button>
-      </header>
-      <div className="shell-body">
-        <nav className="shell-sidebar">
-          {panels.map((p) => (
-            <button
-              key={p.id}
-              className={p.id === active?.id ? 'active' : ''}
-              onClick={() => setActivePanelId(p.id)}
-            >
-              {p.title}
-            </button>
-          ))}
-        </nav>
-        <main className="shell-main">
-          {active ? <active.component /> : <p className="shell-empty">No panels registered.</p>}
-        </main>
+      <nav className="shell-rail">
+        <button
+          className={`rail-logo ${view === 'home' ? 'active' : ''}`}
+          title="Home"
+          onClick={() => setView('home')}
+        >
+          <img src="/logo.svg" alt="Home" />
+        </button>
+        {panels.map((p) => (
+          <button
+            key={p.id}
+            title={p.title}
+            className={view === 'workspace' && p.id === active?.id ? 'active' : ''}
+            onClick={() => registry.openPanel(p.id)}
+          >
+            {p.title[0]}
+          </button>
+        ))}
+        <div className="rail-spacer" />
+        <button title="Commands (Ctrl+K)" onClick={() => setPaletteOpen(true)}>
+          ⌘
+        </button>
+      </nav>
+      <div className="shell-content">
+        {view === 'home' ? (
+          <HomeView />
+        ) : (
+          <>
+            <header className="shell-header">
+              <h1>{appTitle}</h1>
+              <button onClick={() => setPaletteOpen(true)}>Commands (Ctrl+K)</button>
+            </header>
+            <main className="shell-main">
+              {active ? <active.component /> : <p className="shell-empty">No panels registered.</p>}
+            </main>
+          </>
+        )}
       </div>
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </div>

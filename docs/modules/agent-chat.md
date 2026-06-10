@@ -3,6 +3,22 @@
 The core "agentic era" surface: converse with agents/LLMs, watch their tool calls
 stream, and manage sessions.
 
+**Status: first slice implemented** — frontend in
+`packages/core/src/modules/agent/`, backend in `backend/modules/agent/`. What
+exists today:
+
+- **Onboarding** on the home view (see layout-shell.md): detects a local
+  [Ollama](https://ollama.com) at `http://localhost:11434` (override:
+  `HORRIBLE_OLLAMA_URL`), offers a model picker defaulting to `gemma4:e2b`,
+  pulls models with streamed progress (`POST /api/agent/pull`), and persists the
+  choice (`PUT /api/agent/config` → `$HORRIBLE_DATA_DIR/agent-config.json`).
+- **One-shot ask**: the home view's ask bar streams an answer from the
+  configured model (`POST /api/agent/chat`, NDJSON passthrough of Ollama's
+  `/api/generate`). Returns 409 until onboarding completes.
+
+Everything below this line — session management, chat/inspector panels, the
+shared-WebSocket event stream — is still design, not implementation.
+
 ## Contributions to the layout shell
 
 - **Panels:** `chat.conversation` (main chat view, default: center tab group),

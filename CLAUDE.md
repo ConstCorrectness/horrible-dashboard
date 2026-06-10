@@ -7,11 +7,13 @@ same frontend).
 ## Current state
 
 Scaffolded and verified: pnpm monorepo (apps/web, apps/desktop, packages/core,
-packages/ui), FastAPI backend, and the **dashboard module** working end to end
-(registry → panel → widgets → persisted layout). The shell is a sidebar panel
-switcher for now; dockable workspace is the target. An experimental Electron shell
-lives on the `electron-shell` branch. Remaining modules (chat, editor, terminal,
-files) are unimplemented — see docs/ for their designs.
+packages/ui), FastAPI backend, the **dashboard module** end to end, and the
+**agent module's first slice** — a Gemini-style `home` view (default on open) with
+3D avatar, local-model onboarding via Ollama (default `gemma4:e2b`), and a
+streaming ask bar. The shell has `home`/`workspace` views with an icon rail;
+dockable workspace is still the target. An experimental Electron shell lives on
+the `electron-shell` branch. Remaining modules (editor, terminal, files, full chat
+cockpit) are unimplemented — see docs/ for their designs.
 
 ## Stack (decided, do not re-litigate)
 

@@ -26,10 +26,23 @@ to modules.
 Implemented: module registry, command palette (Ctrl+K), keybinding service
 (`mod+` prefix), capability service, and both entries (`apps/web` on port 5173
 proxying `/api` and `/ws` to the backend on port 8000; `apps/desktop` Tauri shell
-loading the same dev server). The workspace is currently a **sidebar panel
-switcher**, not yet the dockable split/tab system described below — that remains
-the target. The backend exposes the shared `/ws` socket but the frontend does
-not consume it yet.
+loading the same dev server). The backend exposes the shared `/ws` socket but the
+frontend does not consume it yet.
+
+The shell has two top-level **views** (`registry.openView`):
+
+- **`home`** — the default on open: a minimal centered surface (3D
+  dashboard-friend avatar, greeting, ask bar streaming from the local model) that
+  hosts agent onboarding until a local model is configured (see
+  `docs/modules/agent-chat.md`). Modeled on chat-first launchers, deliberately
+  free of workspace chrome.
+- **`workspace`** — hosts module panels. Currently a panel switcher (panels
+  listed as icons in the rail), not yet the dockable split/tab system described
+  below — that remains the target.
+
+A persistent **icon rail** (logo/home on top, panel icons, command palette at the
+bottom) is the only chrome shared by both views. Opening a panel from anywhere
+switches to the workspace view.
 
 Branding: source art lives in `assets/` (`logo.svg`, `banner.svg`) —
 `pnpm build:icons` regenerates the web favicon (`apps/web/public/favicon.ico`,
