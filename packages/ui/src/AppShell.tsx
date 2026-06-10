@@ -49,7 +49,10 @@ export function AppShell({ appTitle }: { appTitle: string }) {
   return (
     <div className="shell">
       <header className="shell-header">
-        <h1>{appTitle}</h1>
+        <div className="shell-brand">
+          <img src="/logo.svg" alt="" className="shell-logo" />
+          <h1>{appTitle}</h1>
+        </div>
         <button onClick={() => setPaletteOpen(true)}>Commands (Ctrl+K)</button>
       </header>
       <div className="shell-body">

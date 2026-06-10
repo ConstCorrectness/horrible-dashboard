@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "pnpm --filter @horrible/web dev",
     "build": "pnpm --filter @horrible/web build",
+    "build:icons": "node scripts/build_icons.mjs",
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint .",
     "format": "prettier --write ."
@@ -12,7 +13,9 @@
   "devDependencies": {
     "@eslint/js": "^9.30.0",
     "eslint": "^9.30.0",
+    "png-to-ico": "^3.0.1",
     "prettier": "^3.5.0",
+    "sharp": "^0.34.5",
     "typescript": "^5.8.0",
     "typescript-eslint": "^8.35.0"
   }

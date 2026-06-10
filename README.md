@@ -1,3 +1,5 @@
+![horrible-dashboard](./banner.svg)
+
 # horrible-dashboard
 
 A unified one-stop app for everything — emacs for the agentic era. One React

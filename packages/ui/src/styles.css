@@ -40,6 +40,18 @@ body {
   margin: 0;
 }
 
+.shell-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.shell-logo {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+}
+
 .shell-body {
   display: flex;
   flex: 1;
