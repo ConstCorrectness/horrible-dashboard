@@ -35,7 +35,13 @@ The shell has two top-level **views** (`registry.openView`):
   dashboard-friend avatar, greeting, ask bar streaming from the local model) that
   hosts agent onboarding until a local model is configured (see
   `docs/modules/agent-chat.md`). Modeled on chat-first launchers, deliberately
-  free of workspace chrome.
+  free of workspace chrome. The avatar (`packages/ui/src/Avatar3D.tsx`) is a
+  rigged glTF character loaded with three's `GLTFLoader`, playing a looping
+  animation retargeted onto its skeleton, with pointer-tracking and an orbiting
+  status orb. The model and animation default to `/my-avatar.glb` and
+  `/dancing.glb` (in `apps/web/public/`) and are overridable via the `modelUrl`
+  and `animUrl` props. three is dynamically imported so the workspace view never
+  loads it.
 - **`workspace`** — hosts module panels. Currently a panel switcher (panels
   listed as icons in the rail), not yet the dockable split/tab system described
   below — that remains the target.
@@ -73,14 +79,14 @@ Modules must never check `window.__TAURI__` or user-agent sniff. `packages/core`
 exposes a capability service; feature code branches on capabilities and degrades
 gracefully:
 
-| Capability               | Browser                          | Desktop (Tauri)                  |
-| ------------------------ | -------------------------------- | -------------------------------- |
-| `fs.nativeDialogs`       | no (backend workspace roots only)| yes (native open/save dialogs)   |
-| `shell.revealInOS`       | no                               | yes                              |
-| `notifications.system`   | Web Notifications (tab-scoped)   | OS notifications                 |
-| `window.multi`           | no (single tab, pop-out = new tab)| yes (panel pop-out to OS window) |
-| `shortcuts.global`       | no                               | yes (summon window, quick chat)  |
-| `tray`                   | no                               | yes                              |
+| Capability             | Browser                            | Desktop (Tauri)                  |
+| ---------------------- | ---------------------------------- | -------------------------------- |
+| `fs.nativeDialogs`     | no (backend workspace roots only)  | yes (native open/save dialogs)   |
+| `shell.revealInOS`     | no                                 | yes                              |
+| `notifications.system` | Web Notifications (tab-scoped)     | OS notifications                 |
+| `window.multi`         | no (single tab, pop-out = new tab) | yes (panel pop-out to OS window) |
+| `shortcuts.global`     | no                                 | yes (summon window, quick chat)  |
+| `tray`                 | no                                 | yes                              |
 
 ## Backend connection
 
