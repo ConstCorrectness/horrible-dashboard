@@ -23,7 +23,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       response_bytes: text.length,
     });
     if (!res.ok) {
-      throw new Error(`API ${method} ${path} failed: ${res.status}`);
+      // Surface the backend's `detail` (FastAPI HTTPException) instead of a bare
+      // status, so widgets can show the real reason.
+      let message = `${method} ${path} failed: ${res.status}`;
+      try {
+        const parsed = JSON.parse(text) as { detail?: unknown };
+        if (typeof parsed.detail === 'string') message = parsed.detail;
+      } catch {
+        // non-JSON error body — keep the status message
+      }
+      throw new Error(message);
     }
     return JSON.parse(text) as T;
   } catch (err) {

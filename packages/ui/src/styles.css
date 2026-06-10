@@ -135,6 +135,13 @@ body {
   text-decoration: underline;
 }
 
+.ch-token-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+
 .ch-connected {
   display: flex;
   align-items: center;

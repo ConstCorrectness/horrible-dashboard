@@ -16,6 +16,15 @@ class CompleteAuthRequest(BaseModel):
     verification_code: VerificationCode
 
 
+class TokenConnectRequest(BaseModel):
+    """Connect an existing Clubhouse session by its auth token."""
+
+    auth_token: str
+    user_id: int
+    # Token may be bound to the device it was issued for; pass it through if known.
+    device_id: str | None = None
+
+
 class StartAuthResult(BaseModel):
     success: bool
 

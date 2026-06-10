@@ -87,6 +87,46 @@ def test_complete_auth_wrong_code_is_400(client: TestClient, monkeypatch) -> Non
     assert res.status_code == 400
 
 
+def test_connect_with_token_validates_and_stores(
+    client: TestClient, monkeypatch
+) -> None:
+    calls: list[tuple] = []
+
+    async def fake_authed_post(path, payload, token, user_id, device_id=None):
+        calls.append((path, token, user_id, device_id))
+        return {"user_profile": FAKE_PROFILE}
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_authed_post)
+    res = client.post(
+        "/api/clubhouse/auth/token",
+        json={"auth_token": "TKN", "user_id": 4242, "device_id": "DEV-1"},
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["connected"] is True
+    assert body["username"] == "horrible"
+    assert "TKN" not in res.text  # token never echoed back
+    # validated against /me with the supplied credentials
+    assert calls == [("/me", "TKN", 4242, "DEV-1")]
+
+    status = client.get("/api/clubhouse/status")
+    assert status.json()["connected"] is True
+
+
+def test_connect_with_token_rejects_bad_token(client: TestClient, monkeypatch) -> None:
+    from fastapi import HTTPException
+
+    async def fake_authed_post(path, payload, token, user_id, device_id=None):
+        raise HTTPException(status_code=401, detail="Clubhouse: unauthorized")
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_authed_post)
+    res = client.post(
+        "/api/clubhouse/auth/token", json={"auth_token": "bad", "user_id": 1}
+    )
+    assert res.status_code == 401
+    assert client.get("/api/clubhouse/status").json()["connected"] is False
+
+
 def test_disconnect(client: TestClient, monkeypatch) -> None:
     _mock_ch(
         monkeypatch,

@@ -26,6 +26,18 @@ export function completeClubhouseAuth(
   });
 }
 
+export function connectClubhouseWithToken(
+  authToken: string,
+  userId: number,
+  deviceId?: string,
+): Promise<ClubhouseStatus> {
+  return apiPost<ClubhouseStatus>('/clubhouse/auth/token', {
+    auth_token: authToken,
+    user_id: userId,
+    device_id: deviceId ?? null,
+  });
+}
+
 export function disconnectClubhouse(): Promise<ClubhouseStatus> {
   return apiDelete<ClubhouseStatus>('/clubhouse/auth');
 }

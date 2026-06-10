@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 
 import {
   completeClubhouseAuth,
+  connectClubhouseWithToken,
   disconnectClubhouse,
   getClubhouseStatus,
   startClubhouseAuth,
@@ -20,6 +21,10 @@ export function ClubhouseWidget() {
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Alternative to SMS: paste an existing token (e.g. from another logged-in client).
+  const [showToken, setShowToken] = useState(false);
+  const [token, setToken] = useState('');
+  const [userId, setUserId] = useState('');
 
   const refresh = () =>
     getClubhouseStatus()
@@ -82,6 +87,19 @@ export function ClubhouseWidget() {
     }
   };
 
+  const connectToken = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await connectClubhouseWithToken(token.trim(), Number(userId.trim()));
+      await refresh();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="ch-onboarding">
       {step === 'phone' ? (
@@ -106,6 +124,34 @@ export function ClubhouseWidget() {
               {busy ? 'Sending…' : 'Send code'}
             </button>
           </form>
+          <button className="ch-back" onClick={() => setShowToken((v) => !v)}>
+            {showToken ? 'Use phone instead' : 'Connect with an existing token'}
+          </button>
+          {showToken && (
+            <form
+              className="ch-token-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void connectToken();
+              }}
+            >
+              <input
+                value={token}
+                placeholder="auth token"
+                spellCheck={false}
+                onChange={(e) => setToken(e.target.value)}
+              />
+              <input
+                inputMode="numeric"
+                value={userId}
+                placeholder="user id"
+                onChange={(e) => setUserId(e.target.value.replace(/\D/g, ''))}
+              />
+              <button type="submit" disabled={busy || !token.trim() || !userId.trim()}>
+                {busy ? 'Connecting…' : 'Connect'}
+              </button>
+            </form>
+          )}
         </>
       ) : (
         <>

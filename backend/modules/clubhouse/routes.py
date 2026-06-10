@@ -21,6 +21,7 @@ from backend.modules.clubhouse.models import (
     CompleteAuthRequest,
     StartAuthRequest,
     StartAuthResult,
+    TokenConnectRequest,
 )
 from backend.modules.telemetry.instrument import instrumented_client
 
@@ -50,15 +51,59 @@ def _api_base() -> str:
     return os.environ.get("HORRIBLE_CLUBHOUSE_API", "https://www.clubhouseapi.com/api")
 
 
-def _headers() -> dict[str, str]:
+def _headers(device_id: str | None = None) -> dict[str, str]:
+    # Current client values (build 3375 / app 24.01.02). Clubhouse rejects stale
+    # builds with "login did not pass token validation".
     return {
         "CH-Languages": "en-US",
         "CH-Locale": "en_US",
-        "CH-AppBuild": "304",
-        "CH-AppVersion": "0.1.28",
-        "CH-DeviceId": _device_id(),
-        "User-Agent": "clubhouse/304 (iPhone; iOS 14.4; Scale/2.00)",
+        "CH-AppBuild": "3375",
+        "CH-AppVersion": "24.01.02",
+        "CH-DeviceId": device_id or _device_id(),
+        "User-Agent": "clubhouse/3375 (iPhone; iOS 17.1.2; Scale/3.00)",
     }
+
+
+def _auth_headers(
+    token: str, user_id: int, device_id: str | None = None
+) -> dict[str, str]:
+    return {
+        **_headers(device_id),
+        "Authorization": f"Token {token}",
+        "CH-UserID": str(user_id),
+    }
+
+
+async def _ch_authed_post(
+    path: str,
+    payload: dict[str, Any],
+    token: str,
+    user_id: int,
+    device_id: str | None = None,
+) -> dict[str, Any]:
+    """POST to an authenticated Clubhouse endpoint; tests monkeypatch this seam."""
+    try:
+        async with instrumented_client(timeout=15) as client:
+            res = await client.post(
+                f"{_api_base()}{path}",
+                json=payload,
+                headers=_auth_headers(token, user_id, device_id),
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Clubhouse unreachable: {exc}"
+        ) from exc
+    if res.status_code >= 400:
+        message = res.text[:300]
+        try:
+            message = res.json().get("error_message") or message
+        except (ValueError, AttributeError):
+            pass
+        status_code = (
+            res.status_code if res.status_code in (400, 401, 403, 429) else 502
+        )
+        raise HTTPException(status_code=status_code, detail=f"Clubhouse: {message}")
+    return res.json()
 
 
 async def _ch_post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -73,9 +118,13 @@ async def _ch_post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
             status_code=502, detail=f"Clubhouse unreachable: {exc}"
         ) from exc
     if res.status_code >= 400:
-        detail = res.text[:300]
+        message = res.text[:300]
+        try:
+            message = res.json().get("error_message") or message
+        except (ValueError, AttributeError):
+            pass
         status = res.status_code if res.status_code in (400, 401, 403, 429) else 502
-        raise HTTPException(status_code=status, detail=f"Clubhouse error: {detail}")
+        raise HTTPException(status_code=status, detail=f"Clubhouse: {message}")
     return res.json()
 
 
@@ -122,6 +171,27 @@ async def complete_auth(body: CompleteAuthRequest) -> ClubhouseStatus:
         "auth_token": token,
         "refresh_token": data.get("refresh_token"),
         "user_id": profile.get("user_id"),
+        "username": profile.get("username"),
+        "name": profile.get("name"),
+        "photo_url": profile.get("photo_url"),
+    }
+    path = _auth_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record))
+    return status()
+
+
+@router.post("/auth/token", response_model=ClubhouseStatus)
+async def connect_with_token(body: TokenConnectRequest) -> ClubhouseStatus:
+    """Connect using an existing auth token, validated against /me."""
+    data = await _ch_authed_post(
+        "/me", {}, body.auth_token, body.user_id, body.device_id
+    )
+    profile = data.get("user_profile") or {}
+    record = {
+        "auth_token": body.auth_token,
+        "device_id": body.device_id,
+        "user_id": profile.get("user_id") or body.user_id,
         "username": profile.get("username"),
         "name": profile.get("name"),
         "photo_url": profile.get("photo_url"),
