@@ -1,4 +1,4 @@
-![horrible-dashboard](./banner.svg)
+![horrible-dashboard](./assets/banner.svg)
 
 # horrible-dashboard
 

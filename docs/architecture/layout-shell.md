@@ -31,10 +31,11 @@ switcher**, not yet the dockable split/tab system described below — that remai
 the target. The backend exposes the shared `/ws` socket but the frontend does
 not consume it yet.
 
-Branding: `logo.svg` at the repo root is the single source for all icons —
-`pnpm build:icons` regenerates the web favicon (`apps/web/public/favicon.ico`),
-the SVG favicon copy, and the Tauri app icons from it. The shell header shows
-the logo; `banner.svg` is the README banner.
+Branding: source art lives in `assets/` (`logo.svg`, `banner.svg`) —
+`pnpm build:icons` regenerates the web favicon (`apps/web/public/favicon.ico`,
+16/32/48), the SVG favicon copy, and the Tauri app icons (full size set) from
+`assets/logo.svg`. The shell header shows the logo; `assets/banner.svg` is the
+README banner.
 
 ## The workspace
 
