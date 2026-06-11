@@ -11,18 +11,17 @@ the desktop layout is the same UI inside a Tauri window.
 ## Backend (Python / FastAPI)
 
 ```
-./scripts/dev-backend.ps1          # preferred on this machine (see note); -Port to override
-# or, if PATH is clean:
 uv run uvicorn backend.app:app --reload --port 8000
 ```
 
 - Run from the repo root. Health check: `GET http://localhost:8000/api/health`.
-- **Windows OpenSSL gotcha:** if `C:\msys64\mingw64\bin` (or Git's `mingw64\bin`)
-  is on PATH, the `--reload` server loads MinGW's applink-less `libcrypto` and the
-  worker aborts on the first TLS init — `OPENSSL_Uplink ... no OPENSSL_Applink`,
-  surfacing as Vite proxy `ECONNRESET`/`ECONNREFUSED`. `scripts/dev-backend.ps1`
-  strips the MinGW dirs from the process PATH so Python uses its own OpenSSL. The
-  bare `uvicorn` command only works if those dirs aren't on PATH.
+- **Windows OpenSSL gotcha (handled in code):** if `C:\msys64\mingw64\bin` (or
+  Git's `mingw64\bin`) is on PATH, MinGW's applink-less `libcrypto` could be
+  loaded for TLS and abort the worker — `OPENSSL_Uplink ... no OPENSSL_Applink`,
+  surfacing as Vite proxy `ECONNRESET`/`ECONNREFUSED`. `backend/__init__.py` now
+  strips MinGW dirs from the process PATH at import, so the bare command above
+  just works regardless of your shell PATH. `scripts/dev-backend.ps1` does the
+  same at the shell level and remains as a belt-and-suspenders option.
 
 ## Browser layout (web)
 
