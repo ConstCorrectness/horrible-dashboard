@@ -1,0 +1,372 @@
+# @horrible/sdk — Design Spec
+
+**Version:** SDK API v1  
+**Package:** `@horrible/sdk` (`packages/sdk/`)  
+**Status:** Stable (breaking changes bump `SDK_API_VERSION`)
+
+---
+
+## Overview
+
+`@horrible/sdk` is the public extension contract for horrible-dashboard. Third-party plugins build against it to contribute commands, panels, dashboard widgets, and keybindings — the exact same primitive types built-in modules use. There is one source of truth; `@horrible/core` re-exports all declaration types from the SDK.
+
+**Trust model:** plugins are trusted code (Obsidian/VS Code style), running unsandboxed as ES modules in the app's realm with full DOM and SDK access. Marketplace curation is the safety layer.
+
+---
+
+## Plugin Entry Contract
+
+A plugin is an ES module whose **default export** is the result of `definePlugin({ setup })`.
+
+```ts
+import { definePlugin } from '@horrible/sdk';
+
+export default definePlugin({
+  setup(host) {
+    return {
+      widgets: [{ id: 'my-plugin.thing', title: 'Thing', component: Thing }],
+      commands: [{ id: 'my-plugin.doIt', title: 'My Plugin: Do It', run: () => {} }],
+    };
+  },
+});
+```
+
+### `definePlugin(plugin: HorriblePlugin): HorriblePlugin`
+
+Identity helper that gives plugin entry modules a typed default export. The host calls `setup(host)` once at boot; returned contributions are registered as module `plugin:<id>`.
+
+```ts
+interface HorriblePlugin {
+  setup(host: PluginHost): PluginContributions | Promise<PluginContributions>;
+}
+```
+
+`setup` may be async — useful for fetching initial data or lazy-loading component code before registration.
+
+---
+
+## Contribution Types
+
+All IDs must be namespaced: every contributed id must begin with `<pluginId>.` — the loader rejects the plugin otherwise.
+
+### `PluginContributions`
+
+```ts
+interface PluginContributions {
+  commands?:    CommandDecl[];
+  panels?:      PanelDecl[];
+  widgets?:     WidgetDecl[];
+  keybindings?: KeybindingDecl[];
+}
+```
+
+All fields are optional. A plugin that only contributes commands and no UI is valid.
+
+---
+
+### `CommandDecl`
+
+A command is an action invokable from the command palette or via keybinding.
+
+```ts
+interface CommandDecl {
+  /** Namespaced: `<pluginId>.verbNoun`, e.g. `my-plugin.openSettings` */
+  id: string;
+  title: string;
+  run: () => void | Promise<void>;
+}
+```
+
+| Field | Requirement |
+|-------|-------------|
+| `id` | Must start with `<pluginId>.` |
+| `title` | Shown in command palette; use the format `Plugin Name: Action` |
+| `run` | Synchronous or async; errors are caught and logged per-plugin |
+
+**Do:** namespace and title your commands so they read well in a global palette (`Hello Widget: Bump the counter`).  
+**Don't:** perform navigation or UI side-effects inside `run` without using `host.openPanel` / `host.runCommand` — direct DOM manipulation is fragile.
+
+---
+
+### `PanelDecl`
+
+A panel is a dockable window that opens in the workspace's dockview layout.
+
+```ts
+interface PanelDecl {
+  id: string;
+  title: string;
+  component: ComponentType;
+  defaultPlacement: 'left' | 'center' | 'right' | 'bottom';
+  singleton?: boolean;
+}
+```
+
+| Field | Requirement |
+|-------|-------------|
+| `defaultPlacement` | Where the panel opens if no saved layout exists |
+| `singleton` | `true` — only one instance exists; re-opening focuses it. `false`/omitted — each open creates a new instance (e.g. editor buffers) |
+
+**Do:** set `singleton: true` for settings or overview panels that don't make sense duplicated.  
+**Don't:** assume the panel is mounted; panels unmount when closed. Use `host.storage` for persistence.
+
+---
+
+### `WidgetDecl`
+
+A widget renders in the dashboard grid. Unlike panels, widgets are always mounted when the dashboard is open.
+
+```ts
+interface WidgetDecl {
+  id: string;
+  title: string;
+  component: ComponentType;
+  requiredCapabilities?: Capability[];
+}
+```
+
+| Field | Requirement |
+|-------|-------------|
+| `requiredCapabilities` | Widget is hidden if the platform lacks any listed capability |
+
+**Do:** keep widgets lightweight — they render in the dashboard grid alongside other widgets.  
+**Don't:** open heavy network connections unconditionally; prefer lazy loading on first render.
+
+---
+
+### `KeybindingDecl`
+
+Binds a key chord to an existing command ID.
+
+```ts
+interface KeybindingDecl {
+  /** `mod+k` — `mod` maps to Ctrl on Windows/Linux, Cmd on macOS */
+  key: string;
+  /** Must reference a registered command (built-in or contributed by this plugin) */
+  command: string;
+}
+```
+
+**Do:** use `mod` instead of `ctrl`/`cmd` for cross-platform shortcuts.  
+**Don't:** bind single-character keys without a modifier — they conflict with text input.
+
+---
+
+## The `PluginHost` Interface
+
+`host` is the only door back into the shell. It is passed to `setup` and available for the lifetime of the plugin.
+
+```ts
+interface PluginHost {
+  readonly pluginId: string;
+  api:     PluginApiClient;
+  storage: PluginStorage;
+  hasCapability(capability: Capability): boolean;
+  subscribeChannel(channel: string, handler: (msg: WsMessage) => void): () => void;
+  openPanel(panelId: string): void;
+  runCommand(commandId: string): Promise<void>;
+}
+```
+
+### `host.api` — Backend HTTP Client
+
+Relative to `/api`. The same client built-in modules use.
+
+```ts
+interface PluginApiClient {
+  get<T>(path: string): Promise<T>;
+  post<T>(path: string, body: unknown): Promise<T>;
+  put<T>(path: string, body: unknown): Promise<T>;
+  del<T>(path: string): Promise<T>;
+}
+```
+
+Paths are relative: `host.api.get('/widgets')` resolves to `/api/widgets`. All methods throw on non-2xx responses.
+
+### `host.storage` — Persisted Key-Value Store
+
+Scoped to the plugin. Backed server-side at `/api/plugins/<id>/storage/<key>`. Uninstalling the plugin wipes all storage.
+
+```ts
+interface PluginStorage {
+  get<T>(key: string): Promise<T | undefined>;  // undefined if never set
+  set(key: string, value: unknown): Promise<void>;
+  remove(key: string): Promise<void>;
+}
+```
+
+Values are JSON-serialized. Use typed generics to preserve type safety at the call site:
+
+```ts
+const count = await host.storage.get<number>('count') ?? 0;
+```
+
+### `host.hasCapability(cap)` — Platform Checks
+
+Returns `true` if the current platform supports the capability. Always check before using platform-specific APIs.
+
+```ts
+type Capability =
+  | 'fs.nativeDialogs'    // open/save dialogs
+  | 'shell.revealInOS'    // reveal in Finder / Explorer
+  | 'notifications.system' // OS-level notifications
+  | 'window.multi'        // multiple windows
+  | 'shortcuts.global'    // system-wide keybindings
+  | 'tray';               // system tray icon
+```
+
+### `host.subscribeChannel(channel, handler)` — WebSocket
+
+Subscribes to a named channel on the shared `/ws` socket. Returns an unsubscribe function — **always call it on cleanup** (e.g. in a `useEffect` return).
+
+```ts
+interface WsMessage {
+  channel: string;
+  event: string;
+  data?: unknown;
+}
+
+// Usage
+useEffect(() => {
+  return host.subscribeChannel('observability', (msg) => {
+    if (msg.event === 'metric') handleMetric(msg.data);
+  });
+}, []);
+```
+
+### `host.openPanel(panelId)` / `host.runCommand(commandId)`
+
+Shell navigation — prefer these over direct DOM manipulation.
+
+```ts
+host.openPanel('marketplace');         // opens a built-in panel
+host.runCommand('dashboard.open');     // runs any registered command
+```
+
+---
+
+## Package Manifest (`horrible-plugin.json`)
+
+Every plugin directory must contain a `horrible-plugin.json` at its root.
+
+```json
+{
+  "id": "my-plugin",
+  "name": "My Plugin",
+  "version": "0.1.0",
+  "description": "Short description shown in the marketplace.",
+  "author": "your-name",
+  "entry": "dist/index.js",
+  "sdkVersion": 1,
+  "requiredCapabilities": [],
+  "permissions": ["storage"]
+}
+```
+
+| Field | Type | Constraint |
+|-------|------|------------|
+| `id` | string | `^[a-z0-9][a-z0-9-]{0,63}$`; must match the directory name |
+| `version` | string | Semver |
+| `entry` | string | Relative to package root; no `..` segments |
+| `sdkVersion` | number | Must equal `SDK_API_VERSION` (currently `1`); loader skips mismatches |
+| `requiredCapabilities` | `Capability[]` | Platform must satisfy all; loader skips otherwise |
+| `permissions` | `string[]` | Informational in v1 (displayed in marketplace UI); reserved for future enforcement |
+
+**Typed interface (`PluginPackageManifest`)** is exported from `@horrible/sdk` for use in tooling.
+
+---
+
+## Build Preset (`@horrible/sdk/vite`)
+
+```ts
+import { defineConfig } from 'vite';
+import { horriblePluginViteConfig } from '@horrible/sdk/vite';
+
+export default defineConfig(horriblePluginViteConfig({ entry: 'src/index.tsx' }));
+```
+
+The preset configures a single-file ESM lib build and marks three specifiers **external**:
+
+| External | Rewritten to |
+|----------|-------------|
+| `react` | `/plugin-runtime/react.js` |
+| `react/jsx-runtime` | `/plugin-runtime/jsx-runtime.js` |
+| `@horrible/sdk` | `/plugin-runtime/sdk.js` |
+
+These shims re-export from `window.__HORRIBLE_RUNTIME__`, which the host populates from its own bundled copies before any plugin loads. This guarantees **one React instance** across host and all plugins. A plugin that bundles its own React will crash on hooks — the loader cannot detect this.
+
+**Critical constraints:**
+- Do **not** enable code splitting — entries are evaluated as Blob modules with no base URL; relative chunk imports won't resolve.
+- Do **not** add `react` or `@horrible/sdk` to `build.rollupOptions.external` manually — the preset already handles it.
+- Do **not** import from `@horrible/sdk` at runtime paths that bypass the preset (e.g. dynamic imports of SDK internals).
+
+---
+
+## Versioning
+
+`SDK_API_VERSION` (exported constant, currently `1`) is bumped on any breaking change to the plugin contract. A plugin's `horrible-plugin.json` declares `sdkVersion`; the loader skips plugins where `sdkVersion !== SDK_API_VERSION` and surfaces the mismatch in the marketplace panel. Non-breaking additions (new optional fields, new `PluginHost` methods) do not bump the version.
+
+---
+
+## Plugin Lifecycle
+
+```
+Catalog scan (backend)
+  └─ horrible-plugin.json found
+       └─ Manifest validated (id, sdkVersion, requiredCapabilities)
+            └─ Plugin enabled?
+                 ├─ No → skip
+                 └─ Yes → loadPlugins() (packages/core/src/plugins/loader.ts)
+                      └─ Fetch entry from /api/plugins/<id>/assets/<entry>
+                           └─ Rewrite /plugin-runtime/* shims to page origin
+                                └─ Import as Blob module
+                                     └─ Call setup(host)
+                                          └─ Register contributions as module plugin:<id>
+                                               └─ Failures are contained; listed in marketplace
+```
+
+**Install:** copies package into `$HORRIBLE_DATA_DIR/plugins/<id>/package/` (reinstall = update in place).  
+**Uninstall:** removes the plugin directory including all storage keys.  
+**Enable/disable/install/update:** takes effect on the **next page reload** — the registry has no unregister, and the dock holds live component refs. The marketplace shows a reload banner.
+
+---
+
+## Known Limitations (v1)
+
+| Limitation | Detail |
+|-----------|--------|
+| Reload to apply | Install/update/enable/disable/uninstall require a reload |
+| No plugin HMR | Plugin entries bypass Vite's transform pipeline |
+| Single-file bundles only | Code splitting breaks Blob module resolution |
+| Stale layout refs | Disabled plugin panels render "Unknown panel" placeholder |
+| Frontend-only | Plugins cannot ship backend Python; no fetch proxy (SSRF surface) |
+| Permissions informational | `permissions` field displayed only; not enforced in v1 |
+
+---
+
+## File Structure (Reference Plugin)
+
+```
+my-plugin/
+  horrible-plugin.json     # Package manifest
+  src/
+    index.tsx              # Plugin entry — default-exports definePlugin(...)
+  dist/
+    index.js               # Built ESM bundle (single file)
+  vite.config.ts           # Uses horriblePluginViteConfig preset
+  tsconfig.json
+  package.json
+```
+
+See `examples/plugins/hello-widget/` for the reference implementation: a dashboard counter widget (persisted via `host.storage`) plus a command.
+
+---
+
+## Open Questions / Future Work
+
+- **Permissions enforcement:** the `permissions` field is reserved for enforcement when a fetch-proxy / SSRF design lands.
+- **Sandboxing:** iframe or worklet sandboxing for untrusted plugin sources; not in scope for v1.
+- **Backend plugins:** Python extension points for plugins that need server-side logic.
+- **Plugin HMR:** hot-reload for plugin entries during development.
+- **Unregister support:** would enable enable/disable/uninstall without a reload.
+- **Plugin-to-plugin communication:** no cross-plugin API today; plugins may only talk through the host and shared WebSocket channels.
