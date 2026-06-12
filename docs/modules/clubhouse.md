@@ -32,9 +32,10 @@ for, so an optional `device_id` is passed through on the authed headers.
 
 - **Dashboard widgets:** `clubhouse.account` (in the default grid) — the
   onboarding/connection card.
-- **Commands:** `clubhouse.connect` (opens the dashboard, where the widget
-  lives).
-- **Panels:** none yet — a room/hallway panel would be the natural next step.
+- **Panels:** `clubhouse.rooms` (singleton) — the **Live rooms** browse panel
+  (Phase 1): lists currently-live channels for the connected account, read-only.
+- **Commands:** `clubhouse.connect` (opens the dashboard widget),
+  `clubhouse.rooms` (opens the Live rooms panel).
 
 ## Backend surface
 
@@ -49,7 +50,16 @@ photo_url}`. **Never includes the token.**
   persists the session, returns status. 400 on a wrong/expired code.
 - `POST /api/clubhouse/auth/token` — `{auth_token, user_id, device_id?}` →
   validates the token against `/me`, persists the session, returns status.
+- `GET  /api/clubhouse/channels` — live rooms (proxies Clubhouse
+  `GET /get_channels`); `409` if not connected.
+- `GET  /api/clubhouse/following` — accounts the user follows (proxies
+  `POST /get_following`); `409` if not connected.
 - `DELETE /api/clubhouse/auth` — disconnect (deletes the stored session).
+
+Authed calls go through `_ch_authed_get` / `_ch_authed_post`, which attach
+`Authorization: Token <token>` + `CH-UserID` to the client headers. Browse
+responses are projected into lean Pydantic models (extra fields dropped) rather
+than echoing Clubhouse's full payloads.
 
 Clubhouse error messages (e.g. the validation gate) are surfaced through the
 API client's thrown `Error` so the widget shows the real reason, not a bare 400.

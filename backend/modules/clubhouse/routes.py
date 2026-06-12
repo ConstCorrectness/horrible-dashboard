@@ -17,8 +17,10 @@ import httpx
 from fastapi import APIRouter, HTTPException
 
 from backend.modules.clubhouse.models import (
+    ChannelList,
     ClubhouseStatus,
     CompleteAuthRequest,
+    FollowingList,
     StartAuthRequest,
     StartAuthResult,
     TokenConnectRequest,
@@ -104,6 +106,46 @@ async def _ch_authed_post(
         )
         raise HTTPException(status_code=status_code, detail=f"Clubhouse: {message}")
     return res.json()
+
+
+async def _ch_authed_get(
+    path: str,
+    token: str,
+    user_id: int,
+    device_id: str | None = None,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """GET an authenticated Clubhouse endpoint; tests monkeypatch this seam."""
+    try:
+        async with instrumented_client(timeout=15) as client:
+            res = await client.get(
+                f"{_api_base()}{path}",
+                headers=_auth_headers(token, user_id, device_id),
+                params=params,
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"Clubhouse unreachable: {exc}"
+        ) from exc
+    if res.status_code >= 400:
+        message = res.text[:300]
+        try:
+            message = res.json().get("error_message") or message
+        except (ValueError, AttributeError):
+            pass
+        status_code = (
+            res.status_code if res.status_code in (400, 401, 403, 429) else 502
+        )
+        raise HTTPException(status_code=status_code, detail=f"Clubhouse: {message}")
+    return res.json()
+
+
+def _require_auth() -> dict[str, Any]:
+    """Load the stored session or 409 if the account isn't connected."""
+    path = _auth_path()
+    if not path.is_file():
+        raise HTTPException(status_code=409, detail="Clubhouse not connected")
+    return json.loads(path.read_text())
 
 
 async def _ch_post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -200,6 +242,28 @@ async def connect_with_token(body: TokenConnectRequest) -> ClubhouseStatus:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(record))
     return status()
+
+
+@router.get("/channels", response_model=ChannelList)
+async def channels() -> dict[str, Any]:
+    """Live rooms right now (Clubhouse GET /get_channels)."""
+    auth = _require_auth()
+    return await _ch_authed_get(
+        "/get_channels", auth["auth_token"], auth["user_id"], auth.get("device_id")
+    )
+
+
+@router.get("/following", response_model=FollowingList)
+async def following() -> dict[str, Any]:
+    """People the connected account follows (Clubhouse POST /get_following)."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/get_following",
+        {"user_id": auth["user_id"], "page_size": 50, "page": 1},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
 
 
 @router.delete("/auth", response_model=ClubhouseStatus)

@@ -37,3 +37,43 @@ class ClubhouseStatus(BaseModel):
     username: str | None = None
     name: str | None = None
     photo_url: str | None = None
+
+
+# --- Browse models (lean projections of Clubhouse's larger responses) ---
+
+
+class ChannelUser(BaseModel):
+    user_id: int | None = None
+    name: str | None = None
+    username: str | None = None
+    photo_url: str | None = None
+    is_speaker: bool | None = None
+    is_moderator: bool | None = None
+
+
+class Club(BaseModel):
+    name: str | None = None
+
+
+class Channel(BaseModel):
+    channel: str | None = None
+    topic: str | None = None
+    num_speakers: int | None = None
+    num_all: int | None = None
+    club: Club | None = None
+    users: list[ChannelUser] = []
+
+
+class ChannelList(BaseModel):
+    channels: list[Channel] = []
+
+
+class FollowUser(BaseModel):
+    user_id: int | None = None
+    name: str | None = None
+    username: str | None = None
+    photo_url: str | None = None
+
+
+class FollowingList(BaseModel):
+    users: list[FollowUser] = []

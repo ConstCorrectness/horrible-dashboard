@@ -41,3 +41,36 @@ export function connectClubhouseWithToken(
 export function disconnectClubhouse(): Promise<ClubhouseStatus> {
   return apiDelete<ClubhouseStatus>('/clubhouse/auth');
 }
+
+export interface ChannelUser {
+  user_id: number | null;
+  name: string | null;
+  username: string | null;
+  photo_url: string | null;
+  is_speaker: boolean | null;
+  is_moderator: boolean | null;
+}
+
+export interface Channel {
+  channel: string | null;
+  topic: string | null;
+  num_speakers: number | null;
+  num_all: number | null;
+  club: { name: string | null } | null;
+  users: ChannelUser[];
+}
+
+export interface FollowUser {
+  user_id: number | null;
+  name: string | null;
+  username: string | null;
+  photo_url: string | null;
+}
+
+export function getClubhouseChannels(): Promise<{ channels: Channel[] }> {
+  return apiGet<{ channels: Channel[] }>('/clubhouse/channels');
+}
+
+export function getClubhouseFollowing(): Promise<{ users: FollowUser[] }> {
+  return apiGet<{ users: FollowUser[] }>('/clubhouse/following');
+}

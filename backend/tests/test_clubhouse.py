@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -16,6 +18,55 @@ FAKE_PROFILE = {
 def client(tmp_path, monkeypatch) -> TestClient:
     monkeypatch.setenv("HORRIBLE_DATA_DIR", str(tmp_path))
     return TestClient(app)
+
+
+def _connect(tmp_path) -> None:
+    (tmp_path / "clubhouse-auth.json").write_text(
+        json.dumps({"auth_token": "T", "user_id": 4242, "device_id": "D"})
+    )
+
+
+def test_channels_requires_connection(client: TestClient) -> None:
+    assert client.get("/api/clubhouse/channels").status_code == 409
+
+
+def test_channels_returns_parsed_rooms(client, tmp_path, monkeypatch) -> None:
+    _connect(tmp_path)
+
+    async def fake_get(path, token, user_id, device_id=None, params=None):
+        assert (path, token, user_id, device_id) == ("/get_channels", "T", 4242, "D")
+        return {
+            "success": True,
+            "channels": [
+                {
+                    "channel": "abc",
+                    "topic": "Late night code",
+                    "num_speakers": 2,
+                    "num_all": 9,
+                    "club": {"name": "Builders"},
+                    "users": [{"user_id": 1, "name": "Ada", "is_speaker": True}],
+                }
+            ],
+        }
+
+    monkeypatch.setattr(routes, "_ch_authed_get", fake_get)
+    body = client.get("/api/clubhouse/channels").json()
+    assert body["channels"][0]["topic"] == "Late night code"
+    assert body["channels"][0]["club"]["name"] == "Builders"
+    assert body["channels"][0]["users"][0]["name"] == "Ada"
+
+
+def test_following_returns_users(client, tmp_path, monkeypatch) -> None:
+    _connect(tmp_path)
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        assert path == "/get_following"
+        assert payload["user_id"] == 4242
+        return {"users": [{"user_id": 7, "username": "bob", "name": "Bob"}]}
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    body = client.get("/api/clubhouse/following").json()
+    assert body["users"][0]["username"] == "bob"
 
 
 def _mock_ch(monkeypatch, responses: dict[str, dict]) -> list[tuple[str, dict]]:
