@@ -128,6 +128,9 @@ node_modules/
 .pnpm-store/
 *.tsbuildinfo
 .vite/
+# Sample plugins commit their built entry so the marketplace demo works
+# on a fresh clone without a build step.
+!examples/plugins/*/dist/
 
 # Tauri / Rust
 src-tauri/target/

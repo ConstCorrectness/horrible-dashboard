@@ -12,6 +12,7 @@
   "dependencies": {
     "@horrible/core": "workspace:*",
     "@horrible/ui": "workspace:*",
+    "@tauri-apps/api": "^2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

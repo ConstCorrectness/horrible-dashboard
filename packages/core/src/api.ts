@@ -3,16 +3,28 @@
  * base: the web dev server proxies /api to localhost:8000, and the Tauri shell
  * loads the same frontend from that dev server (dev) or a configured origin.
  */
+import { apiUrl } from './origin';
 import { recordClientIo } from './telemetry';
 
 const BASE = '/api';
+
+/** Thrown for non-2xx responses; carries the status so callers can branch on it. */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const method = init?.method ?? 'GET';
   const start = performance.now();
   const requestBytes = typeof init?.body === 'string' ? init.body.length : null;
   try {
-    const res = await fetch(`${BASE}${path}`, init);
+    const res = await fetch(apiUrl(`${BASE}${path}`), init);
     const text = await res.text();
     recordClientIo({
       method,
@@ -32,7 +44,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       } catch {
         // non-JSON error body — keep the status message
       }
-      throw new Error(message);
+      throw new ApiError(message, res.status);
     }
     return JSON.parse(text) as T;
   } catch (err) {

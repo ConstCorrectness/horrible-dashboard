@@ -24,4 +24,10 @@ param(
 )
 
 $env:Path = ($env:Path -split ';' | Where-Object { $_ -and $_ -notmatch 'mingw64\\bin' }) -join ';'
-uv run uvicorn backend.app:app --reload --port $Port
+# A set SSLKEYLOGFILE (e.g. for Wireshark) makes CPython's ssl module use
+# OpenSSL's FILE*-based keylog API, which aborts python.exe with
+# "no OPENSSL_Applink" on the first SSL context init. Clear it for this process.
+$env:SSLKEYLOGFILE = $null
+# --reload-dir: only watch backend code. Watching the repo root means every
+# $HORRIBLE_DATA_DIR write (dashboard layout, plugin storage) restarts the server.
+uv run uvicorn backend.app:app --reload --reload-dir backend --port $Port

@@ -12,6 +12,9 @@ as it is, not as it once was.
 - [architecture/windowing.md](architecture/windowing.md) — the dockable
   workspace: how panels open as tabbed/split/floating windows, panel
   types vs instances, and layout persistence.
+- [architecture/plugin-sdk.md](architecture/plugin-sdk.md) — the public plugin
+  contract (`@horrible/sdk`): package format, authoring guide, runtime shims,
+  versioning, trust model, catalog/install lifecycle.
 - `modules/` — one page per feature module, each describing how it plugs into the
   layout shell and how it behaves in the browser vs the desktop app:
   - [modules/agent-chat.md](modules/agent-chat.md)
@@ -19,6 +22,7 @@ as it is, not as it once was.
   - [modules/scratch.md](modules/scratch.md)
   - [modules/clubhouse.md](modules/clubhouse.md)
   - [modules/observability.md](modules/observability.md)
+  - [modules/marketplace.md](modules/marketplace.md)
   - [modules/editor.md](modules/editor.md)
   - [modules/terminal.md](modules/terminal.md)
   - [modules/file-explorer.md](modules/file-explorer.md)

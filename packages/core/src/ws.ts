@@ -2,11 +2,11 @@
  * The shell's single shared WebSocket to the backend `/ws`. Modules subscribe to
  * named channels rather than opening their own sockets. Reconnects with backoff.
  */
-export interface WsMessage {
-  channel: string;
-  event: string;
-  data?: unknown;
-}
+import type { WsMessage } from '@horrible/sdk';
+
+import { wsUrl } from './origin';
+
+export type { WsMessage };
 
 type Handler = (msg: WsMessage) => void;
 
@@ -21,8 +21,7 @@ function connect(): void {
   ) {
     return;
   }
-  const scheme = window.location.protocol === 'https:' ? 'wss' : 'ws';
-  socket = new WebSocket(`${scheme}://${window.location.host}/ws`);
+  socket = new WebSocket(wsUrl('/ws'));
 
   socket.onopen = () => {
     backoff = 500;

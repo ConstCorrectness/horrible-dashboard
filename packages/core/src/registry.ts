@@ -1,39 +1,8 @@
-import type { ComponentType } from 'react';
+// Declaration types live in @horrible/sdk so plugins and built-in modules share
+// the exact same contract; re-exported here so existing imports keep working.
+import type { CommandDecl, KeybindingDecl, PanelDecl, WidgetDecl } from '@horrible/sdk';
 
-import type { Capability } from './capabilities';
-
-export interface CommandDecl {
-  /** `module.verb`, e.g. `dashboard.open`. */
-  id: string;
-  title: string;
-  run: () => void | Promise<void>;
-}
-
-export interface PanelDecl {
-  id: string;
-  title: string;
-  component: ComponentType;
-  defaultPlacement: 'left' | 'center' | 'right' | 'bottom';
-  /**
-   * When true, only one window of this panel can exist — opening it again
-   * focuses the existing one (e.g. the dashboard). When false/omitted, each
-   * open creates a new instance (e.g. terminals, editor buffers).
-   */
-  singleton?: boolean;
-}
-
-export interface WidgetDecl {
-  id: string;
-  title: string;
-  component: ComponentType;
-  requiredCapabilities?: Capability[];
-}
-
-export interface KeybindingDecl {
-  /** e.g. `mod+k` — `mod` is ctrl (or cmd on macOS). */
-  key: string;
-  command: string;
-}
+export type { CommandDecl, KeybindingDecl, PanelDecl, WidgetDecl };
 
 export interface ModuleManifest {
   id: string;

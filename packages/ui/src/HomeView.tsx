@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import {
   DEFAULT_AGENT_MODEL,
   getAgentStatus,
+  getBackendOrigin,
   pullAgentModel,
   saveAgentConfig,
   streamAgentChat,
@@ -66,13 +67,21 @@ export function HomeView() {
         {typeof status === 'object' && !ready && (
           <OnboardingCard status={status} onChanged={() => void refresh()} />
         )}
-        {status === 'backend-down' && (
-          <p className="home-hint">
-            Backend unreachable — start it with{' '}
-            <code>uv run uvicorn backend.app:app --port 8000</code>, then{' '}
-            <button onClick={() => void refresh()}>retry</button>
-          </p>
-        )}
+        {status === 'backend-down' &&
+          // Shell-managed backend (desktop): it starts/restarts automatically,
+          // so don't tell the user to run uvicorn by hand.
+          (getBackendOrigin() ? (
+            <p className="home-hint">
+              Backend isn&apos;t responding yet —{' '}
+              <button onClick={() => void refresh()}>retry</button>
+            </p>
+          ) : (
+            <p className="home-hint">
+              Backend unreachable — start it with{' '}
+              <code>uv run uvicorn backend.app:app --port 8000</code>, then{' '}
+              <button onClick={() => void refresh()}>retry</button>
+            </p>
+          ))}
       </div>
     </div>
   );
@@ -92,8 +101,7 @@ function OnboardingCard({ status, onChanged }: { status: AgentStatus; onChanged:
     setPullState('starting…');
     try {
       await pullAgentModel(model, (p) => {
-        const pct =
-          p.total && p.completed ? ` ${Math.round((p.completed / p.total) * 100)}%` : '';
+        const pct = p.total && p.completed ? ` ${Math.round((p.completed / p.total) * 100)}%` : '';
         setPullState(`${p.status ?? 'pulling'}${pct}`);
       });
       setPullState(null);

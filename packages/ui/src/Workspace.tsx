@@ -61,22 +61,35 @@ function openPanel(api: DockviewApi, panelId: string, floating = false): void {
 
 export function Workspace({ pendingOpen }: { pendingOpen?: { panelId: string; nonce: number } }) {
   const apiRef = useRef<DockviewApi | null>(null);
+  // Panels must not open before the async layout restore: api.fromJSON replaces
+  // the whole layout and would wipe them (the restore wins the race).
+  const restoredRef = useRef(false);
   // Track the last applied open request so we don't reopen on every render.
   const lastNonce = useRef<number>(-1);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const applyPending = () => {
     const api = apiRef.current;
-    if (!api || !pendingOpen || pendingOpen.nonce === lastNonce.current) return;
+    if (!api || !restoredRef.current || !pendingOpen || pendingOpen.nonce === lastNonce.current) {
+      return;
+    }
     lastNonce.current = pendingOpen.nonce;
     openPanel(api, pendingOpen.panelId);
   };
+  // onReady's restore callback needs the latest closure, not the mount-time one.
+  const applyPendingRef = useRef(applyPending);
+  applyPendingRef.current = applyPending;
 
   useEffect(applyPending, [pendingOpen]);
 
   const onReady = (event: DockviewReadyEvent) => {
     const api = event.api;
     apiRef.current = api;
+    // A fresh dockview instance (StrictMode re-mounts the engine) starts
+    // unrestored, and any open request consumed by a discarded instance must
+    // be re-applied to this one.
+    restoredRef.current = false;
+    lastNonce.current = -1;
 
     // Dev convenience: reach the live layout API from the console / preview eval.
     // The literal `import.meta.env.DEV` is what Vite statically replaces.
@@ -84,8 +97,12 @@ export function Workspace({ pendingOpen }: { pendingOpen?: { panelId: string; no
       (window as Window & { __horribleWorkspace?: DockviewApi }).__horribleWorkspace = api;
     }
 
+    // Restores race across instances (StrictMode mounts the engine twice, and
+    // both async restores are in flight together): only the instance that is
+    // still the live one may apply its restore and mark the workspace ready.
     void getWorkspaceLayout()
       .then((layout) => {
+        if (apiRef.current !== api) return;
         if (layout && Object.keys(layout).length > 0) {
           // Opaque blob from core → dockview's own shape (see SerializedLayout).
           api.fromJSON(layout as unknown as Parameters<typeof api.fromJSON>[0]);
@@ -94,8 +111,14 @@ export function Workspace({ pendingOpen }: { pendingOpen?: { panelId: string; no
           openPanel(api, 'dashboard.home');
         }
       })
-      .catch(() => openPanel(api, 'dashboard.home'))
-      .finally(applyPending);
+      .catch(() => {
+        if (apiRef.current === api) openPanel(api, 'dashboard.home');
+      })
+      .finally(() => {
+        if (apiRef.current !== api) return;
+        restoredRef.current = true;
+        applyPendingRef.current();
+      });
 
     // Persist layout changes (debounced) so it restores next session.
     api.onDidLayoutChange(() => {

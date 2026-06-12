@@ -99,22 +99,47 @@ gracefully:
 
 ## Backend connection
 
-Both layouts talk to the same FastAPI backend over HTTP + WebSocket.
+Both layouts talk to the same FastAPI backend over HTTP + WebSocket, through one
+origin switch (`packages/core/src/origin.ts`, set once at boot via
+`initBackendOrigin`):
 
-- **Desktop:** the Tauri app targets `localhost` (backend started alongside it in
-  dev; bundling strategy TBD for release).
-- **Browser:** the web app targets a configured backend URL — `localhost` in dev,
-  potentially a remote host later. Anything that executes on the backend
-  (terminals, file access, agents) therefore runs **where the backend runs**, not
-  where the browser runs. Module docs call this out where it matters.
+- **Browser:** origin stays `null` — paths are relative (`/api`, `/ws`) and the
+  Vite dev server proxies them to `localhost:8000`. Start the backend yourself
+  (`scripts/dev-backend.ps1` or `uv run uvicorn backend.app:app --port 8000`).
+  Anything that executes on the backend (terminals, file access, agents) runs
+  **where the backend runs**, not where the browser runs. Module docs call this
+  out where it matters.
+- **Desktop:** the Tauri shell **spawns and supervises the backend itself**
+  (`apps/desktop/src-tauri/src/backend.rs`). On launch it locates the repo
+  checkout, reuses an already-running backend on `:8000` if there is one
+  (dev-backend.ps1 coexistence), otherwise picks a port (8000 preferred,
+  ephemeral fallback) and spawns uvicorn bound to `127.0.0.1` — via the repo's
+  `.venv` python when present, else `uv run` — with MinGW dirs stripped from the
+  child PATH (the `no OPENSSL_Applink` crash). It restarts the process with
+  backoff if it dies (3 fast failures → `failed` with the stderr tail) and kills
+  it on app exit. The frontend polls the `backend_status` Tauri command at boot
+  and uses **absolute** http/ws URLs from then on — no Vite proxy in the loop,
+  so dev and packaged builds exercise the same path. If the backend never comes
+  up, boot proceeds pluginless and the home view shows the backend-down hint.
+
+A packaged desktop build has no repo checkout: the supervisor reports
+`unavailable`, which is the plug point for a future bundled/downloaded runtime
+(python-build-standalone). A per-session auth token between shell and backend is
+a planned follow-up — today anything on localhost can reach the API.
 
 The shell owns a single multiplexed WebSocket connection with reconnect/backoff;
 modules subscribe to channels on it rather than opening their own sockets.
 
 ## What belongs in each entry
 
-- `apps/web`: boot the shell, read backend URL config, register the
-  browser capability set. Nothing feature-specific.
+- `apps/web`: boot the shell, resolve the backend origin (Tauri: ask the shell's
+  `backend_status` command; browser: relative + proxy), register the browser
+  capability set. Nothing feature-specific.
+- Boot is **async**: after registering built-in modules, the entry awaits
+  `loadPlugins()` (installed marketplace plugins, see
+  [plugin-sdk.md](plugin-sdk.md)) before the first render, so restored layouts
+  find plugin panels/widgets already registered. If the backend is down, boot
+  proceeds without plugins.
 - `apps/desktop`: same boot, plus Tauri-only wiring — window chrome, tray, global
   shortcuts, multi-window pop-out, native menu that dispatches to the same
   command registry. Rust code in `src-tauri/` stays a thin shell; app logic

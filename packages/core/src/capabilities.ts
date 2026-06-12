@@ -1,11 +1,8 @@
-/** Platform capabilities — see docs/architecture/layout-shell.md for the table. */
-export type Capability =
-  | 'fs.nativeDialogs'
-  | 'shell.revealInOS'
-  | 'notifications.system'
-  | 'window.multi'
-  | 'shortcuts.global'
-  | 'tray';
+// The Capability union lives in @horrible/sdk (shared with plugins); the
+// runtime state below stays host-side.
+import type { Capability } from '@horrible/sdk';
+
+export type { Capability };
 
 export const BROWSER_CAPABILITIES: Capability[] = ['notifications.system'];
 

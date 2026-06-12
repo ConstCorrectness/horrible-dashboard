@@ -13,4 +13,11 @@ export default tseslint.config(
       globals: { console: 'readonly', process: 'readonly', URL: 'readonly' },
     },
   },
+  {
+    // Plugin-runtime shims: plain browser ESM served from public/, no build step.
+    files: ['apps/*/public/plugin-runtime/**/*.js'],
+    languageOptions: {
+      globals: { window: 'readonly' },
+    },
+  },
 );

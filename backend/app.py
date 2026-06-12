@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.modules.agent import router as agent_router
 from backend.modules.clubhouse import router as clubhouse_router
 from backend.modules.dashboard import router as dashboard_router
+from backend.modules.plugins import router as plugins_router
 from backend.modules.telemetry import router as telemetry_router
 from backend.modules.telemetry import stream_telemetry
 from backend.modules.telemetry.instrument import telemetry_middleware
@@ -41,6 +42,7 @@ app.include_router(agent_router, prefix="/api")
 app.include_router(workspace_router, prefix="/api")
 app.include_router(clubhouse_router, prefix="/api")
 app.include_router(telemetry_router, prefix="/api")
+app.include_router(plugins_router, prefix="/api")
 
 
 @app.websocket("/ws")

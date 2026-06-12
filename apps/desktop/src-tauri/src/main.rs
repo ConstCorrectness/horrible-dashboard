@@ -1,8 +1,29 @@
 // The Tauri shell stays thin: app logic lives in the backend and packages/.
+// Its one real job is supervising the backend process — see backend.rs.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod backend;
+
+use std::sync::Arc;
+
+use tauri::Manager;
+
 fn main() {
+    let supervisor = Arc::new(backend::BackendSupervisor::new());
+    backend::start(Arc::clone(&supervisor));
+
     tauri::Builder::default()
-        .run(tauri::generate_context!())
-        .expect("error while running horrible-dashboard");
+        .manage(supervisor)
+        .invoke_handler(tauri::generate_handler![backend::backend_status])
+        .build(tauri::generate_context!())
+        .expect("error while building horrible-dashboard")
+        .run(|app, event| {
+            if matches!(
+                event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            ) {
+                // Idempotent: may fire for both events.
+                app.state::<Arc<backend::BackendSupervisor>>().shutdown();
+            }
+        });
 }

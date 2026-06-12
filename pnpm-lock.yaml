@@ -44,6 +44,9 @@ importers:
       '@horrible/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@tauri-apps/api':
+        specifier: ^2
+        version: 2.11.0
       react:
         specifier: ^19.0.0
         version: 19.2.7
@@ -67,7 +70,42 @@ importers:
         specifier: ^7.0.0
         version: 7.3.5(@types/node@22.19.20)
 
+  examples/plugins/hello-widget:
+    dependencies:
+      '@horrible/sdk':
+        specifier: workspace:*
+        version: link:../../../packages/sdk
+    devDependencies:
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+      vite:
+        specifier: ^7.0.0
+        version: 7.3.5(@types/node@22.19.20)
+
   packages/core:
+    dependencies:
+      '@horrible/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+    devDependencies:
+      '@types/react':
+        specifier: ^19.0.0
+        version: 19.2.17
+      react:
+        specifier: ^19.0.0
+        version: 19.2.7
+      typescript:
+        specifier: ^5.8.0
+        version: 5.9.3
+
+  packages/sdk:
     devDependencies:
       '@types/react':
         specifier: ^19.0.0
@@ -689,6 +727,9 @@ packages:
     resolution: {integrity: sha512-X+zaP2x+j4RXGfbp/seSoRHWnPxzApilDszisZxbYH5C/jTxFhCtDNdPGZb9lJyYPs24wGxruPF7Y+sIXt9Gzw==}
     cpu: [x64]
     os: [win32]
+
+  '@tauri-apps/api@2.11.0':
+    resolution: {integrity: sha512-7CinYODhky9lmO23xHnUFv0Xt43fbtWMyxZcLcRBlFkcgXKuEirBvHpmtJ89YMhyeGcq20Wuc47Fa4XjyniywA==}
 
   '@tauri-apps/cli-darwin-arm64@2.11.2':
     resolution: {integrity: sha512-+4UZzLt+eOAEQCwgd+TqKgyUJMrvx+BgdXLLaqJYmPqzP+nE6YZr/hY6CWLYGQb8jFn99jEkmC6uA3tNvamA1w==}
@@ -1850,6 +1891,8 @@ snapshots:
 
   '@rollup/rollup-win32-x64-msvc@4.61.1':
     optional: true
+
+  '@tauri-apps/api@2.11.0': {}
 
   '@tauri-apps/cli-darwin-arm64@2.11.2':
     optional: true

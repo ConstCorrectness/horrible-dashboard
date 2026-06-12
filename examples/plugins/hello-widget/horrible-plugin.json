@@ -1,0 +1,11 @@
+{
+  "id": "hello-widget",
+  "name": "Hello Widget",
+  "version": "0.1.0",
+  "description": "Reference plugin: a dashboard counter widget persisted via plugin storage, plus a command.",
+  "author": "horrible",
+  "entry": "dist/index.js",
+  "sdkVersion": 1,
+  "requiredCapabilities": [],
+  "permissions": ["storage"]
+}

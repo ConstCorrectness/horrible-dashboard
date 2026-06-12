@@ -5,7 +5,15 @@ export {
   initCapabilities,
   type Capability,
 } from './capabilities';
-export { apiDelete, apiGet, apiPost, apiPut } from './api';
+export { ApiError, apiDelete, apiGet, apiPost, apiPut } from './api';
+export { apiUrl, getBackendOrigin, initBackendOrigin, wsUrl } from './origin';
+export {
+  loadPlugins,
+  pluginLoadErrors,
+  type InstalledPlugin,
+  type InstalledPluginList,
+  type PluginLoadError,
+} from './plugins/loader';
 export { getWorkspaceLayout, saveWorkspaceLayout, type SerializedLayout } from './workspace';
 export { subscribeChannel, type WsMessage } from './ws';
 export { recordClientIo, telemetryStore, type IoEvent, type IoSource } from './telemetry';
@@ -29,6 +37,7 @@ export {
   type ClubhouseStatus,
 } from './modules/clubhouse';
 export { observabilityModule } from './modules/observability';
+export { marketplaceModule } from './modules/marketplace';
 export {
   agentModule,
   DEFAULT_AGENT_MODEL,
