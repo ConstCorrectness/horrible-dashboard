@@ -5,7 +5,7 @@
  */
 import { useEffect, useState } from 'react';
 
-import { definePlugin, type PluginHost } from '@horrible/sdk';
+import { definePlugin, type PluginHost } from '@horribledashboard/sdk';
 
 const COUNT_KEY = 'count';
 

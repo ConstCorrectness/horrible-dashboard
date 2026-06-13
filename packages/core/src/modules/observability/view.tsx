@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react';
+import { Fragment, useState, useSyncExternalStore, type ReactNode } from 'react';
 
 import { telemetryStore, type IoEvent } from '../../telemetry';
 
@@ -22,9 +22,79 @@ function statusClass(e: IoEvent): string {
   return '';
 }
 
-/** Full observability panel: the live I/O table with source badges. */
+function eventKey(e: IoEvent): string {
+  return `${e.source}-${e.id}`;
+}
+
+/** Whether the event carries detail worth an expanded view. */
+function hasDetails(e: IoEvent): boolean {
+  return Boolean(
+    e.request_headers || e.response_headers || e.request_body || e.response_body || e.error,
+  );
+}
+
+function HeaderList({ headers }: { headers: Record<string, string> }) {
+  return (
+    <dl className="io-kv">
+      {Object.entries(headers).map(([name, value]) => (
+        <div key={name}>
+          <dt>{name}</dt>
+          <dd>{value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/** Expanded per-event detail: headers and bodies, already redacted at capture. */
+function IoDetails({ event }: { event: IoEvent }) {
+  const sections: [string, ReactNode][] = [];
+  if (event.error) sections.push(['Error', <code key="v">{event.error}</code>]);
+  if (event.request_headers) {
+    sections.push(['Request headers', <HeaderList key="v" headers={event.request_headers} />]);
+  }
+  if (event.request_body) {
+    sections.push(['Request body', <pre key="v">{event.request_body}</pre>]);
+  }
+  if (event.response_headers) {
+    sections.push(['Response headers', <HeaderList key="v" headers={event.response_headers} />]);
+  }
+  if (event.response_body) {
+    sections.push(['Response body', <pre key="v">{event.response_body}</pre>]);
+  }
+  return (
+    <div className="io-details">
+      {sections.map(([title, body]) => (
+        <section key={title}>
+          <h4>{title}</h4>
+          {body}
+        </section>
+      ))}
+    </div>
+  );
+}
+
+/** Tracks which event keys are expanded; shared by the panel and the widget. */
+function useExpanded(): [(e: IoEvent) => boolean, (e: IoEvent) => void] {
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const isExpanded = (e: IoEvent) => expanded.has(eventKey(e));
+  const toggle = (e: IoEvent) => {
+    if (!hasDetails(e)) return;
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      const key = eventKey(e);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+  return [isExpanded, toggle];
+}
+
+/** Full observability panel: the live I/O table with expandable rows. */
 export function ObservabilityPanel() {
   const events = useIoEvents();
+  const [isExpanded, toggle] = useExpanded();
   const rows = [...events].reverse(); // newest first
 
   return (
@@ -37,6 +107,7 @@ export function ObservabilityPanel() {
         <table className="obs-table">
           <thead>
             <tr>
+              <th aria-label="Details" />
               <th>Time</th>
               <th>Source</th>
               <th>Method</th>
@@ -48,23 +119,35 @@ export function ObservabilityPanel() {
           </thead>
           <tbody>
             {rows.map((e) => (
-              <tr key={`${e.source}-${e.id}`}>
-                <td className="io-dim">{fmtTime(e.ts)}</td>
-                <td>
-                  <span className={`io-badge io-${e.source}`}>{e.source}</span>
-                </td>
-                <td>{e.method}</td>
-                <td className="io-target" title={e.target}>
-                  {e.target}
-                </td>
-                <td className={statusClass(e)}>{e.error ? 'ERR' : (e.status ?? '')}</td>
-                <td className="io-dim">{e.duration_ms != null ? Math.round(e.duration_ms) : ''}</td>
-                <td className="io-dim">{fmtBytes(e.response_bytes)}</td>
-              </tr>
+              <Fragment key={eventKey(e)}>
+                <tr className={hasDetails(e) ? 'io-expandable' : ''} onClick={() => toggle(e)}>
+                  <td className="io-caret">{hasDetails(e) ? (isExpanded(e) ? '▾' : '▸') : ''}</td>
+                  <td className="io-dim">{fmtTime(e.ts)}</td>
+                  <td>
+                    <span className={`io-badge io-${e.source}`}>{e.source}</span>
+                  </td>
+                  <td>{e.method}</td>
+                  <td className="io-target" title={e.target}>
+                    {e.target}
+                  </td>
+                  <td className={statusClass(e)}>{e.error ? 'ERR' : (e.status ?? '')}</td>
+                  <td className="io-dim">
+                    {e.duration_ms != null ? Math.round(e.duration_ms) : ''}
+                  </td>
+                  <td className="io-dim">{fmtBytes(e.response_bytes)}</td>
+                </tr>
+                {isExpanded(e) && (
+                  <tr className="io-details-row">
+                    <td colSpan={8}>
+                      <IoDetails event={e} />
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={7} className="dashboard-hint">
+                <td colSpan={8} className="dashboard-hint">
                   No I/O yet — interact with the app and traffic appears here.
                 </td>
               </tr>
@@ -76,9 +159,10 @@ export function ObservabilityPanel() {
   );
 }
 
-/** Compact dashboard widget: a summary and the last few calls. */
+/** Compact dashboard widget: a summary and the last few calls, expandable too. */
 export function ObservabilityWidget() {
   const events = useIoEvents();
+  const [isExpanded, toggle] = useExpanded();
   const errors = events.filter((e) => e.error || (e.status != null && e.status >= 400)).length;
   const recent = [...events].slice(-5).reverse();
 
@@ -90,12 +174,19 @@ export function ObservabilityWidget() {
       </div>
       <ul className="obs-recent">
         {recent.map((e) => (
-          <li key={`${e.source}-${e.id}`}>
-            <span className={`io-badge io-${e.source}`}>{e.source}</span>
-            <span className="io-target" title={e.target}>
-              {e.method} {e.target}
-            </span>
-            <span className={statusClass(e)}>{e.error ? 'ERR' : (e.status ?? '')}</span>
+          <li key={eventKey(e)}>
+            <button
+              className={`obs-recent-row ${hasDetails(e) ? 'io-expandable' : ''}`}
+              onClick={() => toggle(e)}
+            >
+              <span className="io-caret">{hasDetails(e) ? (isExpanded(e) ? '▾' : '▸') : ''}</span>
+              <span className={`io-badge io-${e.source}`}>{e.source}</span>
+              <span className="io-target" title={e.target}>
+                {e.method} {e.target}
+              </span>
+              <span className={statusClass(e)}>{e.error ? 'ERR' : (e.status ?? '')}</span>
+            </button>
+            {isExpanded(e) && <IoDetails event={e} />}
           </li>
         ))}
         {recent.length === 0 && <li className="dashboard-hint">No I/O yet.</li>}

@@ -1,14 +1,14 @@
-# @horrible/sdk — Design Spec
+# @horribledashboard/sdk — Design Spec
 
 **Version:** SDK API v1  
-**Package:** `@horrible/sdk` (`packages/sdk/`)  
+**Package:** `@horribledashboard/sdk` (`packages/sdk/`)  
 **Status:** Stable (breaking changes bump `SDK_API_VERSION`)
 
 ---
 
 ## Overview
 
-`@horrible/sdk` is the public extension contract for horrible-dashboard. Third-party plugins build against it to contribute commands, panels, dashboard widgets, and keybindings — the exact same primitive types built-in modules use. There is one source of truth; `@horrible/core` re-exports all declaration types from the SDK.
+`@horribledashboard/sdk` is the public extension contract for horrible-dashboard. Third-party plugins build against it to contribute commands, panels, dashboard widgets, and keybindings — the exact same primitive types built-in modules use. There is one source of truth; `@horrible/core` re-exports all declaration types from the SDK.
 
 **Trust model:** plugins are trusted code (Obsidian/VS Code style), running unsandboxed as ES modules in the app's realm with full DOM and SDK access. Marketplace curation is the safety layer.
 
@@ -19,7 +19,7 @@
 A plugin is an ES module whose **default export** is the result of `definePlugin({ setup })`.
 
 ```ts
-import { definePlugin } from '@horrible/sdk';
+import { definePlugin } from '@horribledashboard/sdk';
 
 export default definePlugin({
   setup(host) {
@@ -272,15 +272,15 @@ Every plugin directory must contain a `horrible-plugin.json` at its root.
 | `requiredCapabilities` | `Capability[]` | Platform must satisfy all; loader skips otherwise |
 | `permissions` | `string[]` | Informational in v1 (displayed in marketplace UI); reserved for future enforcement |
 
-**Typed interface (`PluginPackageManifest`)** is exported from `@horrible/sdk` for use in tooling.
+**Typed interface (`PluginPackageManifest`)** is exported from `@horribledashboard/sdk` for use in tooling.
 
 ---
 
-## Build Preset (`@horrible/sdk/vite`)
+## Build Preset (`@horribledashboard/sdk/vite`)
 
 ```ts
 import { defineConfig } from 'vite';
-import { horriblePluginViteConfig } from '@horrible/sdk/vite';
+import { horriblePluginViteConfig } from '@horribledashboard/sdk/vite';
 
 export default defineConfig(horriblePluginViteConfig({ entry: 'src/index.tsx' }));
 ```
@@ -291,14 +291,14 @@ The preset configures a single-file ESM lib build and marks three specifiers **e
 |----------|-------------|
 | `react` | `/plugin-runtime/react.js` |
 | `react/jsx-runtime` | `/plugin-runtime/jsx-runtime.js` |
-| `@horrible/sdk` | `/plugin-runtime/sdk.js` |
+| `@horribledashboard/sdk` | `/plugin-runtime/sdk.js` |
 
 These shims re-export from `window.__HORRIBLE_RUNTIME__`, which the host populates from its own bundled copies before any plugin loads. This guarantees **one React instance** across host and all plugins. A plugin that bundles its own React will crash on hooks — the loader cannot detect this.
 
 **Critical constraints:**
 - Do **not** enable code splitting — entries are evaluated as Blob modules with no base URL; relative chunk imports won't resolve.
-- Do **not** add `react` or `@horrible/sdk` to `build.rollupOptions.external` manually — the preset already handles it.
-- Do **not** import from `@horrible/sdk` at runtime paths that bypass the preset (e.g. dynamic imports of SDK internals).
+- Do **not** add `react` or `@horribledashboard/sdk` to `build.rollupOptions.external` manually — the preset already handles it.
+- Do **not** import from `@horribledashboard/sdk` at runtime paths that bypass the preset (e.g. dynamic imports of SDK internals).
 
 ---
 

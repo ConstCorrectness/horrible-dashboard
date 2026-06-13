@@ -24,7 +24,6 @@ def test_dashboard_layout_default_then_roundtrip(client: TestClient) -> None:
     assert res.json()["widgets"] == [
         "dashboard.welcome",
         "dashboard.backendStatus",
-        "clubhouse.account",
     ]
 
     new_layout = {"widgets": ["dashboard.backendStatus"]}

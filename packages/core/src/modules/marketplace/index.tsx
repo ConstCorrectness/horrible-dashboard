@@ -2,7 +2,7 @@ import { registry, type ModuleManifest } from '../../registry';
 import { MarketplacePanel } from './MarketplacePanel';
 
 /**
- * Browse, install, and manage plugins built against @horrible/sdk.
+ * Browse, install, and manage plugins built against @horribledashboard/sdk.
  * See docs/modules/marketplace.md and docs/architecture/plugin-sdk.md.
  */
 export const marketplaceModule: ModuleManifest = {

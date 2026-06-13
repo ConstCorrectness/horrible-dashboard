@@ -1,6 +1,6 @@
-// The Capability union lives in @horrible/sdk (shared with plugins); the
+// The Capability union lives in @horribledashboard/sdk (shared with plugins); the
 // runtime state below stays host-side.
-import type { Capability } from '@horrible/sdk';
+import type { Capability } from '@horribledashboard/sdk';
 
 export type { Capability };
 

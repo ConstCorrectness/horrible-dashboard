@@ -1,14 +1,45 @@
 {
-  "name": "@horrible/sdk",
+  "name": "@horribledashboard/sdk",
   "version": "0.1.0",
-  "private": true,
+  "description": "Plugin SDK for horrible-dashboard: the plugin contract (definePlugin, panels, widgets, commands, keybindings) and the Vite build preset for plugin authors.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ConstCorrectness/horrible-dashboard.git",
+    "directory": "packages/sdk"
+  },
+  "keywords": [
+    "horrible-dashboard",
+    "plugin",
+    "sdk"
+  ],
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
     "./vite": "./src/vite.ts"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "./vite": {
+        "types": "./dist/vite.d.ts",
+        "default": "./dist/vite.js"
+      }
+    }
+  },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "pnpm build"
   },
   "peerDependencies": {
     "react": "^19.0.0"

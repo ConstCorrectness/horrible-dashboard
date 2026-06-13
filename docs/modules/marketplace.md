@@ -1,6 +1,6 @@
 # Module: marketplace
 
-Browse, install, and manage plugins built against `@horrible/sdk` — the
+Browse, install, and manage plugins built against `@horribledashboard/sdk` — the
 storefront for the public plugin contract documented in
 [architecture/plugin-sdk.md](../architecture/plugin-sdk.md).
 

@@ -2,7 +2,7 @@
  * The shell's single shared WebSocket to the backend `/ws`. Modules subscribe to
  * named channels rather than opening their own sockets. Reconnects with backoff.
  */
-import type { WsMessage } from '@horrible/sdk';
+import type { WsMessage } from '@horribledashboard/sdk';
 
 import { wsUrl } from './origin';
 

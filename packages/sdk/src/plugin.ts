@@ -11,7 +11,7 @@ import type {
   PanelDecl,
   WidgetDecl,
   WsMessage,
-} from './types';
+} from './types.js';
 
 /**
  * Bumped on breaking changes to the plugin contract. A plugin package declares

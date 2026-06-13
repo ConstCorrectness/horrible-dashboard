@@ -1,7 +1,7 @@
 /**
  * Shared declaration types for everything that can be contributed to the shell.
  * These are the single source of truth — `@horrible/core` re-exports them, and
- * plugins built against `@horrible/sdk` use the exact same shapes as built-in
+ * plugins built against `@horribledashboard/sdk` use the exact same shapes as built-in
  * modules.
  */
 import type { ComponentType } from 'react';

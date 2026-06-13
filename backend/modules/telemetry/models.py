@@ -2,8 +2,10 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-# Only metadata is ever recorded — never request/response bodies or headers,
-# which would leak phone numbers, SMS codes, tokens, or prompts.
+# Detail fields (headers/bodies) are captured **redacted and truncated** — see
+# instrument.py: credential-bearing headers are masked, bodies on sensitive
+# routes (Clubhouse auth: phone numbers, SMS codes, tokens) are suppressed, and
+# everything is capped in size. Never record a raw header or body.
 IoSource = Literal["inbound", "outbound"]
 
 
@@ -18,3 +20,8 @@ class IoEvent(BaseModel):
     request_bytes: int | None = None
     response_bytes: int | None = None
     error: str | None = None
+    # Expandable detail — present only when safely capturable (see instrument.py).
+    request_headers: dict[str, str] | None = None
+    response_headers: dict[str, str] | None = None
+    request_body: str | None = None
+    response_body: str | None = None

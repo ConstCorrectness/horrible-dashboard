@@ -8,5 +8,5 @@ class DashboardLayout(BaseModel):
 
 
 DEFAULT_LAYOUT = DashboardLayout(
-    widgets=["dashboard.welcome", "dashboard.backendStatus", "clubhouse.account"]
+    widgets=["dashboard.welcome", "dashboard.backendStatus"]
 )

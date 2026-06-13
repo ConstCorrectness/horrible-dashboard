@@ -9,7 +9,7 @@ import {
   type HorriblePlugin,
   type PluginContributions,
   type PluginPackageManifest,
-} from '@horrible/sdk';
+} from '@horribledashboard/sdk';
 
 import { apiGet } from '../api';
 import { apiUrl } from '../origin';

@@ -6,7 +6,7 @@ export {
   type PluginHost,
   type PluginPackageManifest,
   type PluginStorage,
-} from './plugin';
+} from './plugin.js';
 export type {
   Capability,
   CommandDecl,
@@ -14,4 +14,4 @@ export type {
   PanelDecl,
   WidgetDecl,
   WsMessage,
-} from './types';
+} from './types.js';

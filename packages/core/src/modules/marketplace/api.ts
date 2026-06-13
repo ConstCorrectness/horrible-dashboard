@@ -1,5 +1,5 @@
 /** Typed client for the backend plugins module (`/api/plugins/*`). */
-import type { PluginPackageManifest } from '@horrible/sdk';
+import type { PluginPackageManifest } from '@horribledashboard/sdk';
 
 import { apiDelete, apiGet, apiPost, apiPut } from '../../api';
 import type { InstalledPlugin, InstalledPluginList } from '../../plugins/loader';

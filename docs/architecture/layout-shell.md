@@ -31,7 +31,8 @@ multiplexed client (`packages/core/src/ws.ts`, channel subscriptions) — its fi
 user is the observability `telemetry` channel (see
 [../modules/observability.md](../modules/observability.md)).
 
-The shell has two top-level **views** (`registry.openView`):
+The shell has two top-level **views** (switched by the shell's own
+`shell.home` / `shell.workspace` commands):
 
 - **`home`** — the default on open: a minimal centered surface (3D
   dashboard-friend avatar, greeting, ask bar streaming from the local model) that

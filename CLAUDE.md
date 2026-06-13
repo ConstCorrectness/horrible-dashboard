@@ -17,7 +17,7 @@ module onboards a Clubhouse account via a dashboard widget (unofficial API,
 token held server-side). An `observability` module shows live data flow
 (client/inbound/outbound I/O) — instrumented at the chokepoints, streamed over
 the shared `/ws` socket. A **public plugin SDK** (`packages/sdk`,
-`@horrible/sdk`) plus a `marketplace` module let third-party frontend plugins
+`@horribledashboard/sdk`) plus a `marketplace` module let third-party frontend plugins
 (panels/widgets/commands/keybindings) be installed from a catalog and loaded at
 boot — see docs/architecture/plugin-sdk.md. An experimental Electron shell lives
 on the `electron-shell` branch. Remaining modules (editor,
@@ -31,7 +31,7 @@ terminal, files, full chat cockpit) are unimplemented — see docs/ for their de
   brain: agents, data, MCP integrations, websockets to the UI.
 - **Extensibility:** built-in modules first. Every feature (chat, dashboard, notes,
   terminal, files) is an internal module registered through a central registry
-  (commands, panels, keybindings). The public plugin API (`@horrible/sdk` +
+  (commands, panels, keybindings). The public plugin API (`@horribledashboard/sdk` +
   marketplace) exposes the same contract to third-party frontend plugins; v1 is
   frontend-only, trusted/unsandboxed — see docs/architecture/plugin-sdk.md.
 
@@ -44,7 +44,7 @@ apps/
 packages/
   core/           # TS core: module registry, command palette, keybindings, API client
   ui/             # shared React components and panel/docking system
-  sdk/            # public plugin SDK (@horrible/sdk): plugin contract + build preset
+  sdk/            # public plugin SDK (@horribledashboard/sdk): plugin contract + build preset
 backend/          # FastAPI app: agents, modules' server side, websockets
 ```
 

@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@horrible/sdk": "workspace:*"
+    "@horribledashboard/sdk": "workspace:*"
   },
   "peerDependencies": {
     "react": "^19.0.0"

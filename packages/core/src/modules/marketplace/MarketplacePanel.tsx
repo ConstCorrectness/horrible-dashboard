@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 
-import type { PluginPackageManifest } from '@horrible/sdk';
+import type { PluginPackageManifest } from '@horribledashboard/sdk';
 
 import { pluginLoadErrors, type InstalledPlugin } from '../../plugins/loader';
 import {

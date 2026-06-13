@@ -1,5 +1,5 @@
 /** Builds the `PluginHost` handle passed to each plugin's `setup()`. */
-import type { PluginHost, PluginStorage } from '@horrible/sdk';
+import type { PluginHost, PluginStorage } from '@horribledashboard/sdk';
 
 import { ApiError, apiDelete, apiGet, apiPost, apiPut } from '../api';
 import { hasCapability } from '../capabilities';

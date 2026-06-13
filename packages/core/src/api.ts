@@ -19,10 +19,24 @@ export class ApiError extends Error {
   }
 }
 
+// Mirror of the backend's capture policy (instrument.py): bodies on sensitive
+// routes are suppressed, everything else is truncated.
+const SENSITIVE_PATH_PREFIXES = ['/clubhouse'];
+const MAX_BODY_CHARS = 2048;
+
+function safeBody(body: string | null | undefined, path: string): string | null {
+  if (!body) return null;
+  if (SENSITIVE_PATH_PREFIXES.some((p) => path.startsWith(p))) {
+    return '[redacted — sensitive route]';
+  }
+  return body.length > MAX_BODY_CHARS ? `${body.slice(0, MAX_BODY_CHARS)}… [truncated]` : body;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const method = init?.method ?? 'GET';
   const start = performance.now();
-  const requestBytes = typeof init?.body === 'string' ? init.body.length : null;
+  const requestBody = typeof init?.body === 'string' ? init.body : null;
+  const requestBytes = requestBody?.length ?? null;
   try {
     const res = await fetch(apiUrl(`${BASE}${path}`), init);
     const text = await res.text();
@@ -33,6 +47,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       duration_ms: performance.now() - start,
       request_bytes: requestBytes,
       response_bytes: text.length,
+      request_headers: init?.headers ? { ...(init.headers as Record<string, string>) } : null,
+      response_headers: Object.fromEntries(res.headers.entries()),
+      request_body: safeBody(requestBody, path),
+      response_body: safeBody(text, path),
     });
     if (!res.ok) {
       // Surface the backend's `detail` (FastAPI HTTPException) instead of a bare

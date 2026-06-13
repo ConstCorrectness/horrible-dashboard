@@ -1,4 +1,4 @@
-// Host-provided @horrible/sdk runtime shim for plugin bundles — see react.js.
+// Host-provided @horribledashboard/sdk runtime shim for plugin bundles — see react.js.
 // The SDK is mostly types (erased at build time); the runtime surface is tiny.
 const sdk = window.__HORRIBLE_RUNTIME__.sdk;
 

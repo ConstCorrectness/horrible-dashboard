@@ -25,13 +25,19 @@ Docker daemon already seeing all container I/O). Three sources feed one stream:
 So a single user action reads end to end: `client GET /agent/status` →
 `inbound /api/agent/status` → `outbound GET …/api/tags` (Ollama).
 
-## Metadata only — never bodies
+## Detail is captured redacted — never raw
 
-The recorder captures method, target, status, duration, and byte counts —
-**never request/response bodies or headers**, which carry phone numbers, SMS
-codes, tokens, and prompts. Outbound URLs are recorded scheme+host+path only
-(query/fragment stripped). This is a hard constraint: an observability tool that
-logged bodies would be a credential leak.
+Every event carries metadata (method, target, status, duration, byte counts)
+plus **redacted detail** for the expandable row view: headers with
+credential-bearing values masked (`authorization`, `cookie`, anything matching
+token/secret/api-key/session), bodies truncated to 2 KB, and bodies on
+sensitive routes suppressed entirely (Clubhouse paths/hosts — phone numbers,
+SMS codes, tokens; the Clubhouse token never reaches the browser). Outbound
+URLs are recorded scheme+host+path only (query/fragment stripped). Response
+bodies are only captured on `client` events: inbound/outbound responses may
+stream, and the client event for the same round-trip shows the payload anyway.
+The redaction lives at the capture chokepoints (`instrument.py`, `api.ts`) —
+never record a raw header or body.
 
 ## Transport
 
@@ -46,10 +52,11 @@ The frontend store (`telemetry.ts`) merges `client` events with the streamed
 
 - **Panels:** `observability.logs` (singleton, `defaultPlacement: bottom`) — the
   full I/O table (time, source badge, method, target, status, ms, size) with a
-  Clear button.
+  Clear button. Rows with captured detail show a caret and expand on click to
+  the redacted headers/bodies.
 - **Dashboard widgets:** `observability.io` ("Data flow") — compact summary
-  (call/error counts + last few). **Not in the default layout** — this is the
-  "optional" part; add it from the dashboard picker.
+  (call/error counts + last few, expandable the same way). **Not in the default
+  layout** — this is the "optional" part; add it from the dashboard picker.
 - **Commands:** `observability.open` (opens the panel).
 
 ## Backend surface
@@ -65,7 +72,7 @@ reflects wherever the backend lives (local or remote).
 
 ## Not yet
 
-Filtering/search, per-request detail expansion, client-side streaming calls
-(the agent chat/pull streams bypass `request<T>`, so they show as outbound on the
-backend but not as client events), and persistence across reloads (the buffer is
-in-memory).
+Filtering/search, client-side streaming calls (the agent chat/pull streams
+bypass `request<T>`, so they show as outbound on the backend but not as client
+events), inbound/outbound response bodies (streaming — see above), and
+persistence across reloads (the buffer is in-memory).

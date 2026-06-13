@@ -30,8 +30,8 @@ for, so an optional `device_id` is passed through on the authed headers.
 
 ## Contributions to the layout shell
 
-- **Dashboard widgets:** `clubhouse.account` (in the default grid) — the
-  onboarding/connection card.
+- **Dashboard widgets:** `clubhouse.account` — the onboarding/connection card.
+  Not in the default grid; add it from the dashboard picker.
 - **Panels:** `clubhouse.rooms` (singleton) — the **Live rooms** browse panel
   (Phase 1): lists currently-live channels for the connected account, read-only.
 - **Commands:** `clubhouse.connect` (opens the dashboard widget),

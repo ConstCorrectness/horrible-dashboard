@@ -1,6 +1,6 @@
-// Declaration types live in @horrible/sdk so plugins and built-in modules share
+// Declaration types live in @horribledashboard/sdk so plugins and built-in modules share
 // the exact same contract; re-exported here so existing imports keep working.
-import type { CommandDecl, KeybindingDecl, PanelDecl, WidgetDecl } from '@horrible/sdk';
+import type { CommandDecl, KeybindingDecl, PanelDecl, WidgetDecl } from '@horribledashboard/sdk';
 
 export type { CommandDecl, KeybindingDecl, PanelDecl, WidgetDecl };
 
@@ -19,7 +19,6 @@ export type ShellView = 'home' | 'workspace';
 class ModuleRegistry {
   private modules = new Map<string, ModuleManifest>();
   private panelOpener: ((panelId: string) => void) | null = null;
-  private viewOpener: ((view: ShellView) => void) | null = null;
 
   /** Idempotent: re-registering the same module id is a no-op (StrictMode-safe). */
   register(manifest: ModuleManifest): void {
@@ -56,14 +55,6 @@ class ModuleRegistry {
 
   openPanel(panelId: string): void {
     this.panelOpener?.(panelId);
-  }
-
-  setViewOpener(opener: (view: ShellView) => void): void {
-    this.viewOpener = opener;
-  }
-
-  openView(view: ShellView): void {
-    this.viewOpener?.(view);
   }
 }
 

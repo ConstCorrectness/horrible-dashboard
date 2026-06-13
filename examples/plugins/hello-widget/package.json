@@ -8,7 +8,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@horrible/sdk": "workspace:*"
+    "@horribledashboard/sdk": "workspace:*"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",

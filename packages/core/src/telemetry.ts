@@ -19,6 +19,12 @@ export interface IoEvent {
   request_bytes?: number | null;
   response_bytes?: number | null;
   error?: string | null;
+  // Expandable detail — redacted/truncated at capture, absent when not safely
+  // capturable (see backend/modules/telemetry/instrument.py and api.ts).
+  request_headers?: Record<string, string> | null;
+  response_headers?: Record<string, string> | null;
+  request_body?: string | null;
+  response_body?: string | null;
 }
 
 const MAX_EVENTS = 300;

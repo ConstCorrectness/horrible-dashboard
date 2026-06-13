@@ -13,7 +13,7 @@ as it is, not as it once was.
   workspace: how panels open as tabbed/split/floating windows, panel
   types vs instances, and layout persistence.
 - [architecture/plugin-sdk.md](architecture/plugin-sdk.md) — the public plugin
-  contract (`@horrible/sdk`): package format, authoring guide, runtime shims,
+  contract (`@horribledashboard/sdk`): package format, authoring guide, runtime shims,
   versioning, trust model, catalog/install lifecycle.
 - `modules/` — one page per feature module, each describing how it plugs into the
   layout shell and how it behaves in the browser vs the desktop app:

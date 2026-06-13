@@ -1,10 +1,16 @@
 # Plugin SDK: the public extension contract
 
-`@horrible/sdk` (`packages/sdk/`) is the unified framework third-party programs
+`@horribledashboard/sdk` (`packages/sdk/`) is the unified framework third-party programs
 build against to integrate into the platform. A plugin contributes the same
 things a built-in module does — commands, panels, dashboard widgets,
 keybindings — using the exact same declaration types, and is installed from the
 in-app [marketplace](../modules/marketplace.md).
+
+The package is published to npm as
+[`@horribledashboard/sdk`](https://www.npmjs.com/package/@horribledashboard/sdk) (MIT). Inside
+the monorepo its exports point at the TypeScript source; the published tarball
+ships compiled ESM + `.d.ts` from `dist/` via `publishConfig` overrides
+(`pnpm publish` from `packages/sdk` — `prepublishOnly` runs the build).
 
 **Trust model (v1, stated plainly):** plugins are **trusted code**,
 Obsidian/VS Code style. They run unsandboxed as ES modules in the app's realm
@@ -17,7 +23,7 @@ sources, not part of this contract.
 A plugin's entry module **default-exports** `definePlugin({ setup })`:
 
 ```tsx
-import { definePlugin } from '@horrible/sdk';
+import { definePlugin } from '@horribledashboard/sdk';
 
 export default definePlugin({
   setup(host) {
@@ -94,12 +100,12 @@ counter widget + a command). The build is a Vite lib build via the SDK preset:
 ```ts
 // vite.config.ts
 import { defineConfig } from 'vite';
-import { horriblePluginViteConfig } from '@horrible/sdk/vite';
+import { horriblePluginViteConfig } from '@horribledashboard/sdk/vite';
 
 export default defineConfig(horriblePluginViteConfig({ entry: 'src/index.tsx' }));
 ```
 
-The preset marks `react`, `react/jsx-runtime`, and `@horrible/sdk` **external**
+The preset marks `react`, `react/jsx-runtime`, and `@horribledashboard/sdk` **external**
 and rewrites them to host-served shim URLs. This is load-bearing:
 
 - The shims (`apps/web/public/plugin-runtime/{react,jsx-runtime,sdk}.js`) are
