@@ -40,12 +40,38 @@ export interface WidgetDecl {
   title: string;
   component: ComponentType;
   requiredCapabilities?: Capability[];
+  /**
+   * Hint for where the widget docks when opened as a pane in the workspace
+   * (`left|center|right|bottom`). Once the user rearranges, the persisted
+   * workspace layout wins. Defaults to `center` when omitted.
+   */
+  defaultPlacement?: 'left' | 'center' | 'right' | 'bottom';
 }
 
 export interface KeybindingDecl {
   /** e.g. `mod+k` — `mod` is ctrl (or cmd on macOS). */
   key: string;
   command: string;
+}
+
+/** The value kinds a setting can hold in v1. */
+export type SettingType = 'string' | 'number' | 'boolean' | 'enum';
+
+/**
+ * A user-configurable setting a module or plugin contributes to the settings
+ * page (VS Code `contributes.configuration` style). The declared `default`
+ * applies until the user overrides it; the schema lives here on the frontend,
+ * while only the overridden values are persisted server-side.
+ */
+export interface SettingDecl {
+  /** `<module>.<name>` — for plugins, `<pluginId>.<name>` (same namespacing as ids). */
+  key: string;
+  title: string;
+  description?: string;
+  type: SettingType;
+  default: string | number | boolean;
+  /** Allowed values when `type === 'enum'`; ignored otherwise. */
+  enumValues?: string[];
 }
 
 /** Envelope for every message on the shared `/ws` socket. */

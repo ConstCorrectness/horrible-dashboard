@@ -1,0 +1,3 @@
+# Docusaurus build output and generated cache
+website/build
+website/.docusaurus

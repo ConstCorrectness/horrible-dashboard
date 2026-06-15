@@ -37,9 +37,23 @@ function emit(): void {
   for (const listener of listeners) listener();
 }
 
+function eventKey(e: IoEvent): string {
+  return `${e.source}-${e.id}`;
+}
+
 function push(event: IoEvent): void {
-  // New array reference each push so useSyncExternalStore sees a change.
-  events = [...events, event].slice(-MAX_EVENTS);
+  // New array reference each push so useSyncExternalStore sees a change. Events
+  // are upserted by (source, id): the backend re-emits an event under the same id
+  // to fill in a streaming response body once the stream finishes (see
+  // recorder.amend), and replaying the backlog on reconnect mustn't duplicate.
+  const key = eventKey(event);
+  const idx = events.findIndex((e) => eventKey(e) === key);
+  if (idx === -1) {
+    events = [...events, event].slice(-MAX_EVENTS);
+  } else {
+    events = events.slice();
+    events[idx] = event;
+  }
   emit();
 }
 

@@ -9,3 +9,4 @@ export const agentModule: ModuleManifest = {
 };
 
 export * from './api';
+export { askAgent, type AgentCallbacks } from './orchestrator-client';

@@ -8,19 +8,27 @@ same frontend).
 
 Scaffolded and verified: pnpm monorepo (apps/web, apps/desktop, packages/core,
 packages/ui), FastAPI backend, the **dashboard module** end to end, and the
-**agent module's first slice** — a Gemini-style `home` view (default on open) with
-3D avatar, local-model onboarding via Ollama (default `gemma4:e2b`), and a
-streaming ask bar. The `workspace` view is a **dockable window manager** (dockview,
-wrapped) — panels open as tabbed/split/floating windows with persisted layout; a
-minimal `scratch` panel is the reference non-singleton panel. A `clubhouse`
-module onboards a Clubhouse account via a dashboard widget (unofficial API,
-token held server-side). An `observability` module shows live data flow
+**agent module** — a Gemini-style `home` view (default on open) with
+3D avatar, local-model onboarding via Ollama (default `gemma4:e2b`), and an ask
+bar wired to the **agent orchestrator**: a backend tool-calling loop (Ollama
+`/api/chat` with tools) that drives the UI — first slice is **layout control**
+(open/close panes, manage workspaces) with tool calls relayed to the frontend
+over the shared `/ws` `agent` channel. See docs/modules/agent-chat.mdx. The `workspace` view is a **dockable window manager** (dockview,
+wrapped): module **panes — panels and widgets alike** — open as tabbed/split/
+floating windows. **Widgets are first-class panes** (no separate grid); the
+**dashboard is the default seeded one of several named workspaces** you switch
+between via a tab strip, each layout persisted server-side. A minimal `scratch`
+panel is the reference non-singleton panel. A `clubhouse` module onboards a
+Clubhouse account via a widget (unofficial API, token held server-side). An `observability` module shows live data flow
 (client/inbound/outbound I/O) — instrumented at the chokepoints, streamed over
 the shared `/ws` socket. A **public plugin SDK** (`packages/sdk`,
 `@horribledashboard/sdk`) plus a `marketplace` module let third-party frontend plugins
 (panels/widgets/commands/keybindings) be installed from a catalog and loaded at
-boot — see docs/architecture/plugin-sdk.md. An experimental Electron shell lives
-on the `electron-shell` branch. Remaining modules (editor,
+boot — see docs/architecture/plugin-sdk.mdx. A `settings` module gives a
+VS Code–style settings page where any module or plugin contributes its own
+settings (declared in its manifest, read live via `useSetting`/`host.settings`,
+overrides persisted server-side) — see docs/modules/settings.mdx. An experimental
+Electron shell lives on the `electron-shell` branch. Remaining modules (editor,
 terminal, files, full chat cockpit) are unimplemented — see docs/ for their designs.
 
 ## Stack (decided, do not re-litigate)
@@ -33,7 +41,7 @@ terminal, files, full chat cockpit) are unimplemented — see docs/ for their de
   terminal, files) is an internal module registered through a central registry
   (commands, panels, keybindings). The public plugin API (`@horribledashboard/sdk` +
   marketplace) exposes the same contract to third-party frontend plugins; v1 is
-  frontend-only, trusted/unsandboxed — see docs/architecture/plugin-sdk.md.
+  frontend-only, trusted/unsandboxed — see docs/architecture/plugin-sdk.mdx.
 
 ## Target layout
 
@@ -79,9 +87,14 @@ buffers, terminal + file explorer.
 ## Documentation (docs/)
 
 `docs/` documents the layout shell and every module — see
-[docs/README.md](docs/README.md) for the index and the full sync policy. The short
+[docs/README.mdx](docs/README.mdx) for the index and the full sync policy. The short
 version: adding or changing a module, panel, command, capability, backend route, or
 layout-shell behavior must update the matching `docs/` page **in the same change**
-(new module → new `docs/modules/<name>.md`). A Stop hook flags code changes under
+(new module → new `docs/modules/<name>.mdx`). A Stop hook flags code changes under
 `apps/`, `packages/`, or `backend/` that don't touch `docs/`; pure refactors are
 exempt — just say so.
+
+The docs are authored as **MDX with Mermaid diagrams** and published as a
+[Docusaurus](https://docusaurus.io) site (`website/`, which reads this `docs/`
+tree directly). `pnpm --filter @horrible/docs build` builds it locally; pushing to
+`main` deploys to GitHub Pages via `.github/workflows/docs.yml`.

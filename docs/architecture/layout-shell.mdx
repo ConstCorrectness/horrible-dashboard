@@ -1,3 +1,8 @@
+---
+sidebar_position: 1
+sidebar_label: Layout shell
+---
+
 # Layout shell: one frontend, two layouts
 
 The browser app and the desktop app render the **same React frontend**. There is
@@ -5,20 +10,18 @@ no per-platform fork of the UI. The differences between the two are confined to
 (a) the app entry that boots the shell and (b) the platform capabilities exposed
 to modules.
 
-```
-            ┌────────────────────────────────────────────┐
-            │              layout shell (packages/ui)     │
-            │  workspace (dock/split/tabs) · command       │
-            │  palette · status bar · keybinding service   │
-            └───────▲────────────────────────────▲────────┘
-                    │ boots                      │ boots
-        apps/web (browser)            apps/desktop (Tauri)
-        plain Vite entry              Rust shell + same frontend
-                    │                            │
-                    └──────────┬─────────────────┘
-                               │ HTTP + WebSocket
-                        backend/ (FastAPI)
-                agents · PTYs · files · notes · widgets data
+```mermaid
+flowchart TB
+    subgraph Shell["Layout shell (packages/ui)"]
+        direction LR
+        WS["Workspace<br/>dock · split · tabs"]
+        CP["Command palette"]
+        SB["Status bar"]
+        KB["Keybinding service"]
+    end
+    Web["apps/web (browser)<br/>plain Vite entry"] -->|boots| Shell
+    Desk["apps/desktop (Tauri)<br/>Rust shell + same frontend"] -->|boots| Shell
+    Shell -->|"HTTP + WebSocket"| BE["backend/ (FastAPI)<br/>agents · PTYs · files · notes · widget data"]
 ```
 
 ## Implementation status
@@ -27,9 +30,13 @@ Implemented: module registry, command palette (Ctrl+K), keybinding service
 (`mod+` prefix), capability service, and both entries (`apps/web` on port 5173
 proxying `/api` and `/ws` to the backend on port 8000; `apps/desktop` Tauri shell
 loading the same dev server). The shared `/ws` socket is consumed via a single
-multiplexed client (`packages/core/src/ws.ts`, channel subscriptions) — its first
-user is the observability `telemetry` channel (see
-[../modules/observability.md](../modules/observability.md)).
+multiplexed client (`packages/core/src/ws.ts`, channel subscriptions + `sendChannel`)
+— its users are the observability `telemetry` channel (see
+[../modules/observability.md](../modules/observability.mdx)) and the `agent`
+channel that drives the agent orchestrator (see
+[../modules/agent-chat.md](../modules/agent-chat.mdx)). The backend `/ws` handler
+is a bidirectional router: telemetry pushes outbound while one receive loop
+dispatches inbound channel messages.
 
 The shell has two top-level **views** (switched by the shell's own
 `shell.home` / `shell.workspace` commands):
@@ -49,11 +56,13 @@ The shell has two top-level **views** (switched by the shell's own
   mascot — a cute glowing orb with eyes that face the viewer, whose glow doubles
   as the agent status light. three is dynamically imported so the workspace view
   never loads it.
-- **`workspace`** — a **dockable window manager**: module panels open as windows
-  that can be tabbed, split, resized, and floated; the layout persists. Built on
-  dockview, wrapped so the registry stays the public API. See
-  [windowing.md](windowing.md) for the model, panel types vs instances, and
-  persistence.
+- **`workspace`** — a **dockable window manager**: module panes (panels _and_
+  widgets) open as windows that can be tabbed, split, resized, and floated.
+  Several **named workspaces** exist, switchable via a tab strip; the Dashboard
+  is the default seeded one. Each workspace's layout persists. Built on dockview,
+  wrapped so the registry stays the public API. See
+  [windowing.md](windowing.mdx) for the model, pane types vs instances, named
+  workspaces, and persistence.
 
 A persistent **icon rail** (logo/home on top, panel icons, command palette at the
 bottom) is the only chrome shared by both views. Opening a panel from anywhere
@@ -138,7 +147,7 @@ modules subscribe to channels on it rather than opening their own sockets.
   capability set. Nothing feature-specific.
 - Boot is **async**: after registering built-in modules, the entry awaits
   `loadPlugins()` (installed marketplace plugins, see
-  [plugin-sdk.md](plugin-sdk.md)) before the first render, so restored layouts
+  [plugin-sdk.md](plugin-sdk.mdx)) before the first render, so restored layouts
   find plugin panels/widgets already registered. If the backend is down, boot
   proceeds without plugins.
 - `apps/desktop`: same boot, plus Tauri-only wiring — window chrome, tray, global

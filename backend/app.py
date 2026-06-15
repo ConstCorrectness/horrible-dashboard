@@ -1,16 +1,20 @@
 """horrible-dashboard backend: the app's brain, serving both layouts."""
 
-from fastapi import FastAPI, WebSocket
+import asyncio
+
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.modules.agent import router as agent_router
+from backend.modules.agent.orchestrator import handle_agent_message
 from backend.modules.clubhouse import router as clubhouse_router
-from backend.modules.dashboard import router as dashboard_router
 from backend.modules.plugins import router as plugins_router
+from backend.modules.settings import router as settings_router
+from backend.modules.telemetry import push_telemetry
 from backend.modules.telemetry import router as telemetry_router
-from backend.modules.telemetry import stream_telemetry
 from backend.modules.telemetry.instrument import telemetry_middleware
 from backend.modules.workspace import router as workspace_router
+from backend.modules.ws import WsConnection
 
 APP_VERSION = "0.1.0"
 
@@ -37,19 +41,31 @@ def health() -> dict[str, str]:
     return {"status": "ok", "app": "horrible-dashboard", "version": APP_VERSION}
 
 
-app.include_router(dashboard_router, prefix="/api")
 app.include_router(agent_router, prefix="/api")
 app.include_router(workspace_router, prefix="/api")
 app.include_router(clubhouse_router, prefix="/api")
 app.include_router(telemetry_router, prefix="/api")
 app.include_router(plugins_router, prefix="/api")
+app.include_router(settings_router, prefix="/api")
 
 
 @app.websocket("/ws")
 async def ws(websocket: WebSocket) -> None:
-    """Shared multiplexed socket: greets, then streams the telemetry channel."""
+    """Shared multiplexed socket: greets, pushes telemetry, and routes inbound
+    channel messages (currently the `agent` orchestrator). One receive loop owns
+    reads; outbound work runs as tasks that send through the connection lock."""
     await websocket.accept()
     await websocket.send_json(
         {"channel": "system", "event": "hello", "version": APP_VERSION}
     )
-    await stream_telemetry(websocket)
+    conn = WsConnection(websocket)
+    telemetry_task = asyncio.create_task(push_telemetry(conn))
+    try:
+        while True:
+            msg = await websocket.receive_json()
+            if isinstance(msg, dict) and msg.get("channel") == "agent":
+                await handle_agent_message(conn, msg)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        telemetry_task.cancel()

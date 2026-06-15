@@ -1,10 +1,15 @@
+---
+sidebar_position: 3
+sidebar_label: Plugin SDK
+---
+
 # Plugin SDK: the public extension contract
 
 `@horribledashboard/sdk` (`packages/sdk/`) is the unified framework third-party programs
 build against to integrate into the platform. A plugin contributes the same
 things a built-in module does — commands, panels, dashboard widgets,
 keybindings — using the exact same declaration types, and is installed from the
-in-app [marketplace](../modules/marketplace.md).
+in-app [marketplace](../modules/marketplace.mdx).
 
 The package is published to npm as
 [`@horribledashboard/sdk`](https://www.npmjs.com/package/@horribledashboard/sdk) (MIT). Inside
@@ -30,6 +35,7 @@ export default definePlugin({
     return {
       widgets: [{ id: 'my-plugin.thing', title: 'Thing', component: Thing }],
       commands: [{ id: 'my-plugin.doIt', title: 'My Plugin: Do it', run: () => {} }],
+      settings: [{ key: 'my-plugin.size', title: 'Size', type: 'number', default: 5 }],
       // panels?, keybindings? — same shapes built-in modules use
     };
   },
@@ -39,26 +45,40 @@ export default definePlugin({
 - `setup(host)` is called once at boot; it may be async. The returned
   contributions are registered in the module registry as module
   `plugin:<id>`.
-- **Namespacing is enforced:** every contributed command/panel/widget id must
-  start with `<pluginId>.` — the loader rejects the plugin otherwise.
+- **Namespacing is enforced:** every contributed command/panel/widget id **and
+  setting key** must start with `<pluginId>.` — the loader rejects the plugin
+  otherwise.
 - The `host` handle (`PluginHost`) is the only door back into the shell:
   - `host.api.get/post/put/del` — the backend HTTP client (relative to `/api`).
   - `host.storage.get/set/remove` — key-value storage scoped to the plugin,
     persisted server-side (`/api/plugins/<id>/storage/<key>`). Uninstall wipes it.
+  - `host.settings.get/set/subscribe` — values of the settings the plugin
+    declared, namespace-guarded to its own keys. **Distinct from storage:**
+    settings are user-configurable on the settings page; storage is the plugin's
+    own bookkeeping. See [../modules/settings.md](../modules/settings.mdx).
   - `host.hasCapability(cap)` — platform capability checks (browser vs desktop).
   - `host.subscribeChannel(channel, handler)` — the shared `/ws` socket.
   - `host.openPanel(panelId)` / `host.runCommand(commandId)`.
 
 Declaration types (`CommandDecl`, `PanelDecl`, `WidgetDecl`, `KeybindingDecl`,
-`Capability`, `WsMessage`) live in the SDK and are re-exported by
-`@horrible/core`, so plugins and built-in modules share one contract.
+`SettingDecl`, `SettingType`, `Capability`, `WsMessage`) live in the SDK and are
+re-exported by `@horrible/core`, so plugins and built-in modules share one
+contract.
+
+A plugin's **widgets are dockable panes**, just like a built-in module's: they
+open into the workspace (tabbed/split/floating), so a `WidgetDecl` takes an
+optional `defaultPlacement` (`left|center|right|bottom`) hinting where it docks.
+There is no separate widget board — see
+[windowing.md](windowing.mdx).
 
 ## Versioning
 
-`SDK_API_VERSION` (currently `1`) is bumped on breaking contract changes. A
-plugin package declares the version it was built against (`sdkVersion` in its
-manifest); the loader skips plugins whose version doesn't match and surfaces
-the mismatch in the marketplace panel.
+`SDK_API_VERSION` (currently `1`) is bumped on **breaking** contract changes
+only. A plugin package declares the version it was built against (`sdkVersion`
+in its manifest); the loader skips plugins whose version doesn't match and
+surfaces the mismatch in the marketplace panel. Additive optional fields (like
+the `settings` contribution in SDK `0.2.0`, and `WidgetDecl.defaultPlacement` in
+`0.3.0`) do **not** bump it, so existing plugins keep loading.
 
 ## Package format
 
@@ -125,6 +145,18 @@ external). Drop the directory into a catalog directory and it's installable.
 
 ## Catalog and lifecycle
 
+```mermaid
+flowchart TD
+    Cat["Catalog scan<br/>*/horrible-plugin.json"] --> Inst["Install: copy →<br/>$DATA/plugins/&lt;id&gt;/package"]
+    Inst --> Boot["Boot: loadPlugins()"]
+    Boot --> Fetch["Fetch /api/plugins/&lt;id&gt;/assets/&lt;entry&gt;"]
+    Fetch --> Rewrite["Rewrite /plugin-runtime/* shims<br/>→ page origin"]
+    Rewrite --> Blob["import() as Blob module"]
+    Blob --> Reg["Register contributions<br/>panels · widgets · commands · keybindings"]
+    Reg --> Live["Live in the dock"]
+    Live -. "enable/disable/uninstall<br/>(applied on reload)" .-> Boot
+```
+
 - The backend scans `HORRIBLE_PLUGIN_CATALOG` (default `examples/plugins`) for
   `*/horrible-plugin.json` — the catalog is self-indexing. Pointing this at a
   hosted registry later is a config change, not a redesign.
@@ -154,9 +186,9 @@ external). Drop the directory into a catalog directory and it's installable.
   have no base URL — relative chunk imports inside a plugin bundle won't
   resolve. The SDK build preset produces a single file; don't enable code
   splitting in a plugin build.
-- **Stale layout references:** a layout that references a disabled plugin's
-  panel renders the shell's "Unknown panel" placeholder; unknown dashboard
-  widget ids are dropped on next layout save.
+- **Stale layout references:** a workspace layout that references a disabled
+  plugin's pane (panel or widget) renders the shell's "Unknown pane" placeholder
+  until the pane is closed.
 - **Frontend-only:** plugins cannot ship backend Python. The host provides
   generic backend services (storage now; more later). A fetch proxy is
   deliberately excluded until a permissions design exists (SSRF surface).

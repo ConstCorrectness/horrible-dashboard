@@ -55,3 +55,18 @@ export function subscribeChannel(channel: string, handler: Handler): () => void 
     set?.delete(handler);
   };
 }
+
+/**
+ * Send a message to the backend on a channel. Connects lazily; if the socket
+ * isn't open yet, waits for `open` once and flushes. Used by the agent channel
+ * to drive the backend orchestrator (`ask`, `tool_result`).
+ */
+export function sendChannel(channel: string, event: string, data?: unknown): void {
+  connect();
+  const payload = JSON.stringify({ channel, event, data });
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.send(payload);
+  } else {
+    socket?.addEventListener('open', () => socket?.send(payload), { once: true });
+  }
+}

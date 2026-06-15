@@ -40,6 +40,7 @@ function assertNamespaced(pluginId: string, contributions: PluginContributions):
     ...(contributions.commands ?? []).map((c) => c.id),
     ...(contributions.panels ?? []).map((p) => p.id),
     ...(contributions.widgets ?? []).map((w) => w.id),
+    ...(contributions.settings ?? []).map((s) => s.key),
   ];
   for (const id of ids) {
     if (!id.startsWith(prefix)) {

@@ -1,0 +1,88 @@
+---
+sidebar_position: 5
+sidebar_label: Settings
+---
+
+# Module: settings
+
+The user-facing configuration surface — one page where every built-in module
+**or** installed plugin exposes its own settings, VS Code `contributes.
+configuration` style. Each contributor declares its settings; the page
+auto-renders a form and persists overrides.
+
+**Status: implemented** — frontend in `packages/core/src/modules/settings/`
+(panel) and `packages/core/src/settings.ts` (the reactive service), backend in
+`backend/modules/settings/`.
+
+## The settings contract
+
+A **setting** is a registry contribution declared alongside a module's
+commands/panels/widgets (and identically in a plugin's `PluginContributions`):
+
+```ts
+{ key: 'observability.recentCount', title: '…', description: '…',
+  type: 'number', default: 5 }            // types: string | number | boolean | enum
+```
+
+Keys are namespaced like every other contributed id — `<module>.<name>`, and
+`<pluginId>.<name>` for plugins (the loader's `assertNamespaced` enforces this on
+setting keys too). The `SettingDecl`/`SettingType` types live in
+`@horribledashboard/sdk` so built-in modules and plugins share one shape.
+
+## Schema on the frontend, values on the backend
+
+The **schema and defaults live in the frontend declarations**; the backend is a
+dumb key→value bag (`settings.json`) that stores only the values the user has
+**overridden**. The effective value of a key is its override, or the declared
+default when unset — resolved in `settings.ts`. This mirrors how the dashboard
+backend stores layout without knowing widget shapes, and keeps the backend
+schema-agnostic.
+
+`settings.ts` is a reactive store (the `telemetry.ts` pattern): `loadSettings()`
+seeds overrides at boot; `getSetting`/`setSetting`/`resetSetting` read and
+mutate; `useSetting(key)` is the hook built-in components use for a live read.
+Setting a value is optimistic (local update + `PUT`), so widgets bound via
+`useSetting` re-render immediately.
+
+## Contributions to the layout shell
+
+- **Panels:** `settings.home` (singleton, `center`) — the settings page,
+  grouped by the module/plugin that declared each setting.
+- **Commands:** `settings.open`.
+- **Keybindings:** `mod+,` → `settings.open` (VS Code parity).
+
+Built-in settings shipped as the first consumers: `observability.recentCount`
+(how many calls the Data flow widget lists), `observability.maxBodyChars` (how
+many characters of each captured I/O body to keep — read on the **backend**, see
+below) and, from the reference plugin, `hello-widget.greetingText`.
+
+Most settings are read on the frontend via `useSetting`, but a value can also be
+consumed by the **backend**: `backend.modules.settings.get_value(key, default)`
+returns the user override or the caller's fallback (defaults stay frontend-owned,
+so backend consumers supply their own). `observability.maxBodyChars` works this
+way — the telemetry instrumentation truncates bodies at capture time.
+
+## Plugins
+
+Plugins declare `settings` in their contributions and read values through
+`host.settings` (`get`/`set`/`subscribe`), namespace-guarded to their own keys.
+This is distinct from `host.storage`: **settings** are user-configurable on this
+page; **storage** is the plugin's own runtime bookkeeping. See
+[../architecture/plugin-sdk.md](../architecture/plugin-sdk.mdx).
+
+## Backend surface
+
+`backend/modules/settings/` — `GET /api/settings` (all overridden values),
+`PUT /api/settings/{key}` (set one, body `{value}`), `DELETE /api/settings/{key}`
+(clear an override → revert to the frontend default). Persists to
+`$HORRIBLE_DATA_DIR/settings.json`.
+
+## Browser vs desktop
+
+Identical. Settings are stored by the backend wherever it runs (local or remote);
+no platform branching in the page or the service.
+
+## Not yet
+
+Object/array setting types, backend-side validation, search/filter in the page,
+import/export, and cross-device sync. Schema stays frontend-owned.

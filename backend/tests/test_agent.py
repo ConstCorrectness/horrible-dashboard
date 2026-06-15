@@ -41,9 +41,13 @@ def test_status_unconfigured_and_unreachable(client: TestClient) -> None:
     assert res.status_code == 200
     body = res.json()
     assert body["configured"] is False
-    assert body["ollama_reachable"] is False
+    assert body["reachable"] is False
     assert body["model"] is None
     assert body["available_models"] == []
+    # All known providers are probed and reported, none reachable here.
+    kinds = {p["kind"] for p in body["providers"]}
+    assert kinds == {"ollama", "lmstudio", "vllm"}
+    assert all(p["reachable"] is False for p in body["providers"])
 
 
 def test_chat_requires_onboarding(client: TestClient) -> None:
@@ -54,8 +58,31 @@ def test_chat_requires_onboarding(client: TestClient) -> None:
 def test_config_roundtrip(client: TestClient) -> None:
     res = client.put("/api/agent/config", json={"model": "gemma4:e2b"})
     assert res.status_code == 200
-    assert res.json()["endpoint"] == "http://localhost:11434"
+    body = res.json()
+    # Provider defaults to Ollama; its endpoint is filled from the provider default.
+    assert body["provider"] == "ollama"
+    assert body["endpoint"] == "http://localhost:11434"
 
     status = client.get("/api/agent/status").json()
     assert status["configured"] is True
+    assert status["provider"] == "ollama"
     assert status["model"] == "gemma4:e2b"
+
+
+def test_config_lmstudio_defaults_endpoint(client: TestClient) -> None:
+    res = client.put(
+        "/api/agent/config", json={"model": "local-model", "provider": "lmstudio"}
+    )
+    assert res.status_code == 200
+    assert res.json()["endpoint"] == "http://localhost:1234"
+
+
+def test_config_rejects_unknown_provider(client: TestClient) -> None:
+    res = client.put("/api/agent/config", json={"model": "m", "provider": "bogus"})
+    assert res.status_code == 422
+
+
+def test_pull_rejected_for_non_pulling_provider(client: TestClient) -> None:
+    client.put("/api/agent/config", json={"model": "m", "provider": "lmstudio"})
+    res = client.post("/api/agent/pull", json={"model": "m"})
+    assert res.status_code == 400

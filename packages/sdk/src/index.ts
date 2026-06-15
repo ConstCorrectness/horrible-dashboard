@@ -5,6 +5,7 @@ export {
   type PluginContributions,
   type PluginHost,
   type PluginPackageManifest,
+  type PluginSettings,
   type PluginStorage,
 } from './plugin.js';
 export type {
@@ -12,6 +13,8 @@ export type {
   CommandDecl,
   KeybindingDecl,
   PanelDecl,
+  SettingDecl,
+  SettingType,
   WidgetDecl,
   WsMessage,
 } from './types.js';

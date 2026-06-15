@@ -1,9 +1,10 @@
 /** Builds the `PluginHost` handle passed to each plugin's `setup()`. */
-import type { PluginHost, PluginStorage } from '@horribledashboard/sdk';
+import type { PluginHost, PluginSettings, PluginStorage } from '@horribledashboard/sdk';
 
 import { ApiError, apiDelete, apiGet, apiPost, apiPut } from '../api';
 import { hasCapability } from '../capabilities';
 import { registry } from '../registry';
+import { getSetting, setSetting, settingsStore, type SettingValue } from '../settings';
 import { subscribeChannel } from '../ws';
 
 interface StorageEntry {
@@ -32,6 +33,27 @@ function createStorage(pluginId: string): PluginStorage {
   };
 }
 
+function createSettings(pluginId: string): PluginSettings {
+  // A plugin may only touch settings it declared — i.e. keys under its own
+  // namespace, the same rule the loader enforces on contributed ids.
+  const requireOwn = (key: string): void => {
+    if (!key.startsWith(`${pluginId}.`)) {
+      throw new Error(`setting "${key}" is not namespaced under "${pluginId}."`);
+    }
+  };
+  return {
+    get<T>(key: string): T | undefined {
+      requireOwn(key);
+      return getSetting<SettingValue>(key) as T | undefined;
+    },
+    set(key: string, value: SettingValue): Promise<void> {
+      requireOwn(key);
+      return setSetting(key, value);
+    },
+    subscribe: settingsStore.subscribe,
+  };
+}
+
 export function createPluginHost(pluginId: string): PluginHost {
   return {
     pluginId,
@@ -42,6 +64,7 @@ export function createPluginHost(pluginId: string): PluginHost {
       del: apiDelete,
     },
     storage: createStorage(pluginId),
+    settings: createSettings(pluginId),
     hasCapability,
     subscribeChannel,
     openPanel: (panelId) => registry.openPanel(panelId),

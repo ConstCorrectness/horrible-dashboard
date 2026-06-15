@@ -1,4 +1,4 @@
-import { apiGet, apiPut } from './api';
+import { apiDelete, apiGet, apiPost, apiPut } from './api';
 
 /**
  * Opaque serialized workspace layout (the docking engine's own JSON shape).
@@ -7,11 +7,44 @@ import { apiGet, apiPut } from './api';
  */
 export type SerializedLayout = Record<string, unknown>;
 
-export async function getWorkspaceLayout(): Promise<SerializedLayout | null> {
-  const res = await apiGet<{ layout: SerializedLayout | null }>('/workspace/layout');
-  return res.layout;
+/** One named dockview layout. */
+export interface Workspace {
+  id: string;
+  name: string;
+  layout: SerializedLayout | null;
 }
 
-export function saveWorkspaceLayout(layout: SerializedLayout): Promise<unknown> {
-  return apiPut('/workspace/layout', { layout });
+/** The whole collection plus which workspace is active. */
+export interface WorkspacesState {
+  active: string | null;
+  workspaces: Workspace[];
+}
+
+export function getWorkspaces(): Promise<WorkspacesState> {
+  return apiGet<WorkspacesState>('/workspaces');
+}
+
+/** Create a workspace with a generated id; becomes active if it's the first. */
+export function createWorkspace(name: string): Promise<Workspace> {
+  return apiPost<Workspace>('/workspaces', { name });
+}
+
+/**
+ * Upsert a workspace by id. Only the fields passed are applied, so saving a
+ * layout never clobbers the name and vice-versa. The Dashboard is seeded with
+ * the stable id `dashboard` via this call.
+ */
+export function saveWorkspace(
+  id: string,
+  patch: { name?: string; layout?: SerializedLayout },
+): Promise<Workspace> {
+  return apiPut<Workspace>(`/workspaces/${encodeURIComponent(id)}`, patch);
+}
+
+export function setActiveWorkspace(id: string): Promise<WorkspacesState> {
+  return apiPut<WorkspacesState>('/workspaces/active', { id });
+}
+
+export function deleteWorkspace(id: string): Promise<WorkspacesState> {
+  return apiDelete<WorkspacesState>(`/workspaces/${encodeURIComponent(id)}`);
 }

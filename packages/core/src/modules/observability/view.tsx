@@ -1,5 +1,6 @@
 import { Fragment, useState, useSyncExternalStore, type ReactNode } from 'react';
 
+import { useSetting } from '../../settings';
 import { telemetryStore, type IoEvent } from '../../telemetry';
 
 function useIoEvents(): IoEvent[] {
@@ -163,8 +164,9 @@ export function ObservabilityPanel() {
 export function ObservabilityWidget() {
   const events = useIoEvents();
   const [isExpanded, toggle] = useExpanded();
+  const recentCount = useSetting<number>('observability.recentCount') ?? 5;
   const errors = events.filter((e) => e.error || (e.status != null && e.status >= 400)).length;
-  const recent = [...events].slice(-5).reverse();
+  const recent = [...events].slice(-recentCount).reverse();
 
   return (
     <div className="obs-widget">

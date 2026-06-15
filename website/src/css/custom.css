@@ -1,0 +1,27 @@
+/**
+ * Docusaurus theme overrides for horrible-dashboard. The defaults (Infima) are
+ * fine; we just set a brand accent and a slightly tighter docs measure.
+ */
+
+:root {
+  --ifm-color-primary: #6d4aff;
+  --ifm-color-primary-dark: #5a32ff;
+  --ifm-color-primary-darker: #4f26ff;
+  --ifm-color-primary-darkest: #3a06e0;
+  --ifm-color-primary-light: #8262ff;
+  --ifm-color-primary-lighter: #8d6fff;
+  --ifm-color-primary-lightest: #ab97ff;
+  --ifm-code-font-size: 95%;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #ab97ff;
+  --ifm-color-primary-dark: #8d6fff;
+  --ifm-color-primary-darker: #8262ff;
+  --ifm-color-primary-darkest: #6d4aff;
+  --ifm-color-primary-light: #c2b4ff;
+  --ifm-color-primary-lighter: #cdc1ff;
+  --ifm-color-primary-lightest: #e8e2ff;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+}

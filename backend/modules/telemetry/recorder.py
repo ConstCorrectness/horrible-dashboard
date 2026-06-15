@@ -24,12 +24,28 @@ class Recorder:
     def record(self, **fields: Any) -> IoEvent:
         event = IoEvent(id=next(self._ids), ts=time.time(), **fields)
         self._buffer.append(event)
+        self._notify(event)
+        return event
+
+    def amend(self, event_id: int, **fields: Any) -> IoEvent | None:
+        """Update an already-recorded event in place and re-emit it under the same
+        id, so subscribers replace the existing row. Used to fill in a streaming
+        response body once the stream finishes (the body isn't known when the
+        event is first recorded). No-op if the event has aged out of the buffer."""
+        for i, event in enumerate(self._buffer):
+            if event.id == event_id:
+                updated = event.model_copy(update=fields)
+                self._buffer[i] = updated
+                self._notify(updated)
+                return updated
+        return None
+
+    def _notify(self, event: IoEvent) -> None:
         for queue in list(self._subscribers):
             try:
                 queue.put_nowait(event)
             except asyncio.QueueFull:
                 pass
-        return event
 
     def recent(self) -> list[IoEvent]:
         return list(self._buffer)

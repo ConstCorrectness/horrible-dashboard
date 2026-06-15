@@ -32,4 +32,21 @@ export const observabilityModule: ModuleManifest = {
       run: () => registry.openPanel('observability.logs'),
     },
   ],
+  settings: [
+    {
+      key: 'observability.recentCount',
+      title: 'Recent calls in the Data flow widget',
+      description: 'How many of the most recent I/O calls the dashboard widget lists.',
+      type: 'number',
+      default: 5,
+    },
+    {
+      key: 'observability.maxBodyChars',
+      title: 'Captured body size (characters)',
+      description:
+        'How many characters of each request/response body to keep for the expandable detail view (applied by the backend at capture time). Bodies are still hard-capped at 64 KB.',
+      type: 'number',
+      default: 2048,
+    },
+  ],
 };

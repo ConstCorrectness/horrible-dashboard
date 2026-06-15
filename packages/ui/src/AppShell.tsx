@@ -18,6 +18,11 @@ export function AppShell({ appTitle }: { appTitle: string }) {
   const [paletteOpen, setPaletteOpen] = useState(false);
   // Bumped each time a panel should open, so the Workspace reacts even to repeats.
   const [pendingOpen, setPendingOpen] = useState<{ panelId: string; nonce: number }>();
+  // Same pattern for switching to a named workspace tab.
+  const [pendingWorkspace, setPendingWorkspace] = useState<{
+    workspaceId: string;
+    nonce: number;
+  }>();
   const nonce = useRef(0);
 
   useEffect(() => {
@@ -43,6 +48,11 @@ export function AppShell({ appTitle }: { appTitle: string }) {
     registry.setPanelOpener((panelId) => {
       setView('workspace');
       setPendingOpen({ panelId, nonce: nonce.current++ });
+    });
+    // Switching workspaces also enters the workspace view, then signals the tab.
+    registry.setWorkspaceSwitcher((workspaceId) => {
+      setView('workspace');
+      setPendingWorkspace({ workspaceId, nonce: nonce.current++ });
     });
   }, []);
 
@@ -91,7 +101,7 @@ export function AppShell({ appTitle }: { appTitle: string }) {
         </div>
         {workspaceMounted && (
           <div hidden={view !== 'workspace'} className="shell-view">
-            <Workspace pendingOpen={pendingOpen} />
+            <Workspace pendingOpen={pendingOpen} pendingWorkspace={pendingWorkspace} />
           </div>
         )}
       </div>

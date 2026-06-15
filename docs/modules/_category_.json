@@ -1,0 +1,9 @@
+{
+  "label": "Modules",
+  "position": 3,
+  "link": {
+    "type": "generated-index",
+    "title": "Modules",
+    "description": "One page per feature module: how it plugs into the layout shell, its backend surface, and how it behaves in the browser vs the desktop app."
+  }
+}

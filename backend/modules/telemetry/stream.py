@@ -1,43 +1,25 @@
-import asyncio
-
-from fastapi import WebSocket, WebSocketDisconnect
-
 from backend.modules.telemetry.recorder import recorder
+from backend.modules.ws import WsConnection
 
 
 def _envelope(event_dict: dict) -> dict:
     return {"channel": "telemetry", "event": "io", "data": event_dict}
 
 
-async def stream_telemetry(websocket: WebSocket) -> None:
-    """Send the recent backlog, then stream new I/O events until disconnect.
+async def push_telemetry(conn: WsConnection) -> None:
+    """Send the recent backlog, then push new I/O events until cancelled.
 
-    Assumes the socket is already accepted (the shared /ws handler greets first).
+    Push-only: the shared `/ws` handler owns the single inbound receive loop and
+    cancels this task on disconnect. Sends go through the connection's lock so
+    they don't interleave with the agent channel.
     """
     for event in recorder.recent():
-        await websocket.send_json(_envelope(event.model_dump()))
+        await conn.send_json(_envelope(event.model_dump()))
 
     queue = recorder.subscribe()
-
-    async def watch_disconnect() -> None:
-        try:
-            while True:
-                await websocket.receive_text()
-        except WebSocketDisconnect:
-            return
-
-    receiver = asyncio.create_task(watch_disconnect())
     try:
         while True:
-            getter = asyncio.create_task(queue.get())
-            done, _ = await asyncio.wait(
-                {getter, receiver}, return_when=asyncio.FIRST_COMPLETED
-            )
-            if receiver in done:
-                getter.cancel()
-                break
-            await websocket.send_json(_envelope(getter.result().model_dump()))
+            event = await queue.get()
+            await conn.send_json(_envelope(event.model_dump()))
     finally:
         recorder.unsubscribe(queue)
-        if not receiver.done():
-            receiver.cancel()

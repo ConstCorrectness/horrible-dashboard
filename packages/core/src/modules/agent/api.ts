@@ -1,22 +1,68 @@
-import { apiGet, apiPut } from '../../api';
+import { apiGet, apiPost, apiPut } from '../../api';
 import { apiUrl } from '../../origin';
 
-export interface AgentStatus {
-  ollama_reachable: boolean;
-  configured: boolean;
+/** One auto-detected local-model provider (Ollama, LM Studio, vLLM). */
+export interface DetectedProvider {
+  kind: string;
+  label: string;
+  endpoint: string;
+  reachable: boolean;
+  models: string[];
+  can_pull: boolean;
+  can_spawn: boolean;
+  install_url: string;
+}
+
+/** Lifecycle of an optional backend-spawned vLLM server. */
+export interface VllmStatus {
+  available: boolean;
+  running: boolean;
   model: string | null;
   endpoint: string;
+  pid: number | null;
+  logs: string[];
+}
+
+export interface AgentStatus {
+  configured: boolean;
+  /** Configured provider kind, or null before onboarding. */
+  provider: string | null;
+  model: string | null;
+  /** Active (configured) provider endpoint. */
+  endpoint: string;
+  /** Whether the active provider is reachable right now. */
+  reachable: boolean;
+  /** Models on the active provider. */
   available_models: string[];
+  /** Every provider we probed, for the onboarding picker. */
+  providers: DetectedProvider[];
+  vllm: VllmStatus;
 }
 
 export const DEFAULT_AGENT_MODEL = 'gemma4:e2b';
+/** A small Gemma served well by vLLM; a sensible default for the spawn flow. */
+export const DEFAULT_VLLM_MODEL = 'google/gemma-2-2b-it';
 
 export function getAgentStatus(): Promise<AgentStatus> {
   return apiGet<AgentStatus>('/agent/status');
 }
 
-export function saveAgentConfig(model: string, endpoint?: string): Promise<unknown> {
-  return apiPut('/agent/config', endpoint ? { model, endpoint } : { model });
+export function saveAgentConfig(
+  model: string,
+  provider: string,
+  endpoint?: string,
+): Promise<unknown> {
+  return apiPut('/agent/config', { model, provider, ...(endpoint ? { endpoint } : {}) });
+}
+
+/** Spawn a backend vLLM server to serve `model`; returns the new vLLM status. */
+export function spawnVllm(model: string, port?: number): Promise<VllmStatus> {
+  return apiPost<VllmStatus>('/agent/vllm/spawn', port ? { model, port } : { model });
+}
+
+/** Stop the backend-spawned vLLM server, if any. */
+export function stopVllm(): Promise<VllmStatus> {
+  return apiPost<VllmStatus>('/agent/vllm/stop', {});
 }
 
 async function streamNdjson(

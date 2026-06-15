@@ -9,6 +9,7 @@ import type {
   CommandDecl,
   KeybindingDecl,
   PanelDecl,
+  SettingDecl,
   WidgetDecl,
   WsMessage,
 } from './types.js';
@@ -44,6 +45,21 @@ export interface PluginStorage {
   remove(key: string): Promise<void>;
 }
 
+/**
+ * Read/write access to the values of settings the plugin declared (see
+ * `PluginContributions.settings`). Distinct from `PluginStorage`: settings are
+ * user-configurable from the settings page, storage is the plugin's own
+ * bookkeeping. Reads are synchronous against an in-memory store the host keeps
+ * warm; `subscribe` fires on any settings change so a widget can re-render.
+ * Keys must be namespaced under the plugin id, like contributed ids.
+ */
+export interface PluginSettings {
+  /** Current value, or the declared default if never overridden. */
+  get<T>(key: string): T | undefined;
+  set(key: string, value: string | number | boolean): Promise<void>;
+  subscribe(listener: () => void): () => void;
+}
+
 /** Everything the host hands a plugin. The only door back into the shell. */
 export interface PluginHost {
   readonly pluginId: string;
@@ -55,6 +71,8 @@ export interface PluginHost {
     del<T>(path: string): Promise<T>;
   };
   storage: PluginStorage;
+  /** Values of the settings this plugin declared in its contributions. */
+  settings: PluginSettings;
   hasCapability(capability: Capability): boolean;
   /** Subscribe to a channel on the shared `/ws` socket; returns unsubscribe. */
   subscribeChannel(channel: string, handler: (msg: WsMessage) => void): () => void;
@@ -71,6 +89,8 @@ export interface PluginContributions {
   panels?: PanelDecl[];
   widgets?: WidgetDecl[];
   keybindings?: KeybindingDecl[];
+  /** User-configurable settings shown on the settings page (keys namespaced). */
+  settings?: SettingDecl[];
 }
 
 export interface HorriblePlugin {

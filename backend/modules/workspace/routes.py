@@ -1,39 +1,108 @@
+"""Named workspaces: a collection of dockview layouts with an active selection.
+
+Each workspace's `layout` is the docking engine's serialized blob, round-tripped
+opaquely — the backend interprets only its own `id`/`name`/`active` fields. The
+frontend authors the default "Dashboard" layout (engine-shaped) and saves it
+here. See docs/architecture/windowing.md.
+"""
+
 import os
+import uuid
 from pathlib import Path
-from typing import Any
+from typing import Annotated
 
-from fastapi import APIRouter
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException
+from fastapi import Path as PathParam
 
-router = APIRouter(prefix="/workspace", tags=["workspace"])
+from backend.modules.workspace.models import (
+    WORKSPACE_ID_PATTERN,
+    ActiveRequest,
+    CreateWorkspace,
+    UpsertWorkspace,
+    Workspace,
+    WorkspacesState,
+)
 
+router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 
-class WorkspaceLayout(BaseModel):
-    """The docking engine's serialized layout, stored opaquely.
-
-    The backend never interprets the shape — it round-trips whatever the
-    frontend's windowing engine produces (see docs/architecture/windowing.md).
-    `None` means no saved layout yet, so the frontend builds its default.
-    """
-
-    layout: dict[str, Any] | None = None
-
-
-def _layout_path() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")) / "workspace-layout.json"
+WorkspaceId = Annotated[str, PathParam(pattern=WORKSPACE_ID_PATTERN)]
 
 
-@router.get("/layout", response_model=WorkspaceLayout)
-def get_layout() -> WorkspaceLayout:
-    path = _layout_path()
-    if path.is_file():
-        return WorkspaceLayout.model_validate_json(path.read_text())
-    return WorkspaceLayout(layout=None)
+def _state_path() -> Path:
+    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")) / "workspaces.json"
 
 
-@router.put("/layout", response_model=WorkspaceLayout)
-def put_layout(body: WorkspaceLayout) -> WorkspaceLayout:
-    path = _layout_path()
+def _read() -> WorkspacesState:
+    path = _state_path()
+    if not path.is_file():
+        return WorkspacesState()
+    try:
+        return WorkspacesState.model_validate_json(path.read_text())
+    except ValueError:
+        return WorkspacesState()
+
+
+def _write(state: WorkspacesState) -> None:
+    path = _state_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(body.model_dump_json())
-    return body
+    path.write_text(state.model_dump_json())
+
+
+def _find(state: WorkspacesState, ws_id: str) -> Workspace | None:
+    return next((w for w in state.workspaces if w.id == ws_id), None)
+
+
+@router.get("", response_model=WorkspacesState)
+def list_workspaces() -> WorkspacesState:
+    return _read()
+
+
+@router.post("", response_model=Workspace)
+def create_workspace(body: CreateWorkspace) -> Workspace:
+    state = _read()
+    ws = Workspace(id=uuid.uuid4().hex[:8], name=body.name, layout=None)
+    state.workspaces.append(ws)
+    if state.active is None:
+        state.active = ws.id
+    _write(state)
+    return ws
+
+
+@router.put("/active", response_model=WorkspacesState)
+def set_active(body: ActiveRequest) -> WorkspacesState:
+    state = _read()
+    if _find(state, body.id) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown workspace '{body.id}'")
+    state.active = body.id
+    _write(state)
+    return state
+
+
+@router.put("/{ws_id}", response_model=Workspace)
+def upsert_workspace(ws_id: WorkspaceId, body: UpsertWorkspace) -> Workspace:
+    state = _read()
+    existing = _find(state, ws_id)
+    if existing is not None:
+        # Apply only provided fields so a rename doesn't wipe the layout.
+        if "name" in body.model_fields_set:
+            existing.name = body.name or existing.name
+        if "layout" in body.model_fields_set:
+            existing.layout = body.layout
+        ws = existing
+    else:
+        ws = Workspace(id=ws_id, name=body.name or ws_id, layout=body.layout)
+        state.workspaces.append(ws)
+    if state.active is None:
+        state.active = ws.id
+    _write(state)
+    return ws
+
+
+@router.delete("/{ws_id}", response_model=WorkspacesState)
+def delete_workspace(ws_id: WorkspaceId) -> WorkspacesState:
+    state = _read()
+    state.workspaces = [w for w in state.workspaces if w.id != ws_id]
+    if state.active == ws_id:
+        state.active = state.workspaces[0].id if state.workspaces else None
+    _write(state)
+    return state

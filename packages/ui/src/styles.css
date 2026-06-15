@@ -92,9 +92,81 @@ body {
 }
 
 /* Dockable workspace */
+.ws-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
 .ws-dockview {
   flex: 1;
   min-height: 0;
+}
+
+/* Workspace tab strip */
+.ws-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.ws-tab {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  user-select: none;
+}
+
+.ws-tab:hover {
+  background: rgb(255 255 255 / 5%);
+}
+
+.ws-tab.active {
+  background: rgb(255 255 255 / 9%);
+  color: var(--text);
+}
+
+.ws-tab-close,
+.ws-tab-add {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  font-size: 0.9rem;
+}
+
+.ws-tab-add {
+  font-size: 1rem;
+  padding: 0.2rem 0.5rem;
+}
+
+.ws-tab-close:hover,
+.ws-tab-add:hover {
+  color: var(--text);
+}
+
+.ws-tabs-spacer {
+  flex: 1;
+}
+
+.ws-widget-picker {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.2rem 0.4rem;
+  font: inherit;
+  font-size: 0.8rem;
 }
 
 .ws-panel {
@@ -427,6 +499,78 @@ body {
   font: inherit;
 }
 
+/* Settings page */
+.settings-page {
+  padding: 0.5rem 0.25rem;
+  overflow: auto;
+  height: 100%;
+}
+
+.settings-group {
+  margin-bottom: 1.5rem;
+}
+
+.settings-group h3 {
+  margin: 0 0 0.5rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.setting-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.5rem 0;
+}
+
+.setting-label label {
+  font-weight: 500;
+}
+
+.setting-desc {
+  margin: 0.15rem 0 0;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  max-width: 36rem;
+}
+
+.setting-control {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.setting-control input[type='text'],
+.setting-control input[type='number'],
+.setting-control select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.25rem 0.4rem;
+  font: inherit;
+}
+
+.setting-control input[type='number'] {
+  width: 5rem;
+}
+
+.setting-reset {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 0.75rem;
+  text-decoration: underline;
+}
+
 .shell-header {
   display: flex;
   align-items: center;
@@ -514,6 +658,21 @@ body {
   white-space: pre-wrap;
 }
 
+.home-actions {
+  width: 100%;
+  list-style: none;
+  margin: 0 0 0.5rem;
+  padding: 0;
+  text-align: left;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+
+.home-actions li {
+  padding: 0.15rem 0;
+  color: #2ed573;
+}
+
 .home-hint {
   color: var(--text-dim);
   font-size: 0.9rem;
@@ -584,6 +743,63 @@ body {
 .pull-progress {
   color: var(--text-dim);
   font-size: 0.85rem;
+}
+
+.onboarding-field {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.onboarding-field .home-hint {
+  flex-basis: 100%;
+  margin: 0.15rem 0 0;
+}
+
+.provider-list {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.provider-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.7rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.provider-option.selected {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.provider-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: var(--text-dim);
+  opacity: 0.4;
+}
+
+.provider-dot.on {
+  background: #2ed573;
+  opacity: 1;
+}
+
+.vllm-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  flex-basis: 100%;
 }
 
 button.primary {

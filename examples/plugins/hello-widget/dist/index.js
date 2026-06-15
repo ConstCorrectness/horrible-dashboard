@@ -1,38 +1,41 @@
-import { jsxs as l, jsx as r } from "/plugin-runtime/jsx-runtime.js";
-import { useState as a, useEffect as c } from "/plugin-runtime/react.js";
-import { definePlugin as u } from "/plugin-runtime/sdk.js";
-const n = "count";
-function g(e) {
+import { jsxs as l, jsx as s } from "/plugin-runtime/jsx-runtime.js";
+import { useState as u, useSyncExternalStore as m, useEffect as p } from "/plugin-runtime/react.js";
+import { definePlugin as f } from "/plugin-runtime/sdk.js";
+const n = "count", g = "hello-widget.greetingText", d = "Hello from a marketplace plugin! 👋";
+function h(e) {
   return function() {
-    const [i, s] = a(null);
-    c(() => {
-      e.storage.get(n).then((t) => s(t ?? 0));
+    const [i, o] = u(null), c = m(
+      e.settings.subscribe,
+      () => e.settings.get(g)
+    ) ?? d;
+    p(() => {
+      e.storage.get(n).then((t) => o(t ?? 0));
     }, []);
-    const d = async () => {
+    const a = async () => {
       const t = (i ?? 0) + 1;
-      s(t), await e.storage.set(n, t);
+      o(t), await e.storage.set(n, t);
     };
     return /* @__PURE__ */ l("div", { children: [
-      /* @__PURE__ */ r("p", { children: "Hello from a marketplace plugin! 👋" }),
+      /* @__PURE__ */ s("p", { children: c }),
       /* @__PURE__ */ l("p", { children: [
         "Pressed ",
-        /* @__PURE__ */ r("strong", { children: i ?? "…" }),
+        /* @__PURE__ */ s("strong", { children: i ?? "…" }),
         " times — persisted server-side via plugin storage."
       ] }),
-      /* @__PURE__ */ r("button", { onClick: () => {
-        d();
+      /* @__PURE__ */ s("button", { onClick: () => {
+        a();
       }, disabled: i === null, children: "Press me" })
     ] });
   };
 }
-const h = u({
+const G = f({
   setup(e) {
     return {
       widgets: [
         {
           id: "hello-widget.greeting",
           title: "Hello Widget",
-          component: g(e)
+          component: h(e)
         }
       ],
       commands: [
@@ -40,14 +43,23 @@ const h = u({
           id: "hello-widget.sayHello",
           title: "Hello Widget: Bump the counter",
           run: async () => {
-            const o = await e.storage.get(n) ?? 0;
-            await e.storage.set(n, o + 1);
+            const r = await e.storage.get(n) ?? 0;
+            await e.storage.set(n, r + 1);
           }
+        }
+      ],
+      settings: [
+        {
+          key: g,
+          title: "Greeting text",
+          description: "The message the Hello Widget shows on the dashboard.",
+          type: "string",
+          default: d
         }
       ]
     };
   }
 });
 export {
-  h as default
+  G as default
 };

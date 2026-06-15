@@ -26,8 +26,8 @@ export const clubhouseModule: ModuleManifest = {
     {
       id: 'clubhouse.connect',
       title: 'Clubhouse: Connect account',
-      // The widget lives on the dashboard grid; the command takes you there.
-      run: () => registry.openPanel('dashboard.home'),
+      // Open the account widget as a pane in the active workspace.
+      run: () => registry.openPanel('clubhouse.account'),
     },
     {
       id: 'clubhouse.rooms',

@@ -18,28 +18,6 @@ def test_health(client: TestClient) -> None:
     assert body["version"] == APP_VERSION
 
 
-def test_dashboard_layout_default_then_roundtrip(client: TestClient) -> None:
-    res = client.get("/api/dashboard/layout")
-    assert res.status_code == 200
-    assert res.json()["widgets"] == [
-        "dashboard.welcome",
-        "dashboard.backendStatus",
-    ]
-
-    new_layout = {"widgets": ["dashboard.backendStatus"]}
-    res = client.put("/api/dashboard/layout", json=new_layout)
-    assert res.status_code == 200
-    assert res.json() == new_layout
-
-    res = client.get("/api/dashboard/layout")
-    assert res.json() == new_layout
-
-
-def test_dashboard_layout_rejects_bad_payload(client: TestClient) -> None:
-    res = client.put("/api/dashboard/layout", json={"widgets": "not-a-list"})
-    assert res.status_code == 422
-
-
 def test_ws_hello(client: TestClient) -> None:
     with client.websocket_connect("/ws") as ws:
         msg = ws.receive_json()

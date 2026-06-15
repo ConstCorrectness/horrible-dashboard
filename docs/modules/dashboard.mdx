@@ -1,0 +1,59 @@
+---
+sidebar_position: 2
+sidebar_label: Dashboard
+---
+
+# Module: dashboard / widgets
+
+The "one-stop" landing surface — common status widgets at a glance (backend
+health, recent agent sessions, tasks, feeds, metrics).
+
+**Status: implemented** — frontend in `packages/core/src/modules/dashboard/`.
+The dashboard is **no longer a grid panel**: it is the default seeded
+**workspace** (see [../architecture/windowing.md](../architecture/windowing.mdx)),
+a layout of common widget-panes. This module's job is now to (1) contribute its
+own widgets and (2) provide the command to jump to the Dashboard tab. It has no
+backend surface — workspace layouts persist through
+`backend/modules/workspace/`.
+
+## Contributions to the layout shell
+
+- **Widgets:** `dashboard.welcome` (intro card, `defaultPlacement: left`) and
+  `dashboard.backendStatus` (polls `/api/health` every 10s,
+  `defaultPlacement: right`). Other modules contribute more widgets
+  (`clubhouse.account`, `observability.io`).
+- **Commands:** `dashboard.open` — selects the Dashboard workspace tab
+  (`registry.switchWorkspace('dashboard')`).
+
+The default Dashboard is seeded on first run by the workspace
+(`DASHBOARD_PRESET` in `Workspace.tsx`): `dashboard.welcome`,
+`dashboard.backendStatus`, `observability.io` opened as panes in a 2-column
+arrangement.
+
+## The widget contract
+
+A **widget** is a registry contribution (`id`, `title`, React component, optional
+`requiredCapabilities`, optional `defaultPlacement`). Widgets are opened as
+**panes** in the workspace — dockable, resizable, floatable like panels (one
+level, no separate board). Every widget is openable from the command palette
+(synthesized `widget.open:<id>` → "Open widget: &lt;title&gt;") and from the
+"Add widget…" picker in the workspace tab strip. Capability-gated widgets are
+filtered by the capability service before they appear in the picker.
+
+Widget data comes from each owning module's own backend routes; the dashboard
+module knows nothing about other widgets' internals — the same inversion as
+panels-in-the-shell.
+
+## Browser vs desktop
+
+Widgets behave identically in both layouts. Differences come only from individual
+widgets' capability requirements:
+
+| Concern                                                                            | Browser                                    | Desktop   |
+| ---------------------------------------------------------------------------------- | ------------------------------------------ | --------- |
+| Capability-gated widgets (e.g. a local system-metrics widget needing desktop APIs) | hidden from the picker, slot shows nothing | available |
+| Backend-sourced widgets (sessions, tasks, feeds)                                   | identical                                  | identical |
+
+A widget that is available in one layout and not the other must come from a
+`requiredCapabilities` declaration — never from platform sniffing inside the
+widget. When adding a capability-gated widget, list it in the table above.

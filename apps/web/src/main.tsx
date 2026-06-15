@@ -8,10 +8,12 @@ import {
   initBackendOrigin,
   initCapabilities,
   loadPlugins,
+  loadSettings,
   marketplaceModule,
   observabilityModule,
   registry,
   scratchModule,
+  settingsModule,
 } from '@horrible/core';
 import { AppShell } from '@horrible/ui';
 
@@ -34,8 +36,12 @@ async function boot(): Promise<void> {
   registry.register(clubhouseModule);
   registry.register(observabilityModule);
   registry.register(marketplaceModule);
+  registry.register(settingsModule);
 
   await loadPlugins();
+  // After plugins register their declarations, seed the persisted overrides so
+  // widgets read correct values on first render. Backend down ⇒ defaults only.
+  await loadSettings();
 
   const root = document.getElementById('root');
   if (!root) throw new Error('Missing #root element');

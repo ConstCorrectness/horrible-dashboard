@@ -1,0 +1,117 @@
+---
+sidebar_position: 1
+sidebar_label: Overview
+slug: /
+---
+
+# horrible-dashboard documentation
+
+A unified one-stop app for everything — "emacs for the agentic era". One web UI
+serves two layouts: a browser app and a cross-platform desktop app (a Tauri shell
+wrapping the same frontend).
+
+These pages are the contract between the code and anyone (human or agent) working
+on it — they describe the codebase as it is, not as it once was.
+
+## The big picture
+
+```mermaid
+flowchart TB
+    subgraph FE["Frontend — one React app, two layouts"]
+        Web["apps/web<br/>(browser)"]
+        Desk["apps/desktop<br/>(Tauri)"]
+        UI["packages/ui<br/>layout shell"]
+        Core["packages/core<br/>registry · commands · API client"]
+        Mods["Modules<br/>agent · dashboard · observability ·<br/>marketplace · settings · clubhouse · scratch"]
+        SDK["packages/sdk<br/>third-party plugins"]
+    end
+    subgraph BE["backend/ — FastAPI (the brain)"]
+        Agent["agent orchestrator"]
+        Tel["telemetry"]
+        WSrv["workspace store"]
+        Other["clubhouse · settings · plugins"]
+    end
+    Ext[("Local models<br/>Ollama · LM Studio · vLLM")]
+    CH[("Clubhouse API")]
+
+    Web --> UI
+    Desk --> UI
+    UI --> Core
+    Core --> Mods
+    SDK -. "loaded at boot" .-> Core
+    Core -->|"HTTP + /ws"| BE
+    Agent --> Ext
+    Other --> CH
+```
+
+## Contents
+
+**Architecture**
+
+- [Layout shell](architecture/layout-shell.mdx) — the shared frontend layout
+  (workspace, panels, command palette) and how the browser and desktop (Tauri)
+  versions differ.
+- [Windowing](architecture/windowing.mdx) — the dockable workspace: how panels
+  open as tabbed/split/floating windows, pane types vs instances, and layout
+  persistence.
+- [Plugin SDK](architecture/plugin-sdk.mdx) — the public plugin contract
+  (`@horribledashboard/sdk`): package format, authoring guide, runtime shims,
+  versioning, trust model, catalog/install lifecycle.
+
+**Modules** — one page per feature module, each describing how it plugs into the
+layout shell and how it behaves in the browser vs the desktop app:
+
+- [Agent chat](modules/agent-chat.mdx)
+- [Dashboard](modules/dashboard.mdx)
+- [Observability](modules/observability.mdx)
+- [Marketplace](modules/marketplace.mdx)
+- [Settings](modules/settings.mdx)
+- [Clubhouse](modules/clubhouse.mdx)
+- [Scratch](modules/scratch.mdx)
+- [Editor](modules/editor.mdx)
+- [Terminal](modules/terminal.mdx)
+- [File explorer](modules/file-explorer.mdx)
+
+## Sync policy (enforced)
+
+Docs live next to the code on purpose, and changes that affect them must update
+them **in the same change**:
+
+- New module → new `docs/modules/<name>.mdx` page following the existing template
+  (purpose, panels/commands contributed, backend surface, browser vs desktop
+  behavior).
+- New panel, command, capability, or backend route on an existing module → update
+  that module's page.
+- Changes to the workspace/docking system, command palette, keybindings, platform
+  capability service, or either app entry → update
+  `docs/architecture/layout-shell.mdx`.
+- Renaming or removing any of the above → same rule, including deleting docs for
+  removed features.
+
+A Stop hook (`.claude/hooks/docs_check.py`) flags any change set that touches
+`apps/`, `packages/`, or `backend/` without touching `docs/`, as a safety net.
+Pure refactors with no behavioral or interface change don't need doc edits — say
+so when the hook asks.
+
+## This documentation site
+
+These pages render as a [Docusaurus](https://docusaurus.io) site whose source of
+truth is this `docs/` directory — the site config lives in `website/` and reads
+`../docs` directly, so editing a page here is editing the site. Diagrams use
+[Mermaid](https://mermaid.js.org) fenced code blocks.
+
+- `pnpm --filter @horrible/docs start` — local dev server with live reload.
+- `pnpm --filter @horrible/docs build` — production build (run before pushing to
+  catch broken links and MDX errors).
+- Pushing to `main` deploys to GitHub Pages via
+  `.github/workflows/docs.yml`.
+
+## Status
+
+Scaffolded: the monorepo (apps/web, apps/desktop, packages/core, packages/ui,
+backend/) exists and the **dashboard**, **agent**, **observability**,
+**clubhouse**, **marketplace**, and **settings** modules are implemented. The
+remaining module pages (editor, terminal, file-explorer) still document design
+only — update each to match reality when it gets implemented. An experimental
+Electron shell lives on the `electron-shell` branch
+(`docs/architecture/electron-shell.md` there).

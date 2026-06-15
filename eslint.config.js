@@ -3,7 +3,14 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/node_modules/**', '**/src-tauri/**', '.venv/**'],
+    ignores: [
+      '**/dist/**',
+      '**/node_modules/**',
+      '**/src-tauri/**',
+      '.venv/**',
+      'website/build/**',
+      'website/.docusaurus/**',
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
