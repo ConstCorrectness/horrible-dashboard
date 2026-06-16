@@ -2,6 +2,7 @@
   "name": "horrible-dashboard",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@10.28.2",
   "scripts": {
     "dev": "pnpm --filter @horrible/web dev",
     "build": "pnpm --filter @horrible/web build",
