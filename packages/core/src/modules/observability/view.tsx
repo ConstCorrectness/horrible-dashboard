@@ -1,10 +1,40 @@
 import { Fragment, useState, useSyncExternalStore, type ReactNode } from 'react';
 
+import type { AgentContextSnapshot } from '@horribledashboard/sdk';
+
+import { useAgentContext } from '../../agent-context';
 import { useSetting } from '../../settings';
 import { telemetryStore, type IoEvent } from '../../telemetry';
 
 function useIoEvents(): IoEvent[] {
   return useSyncExternalStore(telemetryStore.subscribe, telemetryStore.getSnapshot);
+}
+
+function isError(e: IoEvent): boolean {
+  return Boolean(e.error) || (e.status != null && e.status >= 400);
+}
+
+/**
+ * The agent-readable snapshot of the data flow: a summary plus the most recent
+ * calls (newest first) so the agent can reason about what the app is doing —
+ * "did that request fail?", "how much traffic is going out?".
+ */
+function ioSnapshot(events: IoEvent[], recentCount = 10): AgentContextSnapshot {
+  return {
+    totalCalls: events.length,
+    errors: events.filter(isError).length,
+    recent: [...events]
+      .slice(-recentCount)
+      .reverse()
+      .map((e) => ({
+        source: e.source,
+        method: e.method,
+        target: e.target,
+        status: e.status ?? null,
+        durationMs: e.duration_ms != null ? Math.round(e.duration_ms) : null,
+        error: e.error ?? null,
+      })),
+  };
 }
 
 function fmtTime(ts: number): string {
@@ -96,6 +126,7 @@ function useExpanded(): [(e: IoEvent) => boolean, (e: IoEvent) => void] {
 export function ObservabilityPanel() {
   const events = useIoEvents();
   const [isExpanded, toggle] = useExpanded();
+  useAgentContext(() => ioSnapshot(events));
   const rows = [...events].reverse(); // newest first
 
   return (
@@ -165,7 +196,8 @@ export function ObservabilityWidget() {
   const events = useIoEvents();
   const [isExpanded, toggle] = useExpanded();
   const recentCount = useSetting<number>('observability.recentCount') ?? 5;
-  const errors = events.filter((e) => e.error || (e.status != null && e.status >= 400)).length;
+  useAgentContext(() => ioSnapshot(events, recentCount));
+  const errors = events.filter(isError).length;
   const recent = [...events].slice(-recentCount).reverse();
 
   return (

@@ -28,7 +28,8 @@ whole permission system (Epic A) is in place, the **stub validation** ran green
 across all four modes, and all three real modules now declare their tools on the
 surface: the **file explorer** (`files.list`/`read` reads, gated
 `files.create`/`write`/`rename`/`delete`), the **editor** (`getAgentContext`
-buffer reads, gated `editor.applyEdit`/`save`), and the **terminal**
+buffer reads, gated `editor.proposeEdit` [accept/decline diff] /
+`editor.applyEdit`/`save`), and the **terminal**
 (`terminal.list`/`read` reads, gated shell-matched `terminal.exec`). Remaining
 work is incremental per-module polish (e.g. the editor's desktop-only `osfile:`
 source), not foundational.
@@ -143,6 +144,14 @@ This is how the agent "reads widget A to act on widget B": pull A's context with
 read tool, then call a gated action tool on B. It forces per-pane-instance state
 (a known windowing gap — instances currently share a store), which these modules
 need anyway.
+
+Beyond the read/write modules above, the **content widgets expose snapshots too**,
+so the agent can reason about what's on screen even where it has no write tools:
+the **backend-status** widget reports reachability and version; the
+**observability** widget and panel report the data-flow summary (total calls,
+errors) and the most recent calls; the **Clubhouse** account widget reports the
+connection state and the **live-rooms** panel reports the rooms currently listed.
+These are read-only `getAgentContext` providers — no `agentTools`.
 
 ## Capability manifest protocol
 

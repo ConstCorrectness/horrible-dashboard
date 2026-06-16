@@ -180,6 +180,42 @@ def tool_result_message(
     return {"role": "tool", "content": content, "tool_call_id": call.id}
 
 
+async def generate(
+    client: httpx.AsyncClient,
+    info: ProviderInfo,
+    endpoint: str,
+    model: str,
+    prompt: str,
+    max_tokens: int = 64,
+) -> str:
+    """One non-streaming, short completion (for editor autosuggest), normalized
+    across dialects to a plain string. Token-capped to keep latency low."""
+    if info.dialect == "ollama":
+        res = await client.post(
+            f"{endpoint}/api/generate",
+            json={
+                "model": model,
+                "prompt": prompt,
+                "stream": False,
+                "options": {"num_predict": max_tokens},
+            },
+        )
+        res.raise_for_status()
+        return res.json().get("response", "")
+    res = await client.post(
+        f"{endpoint}/v1/chat/completions",
+        json={
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": False,
+            "max_tokens": max_tokens,
+        },
+    )
+    res.raise_for_status()
+    choices = res.json().get("choices") or [{}]
+    return choices[0].get("message", {}).get("content") or ""
+
+
 async def generate_stream(
     client: httpx.AsyncClient,
     info: ProviderInfo,

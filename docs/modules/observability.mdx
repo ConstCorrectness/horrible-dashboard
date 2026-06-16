@@ -115,6 +115,13 @@ avoid feedback noise.
 Identical. The store also captures real client-side round-trip latency, which
 reflects wherever the backend lives (local or remote).
 
+## Agent context
+
+Both the widget and the panel expose a `getAgentContext()` snapshot (total calls,
+error count, and the most recent calls with source/method/target/status/duration),
+so the agent can reason about live traffic — e.g. "did that request fail?". See
+[agent tools](../architecture/agent-tools.mdx#reading-widget-state-getagentcontext).
+
 ## Not yet
 
 Filtering/search, client-side streaming calls (the agent chat/pull streams

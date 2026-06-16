@@ -83,6 +83,16 @@ export const editorModule: ModuleManifest = {
   // Editing keys go through the shell keybinding service, never a hardcoded
   // handler in the component — so they stay rebindable.
   keybindings: [{ key: 'mod+s', command: 'editor.save' }],
+  settings: [
+    {
+      key: 'editor.autosuggest',
+      title: 'Inline autosuggest',
+      description:
+        'Suggest inline completions from the local model as you type in a buffer (Tab to accept, Esc to dismiss).',
+      type: 'boolean',
+      default: false,
+    },
+  ],
 };
 
 export { loadSource, saveSource, sourceTitle, type LoadedSource } from './sources';

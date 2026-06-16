@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 
+import { useAgentContext } from '../../agent-context';
 import {
   completeClubhouseAuth,
   connectClubhouseWithToken,
@@ -33,6 +34,15 @@ export function ClubhouseWidget() {
   useEffect(() => {
     void refresh();
   }, []);
+
+  // Expose the connection state so the agent knows whose account is linked.
+  useAgentContext(() => {
+    if (status === 'loading' || status === 'backend-down') return { state: status };
+    if (status.connected) {
+      return { connected: true, name: status.name ?? null, username: status.username ?? null };
+    }
+    return { connected: false, step };
+  });
 
   if (status === 'loading') return <p>Checking…</p>;
   if (status === 'backend-down') {

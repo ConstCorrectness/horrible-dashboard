@@ -52,6 +52,15 @@ class ChatRequest(BaseModel):
     prompt: str
 
 
+class CompleteRequest(BaseModel):
+    """A fill-in completion request for the editor's inline autosuggest: the text
+    before the cursor (`prefix`) and after it (`suffix`)."""
+
+    prefix: str
+    suffix: str = ""
+    language: str | None = None
+
+
 class PullRequest(BaseModel):
     model: str
 

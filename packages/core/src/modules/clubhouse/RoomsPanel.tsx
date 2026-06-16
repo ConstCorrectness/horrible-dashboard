@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 
+import { useAgentContext } from '../../agent-context';
 import { getClubhouseChannels, getClubhouseStatus, type Channel } from './api';
 
 /**
@@ -33,6 +34,18 @@ export function RoomsPanel() {
   useEffect(() => {
     void load();
   }, []);
+
+  // Let the agent read the live rooms currently listed.
+  useAgentContext(() => ({
+    state,
+    rooms: channels.map((c) => ({
+      topic: c.topic || null,
+      club: c.club?.name ?? null,
+      speakers: c.num_speakers ?? 0,
+      total: c.num_all ?? 0,
+      people: c.users.map((u) => u.name).filter(Boolean),
+    })),
+  }));
 
   return (
     <div className="ch-rooms">

@@ -5,7 +5,9 @@
   "packageManager": "pnpm@10.28.2",
   "scripts": {
     "dev": "pnpm --filter @horrible/web dev",
+    "dev:desktop": "pnpm --filter @horrible/desktop dev",
     "build": "pnpm --filter @horrible/web build",
+    "build:desktop": "pnpm --filter @horrible/desktop build",
     "build:icons": "node scripts/build_icons.mjs",
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint .",

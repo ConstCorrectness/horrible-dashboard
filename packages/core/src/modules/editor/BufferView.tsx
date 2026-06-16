@@ -13,10 +13,14 @@ import { Compartment, EditorState } from '@codemirror/state';
 import { markdown } from '@codemirror/lang-markdown';
 import { javascript } from '@codemirror/lang-javascript';
 import { oneDark } from '@codemirror/theme-one-dark';
+import { unifiedMergeView } from '@codemirror/merge';
 
 import { useAgentContext } from '../../agent-context';
 import { ApiError } from '../../api';
 import { usePaneParams } from '../../panes';
+import { useSetting } from '../../settings';
+import { completeCode } from '../agent/api';
+import { autosuggest } from './autosuggest';
 import { registerBuffer, type BufferSnapshot } from './buffers';
 import { setActiveBufferSource } from './index';
 import { loadSource, saveSource } from './sources';
@@ -28,6 +32,13 @@ function languageFor(title: string) {
   return markdown();
 }
 
+/** A coarse language hint for the completion prompt. */
+function languageHint(title: string): string {
+  if (/\.tsx?$/i.test(title)) return 'TypeScript';
+  if (/\.jsx?$|\.mjs$|\.cjs$/i.test(title)) return 'JavaScript';
+  return 'Markdown';
+}
+
 export function BufferView() {
   const params = usePaneParams();
   const source = typeof params.source === 'string' ? params.source : null;
@@ -35,11 +46,18 @@ export function BufferView() {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const langRef = useRef(new Compartment());
+  const mergeRef = useRef(new Compartment());
+  const autoRef = useRef(new Compartment());
   const revisionRef = useRef<number | undefined>(undefined);
+  // The buffer content captured when a proposal opens, restored on Decline.
+  const originalRef = useRef('');
+  const dirtyBeforeProposalRef = useRef(false);
 
   const [title, setTitle] = useState(source ? '…' : 'Untitled');
   const [dirty, setDirty] = useState(false);
+  const [proposing, setProposing] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  const autosuggestOn = useSetting<boolean>('editor.autosuggest') ?? false;
 
   // Mount CodeMirror once.
   useEffect(() => {
@@ -52,6 +70,8 @@ export function BufferView() {
           basicSetup,
           oneDark,
           langRef.current.of(markdown()),
+          mergeRef.current.of([]),
+          autoRef.current.of([]),
           EditorView.updateListener.of((u) => {
             if (u.docChanged) setDirty(true);
             // Track the focused buffer as "active" (Mod-s etc. route through the
@@ -119,6 +139,40 @@ export function BufferView() {
       );
     }
   };
+  // Show an agent-proposed edit as an inline diff (original vs proposed). The user
+  // reviews per-chunk in the gutter, then Accepts (keep) or Declines (revert).
+  const propose = (content: string) => {
+    const view = viewRef.current;
+    if (!view) return;
+    if (!proposing) {
+      originalRef.current = view.state.doc.toString();
+      dirtyBeforeProposalRef.current = dirty;
+    }
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: content },
+      effects: mergeRef.current.reconfigure(unifiedMergeView({ original: originalRef.current })),
+    });
+    setProposing(true);
+  };
+  // The controller registers once per source; route through a ref so it always
+  // calls the current `propose` (which closes over live `dirty`/`proposing`).
+  const proposeRef = useRef(propose);
+  proposeRef.current = propose;
+
+  const closeProposal = (revert: boolean) => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({
+      ...(revert
+        ? { changes: { from: 0, to: view.state.doc.length, insert: originalRef.current } }
+        : {}),
+      effects: mergeRef.current.reconfigure([]),
+    });
+    // Accept leaves changes in place (dirty); Decline restores the pre-proposal state.
+    setDirty(revert ? dirtyBeforeProposalRef.current : true);
+    setProposing(false);
+  };
+
   // A live snapshot for the agent (kept current via a ref reassigned each render).
   const snapshotRef = useRef<() => BufferSnapshot>(() => ({
     uri: '(unsaved)',
@@ -145,6 +199,21 @@ export function BufferView() {
   // Read path: the agent pulls this buffer's snapshot on demand.
   useAgentContext(() => snapshotRef.current());
 
+  // Inline autosuggest: enabled live by the setting, suppressed while reviewing a
+  // proposed edit (the diff owns the buffer then). Reconfigured via a compartment.
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    const ext =
+      autosuggestOn && !proposing
+        ? autosuggest({
+            fetch: (prefix, suffix, signal) =>
+              completeCode(prefix, suffix, languageHint(title), signal),
+          })
+        : [];
+    view.dispatch({ effects: autoRef.current.reconfigure(ext) });
+  }, [autosuggestOn, proposing, title]);
+
   // Write path: register a controller so `editor.applyEdit`/`editor.save` (gated,
   // type-level tools) can act on this buffer instance by URI.
   useEffect(() => {
@@ -157,9 +226,10 @@ export function BufferView() {
           view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: content } });
         }
       },
+      propose: (content) => proposeRef.current(content),
       save: () => save(),
     });
-    // `save`/`snapshotRef` read current values via refs; only `source` re-registers.
+    // `save`/`snapshotRef`/`propose` read current values via refs; only `source` re-registers.
   }, [source]);
 
   return (
@@ -174,6 +244,17 @@ export function BufferView() {
           Save
         </button>
       </div>
+      {proposing && (
+        <div className="editor-proposal">
+          <span className="editor-proposal-label">⤳ Agent proposed an edit — review the diff</span>
+          <button className="editor-proposal-accept" onClick={() => closeProposal(false)}>
+            Accept
+          </button>
+          <button className="editor-proposal-decline" onClick={() => closeProposal(true)}>
+            Decline
+          </button>
+        </div>
+      )}
       <div className="editor-cm" ref={hostRef} />
     </div>
   );

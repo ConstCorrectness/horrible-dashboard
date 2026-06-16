@@ -17,6 +17,12 @@ export type BufferSnapshot = {
 export interface BufferController {
   snapshot(): BufferSnapshot;
   setContent(content: string): void;
+  /**
+   * Show `content` as a *proposed* edit: the buffer enters a diff/review state
+   * (original vs proposed) the user accepts or declines, rather than replacing the
+   * content outright. Used by the gated `editor.proposeEdit` agent tool.
+   */
+  propose(content: string): void;
   save(): Promise<void>;
 }
 

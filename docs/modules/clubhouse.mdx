@@ -72,6 +72,15 @@ API client's thrown `Error` so the widget shows the real reason, not a bare 400.
 The session (auth token, refresh token, profile) is stored server-side in
 `$HORRIBLE_DATA_DIR/clubhouse-auth.json`. Treat that file as a credential.
 
+## Agent context
+
+The account widget exposes a `getAgentContext()` snapshot of the connection state
+(connected, name, username, or the current onboarding step), and the live-rooms
+panel exposes the rooms it lists (topic, club, speaker/listener counts, people).
+Both are read-only — the agent can reason about who's connected and what's live,
+but there are no Clubhouse `agentTools` yet. See
+[agent tools](../architecture/agent-tools.mdx#reading-widget-state-getagentcontext).
+
 ## Browser vs desktop
 
 Identical in both layouts — everything runs through the backend. As with the

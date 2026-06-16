@@ -6,8 +6,26 @@ import httpx
 
 from backend.modules.agent import orchestrator, permission_store, permissions
 from backend.modules.agent.models import AgentConfig
+from backend.modules.agent.orchestrator import _history_messages
 from backend.modules.agent.permissions import Mode
 from backend.modules.ws import WsConnection
+
+
+def test_history_messages_keeps_text_turns_drops_junk() -> None:
+    # Only well-formed user/assistant text survives; tool plumbing and bad shapes drop.
+    history = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+        {"role": "tool", "content": "ignored"},
+        {"role": "assistant", "content": ""},
+        {"role": "user"},
+        "not a dict",
+    ]
+    assert _history_messages(history) == [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+    ]
+    assert _history_messages(None) == []
 
 
 class FakeConn:

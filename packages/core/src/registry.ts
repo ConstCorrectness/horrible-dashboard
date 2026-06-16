@@ -148,6 +148,12 @@ export interface LayoutController {
   setPaneFloating(instanceId: string, floating: boolean): boolean;
   /** Maximize a pane to fill the workspace (`true`) or restore the layout (`false`). */
   maximizePane(instanceId: string, maximized: boolean): boolean;
+  /**
+   * Swap an open pane's content to another registered pane type in place (same
+   * instance id, so the layout/geometry is preserved). Returns false if either the
+   * pane instance or the target `paneId` is unknown.
+   */
+  changePaneType(instanceId: string, paneId: string): boolean;
 }
 
 class ModuleRegistry {

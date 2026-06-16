@@ -208,6 +208,31 @@ body {
   padding: 0.15rem 0.6rem;
 }
 
+.editor-proposal {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.6rem;
+  background: color-mix(in srgb, var(--accent) 16%, var(--bg-raised));
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  font-size: 0.85rem;
+}
+
+.editor-proposal-label {
+  flex: 1;
+  color: var(--text);
+}
+
+.editor-proposal-accept {
+  padding: 0.15rem 0.7rem;
+  color: #8cf0a8;
+}
+
+.editor-proposal-decline {
+  padding: 0.15rem 0.7rem;
+  color: #f08c8c;
+}
+
 .editor-cm {
   flex: 1;
   min-height: 0;
@@ -216,6 +241,11 @@ body {
 
 .editor-cm .cm-editor {
   height: 100%;
+}
+
+.cm-ghost-text {
+  opacity: 0.42;
+  font-style: italic;
 }
 
 /* File tree (files.tree panel) */
@@ -1339,4 +1369,155 @@ kbd {
 
 .mk-badge.mk-off {
   color: var(--text-dim);
+}
+
+/* Agent chat widget */
+.agent-chat {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.agent-chat-avatar {
+  display: flex;
+  justify-content: center;
+  padding: 0.25rem 0 0;
+  flex: 0 0 auto;
+}
+
+.agent-chat-log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.agent-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-width: 92%;
+}
+
+.agent-msg-user {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+.agent-msg-assistant {
+  align-self: flex-start;
+}
+
+.agent-bubble {
+  padding: 0.45rem 0.7rem;
+  border-radius: 12px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.4;
+}
+
+.agent-msg-user .agent-bubble {
+  background: color-mix(in srgb, var(--accent) 22%, var(--bg-raised));
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+
+.agent-actions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 0.8rem;
+  color: #2ed573;
+}
+
+.agent-chat-input {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.agent-chat-input input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  outline: none;
+  color: var(--text);
+  font: inherit;
+  padding: 0.4rem 0.85rem;
+}
+
+.agent-chat-input button {
+  border-radius: 999px;
+}
+
+/* Workspace tab: type-switcher (▾) + close (✕) beside the default tab */
+.pane-tab {
+  display: flex;
+  align-items: center;
+}
+
+.pane-tab-btn,
+.pane-tab-close {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 0 0.3rem;
+  font-size: 0.8rem;
+  line-height: 1;
+}
+
+.pane-tab-btn:hover,
+.pane-tab-close:hover {
+  color: var(--text);
+}
+
+.pane-tab-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 180px;
+  max-height: 60vh;
+  overflow-y: auto;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.25rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.pane-tab-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  padding: 0.3rem 0.5rem;
+  border-radius: 4px;
+  font: inherit;
+}
+
+.pane-tab-menu-item:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.pane-tab-menu-item.active {
+  color: var(--accent);
+}
+
+.pane-tab-menu-kind {
+  color: var(--text-dim);
+  font-size: 0.75rem;
 }

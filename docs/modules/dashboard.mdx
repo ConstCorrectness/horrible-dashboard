@@ -57,3 +57,10 @@ widgets' capability requirements:
 A widget that is available in one layout and not the other must come from a
 `requiredCapabilities` declaration — never from platform sniffing inside the
 widget. When adding a capability-gated widget, list it in the table above.
+
+## Agent context
+
+The backend-status widget exposes a `getAgentContext()` snapshot (reachability
+plus the app name/version when reachable), so the agent can answer "is the backend
+up?" without its own tool. See
+[agent tools](../architecture/agent-tools.mdx#reading-widget-state-getagentcontext).

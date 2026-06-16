@@ -46,6 +46,12 @@ SYSTEM_PROMPT = (
     "- Only use list_workspaces / create_workspace / switch_workspace when the "
     "user explicitly talks about workspaces or tabs.\n"
     "- Ids are not guessable; always discover them with a list_* tool first.\n"
+    "- When the user asks ABOUT what's on screen, the layout, or a widget's "
+    "contents, call list_open_panes first, then get_pane_context on the relevant "
+    "pane(s), and answer from what they return — do not guess.\n"
+    "- To change code in an open editor buffer (format, rewrite, fix), use "
+    "editor.proposeEdit (NOT editor.applyEdit) so the user reviews the diff and "
+    "accepts or declines it.\n"
     "- After acting, reply with one short sentence confirming what you did."
 )
 
@@ -237,9 +243,13 @@ async def handle_agent_message(conn: WsConnection, msg: dict[str, Any]) -> None:
     elif event == "ask":
         # Must not block the receive loop — the turn awaits tool_results that
         # arrive on that same loop. Run it detached.
+        history = data.get("history")
         asyncio.create_task(
             run_agent_turn(
-                conn, str(data.get("turnId", "")), str(data.get("prompt", ""))
+                conn,
+                str(data.get("turnId", "")),
+                str(data.get("prompt", "")),
+                history if isinstance(history, list) else None,
             )
         )
     elif event == "tool_result":
@@ -348,10 +358,32 @@ async def _gate(conn: WsConnection, turn_id: str, call: Any) -> bool:
     return choice == "allow_once"
 
 
-async def run_agent_turn(conn: WsConnection, turn_id: str, prompt: str) -> None:
+def _history_messages(history: list[Any] | None) -> list[dict[str, Any]]:
+    """Sanitize prior-turn messages sent by the chat widget into the bare
+    {role, content} pairs the providers accept. Only user/assistant text is kept
+    (tool-call plumbing is per-turn and not replayed); anything malformed drops."""
+    out: list[dict[str, Any]] = []
+    for m in history or []:
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role")
+        content = m.get("content")
+        if role in ("user", "assistant") and isinstance(content, str) and content:
+            out.append({"role": role, "content": content})
+    return out
+
+
+async def run_agent_turn(
+    conn: WsConnection,
+    turn_id: str,
+    prompt: str,
+    history: list[Any] | None = None,
+) -> None:
     """Drive one user turn: loop the configured provider's chat, relaying tool
     calls to the UI. The provider dialect (Ollama vs OpenAI-compatible) is hidden
-    behind providers.chat / providers.tool_result_message."""
+    behind providers.chat / providers.tool_result_message. `history` carries prior
+    user/assistant turns from the chat widget so the conversation is multi-turn
+    while the backend stays stateless per turn."""
     config = _load_config()
     if config is None:
         await conn.send_json(
@@ -363,6 +395,7 @@ async def run_agent_turn(conn: WsConnection, turn_id: str, prompt: str) -> None:
     tools = _tools_for(conn)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
+        *_history_messages(history),
         {"role": "user", "content": prompt},
     ]
     try:

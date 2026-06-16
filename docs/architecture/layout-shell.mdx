@@ -45,7 +45,8 @@ The shell has two top-level **views** (switched by the shell's own
   dashboard-friend avatar, greeting, ask bar streaming from the local model) that
   hosts agent onboarding until a local model is configured (see
   `docs/modules/agent-chat.md`). Modeled on chat-first launchers, deliberately
-  free of workspace chrome. The avatar (`packages/ui/src/Avatar3D.tsx`) is a
+  free of workspace chrome. The avatar (`packages/core/src/Avatar3D.tsx` — moved
+  to core so feature modules like the agent chat pane can use it too) is a
   rigged glTF character (`/my-avatar.glb`) loaded with three's `GLTFLoader`,
   with pointer-tracking. It expresses the agent's **emotional mood** as a looping
   animation: the `moods` prop maps mood names to animation clips

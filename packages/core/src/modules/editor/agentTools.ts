@@ -16,9 +16,31 @@ function resolveUri(arg: unknown): string | null {
 
 export const editorAgentTools: AgentToolDecl[] = [
   {
+    name: 'editor.proposeEdit',
+    description:
+      'Propose replacing the full content of an open editor buffer with new content the user reviews as a diff and accepts or declines. PREFER THIS over editor.applyEdit for any code change (format, rewrite, fix). Targets the given buffer URI, or the active buffer. Read the buffer first via its pane context.',
+    params: {
+      type: 'object',
+      properties: {
+        uri: { type: 'string', description: 'Buffer source URI (note:/workspace-file:)' },
+        content: { type: 'string', description: 'The proposed new full content of the buffer' },
+      },
+      required: ['content'],
+    },
+    sideEffect: true,
+    specifierTemplate: '{uri}',
+    handler: (args) => {
+      const uri = resolveUri(args.uri);
+      const buffer = uri ? getBuffer(uri) : undefined;
+      if (!uri || !buffer) return { ok: false, error: 'no open buffer for that uri' };
+      buffer.propose(String(args.content ?? ''));
+      return { ok: true, uri, status: 'awaiting user accept/decline' };
+    },
+  },
+  {
     name: 'editor.applyEdit',
     description:
-      'Replace the full content of an open editor buffer. Targets the given buffer URI, or the active buffer. Read the buffer first via its pane context.',
+      'Replace the full content of an open editor buffer outright (no review). Prefer editor.proposeEdit for code changes. Targets the given buffer URI, or the active buffer. Read the buffer first via its pane context.',
     params: {
       type: 'object',
       properties: {

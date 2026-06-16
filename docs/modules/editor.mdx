@@ -63,13 +63,35 @@ via `editor.applyEdit`. The editor exposes
 
 - **Read (ungated):** the active buffer's uri, full text, selection, and dirty
   state via the pane's `getAgentContext()` snapshot.
-- **Gated:** `editor.applyEdit(uri, edits)` and `editor.save(uri)`, matched by the
-  same filesystem `Edit`/`files.write` rules the tree uses. Both auto-allow under
-  the `acceptEdits` mode (Claude Code parity). See the
-  [permission system](../architecture/agent-tools.mdx#the-permission-system).
+- **Gated:** `editor.proposeEdit(uri, content)`, `editor.applyEdit(uri, content)`,
+  and `editor.save(uri)`, matched by the same filesystem `Edit`/`files.write` rules
+  the tree uses. All auto-allow under the `acceptEdits` mode (Claude Code parity).
+  See the [permission system](../architecture/agent-tools.mdx#the-permission-system).
 
 Because sources are URIs, the agent (like any module) shows editable text through
 the single `editor.openBuffer(source)` seam regardless of where the content lives.
+
+### Accept/decline proposed edits
+
+For any code change (format, rewrite, fix) the agent is steered to
+`editor.proposeEdit` rather than `editor.applyEdit`: instead of replacing the
+content outright, the buffer enters a **diff/review state** (a `@codemirror/merge`
+`unifiedMergeView`, original vs proposed, with per-chunk accept/reject in the
+gutter) and shows an **Accept / Decline** bar. Accept keeps the proposed content
+and marks the buffer dirty; Decline restores the pre-proposal text. The tool is in
+`EDIT_SAFE_TOOLS` because the in-editor review — not the permission gate — is the
+real safety boundary. Buffer controllers gain a `propose(content)` method
+(`buffers.ts`), driven from `BufferView.tsx`.
+
+### Inline autosuggest
+
+Opt-in, off by default — the `editor.autosuggest` setting. When on, after a typing
+pause the buffer requests a short fill-in completion (`POST /api/agent/complete`,
+the local model via `providers.generate`) and renders it as ghost text at the
+cursor; **Tab** accepts, **Esc** dismisses. In-flight requests are debounced and
+cancelled on further typing; suggestions are suppressed while an edit proposal is
+under review. The CodeMirror extension is `autosuggest.ts`, toggled live via a
+compartment in `BufferView.tsx`.
 
 ## Browser vs desktop
 

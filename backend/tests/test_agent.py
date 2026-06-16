@@ -86,3 +86,23 @@ def test_pull_rejected_for_non_pulling_provider(client: TestClient) -> None:
     client.put("/api/agent/config", json={"model": "m", "provider": "lmstudio"})
     res = client.post("/api/agent/pull", json={"model": "m"})
     assert res.status_code == 400
+
+
+def test_complete_requires_onboarding(client: TestClient) -> None:
+    res = client.post("/api/agent/complete", json={"prefix": "def foo("})
+    assert res.status_code == 409
+
+
+def test_complete_returns_completion(client: TestClient, monkeypatch) -> None:
+    client.put("/api/agent/config", json={"model": "gemma4:e2b"})
+
+    async def fake_generate(*args, **kwargs) -> str:
+        return "x):\n    return x"
+
+    monkeypatch.setattr(routes.P, "generate", fake_generate)
+    res = client.post(
+        "/api/agent/complete",
+        json={"prefix": "def foo(", "suffix": "", "language": "Python"},
+    )
+    assert res.status_code == 200
+    assert res.json()["completion"] == "x):\n    return x"

@@ -50,7 +50,15 @@ class Decision(str, Enum):
 # Deliberately excludes destructive verbs (delete/rename) and shell exec, which
 # keep prompting. This is the v1 policy; refine as modules land.
 EDIT_SAFE_TOOLS: frozenset[str] = frozenset(
-    {"editor.save", "editor.applyEdit", "files.create", "files.write", "files.mkdir"}
+    {
+        "editor.save",
+        "editor.applyEdit",
+        # Non-destructive: only shows a diff the user must accept in the editor.
+        "editor.proposeEdit",
+        "files.create",
+        "files.write",
+        "files.mkdir",
+    }
 )
 
 

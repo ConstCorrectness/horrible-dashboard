@@ -6,6 +6,12 @@ export {
   type Capability,
 } from './capabilities';
 export { ApiError, apiDelete, apiGet, apiPost, apiPut } from './api';
+export {
+  Avatar3D,
+  DEFAULT_AVATAR_MOOD,
+  DEFAULT_AVATAR_MOODS,
+  type AvatarMoodMap,
+} from './Avatar3D';
 export { apiUrl, getBackendOrigin, initBackendOrigin, wsUrl } from './origin';
 export {
   loadPlugins,

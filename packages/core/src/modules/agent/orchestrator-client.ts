@@ -15,6 +15,12 @@ export interface AgentCallbacks {
   onError?: (message: string) => void;
 }
 
+/** A prior conversation turn replayed to the backend so a turn has context. */
+export interface AgentTurn {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 /** A short log line for mutating tools; read-only `list_*` tools stay silent. */
 function describe(name: string, args: Record<string, unknown>): string | null {
   switch (name) {
@@ -31,8 +37,9 @@ function describe(name: string, args: Record<string, unknown>): string | null {
   }
 }
 
-/** Run one agent turn over the WS `agent` channel; resolves when the turn ends. */
-export function askAgent(prompt: string, cb: AgentCallbacks): Promise<void> {
+/** Run one agent turn over the WS `agent` channel; resolves when the turn ends.
+ * `history` replays prior user/assistant turns so the conversation is multi-turn. */
+export function askAgent(prompt: string, cb: AgentCallbacks, history?: AgentTurn[]): Promise<void> {
   return new Promise<void>((resolve) => {
     const turnId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const unsub = subscribeChannel('agent', (msg) => {
@@ -72,6 +79,6 @@ export function askAgent(prompt: string, cb: AgentCallbacks): Promise<void> {
         }
       })();
     });
-    sendChannel('agent', 'ask', { turnId, prompt });
+    sendChannel('agent', 'ask', { turnId, prompt, history: history ?? [] });
   });
 }

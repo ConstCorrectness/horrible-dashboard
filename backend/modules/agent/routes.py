@@ -13,6 +13,7 @@ from backend.modules.agent.models import (
     AgentConfig,
     AgentStatus,
     ChatRequest,
+    CompleteRequest,
     DetectedProvider,
     PullRequest,
     VllmSpawnRequest,
@@ -130,6 +131,39 @@ async def chat(req: ChatRequest) -> StreamingResponse:
                 yield line
 
     return StreamingResponse(gen(), media_type="application/x-ndjson")
+
+
+_COMPLETE_SYSTEM = (
+    "You are an inline code/text completion engine. Continue the text at the "
+    "<CURSOR> marker so it fits naturally between the text before and after it. "
+    "Reply with ONLY the raw text to insert — no explanation, no markdown fences, "
+    "no repetition of the surrounding text. Keep it short (finish the current line "
+    "or statement)."
+)
+
+
+@router.post("/complete")
+async def complete(req: CompleteRequest) -> dict[str, str]:
+    """Return one short fill-in completion for the editor's inline autosuggest."""
+    config = _load_config()
+    if config is None:
+        raise HTTPException(
+            status_code=409, detail="Agent not configured — finish onboarding"
+        )
+    info = P.provider_for(config.provider)
+    endpoint = config.endpoint or info.default_endpoint
+    lang = f" The language is {req.language}." if req.language else ""
+    prompt = (
+        f"{_COMPLETE_SYSTEM}{lang}\n\n"
+        f"{req.prefix}<CURSOR>{req.suffix}\n\n"
+        "Text to insert at <CURSOR>:"
+    )
+    async with instrumented_client(timeout=20) as client:
+        try:
+            completion = await P.generate(client, info, endpoint, config.model, prompt)
+        except httpx.HTTPError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"completion": completion}
 
 
 @router.post("/pull")

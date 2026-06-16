@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
   askAgent,
+  Avatar3D,
   DEFAULT_AGENT_MODEL,
   DEFAULT_VLLM_MODEL,
   getAgentStatus,
@@ -12,8 +13,6 @@ import {
   type AgentStatus,
   type DetectedProvider,
 } from '@horrible/core';
-
-import { Avatar3D } from './Avatar3D';
 
 const NAME_KEY = 'horrible.userName';
 

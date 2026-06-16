@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   DockviewReact,
   themeAbyss,
@@ -25,6 +25,7 @@ import {
   type Workspace as WorkspaceModel,
 } from '@horrible/core';
 
+import { PaneTab } from './PaneTab';
 import { SplitHandle } from './SplitHandle';
 
 /**
@@ -41,18 +42,29 @@ function resolveContent(id: string) {
   return registry.panels.find((p) => p.id === id) ?? registry.widgets.find((w) => w.id === id);
 }
 
-/** Single host for every pane — reads which registry entry to render from params. */
+/** Single host for every pane — reads which registry entry to render from params.
+ * `panelId` is reactive: the tab's type-switcher calls `updateParameters`, and we
+ * re-render the new content in place (same instance id). */
 function PanelHost(props: IDockviewPanelProps<{ panelId: string }>) {
-  const decl = resolveContent(props.params.panelId);
+  const [panelId, setPanelId] = useState(props.params.panelId);
+  useEffect(() => {
+    const sub = props.api.onDidParametersChange((params) => {
+      const next = (params as { panelId?: string }).panelId;
+      if (next) setPanelId(next);
+    });
+    return () => sub.dispose();
+  }, [props.api]);
+
+  const decl = resolveContent(panelId);
   if (!decl) {
-    return <div className="ws-panel ws-panel-missing">Unknown pane: {props.params.panelId}</div>;
+    return <div className="ws-panel ws-panel-missing">Unknown pane: {panelId}</div>;
   }
   const Component = decl.component;
   // The Blender-style split grip and the agent's split_pane tool both drive the
   // same LayoutController.splitPane — duplicating this pane's content into the
   // new region (the engine assigns the duplicate a fresh instance id).
   const onSplit = (direction: SplitDirection) => {
-    registry.layoutController?.splitPane(props.api.id, direction, props.params.panelId);
+    registry.layoutController?.splitPane(props.api.id, direction, panelId);
   };
   // Expose this pane's live instance id (for useAgentContext, keyed by instance)
   // and the params it was opened with (for usePaneParams, e.g. a buffer source).
@@ -447,6 +459,15 @@ export function Workspace({
         else panel.api.exitMaximized();
         return true;
       },
+      changePaneType: (instanceId, paneId) => {
+        const panel = api.getPanel(instanceId);
+        const decl = resolveContent(paneId);
+        if (!panel || !decl) return false;
+        // Same instance id, new content: PanelHost re-renders via onDidParametersChange.
+        panel.api.updateParameters({ panelId: paneId });
+        panel.api.setTitle(decl.title);
+        return true;
+      },
     });
 
     // Tab switching: clicks call switchTo directly; commands route via AppShell's
@@ -500,6 +521,7 @@ export function Workspace({
         className="ws-dockview"
         theme={themeAbyss}
         components={components}
+        defaultTabComponent={PaneTab}
         onReady={onReady}
       />
     </div>

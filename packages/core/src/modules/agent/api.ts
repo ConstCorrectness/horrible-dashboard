@@ -99,6 +99,20 @@ export function streamAgentChat(prompt: string, onToken: (token: string) => void
   });
 }
 
+/** One short fill-in completion for the editor's inline autosuggest. */
+export function completeCode(
+  prefix: string,
+  suffix: string,
+  language?: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  return apiPost<{ completion: string }>(
+    '/agent/complete',
+    { prefix, suffix, ...(language ? { language } : {}) },
+    signal,
+  ).then((r) => r.completion);
+}
+
 export interface PullProgress {
   status?: string;
   completed?: number;

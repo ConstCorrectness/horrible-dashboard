@@ -65,6 +65,13 @@ creates **instances**:
 `defaultPlacement` (`left|center|right|bottom`) on either decl hints where a
 freshly opened pane docks; once the user rearranges, the persisted tree wins.
 
+**Changing a pane's type:** each tab carries a **▾ switcher** (a custom
+`defaultTabComponent`, `packages/ui/src/PaneTab.tsx`, wrapping dockview's
+`DockviewDefaultTab`) listing every registry pane. Picking one calls
+`LayoutController.changePaneType(instanceId, paneId)`, which swaps the content
+**in place** — same instance id, so geometry and autosave are untouched. `PanelHost`
+re-renders the new type by tracking `panelId` from `api.onDidParametersChange`.
+
 ## How panes reach the workspace
 
 1. A command calls `registry.openPanel(id)` (works for panel _or_ widget ids).
@@ -183,10 +190,11 @@ persistence/restore, and `layout.reset`; custom workspace create/delete; splits,
 tab groups, floating windows; the singleton/instance distinction; the
 **`LayoutController` geometry seam** (split/resize/move/float/maximize), the
 **agent geometry tools** that drive it, and the **Blender-style split grip**
-(`SplitHandle`) that drives the same seam from direct manipulation. Built-in
-presets: **Dashboard** and **Scripting**. `scratch.note` is the reference
-non-singleton panel. Not yet: a pane-type picker for the split target (it
-duplicates the current pane today), edge-drag-to-split (native sashes cover
+(`SplitHandle`) that drives the same seam from direct manipulation; the per-tab
+**▾ pane-type switcher** (`changePaneType`). Built-in presets: **Dashboard** and
+**Scripting**. `scratch.note` is the reference non-singleton panel. Not yet: a
+pane-type picker for the split target (it duplicates the current pane today),
+edge-drag-to-split (native sashes cover
 resize), real OS windows on desktop, per-instance pane state (scratch instances
 share one store), multiple instances of the same widget in one workspace, and
 workspace reorder/import-export.

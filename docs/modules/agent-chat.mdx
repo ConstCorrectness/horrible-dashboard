@@ -22,9 +22,21 @@ exists today:
 - **Orchestrator (layout control)** — the home ask bar now drives the
   **agent orchestrator**: a backend tool-calling loop that arranges the user's
   workspace. See "The orchestrator" below.
+- **Conversational chat widget** (`agent.chat`, command `agent.openChat`): a
+  dockable pane with a multi-turn transcript, a per-turn action log, and the
+  model's reply. Each turn replays prior user/assistant turns to the backend as
+  `history` (the backend stays stateless per turn). It drives the same
+  orchestrator, so it reasons about the live layout and widget contents (via the
+  read tools) and acts on them. See `ChatWidget.tsx`. The pane shows the 3D
+  [avatar](../architecture/layout-shell.mdx) (`Avatar3D`, now in `packages/core`)
+  cycling through its mood animations; the **`agent.avatarAnimation`** setting
+  (default on) turns it off for a plain text pane.
+- **Inline autosuggest source** (`POST /api/agent/complete`): a short non-streaming
+  fill-in completion the [editor](./editor.mdx)'s opt-in ghost-text autosuggest calls.
 
-Everything else — session management, chat/inspector panels, per-widget
-`agentTools`, and widget interop — is still design, not implementation.
+Everything else — session management, chat/inspector panels — is still design.
+Per-widget `agentTools` + `getAgentContext` widget interop now ship (see
+[agent tools & permissions](../architecture/agent-tools.mdx)).
 
 ## The orchestrator
 
@@ -71,7 +83,7 @@ at `MAX_ROUNDS`.
 | Direction     | event               | data                                          |
 | ------------- | ------------------- | --------------------------------------------- |
 | client→server | `manifest`          | `{tools: SerializedTool[]}`                   |
-| client→server | `ask`               | `{turnId, prompt}`                            |
+| client→server | `ask`               | `{turnId, prompt, history?}`                  |
 | server→client | `tool_call`         | `{turnId, callId, name, args}`                |
 | client→server | `tool_result`       | `{turnId, callId, ok, result?, error?}`       |
 | server→client | `approval_request`  | `{turnId, approvalId, tool, specifier, mode}` |
@@ -123,12 +135,11 @@ receive loop dispatches by channel (`agent` → the orchestrator) while a teleme
 push task sends outbound; `WsConnection` (`backend/modules/ws.py`) serializes
 sends and tracks pending tool-call futures.
 
-**Next slices:** the frontend→backend capability manifest now ships (above);
-remaining are `getAgentContext()` state-reads and widget interop, a Claude
-Code–style permission system gating side effects, streamed tokens, and
-parameterized commands-as-tools. These are specified in
-[agent tools & permissions](../architecture/agent-tools.mdx) — the shared surface
-the editor, terminal, and file-explorer modules build on.
+The capability manifest, `getAgentContext()` state-reads, widget interop, and the
+Claude Code–style permission system gating side effects all ship now (specified in
+[agent tools & permissions](../architecture/agent-tools.mdx)) — the shared surface
+the editor, terminal, and file-explorer modules build on. **Next slices:** streamed
+tokens in the chat widget, session persistence, and parameterized commands-as-tools.
 
 ## Providers & HTTP endpoints
 
@@ -152,6 +163,7 @@ localhost server.
 | List models / probe      | `GET /api/tags`                   | `GET /v1/models`                             | `list_models` — `/agent/status`          |
 | Tool-calling round       | `POST /api/chat` (`stream:false`) | `POST /v1/chat/completions` (`stream:false`) | `chat` — the orchestrator loop           |
 | One-shot streamed answer | `POST /api/generate`              | `POST /v1/chat/completions` (SSE)            | `generate_stream` — legacy `/agent/chat` |
+| Short fill-in completion | `POST /api/generate` (`stream:false`) | `POST /v1/chat/completions` (`stream:false`) | `generate` — `/agent/complete` (autosuggest) |
 | Pull a model             | `POST /api/pull`                  | — (unsupported)                              | `/agent/pull`                            |
 
 Ollama's default URL can be overridden with `HORRIBLE_OLLAMA_URL`; a backend-spawned
