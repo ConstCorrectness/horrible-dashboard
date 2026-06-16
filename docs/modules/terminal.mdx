@@ -23,6 +23,10 @@ pre-running a command (via an `initialCommand` pane param). The agent's gated
 - **Services for other modules:** `runCommand(cmd, opts)` (exported as
   `runTerminalCommand`) lets modules (e.g. agent chat showing a suggested command)
   open a terminal pre-running a command — always visibly, never hidden execution.
+- **Settings:** `terminal.fontFamily` (enum of common monospace fonts; falls back
+  to the system monospace if the chosen font isn't installed) and
+  `terminal.fontSize` (px). Read live via `useSetting` in `TerminalPane`; changes
+  apply to open terminals immediately (xterm re-fits and the PTY is resized).
 
 ## Backend surface
 

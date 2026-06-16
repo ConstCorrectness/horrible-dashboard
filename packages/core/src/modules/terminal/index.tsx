@@ -67,4 +67,31 @@ export const terminalModule: ModuleManifest = {
     { id: 'terminal.focusNext', title: 'Terminal: Focus next', run: () => focusSibling(1) },
     { id: 'terminal.focusPrev', title: 'Terminal: Focus previous', run: () => focusSibling(-1) },
   ],
+  settings: [
+    {
+      key: 'terminal.fontFamily',
+      title: 'Terminal font',
+      description:
+        'Monospace font for terminal panes. Falls back to the system monospace if the chosen font is not installed.',
+      type: 'enum',
+      enumValues: [
+        'Monospace',
+        'Cascadia Code',
+        'Cascadia Mono',
+        'Consolas',
+        'Fira Code',
+        'JetBrains Mono',
+        'Menlo',
+        'Courier New',
+      ],
+      default: 'Monospace',
+    },
+    {
+      key: 'terminal.fontSize',
+      title: 'Terminal font size',
+      description: 'Font size, in pixels, for terminal panes.',
+      type: 'number',
+      default: 13,
+    },
+  ],
 };
