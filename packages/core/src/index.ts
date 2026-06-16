@@ -24,7 +24,14 @@ export {
   type Workspace,
   type WorkspacesState,
 } from './workspace';
-export { subscribeChannel, type WsMessage } from './ws';
+export { onSocketOpen, sendChannel, subscribeChannel, type WsMessage } from './ws';
+export {
+  hasAgentContext,
+  PaneInstanceContext,
+  readAgentContext,
+  useAgentContext,
+} from './agent-context';
+export { PaneParamsContext, usePaneParams, type PaneParams } from './panes';
 export { recordClientIo, telemetryStore, type IoEvent, type IoSource } from './telemetry';
 export {
   getSetting,
@@ -38,20 +45,38 @@ export {
 } from './settings';
 export {
   registry,
+  type AgentCommandDecl,
+  type AgentContextSnapshot,
+  type AgentToolDecl,
   type CommandDecl,
+  type JSONSchema,
   type KeybindingDecl,
   type LayoutController,
   type ModuleManifest,
   type OpenPaneInfo,
+  type OpenPaneOptions,
   type PanelDecl,
   type SettingDecl,
   type SettingType,
   type ShellView,
+  type UseAgentContext,
   type WidgetDecl,
   type WorkspaceInfo,
 } from './registry';
 export { dashboardModule } from './modules/dashboard';
 export { scratchModule } from './modules/scratch';
+export { stubModule } from './modules/stub';
+export {
+  editorModule,
+  getActiveBufferSource,
+  loadSource,
+  openBuffer,
+  saveSource,
+  sourceTitle,
+  type LoadedSource,
+} from './modules/editor';
+export { filesModule } from './modules/files';
+export { terminalModule, openTerminal, runCommand as runTerminalCommand } from './modules/terminal';
 export {
   clubhouseModule,
   completeClubhouseAuth,
@@ -69,14 +94,22 @@ export {
   DEFAULT_AGENT_MODEL,
   DEFAULT_VLLM_MODEL,
   getAgentStatus,
+  initAgentManifestSync,
+  initApprovalListener,
   pullAgentModel,
+  respondApproval,
   saveAgentConfig,
+  serializeManifest,
   spawnVllm,
   stopVllm,
   streamAgentChat,
+  useApprovals,
   type AgentCallbacks,
   type AgentStatus,
+  type ApprovalDecision,
   type DetectedProvider,
+  type PendingApproval,
   type PullProgress,
+  type SerializedTool,
   type VllmStatus,
 } from './modules/agent';

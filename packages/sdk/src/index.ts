@@ -9,12 +9,17 @@ export {
   type PluginStorage,
 } from './plugin.js';
 export type {
+  AgentCommandDecl,
+  AgentContextSnapshot,
+  AgentToolDecl,
   Capability,
   CommandDecl,
+  JSONSchema,
   KeybindingDecl,
   PanelDecl,
   SettingDecl,
   SettingType,
+  UseAgentContext,
   WidgetDecl,
   WsMessage,
 } from './types.js';

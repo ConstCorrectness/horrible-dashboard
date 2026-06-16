@@ -53,6 +53,15 @@ def get_value(key: str, default: Any) -> Any:
     return _read().get(key, default)
 
 
+def set_value(key: str, value: Any) -> None:
+    """Persist a setting value server-side. For backend consumers that write a
+    setting directly (e.g. the agent persisting an 'always allow' permission rule),
+    mirroring the frontend's PUT /settings/{key}."""
+    data = _read()
+    data[key] = value
+    _write(data)
+
+
 @router.get("", response_model=SettingsValues)
 def get_settings() -> SettingsValues:
     return SettingsValues(values=_read())

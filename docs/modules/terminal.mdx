@@ -7,23 +7,67 @@ sidebar_label: Terminal
 
 Embedded terminals for working on a machine from inside the app.
 
+**Status: frontend implemented (D2).** The `terminal.instance` panel (xterm.js)
+binds to a backend PTY session over the `terminal` channel — input/resize up,
+output down — and kills its PTY on close. `runCommand` opens a terminal
+pre-running a command (via an `initialCommand` pane param). The agent's gated
+`terminal.exec` tool is D3.
+
 ## Contributions to the layout shell
 
-- **Panels:** `terminal.instance` (one per terminal, default: bottom dock tab
+- **Panels:** `terminal.instance` (one PTY per instance, default: bottom dock tab
   group).
-- **Commands:** `terminal.new`, `terminal.kill`, `terminal.clear`,
-  `terminal.focusNext`/`focusPrev`.
-- **Services for other modules:** `terminal.runCommand(cmd, opts)` lets modules
-  (e.g. agent chat showing a suggested command) open a terminal pre-filled or
-  running — always visibly, never hidden execution.
+- **Commands:** `terminal.new`, `terminal.kill` (active), `terminal.clear`
+  (active), `terminal.focusNext`/`focusPrev` (cycle, via the
+  `layoutController.focusPane` seam).
+- **Services for other modules:** `runCommand(cmd, opts)` (exported as
+  `runTerminalCommand`) lets modules (e.g. agent chat showing a suggested command)
+  open a terminal pre-running a command — always visibly, never hidden execution.
 
 ## Backend surface
 
-`backend/modules/terminal/` owns the PTYs. The frontend is xterm.js rendering a
-`terminal.<id>` channel on the shared WebSocket; resize/input go up, output
-streams down. **The PTY always runs where the backend runs** — there is no
-client-side shell in either layout. This keeps browser and desktop byte-for-byte
-identical and gives agents and humans the same terminals.
+`backend/modules/terminal/` owns the PTYs — **backend implemented.** A
+`TerminalManager` lives per `/ws` connection and routes the shared socket's
+`terminal` channel; the frontend (xterm.js) will render it. **The PTY always runs
+where the backend runs** — there is no client-side shell in either layout, so
+browser and desktop are byte-for-byte identical and agents and humans share the
+same terminals. Cross-platform PTYs unify on `ptyprocess` (POSIX) and `pywinpty`
+(Windows ConPTY), which expose the same `PtyProcess.spawn` API behind
+`pty.py`; the default shell is PowerShell on Windows, `$SHELL` elsewhere. Each
+PTY's blocking read runs in a thread so it never stalls the event loop; sessions
+are killed when the socket closes (resume-on-reconnect is a later enhancement).
+
+Channel protocol (`{channel:'terminal', event, data}`):
+
+| Direction     | event                                | data                     |
+| ------------- | ------------------------------------ | ------------------------ |
+| client→server | `start` / `input` / `resize` / `kill`| `{id, …}`                |
+| server→client | `started` / `output` / `exit` / `error` | `{id, …}`             |
+
+## Agent integration
+
+**Status: implemented (D3).** Declared on the `terminal.instance` panel. Verified
+live: the agent ran a command through gated `terminal.exec`, which prompted with
+the rendered `{command}` shell specifier and ran it in a visible terminal on
+approval. The terminal exposes
+[agent tools & `getAgentContext`](../architecture/agent-tools.mdx), and is the most
+security-sensitive tool surface in the app:
+
+- **Read (ungated):** `terminal.list()` and `terminal.read(id)` (recent
+  scrollback); the active terminal's cwd via `getAgentContext()`.
+- **Gated:** `terminal.exec(id?, command)`. There is no separate "authority"
+  switch — what the agent may run is purely a function of the
+  [permission mode and rules](../architecture/agent-tools.mdx#the-permission-system):
+  in `plan`/`default` the command is prefilled and prompts before running; in
+  `autonomous` it runs (subject to `deny`/`ask` rules and the `rm -rf /` circuit
+  breaker). Execution is always visible in a real terminal pane — never hidden.
+
+Matching a shell command safely is the bulk of the permission engine's work. The
+terminal's specifiers reuse Claude Code's Bash/PowerShell rule logic: `*` globs
+with word boundaries (`terminal.exec(npm run *)`), compound-command splitting on
+`&& || ; |` (a rule must match each subcommand), wrapper stripping (`timeout`,
+`nice`, …), and a built-in read-only allowlist (`ls`, `cat`, `pwd`, …) that runs
+without a prompt in every mode.
 
 ## Browser vs desktop
 

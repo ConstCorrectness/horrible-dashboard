@@ -15,6 +15,7 @@ from typing import Any
 
 import httpx
 
+from backend.modules.agent import permission_store, permissions
 from backend.modules.agent import providers as P
 from backend.modules.agent.routes import _load_config
 from backend.modules.telemetry.instrument import instrumented_client
@@ -25,6 +26,8 @@ logger = logging.getLogger(__name__)
 # Guard against a model that never stops calling tools.
 MAX_ROUNDS = 8
 TOOL_TIMEOUT_S = 30.0
+# A permission prompt waits on a human, so it gets a much longer leash.
+APPROVAL_TIMEOUT_S = 300.0
 
 SYSTEM_PROMPT = (
     "You are the orchestrator for horrible-dashboard, a dockable dashboard app. "
@@ -72,6 +75,20 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
     ),
     _tool("list_workspaces", "List the named workspaces and which one is active."),
     _tool(
+        "list_open_panes",
+        "List the panes currently open in the active workspace, with each pane's "
+        "type id, live instanceId, title, and whether it exposes agent-readable "
+        "context. Use the instanceId with get_pane_context.",
+    ),
+    _tool(
+        "get_pane_context",
+        "Read a live pane's current state/selection snapshot (e.g. the active "
+        "editor buffer's text, a file tree's selection). Use instanceId from "
+        "list_open_panes.",
+        {"instanceId": {"type": "string", "description": "Live pane instanceId"}},
+        ["instanceId"],
+    ),
+    _tool(
         "open_pane",
         "Open a panel or widget as a pane in the active workspace.",
         {"id": {"type": "string", "description": "Pane id from list_available_panes"}},
@@ -98,6 +115,42 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
 ]
 
 
+def _manifest_to_tools(serialized: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert the browser-pushed capability manifest (serialized AgentToolDecl /
+    agent-command shapes) into provider tool definitions. Handlers never cross the
+    wire, so only the schema is here."""
+    tools: list[dict[str, Any]] = []
+    for t in serialized:
+        name = t.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        params = t.get("params") or {"type": "object", "properties": {}, "required": []}
+        tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": str(t.get("description", "")),
+                    "parameters": params,
+                },
+            }
+        )
+    return tools
+
+
+def _tools_for(conn: WsConnection) -> list[dict[str, Any]]:
+    """The model's tool list for a turn: static LAYOUT_TOOLS plus the connection's
+    pushed dynamic tools, deduped by name (static wins)."""
+    merged = list(LAYOUT_TOOLS)
+    seen = {t["function"]["name"] for t in merged}
+    for t in _manifest_to_tools(getattr(conn, "agent_tools", [])):
+        if t["function"]["name"] in seen:
+            continue
+        merged.append(t)
+        seen.add(t["function"]["name"])
+    return merged
+
+
 def _evt(event: str, data: dict[str, Any]) -> dict[str, Any]:
     return {"channel": "agent", "event": event, "data": data}
 
@@ -106,7 +159,10 @@ async def handle_agent_message(conn: WsConnection, msg: dict[str, Any]) -> None:
     """Route an inbound `agent`-channel message from the browser."""
     event = msg.get("event")
     data = msg.get("data") or {}
-    if event == "ask":
+    if event == "manifest":
+        tools = data.get("tools")
+        conn.agent_tools = tools if isinstance(tools, list) else []
+    elif event == "ask":
         # Must not block the receive loop — the turn awaits tool_results that
         # arrive on that same loop. Run it detached.
         asyncio.create_task(
@@ -117,6 +173,11 @@ async def handle_agent_message(conn: WsConnection, msg: dict[str, Any]) -> None:
     elif event == "tool_result":
         call_id = str(data.get("callId", ""))
         fut = conn.pending.pop(call_id, None)
+        if fut is not None and not fut.done():
+            fut.set_result(data)
+    elif event == "approval_response":
+        approval_id = str(data.get("approvalId", ""))
+        fut = conn.pending_approvals.pop(approval_id, None)
         if fut is not None and not fut.done():
             fut.set_result(data)
 
@@ -144,6 +205,77 @@ async def _call_frontend_tool(
     return {"error": data.get("error", "tool failed")}
 
 
+def _tool_meta(conn: WsConnection, name: str) -> dict[str, Any] | None:
+    """The pushed manifest entry for a tool, or None for layout/unknown tools."""
+    for t in getattr(conn, "agent_tools", []):
+        if t.get("name") == name:
+            return t
+    return None
+
+
+def _default_rule(name: str, specifier: str | None) -> str:
+    return f"{name}({specifier})" if specifier else name
+
+
+async def _request_approval(
+    conn: WsConnection,
+    turn_id: str,
+    name: str,
+    specifier: str | None,
+    mode: permissions.Mode,
+) -> dict[str, Any]:
+    """Prompt the browser to approve a gated call; await the user's decision."""
+    approval_id = uuid.uuid4().hex[:8]
+    fut: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+    conn.pending_approvals[approval_id] = fut
+    await conn.send_json(
+        _evt(
+            "approval_request",
+            {
+                "turnId": turn_id,
+                "approvalId": approval_id,
+                "tool": name,
+                "specifier": specifier,
+                "mode": mode.value,
+            },
+        )
+    )
+    try:
+        return await asyncio.wait_for(fut, timeout=APPROVAL_TIMEOUT_S)
+    except TimeoutError:
+        conn.pending_approvals.pop(approval_id, None)
+        return {"decision": "deny"}
+
+
+async def _gate(conn: WsConnection, turn_id: str, call: Any) -> bool:
+    """Decide whether a relayed tool call may run. Read-only/layout tools pass
+    straight through; side-effecting tools are evaluated against the permission
+    rules + mode, prompting the user on an ASK and persisting a rule on
+    'always allow'. Returns True to relay, False to deny."""
+    meta = _tool_meta(conn, call.name)
+    side_effect = bool(meta and meta.get("sideEffect"))
+    if not side_effect:
+        return True
+    specifier = permissions.render_specifier(
+        meta.get("specifierTemplate") if meta else None, call.arguments
+    )
+    mode = permission_store.load_mode()
+    rules = permission_store.load_rules()
+    decision = permissions.evaluate(call.name, specifier, side_effect, mode, rules)
+    if decision is permissions.Decision.ALLOW:
+        return True
+    if decision is permissions.Decision.DENY:
+        return False
+    response = await _request_approval(conn, turn_id, call.name, specifier, mode)
+    choice = response.get("decision")
+    if choice == "allow_always":
+        permission_store.add_rule(
+            "allow", str(response.get("rule") or _default_rule(call.name, specifier))
+        )
+        return True
+    return choice == "allow_once"
+
+
 async def run_agent_turn(conn: WsConnection, turn_id: str, prompt: str) -> None:
     """Drive one user turn: loop the configured provider's chat, relaying tool
     calls to the UI. The provider dialect (Ollama vs OpenAI-compatible) is hidden
@@ -156,6 +288,7 @@ async def run_agent_turn(conn: WsConnection, turn_id: str, prompt: str) -> None:
         return
     info = P.provider_for(config.provider)
     endpoint = config.endpoint or info.default_endpoint
+    tools = _tools_for(conn)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": prompt},
@@ -164,7 +297,7 @@ async def run_agent_turn(conn: WsConnection, turn_id: str, prompt: str) -> None:
         async with instrumented_client(timeout=120) as client:
             for _ in range(MAX_ROUNDS):
                 result = await P.chat(
-                    client, info, endpoint, config.model, messages, LAYOUT_TOOLS
+                    client, info, endpoint, config.model, messages, tools
                 )
                 messages.append(result.assistant_message)
                 if not result.tool_calls:
@@ -174,9 +307,12 @@ async def run_agent_turn(conn: WsConnection, turn_id: str, prompt: str) -> None:
                     await conn.send_json(_evt("done", {"turnId": turn_id}))
                     return
                 for call in result.tool_calls:
-                    tool_result = await _call_frontend_tool(
-                        conn, turn_id, call.name, call.arguments
-                    )
+                    if await _gate(conn, turn_id, call):
+                        tool_result = await _call_frontend_tool(
+                            conn, turn_id, call.name, call.arguments
+                        )
+                    else:
+                        tool_result = {"error": "denied by permission policy"}
                     messages.append(P.tool_result_message(info, call, tool_result))
         await conn.send_json(
             _evt(

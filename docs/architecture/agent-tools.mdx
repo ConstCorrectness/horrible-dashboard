@@ -1,0 +1,272 @@
+---
+sidebar_position: 4
+sidebar_label: Agent tools & permissions
+---
+
+# Agent tools & permissions
+
+**Status: implemented.** This page specifies the generalized **agent
+tool surface** of the [agent orchestrator](../modules/agent-chat.mdx) (per-widget
+`agentTools`, agent-exposed commands, pull-based `getAgentContext()`) and the
+**permission system** that gates side effects. It is the shared foundation the
+[file explorer](../modules/file-explorer.mdx), [editor](../modules/editor.mdx),
+and [terminal](../modules/terminal.mdx) modules are built on; the surface was built
+first, validated against a stub, then those modules were layered onto it. Slice 1
+(the static `LAYOUT_TOOLS` catalog) is in [agent-chat.mdx](../modules/agent-chat.mdx).
+
+Landed: the SDK declaration contract (`AgentToolDecl`, `CommandDecl.agent`,
+`getAgentContext`/`AgentContextSnapshot`); the capability-manifest protocol
+(below); the per-instance **`getAgentContext` registry** with the
+`list_open_panes` / `get_pane_context` read tools; the **permission engine
+core** (`backend/modules/agent/permissions.py` — rule parsing, `deny → ask →
+allow` precedence, the four modes, circuit breakers) including **shell-aware
+specifier matching** (`shell.py`); the **gate + approval round-trip** in the
+orchestrator (`_gate`, `approval_request`/`approval_response`, rule persistence via
+`permission_store`); and the **approval UI** (`ApprovalPrompts` + `useApprovals`)
+with the settings-page **permissions section** (mode picker + rule lists). The
+whole permission system (Epic A) is in place, the **stub validation** ran green
+across all four modes, and all three real modules now declare their tools on the
+surface: the **file explorer** (`files.list`/`read` reads, gated
+`files.create`/`write`/`rename`/`delete`), the **editor** (`getAgentContext`
+buffer reads, gated `editor.applyEdit`/`save`), and the **terminal**
+(`terminal.list`/`read` reads, gated shell-matched `terminal.exec`). Remaining
+work is incremental per-module polish (e.g. the editor's desktop-only `osfile:`
+source), not foundational.
+
+## The model: one tool path, one gate
+
+Every agent tool call flows through the **frontend relay** over the shared `/ws`
+`agent` channel — there is no separate backend-direct tool path, even for tools
+whose resource (a PTY, the filesystem) lives in the backend. Those tools' handlers
+run in the frontend and call the backend's existing HTTP/WS API, so the agent has
+exactly **one** tool model to reason about.
+
+The consequence that shapes everything: because all calls pass through the
+orchestrator loop, the **permission gate sits in the backend orchestrator, before
+the relay**. Permissions are enforced by the orchestrator, **not by the model** —
+the system prompt shapes what the agent *tries*, but the engine decides what runs.
+This mirrors Claude Code, where rules are enforced by the harness rather than the
+LLM.
+
+```mermaid
+sequenceDiagram
+    participant M as Local model
+    participant BE as Backend orchestrator
+    participant PE as Permission engine
+    participant FE as Frontend (tool handlers)
+
+    M-->>BE: tool_call {name, args}
+    alt read-only tool (sideEffect = false)
+        BE->>FE: relay tool_call
+        FE-->>BE: tool_result
+    else side-effecting tool
+        BE->>PE: evaluate(rule string, mode)
+        alt deny
+            PE-->>BE: denied
+            BE-->>M: tool_result {ok:false, error:"denied"}
+        else ask
+            BE->>FE: approval_request {tool, specifier, mode}
+            FE-->>BE: approval_response {allow_once | allow_always | deny}
+            note over BE: allow_always persists a rule
+        else allow
+            BE->>FE: relay tool_call
+            FE-->>BE: tool_result
+        end
+    end
+    BE->>M: tool_result (loop continues)
+```
+
+A read-only tool never reaches the engine — the same read-only tier Claude Code
+uses for file reads and `grep`.
+
+## Declaring agent tools
+
+Two surfaces, by design (the "hybrid" decision in
+[[agent-orchestrator-architecture]]):
+
+1. **App-wide verbs are commands.** `CommandDecl` gains an optional `agent`
+   field so a command opts into being model-callable:
+
+   ```ts
+   export interface CommandDecl {
+     id: string;
+     title: string;
+     run: () => void | Promise<void>;
+     agent?: { description: string; params?: JSONSchema; sideEffect?: boolean };
+   }
+   ```
+
+   Layout/navigation verbs (open pane, switch workspace) are exposed this way and
+   are read-only or harmless, so they stay ungated.
+
+2. **Widget/panel-specific actions are `agentTools`.** `WidgetDecl` and
+   `PanelDecl` gain an optional `agentTools?: AgentToolDecl[]` (MCP-style):
+
+   ```ts
+   export interface AgentToolDecl {
+     name: string;              // namespaced like a command id, e.g. "terminal.exec"
+     description: string;       // natural language, for the model
+     params?: JSONSchema;       // JSON-schema object for the arguments
+     sideEffect?: boolean;      // falsy = read-only, never gated
+     /**
+      * Template rendered into the permission *specifier* the engine matches
+      * rule specifiers against. `{name}` placeholders are filled from args; the
+      * tool name is implicit. e.g. "{command}" → specifier `npm run build`,
+      * matched by rule `terminal.exec(npm run *)`. Declarative so the backend
+      * builds the specifier itself, keeping the gate fully server-side.
+      */
+     specifierTemplate?: string;
+     handler: (args: Record<string, unknown>) => unknown | Promise<unknown>;
+   }
+   ```
+
+   `handler` and the live arguments stay frontend-owned; only the serialized
+   schema and `specifierTemplate` reach the backend.
+
+## Reading widget state: `getAgentContext()`
+
+State the agent needs to read — the active buffer's text, the tree selection, a
+terminal's recent output — lives in a live pane **instance**, not in a static
+declaration. It is read on a **pull** basis (not a push bus):
+
+- A pane component registers a snapshot provider via the `useAgentContext(() =>
+  snapshot)` hook (`packages/core/src/agent-context.ts`). The provider registry
+  lives in **core** so feature modules (which live in core) can import the hook
+  without a core→ui cycle; `packages/ui`'s `PanelHost` only supplies the live
+  instance id through `PaneInstanceContext`, keyed per pane instance.
+- Two built-in read tools (ungated) expose it: `list_open_panes()` (the
+  `listOpenPanes` seam, which now reports each pane's `instanceId` and a
+  `hasContext` flag) and `get_pane_context(instanceId)`, which invokes the
+  registered provider and returns its JSON snapshot.
+
+This is how the agent "reads widget A to act on widget B": pull A's context with a
+read tool, then call a gated action tool on B. It forces per-pane-instance state
+(a known windowing gap — instances currently share a store), which these modules
+need anyway.
+
+## Capability manifest protocol
+
+The frontend owns the tool catalog and **pushes** it to the backend so the
+manifest reflects runtime-loaded plugins and the current registry. New
+`agent`-channel events extend the
+[slice-1 protocol](../modules/agent-chat.mdx#the-orchestrator):
+
+| Direction     | event              | data                                                            |
+| ------------- | ------------------ | --------------------------------------------------------------- |
+| client→server | `manifest`         | `{tools: SerializedTool[]}` — on connect **and** on registry change |
+| server→client | `approval_request` | `{turnId, callId, tool, specifier, mode}`                       |
+| client→server | `approval_response`| `{callId, decision: 'allow_once'\|'allow_always'\|'deny', rule?}` |
+
+`SerializedTool` = `{name, description, params, sideEffect, specifierTemplate, kind}`
+where `kind` is `'agentTool' | 'command' | 'layout'`. Each turn the backend merges
+the pushed manifest with the static `LAYOUT_TOOLS` into the model's tool list. The
+`handler` is never serialized; the backend learns *which* tools to gate from
+`sideEffect` and renders the rule string from `specifierTemplate` + the call args
+before consulting the engine.
+
+## The permission system
+
+A direct port of Claude Code's model
+(`backend/modules/agent/permissions.py`), scoped to this app's tools.
+
+### Rules
+
+Three lists — `allow`, `ask`, `deny` — of `Tool` or `Tool(specifier)` strings,
+with `*` glob support. **Precedence is `deny → ask → allow`; first match wins, and
+specificity does not reorder.** A matching `ask` prompts even when a more specific
+`allow` also matches. A bare tool name (`terminal.exec`) matches all uses; a scoped
+rule (`terminal.exec(rm -rf *)`) matches only matching calls.
+
+### Modes
+
+A `defaultMode` setting (overridable per session), mirroring Claude Code:
+
+| Mode         | Behavior                                                                                 |
+| ------------ | ---------------------------------------------------------------------------------------- |
+| `default`    | Prompt (`ask`) on every side-effecting tool not already covered by an `allow` rule.      |
+| `plan`       | Read-only: every `sideEffect` tool is auto-denied; the agent can explore but not mutate. |
+| `acceptEdits`| Auto-allow editor saves and safe FS creation (`files.create`, mkdir-equivalents); still `ask` on `files.delete`/`files.rename`/`terminal.exec`. |
+| `autonomous` | Allow everything except explicit `ask`/`deny` rules — the `bypassPermissions` analog.    |
+
+**Circuit breakers** apply even in `autonomous`: destructive roots
+(`files.delete` at a workspace root, `terminal.exec(rm -rf /*)` and equivalents)
+always prompt, as a guard against model error.
+
+### Terminal & filesystem specifiers
+
+The terminal carries most of the engine's complexity, because matching a shell
+command safely is the hard part. Implemented in `backend/modules/agent/shell.py`
+(tools listed in `permissions.SHELL_TOOLS`), porting Claude Code's Bash/PowerShell
+rule logic:
+
+- `*` globs with word-boundary semantics (`terminal.exec(npm run *)` matches
+  `npm run build`, not `npm runner`);
+- compound-command splitting on `&& || ; | &` — for an **allow** every subcommand
+  must be covered; a **deny**/**ask** fires if **any** subcommand matches (so a
+  dangerous part can't hide behind a safe one);
+- wrapper stripping (`sudo`, `timeout N`, `nice -n N`, `env VAR=…`, …) before
+  matching;
+- a built-in **read-only command allowlist** (`ls`, `cat`, `pwd`, …) that runs
+  without a prompt in every mode (a command with an output redirect is not
+  treated as read-only);
+- shell **circuit breakers** (`mkfs`, `dd of=/dev/…`, fork bombs, `rm -rf` of a
+  root) that always prompt, even in `autonomous`.
+
+Filesystem rules use gitignore-style path anchors against the workspace roots,
+matching Claude Code's `Read`/`Edit` patterns (`//abs`, `~/home`, `/projectRoot`,
+`./cwd`), so a rule like `deny files.delete(**)` or `allow files.write(/src/**)`
+behaves as expected. See [file-explorer.mdx](../modules/file-explorer.mdx).
+
+### Where rules live
+
+Rules and the default mode are persisted server-side in the existing settings
+store (`$HORRIBLE_DATA_DIR`) under `agent.permissions.{mode,allow,ask,deny}`, read
+through `permission_store` and surfaced in the
+[settings module](../modules/settings.mdx). Precedence, lightest to heaviest:
+shipped defaults → user settings → session override. "Always allow" from an
+approval prompt appends a rule to `agent.permissions.allow`.
+
+### Out of scope for v1
+
+OS-level **sandboxing** (Claude Code's complementary enforcement layer) is not part
+of v1 — permissions are the only boundary. As the terminal page notes, exposing the
+backend beyond localhost exposes shell execution on that host; that is an auth
+problem at the backend boundary, not something the permission engine solves.
+
+## Approval UI
+
+`approval_request` renders a global surface (`packages/ui/ApprovalPrompts.tsx`,
+fed by the `useApprovals` store in `packages/core/.../agent/approvals.ts`) — and,
+on desktop, an OS notification via `notifications.system` — showing the tool, the
+rendered specifier, and **Allow once / Always allow / Deny**. "Always allow" sends
+an `approval_response` carrying an editable `rule` (prefilled with the exact call,
+broadenable to e.g. `terminal.exec(npm run *)`) that the backend persists.
+
+The mode and rule lists are editable on the settings page: the agent module
+contributes a `settingsSections` entry (`PermissionsSettings`) — a registry seam
+for configuration too rich for the declarative `SettingDecl` controls — that
+reads/writes `agent.permissions.{mode,allow,ask,deny}` through `/api/settings`.
+
+## Build order
+
+1. Extend the SDK decl types (`CommandDecl.agent`, `AgentToolDecl`,
+   `getAgentContext` host hook) and the manifest protocol. ✅
+2. Build the permission engine and the approval UI. ✅
+3. Validate end to end against a **stub** module — one read tool, one gated tool —
+   exercising every mode before any real module exists. ✅
+4. Layer the file explorer, editor, and terminal onto the surface. ✅ — all three
+   ship with their `agentTools`/`getAgentContext` on the gate. Incremental
+   per-module follow-ups remain (e.g. the editor's desktop `osfile:` source, live
+   `files.*` watch events), but the foundation is fully in use.
+
+### Validation stub
+
+`packages/core/src/modules/stub/` is a dev-only reference module
+(`import.meta.env.DEV`) — the minimal exercise of the whole surface: a read tool
+(`stub.getValue`), a gated tool (`stub.setValue`, `specifierTemplate: "{command}"`
+style `"{value}"`), and a `getAgentContext` snapshot. It validated the full path
+live (gemma4:e2b) across all four modes: `default` prompts then relays on _allow
+once_; `plan` hard-denies with no prompt; `autonomous` relays with no prompt;
+`acceptEdits` still prompts (the tool isn't edit-safe) and _deny_ blocks the
+relay; and _always allow_ persists a rule (broadenable to `stub.setValue(*)`) that
+the next call honors without prompting. New real modules can copy its shape.

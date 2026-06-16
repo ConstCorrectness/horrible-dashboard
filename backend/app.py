@@ -8,11 +8,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.modules.agent import router as agent_router
 from backend.modules.agent.orchestrator import handle_agent_message
 from backend.modules.clubhouse import router as clubhouse_router
+from backend.modules.files import router as files_router
+from backend.modules.notes import router as notes_router
 from backend.modules.plugins import router as plugins_router
 from backend.modules.settings import router as settings_router
 from backend.modules.telemetry import push_telemetry
 from backend.modules.telemetry import router as telemetry_router
 from backend.modules.telemetry.instrument import telemetry_middleware
+from backend.modules.terminal import TerminalManager
 from backend.modules.workspace import router as workspace_router
 from backend.modules.ws import WsConnection
 
@@ -43,6 +46,8 @@ def health() -> dict[str, str]:
 
 app.include_router(agent_router, prefix="/api")
 app.include_router(workspace_router, prefix="/api")
+app.include_router(files_router, prefix="/api")
+app.include_router(notes_router, prefix="/api")
 app.include_router(clubhouse_router, prefix="/api")
 app.include_router(telemetry_router, prefix="/api")
 app.include_router(plugins_router, prefix="/api")
@@ -59,13 +64,20 @@ async def ws(websocket: WebSocket) -> None:
         {"channel": "system", "event": "hello", "version": APP_VERSION}
     )
     conn = WsConnection(websocket)
+    terminals = TerminalManager(conn)
     telemetry_task = asyncio.create_task(push_telemetry(conn))
     try:
         while True:
             msg = await websocket.receive_json()
-            if isinstance(msg, dict) and msg.get("channel") == "agent":
+            if not isinstance(msg, dict):
+                continue
+            channel = msg.get("channel")
+            if channel == "agent":
                 await handle_agent_message(conn, msg)
+            elif channel == "terminal":
+                await terminals.handle(msg)
     except WebSocketDisconnect:
         pass
     finally:
+        await terminals.close_all()
         telemetry_task.cancel()

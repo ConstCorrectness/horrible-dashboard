@@ -179,6 +179,176 @@ body {
   color: var(--text-dim);
 }
 
+/* Editor buffer (CodeMirror 6) — fill the pane, header strip on top. The pane's
+   own padding is dropped so the editor reaches the edges. */
+.ws-panel:has(.editor-buffer) {
+  padding: 0;
+}
+
+.editor-buffer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.editor-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.6rem;
+  border-bottom: 1px solid var(--border, #2a2a3a);
+  font-size: 0.8rem;
+}
+
+.editor-title {
+  font-weight: 600;
+}
+
+.editor-status {
+  margin-left: auto;
+  color: var(--text-dim);
+}
+
+.editor-save {
+  padding: 0.15rem 0.6rem;
+}
+
+.editor-cm {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.editor-cm .cm-editor {
+  height: 100%;
+}
+
+/* File tree (files.tree panel) */
+.ws-panel:has(.file-tree) {
+  padding: 0;
+}
+
+.file-tree {
+  font-size: 0.85rem;
+  user-select: none;
+}
+
+.file-tree-toolbar {
+  display: flex;
+  gap: 0.2rem;
+  padding: 0.3rem 0.4rem;
+  border-bottom: 1px solid var(--border, #2a2a3a);
+  position: sticky;
+  top: 0;
+  background: inherit;
+}
+
+.file-tree-toolbar button {
+  padding: 0.1rem 0.4rem;
+  font-size: 0.85rem;
+}
+
+.file-tree-empty,
+.file-tree-error {
+  padding: 0.6rem;
+  color: var(--text-dim);
+}
+
+.file-tree-error {
+  color: var(--danger, #e06c75);
+}
+
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.12rem 0.4rem;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-row:hover {
+  background: var(--hover, rgba(255, 255, 255, 0.06));
+}
+
+.file-row.selected {
+  background: var(--accent-dim, rgba(97, 175, 239, 0.18));
+}
+
+.file-caret {
+  display: inline-block;
+  width: 0.9em;
+  color: var(--text-dim);
+}
+
+/* Recent-notes dashboard widget (editor.recentNotes) */
+.recent-notes-toolbar {
+  display: flex;
+  gap: 0.3rem;
+  margin-bottom: 0.4rem;
+}
+
+.recent-notes-toolbar button {
+  padding: 0.1rem 0.5rem;
+  font-size: 0.85rem;
+}
+
+.recent-notes-empty {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
+.recent-notes-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.recent-note-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.recent-note-row:hover {
+  background: var(--hover, rgba(255, 255, 255, 0.06));
+}
+
+.recent-note-title {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.recent-note-time {
+  flex: none;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+}
+
+/* Terminal pane (xterm.js) */
+.ws-panel:has(.terminal-pane) {
+  padding: 0;
+}
+
+.terminal-pane {
+  height: 100%;
+  width: 100%;
+  background: #0b0b12;
+}
+
+.terminal-pane .xterm {
+  height: 100%;
+  padding: 4px 6px;
+}
+
 /* Widget forms (e.g. clubhouse onboarding) */
 .widget-form {
   display: flex;
@@ -756,6 +926,160 @@ body {
 .onboarding-field .home-hint {
   flex-basis: 100%;
   margin: 0.15rem 0 0;
+}
+
+/* Agent permission approval prompts (global overlay) */
+.approval-overlay {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  z-index: 1000;
+  max-width: 24rem;
+}
+
+.approval-card {
+  background: var(--bg-raised);
+  border: 1px solid var(--accent);
+  border-radius: 0.5rem;
+  padding: 0.75rem 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  box-shadow: 0 6px 24px rgb(0 0 0 / 40%);
+}
+
+.approval-head {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.approval-tool {
+  font-size: 0.9rem;
+  color: var(--text);
+  word-break: break-all;
+}
+
+.approval-mode {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+
+.approval-rule {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+
+.approval-rule input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  color: var(--text);
+  padding: 0.3rem 0.4rem;
+  font-family: monospace;
+  font-size: 0.8rem;
+}
+
+.approval-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.2rem;
+}
+
+.approval-actions button {
+  flex: 1;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 0.3rem;
+  padding: 0.35rem 0.4rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+
+.approval-actions button:hover {
+  border-color: var(--accent);
+}
+
+.approval-actions .approval-deny:hover {
+  border-color: #f0846e;
+  color: #f0846e;
+}
+
+/* Agent permissions settings section */
+.permissions-list {
+  margin: 0.6rem 0;
+}
+
+.permissions-list h4 {
+  margin: 0 0 0.3rem;
+  font-size: 0.85rem;
+}
+
+.permissions-list h4 button,
+.permissions-list form button {
+  margin-left: 0.4rem;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 0.3rem;
+  padding: 0.1rem 0.45rem;
+  cursor: pointer;
+  font-size: 0.75rem;
+}
+
+.permissions-list ul {
+  list-style: none;
+  margin: 0 0 0.4rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.permissions-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  padding: 0.25rem 0.5rem;
+}
+
+.permissions-list li button {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.permissions-list li button:hover {
+  color: #f0846e;
+}
+
+.permissions-list form {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.permissions-list form input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  color: var(--text);
+  padding: 0.3rem 0.45rem;
+  font-family: monospace;
+  font-size: 0.8rem;
 }
 
 .provider-list {

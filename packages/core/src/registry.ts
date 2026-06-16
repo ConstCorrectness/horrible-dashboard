@@ -1,15 +1,45 @@
 // Declaration types live in @horribledashboard/sdk so plugins and built-in modules share
 // the exact same contract; re-exported here so existing imports keep working.
+import type { ComponentType } from 'react';
+
 import type {
+  AgentCommandDecl,
+  AgentContextSnapshot,
+  AgentToolDecl,
   CommandDecl,
+  JSONSchema,
   KeybindingDecl,
   PanelDecl,
   SettingDecl,
   SettingType,
+  UseAgentContext,
   WidgetDecl,
 } from '@horribledashboard/sdk';
 
-export type { CommandDecl, KeybindingDecl, PanelDecl, SettingDecl, SettingType, WidgetDecl };
+export type {
+  AgentCommandDecl,
+  AgentContextSnapshot,
+  AgentToolDecl,
+  CommandDecl,
+  JSONSchema,
+  KeybindingDecl,
+  PanelDecl,
+  SettingDecl,
+  SettingType,
+  UseAgentContext,
+  WidgetDecl,
+};
+
+/**
+ * A custom section a module renders on the settings page, for configuration too
+ * rich for the declarative `SettingDecl` controls (e.g. the agent permission rule
+ * lists). Built-in only for now — not part of the public plugin contract.
+ */
+export interface SettingsSectionDecl {
+  id: string;
+  title: string;
+  component: ComponentType;
+}
 
 export interface ModuleManifest {
   id: string;
@@ -19,6 +49,7 @@ export interface ModuleManifest {
   widgets?: WidgetDecl[];
   keybindings?: KeybindingDecl[];
   settings?: SettingDecl[];
+  settingsSections?: SettingsSectionDecl[];
 }
 
 /** Top-level shell surfaces. `home` is the first-open view; `workspace` hosts panels. */
@@ -26,13 +57,29 @@ export type ShellView = 'home' | 'workspace';
 
 /** An open pane in the active workspace. */
 export interface OpenPaneInfo {
+  /** The pane **type** id (what `open_pane`/`close_pane` take). */
   id: string;
+  /**
+   * The live **instance** id (what `get_pane_context` targets). Differs from
+   * `id` for non-singleton panes (e.g. `scratch.note#2`).
+   */
+  instanceId: string;
   title: string;
+  /** Whether this instance currently exposes `getAgentContext`. */
+  hasContext: boolean;
 }
 
 export interface WorkspaceInfo {
   id: string;
   name: string;
+}
+
+/** Options for opening a pane: an explicit instance id (so reopening the same
+ * logical pane — e.g. a buffer for one source — focuses it instead of
+ * duplicating) and params passed to the instance (read via `usePaneParams`). */
+export interface OpenPaneOptions {
+  instanceId?: string;
+  params?: Record<string, unknown>;
 }
 
 /**
@@ -42,6 +89,8 @@ export interface WorkspaceInfo {
  */
 export interface LayoutController {
   closePane(id: string): boolean;
+  /** Bring a pane instance forward (activate its tab). Returns false if unknown. */
+  focusPane(instanceId: string): boolean;
   listOpenPanes(): OpenPaneInfo[];
   createWorkspace(name: string): Promise<WorkspaceInfo>;
   listWorkspaces(): Promise<{ active: string | null; workspaces: WorkspaceInfo[] }>;
@@ -49,14 +98,28 @@ export interface LayoutController {
 
 class ModuleRegistry {
   private modules = new Map<string, ModuleManifest>();
-  private panelOpener: ((panelId: string) => void) | null = null;
+  private panelOpener: ((panelId: string, opts?: OpenPaneOptions) => void) | null = null;
   private workspaceSwitcher: ((workspaceId: string) => void) | null = null;
   private layoutControllerImpl: LayoutController | null = null;
+  private changeListeners = new Set<() => void>();
 
   /** Idempotent: re-registering the same module id is a no-op (StrictMode-safe). */
   register(manifest: ModuleManifest): void {
     if (this.modules.has(manifest.id)) return;
     this.modules.set(manifest.id, manifest);
+    this.changeListeners.forEach((l) => l());
+  }
+
+  /**
+   * Fire `listener` whenever the set of registered modules changes (e.g. a plugin
+   * registers at boot). Returns an unsubscribe. Used to re-push the agent
+   * capability manifest when the tool catalog changes.
+   */
+  onChange(listener: () => void): () => void {
+    this.changeListeners.add(listener);
+    return () => {
+      this.changeListeners.delete(listener);
+    };
   }
 
   get commands(): CommandDecl[] {
@@ -89,6 +152,10 @@ class ModuleRegistry {
     return [...this.modules.values()].flatMap((m) => m.settings ?? []);
   }
 
+  get settingsSections(): SettingsSectionDecl[] {
+    return [...this.modules.values()].flatMap((m) => m.settingsSections ?? []);
+  }
+
   /**
    * Title of the module that declared `settingKey`, for grouping the settings
    * page by contributor. Falls back to `undefined` for an unknown key.
@@ -107,12 +174,12 @@ class ModuleRegistry {
   }
 
   /** The layout shell installs the opener; modules call openPanel. */
-  setPanelOpener(opener: (panelId: string) => void): void {
+  setPanelOpener(opener: (panelId: string, opts?: OpenPaneOptions) => void): void {
     this.panelOpener = opener;
   }
 
-  openPanel(panelId: string): void {
-    this.panelOpener?.(panelId);
+  openPanel(panelId: string, opts?: OpenPaneOptions): void {
+    this.panelOpener?.(panelId, opts);
   }
 
   /** The workspace installs the switcher; commands call switchWorkspace. */

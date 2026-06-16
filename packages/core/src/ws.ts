@@ -11,6 +11,7 @@ export type { WsMessage };
 type Handler = (msg: WsMessage) => void;
 
 const handlers = new Map<string, Set<Handler>>();
+const openListeners = new Set<() => void>();
 let socket: WebSocket | null = null;
 let backoff = 500;
 
@@ -25,6 +26,7 @@ function connect(): void {
 
   socket.onopen = () => {
     backoff = 500;
+    openListeners.forEach((l) => l());
   };
   socket.onmessage = (e: MessageEvent<string>) => {
     let msg: WsMessage;
@@ -39,6 +41,20 @@ function connect(): void {
     socket = null;
     setTimeout(connect, backoff);
     backoff = Math.min(backoff * 2, 10_000);
+  };
+}
+
+/**
+ * Run `listener` every time the socket (re)connects — and once now if already
+ * open. Used to (re)push state the backend forgets across reconnects, e.g. the
+ * agent capability manifest. Returns an unsubscribe function. Connects lazily.
+ */
+export function onSocketOpen(listener: () => void): () => void {
+  connect();
+  openListeners.add(listener);
+  if (socket && socket.readyState === WebSocket.OPEN) listener();
+  return () => {
+    openListeners.delete(listener);
   };
 }
 

@@ -7,23 +7,69 @@ sidebar_label: File explorer
 
 Tree view over the workspace for browsing, opening, and organizing files.
 
+**Status: panel + commands implemented (B3).** The `files.tree` panel lists the
+backend's workspace roots, lazy-loads directories on expand, and opens files as
+`workspace-file:` editor buffers. CRUD commands operate on the tree selection;
+the tree re-lists after a mutation (live watch events are B1b).
+
 ## Contributions to the layout shell
 
-- **Panels:** `files.tree` (default: left dock, alongside `chat.sessions`).
-- **Commands:** `files.newFile`, `files.newFolder`, `files.rename`,
-  `files.delete`, `files.revealActiveBuffer`, `files.revealInOS` (desktop only —
-  registered only when `shell.revealInOS` capability is present, so the palette
-  never shows dead commands).
-- **Interactions with other modules:** opening a file calls
-  `editor.openBuffer('workspace-file:...')`; "open terminal here" calls
-  `terminal.new` with a cwd; agent chat can reference tree selections as context.
+- **Panels:** `files.tree` (singleton, default: left dock).
+- **Commands:** `files.open`, `files.newFile`, `files.newFolder`, `files.rename`,
+  `files.delete`, `files.refresh`, `files.openTerminalHere`,
+  `files.revealActiveBuffer`; `files.revealInOS` (desktop only — registered only
+  when `shell.revealInOS` capability is present, so the palette never shows dead
+  commands) is B6.
+- **Interactions with other modules (B5):** opening a file calls the editor's
+  public `openBuffer('workspace-file:...')` service; **"open terminal here"** calls
+  the terminal's `openTerminal({ cwd })` rooted at the selected directory; the
+  agent reads the tree selection via the panel's `getAgentContext` (B4). These go
+  through each module's public exports — never another module's internals.
 
 ## Backend surface
 
-`backend/modules/files/` — directory listing, watch events (over the shared
-WebSocket, `files.*` channels), and file operations, all **rooted at configured
-workspace roots**. The backend never serves paths outside those roots; path
-traversal checks live here, not in the UI.
+`backend/modules/files/` — **implemented (HTTP surface).** All paths are **rooted
+at configured workspace roots**: every request resolves the target (collapsing
+`..`, following symlinks) and rejects anything that lands outside a root with
+`403`. The path-traversal boundary lives here, not in the UI, so a remote backend
+can never be coaxed into serving paths outside its roots. Roots are configured in
+the [settings module](settings.mdx) (`files.roots`; browser: paste a backend-host
+path; desktop: a native folder picker via `fs.nativeDialogs`), with an env
+override `HORRIBLE_WORKSPACE_ROOTS` for dev/test.
+
+| Route                  | Purpose                                          |
+| ---------------------- | ------------------------------------------------ |
+| `GET /files/roots`     | the configured workspace roots                   |
+| `GET /files/list`      | a directory's entries (dirs first)               |
+| `GET /files/read`      | a UTF-8 file's content (capped; binary → `415`)  |
+| `POST /files/create`   | new file or directory                            |
+| `PUT /files/write`     | overwrite/create file content                    |
+| `POST /files/rename`   | rename/move within roots                         |
+| `POST /files/delete`   | delete (`recursive` required for non-empty dirs) |
+
+Live **watch events** over the `files.*` WS channels are a follow-up; until then
+clients re-list to refresh after a mutation.
+
+## Agent integration
+
+**Status: implemented (B4).** Declared on the `files.tree` panel, so they reach the
+capability manifest. Verified live: the agent wrote a file through gated
+`files.write`, which prompted with the rendered `{path}` specifier and wrote on
+approval. The tree exposes [agent tools & `getAgentContext`](../architecture/agent-tools.mdx):
+
+- **Read (ungated):** `files.list(path)` and `files.read(path)`; the current tree
+  selection is exposed through the pane's `getAgentContext()` snapshot.
+- **Gated (side-effecting):** `files.create`, `files.write`, `files.rename`,
+  `files.delete`. These are matched by filesystem permission rules using
+  gitignore-style anchors against the workspace roots — e.g. `allow
+  files.write(/src/**)`, `deny files.delete(**)`. `files.create` and mkdir-style
+  operations auto-allow under the `acceptEdits` mode; delete/rename still prompt.
+  See the [permission system](../architecture/agent-tools.mdx#the-permission-system).
+
+The agent transfers *out* of the tree the same way a user does (it invokes the
+commands, never another module's internals): opening a file is
+`editor.openBuffer('workspace-file:...')`; "open terminal here" is
+`terminal.new({ cwd })`.
 
 ## Browser vs desktop
 

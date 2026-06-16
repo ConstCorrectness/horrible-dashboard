@@ -11,9 +11,13 @@ import {
   createWorkspace,
   deleteWorkspace,
   getWorkspaces,
+  hasAgentContext,
+  PaneInstanceContext,
+  PaneParamsContext,
   registry,
   saveWorkspace,
   setActiveWorkspace,
+  type OpenPaneOptions,
   type SerializedLayout,
   type Workspace as WorkspaceModel,
 } from '@horrible/core';
@@ -39,10 +43,16 @@ function PanelHost(props: IDockviewPanelProps<{ panelId: string }>) {
     return <div className="ws-panel ws-panel-missing">Unknown pane: {props.params.panelId}</div>;
   }
   const Component = decl.component;
+  // Expose this pane's live instance id (for useAgentContext, keyed by instance)
+  // and the params it was opened with (for usePaneParams, e.g. a buffer source).
   return (
-    <div className="ws-panel">
-      <Component />
-    </div>
+    <PaneInstanceContext.Provider value={props.api.id}>
+      <PaneParamsContext.Provider value={props.params}>
+        <div className="ws-panel">
+          <Component />
+        </div>
+      </PaneParamsContext.Provider>
+    </PaneInstanceContext.Provider>
   );
 }
 
@@ -82,8 +92,14 @@ function addPane(
   });
 }
 
-/** Open a registry pane (panel or widget) — focuses an existing singleton. */
-function openPane(api: DockviewApi, id: string, floating = false): void {
+/** Open a registry pane (panel or widget) — focuses an existing singleton, or an
+ * explicit instance id (so reopening the same buffer focuses it). `opts.params`
+ * are passed to the pane instance (read via `usePaneParams`). */
+function openPane(
+  api: DockviewApi,
+  id: string,
+  opts?: OpenPaneOptions & { floating?: boolean },
+): void {
   const panel = registry.panels.find((p) => p.id === id);
   const widget = panel ? undefined : registry.widgets.find((w) => w.id === id);
   const decl = panel ?? widget;
@@ -91,21 +107,23 @@ function openPane(api: DockviewApi, id: string, floating = false): void {
 
   // Widgets are singleton-by-id (one "Data flow" pane); panels honor their flag.
   const singleton = panel ? Boolean(panel.singleton) : true;
-  if (singleton) {
-    const existing = api.getPanel(id);
+  // A caller-supplied instance id is the identity (focus-or-create); otherwise a
+  // singleton uses its type id and a multi-instance pane gets a fresh suffix.
+  const instanceId = opts?.instanceId ?? (singleton ? id : `${id}#${api.panels.length + 1}`);
+  if (singleton || opts?.instanceId) {
+    const existing = api.getPanel(instanceId);
     if (existing) {
       existing.api.setActive();
       return;
     }
   }
-  const instanceId = singleton ? id : `${id}#${api.panels.length + 1}`;
   const direction = placementDirection(panel?.defaultPlacement ?? widget?.defaultPlacement);
   api.addPanel({
     id: instanceId,
     component: 'panel',
     title: decl.title,
-    params: { panelId: id },
-    ...(floating ? { floating: true } : direction ? { position: { direction } } : {}),
+    params: { panelId: id, ...(opts?.params ?? {}) },
+    ...(opts?.floating ? { floating: true } : direction ? { position: { direction } } : {}),
   });
 }
 
@@ -183,7 +201,7 @@ export function Workspace({
   pendingOpen,
   pendingWorkspace,
 }: {
-  pendingOpen?: { panelId: string; nonce: number };
+  pendingOpen?: { panelId: string; opts?: OpenPaneOptions; nonce: number };
   pendingWorkspace?: { workspaceId: string; nonce: number };
 }) {
   const apiRef = useRef<DockviewApi | null>(null);
@@ -338,10 +356,20 @@ export function Workspace({
         }
         return false;
       },
+      focusPane: (instanceId) => {
+        const panel = api.getPanel(instanceId);
+        if (panel) {
+          panel.api.setActive();
+          return true;
+        }
+        return false;
+      },
       listOpenPanes: () =>
         api.panels.map((p) => ({
           id: (p.params as { panelId?: string })?.panelId ?? p.id,
+          instanceId: p.id,
           title: p.title ?? p.id,
+          hasContext: hasAgentContext(p.id),
         })),
       createWorkspace: (name) => createNamedWorkspace(name),
       listWorkspaces: async () => {
@@ -381,7 +409,7 @@ export function Workspace({
     if (!api || !restoredRef.current) return;
     if (pendingOpen && pendingOpen.nonce !== lastOpenNonce.current) {
       lastOpenNonce.current = pendingOpen.nonce;
-      openPane(api, pendingOpen.panelId);
+      openPane(api, pendingOpen.panelId, pendingOpen.opts);
     }
     if (pendingWorkspace && pendingWorkspace.nonce !== lastSwitchNonce.current) {
       lastSwitchNonce.current = pendingWorkspace.nonce;

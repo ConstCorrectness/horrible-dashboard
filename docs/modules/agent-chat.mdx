@@ -68,31 +68,53 @@ at `MAX_ROUNDS`.
 
 **Channel protocol** (`{channel:'agent', event, data:{turnId, …}}`):
 
-| Direction     | event            | data                                    |
-| ------------- | ---------------- | --------------------------------------- |
-| client→server | `ask`            | `{turnId, prompt}`                      |
-| server→client | `tool_call`      | `{turnId, callId, name, args}`          |
-| client→server | `tool_result`    | `{turnId, callId, ok, result?, error?}` |
-| server→client | `answer`         | `{turnId, text}`                        |
-| server→client | `done` / `error` | `{turnId, …}`                           |
+| Direction     | event               | data                                          |
+| ------------- | ------------------- | --------------------------------------------- |
+| client→server | `manifest`          | `{tools: SerializedTool[]}`                   |
+| client→server | `ask`               | `{turnId, prompt}`                            |
+| server→client | `tool_call`         | `{turnId, callId, name, args}`                |
+| client→server | `tool_result`       | `{turnId, callId, ok, result?, error?}`       |
+| server→client | `approval_request`  | `{turnId, approvalId, tool, specifier, mode}` |
+| client→server | `approval_response` | `{approvalId, decision, rule?}`               |
+| server→client | `answer`            | `{turnId, text}`                              |
+| server→client | `done` / `error`    | `{turnId, …}`                                 |
+
+The frontend pushes the **capability manifest** (`manifest`) on connect, on every
+reconnect, and whenever the registry changes
+(`packages/core/src/modules/agent/manifest.ts`, `initAgentManifestSync`): the
+serialized agent-exposed commands and per-widget/panel `agentTools` (handlers
+stripped). The backend stores it on the `WsConnection` and merges it with the
+static `LAYOUT_TOOLS` into the model's tool list each turn (`_tools_for`). Relayed
+calls that aren't layout verbs are dispatched on the frontend via
+`executeDynamicTool`. Side-effecting calls pass through the **permission gate**
+(`_gate` in the orchestrator) before relay: read-only tools pass straight through,
+denied calls return an error to the model, and an `ASK` decision prompts the user
+via `approval_request`/`approval_response` (the in-chat approval UI is the next
+slice) — see [agent tools & permissions](../architecture/agent-tools.mdx).
 
 The frontend (`packages/core/src/modules/agent/orchestrator-client.ts`,
 `askAgent`) executes each `tool_call` against the registry and the
 `registry.layoutController` seam (installed by `Workspace.tsx`), then replies.
 
-**`LAYOUT_TOOLS`** (first slice, app-level verbs; the model discovers ids via the
-read tools, so the catalog stays frontend-owned):
-`list_available_panes`, `list_workspaces`, `open_pane(id)`, `close_pane(id)`,
-`create_workspace(name)`, `switch_workspace(id)`.
+**`LAYOUT_TOOLS`** (app-level verbs; the model discovers ids via the read tools,
+so the catalog stays frontend-owned): `list_available_panes`, `list_workspaces`,
+`list_open_panes`, `get_pane_context(instanceId)`, `open_pane(id)`,
+`close_pane(id)`, `create_workspace(name)`, `switch_workspace(id)`.
+`list_open_panes` reports each open pane's type id, live `instanceId`, title, and
+whether it exposes agent context; `get_pane_context` pulls one instance's snapshot
+(see [agent tools & permissions](../architecture/agent-tools.mdx)).
 
 The `/ws` handler (`backend/app.py`) is now a bidirectional router: one inbound
 receive loop dispatches by channel (`agent` → the orchestrator) while a telemetry
 push task sends outbound; `WsConnection` (`backend/modules/ws.py`) serializes
 sends and tracks pending tool-call futures.
 
-**Next slices:** per-widget `agentTools` + a frontend→backend capability manifest,
-`getAgentContext()` state-reads and widget interop, streamed tokens, and
-parameterized commands-as-tools.
+**Next slices:** the frontend→backend capability manifest now ships (above);
+remaining are `getAgentContext()` state-reads and widget interop, a Claude
+Code–style permission system gating side effects, streamed tokens, and
+parameterized commands-as-tools. These are specified in
+[agent tools & permissions](../architecture/agent-tools.mdx) — the shared surface
+the editor, terminal, and file-explorer modules build on.
 
 ## Providers & HTTP endpoints
 

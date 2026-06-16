@@ -44,6 +44,19 @@ mutate; `useSetting(key)` is the hook built-in components use for a live read.
 Setting a value is optimistic (local update + `PUT`), so widgets bound via
 `useSetting` re-render immediately.
 
+## Custom sections
+
+Some configuration is too rich for the declarative `SettingDecl` controls
+(string/number/boolean/enum). A module may also contribute a
+`settingsSections` entry — `{ id, title, component }` on its `ModuleManifest` —
+and the page renders the component as its own group after the declared settings.
+The first consumer is the agent's **Agent permissions** section
+(`PermissionsSettings`): a default-mode picker plus editable allow/ask/deny rule
+lists that read/write `agent.permissions.*` through `/api/settings` directly (rule
+lists are arrays, outside the scalar `useSetting` store). See
+[../architecture/agent-tools.md](../architecture/agent-tools.mdx). This seam is
+built-in only — not part of the public plugin contract yet.
+
 ## Contributions to the layout shell
 
 - **Panels:** `settings.home` (singleton, `center`) — the settings page,

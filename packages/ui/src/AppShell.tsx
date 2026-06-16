@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { registry, type ShellView } from '@horrible/core';
+import { registry, type OpenPaneOptions, type ShellView } from '@horrible/core';
 
+import { ApprovalPrompts } from './ApprovalPrompts';
 import { CommandPalette } from './CommandPalette';
 import { HomeView } from './HomeView';
 import { Workspace } from './Workspace';
@@ -17,7 +18,11 @@ export function AppShell({ appTitle }: { appTitle: string }) {
   const [view, setView] = useState<ShellView>('home');
   const [paletteOpen, setPaletteOpen] = useState(false);
   // Bumped each time a panel should open, so the Workspace reacts even to repeats.
-  const [pendingOpen, setPendingOpen] = useState<{ panelId: string; nonce: number }>();
+  const [pendingOpen, setPendingOpen] = useState<{
+    panelId: string;
+    opts?: OpenPaneOptions;
+    nonce: number;
+  }>();
   // Same pattern for switching to a named workspace tab.
   const [pendingWorkspace, setPendingWorkspace] = useState<{
     workspaceId: string;
@@ -45,9 +50,9 @@ export function AppShell({ appTitle }: { appTitle: string }) {
       keybindings: [{ key: 'mod+k', command: 'shell.commandPalette' }],
     });
     // Opening any panel switches to the workspace and tells it which to open.
-    registry.setPanelOpener((panelId) => {
+    registry.setPanelOpener((panelId, opts) => {
       setView('workspace');
-      setPendingOpen({ panelId, nonce: nonce.current++ });
+      setPendingOpen({ panelId, opts, nonce: nonce.current++ });
     });
     // Switching workspaces also enters the workspace view, then signals the tab.
     registry.setWorkspaceSwitcher((workspaceId) => {
@@ -106,6 +111,7 @@ export function AppShell({ appTitle }: { appTitle: string }) {
         )}
       </div>
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+      <ApprovalPrompts />
     </div>
   );
 }

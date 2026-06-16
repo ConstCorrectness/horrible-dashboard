@@ -4,8 +4,10 @@
  * this executes them against the registry and replies with results. See
  * docs/modules/agent-chat.md and backend/modules/agent/orchestrator.py.
  */
+import { readAgentContext } from '../../agent-context';
 import { registry } from '../../registry';
 import { sendChannel, subscribeChannel } from '../../ws';
+import { executeDynamicTool } from './manifest';
 
 export interface AgentCallbacks {
   /** The model's final natural-language reply for the turn. */
@@ -48,6 +50,14 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
       };
     case 'list_workspaces':
       return lc ? await lc.listWorkspaces() : { error: 'workspace not ready' };
+    case 'list_open_panes':
+      return lc ? { panes: lc.listOpenPanes() } : { error: 'workspace not ready' };
+    case 'get_pane_context': {
+      const snapshot = readAgentContext(String(args.instanceId));
+      return snapshot === null
+        ? { error: `no agent context for pane: ${String(args.instanceId)}` }
+        : { context: snapshot };
+    }
     case 'open_pane':
       registry.openPanel(String(args.id));
       return { ok: true, opened: args.id };
@@ -58,8 +68,13 @@ async function executeTool(name: string, args: Record<string, unknown>): Promise
     case 'switch_workspace':
       registry.switchWorkspace(String(args.id));
       return { ok: true, switched: args.id };
-    default:
+    default: {
+      // Not a layout verb — try the dynamic tools the manifest advertised
+      // (per-widget/panel agentTools and agent-exposed commands).
+      const dynamic = await executeDynamicTool(name, args);
+      if (dynamic.handled) return dynamic.result;
       return { error: `unknown tool: ${name}` };
+    }
   }
 }
 

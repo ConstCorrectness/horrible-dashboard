@@ -9,24 +9,67 @@ The emacs-like editing core: markdown/text buffers with command-palette-driven
 editing. Also the rendering target other modules use to open text (file explorer
 opens files into editor buffers).
 
+**Status: buffer panel + source model implemented (C1).** The `editor.buffer`
+panel (CodeMirror 6) and the URI source model ship; `openBuffer(source)` opens (or
+focuses) a buffer for a `note:`/`workspace-file:` source, loading via the backend
+and saving back (notes carry the revision for conflict detection). The public
+command surface and the keybinding-service keymap (C3), agent tools (C4), and the
+`editor.recentNotes` dashboard widget (C5) all ship.
+
+**Engine: [CodeMirror 6](https://codemirror.dev).** Lean, extensible, and
+emacs-friendly — code-aware (syntax highlighting, markdown) without pulling in a
+full IDE. No language-server/IntelliSense in v1; that is a later addition. The CM6
+keymap is exposed through the shell keybinding service so bindings stay rebindable
+— editing key handlers are never hardcoded in the component.
+
 ## Contributions to the layout shell
 
 - **Panels:** `editor.buffer` (one panel instance per open buffer, default:
   center tab group). Buffer tabs are workspace tabs — the shell owns tab UX, the
-  editor owns content.
-- **Commands:** `editor.newNote`, `editor.open`, `editor.save`, `editor.saveAll`,
-  plus editing commands exposed to the palette so keybindings stay rebindable.
+  editor owns content. The pane receives its `source` via pane params
+  (`usePaneParams`); the instance id is derived from the source so reopening the
+  same file/note focuses the existing buffer (generic windowing support added with
+  `openPanel(id, { instanceId, params })`).
+- **Commands (C3):** `editor.newNote` (create + open a note), `editor.save`,
+  `editor.saveAll`. `mod+s` is a default **keybinding → `editor.save`** routed
+  through the shell keybinding service — the buffer has no hardcoded save handler,
+  so the key stays rebindable. (`editor.open` quick-open is still to come.)
 - **Services for other modules:** `editor.openBuffer(source)` is the public way
   any module shows editable text. Sources are URIs (`note:`, `workspace-file:`,
   `osfile:` on desktop) so the buffer layer doesn't care where content lives.
-- **Dashboard widgets:** `editor.recentNotes`.
+- **Dashboard widgets:** `editor.recentNotes` — the most-recently-updated notes
+  (`GET /notes`); click a row to open it as a `note:` buffer, with a "New note"
+  affordance. Refreshes on window focus so notes created/saved elsewhere appear.
 
 ## Backend surface
 
-`backend/modules/notes/` — note storage (CRUD, search) and workspace-file
-read/write. Notes are backend-owned data, identical everywhere. Autosave and
-conflict handling (buffer revision vs backend revision) live behind the same
-routes for both layouts.
+`backend/modules/notes/` — **note storage implemented**: CRUD + search over
+backend-owned notes (`GET/POST /notes`, `GET/PUT/DELETE /notes/{id}`,
+`GET /notes/search`). Notes are identical everywhere; the editor opens them as
+`note:<id>` buffers. **Autosave and conflict handling** share one path: a save
+sends the `base_revision` the editor loaded, and a stale save returns `409` with
+the current note (`{message, current}`) so the client reconciles. Workspace-file
+read/write is the [file explorer](file-explorer.mdx)'s `GET /files/read` /
+`PUT /files/write` (`workspace-file:` buffers), so the editor's buffer layer is
+URI-agnostic.
+
+## Agent integration
+
+**Status: implemented (C4).** Declared on the `editor.buffer` panel; a live buffer
+controller registry (keyed by source URI) lets the type-level tools act on a
+specific open buffer. Verified live: the agent replaced an open buffer's content
+via `editor.applyEdit`. The editor exposes
+[agent tools & `getAgentContext`](../architecture/agent-tools.mdx):
+
+- **Read (ungated):** the active buffer's uri, full text, selection, and dirty
+  state via the pane's `getAgentContext()` snapshot.
+- **Gated:** `editor.applyEdit(uri, edits)` and `editor.save(uri)`, matched by the
+  same filesystem `Edit`/`files.write` rules the tree uses. Both auto-allow under
+  the `acceptEdits` mode (Claude Code parity). See the
+  [permission system](../architecture/agent-tools.mdx#the-permission-system).
+
+Because sources are URIs, the agent (like any module) shows editable text through
+the single `editor.openBuffer(source)` seam regardless of where the content lives.
 
 ## Browser vs desktop
 

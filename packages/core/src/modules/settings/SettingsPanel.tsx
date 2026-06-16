@@ -104,6 +104,15 @@ export function SettingsPanel() {
           ))}
         </section>
       ))}
+      {registry.settingsSections.map((section) => {
+        const Section = section.component;
+        return (
+          <section key={section.id} className="settings-group">
+            <h3>{section.title}</h3>
+            <Section />
+          </section>
+        );
+      })}
     </div>
   );
 }
