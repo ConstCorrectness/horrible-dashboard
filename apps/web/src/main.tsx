@@ -11,11 +11,13 @@ import {
   initApprovalListener,
   initBackendOrigin,
   initCapabilities,
+  layoutsModule,
   loadPlugins,
   loadSettings,
   marketplaceModule,
   observabilityModule,
   registry,
+  replModule,
   scratchModule,
   settingsModule,
   stubModule,
@@ -37,6 +39,7 @@ async function boot(): Promise<void> {
 
   initCapabilities(BROWSER_CAPABILITIES);
   registry.register(dashboardModule);
+  registry.register(layoutsModule);
   registry.register(agentModule);
   registry.register(scratchModule);
   registry.register(clubhouseModule);
@@ -46,6 +49,7 @@ async function boot(): Promise<void> {
   registry.register(editorModule);
   registry.register(filesModule);
   registry.register(terminalModule);
+  registry.register(replModule);
   // Dev-only agent-tool reference/validation stub (see agent-tools.md).
   if (import.meta.env.DEV) registry.register(stubModule);
 

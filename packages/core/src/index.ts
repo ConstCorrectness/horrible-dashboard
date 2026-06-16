@@ -26,6 +26,12 @@ export {
 } from './workspace';
 export { onSocketOpen, sendChannel, subscribeChannel, type WsMessage } from './ws';
 export {
+  useWorkspaces,
+  workspaceStore,
+  type WorkspaceSnapshot,
+  type WorkspaceSummary,
+} from './workspace-store';
+export {
   hasAgentContext,
   PaneInstanceContext,
   readAgentContext,
@@ -52,9 +58,12 @@ export {
   type JSONSchema,
   type KeybindingDecl,
   type LayoutController,
+  type LayoutPreset,
   type ModuleManifest,
   type OpenPaneInfo,
   type OpenPaneOptions,
+  type PaneDirection,
+  type PanePlacement,
   type PanelDecl,
   type SettingDecl,
   type SettingType,
@@ -64,6 +73,7 @@ export {
   type WorkspaceInfo,
 } from './registry';
 export { dashboardModule } from './modules/dashboard';
+export { layoutsModule } from './modules/layouts';
 export { scratchModule } from './modules/scratch';
 export { stubModule } from './modules/stub';
 export {
@@ -77,6 +87,7 @@ export {
 } from './modules/editor';
 export { filesModule } from './modules/files';
 export { terminalModule, openTerminal, runCommand as runTerminalCommand } from './modules/terminal';
+export { replModule } from './modules/repl';
 export {
   clubhouseModule,
   completeClubhouseAuth,

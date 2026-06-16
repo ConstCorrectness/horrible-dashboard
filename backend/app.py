@@ -11,6 +11,7 @@ from backend.modules.clubhouse import router as clubhouse_router
 from backend.modules.files import router as files_router
 from backend.modules.notes import router as notes_router
 from backend.modules.plugins import router as plugins_router
+from backend.modules.repl import ReplManager
 from backend.modules.settings import router as settings_router
 from backend.modules.telemetry import push_telemetry
 from backend.modules.telemetry import router as telemetry_router
@@ -65,6 +66,7 @@ async def ws(websocket: WebSocket) -> None:
     )
     conn = WsConnection(websocket)
     terminals = TerminalManager(conn)
+    repl = ReplManager(conn)
     telemetry_task = asyncio.create_task(push_telemetry(conn))
     try:
         while True:
@@ -76,8 +78,11 @@ async def ws(websocket: WebSocket) -> None:
                 await handle_agent_message(conn, msg)
             elif channel == "terminal":
                 await terminals.handle(msg)
+            elif channel == "repl":
+                await repl.handle(msg)
     except WebSocketDisconnect:
         pass
     finally:
         await terminals.close_all()
+        await repl.close_all()
         telemetry_task.cancel()

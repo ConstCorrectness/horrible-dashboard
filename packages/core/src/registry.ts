@@ -41,12 +41,36 @@ export interface SettingsSectionDecl {
   component: ComponentType;
 }
 
+/** Where a pane is placed relative to a reference pane when seeding a layout. */
+export type PaneDirection = 'left' | 'right' | 'above' | 'below' | 'within';
+
+/** One pane in a layout preset: a pane id, optionally positioned next to another. */
+export interface PanePlacement {
+  id: string;
+  position?: { referencePanel: string; direction: PaneDirection };
+}
+
+/**
+ * A predefined **workflow layout** (Blender-style workspace) shown in the shell
+ * rail. The preset is the *seed* for a stable-id workspace: first activation lays
+ * out `panes`, after which the user's rearrangements persist like any workspace
+ * (a `layout.reset` restores the preset). Built-in only for now.
+ */
+export interface LayoutPreset {
+  id: string;
+  name: string;
+  /** Short rail glyph (emoji/letter); falls back to the name's first character. */
+  icon?: string;
+  panes: PanePlacement[];
+}
+
 export interface ModuleManifest {
   id: string;
   title: string;
   commands?: CommandDecl[];
   panels?: PanelDecl[];
   widgets?: WidgetDecl[];
+  layouts?: LayoutPreset[];
   keybindings?: KeybindingDecl[];
   settings?: SettingDecl[];
   settingsSections?: SettingsSectionDecl[];
@@ -94,6 +118,10 @@ export interface LayoutController {
   listOpenPanes(): OpenPaneInfo[];
   createWorkspace(name: string): Promise<WorkspaceInfo>;
   listWorkspaces(): Promise<{ active: string | null; workspaces: WorkspaceInfo[] }>;
+  /** Re-seed the active workflow layout from its preset (discarding tweaks). */
+  resetLayout(): void;
+  /** Delete the active workspace if it's a custom one (presets reset instead). */
+  deleteActiveWorkspace(): void;
 }
 
 class ModuleRegistry {
@@ -142,6 +170,11 @@ class ModuleRegistry {
 
   get widgets(): WidgetDecl[] {
     return [...this.modules.values()].flatMap((m) => m.widgets ?? []);
+  }
+
+  /** Predefined workflow layouts contributed by modules, in registration order. */
+  get layouts(): LayoutPreset[] {
+    return [...this.modules.values()].flatMap((m) => m.layouts ?? []);
   }
 
   get keybindings(): KeybindingDecl[] {

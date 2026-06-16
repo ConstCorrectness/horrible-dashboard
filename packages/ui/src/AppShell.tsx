@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { registry, type OpenPaneOptions, type ShellView } from '@horrible/core';
+import { registry, useWorkspaces, type OpenPaneOptions, type ShellView } from '@horrible/core';
 
 import { ApprovalPrompts } from './ApprovalPrompts';
 import { CommandPalette } from './CommandPalette';
@@ -17,6 +17,10 @@ function matchesBinding(e: KeyboardEvent, key: string): boolean {
 export function AppShell({ appTitle }: { appTitle: string }) {
   const [view, setView] = useState<ShellView>('home');
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // The rail is the workspace switcher: predefined workflow layouts plus any
+  // custom workspaces, with the active one highlighted (state owned by Workspace,
+  // read here via the shared store).
+  const { workspaces, activeId } = useWorkspaces();
   // Bumped each time a panel should open, so the Workspace reacts even to repeats.
   const [pendingOpen, setPendingOpen] = useState<{
     panelId: string;
@@ -80,6 +84,16 @@ export function AppShell({ appTitle }: { appTitle: string }) {
     if (view === 'workspace') setWorkspaceMounted(true);
   }, [view]);
 
+  // Rail = every predefined workflow layout (always shown, even before first
+  // open), then any custom workspace that isn't one of them.
+  const presetIds = new Set(registry.layouts.map((p) => p.id));
+  const railEntries = [
+    ...registry.layouts.map((p) => ({ id: p.id, glyph: p.icon ?? p.name[0], title: p.name })),
+    ...workspaces
+      .filter((w) => !presetIds.has(w.id))
+      .map((w) => ({ id: w.id, glyph: w.name[0], title: w.name })),
+  ];
+
   return (
     <div className="shell">
       <nav className="shell-rail">
@@ -90,11 +104,19 @@ export function AppShell({ appTitle }: { appTitle: string }) {
         >
           <img src="/logo.svg" alt="Home" />
         </button>
-        {registry.panels.map((p) => (
-          <button key={p.id} title={`Open ${p.title}`} onClick={() => registry.openPanel(p.id)}>
-            {p.title[0]}
+        {railEntries.map((entry) => (
+          <button
+            key={entry.id}
+            className={entry.id === activeId ? 'active' : ''}
+            title={entry.title}
+            onClick={() => registry.switchWorkspace(entry.id)}
+          >
+            {entry.glyph}
           </button>
         ))}
+        <button title="New workspace" onClick={() => void registry.runCommand('workspace.new')}>
+          ＋
+        </button>
         <div className="rail-spacer" />
         <button title="Commands (Ctrl+K)" onClick={() => setPaletteOpen(true)}>
           ⌘

@@ -4,10 +4,8 @@
  * this executes them against the registry and replies with results. See
  * docs/modules/agent-chat.md and backend/modules/agent/orchestrator.py.
  */
-import { readAgentContext } from '../../agent-context';
-import { registry } from '../../registry';
 import { sendChannel, subscribeChannel } from '../../ws';
-import { executeDynamicTool } from './manifest';
+import { executeTool, paneTitle } from './tool-exec';
 
 export interface AgentCallbacks {
   /** The model's final natural-language reply for the turn. */
@@ -15,12 +13,6 @@ export interface AgentCallbacks {
   /** A human-readable note for each mutating tool the agent ran. */
   onAction?: (text: string) => void;
   onError?: (message: string) => void;
-}
-
-function paneTitle(id: string): string {
-  const decl =
-    registry.panels.find((p) => p.id === id) ?? registry.widgets.find((w) => w.id === id);
-  return decl?.title ?? id;
 }
 
 /** A short log line for mutating tools; read-only `list_*` tools stay silent. */
@@ -36,45 +28,6 @@ function describe(name: string, args: Record<string, unknown>): string | null {
       return 'Switched workspace';
     default:
       return null;
-  }
-}
-
-/** Execute one relayed tool call against the registry/layout controller. */
-async function executeTool(name: string, args: Record<string, unknown>): Promise<unknown> {
-  const lc = registry.layoutController;
-  switch (name) {
-    case 'list_available_panes':
-      return {
-        panels: registry.panels.map((p) => ({ id: p.id, title: p.title })),
-        widgets: registry.widgets.map((w) => ({ id: w.id, title: w.title })),
-      };
-    case 'list_workspaces':
-      return lc ? await lc.listWorkspaces() : { error: 'workspace not ready' };
-    case 'list_open_panes':
-      return lc ? { panes: lc.listOpenPanes() } : { error: 'workspace not ready' };
-    case 'get_pane_context': {
-      const snapshot = readAgentContext(String(args.instanceId));
-      return snapshot === null
-        ? { error: `no agent context for pane: ${String(args.instanceId)}` }
-        : { context: snapshot };
-    }
-    case 'open_pane':
-      registry.openPanel(String(args.id));
-      return { ok: true, opened: args.id };
-    case 'close_pane':
-      return { closed: lc?.closePane(String(args.id)) ?? false };
-    case 'create_workspace':
-      return lc ? await lc.createWorkspace(String(args.name)) : { error: 'workspace not ready' };
-    case 'switch_workspace':
-      registry.switchWorkspace(String(args.id));
-      return { ok: true, switched: args.id };
-    default: {
-      // Not a layout verb — try the dynamic tools the manifest advertised
-      // (per-widget/panel agentTools and agent-exposed commands).
-      const dynamic = await executeDynamicTool(name, args);
-      if (dynamic.handled) return dynamic.result;
-      return { error: `unknown tool: ${name}` };
-    }
   }
 }
 

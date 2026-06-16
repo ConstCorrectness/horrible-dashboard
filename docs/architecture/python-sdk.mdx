@@ -1,0 +1,190 @@
+---
+sidebar_position: 5
+sidebar_label: Python SDK (dash)
+---
+
+# Python SDK: scripting the dashboard with `dash`
+
+`dash` is the Python handle for driving horrible-dashboard programmatically — open
+and close panes, manage workspaces, read live widget state, and invoke any
+agent-exposed capability. It is seeded into every [Python REPL](../modules/repl.mdx)
+session, so you can script the running app interactively.
+
+This page is the **canonical reference** for the SDK surface. For the REPL pane,
+the kernel, and the `/ws` channel protocol, see the
+[repl module](../modules/repl.mdx).
+
+**Scope (v1):** the SDK is the namespace injected into the **in-app REPL** — it is
+not (yet) a standalone, pip-installable client for driving the app from an external
+process. Its source is `backend/modules/repl/sdk.py`.
+
+## How it runs
+
+`dash` is a thin, **synchronous** Pythonic veneer over the *same relay surface the
+[agent](../modules/agent-chat.mdx) drives*. Each method becomes a tool call relayed
+to the originating browser over the shared `/ws` socket, where
+`executeTool` (`packages/core/src/modules/agent/tool-exec.ts`) runs it against the
+registry and layout controller. Anything the agent can do, `dash` can do — they
+share one executor, so they never drift.
+
+Although the work crosses a process boundary, **you write ordinary blocking
+Python**: the call returns the browser's result before the next line runs. Under
+the hood the cell runs in a worker thread, and the SDK bridges to the event loop
+and blocks that thread until the reply arrives.
+
+```mermaid
+sequenceDiagram
+    participant Cell as REPL cell (worker thread)
+    participant Loop as backend event loop
+    participant FE as Browser (ReplSession)
+    participant Reg as registry + layoutController
+    Cell->>Loop: dash.panes.open("settings.home")
+    Loop->>FE: tool_call {name:"open_pane", args:{id}}
+    FE->>Reg: executeTool(...)
+    Reg-->>FE: result
+    FE-->>Loop: tool_result
+    Loop-->>Cell: returns {'ok': True, 'opened': 'settings.home'}
+```
+
+Each call blocks until the browser answers (or a **30-second relay timeout**, after
+which the call returns `{'error': 'tool timed out'}`).
+
+## Reference
+
+### `dash.panes`
+
+Open, close, and inspect panes (panels and widgets) in the **active workspace**.
+
+| Method | Relayed tool | Returns |
+| --- | --- | --- |
+| `dash.panes.available()` | `list_available_panes` | `{'panels': [{'id', 'title'}], 'widgets': [{'id', 'title'}]}` — everything openable |
+| `dash.panes.open_list()` | `list_open_panes` | `{'panes': [{'id', 'instanceId', 'title', 'hasContext'}]}` — what's open now |
+| `dash.panes.open(pane_id)` | `open_pane` | `{'ok': True, 'opened': pane_id}` |
+| `dash.panes.close(pane_id)` | `close_pane` | `{'closed': bool}` (`False` if no such open pane) |
+
+- `id` is the **pane type** id (e.g. `settings.home`); `instanceId` identifies a
+  **live instance** (e.g. `repl.console#1`) and is what `dash.context` takes.
+- `hasContext` is `True` when that instance exposes a readable state snapshot.
+- `open` of an unknown id is a no-op on the UI but still returns `{'ok': True}`;
+  always discover ids with `available()` first.
+
+### `dash.workspaces`
+
+List, create, and switch the named workspace tabs.
+
+| Method | Relayed tool | Returns |
+| --- | --- | --- |
+| `dash.workspaces.list()` | `list_workspaces` | `{'active': str \| None, 'workspaces': [{'id', 'name'}]}` |
+| `dash.workspaces.create(name)` | `create_workspace` | `{'id', 'name'}` — created **and switched to** |
+| `dash.workspaces.switch(workspace_id)` | `switch_workspace` | `{'ok': True, 'switched': workspace_id}` |
+
+### `dash.context(instance_id)`
+
+Read a live pane's current state/selection snapshot (relays `get_pane_context`).
+Pass an `instanceId` from `dash.panes.open_list()`. Returns `{'context': <snapshot>}`,
+or `{'error': ...}` if that instance exposes no context.
+
+The snapshot shape is defined by the pane itself via `getAgentContext()` — e.g. the
+editor returns its buffer text, a file tree returns its selection. This is the
+**read-one-widget** half of cross-widget scripting.
+
+### `dash.call(name, **args)`
+
+The escape hatch: relay **any** tool by name. This reaches every per-widget
+`agentTool` and agent-exposed command in the registry, so capabilities are
+scriptable the moment they exist — no SDK change needed. The layout verbs above are
+just ergonomic wrappers over `call`; these are equivalent:
+
+```python
+dash.panes.open("settings.home")
+dash.call("open_pane", id="settings.home")
+```
+
+Discover dynamic tool names from the app's agent tooling
+([agent tools & permissions](./agent-tools.mdx)); pass their schema fields as
+keyword arguments.
+
+## Return values & errors
+
+Every method returns the browser's JSON result as a plain Python `dict`/`list`/
+scalar. Failures are **values, not exceptions** — a failed or unknown tool comes
+back as `{'error': '...'}`, and a timed-out relay as `{'error': 'tool timed out'}`.
+So branch on the result rather than wrapping calls in `try/except`:
+
+```python
+res = dash.context("editor.buffer#1")
+if "error" in res:
+    print("no context:", res["error"])
+else:
+    text = res["context"]
+```
+
+(Errors raised by *your own* Python — `1/0`, `NameError`, … — are reported as a
+normal traceback in the REPL, with the kernel's own frames stripped.)
+
+## Recipes
+
+**Discover, then open**
+
+```python
+dash.panes.available()              # find the id you want
+dash.panes.open("terminal.instance")
+```
+
+**Read one widget, act on another** (the cross-widget pattern)
+
+```python
+panes = dash.panes.open_list()["panes"]
+ed = next(p for p in panes if p["id"] == "editor.buffer")
+src = dash.context(ed["instanceId"])["context"]   # read the editor
+# …decide something from `src`, then drive another pane…
+dash.panes.open("files.tree")
+```
+
+**Build a focused workspace**
+
+```python
+dash.workspaces.create("debugging")     # new tab, switched to
+dash.panes.open("terminal.instance")
+dash.panes.open("observability.logs")
+```
+
+## State & lifetime
+
+A REPL session has a **persistent namespace** — variables, imports, and functions
+defined in one cell are available in the next. The session (and its kernel) lives
+for the life of the `/ws` connection: it is created when the console opens and
+dropped when the socket closes (reload/close tears it down). `dash` itself is bound
+to *that* connection, so it always drives the browser tab that owns the console.
+
+## Trust model
+
+`dash` calls are **not** routed through the agent
+[permission gate](./agent-tools.mdx#the-permission-system). A REPL is the user's own
+direct intent — the same trust model as the [terminal](../modules/terminal.mdx)
+pane — so UI mutations run without per-call approval. Combined with arbitrary
+backend code execution, this is safe only while the backend is bound to localhost;
+see the security note on the [repl module](../modules/repl.mdx#security-note).
+
+## Extending the SDK
+
+Two ways to add reach, in order of preference:
+
+1. **Nothing** — if the capability is already a widget `agentTool` or an
+   agent-exposed command, it's reachable today via `dash.call(name, **args)`.
+2. **A wrapper** — to give a frequently-used tool a first-class method, add it to
+   the relevant facade in `backend/modules/repl/sdk.py` (`_Panes`, `_Workspaces`, or
+   `Dash`). If it's a brand-new UI verb (not just a dynamic tool), also teach the
+   shared executor `executeTool` in
+   `packages/core/src/modules/agent/tool-exec.ts` — which automatically gives the
+   **agent** the same verb. Keep the two surfaces in lockstep.
+
+## Source map
+
+| Concern | File |
+| --- | --- |
+| The `dash` facade | `backend/modules/repl/sdk.py` |
+| Relay bridge + session manager | `backend/modules/repl/manager.py` |
+| Interpreter / namespace | `backend/modules/repl/kernel.py` |
+| Frontend executor (shared with the agent) | `packages/core/src/modules/agent/tool-exec.ts` |
+| REPL pane + WS client | `packages/core/src/modules/repl/` |

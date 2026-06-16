@@ -22,10 +22,15 @@ floated. This replaced the earlier single-panel switcher.
   and renders either. There is no separate "widget board"; a widget docks,
   resizes, and floats exactly like a panel. (Earlier the dashboard had a fixed
   inner grid of widgets — that two-level model is gone.)
-- **Named workspaces.** A workspace is a named, savable dockview layout; several
-  can exist and you switch between them via a tab strip. The **Dashboard** is
-  just the default seeded workspace (a layout of common widget-panes), not a
-  special container.
+- **Workflow layouts (Blender-style).** A workspace is a named, savable dockview
+  layout; you switch between them from the **shell rail** (the single switcher —
+  there is no separate tab strip). The rail lists **predefined workflow layouts**
+  — `LayoutPreset`s contributed via the module registry — e.g. **Dashboard** (a
+  layout of common widget-panes) and **Scripting** (files · editor · REPL +
+  terminal). A preset is the *seed* for a stable-id workspace: first activation
+  lays out its panes, then the user's rearrangements persist per layout (a
+  `layout.reset` command restores the preset). Custom workspaces (the rail's `＋`)
+  are just presetless layouts.
 
 ## Model
 
@@ -62,32 +67,45 @@ freshly opened pane docks; once the user rearranges, the persisted tree wins.
 
 ## How panes reach the workspace
 
-1. A rail button or command calls `registry.openPanel(id)` (works for panel _or_
-   widget ids). Every widget also gets a synthesized `widget.open:<id>` command,
-   so any widget is openable from the palette ("Open widget: &lt;title&gt;"). A visual
-   "Add widget…" picker in the tab strip does the same.
+1. A command calls `registry.openPanel(id)` (works for panel _or_ widget ids).
+   Every panel and widget is openable from the command palette — panels via their
+   module command, and every widget via a synthesized `widget.open:<id>` command
+   ("Open widget: &lt;title&gt;"). (The rail switches whole layouts; it no longer
+   opens individual panes.)
 2. The shell switches to the `workspace` view and signals `Workspace` which pane
    to open (a bumped `pendingOpen` nonce, so repeats re-fire).
 3. `Workspace` renders every pane through one host (`PanelHost`) that resolves
    `params.panelId` from the registry — so the serialized layout stores only ids
    and restore just re-resolves them.
 
-## Named workspaces & switching
+## Workflow layouts, the rail & switching
 
-`Workspace` loads the collection (`getWorkspaces()`), renders a **tab strip**
-above the dock (one tab per workspace, a "＋" to create, "×" to delete), and
-tracks the active id. Switching a tab flushes the current layout
-(`saveWorkspace`), then `api.fromJSON(target.layout)` (or seeds, for the
-Dashboard, or clears, for a fresh one) — guarded by `swappingRef` so the
-programmatic swap doesn't trip autosave. Commands switch tabs through the
-`registry.setWorkspaceSwitcher` seam (AppShell enters the workspace view, then
-signals via a `pendingWorkspace` nonce — mirroring `pendingOpen`);
-`dashboard.open` is just `switchWorkspace('dashboard')`.
+The **shell rail** (in `AppShell.tsx`) is the workspace switcher. It renders every
+`registry.layouts` preset (always, even before first open) plus any custom
+workspace, highlighting the active one. The active id + workspace list come from a
+small observable, `workspace-store` (`packages/core`), that `Workspace` publishes
+on every change — so the rail (in `packages/ui`) stays in sync without owning the
+state.
 
-On first run (no workspaces) the frontend **seeds** a "Dashboard" workspace —
-opens the preset widgets (`dashboard.welcome`, `dashboard.backendStatus`,
-`observability.io`) as panes in a 2-column arrangement — and saves it under the
-stable id `dashboard`.
+A rail click calls `registry.switchWorkspace(id)` — the existing
+`setWorkspaceSwitcher` seam (AppShell enters the workspace view, then signals via a
+`pendingWorkspace` nonce, mirroring `pendingOpen`). `Workspace.switchTo` flushes
+the current layout (`saveWorkspace`), then `loadInto`:
+
+- a saved layout **with panes** → `api.fromJSON(layout)`;
+- otherwise → seed from the matching `LayoutPreset` (via `seedPreset`, which
+  replays `preset.panes` through `addPane`), or a blank dock for a presetless
+  custom workspace.
+
+All guarded by `swappingRef` so the programmatic swap doesn't trip autosave.
+Activating a preset that has **no workspace yet** creates one with the preset's
+**stable id** (`saveWorkspace(preset.id, …)`) then seeds it — so the rail (and the
+agent's `switch_workspace`) can open a never-touched layout. `layout.reset`
+re-seeds the active layout from its preset; `workspace.new`/`workspace.delete`
+manage custom layouts (a preset resets rather than deletes).
+
+On first run (no workspaces) the frontend seeds the **default preset** (Dashboard)
+under its stable id so the app always opens onto something.
 
 ## Agent-driven layout
 
@@ -106,7 +124,8 @@ backend (`backend/modules/workspace/`) stores the collection
 (`{ active, workspaces: [{ id, name, layout }] }`) but treats each `layout`
 **opaquely** — it never interprets the engine's JSON shape (`SerializedLayout` in
 `packages/core/src/workspace.ts` is `Record<string, unknown>`). Authoring the
-default Dashboard arrangement is the frontend's job (engine-shaped).
+preset arrangements is the frontend's job (engine-shaped); the backend just stores
+the resulting blobs.
 
 ## Browser vs desktop
 
@@ -123,9 +142,11 @@ as `window.__horribleWorkspace` for console/preview experimentation
 
 ## Status
 
-Implemented: widgets-as-panes, named workspaces with a tab switcher, splits, tab
-groups, floating windows, per-workspace layout persistence/restore, the
-singleton/instance distinction, and the seeded default Dashboard. `scratch.note`
-is the reference non-singleton panel. Not yet: real OS windows on desktop,
-per-instance pane state (scratch instances share one store), multiple instances
-of the same widget in one workspace, and workspace reorder/import-export.
+Implemented: widgets-as-panes; workflow-layout presets (`registry.layouts`) with
+the rail as the single switcher; lazy stable-id seeding, per-layout
+persistence/restore, and `layout.reset`; custom workspace create/delete; splits,
+tab groups, floating windows; the singleton/instance distinction. Built-in presets:
+**Dashboard** and **Scripting**. `scratch.note` is the reference non-singleton
+panel. Not yet: real OS windows on desktop, per-instance pane state (scratch
+instances share one store), multiple instances of the same widget in one
+workspace, and workspace reorder/import-export.

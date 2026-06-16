@@ -58,16 +58,19 @@ The shell has two top-level **views** (switched by the shell's own
   never loads it.
 - **`workspace`** — a **dockable window manager**: module panes (panels _and_
   widgets) open as windows that can be tabbed, split, resized, and floated.
-  Several **named workspaces** exist, switchable via a tab strip; the Dashboard
-  is the default seeded one. Each workspace's layout persists. Built on dockview,
+  Several **workflow layouts** (Blender-style workspaces) exist — predefined
+  presets like **Dashboard** and **Scripting** plus any custom ones — switchable
+  from the shell rail; each layout's arrangement persists. Built on dockview,
   wrapped so the registry stays the public API. See
-  [windowing.md](windowing.mdx) for the model, pane types vs instances, named
-  workspaces, and persistence.
+  [windowing.md](windowing.mdx) for the model, pane types vs instances, layout
+  presets, and persistence.
 
-A persistent **icon rail** (logo/home on top, panel icons, command palette at the
-bottom) is the only chrome shared by both views. Opening a panel from anywhere
-switches to the workspace view. The Workspace stays mounted across view switches
-so its layout survives a trip home.
+A persistent **icon rail** (logo/home on top, one icon per **workflow layout** +
+a `＋` to add a custom one, command palette at the bottom) is the only chrome
+shared by both views — it is the workspace switcher (Blender-style), not a pane
+launcher. Clicking a layout switches to the workspace view and activates it;
+individual panes are opened from the command palette instead. The Workspace stays
+mounted across view switches so its layout survives a trip home.
 
 Branding: source art lives in `assets/` (`logo.svg`, `banner.svg`) —
 `pnpm build:icons` regenerates the web favicon (`apps/web/public/favicon.ico`,

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import {
   DockviewReact,
   themeAbyss,
@@ -17,6 +17,8 @@ import {
   registry,
   saveWorkspace,
   setActiveWorkspace,
+  workspaceStore,
+  type LayoutPreset,
   type OpenPaneOptions,
   type SerializedLayout,
   type Workspace as WorkspaceModel,
@@ -58,7 +60,11 @@ function PanelHost(props: IDockviewPanelProps<{ panelId: string }>) {
 
 const components = { panel: PanelHost };
 
-const DASHBOARD_PRESET = ['dashboard.welcome', 'dashboard.backendStatus', 'observability.io'];
+/** The workflow-layout preset for a workspace id, if it is one of the predefined
+ * layouts (vs a custom user workspace). */
+function presetFor(id: string | null): LayoutPreset | undefined {
+  return id ? registry.layouts.find((p) => p.id === id) : undefined;
+}
 
 type Direction = 'left' | 'right' | 'above' | 'below' | 'within';
 
@@ -127,74 +133,11 @@ function openPane(
   });
 }
 
-/** Build the default Dashboard arrangement (a 2-column grid of common widgets). */
-function seedDashboard(api: DockviewApi): void {
+/** Lay out a workflow layout from its preset (replacing the current contents).
+ * Each placement replays through `addPane`; unknown pane ids are skipped. */
+function seedPreset(api: DockviewApi, preset: LayoutPreset): void {
   api.clear();
-  const [first, ...rest] = DASHBOARD_PRESET;
-  addPane(api, first);
-  if (rest[0]) addPane(api, rest[0], { referencePanel: first, direction: 'right' });
-  if (rest[1]) addPane(api, rest[1], { referencePanel: first, direction: 'below' });
-  for (const extra of rest.slice(2)) addPane(api, extra);
-}
-
-interface WorkspaceTabsProps {
-  workspaces: WorkspaceModel[];
-  activeId: string | null;
-  onSelect: (id: string) => void;
-  onCreate: () => void;
-  onDelete: (id: string) => void;
-  onAddWidget: (id: string) => void;
-}
-
-/** The tab strip above the dock: one tab per workspace + create + add-widget. */
-function WorkspaceTabs(props: WorkspaceTabsProps) {
-  const addable = registry.widgets;
-  return (
-    <div className="ws-tabs">
-      {props.workspaces.map((ws) => (
-        <div
-          key={ws.id}
-          className={`ws-tab ${ws.id === props.activeId ? 'active' : ''}`}
-          onClick={() => props.onSelect(ws.id)}
-        >
-          <span>{ws.name}</span>
-          {props.workspaces.length > 1 && (
-            <button
-              className="ws-tab-close"
-              title={`Delete ${ws.name}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                props.onDelete(ws.id);
-              }}
-            >
-              ×
-            </button>
-          )}
-        </div>
-      ))}
-      <button className="ws-tab-add" title="New workspace" onClick={props.onCreate}>
-        ＋
-      </button>
-      <div className="ws-tabs-spacer" />
-      {addable.length > 0 && (
-        <select
-          className="ws-widget-picker"
-          value=""
-          onChange={(e) => {
-            if (e.target.value) props.onAddWidget(e.target.value);
-            e.target.value = '';
-          }}
-        >
-          <option value="">Add widget…</option>
-          {addable.map((w) => (
-            <option key={w.id} value={w.id}>
-              {w.title}
-            </option>
-          ))}
-        </select>
-      )}
-    </div>
-  );
+  for (const pane of preset.panes) addPane(api, pane.id, pane.position);
 }
 
 export function Workspace({
@@ -215,14 +158,16 @@ export function Workspace({
   const lastSwitchNonce = useRef(-1);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [workspaces, setWorkspaces] = useState<WorkspaceModel[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(null);
-
+  // The rail (AppShell) renders the workspace switcher off the shared store, so
+  // the Workspace publishes its list/active selection rather than holding render
+  // state of its own.
   const applyState = (list: WorkspaceModel[], active: string | null) => {
     workspacesRef.current = list;
     activeIdRef.current = active;
-    setWorkspaces(list);
-    setActiveId(active);
+    workspaceStore.publish({
+      workspaces: list.map((w) => ({ id: w.id, name: w.name })),
+      activeId: active,
+    });
   };
 
   // Persist the active workspace's current layout. Awaitable so a following
@@ -243,12 +188,20 @@ export function Workspace({
 
   const loadInto = (api: DockviewApi, ws: WorkspaceModel) => {
     swappingRef.current = true;
-    if (ws.layout && Object.keys(ws.layout).length > 0) {
+    // A saved layout counts only if it actually holds panes — a structurally
+    // present but empty layout (`panels: {}`) re-seeds from the preset rather than
+    // restoring a blank dock.
+    const savedPanes = ws.layout
+      ? Object.keys((ws.layout as { panels?: Record<string, unknown> }).panels ?? {}).length
+      : 0;
+    if (savedPanes > 0) {
       api.fromJSON(ws.layout as unknown as Parameters<typeof api.fromJSON>[0]);
-    } else if (ws.id === 'dashboard') {
-      seedDashboard(api);
     } else {
-      api.clear();
+      // No usable saved layout: seed from the matching workflow preset (first
+      // activation), or leave a blank canvas for a custom workspace.
+      const preset = presetFor(ws.id);
+      if (preset) seedPreset(api, preset);
+      else api.clear();
     }
     swappingRef.current = false;
   };
@@ -260,10 +213,22 @@ export function Workspace({
     if (apiRef.current !== api) return;
     // Re-fetch fresh layouts: autosaves persist to the server but don't update
     // our in-memory copies, so the target's layout here would otherwise be stale.
-    const state = await getWorkspaces();
+    let state = await getWorkspaces();
     if (apiRef.current !== api) return;
-    const target = state.workspaces.find((w) => w.id === id);
-    if (!target) return;
+    let target = state.workspaces.find((w) => w.id === id);
+    if (!target) {
+      // A predefined workflow layout that's never been opened: create it with its
+      // stable id (no layout yet → loadInto seeds from the preset). Non-preset
+      // ids that don't exist are ignored.
+      const preset = presetFor(id);
+      if (!preset) return;
+      await saveWorkspace(preset.id, { name: preset.name });
+      if (apiRef.current !== api) return;
+      state = await getWorkspaces();
+      if (apiRef.current !== api) return;
+      target = state.workspaces.find((w) => w.id === id);
+      if (!target) return;
+    }
     applyState(state.workspaces, id);
     loadInto(api, target);
     void setActiveWorkspace(id);
@@ -287,11 +252,6 @@ export function Workspace({
     return { id: ws.id, name: ws.name };
   };
 
-  const createWs = async () => {
-    const name = window.prompt('New workspace name', 'Workspace');
-    if (name) await createNamedWorkspace(name);
-  };
-
   const removeWs = async (id: string) => {
     const api = apiRef.current;
     const state = await deleteWorkspace(id);
@@ -311,12 +271,15 @@ export function Workspace({
   const init = async (api: DockviewApi) => {
     let state = await getWorkspaces();
     if (apiRef.current !== api) return;
-    if (state.workspaces.length === 0) {
+    // Empty slate: seed the default workflow layout (the first preset, normally
+    // Dashboard) so the app always opens onto something.
+    const defaultPreset = presetFor('dashboard') ?? registry.layouts[0];
+    if (state.workspaces.length === 0 && defaultPreset) {
       swappingRef.current = true;
-      seedDashboard(api);
+      seedPreset(api, defaultPreset);
       swappingRef.current = false;
-      await saveWorkspace('dashboard', {
-        name: 'Dashboard',
+      await saveWorkspace(defaultPreset.id, {
+        name: defaultPreset.name,
         layout: api.toJSON() as unknown as SerializedLayout,
       });
       if (apiRef.current !== api) return;
@@ -327,8 +290,10 @@ export function Workspace({
     applyState(state.workspaces, active);
     const ws = state.workspaces.find((w) => w.id === active);
     if (ws) {
-      // Dashboard was just seeded into the live api; only reload non-active swaps.
-      if (!(ws.id === 'dashboard' && state.workspaces.length === 1)) loadInto(api, ws);
+      // The default preset was just seeded into the live api; only reload other
+      // (non-active) workspaces.
+      const justSeeded = ws.id === defaultPreset?.id && state.workspaces.length === 1;
+      if (!justSeeded) loadInto(api, ws);
       if (state.active !== active) void setActiveWorkspace(active!);
     }
   };
@@ -379,6 +344,22 @@ export function Workspace({
           workspaces: s.workspaces.map((w) => ({ id: w.id, name: w.name })),
         };
       },
+      resetLayout: () => {
+        const preset = presetFor(activeIdRef.current);
+        if (!preset) return;
+        swappingRef.current = true;
+        seedPreset(api, preset);
+        swappingRef.current = false;
+        void saveWorkspace(preset.id, {
+          layout: api.toJSON() as unknown as SerializedLayout,
+        });
+      },
+      deleteActiveWorkspace: () => {
+        const id = activeIdRef.current;
+        // Predefined layouts reset rather than delete; only remove custom ones.
+        if (!id || presetFor(id)) return;
+        void removeWs(id);
+      },
     });
 
     // Tab switching: clicks call switchTo directly; commands route via AppShell's
@@ -428,17 +409,6 @@ export function Workspace({
 
   return (
     <div className="ws-root">
-      <WorkspaceTabs
-        workspaces={workspaces}
-        activeId={activeId}
-        onSelect={(id) => void switchTo(id)}
-        onCreate={() => void createWs()}
-        onDelete={(id) => void removeWs(id)}
-        onAddWidget={(id) => {
-          const api = apiRef.current;
-          if (api) openPane(api, id);
-        }}
-      />
       <DockviewReact
         className="ws-dockview"
         theme={themeAbyss}
