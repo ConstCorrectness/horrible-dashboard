@@ -65,6 +65,7 @@ export {
   type PaneDirection,
   type PanePlacement,
   type PanelDecl,
+  type SplitDirection,
   type SettingDecl,
   type SettingType,
   type ShellView,

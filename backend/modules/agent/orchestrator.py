@@ -31,13 +31,18 @@ APPROVAL_TIMEOUT_S = 300.0
 
 SYSTEM_PROMPT = (
     "You are the orchestrator for horrible-dashboard, a dockable dashboard app. "
-    "You arrange the user's screen by opening/closing panes and managing "
-    "workspaces, using the provided tools.\n"
+    "You arrange the user's screen by opening/closing panes, by splitting, "
+    "resizing, moving, floating and maximizing them, and by managing workspaces, "
+    "using the provided tools.\n"
     "Rules:\n"
     "- A 'pane' is a panel or widget shown on screen (e.g. Marketplace, Settings, "
     "Data flow, Backend status). To open/show/add something the user names, FIRST "
     "call list_available_panes to find the pane whose title matches, THEN call "
     "open_pane with that exact id. Do NOT treat it as a workspace.\n"
+    "- To arrange ALREADY-OPEN panes (split/resize/move/float/maximize), FIRST "
+    "call list_open_panes to get each pane's live instanceId. Geometry tools take "
+    "the instanceId, NOT the pane type id. split_pane also needs a paneId (from "
+    "list_available_panes) for the content to show in the new region.\n"
     "- Only use list_workspaces / create_workspace / switch_workspace when the "
     "user explicitly talks about workspaces or tabs.\n"
     "- Ids are not guessable; always discover them with a list_* tool first.\n"
@@ -111,6 +116,73 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
         "Switch to a workspace by its id (from list_workspaces).",
         {"id": {"type": "string"}},
         ["id"],
+    ),
+    _tool(
+        "split_pane",
+        "Split an open pane, opening another pane beside it. 'left'/'right' give a "
+        "vertical split, 'above'/'below' a horizontal one. Use instanceId from "
+        "list_open_panes and paneId from list_available_panes.",
+        {
+            "instanceId": {"type": "string", "description": "Live pane to split"},
+            "direction": {
+                "type": "string",
+                "enum": ["left", "right", "above", "below"],
+            },
+            "paneId": {
+                "type": "string",
+                "description": "Pane id (from list_available_panes) for the new region",
+            },
+        },
+        ["instanceId", "direction", "paneId"],
+    ),
+    _tool(
+        "resize_pane",
+        "Resize the region holding an open pane. Sizes are in pixels; pass width "
+        "and/or height. Use instanceId from list_open_panes.",
+        {
+            "instanceId": {"type": "string"},
+            "width": {"type": "number", "description": "Target width in pixels"},
+            "height": {"type": "number", "description": "Target height in pixels"},
+        },
+        ["instanceId"],
+    ),
+    _tool(
+        "move_pane",
+        "Move an open pane next to another open pane ('within' merges it into the "
+        "reference's tab group). Both ids are instanceIds from list_open_panes.",
+        {
+            "instanceId": {"type": "string", "description": "Pane to move"},
+            "reference": {"type": "string", "description": "Pane to move next to"},
+            "direction": {
+                "type": "string",
+                "enum": ["left", "right", "above", "below", "within"],
+            },
+        },
+        ["instanceId", "reference", "direction"],
+    ),
+    _tool(
+        "float_pane",
+        "Pop an open pane out into a floating window. instanceId from list_open_panes.",
+        {"instanceId": {"type": "string"}},
+        ["instanceId"],
+    ),
+    _tool(
+        "dock_pane",
+        "Dock a floating pane back into the layout. instanceId from list_open_panes.",
+        {"instanceId": {"type": "string"}},
+        ["instanceId"],
+    ),
+    _tool(
+        "maximize_pane",
+        "Maximize an open pane to fill the workspace. instanceId from list_open_panes.",
+        {"instanceId": {"type": "string"}},
+        ["instanceId"],
+    ),
+    _tool(
+        "restore_pane",
+        "Restore a maximized pane back to the normal layout.",
+        {"instanceId": {"type": "string"}},
+        ["instanceId"],
     ),
 ]
 

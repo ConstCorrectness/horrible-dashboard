@@ -107,14 +107,49 @@ manage custom layouts (a preset resets rather than deletes).
 On first run (no workspaces) the frontend seeds the **default preset** (Dashboard)
 under its stable id so the app always opens onto something.
 
+## The geometry seam: one set of operations, two callers
+
+Splitting, resizing, moving, floating and maximizing panes are **semantic
+operations on `LayoutController`** (`packages/core/src/registry.ts`), implemented
+once in `Workspace.tsx` against the live dockview api:
+
+| Method | dockview primitive |
+| --- | --- |
+| `splitPane(instanceId, direction, paneId)` | `addPanel({ position: { referencePanel, direction } })` |
+| `resizePane(instanceId, {width?, height?})` | `panel.api.setSize(...)` |
+| `movePane(instanceId, reference, direction)` | `panel.api.moveTo({ group, position })` |
+| `setPaneFloating(instanceId, floating)` | `addFloatingGroup` / `moveTo` back to a grid group |
+| `maximizePane(instanceId, maximized)` | `panel.api.maximize()` / `exitMaximized()` |
+
+This is deliberately the **only** place these operations live, because two
+callers drive them:
+
+- the **agent**, via the `split_pane`/`resize_pane`/`move_pane`/`float_pane`/
+  `dock_pane`/`maximize_pane`/`restore_pane` tools (relayed through
+  `tool-exec.ts`), and
+- the **user**, via direct manipulation — the **Blender-style split grip**
+  (`packages/ui/src/SplitHandle.tsx`), a grab tab in each pane's bottom-right
+  corner (rendered by `PanelHost`, hidden until the pane is hovered). Dragging it
+  picks the orientation from the dominant axis and the new region appears on the
+  side you drag toward (drag left → new pane on the left, down → below); a live
+  overlay previews the split, and on release it calls `splitPane`, duplicating the
+  pane's content into the new region. Resizing and re-docking use dockview's
+  native sashes and tab-drag (already Blender-like), so the custom layer only adds
+  the split gesture the engine lacks.
+
+So "the agent splits a pane" and "the user drags a split" are the same code path.
+Because each method mutates the dockview tree, the existing `onDidLayoutChange`
+autosave persists the result for free — no separate save path. Geometry verbs are
+layout-only, so the orchestrator leaves them **ungated** (like `open_pane`).
+
 ## Agent-driven layout
 
-The agent orchestrator can arrange the workspace too (open/close panes, create
-and switch workspaces). The mutations it needs beyond the existing
-`openPanel`/`switchWorkspace` seams go through `registry.layoutController`
-(`setLayoutController`), which `Workspace` installs over its dockview api. So the
-agent stays decoupled from the engine, same as every module. See
-[../modules/agent-chat.md](../modules/agent-chat.mdx).
+The agent orchestrator can arrange the workspace too (open/close panes, the
+geometry verbs above, create and switch workspaces). The mutations it needs beyond
+the existing `openPanel`/`switchWorkspace` seams go through
+`registry.layoutController` (`setLayoutController`), which `Workspace` installs over
+its dockview api. So the agent stays decoupled from the engine, same as every
+module. See [../modules/agent-chat.md](../modules/agent-chat.mdx).
 
 ## Persistence
 
@@ -145,8 +180,13 @@ as `window.__horribleWorkspace` for console/preview experimentation
 Implemented: widgets-as-panes; workflow-layout presets (`registry.layouts`) with
 the rail as the single switcher; lazy stable-id seeding, per-layout
 persistence/restore, and `layout.reset`; custom workspace create/delete; splits,
-tab groups, floating windows; the singleton/instance distinction. Built-in presets:
-**Dashboard** and **Scripting**. `scratch.note` is the reference non-singleton
-panel. Not yet: real OS windows on desktop, per-instance pane state (scratch
-instances share one store), multiple instances of the same widget in one
-workspace, and workspace reorder/import-export.
+tab groups, floating windows; the singleton/instance distinction; the
+**`LayoutController` geometry seam** (split/resize/move/float/maximize), the
+**agent geometry tools** that drive it, and the **Blender-style split grip**
+(`SplitHandle`) that drives the same seam from direct manipulation. Built-in
+presets: **Dashboard** and **Scripting**. `scratch.note` is the reference
+non-singleton panel. Not yet: a pane-type picker for the split target (it
+duplicates the current pane today), edge-drag-to-split (native sashes cover
+resize), real OS windows on desktop, per-instance pane state (scratch instances
+share one store), multiple instances of the same widget in one workspace, and
+workspace reorder/import-export.

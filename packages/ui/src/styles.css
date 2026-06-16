@@ -103,6 +103,13 @@ body {
   min-height: 0;
 }
 
+/* Pane host: positioning context for the Blender-style split grip overlay, which
+   must sit above the (scrolling) .ws-panel content rather than inside it. */
+.ws-pane-host {
+  position: relative;
+  height: 100%;
+}
+
 .ws-panel {
   height: 100%;
   overflow: auto;
@@ -111,6 +118,59 @@ body {
 
 .ws-panel-missing {
   color: var(--text-dim);
+}
+
+/* Split grip — a small grab tab in the pane's bottom-right corner (Blender-style).
+   Hidden until the pane is hovered so it never competes with content. */
+.ws-split-handle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: crosshair;
+  opacity: 0;
+  z-index: 5;
+  background: linear-gradient(
+    135deg,
+    transparent 0 50%,
+    var(--accent, #6c8cff) 50% 60%,
+    transparent 60% 70%,
+    var(--accent, #6c8cff) 70% 80%,
+    transparent 80%
+  );
+  transition: opacity 0.12s ease;
+}
+
+.ws-pane-host:hover .ws-split-handle {
+  opacity: 0.6;
+}
+
+.ws-split-handle:hover {
+  opacity: 1;
+}
+
+/* Live preview of where the split will land while dragging the grip. */
+.ws-split-preview {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--accent, #6c8cff) 12%, transparent);
+  border: 2px solid var(--accent, #6c8cff);
+}
+
+.ws-split-preview-left {
+  right: 50%;
+}
+.ws-split-preview-right {
+  left: 50%;
+}
+.ws-split-preview-above {
+  bottom: 50%;
+}
+.ws-split-preview-below {
+  top: 50%;
 }
 
 /* Editor buffer (CodeMirror 6) — fill the pane, header strip on top. The pane's

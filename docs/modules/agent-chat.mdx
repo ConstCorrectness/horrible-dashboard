@@ -100,12 +100,23 @@ executor itself lives in `packages/core/src/modules/agent/tool-exec.ts`
 `dash` SDK drives too, so the two stay in lockstep.
 
 **`LAYOUT_TOOLS`** (app-level verbs; the model discovers ids via the read tools,
-so the catalog stays frontend-owned): `list_available_panes`, `list_workspaces`,
-`list_open_panes`, `get_pane_context(instanceId)`, `open_pane(id)`,
-`close_pane(id)`, `create_workspace(name)`, `switch_workspace(id)`.
+so the catalog stays frontend-owned). Read/open: `list_available_panes`,
+`list_workspaces`, `list_open_panes`, `get_pane_context(instanceId)`,
+`open_pane(id)`, `close_pane(id)`, `create_workspace(name)`,
+`switch_workspace(id)`. **Geometry** (Blender-style arranging of already-open
+panes, all keyed by live `instanceId`): `split_pane(instanceId, direction,
+paneId)`, `resize_pane(instanceId, width?, height?)`, `move_pane(instanceId,
+reference, direction)`, `float_pane`/`dock_pane(instanceId)`,
+`maximize_pane`/`restore_pane(instanceId)`.
 `list_open_panes` reports each open pane's type id, live `instanceId`, title, and
 whether it exposes agent context; `get_pane_context` pulls one instance's snapshot
 (see [agent tools & permissions](../architecture/agent-tools.mdx)).
+
+The geometry verbs are **layout-only and ungated** (like `open_pane`), and they
+execute through the same `LayoutController` seam the user's drag gestures use —
+one set of operations, two callers (see
+[windowing](../architecture/windowing.mdx)). Each mutation triggers the dockview
+autosave, so an agent split persists exactly like a user drag.
 
 The `/ws` handler (`backend/app.py`) is now a bidirectional router: one inbound
 receive loop dispatches by channel (`agent` → the orchestrator) while a telemetry

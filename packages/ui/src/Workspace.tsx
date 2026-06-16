@@ -21,8 +21,11 @@ import {
   type LayoutPreset,
   type OpenPaneOptions,
   type SerializedLayout,
+  type SplitDirection,
   type Workspace as WorkspaceModel,
 } from '@horrible/core';
+
+import { SplitHandle } from './SplitHandle';
 
 /**
  * The dockable workspace: a collection of named layouts (tabs), each a tree of
@@ -45,13 +48,22 @@ function PanelHost(props: IDockviewPanelProps<{ panelId: string }>) {
     return <div className="ws-panel ws-panel-missing">Unknown pane: {props.params.panelId}</div>;
   }
   const Component = decl.component;
+  // The Blender-style split grip and the agent's split_pane tool both drive the
+  // same LayoutController.splitPane — duplicating this pane's content into the
+  // new region (the engine assigns the duplicate a fresh instance id).
+  const onSplit = (direction: SplitDirection) => {
+    registry.layoutController?.splitPane(props.api.id, direction, props.params.panelId);
+  };
   // Expose this pane's live instance id (for useAgentContext, keyed by instance)
   // and the params it was opened with (for usePaneParams, e.g. a buffer source).
   return (
     <PaneInstanceContext.Provider value={props.api.id}>
       <PaneParamsContext.Provider value={props.params}>
-        <div className="ws-panel">
-          <Component />
+        <div className="ws-pane-host">
+          <div className="ws-panel">
+            <Component />
+          </div>
+          <SplitHandle onSplit={onSplit} />
         </div>
       </PaneParamsContext.Provider>
     </PaneInstanceContext.Provider>
@@ -67,6 +79,29 @@ function presetFor(id: string | null): LayoutPreset | undefined {
 }
 
 type Direction = 'left' | 'right' | 'above' | 'below' | 'within';
+
+/** A fresh, collision-free instance id for a new pane of type `paneId` (matches
+ * the `${id}#${n}` scheme `openPane` uses for non-singleton instances). */
+function freshInstanceId(api: DockviewApi, paneId: string): string {
+  let n = api.panels.length + 1;
+  let id = `${paneId}#${n}`;
+  while (api.getPanel(id)) id = `${paneId}#${++n}`;
+  return id;
+}
+
+/** Map a layout `PaneDirection` to dockview's drop `Position` (used by moveTo). */
+function moveToPosition(d: Direction): 'left' | 'right' | 'top' | 'bottom' | 'center' {
+  switch (d) {
+    case 'above':
+      return 'top';
+    case 'below':
+      return 'bottom';
+    case 'within':
+      return 'center';
+    default:
+      return d;
+  }
+}
 
 function placementDirection(placement?: string): Direction | undefined {
   switch (placement) {
@@ -359,6 +394,58 @@ export function Workspace({
         // Predefined layouts reset rather than delete; only remove custom ones.
         if (!id || presetFor(id)) return;
         void removeWs(id);
+      },
+      splitPane: (instanceId, direction, paneId) => {
+        const ref = api.getPanel(instanceId);
+        const decl = resolveContent(paneId);
+        if (!ref || !decl) return null;
+        const newId = freshInstanceId(api, paneId);
+        api.addPanel({
+          id: newId,
+          component: 'panel',
+          title: decl.title,
+          params: { panelId: paneId },
+          position: { referencePanel: instanceId, direction },
+        });
+        return newId;
+      },
+      resizePane: (instanceId, size) => {
+        const panel = api.getPanel(instanceId);
+        if (!panel) return false;
+        panel.api.setSize(size);
+        return true;
+      },
+      movePane: (instanceId, referenceInstanceId, direction) => {
+        const panel = api.getPanel(instanceId);
+        const ref = api.getPanel(referenceInstanceId);
+        if (!panel || !ref) return false;
+        panel.api.moveTo({ group: ref.group, position: moveToPosition(direction) });
+        return true;
+      },
+      setPaneFloating: (instanceId, floating) => {
+        const panel = api.getPanel(instanceId);
+        if (!panel) return false;
+        const isFloating = panel.api.location.type === 'floating';
+        if (floating === isFloating) return false;
+        if (floating) {
+          api.addFloatingGroup(panel);
+        } else {
+          // Dock back into an existing grid group, or a fresh one if none remain.
+          const grid = api.panels.find(
+            (p) => p.id !== instanceId && p.api.location.type === 'grid',
+          );
+          panel.api.moveTo(
+            grid ? { group: grid.group, position: 'center' } : { group: api.addGroup() },
+          );
+        }
+        return true;
+      },
+      maximizePane: (instanceId, maximized) => {
+        const panel = api.getPanel(instanceId);
+        if (!panel) return false;
+        if (maximized) panel.api.maximize();
+        else panel.api.exitMaximized();
+        return true;
       },
     });
 

@@ -44,6 +44,13 @@ export interface SettingsSectionDecl {
 /** Where a pane is placed relative to a reference pane when seeding a layout. */
 export type PaneDirection = 'left' | 'right' | 'above' | 'below' | 'within';
 
+/**
+ * Directions a pane can be **split** toward. Excludes `within` (which adds a tab
+ * to the same group rather than splitting). `left`/`right` produce a vertical
+ * split, `above`/`below` a horizontal one.
+ */
+export type SplitDirection = 'left' | 'right' | 'above' | 'below';
+
 /** One pane in a layout preset: a pane id, optionally positioned next to another. */
 export interface PanePlacement {
   id: string;
@@ -122,6 +129,25 @@ export interface LayoutController {
   resetLayout(): void;
   /** Delete the active workspace if it's a custom one (presets reset instead). */
   deleteActiveWorkspace(): void;
+
+  // --- Geometry: the shared operations the agent's tools AND the user's
+  // Blender-style gestures both drive. Every mutation triggers the dockview
+  // autosave (onDidLayoutChange), so the new layout persists like any other. ---
+
+  /**
+   * Split the pane `instanceId`, opening `paneId` in a new region beside it
+   * (`left`/`right` → vertical split, `above`/`below` → horizontal). Returns the
+   * new pane's instance id, or null if either id is unknown.
+   */
+  splitPane(instanceId: string, direction: SplitDirection, paneId: string): string | null;
+  /** Resize the group holding a pane (pixels; omit a dimension to leave it). */
+  resizePane(instanceId: string, size: { width?: number; height?: number }): boolean;
+  /** Move a pane beside another pane, or into its tab group with `within`. */
+  movePane(instanceId: string, referenceInstanceId: string, direction: PaneDirection): boolean;
+  /** Pop a pane out to a floating window (`true`) or dock it back (`false`). */
+  setPaneFloating(instanceId: string, floating: boolean): boolean;
+  /** Maximize a pane to fill the workspace (`true`) or restore the layout (`false`). */
+  maximizePane(instanceId: string, maximized: boolean): boolean;
 }
 
 class ModuleRegistry {
