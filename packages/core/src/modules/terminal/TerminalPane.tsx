@@ -80,6 +80,7 @@ export function TerminalPane() {
       id,
       (data) => term.write(data),
       () => term.write('\r\n\x1b[90m[process exited]\x1b[0m\r\n'),
+      (message) => term.write(`\r\n\x1b[31m[terminal error] ${message}\x1b[0m\r\n`),
     );
     sessionRef.current = session;
     const cwd = typeof params.cwd === 'string' ? params.cwd : undefined;

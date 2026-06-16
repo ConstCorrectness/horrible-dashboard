@@ -10,7 +10,9 @@ import asyncio
 import queue
 from typing import Any
 
+from backend.modules.terminal import pty as pty_mod
 from backend.modules.terminal.manager import TerminalManager
+from backend.modules.terminal.pty import default_shell
 
 
 class FakePty:
@@ -172,3 +174,35 @@ def test_input_to_unknown_session_is_ignored() -> None:
         await mgr.handle({"event": "input", "data": {"id": "ghost", "data": "x"}})
 
     asyncio.run(go())
+
+
+# --- default_shell resolution (these run on Windows CI too, so platform is faked) ---
+
+
+def test_default_shell_windows(monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setattr(pty_mod.sys, "platform", "win32")
+    assert default_shell() == "powershell.exe"
+
+
+def test_default_shell_prefers_valid_shell_env(monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setattr(pty_mod.sys, "platform", "linux")
+    monkeypatch.setenv("SHELL", "/usr/bin/fish")
+    monkeypatch.setattr(pty_mod.os.path, "isfile", lambda p: p == "/usr/bin/fish")
+    assert default_shell() == "/usr/bin/fish"
+
+
+def test_default_shell_falls_back_when_shell_unset(monkeypatch) -> None:  # noqa: ANN001
+    # GUI-launched apps often have no $SHELL; pick the first shell that exists.
+    monkeypatch.setattr(pty_mod.sys, "platform", "linux")
+    monkeypatch.delenv("SHELL", raising=False)
+    monkeypatch.setattr(pty_mod.os.path, "isfile", lambda p: p == "/bin/bash")
+    assert default_shell() == "/bin/bash"
+
+
+def test_default_shell_last_resort_is_sh(monkeypatch) -> None:  # noqa: ANN001
+    # $SHELL set but invalid, and no common shell on disk → /bin/sh.
+    monkeypatch.setattr(pty_mod.sys, "platform", "linux")
+    monkeypatch.setenv("SHELL", "/does/not/exist")
+    monkeypatch.setattr(pty_mod.shutil, "which", lambda c: None)
+    monkeypatch.setattr(pty_mod.os.path, "isfile", lambda p: False)
+    assert default_shell() == "/bin/sh"

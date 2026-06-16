@@ -37,9 +37,14 @@ where the backend runs** — there is no client-side shell in either layout, so
 browser and desktop are byte-for-byte identical and agents and humans share the
 same terminals. Cross-platform PTYs unify on `ptyprocess` (POSIX) and `pywinpty`
 (Windows ConPTY), which expose the same `PtyProcess.spawn` API behind
-`pty.py`; the default shell is PowerShell on Windows, `$SHELL` elsewhere. Each
-PTY's blocking read runs in a thread so it never stalls the event loop; sessions
-are killed when the socket closes (resume-on-reconnect is a later enhancement).
+`pty.py`; the default shell is PowerShell on Windows. On POSIX it prefers
+`$SHELL`, but that is often unset when the app is launched from a GUI launcher
+rather than a terminal (and `/bin/bash` doesn't exist on every distro, e.g.
+NixOS), so it falls back through common shells down to `/bin/sh`. Each PTY's
+blocking read runs in a thread so it never stalls the event loop; sessions are
+killed when the socket closes (resume-on-reconnect is a later enhancement). PTY
+spawn/IO failures are sent to the pane as an `error` event and shown inline
+(`[terminal error] …`) rather than leaving a blank, dead terminal.
 
 Channel protocol (`{channel:'terminal', event, data}`):
 

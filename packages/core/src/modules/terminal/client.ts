@@ -13,12 +13,16 @@ export class TerminalSession {
     readonly id: string,
     onOutput: (data: string) => void,
     onExit: () => void,
+    onError?: (message: string) => void,
   ) {
     this.unsub = subscribeChannel('terminal', (msg) => {
-      const data = (msg.data ?? {}) as { id?: string; data?: string };
+      const data = (msg.data ?? {}) as { id?: string; data?: string; message?: string };
       if (data.id !== this.id) return;
       if (msg.event === 'output') onOutput(data.data ?? '');
       else if (msg.event === 'exit') onExit();
+      // Spawn/IO failures (e.g. the shell isn't found on this host) — surface
+      // them instead of leaving a blank, dead pane.
+      else if (msg.event === 'error') onError?.(data.message ?? 'terminal error');
     });
   }
 
