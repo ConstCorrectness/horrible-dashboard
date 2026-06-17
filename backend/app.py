@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.modules.agent import router as agent_router
 from backend.modules.agent.orchestrator import handle_agent_message
+from backend.modules.chat import router as chat_router
 from backend.modules.clubhouse import router as clubhouse_router
 from backend.modules.files import router as files_router
 from backend.modules.notes import router as notes_router
@@ -47,6 +48,7 @@ def health() -> dict[str, str]:
 
 app.include_router(agent_router, prefix="/api")
 app.include_router(workspace_router, prefix="/api")
+app.include_router(chat_router, prefix="/api")
 app.include_router(files_router, prefix="/api")
 app.include_router(notes_router, prefix="/api")
 app.include_router(clubhouse_router, prefix="/api")

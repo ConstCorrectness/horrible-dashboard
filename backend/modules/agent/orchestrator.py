@@ -240,6 +240,21 @@ async def handle_agent_message(conn: WsConnection, msg: dict[str, Any]) -> None:
     if event == "manifest":
         tools = data.get("tools")
         conn.agent_tools = tools if isinstance(tools, list) else []
+    elif event == "list_tools":
+        # Introspection for the chat widget's `/tools` command: the full catalog the
+        # model sees this turn (static layout verbs + the connection's pushed tools).
+        layout_names = {t["function"]["name"] for t in LAYOUT_TOOLS}
+        catalog = [
+            {
+                "name": t["function"]["name"],
+                "description": t["function"].get("description", ""),
+                "source": "layout"
+                if t["function"]["name"] in layout_names
+                else "widget",
+            }
+            for t in _tools_for(conn)
+        ]
+        await conn.send_json(_evt("tools", {"tools": catalog}))
     elif event == "ask":
         # Must not block the receive loop — the turn awaits tool_results that
         # arrive on that same loop. Run it detached.
@@ -398,11 +413,22 @@ async def run_agent_turn(
         *_history_messages(history),
         {"role": "user", "content": prompt},
     ]
+
+    async def on_delta(reasoning: str, content: str) -> None:
+        # Relay the model's streamed reasoning + answer tokens to the chat widget as
+        # they arrive (the final `answer` event below stays authoritative).
+        if reasoning:
+            await conn.send_json(
+                _evt("reasoning", {"turnId": turn_id, "delta": reasoning})
+            )
+        if content:
+            await conn.send_json(_evt("token", {"turnId": turn_id, "delta": content}))
+
     try:
         async with instrumented_client(timeout=120) as client:
             for _ in range(MAX_ROUNDS):
-                result = await P.chat(
-                    client, info, endpoint, config.model, messages, tools
+                result = await P.chat_stream(
+                    client, info, endpoint, config.model, messages, tools, on_delta
                 )
                 messages.append(result.assistant_message)
                 if not result.tool_calls:

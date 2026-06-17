@@ -30,9 +30,14 @@ surface: the **file explorer** (`files.list`/`read` reads, gated
 `files.create`/`write`/`rename`/`delete`), the **editor** (`getAgentContext`
 buffer reads, gated `editor.proposeEdit` [accept/decline diff] /
 `editor.applyEdit`/`save`), and the **terminal**
-(`terminal.list`/`read` reads, gated shell-matched `terminal.exec`). Remaining
-work is incremental per-module polish (e.g. the editor's desktop-only `osfile:`
-source), not foundational.
+(`terminal.list`/`read` reads, gated shell-matched `terminal.exec`). Content widgets
+add their own: **observability** (`getAgentContext` I/O snapshot + gated
+`observability.clear`) and **clubhouse** (`clubhouse.status`/`listRooms` reads, gated
+`clubhouse.disconnect`) — illustrating that any widget gets agent tools just by
+declaring `agentTools` on its decl. The chat widget's **`/tools`** command lists the
+live catalog via a `list_tools`→`tools` WS round-trip (the backend's `_tools_for`,
+the exact set the model sees). Remaining work is incremental per-module polish (e.g.
+the editor's desktop-only `osfile:` source), not foundational.
 
 ## The model: one tool path, one gate
 

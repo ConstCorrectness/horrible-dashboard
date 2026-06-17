@@ -8,8 +8,12 @@ import { sendChannel, subscribeChannel } from '../../ws';
 import { executeTool, paneTitle } from './tool-exec';
 
 export interface AgentCallbacks {
-  /** The model's final natural-language reply for the turn. */
+  /** The model's final natural-language reply for the turn (authoritative). */
   onAnswer?: (text: string) => void;
+  /** A streamed answer-content delta (append as it arrives). */
+  onToken?: (delta: string) => void;
+  /** A streamed reasoning/thinking delta (`reasoning_content`/`thinking`). */
+  onReasoning?: (delta: string) => void;
   /** A human-readable note for each mutating tool the agent ran. */
   onAction?: (text: string) => void;
   onError?: (message: string) => void;
@@ -19,6 +23,35 @@ export interface AgentCallbacks {
 export interface AgentTurn {
   role: 'user' | 'assistant';
   content: string;
+}
+
+/** One entry of the agent's live tool catalog (for the `/tools` slash command). */
+export interface AgentToolInfo {
+  name: string;
+  description: string;
+  /** `layout` = built-in app verb; `widget` = a manifest-pushed widget/command tool. */
+  source: 'layout' | 'widget';
+}
+
+/** Ask the backend for the exact tool catalog the model sees (static layout verbs
+ * plus this connection's pushed manifest). Resolves on the `tools` reply. */
+export function requestAgentTools(timeoutMs = 5000): Promise<AgentToolInfo[]> {
+  return new Promise<AgentToolInfo[]>((resolve) => {
+    let done = false;
+    const finish = (tools: AgentToolInfo[]) => {
+      if (done) return;
+      done = true;
+      unsub();
+      resolve(tools);
+    };
+    const unsub = subscribeChannel('agent', (msg) => {
+      if (msg.event !== 'tools') return;
+      const data = (msg.data ?? {}) as { tools?: AgentToolInfo[] };
+      finish(Array.isArray(data.tools) ? data.tools : []);
+    });
+    sendChannel('agent', 'list_tools', {});
+    setTimeout(() => finish([]), timeoutMs);
+  });
 }
 
 /** A short log line for mutating tools; read-only `list_*` tools stay silent. */
@@ -64,6 +97,12 @@ export function askAgent(prompt: string, cb: AgentCallbacks, history?: AgentTurn
             sendChannel('agent', 'tool_result', { turnId, callId: data.callId, ok, result, error });
             break;
           }
+          case 'token':
+            cb.onToken?.(String(data.delta ?? ''));
+            break;
+          case 'reasoning':
+            cb.onReasoning?.(String(data.delta ?? ''));
+            break;
           case 'answer':
             cb.onAnswer?.(String(data.text ?? ''));
             break;

@@ -30,13 +30,35 @@ exists today:
   read tools) and acts on them. See `ChatWidget.tsx`. The pane shows the 3D
   [avatar](../architecture/layout-shell.mdx) (`Avatar3D`, now in `packages/core`)
   cycling through its mood animations; the **`agent.avatarAnimation`** setting
-  (default on) turns it off for a plain text pane.
+  (default on) turns it off for a plain text pane. The transcript persists as named
+  **sessions** and supports **slash commands** (both below).
 - **Inline autosuggest source** (`POST /api/agent/complete`): a short non-streaming
   fill-in completion the [editor](./editor.mdx)'s opt-in ghost-text autosuggest calls.
 
-Everything else — session management, chat/inspector panels — is still design.
-Per-widget `agentTools` + `getAgentContext` widget interop now ship (see
-[agent tools & permissions](../architecture/agent-tools.mdx)).
+Per-widget `agentTools` + `getAgentContext` widget interop ship (see
+[agent tools & permissions](../architecture/agent-tools.mdx)). Remaining design:
+a fuller chat/inspector cockpit.
+
+## Sessions (persistence)
+
+Chat transcripts persist server-side as named **sessions** — a small `chat` backend
+module (`backend/modules/chat/`) that mirrors the workspace store: file-backed JSON
+at `$HORRIBLE_DATA_DIR/chat-sessions.json`, CRUD under `/api/chat/sessions` (list
+returns metadata only; `GET /{id}` returns the full transcript; `PUT /{id}` is a
+partial upsert of `title`/`messages`; plus `/active` and `DELETE`). The chat widget
+loads the active session on mount (so a dockview remount restores the conversation),
+lazily creates a session titled from the first prompt, and **auto-saves each
+completed turn**. The session bar (a `<select>` + new/delete) switches between them.
+Frontend client: `packages/core/src/modules/agent/sessions.ts`.
+
+## Slash commands
+
+`/`-prefixed inputs run **locally** in the chat widget (no model turn) and render as
+ephemeral system output that is never persisted or replayed to the model
+(`packages/core/src/modules/agent/slash.ts`): `/tools` (the agent's live tool
+catalog, fetched via the `list_tools`→`tools` WS round-trip), `/help`, `/panes`
+(open panes), `/clear` (new session), and honest placeholders `/mcp` and `/skills`
+(those subsystems don't exist yet). Typing `/` shows a suggestion list.
 
 ## The orchestrator
 
@@ -64,19 +86,24 @@ sequenceDiagram
             FE->>FE: execute vs registry / layoutController
             FE-->>BE: tool_result {callId, ok, result}
         else final answer
-            M-->>BE: content
+            M-->>BE: reasoning + content deltas
+            BE->>FE: reasoning {delta} / token {delta}
             BE->>FE: answer {text}
             BE->>FE: done
-            FE-->>U: render answer + action log
+            FE-->>U: stream reasoning + content, render action log
         end
     end
 ```
 
 **Loop** (`backend/modules/agent/orchestrator.py`): on an `ask`, a detached task
-calls the user's local Ollama `/api/chat` (`stream:false`) with `tools=LAYOUT_TOOLS`.
-If the model returns `tool_calls`, each is relayed to the browser and the loop
-awaits the result before continuing; otherwise it sends the final answer. Capped
-at `MAX_ROUNDS`.
+**streams** the user's local Ollama `/api/chat` (`stream:true`) with
+`tools=LAYOUT_TOOLS` via `providers.chat_stream`. Each round's reasoning
+(`thinking`/`reasoning_content`) and answer `content` token-deltas are relayed live
+to the chat widget (`reasoning`/`token` events) as they arrive. If the model returns
+`tool_calls`, each is relayed to the browser and the loop awaits the result before
+continuing; otherwise it sends the final (authoritative) `answer`. Capped at
+`MAX_ROUNDS`. Ollama gets `think:true` best-effort — models without a thinking mode
+reject it (400) and the round transparently retries without, still streaming content.
 
 **Channel protocol** (`{channel:'agent', event, data:{turnId, …}}`):
 
@@ -88,7 +115,11 @@ at `MAX_ROUNDS`.
 | client→server | `tool_result`       | `{turnId, callId, ok, result?, error?}`       |
 | server→client | `approval_request`  | `{turnId, approvalId, tool, specifier, mode}` |
 | client→server | `approval_response` | `{approvalId, decision, rule?}`               |
-| server→client | `answer`            | `{turnId, text}`                              |
+| client→server | `list_tools`        | `{}` — request the live tool catalog          |
+| server→client | `tools`             | `{tools: [{name, description, source}]}`      |
+| server→client | `reasoning`         | `{turnId, delta}` — streamed thinking         |
+| server→client | `token`             | `{turnId, delta}` — streamed answer content   |
+| server→client | `answer`            | `{turnId, text}` — final, authoritative       |
 | server→client | `done` / `error`    | `{turnId, …}`                                 |
 
 The frontend pushes the **capability manifest** (`manifest`) on connect, on every
@@ -138,8 +169,10 @@ sends and tracks pending tool-call futures.
 The capability manifest, `getAgentContext()` state-reads, widget interop, and the
 Claude Code–style permission system gating side effects all ship now (specified in
 [agent tools & permissions](../architecture/agent-tools.mdx)) — the shared surface
-the editor, terminal, and file-explorer modules build on. **Next slices:** streamed
-tokens in the chat widget, session persistence, and parameterized commands-as-tools.
+the editor, terminal, and file-explorer modules build on. The chat widget now
+**streams** reasoning + answer tokens live (`chat_stream`), persists transcripts as
+**sessions**, and supports **slash commands**. **Next slices:** parameterized
+commands-as-tools and a fuller chat/inspector cockpit.
 
 ## Providers & HTTP endpoints
 
@@ -161,7 +194,7 @@ localhost server.
 | Operation                | `ollama` dialect                  | `openai` dialect                             | Used by                                  |
 | ------------------------ | --------------------------------- | -------------------------------------------- | ---------------------------------------- |
 | List models / probe      | `GET /api/tags`                   | `GET /v1/models`                             | `list_models` — `/agent/status`          |
-| Tool-calling round       | `POST /api/chat` (`stream:false`) | `POST /v1/chat/completions` (`stream:false`) | `chat` — the orchestrator loop           |
+| Tool-calling round (streamed) | `POST /api/chat` (`stream:true`, `think`) | `POST /v1/chat/completions` (`stream:true`) | `chat_stream` — the orchestrator loop    |
 | One-shot streamed answer | `POST /api/generate`              | `POST /v1/chat/completions` (SSE)            | `generate_stream` — legacy `/agent/chat` |
 | Short fill-in completion | `POST /api/generate` (`stream:false`) | `POST /v1/chat/completions` (`stream:false`) | `generate` — `/agent/complete` (autosuggest) |
 | Pull a model             | `POST /api/pull`                  | — (unsupported)                              | `/agent/pull`                            |
@@ -169,8 +202,8 @@ localhost server.
 Ollama's default URL can be overridden with `HORRIBLE_OLLAMA_URL`; a backend-spawned
 vLLM advertises its own port. All of these outbound calls go through
 `instrumented_client()`, so they surface in the observability I/O stream with full
-request↔response bodies — the non-streaming tool-calling round directly, and the
-streamed answer/pull responses via `tee_stream`. See
+request↔response bodies — the streamed tool-calling round, answer, and pull
+responses all via `tee_stream`. See
 [observability.md](observability.mdx).
 
 ## Contributions to the layout shell

@@ -1,4 +1,5 @@
 import { registry, type ModuleManifest } from '../../registry';
+import { telemetryStore } from '../../telemetry';
 import { ObservabilityPanel, ObservabilityWidget } from './view';
 
 /**
@@ -23,6 +24,19 @@ export const observabilityModule: ModuleManifest = {
       id: 'observability.io',
       title: 'Data flow',
       component: ObservabilityWidget,
+      // The agent reads the I/O snapshot via getAgentContext (see view.tsx); this
+      // is its one write action. Gated like any side effect.
+      agentTools: [
+        {
+          name: 'observability.clear',
+          description: 'Clear the observability data-flow log (all captured I/O events).',
+          sideEffect: true,
+          handler: () => {
+            telemetryStore.clear();
+            return { ok: true, cleared: true };
+          },
+        },
+      ],
     },
   ],
   commands: [

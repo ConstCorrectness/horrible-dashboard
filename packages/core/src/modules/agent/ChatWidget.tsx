@@ -1,10 +1,14 @@
 /**
  * Conversational agent pane: a transcript you talk to that reasons about the live
  * layout and widget contents (the backend orchestrator pulls that context with its
- * read tools) and acts on them. Each turn replays the prior user/assistant messages
- * as `history` so the conversation is multi-turn; mutating tools the agent runs show
- * as a per-turn action log. Permission prompts render globally (ApprovalPrompts), and
- * code edits surface as an accept/decline diff in the editor — not here.
+ * read tools) and acts on them. Turns stream reasoning + content live; the prior
+ * user/assistant turns replay as `history` so the conversation is multi-turn.
+ *
+ * Transcripts persist as named **sessions** (backend chat module) — auto-saved each
+ * turn, restored on mount, switchable via the session bar. `/`-prefixed inputs run
+ * locally as **slash commands** (see slash.ts) and are shown but never persisted or
+ * sent to the model. Permission prompts render globally (ApprovalPrompts); code
+ * edits surface as an accept/decline diff in the editor — not here.
  * See docs/modules/agent-chat.md.
  */
 import { useEffect, useRef, useState, type FormEvent } from 'react';
@@ -13,22 +17,64 @@ import { Avatar3D, DEFAULT_AVATAR_MOOD, DEFAULT_AVATAR_MOODS } from '../../Avata
 import { useSetting } from '../../settings';
 import { getAgentStatus, type AgentStatus } from './api';
 import { askAgent, type AgentTurn } from './orchestrator-client';
+import {
+  createSession,
+  deleteSession,
+  getSession,
+  getSessions,
+  saveSession,
+  setActiveSession,
+  type ChatMessage,
+  type ChatSessionMeta,
+} from './sessions';
+import { matchSlash, runSlash } from './slash';
 
 const AVATAR_MOODS = Object.keys(DEFAULT_AVATAR_MOODS);
 
 interface ChatTurn {
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   text: string;
+  /** Streamed reasoning/thinking for an assistant turn (`reasoning_content`). */
+  reasoning?: string;
   /** Mutating tools the agent ran during an assistant turn. */
   actions?: string[];
+  /** Slash-command echo/output: shown but not persisted or replayed to the model. */
+  ephemeral?: boolean;
+}
+
+/** Persisted turns only (drop ephemeral slash output and system lines). */
+function toMessages(turns: ChatTurn[]): ChatMessage[] {
+  return turns
+    .filter((t) => !t.ephemeral && (t.role === 'user' || t.role === 'assistant'))
+    .map((t) => ({
+      role: t.role as 'user' | 'assistant',
+      content: t.text,
+      reasoning: t.reasoning,
+      actions: t.actions,
+    }));
+}
+
+function toTurns(messages: ChatMessage[]): ChatTurn[] {
+  return messages.map((m) => ({
+    role: m.role,
+    text: m.content,
+    reasoning: m.reasoning,
+    actions: m.actions,
+  }));
 }
 
 export function ChatWidget() {
   const [status, setStatus] = useState<AgentStatus | 'loading' | 'backend-down'>('loading');
+  const [sessions, setSessions] = useState<ChatSessionMeta[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const turnsRef = useRef<ChatTurn[]>([]);
+  turnsRef.current = turns;
+  const activeIdRef = useRef<string | null>(null);
+  activeIdRef.current = activeId;
   // The avatar (default on) cycles through its mood animations; the setting turns
   // it off for a plain text pane (see agentModule settings).
   const animateAvatar = useSetting<boolean>('agent.avatarAnimation') ?? true;
@@ -38,6 +84,27 @@ export function ChatWidget() {
     getAgentStatus()
       .then(setStatus)
       .catch(() => setStatus('backend-down'));
+  }, []);
+
+  // Restore the active session's transcript on mount (also runs after a dockview
+  // remount, so switching tabs no longer loses the conversation).
+  useEffect(() => {
+    let cancelled = false;
+    void getSessions()
+      .then(async (list) => {
+        if (cancelled) return;
+        setSessions(list.sessions);
+        if (!list.active) return;
+        setActiveId(list.active);
+        const session = await getSession(list.active);
+        if (!cancelled) setTurns(toTurns(session.messages));
+      })
+      .catch(() => {
+        /* backend down — start fresh; persistence resumes when it returns */
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -56,18 +123,100 @@ export function ChatWidget() {
   }, [turns]);
 
   const ready = typeof status === 'object' && status.configured && status.reachable;
+  const slashMatches = prompt.startsWith('/') ? matchSlash(prompt) : [];
+
+  const refreshSessions = async () => {
+    try {
+      setSessions((await getSessions()).sessions);
+    } catch {
+      /* keep current list */
+    }
+  };
+
+  const newSession = async () => {
+    setTurns([]);
+    try {
+      const session = await createSession();
+      setActiveId(session.id);
+      activeIdRef.current = session.id;
+      await refreshSessions();
+    } catch {
+      setActiveId(null);
+    }
+  };
+
+  const switchSession = async (id: string) => {
+    if (!id || id === activeIdRef.current) return;
+    try {
+      await setActiveSession(id);
+      setActiveId(id);
+      setTurns(toTurns((await getSession(id)).messages));
+    } catch {
+      /* leave current */
+    }
+  };
+
+  const removeSession = async (id: string) => {
+    try {
+      const list = await deleteSession(id);
+      setSessions(list.sessions);
+      if (id !== activeIdRef.current) return;
+      setActiveId(list.active);
+      setTurns(list.active ? toTurns((await getSession(list.active)).messages) : []);
+    } catch {
+      /* leave current */
+    }
+  };
+
+  // Lazily create a session on the first real message, titled from the prompt.
+  const ensureSession = async (firstPrompt: string): Promise<void> => {
+    if (activeIdRef.current) return;
+    try {
+      const session = await createSession(firstPrompt.slice(0, 40));
+      setActiveId(session.id);
+      activeIdRef.current = session.id;
+      await refreshSessions();
+    } catch {
+      /* backend down — proceed without persistence */
+    }
+  };
+
+  const persist = async () => {
+    const id = activeIdRef.current;
+    if (!id) return;
+    try {
+      await saveSession(id, { messages: toMessages(turnsRef.current) });
+      await refreshSessions();
+    } catch {
+      /* best-effort */
+    }
+  };
 
   const send = async (e: FormEvent) => {
     e.preventDefault();
     const text = prompt.trim();
-    if (!text || busy || !ready) return;
+    if (!text || busy) return;
+
+    // Slash command: run locally, render as ephemeral system output, no model turn.
+    if (text.startsWith('/')) {
+      setPrompt('');
+      setTurns((prev) => [...prev, { role: 'user', text, ephemeral: true }]);
+      const out = await runSlash(text, { newSession });
+      setTurns((prev) => [...prev, { role: 'system', text: out, ephemeral: true }]);
+      return;
+    }
+
+    if (!ready) return;
     setPrompt('');
     setBusy(true);
+    await ensureSession(text);
 
-    // History is the conversation so far (text only); the new user turn and an empty
-    // assistant turn we stream into are appended before the call.
-    const history: AgentTurn[] = turns.map((t) => ({ role: t.role, content: t.text }));
-    const assistantIndex = turns.length + 1;
+    // History is the prior real turns (text only); a new user turn and an empty
+    // assistant turn we stream into are appended after.
+    const history: AgentTurn[] = turnsRef.current
+      .filter((t) => t.role !== 'system' && !t.ephemeral)
+      .map((t) => ({ role: t.role as 'user' | 'assistant', content: t.text }));
+    const assistantIndex = turnsRef.current.length + 1;
     setTurns((prev) => [...prev, { role: 'user', text }, { role: 'assistant', text: '' }]);
 
     const patch = (fn: (t: ChatTurn) => ChatTurn) =>
@@ -77,7 +226,10 @@ export function ChatWidget() {
       await askAgent(
         text,
         {
-          onAnswer: (answer) => patch((t) => ({ ...t, text: answer })),
+          onToken: (delta) => patch((t) => ({ ...t, text: t.text + delta })),
+          onReasoning: (delta) => patch((t) => ({ ...t, reasoning: (t.reasoning ?? '') + delta })),
+          // The final answer is authoritative; fall back to the streamed text if empty.
+          onAnswer: (answer) => patch((t) => ({ ...t, text: answer || t.text })),
           onAction: (note) => patch((t) => ({ ...t, actions: [...(t.actions ?? []), note] })),
           onError: (msg) => patch((t) => ({ ...t, text: `⚠ ${msg}` })),
         },
@@ -85,11 +237,39 @@ export function ChatWidget() {
       );
     } finally {
       setBusy(false);
+      void persist();
     }
   };
 
+  const canSend = !busy && prompt.trim().length > 0 && (ready || prompt.startsWith('/'));
+
   return (
     <div className="agent-chat">
+      <div className="agent-session-bar">
+        <select
+          value={activeId ?? ''}
+          onChange={(e) => void switchSession(e.target.value)}
+          aria-label="Chat session"
+        >
+          {(sessions.length === 0 || !activeId) && <option value="">New chat</option>}
+          {sessions.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.title}
+            </option>
+          ))}
+        </select>
+        <button type="button" title="New chat" onClick={() => void newSession()}>
+          ＋
+        </button>
+        <button
+          type="button"
+          title="Delete chat"
+          disabled={!activeId}
+          onClick={() => activeId && void removeSession(activeId)}
+        >
+          🗑
+        </button>
+      </div>
       {animateAvatar && (
         <div className="agent-chat-avatar">
           <Avatar3D size={120} mood={mood} />
@@ -99,32 +279,60 @@ export function ChatWidget() {
         {turns.length === 0 && (
           <p className="dashboard-hint">
             Ask me about your layout or a widget&apos;s contents, or tell me to arrange panes or
-            edit an open buffer.
+            edit an open buffer. Type <code>/help</code> for commands.
           </p>
         )}
-        {turns.map((turn, i) => (
-          <div key={i} className={`agent-msg agent-msg-${turn.role}`}>
-            {turn.actions && turn.actions.length > 0 && (
-              <ul className="agent-actions">
-                {turn.actions.map((a, j) => (
-                  <li key={j}>✓ {a}</li>
-                ))}
-              </ul>
-            )}
-            <div className="agent-bubble">
-              {turn.text || (turn.role === 'assistant' && busy ? '…' : '')}
+        {turns.map((turn, i) =>
+          turn.role === 'system' ? (
+            <pre key={i} className="agent-system">
+              {turn.text}
+            </pre>
+          ) : (
+            <div key={i} className={`agent-msg agent-msg-${turn.role}`}>
+              {turn.reasoning && (
+                <details className="agent-reasoning" open={!turn.text}>
+                  <summary>Reasoning</summary>
+                  <div className="agent-reasoning-body">{turn.reasoning}</div>
+                </details>
+              )}
+              {turn.actions && turn.actions.length > 0 && (
+                <ul className="agent-actions">
+                  {turn.actions.map((a, j) => (
+                    <li key={j}>✓ {a}</li>
+                  ))}
+                </ul>
+              )}
+              {(turn.text || turn.role === 'user' || (turn.role === 'assistant' && busy)) && (
+                <div className="agent-bubble">
+                  {turn.text || (turn.role === 'assistant' && busy ? '…' : '')}
+                </div>
+              )}
             </div>
-          </div>
-        ))}
+          ),
+        )}
       </div>
+      {slashMatches.length > 0 && (
+        <ul className="agent-slash-suggest">
+          {slashMatches.map((c) => (
+            <li key={c.name}>
+              <button type="button" onClick={() => setPrompt(`/${c.name} `)}>
+                <span className="agent-slash-name">/{c.name}</span>
+                <span className="agent-slash-desc">{c.description}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
       <form className="agent-chat-input" onSubmit={(e) => void send(e)}>
         <input
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
-          placeholder={ready ? 'Ask the agent…' : 'Agent not ready — finish setup on Home'}
-          disabled={!ready || busy}
+          placeholder={
+            ready ? 'Ask the agent…  (/ for commands)' : 'Agent not ready — / for commands'
+          }
+          disabled={busy}
         />
-        <button type="submit" disabled={!ready || busy || !prompt.trim()}>
+        <button type="submit" disabled={!canSend}>
           {busy ? '…' : '➤'}
         </button>
       </form>

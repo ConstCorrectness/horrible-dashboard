@@ -15,9 +15,12 @@ provider-agnostic. See docs/modules/agent-chat.md.
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
+
+# Emits streamed deltas: (reasoning_text, content_text). Either may be empty.
+DeltaSink = Callable[[str, str], Awaitable[None]]
 
 import httpx
 
@@ -167,6 +170,141 @@ async def chat(
         tool_calls=_parse_tool_calls(msg.get("tool_calls") or []),
         content=msg.get("content") or "",
     )
+
+
+async def chat_stream(
+    client: httpx.AsyncClient,
+    info: ProviderInfo,
+    endpoint: str,
+    model: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    on_delta: DeltaSink,
+) -> ChatResult:
+    """One **streamed** tool-calling round. Emits the model's reasoning
+    (``thinking`` / ``reasoning_content``) and answer ``content`` token-deltas via
+    ``on_delta(reasoning, content)`` as they arrive, and returns the assembled
+    ``ChatResult`` (assistant message + tool calls + full content) for the loop."""
+    if info.dialect == "ollama":
+        return await _ollama_chat_stream(
+            client, endpoint, model, messages, tools, on_delta
+        )
+    return await _openai_chat_stream(client, endpoint, model, messages, tools, on_delta)
+
+
+async def _ollama_chat_stream(
+    client: httpx.AsyncClient,
+    endpoint: str,
+    model: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    on_delta: DeltaSink,
+) -> ChatResult:
+    url = f"{endpoint}/api/chat"
+    base = {"model": model, "messages": messages, "tools": tools, "stream": True}
+
+    async def run(think: bool) -> ChatResult:
+        payload = {**base, "think": True} if think else base
+        content_parts: list[str] = []
+        tool_calls_raw: list[dict[str, Any]] = []
+        async with client.stream("POST", url, json=payload) as res:
+            if res.status_code >= 400:
+                await res.aread()
+                res.raise_for_status()
+            async for line in tee_stream(res, res.aiter_lines()):
+                if not line:
+                    continue
+                obj = json.loads(line)
+                msg = obj.get("message") or {}
+                thinking = msg.get("thinking")
+                content = msg.get("content")
+                if thinking:
+                    await on_delta(thinking, "")
+                if content:
+                    content_parts.append(content)
+                    await on_delta("", content)
+                if msg.get("tool_calls"):
+                    # Ollama emits the (accumulated) tool_calls in a chunk; take latest.
+                    tool_calls_raw = msg["tool_calls"]
+                if obj.get("done"):
+                    break
+        full = "".join(content_parts)
+        assistant: dict[str, Any] = {"role": "assistant", "content": full}
+        if tool_calls_raw:
+            assistant["tool_calls"] = tool_calls_raw
+        return ChatResult(assistant, _parse_tool_calls(tool_calls_raw), full)
+
+    try:
+        return await run(think=True)
+    except httpx.HTTPStatusError as exc:
+        # Models without a thinking mode reject `think: true` (400) — retry plainly,
+        # so non-reasoning models still stream their content.
+        if exc.response is not None and exc.response.status_code == 400:
+            return await run(think=False)
+        raise
+
+
+async def _openai_chat_stream(
+    client: httpx.AsyncClient,
+    endpoint: str,
+    model: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    on_delta: DeltaSink,
+) -> ChatResult:
+    url = f"{endpoint}/v1/chat/completions"
+    payload = {"model": model, "messages": messages, "tools": tools, "stream": True}
+    content_parts: list[str] = []
+    # OpenAI streams tool calls as partial deltas keyed by index; assemble them.
+    tool_acc: dict[int, dict[str, Any]] = {}
+    async with client.stream("POST", url, json=payload) as res:
+        res.raise_for_status()
+        async for line in tee_stream(res, res.aiter_lines()):
+            if not line or not line.startswith("data:"):
+                continue
+            data = line[len("data:") :].strip()
+            if data == "[DONE]":
+                break
+            choice = (json.loads(data).get("choices") or [{}])[0]
+            delta = choice.get("delta") or {}
+            # DeepSeek/vLLM reasoning parsers use `reasoning_content`; some use `reasoning`.
+            reasoning = delta.get("reasoning_content") or delta.get("reasoning")
+            content = delta.get("content")
+            if reasoning:
+                await on_delta(reasoning, "")
+            if content:
+                content_parts.append(content)
+                await on_delta("", content)
+            for tc in delta.get("tool_calls") or []:
+                slot = tool_acc.setdefault(
+                    tc.get("index", 0), {"id": None, "name": "", "args": ""}
+                )
+                if tc.get("id"):
+                    slot["id"] = tc["id"]
+                fn = tc.get("function") or {}
+                if fn.get("name"):
+                    slot["name"] = fn["name"]
+                if fn.get("arguments"):
+                    slot["args"] += fn["arguments"]
+    full = "".join(content_parts)
+    ordered = [tool_acc[i] for i in sorted(tool_acc)]
+    tool_calls = [
+        ToolCall(
+            id=str(s["id"] or i), name=s["name"], arguments=_coerce_args(s["args"])
+        )
+        for i, s in enumerate(ordered)
+    ]
+    assistant: dict[str, Any] = {"role": "assistant", "content": full}
+    if ordered:
+        assistant["tool_calls"] = [
+            {
+                "id": str(s["id"] or i),
+                "type": "function",
+                "function": {"name": s["name"], "arguments": s["args"]},
+            }
+            for i, s in enumerate(ordered)
+        ]
+    return ChatResult(assistant, tool_calls, full)
 
 
 def tool_result_message(

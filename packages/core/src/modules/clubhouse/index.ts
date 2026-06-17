@@ -1,4 +1,5 @@
 import { registry, type ModuleManifest } from '../../registry';
+import { disconnectClubhouse, getClubhouseChannels, getClubhouseStatus } from './api';
 import { ClubhouseWidget } from './ClubhouseWidget';
 import { RoomsPanel } from './RoomsPanel';
 
@@ -20,6 +21,26 @@ export const clubhouseModule: ModuleManifest = {
       id: 'clubhouse.account',
       title: 'Clubhouse',
       component: ClubhouseWidget,
+      agentTools: [
+        {
+          name: 'clubhouse.status',
+          description: 'Read the connected Clubhouse account status (name, username).',
+          sideEffect: false,
+          handler: () => getClubhouseStatus(),
+        },
+        {
+          name: 'clubhouse.listRooms',
+          description: 'List the live Clubhouse rooms for the connected account.',
+          sideEffect: false,
+          handler: () => getClubhouseChannels(),
+        },
+        {
+          name: 'clubhouse.disconnect',
+          description: 'Disconnect the connected Clubhouse account (clears the server-side token).',
+          sideEffect: true,
+          handler: () => disconnectClubhouse(),
+        },
+      ],
     },
   ],
   commands: [

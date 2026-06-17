@@ -155,6 +155,37 @@ def test_answer_without_tools(monkeypatch) -> None:
     assert [d["text"] for ev, d in events if ev == "answer"] == ["Hi there."]
 
 
+def test_turn_streams_reasoning_and_content(monkeypatch) -> None:
+    # Ollama streaming: the round emits `thinking` then `content` chunks; the
+    # orchestrator relays them as `reasoning`/`token` deltas, then a final `answer`.
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        assert body["stream"] is True
+        lines = [
+            {"message": {"role": "assistant", "thinking": "Let me think. "}},
+            {"message": {"role": "assistant", "content": "Hello"}},
+            {"message": {"role": "assistant", "content": " there."}},
+            {"message": {"role": "assistant", "content": ""}, "done": True},
+        ]
+        return httpx.Response(
+            200, content="".join(json.dumps(line) + "\n" for line in lines)
+        )
+
+    _configure(monkeypatch)
+    _mock_ollama(monkeypatch, handler)
+
+    conn = FakeConn()
+    asyncio.run(orchestrator.run_agent_turn(conn, "t", "hi"))
+    events = conn.events()
+
+    reasoning = "".join(d["delta"] for ev, d in events if ev == "reasoning")
+    tokens = "".join(d["delta"] for ev, d in events if ev == "token")
+    assert reasoning == "Let me think. "
+    assert tokens == "Hello there."
+    assert [d["text"] for ev, d in events if ev == "answer"] == ["Hello there."]
+    assert any(ev == "done" for ev, _ in events)
+
+
 def test_unconfigured_emits_error(monkeypatch) -> None:
     monkeypatch.setattr(orchestrator, "_load_config", lambda: None)
     conn = FakeConn()

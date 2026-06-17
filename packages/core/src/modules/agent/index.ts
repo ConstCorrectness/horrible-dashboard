@@ -39,7 +39,14 @@ export const agentModule: ModuleManifest = {
 };
 
 export * from './api';
-export { askAgent, type AgentCallbacks, type AgentTurn } from './orchestrator-client';
+export * from './sessions';
+export {
+  askAgent,
+  requestAgentTools,
+  type AgentCallbacks,
+  type AgentToolInfo,
+  type AgentTurn,
+} from './orchestrator-client';
 export { initAgentManifestSync, serializeManifest, type SerializedTool } from './manifest';
 export {
   initApprovalListener,

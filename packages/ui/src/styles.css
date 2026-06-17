@@ -1435,6 +1435,27 @@ kbd {
   color: #2ed573;
 }
 
+.agent-reasoning {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  border-left: 2px solid var(--border);
+  padding-left: 0.5rem;
+}
+
+.agent-reasoning summary {
+  cursor: pointer;
+  user-select: none;
+  opacity: 0.8;
+}
+
+.agent-reasoning-body {
+  margin-top: 0.25rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-style: italic;
+  opacity: 0.85;
+}
+
 .agent-chat-input {
   display: flex;
   align-items: center;
@@ -1456,6 +1477,87 @@ kbd {
 
 .agent-chat-input button {
   border-radius: 999px;
+}
+
+.agent-session-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.agent-session-bar select {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.2rem 0.4rem;
+  font: inherit;
+}
+
+.agent-session-bar button {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 0.15rem 0.45rem;
+}
+
+.agent-session-bar button:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.agent-system {
+  margin: 0;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+
+.agent-slash-suggest {
+  list-style: none;
+  margin: 0;
+  padding: 0.25rem;
+  border-top: 1px solid var(--border);
+  max-height: 9rem;
+  overflow-y: auto;
+}
+
+.agent-slash-suggest button {
+  display: flex;
+  gap: 0.6rem;
+  align-items: baseline;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  padding: 0.25rem 0.4rem;
+  border-radius: 4px;
+  font: inherit;
+}
+
+.agent-slash-suggest button:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.agent-slash-name {
+  color: var(--accent);
+}
+
+.agent-slash-desc {
+  color: var(--text-dim);
+  font-size: 0.8rem;
 }
 
 /* Workspace tab: type-switcher (▾) + close (✕) beside the default tab */
