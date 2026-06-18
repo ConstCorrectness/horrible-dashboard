@@ -8,7 +8,7 @@ docs/modules/settings.md) with an env override (`HORRIBLE_WORKSPACE_ROOTS`,
 os.pathsep-separated) for dev/test. See docs/modules/file-explorer.md.
 
 This is the HTTP surface (list/read + create/write/rename/delete). Live watch
-events over the `files.*` WS channels are a follow-up; clients re-list to refresh.
+events ship separately in `watcher.py` (the `files` `/ws` channel).
 """
 
 from __future__ import annotations
@@ -18,12 +18,14 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 
+from backend.modules.files.git import git_status
 from backend.modules.files.models import (
     CreateRequest,
     DeleteRequest,
     DirListing,
     FileContent,
     FileEntry,
+    GitStatus,
     OpResult,
     RenameRequest,
     RootInfo,
@@ -102,6 +104,16 @@ def _entry(path: Path) -> FileEntry:
 @router.get("/roots", response_model=list[RootInfo])
 def list_roots() -> list[RootInfo]:
     return [RootInfo(name=root.name or str(root), path=str(root)) for root in _roots()]
+
+
+@router.get("/git-status", response_model=GitStatus)
+def git_status_route(path: str) -> GitStatus:
+    """Working-tree status for a workspace root (path must be one of the roots).
+    Returns `is_repo=False` if it isn't inside a git repository."""
+    target = _resolve(path)
+    if not target.is_dir():
+        raise HTTPException(status_code=400, detail="not a directory")
+    return git_status(target)
 
 
 @router.get("/list", response_model=DirListing)

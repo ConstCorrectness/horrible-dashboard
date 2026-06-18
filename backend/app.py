@@ -10,6 +10,8 @@ from backend.modules.agent.orchestrator import handle_agent_message
 from backend.modules.chat import router as chat_router
 from backend.modules.clubhouse import router as clubhouse_router
 from backend.modules.files import router as files_router
+from backend.modules.files.watcher import push_file_events
+from backend.modules.lsp import LspManager
 from backend.modules.notes import router as notes_router
 from backend.modules.plugins import router as plugins_router
 from backend.modules.repl import ReplManager
@@ -69,7 +71,9 @@ async def ws(websocket: WebSocket) -> None:
     conn = WsConnection(websocket)
     terminals = TerminalManager(conn)
     repl = ReplManager(conn)
+    lsp = LspManager(conn)
     telemetry_task = asyncio.create_task(push_telemetry(conn))
+    files_task = asyncio.create_task(push_file_events(conn))
     try:
         while True:
             msg = await websocket.receive_json()
@@ -82,9 +86,13 @@ async def ws(websocket: WebSocket) -> None:
                 await terminals.handle(msg)
             elif channel == "repl":
                 await repl.handle(msg)
+            elif channel == "lsp":
+                await lsp.handle(msg)
     except WebSocketDisconnect:
         pass
     finally:
         await terminals.close_all()
         await repl.close_all()
+        await lsp.close_all()
         telemetry_task.cancel()
+        files_task.cancel()

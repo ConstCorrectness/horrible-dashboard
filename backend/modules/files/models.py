@@ -55,3 +55,22 @@ class DeleteRequest(BaseModel):
 class OpResult(BaseModel):
     ok: bool
     path: str
+
+
+class GitEntry(BaseModel):
+    """One changed path in a repo's working tree. `path` is absolute (so it lines
+    up with the tree's rows); `status` is a collapsed category."""
+
+    path: str
+    # modified | added | deleted | untracked | renamed | conflict
+    status: str
+
+
+class GitStatus(BaseModel):
+    """The working-tree status of a workspace root, or `is_repo=False` if the root
+    isn't inside a git repository."""
+
+    is_repo: bool
+    root: str
+    branch: str | None = None
+    entries: list[GitEntry] = []

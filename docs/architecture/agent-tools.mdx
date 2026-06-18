@@ -129,6 +129,60 @@ Two surfaces, by design (the "hybrid" decision in
    `handler` and the live arguments stay frontend-owned; only the serialized
    schema and `specifierTemplate` reach the backend.
 
+## Giving the agent a new tool (recipe)
+
+There are **three** ways a tool reaches the model. Pick by what the tool *is*, not
+by where it's convenient to write:
+
+| If the tool is…                                              | Declare it as…                                     | Lives in                                                  | Gated? |
+| ----------------------------------------------------------- | -------------------------------------------------- | -------------------------------------------------------- | ------ |
+| An app-level **layout/navigation verb** (open/split a pane) | a static entry in `LAYOUT_TOOLS`                   | `backend/modules/agent/orchestrator.py`                  | no (layout-only) |
+| An app-wide **command** the user could also run from the palette | `CommandDecl.agent` on the command                 | the module's manifest (frontend)                         | optional (`sideEffect`) |
+| A **widget/panel-specific action** tied to a pane instance  | an `AgentToolDecl` in the decl's `agentTools`      | the widget/panel decl (frontend)                         | optional (`sideEffect`) |
+
+Only `LAYOUT_TOOLS` is authored on the backend; it is the one catalog the backend
+owns because layout verbs have no frontend handler to serialize — they execute
+directly in [`tool-exec.ts`](../modules/agent-chat.mdx#the-orchestrator)'s
+`executeTool` switch. **Everything else is frontend-owned and pushed** to the
+backend in the capability manifest, so a runtime-loaded plugin's tools appear with
+no backend change.
+
+### Steps for a frontend tool (command or `agentTools`)
+
+1. **Declare it.** Add `agent: { description, params?, sideEffect? }` to a
+   `CommandDecl`, or push an `AgentToolDecl` onto a `WidgetDecl`/`PanelDecl`'s
+   `agentTools`. The `description` is the model's only guidance — write it like an
+   API doc, name the args, and say when *not* to call it (see the editor's
+   `proposeEdit`-vs-`applyEdit` note in `SYSTEM_PROMPT`).
+2. **Write a precise `params` JSON-schema.** Local models follow `enum`s and
+   `required` far better than prose. Keep ids out of enums — the model discovers
+   live ids with the read tools, so the catalog stays frontend-owned.
+3. **Mark side effects.** A tool that mutates anything sets `sideEffect: true` and
+   passes through the [gate](#the-permission-system); a read-only tool omits it and
+   is relayed without a prompt. For a gated tool, add a `specifierTemplate` (e.g.
+   `"{command}"`) so the engine can match scoped rules like `terminal.exec(npm run *)`.
+4. **Implement the `handler` (frontend) — or the `executeTool` case (layout verb).**
+   The handler runs in the browser and may call backend HTTP/WS APIs; it never
+   crosses the wire. Unknown relayed names fall through `executeTool`'s `default`
+   to `executeDynamicTool`, which dispatches to the registered handler.
+5. **It's already wired.** `initAgentManifestSync` pushes the manifest on connect,
+   reconnect, and every registry change, and the backend merges it into the model's
+   tool list each turn (`_tools_for`). No registration step beyond the decl.
+6. **Verify.** Open the chat widget and run **`/tools`** — the live catalog (exactly
+   what `_tools_for` feeds the model) should list your tool with the right `source`.
+   Then ask the agent to use it and watch the per-turn action log.
+
+### Backend layout verbs
+
+A new `LAYOUT_TOOLS` entry needs three edits kept in lockstep: the `_tool(...)`
+schema in `orchestrator.py`, a `case` in `executeTool` (`tool-exec.ts`), and — if
+it drives the docking engine — a method on the `LayoutController` seam
+(`registry.ts`, installed by `Workspace.tsx`). Argument **aliasing** belongs at the
+`tool-exec.ts` boundary, not in the engine: `split_pane` accepts
+`vertical`/`horizontal` there and resolves them to a concrete side before calling
+`LayoutController.splitPane`, so the model gets the simpler vocabulary while the
+seam and the UI grip stay four-way.
+
 ## Reading widget state: `getAgentContext()`
 
 State the agent needs to read — the active buffer's text, the tree selection, a

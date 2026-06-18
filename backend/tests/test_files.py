@@ -1,6 +1,8 @@
 """Tests for the workspace file-access module (B1). Path-traversal safety is the
 load-bearing concern, so it gets the most coverage."""
 
+import subprocess
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -174,3 +176,52 @@ def test_delete_outside_root_rejected(client: TestClient, tmp_path) -> None:
     res = client.post("/api/files/delete", json={"path": str(target)})
     assert res.status_code == 403
     assert target.exists()
+
+
+# --- git status -------------------------------------------------------------
+
+
+def _git(root, *args: str) -> None:
+    subprocess.run(
+        ["git", "-C", str(root), "-c", "commit.gpgsign=false", *args],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_git_status_not_a_repo(client: TestClient, root) -> None:
+    res = client.get("/api/files/git-status", params={"path": str(root)})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["is_repo"] is False
+    assert body["entries"] == []
+
+
+def test_git_status_reports_changes(client: TestClient, root) -> None:
+    subprocess.run(
+        ["git", "-c", "init.defaultBranch=main", "init", str(root)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    _git(root, "config", "user.email", "t@t.com")
+    _git(root, "config", "user.name", "t")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-m", "init")
+
+    (root / "a.txt").write_text("changed", encoding="utf-8")  # modified
+    (root / "new.txt").write_text("x", encoding="utf-8")  # untracked
+
+    res = client.get("/api/files/git-status", params={"path": str(root)})
+    assert res.status_code == 200
+    body = res.json()
+    assert body["is_repo"] is True
+    assert body["branch"] == "main"
+    # Match by basename so OS path-resolution quirks don't matter.
+    by_name = {
+        e["path"].replace("\\", "/").rsplit("/", 1)[-1]: e["status"]
+        for e in body["entries"]
+    }
+    assert by_name.get("a.txt") == "modified"
+    assert by_name.get("new.txt") == "untracked"

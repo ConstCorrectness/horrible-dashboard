@@ -8,9 +8,18 @@ import { registry, type ModuleManifest } from '../../registry';
 import { getActiveBufferSource, openBuffer } from '../editor';
 import { openTerminal } from '../terminal';
 import { filesAgentTools } from './agentTools';
-import { createEntry, deleteEntry, joinPath, listRoots, parentDir, renameEntry } from './api';
+import { createEntry, deleteEntry, joinPath, listRoots, parentDir } from './api';
 import { FileTree } from './FileTree';
-import { getSelection, refreshTree, setRevealTarget, setSelection } from './store';
+import {
+  getActivePath,
+  getSelectedPaths,
+  getSelection,
+  kindFor,
+  refreshTree,
+  setRevealTarget,
+  setSelection,
+  startRename,
+} from './store';
 
 const FILE_URI = 'workspace-file:';
 
@@ -43,28 +52,35 @@ async function newFolder(): Promise<void> {
   refreshTree();
 }
 
-async function renameSelected(): Promise<void> {
-  const sel = getSelection();
-  if (!sel) {
+/** Palette entry: start the tree's inline rename on the active selection (the
+ * same in-place edit F2 and the context menu use). */
+function renameSelected(): void {
+  const active = getActivePath();
+  if (!active) {
     window.alert('Select a file or folder to rename.');
     return;
   }
-  const current = sel.path.split(/[\\/]/).pop() ?? sel.path;
-  const name = window.prompt('Rename to', current);
-  if (!name || name === current) return;
-  await renameEntry(sel.path, joinPath(parentDir(sel.path), name));
-  setSelection(null);
-  refreshTree();
+  registry.openPanel('files.tree');
+  startRename(active);
 }
 
+/** Palette entry: delete the whole multi-selection (the tree's context menu /
+ * Delete key share this behavior via the view). */
 async function deleteSelected(): Promise<void> {
-  const sel = getSelection();
-  if (!sel) {
+  const paths = [...getSelectedPaths()];
+  if (paths.length === 0) {
     window.alert('Select a file or folder to delete.');
     return;
   }
-  if (!window.confirm(`Delete ${sel.path}?`)) return;
-  await deleteEntry(sel.path, sel.kind === 'dir');
+  const label = paths.length === 1 ? paths[0] : `${paths.length} items`;
+  if (!window.confirm(`Delete ${label}?`)) return;
+  for (const p of paths) {
+    try {
+      await deleteEntry(p, kindFor(p) === 'dir');
+    } catch {
+      /* surfaced by the watch re-list; skip */
+    }
+  }
   setSelection(null);
   refreshTree();
 }

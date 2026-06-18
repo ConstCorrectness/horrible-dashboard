@@ -93,6 +93,113 @@ cancelled on further typing; suggestions are suppressed while an edit proposal i
 under review. The CodeMirror extension is `autosuggest.ts`, toggled live via a
 compartment in `BufferView.tsx`.
 
+## Language intelligence (LSP) & deeper agent editing
+
+**Status: spine implemented (diagnostics, completion, hover, go-to-definition); the
+rest is design.** The road from "buffer over a URI source" to a real code editor. The organizing idea is **three
+stacked intelligence layers**, each with a different latency and authority — they
+coexist (they don't replace one another), the way VS Code runs IntelliSense and
+Copilot side by side:
+
+| Layer       | Source                          | Provides                                                              | Latency        |
+| ----------- | ------------------------------- | -------------------------------------------------------------------- | -------------- |
+| **L1 local** | CodeMirror in the browser       | syntax, brackets, search/replace, multi-cursor, indentation          | instant        |
+| **L2 LSP**   | backend language-server process | diagnostics, completion list, hover, go-to-def, references, rename, format | ~10–100 ms |
+| **L3 LLM**   | backend local model             | inline ghost text + agent edits, **grounded by L2**                  | ~0.1–n s       |
+
+L3 ships (the ghost-text autosuggest above + the agent edit tools). L1 is mostly
+CodeMirror's `basicSetup`. **L2 (LSP) now has its spine** — the transport plus
+**diagnostics**, **completion**, **hover**, and **go-to-definition** — with
+rename/references/format layering onto the same pipe next.
+
+### Where the LSP runs: the backend, over a `/ws` `lsp` channel (implemented)
+
+Same rule as the agent orchestrator and the terminal PTY (see
+[windowing](../architecture/windowing.mdx) and [terminal](terminal.mdx)): the
+browser can't spawn `pylsp`/`typescript-language-server`, both layouts must share
+one path, and with a remote backend the server must run **where the files are**.
+
+The key design choice: the **backend is a dumb JSON-RPC pipe**, and the **frontend
+is the LSP client**. `LspManager` (`backend/modules/lsp/manager.py`, mirroring
+`terminal/manager.py`) spawns a server per buffer session — chosen from a fixed
+`languageId → command` registry so the channel can't run arbitrary processes — and
+translates LSP's `Content-Length` framing ↔ discrete `lsp`-channel messages
+(`start`/`rpc`/`stop` ↔ `started`/`rpc`/`exit`/`error`). It never parses LSP
+semantics, so every future capability flows through the one pipe with **no backend
+change**. The frontend client lives in `editor/lsp.ts` (a CodeMirror extension wired
+through a compartment in `BufferView.tsx`): it renders `publishDiagnostics` via
+`@codemirror/lint`, serves `textDocument/completion` as a `@codemirror/autocomplete`
+source, shows `textDocument/hover` in a CodeMirror hover tooltip, and binds **F12**
+to `textDocument/definition` (same-file jumps move the cursor; cross-file jumps open
+the target via the editor's `openBuffer` and reveal it in the tree). Request-shaped
+methods use JSON-RPC id correlation; same-file detection normalizes `file://` URIs
+(servers vary in drive-letter case). Servers spawn only when present on `PATH` (else the editor
+silently degrades); the registry currently maps `python → pylsp` (needs `pyflakes`/
+`pycodestyle` installed to emit diagnostics), `typescript`/`javascript →
+typescript-language-server`, and `rust → rust-analyzer`.
+
+The buffer — not the file on disk — is the source of truth while open, so the
+**document-sync lifecycle** matters:
+
+```mermaid
+sequenceDiagram
+    participant CM as CodeMirror buffer
+    participant BE as Backend LspManager
+    participant LS as Language server (stdio)
+    CM->>BE: open(uri) · /ws lsp
+    BE->>LS: textDocument/didOpen {text}
+    loop while editing
+        CM->>BE: change(uri, edits)
+        BE->>LS: textDocument/didChange
+        LS-->>BE: publishDiagnostics
+        BE-->>CM: diagnostics → CM6 linter
+        CM->>BE: completion / hover / definition
+        BE->>LS: textDocument/*
+        LS-->>CM: results → CM6 autocomplete / tooltip
+    end
+    CM->>BE: close(uri) → didClose
+```
+
+`workspace-file:` URIs map directly to real paths the server roots on; `note:` and
+`osfile:` get no LSP (only `workspace-file:` buffers with a known language do). Sync
+is **full-text `didChange`** (debounced) for now — simple and correct; incremental is
+a later optimization. LSP capabilities map onto CodeMirror:
+completion → autocomplete source, `publishDiagnostics` → linter, hover → tooltip,
+definition → a jump that opens a `workspace-file:` buffer and reveals it in the tree.
+
+### Range edits replace full-content edits
+
+`editor.proposeEdit`/`applyEdit` today take the **whole new buffer**. That doesn't
+scale to real files: it blows a local model's context and forces it to reproduce
+code verbatim. The plan is anchored, search/replace-style edits
+(`proposeEdit(uri, edits: {find, replace}[])`, full-content kept as a fallback). The
+existing accept/decline `unifiedMergeView` renders them per-chunk unchanged — only
+the tool payload narrows from "whole doc" to surgical edits. This is what lets the
+agent edit a large file with a small local model.
+
+### LSP-grounded ghost text
+
+The ghost-text prompt is `prefix<CURSOR>suffix` today. Enriching it with **L2
+context** — the LSP's completion candidates and the expected type at the cursor —
+makes the local model suggest code that actually resolves instead of hallucinating
+symbols. The split stays clean: **LSP drives the dropdown completion list, the LLM
+drives multi-token inline ghost text**, now grounded. (A dedicated small code model
+for `/agent/complete` is worth considering — see [agent chat](agent-chat.mdx).)
+
+### The agent reading & watching the buffer
+
+- **Passive (read):** add the buffer's LSP **diagnostics** to `getAgentContext` plus
+  a `get_diagnostics(uri)` read tool, so the agent sees the errors it causes and
+  self-corrects — the highest-leverage agent-editor upgrade.
+- **Proactive (opt-in):** an `editor.agentWatch` mode where each
+  `didChange → publishDiagnostics` with errors pings the orchestrator with the
+  diagnostic + surrounding code; it may `proposeEdit` a fix (suggest, never
+  auto-apply). Gated, off by default.
+- **Agent-as-LSP-client tools:** `editor.rename`, `editor.findReferences`,
+  `editor.format` backed by LSP `rename`/`references`/`formatting` — correct
+  cross-file edits instead of regex. Reads ungated; mutations gated like
+  `applyEdit` (auto-allow under `acceptEdits`).
+
 ## Browser vs desktop
 
 Editing notes and workspace files is identical in both layouts. The difference

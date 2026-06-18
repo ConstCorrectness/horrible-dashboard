@@ -6,7 +6,15 @@
  * `acceptEdits`, delete/rename keep prompting). See docs/architecture/agent-tools.md.
  */
 import type { AgentToolDecl } from '../../registry';
-import { createEntry, deleteEntry, listDir, readFile, renameEntry, writeFile } from './api';
+import {
+  createEntry,
+  deleteEntry,
+  gitStatus,
+  listDir,
+  readFile,
+  renameEntry,
+  writeFile,
+} from './api';
 import { refreshTree } from './store';
 
 const pathParam = {
@@ -31,6 +39,14 @@ export const filesAgentTools: AgentToolDecl[] = [
     params: pathParam,
     sideEffect: false,
     handler: (args) => readFile(String(args.path)),
+  },
+  {
+    name: 'files.gitStatus',
+    description:
+      "List the git working-tree changes for a workspace root (the branch and each changed path's status). Returns is_repo:false if the root isn't a git repo.",
+    params: pathParam,
+    sideEffect: false,
+    handler: (args) => gitStatus(String(args.path)),
   },
   {
     name: 'files.create',

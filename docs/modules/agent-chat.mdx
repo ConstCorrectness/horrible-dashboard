@@ -150,7 +150,12 @@ so the catalog stays frontend-owned). Read/open: `list_available_panes`,
 panes, all keyed by live `instanceId`): `split_pane(instanceId, direction,
 paneId)`, `resize_pane(instanceId, width?, height?)`, `move_pane(instanceId,
 reference, direction)`, `float_pane`/`dock_pane(instanceId)`,
-`maximize_pane`/`restore_pane(instanceId)`.
+`maximize_pane`/`restore_pane(instanceId)`. `split_pane`'s `direction` takes the
+model-friendly orientations **`vertical`** (panes side by side) and
+**`horizontal`** (panes stacked) as well as the four concrete sides
+(`left`/`right`/`above`/`below`); the orientations are resolved to a side
+(`vertical`→`right`, `horizontal`→`below`) in `tool-exec.ts`, so the
+`LayoutController` and the UI corner-grip stay four-way.
 `list_open_panes` reports each open pane's type id, live `instanceId`, title, and
 whether it exposes agent context; `get_pane_context` pulls one instance's snapshot
 (see [agent tools & permissions](../architecture/agent-tools.mdx)).

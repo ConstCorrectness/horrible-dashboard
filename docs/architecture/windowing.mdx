@@ -71,6 +71,13 @@ freshly opened pane docks; once the user rearranges, the persisted tree wins.
 `LayoutController.changePaneType(instanceId, paneId)`, which swaps the content
 **in place** — same instance id, so geometry and autosave are untouched. `PanelHost`
 re-renders the new type by tracking `panelId` from `api.onDidParametersChange`.
+The menu is portaled to `document.body` and positioned from the tab's viewport
+rect; since the pane catalog grows long, its `max-height` is capped to the space
+available below the tab (and it **flips above** the tab when there's more room
+there) so the full list always fits on-screen and scrolls within that height. A
+sticky **filter input** at the top narrows the list by title/id substring (the
+command-palette match) and is keyboard-drivable — it auto-focuses on open, ↑/↓
+move the highlight, Enter picks it, Escape closes.
 
 ## How panes reach the workspace
 

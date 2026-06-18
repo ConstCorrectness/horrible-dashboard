@@ -13,6 +13,22 @@ import { executeDynamicTool } from './manifest';
 const SPLIT_DIRS: readonly SplitDirection[] = ['left', 'right', 'above', 'below'];
 const MOVE_DIRS: readonly PaneDirection[] = ['left', 'right', 'above', 'below', 'within'];
 
+/**
+ * Orientation aliases the agent may pass instead of a concrete side: `vertical`
+ * means side-by-side panes (split toward the right), `horizontal` means stacked
+ * panes (split below). The UI corner-grip still uses the four concrete sides; this
+ * only widens what `split_pane` accepts so the model can reason in the simpler
+ * vertical/horizontal terms. See docs/architecture/agent-tools.mdx.
+ */
+const SPLIT_ALIASES: Record<string, SplitDirection> = { vertical: 'right', horizontal: 'below' };
+
+/** Resolve a split arg (a concrete side or a vertical/horizontal alias) to a side. */
+function resolveSplitDirection(raw: unknown): SplitDirection | null {
+  const v = String(raw);
+  if (SPLIT_DIRS.includes(v as SplitDirection)) return v as SplitDirection;
+  return SPLIT_ALIASES[v] ?? null;
+}
+
 function num(v: unknown): number | undefined {
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
 }
@@ -55,9 +71,11 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       return { ok: true, switched: args.id };
     case 'split_pane': {
       if (!lc) return { error: 'workspace not ready' };
-      const direction = args.direction as SplitDirection;
-      if (!SPLIT_DIRS.includes(direction))
-        return { error: `direction must be one of ${SPLIT_DIRS.join(', ')}` };
+      const direction = resolveSplitDirection(args.direction);
+      if (!direction)
+        return {
+          error: `direction must be one of ${SPLIT_DIRS.join(', ')}, vertical, or horizontal`,
+        };
       const newInstanceId = lc.splitPane(String(args.instanceId), direction, String(args.paneId));
       return newInstanceId === null
         ? { error: 'unknown pane instanceId or paneId' }

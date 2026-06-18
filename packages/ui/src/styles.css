@@ -256,6 +256,15 @@ body {
 .file-tree {
   font-size: 0.85rem;
   user-select: none;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.file-tree-rows {
+  flex: 1 1 auto;
+  overflow: auto;
+  outline: none;
 }
 
 .file-tree-toolbar {
@@ -302,10 +311,205 @@ body {
   background: var(--accent-dim, rgba(97, 175, 239, 0.18));
 }
 
+.file-row.active {
+  box-shadow: inset 0 0 0 1px var(--accent, #61afef);
+}
+
 .file-caret {
   display: inline-block;
   width: 0.9em;
+  flex: none;
   color: var(--text-dim);
+}
+
+.file-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Asset-free file icons: a short category-colored tag (see files/icons.ts). */
+.file-icon {
+  display: inline-block;
+  width: 1.6em;
+  flex: none;
+  text-align: center;
+  font-size: 0.62rem;
+  font-weight: 700;
+  font-family: var(--mono, ui-monospace, monospace);
+  letter-spacing: -0.02em;
+}
+
+.file-icon.ic-dir {
+  font-size: 0.85rem;
+  font-weight: 400;
+}
+
+.ic-ts {
+  color: #3178c6;
+}
+.ic-js {
+  color: #d8c149;
+}
+.ic-py {
+  color: #4b8bbe;
+}
+.ic-rs {
+  color: #dea584;
+}
+.ic-go {
+  color: #00add8;
+}
+.ic-data {
+  color: #cbcb41;
+}
+.ic-style {
+  color: #c586c0;
+}
+.ic-markup {
+  color: #e37933;
+}
+.ic-img {
+  color: #8dc149;
+}
+.ic-script {
+  color: #4caf50;
+}
+.ic-doc,
+.ic-default {
+  color: var(--text-dim);
+}
+
+.file-rename-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  padding: 0 2px;
+  background: var(--bg, #1e1e2e);
+  color: var(--text);
+  border: 1px solid var(--accent, #61afef);
+  border-radius: 2px;
+  outline: none;
+}
+
+.file-loading {
+  margin-left: auto;
+  color: var(--text-dim);
+}
+
+.file-ctx-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  padding: 0.25rem;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  font-size: 0.85rem;
+}
+
+.file-ctx-menu button {
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 0.3rem 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.file-ctx-menu button:hover {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.file-ctx-menu button.danger {
+  color: var(--danger, #e06c75);
+}
+
+.file-ctx-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 0.25rem 0;
+}
+
+.file-ctx-target {
+  padding: 0.25rem 0.5rem 0.1rem;
+  margin-top: 0.2rem;
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 0.7rem;
+}
+
+/* LSP hover tooltip (editor/lsp.ts → CodeMirror hoverTooltip). */
+.cm-lsp-hover {
+  max-width: 480px;
+  max-height: 320px;
+  overflow: auto;
+  padding: 0.4rem 0.6rem;
+  white-space: pre-wrap;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+/* Git decorations (see files/store.ts, files/FileTree.tsx). Per-status color is
+ * applied to both the file name and its right-aligned letter badge. */
+.git-modified {
+  --git-color: #e2c08d;
+}
+.git-added,
+.git-untracked {
+  --git-color: #73c991;
+}
+.git-deleted {
+  --git-color: #c74e39;
+}
+.git-renamed {
+  --git-color: #6cb6ff;
+}
+.git-conflict {
+  --git-color: #e4676b;
+}
+
+.file-row.git-modified .file-name,
+.file-row.git-added .file-name,
+.file-row.git-untracked .file-name,
+.file-row.git-deleted .file-name,
+.file-row.git-renamed .file-name,
+.file-row.git-conflict .file-name {
+  color: var(--git-color);
+}
+
+.file-row.git-deleted .file-name {
+  text-decoration: line-through;
+}
+
+/* A folder containing changes gets a subtle accent dot on its caret. */
+.file-row.git-dir-changed .file-caret {
+  color: #e2c08d;
+}
+
+.git-badge {
+  flex: none;
+  margin-left: auto;
+  padding-left: 0.4rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--git-color, var(--text-dim));
+}
+
+.file-git-branch {
+  margin-left: auto;
+  padding: 0 0.35rem;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 11ch;
 }
 
 /* Recent-notes dashboard widget (editor.recentNotes) */
@@ -539,8 +743,27 @@ body {
 .obs-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 0.5rem;
   margin-bottom: 0.5rem;
+}
+
+.obs-filter-query {
+  flex: 1;
+  min-width: 6rem;
+}
+
+.obs-filter-errors {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+/* Push the count + Clear button to the right edge of the toolbar. */
+.obs-toolbar .dashboard-hint {
+  margin-left: auto;
+  white-space: nowrap;
 }
 
 .obs-table-wrap {
@@ -550,7 +773,12 @@ body {
 
 .obs-table {
   width: 100%;
-  border-collapse: collapse;
+  /* `separate` (not `collapse`): collapsed per-cell `border-top`s render with
+   * sub-pixel gaps at every column boundary, so the row separator looks broken.
+   * With separate borders + zero spacing each row's top border is one continuous
+   * line. */
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 0.85rem;
 }
 
@@ -1586,6 +1814,9 @@ kbd {
   position: fixed;
   z-index: 1000;
   min-width: 180px;
+  /* `max-height` is set inline to the space available below/above the tab (see
+   * PaneTab.tsx); this is just a fallback. `overflow-y: auto` makes the long pane
+   * list scroll within that height. */
   max-height: 60vh;
   overflow-y: auto;
   background: var(--bg-raised);
@@ -1593,6 +1824,29 @@ kbd {
   border-radius: 6px;
   padding: 0.25rem;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.pane-tab-menu-search {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  /* Bleed over the menu's 0.25rem padding so scrolled rows don't peek above it. */
+  margin: -0.25rem -0.25rem 0.25rem;
+  width: calc(100% + 0.5rem);
+  box-sizing: border-box;
+  padding: 0.4rem 0.5rem;
+  background: var(--bg-raised);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+}
+
+.pane-tab-menu-empty {
+  padding: 0.4rem 0.5rem;
+  color: var(--text-dim);
+  font-size: 0.85rem;
 }
 
 .pane-tab-menu-item {
@@ -1617,6 +1871,10 @@ kbd {
 
 .pane-tab-menu-item.active {
   color: var(--accent);
+}
+
+.pane-tab-menu-item.selected {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .pane-tab-menu-kind {

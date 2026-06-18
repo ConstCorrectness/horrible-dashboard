@@ -12,23 +12,46 @@ import { basicSetup, EditorView } from 'codemirror';
 import { Compartment, EditorState } from '@codemirror/state';
 import { markdown } from '@codemirror/lang-markdown';
 import { javascript } from '@codemirror/lang-javascript';
+import { python } from '@codemirror/lang-python';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { unifiedMergeView } from '@codemirror/merge';
 
 import { useAgentContext } from '../../agent-context';
 import { ApiError } from '../../api';
+import { registry } from '../../registry';
 import { usePaneParams } from '../../panes';
 import { useSetting } from '../../settings';
 import { completeCode } from '../agent/api';
 import { autosuggest } from './autosuggest';
 import { registerBuffer, type BufferSnapshot } from './buffers';
-import { setActiveBufferSource } from './index';
+import { openBuffer, setActiveBufferSource } from './index';
+import { dirOf, lspExtension, lspLanguageId } from './lsp';
 import { loadSource, saveSource } from './sources';
+
+const FILE_URI = 'workspace-file:';
+
+/** Open a workspace file (go-to-definition target) and reveal it in the tree. The
+ * reveal runs once the new buffer is the active one. */
+function goToFile(path: string): void {
+  openBuffer(`${FILE_URI}${path}`);
+  setTimeout(() => void registry.runCommand('files.revealActiveBuffer'), 150);
+}
+
+/** The LSP extension for a just-loaded source, or `[]` when there's no language
+ * server for it (only `workspace-file:` buffers with a known language get one). */
+function lspFor(source: string | null, title: string) {
+  if (!source || !source.startsWith(FILE_URI)) return [];
+  const language = lspLanguageId(title);
+  if (!language) return [];
+  const path = source.slice(FILE_URI.length);
+  return lspExtension({ path, languageId: language, root: dirOf(path), openFile: goToFile });
+}
 
 function languageFor(title: string) {
   if (/\.(tsx?|jsx?|mjs|cjs)$/i.test(title)) {
     return javascript({ typescript: /\.tsx?$/i.test(title), jsx: /x$/i.test(title) });
   }
+  if (/\.py$/i.test(title)) return python();
   return markdown();
 }
 
@@ -48,6 +71,7 @@ export function BufferView() {
   const langRef = useRef(new Compartment());
   const mergeRef = useRef(new Compartment());
   const autoRef = useRef(new Compartment());
+  const lspRef = useRef(new Compartment());
   const revisionRef = useRef<number | undefined>(undefined);
   // The buffer content captured when a proposal opens, restored on Decline.
   const originalRef = useRef('');
@@ -72,6 +96,7 @@ export function BufferView() {
           langRef.current.of(markdown()),
           mergeRef.current.of([]),
           autoRef.current.of([]),
+          lspRef.current.of([]),
           EditorView.updateListener.of((u) => {
             if (u.docChanged) setDirty(true);
             // Track the focused buffer as "active" (Mod-s etc. route through the
@@ -102,7 +127,13 @@ export function BufferView() {
         setTitle(loaded.title);
         view.dispatch({
           changes: { from: 0, to: view.state.doc.length, insert: loaded.content },
-          effects: langRef.current.reconfigure(languageFor(loaded.title)),
+          effects: [
+            langRef.current.reconfigure(languageFor(loaded.title)),
+            // Connect (or disconnect) a language server for this buffer. The
+            // reconfigure tears down any prior session (didClose + stop) and the
+            // new plugin sees the just-applied content for its didOpen.
+            lspRef.current.reconfigure(lspFor(source, loaded.title)),
+          ],
         });
         setDirty(false);
         setStatus(null);

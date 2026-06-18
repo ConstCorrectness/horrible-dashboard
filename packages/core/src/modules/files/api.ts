@@ -26,6 +26,25 @@ export function listDir(path: string): Promise<{ path: string; entries: FileEntr
   return apiGet(`/files/list?path=${encodeURIComponent(path)}`);
 }
 
+export type GitStatusKind = 'modified' | 'added' | 'deleted' | 'untracked' | 'renamed' | 'conflict';
+
+export interface GitEntry {
+  path: string;
+  status: GitStatusKind;
+}
+
+export interface GitStatus {
+  is_repo: boolean;
+  root: string;
+  branch: string | null;
+  entries: GitEntry[];
+}
+
+/** Working-tree status for a workspace root (`is_repo:false` if not a repo). */
+export function gitStatus(path: string): Promise<GitStatus> {
+  return apiGet(`/files/git-status?path=${encodeURIComponent(path)}`);
+}
+
 export function readFile(
   path: string,
 ): Promise<{ path: string; content: string; truncated: boolean }> {

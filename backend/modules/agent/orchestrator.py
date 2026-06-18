@@ -125,14 +125,17 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
     ),
     _tool(
         "split_pane",
-        "Split an open pane, opening another pane beside it. 'left'/'right' give a "
-        "vertical split, 'above'/'below' a horizontal one. Use instanceId from "
-        "list_open_panes and paneId from list_available_panes.",
+        "Split an open pane, opening another pane beside it. Prefer 'vertical' "
+        "(panes side by side) or 'horizontal' (panes stacked); the concrete sides "
+        "'left'/'right'/'above'/'below' are also accepted when the user wants the "
+        "new pane on a specific side. Use instanceId from list_open_panes and "
+        "paneId from list_available_panes.",
         {
             "instanceId": {"type": "string", "description": "Live pane to split"},
             "direction": {
                 "type": "string",
-                "enum": ["left", "right", "above", "below"],
+                "enum": ["vertical", "horizontal", "left", "right", "above", "below"],
+                "description": "vertical=side by side, horizontal=stacked",
             },
             "paneId": {
                 "type": "string",

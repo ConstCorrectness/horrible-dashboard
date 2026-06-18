@@ -88,8 +88,11 @@ replaces its row in place rather than duplicating it.
 
 - **Panels:** `observability.logs` (singleton, `defaultPlacement: bottom`) — the
   full I/O table (time, source badge, method, target, status, ms, size) with a
-  Clear button. Rows with captured detail show a caret and expand on click to
-  the redacted headers/bodies.
+  Clear button. A toolbar **filter** narrows the rows live (client-side, over the
+  same in-memory list): a free-text query over method+target, a source selector
+  (all / client / inbound / outbound), and an **errors only** toggle; the count
+  reads `shown / total` while a filter is active. Rows with captured detail show a
+  caret and expand on click to the redacted headers/bodies.
 - **Widgets:** `observability.io` ("Data flow") — compact summary (call/error
   counts + last few, expandable the same way), opened as a pane. Part of the
   seeded Dashboard workspace; also addable to any workspace from the palette
@@ -124,7 +127,7 @@ so the agent can reason about live traffic — e.g. "did that request fail?". Se
 
 ## Not yet
 
-Filtering/search, client-side streaming calls (the agent chat/pull streams
-bypass `request<T>`, so they show as outbound on the backend but not as client
-events), inbound response bodies (see above), and persistence across reloads
-(the buffer is in-memory).
+Client-side streaming calls (the agent chat/pull streams bypass `request<T>`, so
+they show as outbound on the backend but not as client events), inbound response
+bodies (see above), and persistence across reloads (the buffer is in-memory). The
+panel filter is panel-local state, so it resets when the pane is unmounted.

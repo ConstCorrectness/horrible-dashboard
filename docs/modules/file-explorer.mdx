@@ -7,10 +7,16 @@ sidebar_label: File explorer
 
 Tree view over the workspace for browsing, opening, and organizing files.
 
-**Status: panel + commands implemented (B3).** The `files.tree` panel lists the
+**Status: VS Code-style explorer implemented.** The `files.tree` panel lists the
 backend's workspace roots, lazy-loads directories on expand, and opens files as
-`workspace-file:` editor buffers. CRUD commands operate on the tree selection;
-the tree re-lists after a mutation (live watch events are B1b).
+`workspace-file:` editor buffers. The view is a **flattened, virtualized row list**
+(state in the shared store, so it survives a dockview remount) with file icons,
+**multi-selection** (ctrl/shift-click), **keyboard navigation** (arrows, type-ahead,
+Enter, F2), **inline rename**, a **right-click context menu**, and **git decorations**
+(M/A/D/U badges + colors, folder change indicators, branch). Disk changes arrive
+**live** over the `files` watch channel (no manual refresh). Remaining VS Code
+parity — an "Open Editors" section, auto-reveal, and drag-and-drop — is tracked in
+[Remaining parity](#remaining-parity).
 
 ## Contributions to the layout shell
 
@@ -39,16 +45,20 @@ override `HORRIBLE_WORKSPACE_ROOTS` for dev/test.
 
 | Route                  | Purpose                                          |
 | ---------------------- | ------------------------------------------------ |
-| `GET /files/roots`     | the configured workspace roots                   |
-| `GET /files/list`      | a directory's entries (dirs first)               |
-| `GET /files/read`      | a UTF-8 file's content (capped; binary → `415`)  |
-| `POST /files/create`   | new file or directory                            |
-| `PUT /files/write`     | overwrite/create file content                    |
-| `POST /files/rename`   | rename/move within roots                         |
-| `POST /files/delete`   | delete (`recursive` required for non-empty dirs) |
+| `GET /files/roots`      | the configured workspace roots                   |
+| `GET /files/list`       | a directory's entries (dirs first)               |
+| `GET /files/read`       | a UTF-8 file's content (capped; binary → `415`)  |
+| `GET /files/git-status` | working-tree status of a root (`git status --porcelain=v2`; `is_repo:false` if not a repo) |
+| `POST /files/create`    | new file or directory                            |
+| `PUT /files/write`      | overwrite/create file content                    |
+| `POST /files/rename`    | rename/move within roots                         |
+| `POST /files/delete`    | delete (`recursive` required for non-empty dirs) |
 
-Live **watch events** over the `files.*` WS channels are a follow-up; until then
-clients re-list to refresh after a mutation.
+Live **watch events** ship: a backend `watchfiles` watcher
+(`backend/modules/files/watcher.py`) broadcasts changes on the `files` `/ws`
+channel, and the tree re-lists the affected directories on them (see
+[Live watch](#live-file-watch-ws-channel) below). Clients still re-list after their
+own mutations as a belt-and-braces fallback.
 
 ## Agent integration
 
@@ -57,8 +67,11 @@ capability manifest. Verified live: the agent wrote a file through gated
 `files.write`, which prompted with the rendered `{path}` specifier and wrote on
 approval. The tree exposes [agent tools & `getAgentContext`](../architecture/agent-tools.mdx):
 
-- **Read (ungated):** `files.list(path)` and `files.read(path)`; the current tree
-  selection is exposed through the pane's `getAgentContext()` snapshot.
+- **Read (ungated):** `files.list(path)`, `files.read(path)`, and
+  `files.gitStatus(path)` (branch + each changed path's status); the tree's roots,
+  the active selection, the full **multi-selection** (`selectedPaths`), and a git
+  summary (`{branch, changeCount}`) are exposed through the pane's
+  `getAgentContext()` snapshot.
 - **Gated (side-effecting):** `files.create`, `files.write`, `files.rename`,
   `files.delete`. These are matched by filesystem permission rules using
   gitignore-style anchors against the workspace roots — e.g. `allow
@@ -70,6 +83,79 @@ The agent transfers *out* of the tree the same way a user does (it invokes the
 commands, never another module's internals): opening a file is
 `editor.openBuffer('workspace-file:...')`; "open terminal here" is
 `terminal.new({ cwd })`.
+
+## Live watch & a VS Code-like explorer
+
+**Status: Phase 1 (watch channel) and Phase 2 (the explorer UX) implemented.**
+
+### Live file-watch `/ws` channel
+
+The deferred "watch events" are the foundation everything else wants. A backend
+watcher (`watchfiles`, `backend/modules/files/watcher.py`) over the configured
+roots emits change events on a `files` `/ws` channel; the frontend store
+(`initFilesWatch`, `store.ts`) applies them (debounced) instead of manual
+re-listing. A single process-wide `FileWatcher` broadcasts to per-connection
+`push_file_events` tasks, mirroring telemetry's recorder/stream split. The one
+channel feeds **three** consumers:
+
+```mermaid
+flowchart LR
+    FS[(workspace roots)] -- watchfiles --> W[FileWatcher]
+    W -- files channel /ws --> TREE[Explorer tree auto-refresh]
+    W --> LSP[LSP didChangeWatchedFiles]
+    W --> AG[Agent awareness of changes]
+```
+
+Events carry the change type and the affected path's parent dir, so the tree
+re-lists only the directories that changed. Roots are read when the watch starts;
+a roots change (settings) restarts it.
+
+### Explorer UX
+
+The store (`store.ts`) owns the whole tree model — roots, per-directory expansion,
+the children cache, the multi-selection, and the inline-rename target — and exposes
+a **flattened, render-ready row list** (`visibleRows()`). `FileTree.tsx` is a thin
+consumer that virtualizes those rows and wires the interactions:
+
+| Feature                 | How                                                                         |
+| ----------------------- | -------------------------------------------------------------------------- |
+| **Flattened row model** | `visibleRows()` walks roots → expanded children into a flat `Row[]`, which makes keyboard nav, multi-select, and virtualization fall out cheaply |
+| **File icons**          | `icons.ts` maps extension → a colored category tag (`.file-icon`/`.ic-*` in `styles.css`); folders use an open/closed glyph |
+| **Inline rename (F2)**  | the active row becomes an `<input>`; Enter commits via `renameEntry`, Esc cancels |
+| **Context menu**        | right-click → Open / New File / New Folder / Rename / Delete / Copy Path / Open Terminal Here (portaled, viewport-clamped) |
+| **Multi-select**        | Ctrl/Cmd-click toggles, Shift-click selects a range along the visible order; the set drives multi-delete |
+| **Keyboard nav**        | ↑/↓ move the active row, ←/→ collapse/expand, Enter opens, F2 renames, Delete removes, and printable keys type-ahead-jump |
+| **Virtualized tree**    | `@tanstack/react-virtual` over the flat rows, so large directories stay smooth |
+
+The palette commands (`files.rename`, `files.delete`) and the context menu share
+this behavior — rename starts the same inline edit, delete removes the whole
+selection.
+
+### Git decorations
+
+A backend git source (`git.py`, parsing `git status --porcelain=v2 --branch` via
+`GET /files/git-status`) maps each changed path to a collapsed status; the store
+(`reloadGit` in `store.ts`) fetches per repo root on mount and on every watch event,
+and derives which **directories contain changes**. `FileTree.tsx` paints a colored
+name + letter badge per file (M/A/D/U/R/!), a change indicator on folders, and the
+branch in the toolbar. The same source is the ungated `files.gitStatus` agent read
+tool — "what's changed?". A non-git root simply renders undecorated (`is_repo:false`).
+
+### Remaining parity
+
+- **"Open Editors" section** at the top, listing open buffers (the editor tracks
+  them via `listBufferUris()`).
+- **Auto-reveal active file** — make `files.revealActiveBuffer` fire automatically on
+  buffer focus, with a toggle.
+- **Drag-and-drop** to move within the tree (and external drop = upload/native move).
+- **Type-to-filter** box reusing the pane-type-menu filter pattern.
+
+### Richer agent context
+
+The tree's `getAgentContext` reports `{roots, selection, selectedPaths, git:{branch,
+changeCount}}`, and `files.gitStatus` exposes the full working-tree status; with the
+items above it grows to include the open editors — so the agent reasons about the
+project the way a developer does.
 
 ## Browser vs desktop
 
