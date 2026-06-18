@@ -83,6 +83,8 @@ export { dashboardModule } from './modules/dashboard';
 export { layoutsModule } from './modules/layouts';
 export { scratchModule } from './modules/scratch';
 export { stubModule } from './modules/stub';
+export { vectordbModule } from './modules/vectordb';
+export { visualizerModule } from './modules/visualizer';
 export {
   editorModule,
   getActiveBufferSource,

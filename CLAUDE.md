@@ -27,9 +27,7 @@ the shared `/ws` socket. A **public plugin SDK** (`packages/sdk`,
 boot — see docs/architecture/plugin-sdk.mdx. A `settings` module gives a
 VS Code–style settings page where any module or plugin contributes its own
 settings (declared in its manifest, read live via `useSetting`/`host.settings`,
-overrides persisted server-side) — see docs/modules/settings.mdx. An experimental
-Electron shell lives on the `electron-shell` branch. Remaining modules (editor,
-terminal, files, full chat cockpit) are unimplemented — see docs/ for their designs.
+overrides persisted server-side) — see docs/modules/settings.mdx. A **vectordb** module manages a local vector database with cosine similarity searches and agent integration — see docs/modules/vectordb.mdx. A **visualizer** module renders HTML5 Canvas, Three.js, and Babylon.js dynamic client-side animations, and streams headless Pygame frames from backend subprocesses — see docs/modules/visualizer.mdx. An experimental Electron shell lives on the `electron-shell` branch. Remaining modules (editor, terminal, files, full chat cockpit) are unimplemented — see docs/ for their designs.
 
 ## Stack (decided, do not re-litigate)
 

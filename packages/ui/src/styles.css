@@ -1623,3 +1623,573 @@ kbd {
   color: var(--text-dim);
   font-size: 0.75rem;
 }
+
+/* ==========================================================================
+   Vector DB Manager Widget
+   ========================================================================== */
+
+.vdb-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+}
+
+.vdb-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.vdb-tabs {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.vdb-tab-btn {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  padding: 0.4rem 0.8rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.2s ease;
+}
+
+.vdb-tab-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.vdb-tab-btn.active {
+  background: color-mix(in srgb, var(--accent) 15%, var(--bg-raised));
+  border-color: var(--accent);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: 0 0 10px rgba(110, 168, 254, 0.1);
+}
+
+.vdb-btn-refresh {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 0.3rem 0.6rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  transition: background 0.2s;
+}
+
+.vdb-btn-refresh:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.vdb-btn-refresh:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.vdb-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+}
+
+.vdb-tab-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  height: 100%;
+}
+
+.vdb-alert {
+  padding: 0.75rem 1rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
+.vdb-alert.error {
+  background: rgba(220, 53, 69, 0.1);
+  border: 1px solid rgba(220, 53, 69, 0.3);
+  color: #ea868f;
+}
+
+.vdb-alert.success {
+  background: rgba(40, 167, 69, 0.1);
+  border: 1px solid rgba(40, 167, 69, 0.3);
+  color: #75b798;
+}
+
+.vdb-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+}
+
+.vdb-card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.15);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.vdb-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 12px rgba(0, 0, 0, 0.25);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+
+.vdb-card h3 {
+  margin: 0;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  letter-spacing: 0.05em;
+}
+
+.vdb-card-val {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--text);
+  word-break: break-all;
+}
+
+.vdb-card-sub {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  word-break: break-all;
+  line-height: 1.3;
+}
+
+.vdb-badge {
+  display: inline-block;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.vdb-badge.model {
+  background: rgba(110, 168, 254, 0.1);
+  border-color: rgba(110, 168, 254, 0.3);
+  color: var(--accent);
+}
+
+.vdb-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.vdb-section h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  border-left: 3px solid var(--accent);
+  padding-left: 0.5rem;
+}
+
+.vdb-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.25rem;
+}
+
+.vdb-table th,
+.vdb-table td {
+  padding: 0.6rem 0.8rem;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+
+.vdb-table th {
+  background: var(--bg-raised);
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.vdb-table tr:hover td {
+  background: var(--bg-hover);
+}
+
+.vdb-table-btn {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.75rem;
+  margin-right: 0.4rem;
+  transition: all 0.15s;
+}
+
+.vdb-table-btn:hover {
+  background: var(--bg-hover);
+  border-color: var(--text-dim);
+}
+
+.vdb-table-btn.accent {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.vdb-table-btn.accent:hover {
+  background: rgba(110, 168, 254, 0.1);
+}
+
+.vdb-placeholder {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  text-align: center;
+  padding: 2rem;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--bg-raised);
+}
+
+/* Form Styling */
+.vdb-form {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+}
+
+.vdb-form-row {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-end;
+}
+
+.vdb-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.vdb-field.flex-grow {
+  flex: 1;
+}
+
+.vdb-field label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.vdb-field input[type="text"],
+.vdb-field select,
+.vdb-field textarea {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.4rem 0.6rem;
+  font: inherit;
+  font-size: 0.85rem;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.vdb-field input[type="text"]:focus,
+.vdb-field select:focus,
+.vdb-field textarea:focus {
+  border-color: var(--accent);
+}
+
+.vdb-btn-primary {
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  padding: 0.4rem 1rem;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 0.2s, opacity 0.2s;
+  height: 2.1rem;
+}
+
+.vdb-btn-primary:hover:not(:disabled) {
+  background: #8bb9fe;
+}
+
+.vdb-btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.vdb-btn-secondary {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 0.35rem 0.75rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.vdb-btn-secondary:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.vdb-btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Results & Explorer Cards */
+.vdb-results {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  flex: 1;
+}
+
+.vdb-results h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--text-dim);
+}
+
+.vdb-results-list,
+.vdb-docs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.vdb-result-card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  position: relative;
+  overflow: hidden;
+}
+
+.vdb-result-hdr {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.75rem;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.vdb-result-id {
+  font-family: monospace;
+  color: var(--text-dim);
+  background: var(--bg);
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+}
+
+.vdb-result-col-badge {
+  background: rgba(110, 168, 254, 0.1);
+  color: var(--accent);
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  font-weight: 600;
+}
+
+.vdb-result-date {
+  color: var(--text-dim);
+}
+
+.vdb-result-score-container {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.vdb-score-badge {
+  font-weight: 600;
+  padding: 0.1rem 0.3rem;
+  border-radius: 3px;
+}
+
+.vdb-score-badge.score-excellent {
+  background: rgba(40, 167, 69, 0.15);
+  color: #75b798;
+}
+
+.vdb-score-badge.score-good {
+  background: rgba(110, 168, 254, 0.15);
+  color: var(--accent);
+}
+
+.vdb-score-badge.score-fair {
+  background: rgba(255, 193, 7, 0.15);
+  color: #ffda6a;
+}
+
+.vdb-score-badge.score-poor {
+  background: rgba(220, 53, 69, 0.15);
+  color: #ea868f;
+}
+
+.vdb-score-track {
+  width: 5rem;
+  height: 6px;
+  background: var(--bg);
+  border-radius: 3px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.vdb-score-fill {
+  height: 100%;
+}
+
+.vdb-score-fill.score-excellent {
+  background: #75b798;
+}
+
+.vdb-score-fill.score-good {
+  background: var(--accent);
+}
+
+.vdb-score-fill.score-fair {
+  background: #ffda6a;
+}
+
+.vdb-score-fill.score-poor {
+  background: #ea868f;
+}
+
+.vdb-result-text {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.vdb-result-actions {
+  display: flex;
+  gap: 0.5rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.6rem;
+  margin-top: 0.2rem;
+}
+
+.vdb-card-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.75rem;
+  transition: all 0.2s;
+}
+
+.vdb-card-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+.vdb-card-btn.danger {
+  color: #ea868f;
+}
+
+.vdb-card-btn.danger:hover {
+  background: rgba(220, 53, 69, 0.15);
+  border-color: #ea868f;
+}
+
+.vdb-metadata-box {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.6rem;
+  font-family: monospace;
+  font-size: 0.75rem;
+  color: #9cb3c9;
+  overflow-x: auto;
+  margin: 0;
+}
+
+.vdb-explorer-filters {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.vdb-explorer-count {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.vdb-pagination {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+.vdb-page-num {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.vdb-insert-form {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  max-width: 48rem;
+}
+
+/* Micro-animations */
+.anim-fade-in {
+  animation: fadeIn 0.2s ease-out forwards;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
