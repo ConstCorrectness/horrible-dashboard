@@ -11,6 +11,7 @@ def client(tmp_path, monkeypatch) -> TestClient:
     monkeypatch.setenv("HORRIBLE_DATA_DIR", str(tmp_path))
     # Re-import routes/database under the mock environment
     from backend.modules.vectordb.database import init_db
+
     init_db()
     return TestClient(app)
 
@@ -21,7 +22,7 @@ def test_cosine_similarity_edge_cases() -> None:
     v2_b = float_list_to_bytes([0.0, 0.0])
     assert cosine_similarity(v1_b, v2_b) == 0.0
     assert cosine_similarity(b"", v2_b) == 0.0
-    
+
     # 2. Perfect match
     v3_b = float_list_to_bytes([1.0, 2.0, 3.0])
     assert cosine_similarity(v3_b, v3_b) == pytest.approx(1.0)
@@ -32,8 +33,8 @@ def test_cosine_similarity_edge_cases() -> None:
     assert cosine_similarity(v4_b, v5_b) == 0.0
 
     # 4. Mismatched dimensions (padding/truncating checks)
-    v6_b = float_list_to_bytes([1.0, 0.0, 0.0, 0.0]) # 4D
-    v7_b = float_list_to_bytes([1.0, 0.0]) # 2D
+    v6_b = float_list_to_bytes([1.0, 0.0, 0.0, 0.0])  # 4D
+    v7_b = float_list_to_bytes([1.0, 0.0])  # 2D
     # It should overlap only on first 2 elements: [1.0, 0.0] vs [1.0, 0.0], which is identical
     assert cosine_similarity(v6_b, v7_b) == pytest.approx(1.0)
 
@@ -53,7 +54,7 @@ def test_upsert_and_list_documents(client: TestClient) -> None:
         "id": "doc1",
         "collection": "test_settings",
         "text": "The agent should always be polite and help with coding.",
-        "metadata": {"source": "user_settings", "category": "agent_rules"}
+        "metadata": {"source": "user_settings", "category": "agent_rules"},
     }
     res = client.post("/api/vectordb/documents", json=doc_payload)
     assert res.status_code == 200
@@ -88,8 +89,8 @@ def test_semantic_search(client: TestClient) -> None:
             "id": "doc_agent",
             "collection": "memories",
             "text": "agent memory and orchestrator rules for running shell commands",
-            "metadata": {"type": "agent"}
-        }
+            "metadata": {"type": "agent"},
+        },
     )
     client.post(
         "/api/vectordb/documents",
@@ -97,15 +98,15 @@ def test_semantic_search(client: TestClient) -> None:
             "id": "doc_ui",
             "collection": "memories",
             "text": "user interface color themes and responsive window sizes",
-            "metadata": {"type": "ui"}
-        }
+            "metadata": {"type": "ui"},
+        },
     )
 
     # Perform search for ui topic
     search_payload = {
         "text": "responsive themes window layout",
         "collection": "memories",
-        "limit": 5
+        "limit": 5,
     }
     res = client.post("/api/vectordb/search", json=search_payload)
     assert res.status_code == 200
@@ -120,17 +121,17 @@ def test_delete_documents(client: TestClient) -> None:
     # Insert document
     client.post(
         "/api/vectordb/documents",
-        json={"id": "to_delete", "collection": "trash", "text": "temporary dump"}
+        json={"id": "to_delete", "collection": "trash", "text": "temporary dump"},
     )
-    
+
     # Verify count is 1
     assert client.get("/api/vectordb/status").json()["num_documents"] == 1
-    
+
     # Delete
     del_res = client.delete("/api/vectordb/documents/to_delete")
     assert del_res.status_code == 200
     assert del_res.json() == {"deleted": True, "id": "to_delete"}
-    
+
     # Verify count is 0
     assert client.get("/api/vectordb/status").json()["num_documents"] == 0
 

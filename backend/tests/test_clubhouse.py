@@ -33,23 +33,24 @@ def test_channels_requires_connection(client: TestClient) -> None:
 def test_channels_returns_parsed_rooms(client, tmp_path, monkeypatch) -> None:
     _connect(tmp_path)
 
-    async def fake_get(path, token, user_id, device_id=None, params=None):
-        assert (path, token, user_id, device_id) == ("/get_channels", "T", 4242, "D")
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        assert (path, token, user_id, device_id) == ("/get_feed_v3", "T", 4242, "D")
         return {
-            "success": True,
-            "channels": [
+            "items": [
                 {
-                    "channel": "abc",
-                    "topic": "Late night code",
-                    "num_speakers": 2,
-                    "num_all": 9,
-                    "club": {"name": "Builders"},
-                    "users": [{"user_id": 1, "name": "Ada", "is_speaker": True}],
+                    "channel": {
+                        "channel": "abc",
+                        "topic": "Late night code",
+                        "num_speakers": 2,
+                        "num_all": 9,
+                        "social_club": {"name": "Builders"},
+                        "users": [{"user_id": 1, "name": "Ada", "is_speaker": True}],
+                    }
                 }
             ],
         }
 
-    monkeypatch.setattr(routes, "_ch_authed_get", fake_get)
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
     body = client.get("/api/clubhouse/channels").json()
     assert body["channels"][0]["topic"] == "Late night code"
     assert body["channels"][0]["club"]["name"] == "Builders"
@@ -72,11 +73,21 @@ def test_following_returns_users(client, tmp_path, monkeypatch) -> None:
 def _mock_ch(monkeypatch, responses: dict[str, dict]) -> list[tuple[str, dict]]:
     calls: list[tuple[str, dict]] = []
 
-    async def fake_post(path: str, payload: dict) -> dict:
+    async def fake_run_helper(
+        action: str, phone_number: str, extra_arg: str = ""
+    ) -> dict:
+        path = (
+            "/start_phone_number_auth"
+            if action == "start"
+            else "/complete_phone_number_auth"
+        )
+        payload = {"phone_number": phone_number}
+        if action == "complete":
+            payload["verification_code"] = extra_arg
         calls.append((path, payload))
         return responses[path]
 
-    monkeypatch.setattr(routes, "_ch_post", fake_post)
+    monkeypatch.setattr(routes, "_run_helper", fake_run_helper)
     return calls
 
 
@@ -99,6 +110,46 @@ def test_start_auth_passes_phone_through(client: TestClient, monkeypatch) -> Non
 def test_start_auth_rejects_bad_phone(client: TestClient) -> None:
     res = client.post("/api/clubhouse/auth/start", json={"phone_number": "555-1234"})
     assert res.status_code == 422
+
+
+def test_start_auth_succeeds_even_if_rc_token_present(
+    client: TestClient, monkeypatch
+) -> None:
+    calls = _mock_ch(
+        monkeypatch,
+        {
+            "/start_phone_number_auth": {
+                "success": True,
+                "send_rc_token": True,
+            }
+        },
+    )
+    res = client.post(
+        "/api/clubhouse/auth/start", json={"phone_number": "+15551234567"}
+    )
+    assert res.status_code == 200
+    assert res.json() == {"success": True}
+    assert calls == [("/start_phone_number_auth", {"phone_number": "+15551234567"})]
+
+
+def test_start_auth_fails_if_api_reports_failure(
+    client: TestClient, monkeypatch
+) -> None:
+    calls = _mock_ch(
+        monkeypatch,
+        {
+            "/start_phone_number_auth": {
+                "success": False,
+                "error_message": "Too many attempts",
+            }
+        },
+    )
+    res = client.post(
+        "/api/clubhouse/auth/start", json={"phone_number": "+15551234567"}
+    )
+    assert res.status_code == 400
+    assert "Too many attempts" in res.json()["detail"]
+    assert calls == [("/start_phone_number_auth", {"phone_number": "+15551234567"})]
 
 
 def test_complete_auth_persists_and_never_leaks_token(

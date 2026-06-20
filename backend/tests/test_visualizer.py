@@ -33,11 +33,13 @@ pygame.display.flip()
 # Sleep a bit to keep it alive
 time.sleep(0.5)
 """
-        ws.send_json({
-            "channel": "visualizer",
-            "event": "start_pygame",
-            "data": {"code": pygame_code}
-        })
+        ws.send_json(
+            {
+                "channel": "visualizer",
+                "event": "start_pygame",
+                "data": {"code": pygame_code},
+            }
+        )
 
         # 3. Read messages until we get a frame
         frame_received = False
@@ -52,15 +54,16 @@ time.sleep(0.5)
                     frame_received = True
                     break
                 elif msg.get("event") == "error":
-                    pytest.fail(f"Received unexpected visualizer error: {msg['data'].get('message')}")
+                    pytest.fail(
+                        f"Received unexpected visualizer error: {msg['data'].get('message')}"
+                    )
 
-        assert frame_received, "Failed to receive a visualizer frame from Pygame subprocess"
+        assert frame_received, (
+            "Failed to receive a visualizer frame from Pygame subprocess"
+        )
 
         # 4. Stop the Pygame visualization
-        ws.send_json({
-            "channel": "visualizer",
-            "event": "stop_pygame"
-        })
+        ws.send_json({"channel": "visualizer", "event": "stop_pygame"})
 
         # Give the backend a brief moment to process the stop event and terminate the process
         time.sleep(0.5)
@@ -83,11 +86,13 @@ screen = pygame.display.set_mode((100, 100))
 pygame.display.flip()
 x = 1 / 0
 """
-        ws.send_json({
-            "channel": "visualizer",
-            "event": "start_pygame",
-            "data": {"code": error_code}
-        })
+        ws.send_json(
+            {
+                "channel": "visualizer",
+                "event": "start_pygame",
+                "data": {"code": error_code},
+            }
+        )
 
         # Read messages until we get an error
         error_received = False
@@ -101,4 +106,6 @@ x = 1 / 0
                     error_received = True
                     break
 
-        assert error_received, "Failed to receive a visualizer error from faulty Pygame subprocess"
+        assert error_received, (
+            "Failed to receive a visualizer error from faulty Pygame subprocess"
+        )

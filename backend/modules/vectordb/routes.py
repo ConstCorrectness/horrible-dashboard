@@ -34,10 +34,10 @@ router = APIRouter(prefix="/vectordb", tags=["vectordb"])
 async def get_status() -> VectorDbStatus:
     stats = get_db_stats()
     config = _load_config()
-    
+
     active_provider = config.provider if config else "none"
     active_model = config.model if config else "none"
-    
+
     # Check if a dedicated embedding model (e.g. all-minilm) is pulled
     # and override active_model display if it is detected by get_embedding
     if config:
@@ -48,13 +48,15 @@ async def get_status() -> VectorDbStatus:
                 available_models = await P.list_models(client, info, endpoint)
                 embedding_keywords = ["all-minilm", "nomic-embed", "bge-", "embed"]
                 for kw in embedding_keywords:
-                    matched = next((m for m in available_models if kw in m.lower()), None)
+                    matched = next(
+                        (m for m in available_models if kw in m.lower()), None
+                    )
                     if matched:
                         active_model = f"{matched} (dedicated)"
                         break
             except Exception:
                 pass
-    
+
     return VectorDbStatus(
         db_path=stats["db_path"],
         size_bytes=stats["size_bytes"],
@@ -69,21 +71,25 @@ async def get_status() -> VectorDbStatus:
 async def pull_embedding_model() -> StreamingResponse:
     config = _load_config()
     if not config or config.provider != "ollama":
-        raise HTTPException(status_code=400, detail="Only Ollama provider supports pulling models")
-    
+        raise HTTPException(
+            status_code=400, detail="Only Ollama provider supports pulling models"
+        )
+
     info = P.provider_for("ollama")
     endpoint = config.endpoint or info.default_endpoint
-    
+
     async def gen():
         async with httpx.AsyncClient(timeout=None) as client:
             async with client.stream(
-                "POST", f"{endpoint}/api/pull", json={"model": "all-minilm", "stream": True}
+                "POST",
+                f"{endpoint}/api/pull",
+                json={"model": "all-minilm", "stream": True},
             ) as res:
                 res.raise_for_status()
                 async for line in res.aiter_lines():
                     if line:
                         yield line + "\n"
-                        
+
     return StreamingResponse(gen(), media_type="application/x-ndjson")
 
 
@@ -100,7 +106,7 @@ async def get_all_documents(
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> DocumentsListResponse:
     docs, total = list_documents(collection, limit, offset)
-    
+
     doc_responses = [
         DocumentResponse(
             id=d["id"],
@@ -111,7 +117,7 @@ async def get_all_documents(
         )
         for d in docs
     ]
-    
+
     return DocumentsListResponse(
         documents=doc_responses,
         total=total,
@@ -124,10 +130,10 @@ async def get_all_documents(
 async def search(req: SearchRequest) -> list[SearchResult]:
     # 1. Generate the query embedding (using agent provider or local fallback)
     emb, _ = await get_embedding(req.text)
-    
+
     # 2. Search database using cosine similarity
     matches = search_documents(req.collection, emb, req.limit)
-    
+
     return [
         SearchResult(
             id=m["id"],
@@ -143,23 +149,23 @@ async def search(req: SearchRequest) -> list[SearchResult]:
 @router.post("/documents", response_model=DocumentResponse)
 async def upsert(req: UpsertDocumentRequest) -> DocumentResponse:
     doc_id = req.id or uuid.uuid4().hex[:12]
-    
+
     # 1. Generate text embedding
     emb, source = await get_embedding(req.text)
-    
+
     # 2. Inject embedding source into metadata for observability
     metadata = dict(req.metadata)
     metadata["_embedding_source"] = source
-    
+
     # 3. Store document
     upsert_document(doc_id, req.collection, req.text, metadata, emb)
-    
+
     # Retrieve to get created_at
     docs, _ = list_documents(req.collection, 1, 0)
     matched = next((d for d in docs if d["id"] == doc_id), None)
-    
+
     created_at = str(matched["created_at"]) if matched else ""
-    
+
     return DocumentResponse(
         id=doc_id,
         collection=req.collection,
@@ -173,5 +179,7 @@ async def upsert(req: UpsertDocumentRequest) -> DocumentResponse:
 async def remove(doc_id: str) -> dict[str, Any]:
     deleted = delete_document(doc_id)
     if not deleted:
-        raise HTTPException(status_code=404, detail=f"Document with ID '{doc_id}' not found")
+        raise HTTPException(
+            status_code=404, detail=f"Document with ID '{doc_id}' not found"
+        )
     return {"deleted": True, "id": doc_id}

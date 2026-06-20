@@ -7,7 +7,9 @@ bumping if Clubhouse rejects them. The auth token is stored server-side only
 (``$HORRIBLE_DATA_DIR/clubhouse-auth.json``) and never sent to the frontend.
 """
 
+import asyncio
 import json
+import logging
 import os
 import uuid
 from pathlib import Path
@@ -28,6 +30,7 @@ from backend.modules.clubhouse.models import (
 from backend.modules.telemetry.instrument import instrumented_client
 
 router = APIRouter(prefix="/clubhouse", tags=["clubhouse"])
+logger = logging.getLogger(__name__)
 
 
 def _data_dir() -> Path:
@@ -47,6 +50,73 @@ def _device_id() -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(device_id)
     return device_id
+
+
+def _get_helper_path() -> Path:
+    base_dir = Path(__file__).parent / "auth_helper"
+    bin_path = base_dir / "bin" / "ch-auth-helper"
+    if not bin_path.is_file():
+        import subprocess
+
+        logger.info("Compiling Clubhouse auth helper...")
+        base_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            subprocess.run(
+                [
+                    "dotnet",
+                    "publish",
+                    str(base_dir / "ch-auth-helper.csproj"),
+                    "-c",
+                    "Release",
+                    "-r",
+                    "linux-x64",
+                    "--self-contained",
+                    "false",
+                    "-o",
+                    str(base_dir / "bin"),
+                ],
+                check=True,
+                capture_output=True,
+            )
+        except subprocess.CalledProcessError as err:
+            logger.error(f"Failed to compile ch-auth-helper: {err.stderr.decode()}")
+            raise RuntimeError(
+                f"Failed to compile ch-auth-helper: {err.stderr.decode()}"
+            ) from err
+    return bin_path
+
+
+async def _run_helper(
+    action: str, phone_number: str, extra_arg: str = ""
+) -> dict[str, Any]:
+    bin_path = _get_helper_path()
+    cmd = [str(bin_path), action, phone_number]
+    if extra_arg:
+        cmd.append(extra_arg)
+
+    cmd.append(_device_id())
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    stdout, stderr = await proc.communicate()
+
+    if proc.returncode != 0:
+        err_msg = stderr.decode().strip() or stdout.decode().strip()
+        try:
+            data = json.loads(stdout.decode())
+            if "error" in data:
+                err_msg = data["error"]
+        except Exception:
+            pass
+        raise HTTPException(status_code=400, detail=f"Authentication failed: {err_msg}")
+
+    try:
+        return json.loads(stdout.decode())
+    except json.JSONDecodeError as err:
+        raise HTTPException(
+            status_code=500, detail="Invalid response from auth helper"
+        ) from err
 
 
 def _api_base() -> str:
@@ -187,21 +257,28 @@ def status() -> ClubhouseStatus:
 
 @router.post("/auth/start", response_model=StartAuthResult)
 async def start_auth(body: StartAuthRequest) -> StartAuthResult:
-    data = await _ch_post(
-        "/start_phone_number_auth", {"phone_number": body.phone_number}
-    )
-    return StartAuthResult(success=bool(data.get("success", False)))
+    data = await _run_helper("start", body.phone_number)
+    if not data.get("success"):
+        error_msg = (
+            data.get("error_message") or data.get("error") or "verification gate block"
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=f"Clubhouse verification failed: {error_msg}",
+        )
+    return StartAuthResult(success=True)
 
 
 @router.post("/auth/complete", response_model=ClubhouseStatus)
 async def complete_auth(body: CompleteAuthRequest) -> ClubhouseStatus:
-    data = await _ch_post(
-        "/complete_phone_number_auth",
-        {
-            "phone_number": body.phone_number,
-            "verification_code": body.verification_code,
-        },
-    )
+    data = await _run_helper("complete", body.phone_number, body.verification_code)
+    if not data.get("success") and not data.get("auth_token"):
+        error_msg = (
+            data.get("error_message") or data.get("error") or "wrong or expired code"
+        )
+        raise HTTPException(
+            status_code=400, detail=f"Verification failed — {error_msg}"
+        )
     token = data.get("auth_token")
     if not token:
         raise HTTPException(
@@ -246,11 +323,53 @@ async def connect_with_token(body: TokenConnectRequest) -> ClubhouseStatus:
 
 @router.get("/channels", response_model=ChannelList)
 async def channels() -> dict[str, Any]:
-    """Live rooms right now (Clubhouse GET /get_channels)."""
+    """Live rooms right now (Clubhouse POST /get_feed_v3)."""
     auth = _require_auth()
-    return await _ch_authed_get(
-        "/get_channels", auth["auth_token"], auth["user_id"], auth.get("device_id")
+    raw = await _ch_authed_post(
+        "/get_feed_v3",
+        {},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
     )
+
+    channels_list = []
+    items = raw.get("items", []) or []
+    for item in items:
+        if "channel" in item and item["channel"]:
+            ch_raw = item["channel"]
+
+            # Map social_club to club
+            club_data = None
+            if ch_raw.get("social_club"):
+                club_data = {"name": ch_raw["social_club"].get("name")}
+
+            # Map users
+            users_list = []
+            for u in ch_raw.get("users", []):
+                users_list.append(
+                    {
+                        "user_id": u.get("user_id"),
+                        "name": u.get("name"),
+                        "username": u.get("username"),
+                        "photo_url": u.get("photo_url"),
+                        "is_speaker": u.get("is_speaker"),
+                        "is_moderator": u.get("is_moderator", False),
+                    }
+                )
+
+            channels_list.append(
+                {
+                    "channel": ch_raw.get("channel"),
+                    "topic": ch_raw.get("topic"),
+                    "num_speakers": ch_raw.get("num_speakers"),
+                    "num_all": ch_raw.get("num_all"),
+                    "club": club_data,
+                    "users": users_list,
+                }
+            )
+
+    return {"channels": channels_list}
 
 
 @router.get("/following", response_model=FollowingList)

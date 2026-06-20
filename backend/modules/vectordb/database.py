@@ -7,6 +7,7 @@ from pathlib import Path
 from contextlib import contextmanager
 from typing import Any, Generator
 
+
 # Path to the database file
 def get_db_path() -> Path:
     data_dir = Path(os.environ.get("HORRIBLE_DATA_DIR", ".data"))
@@ -66,12 +67,12 @@ def get_db_conn() -> Generator[sqlite3.Connection, None, None]:
     """Context manager to yield a SQLite database connection with custom functions registered."""
     db_path = get_db_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     # Register our custom cosine similarity function
     conn.create_function("cosine_similarity", 2, cosine_similarity)
-    
+
     try:
         yield conn
         conn.commit()
@@ -103,7 +104,11 @@ def init_db() -> None:
 
 
 def upsert_document(
-    doc_id: str, collection: str, text: str, metadata: dict[str, Any], embedding: list[float]
+    doc_id: str,
+    collection: str,
+    text: str,
+    metadata: dict[str, Any],
+    embedding: list[float],
 ) -> None:
     """Upsert a document into the database."""
     metadata_json = json.dumps(metadata)
@@ -136,7 +141,7 @@ def search_documents(
 ) -> list[dict[str, Any]]:
     """Perform a semantic search in a given collection using cosine similarity."""
     query_blob = float_list_to_bytes(query_embedding)
-    
+
     with get_db_conn() as conn:
         rows = conn.execute(
             """
@@ -149,7 +154,7 @@ def search_documents(
             """,
             (query_blob, collection, limit),
         ).fetchall()
-        
+
         results = []
         for r in rows:
             results.append(
@@ -213,18 +218,18 @@ def get_db_stats() -> dict[str, Any]:
     """Get database statistics (path, disk size, record counts, active collections)."""
     db_path = get_db_path()
     size_bytes = db_path.stat().st_size if db_path.exists() else 0
-    
+
     with get_db_conn() as conn:
         total_docs = conn.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
-        
+
         collection_rows = conn.execute(
             "SELECT collection, COUNT(*) as count FROM documents GROUP BY collection"
         ).fetchall()
-        
+
         collections = [
             {"name": r["collection"], "count": r["count"]} for r in collection_rows
         ]
-        
+
     return {
         "db_path": str(db_path),
         "size_bytes": size_bytes,

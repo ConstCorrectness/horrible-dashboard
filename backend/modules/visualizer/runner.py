@@ -58,6 +58,7 @@ pygame.display.update = _custom_update
 
 class PygameProcess:
     """Manages a single running Pygame subprocess and its output reading tasks."""
+
     def __init__(self, ws_conn: WsConnection, code: str):
         self.ws_conn = ws_conn
         self.code = code
@@ -136,14 +137,20 @@ class PygameProcess:
                 if "No module named 'pygame'" in line:
                     await self._send(
                         "error",
-                        {"message": "Pygame is not installed on the system. Run 'uv add pygame' to install it."},
+                        {
+                            "message": "Pygame is not installed on the system. Run 'uv add pygame' to install it."
+                        },
                     )
-            
+
             if accumulated_errors:
                 err_msg = "\n".join(accumulated_errors)
                 logger.warning(f"Pygame stderr: {err_msg}")
                 # Filter out pygame community welcome header
-                filtered_errs = [e for e in accumulated_errors if "Hello from the pygame community" not in e]
+                filtered_errs = [
+                    e
+                    for e in accumulated_errors
+                    if "Hello from the pygame community" not in e
+                ]
                 if filtered_errs:
                     await self._send(
                         "error",
@@ -175,6 +182,7 @@ class PygameProcess:
 
 class VisualizerManager:
     """Manages active Pygame sessions per active WebSocket connection."""
+
     def __init__(self):
         self.sessions: Dict[WsConnection, PygameProcess] = {}
 
@@ -186,7 +194,7 @@ class VisualizerManager:
             code = data.get("code", "")
             # Stop any existing process for this connection
             self.stop_for(ws_conn)
-            
+
             # Start new process
             proc = PygameProcess(ws_conn, code)
             self.sessions[ws_conn] = proc

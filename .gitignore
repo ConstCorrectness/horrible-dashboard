@@ -158,3 +158,12 @@ apps/desktop/src-tauri/gen/
 .DS_Store
 Thumbs.db
 
+# C# / .NET
+[Bb]in/
+[Oo]bj/
+*.suo
+*.user
+*.userossc
+*.sln.docstates
+
+

@@ -2,7 +2,6 @@ import logging
 import hashlib
 import math
 import httpx
-from typing import Any
 from backend.modules.agent.routes import _load_config
 from backend.modules.agent import providers as P
 
@@ -24,7 +23,7 @@ def get_local_fallback_embedding(text: str) -> list[float]:
 
     # Initialize a zero vector
     vector = [0.0] * FALLBACK_DIMENSION
-    
+
     # Process text: lowercase and tokenize
     words = text.lower().split()
     if not words:
@@ -71,7 +70,7 @@ async def get_embedding(text: str) -> tuple[list[float], str]:
 
     info = P.provider_for(config.provider)
     endpoint = config.endpoint or info.default_endpoint
-    
+
     # Base fallback is the user's configured agent model
     model = config.model
 
@@ -85,7 +84,9 @@ async def get_embedding(text: str) -> tuple[list[float], str]:
                 matched = next((m for m in available_models if kw in m.lower()), None)
                 if matched:
                     model = matched
-                    logger.info(f"Detected and selected dedicated embedding model: {model}")
+                    logger.info(
+                        f"Detected and selected dedicated embedding model: {model}"
+                    )
                     break
         except Exception as e:
             logger.debug(f"Failed to query available models list: {e}")
@@ -106,7 +107,11 @@ async def get_embedding(text: str) -> tuple[list[float], str]:
                     res = await client.post(url, json={"model": model, "input": text})
                     res.raise_for_status()
                     embeddings = res.json().get("embeddings")
-                    if embeddings and isinstance(embeddings, list) and len(embeddings) > 0:
+                    if (
+                        embeddings
+                        and isinstance(embeddings, list)
+                        and len(embeddings) > 0
+                    ):
                         return [float(x) for x in embeddings[0]], f"ollama/{model}"
                     # Maybe it returns a flat "embedding" key
                     emb = res.json().get("embedding")
@@ -130,4 +135,6 @@ async def get_embedding(text: str) -> tuple[list[float], str]:
                 f"Failed to fetch remote embedding from {info.kind} ({exc}); "
                 "falling back to local deterministic hash embedding."
             )
-            return get_local_fallback_embedding(text), f"local-fallback (error: {type(exc).__name__})"
+            return get_local_fallback_embedding(
+                text
+            ), f"local-fallback (error: {type(exc).__name__})"
