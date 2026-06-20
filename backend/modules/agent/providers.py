@@ -180,16 +180,25 @@ async def chat_stream(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]],
     on_delta: DeltaSink,
+    temperature: float | None = None,
+    tool_choice: str | None = None,
 ) -> ChatResult:
     """One **streamed** tool-calling round. Emits the model's reasoning
     (``thinking`` / ``reasoning_content``) and answer ``content`` token-deltas via
     ``on_delta(reasoning, content)`` as they arrive, and returns the assembled
-    ``ChatResult`` (assistant message + tool calls + full content) for the loop."""
+    ``ChatResult`` (assistant message + tool calls + full content) for the loop.
+
+    ``temperature`` controls sampling (the orchestrator uses ~0 so the model emits
+    structured tool calls instead of narrating them). ``tool_choice`` (``"required"``/
+    ``"auto"``/a specific function) forces a call on the OpenAI dialect; Ollama has no
+    reliable equivalent, so it's ignored there."""
     if info.dialect == "ollama":
         return await _ollama_chat_stream(
-            client, endpoint, model, messages, tools, on_delta
+            client, endpoint, model, messages, tools, on_delta, temperature
         )
-    return await _openai_chat_stream(client, endpoint, model, messages, tools, on_delta)
+    return await _openai_chat_stream(
+        client, endpoint, model, messages, tools, on_delta, temperature, tool_choice
+    )
 
 
 async def _ollama_chat_stream(
@@ -199,9 +208,17 @@ async def _ollama_chat_stream(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]],
     on_delta: DeltaSink,
+    temperature: float | None = None,
 ) -> ChatResult:
     url = f"{endpoint}/api/chat"
-    base = {"model": model, "messages": messages, "tools": tools, "stream": True}
+    base: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "tools": tools,
+        "stream": True,
+    }
+    if temperature is not None:
+        base["options"] = {"temperature": temperature}
 
     async def run(think: bool) -> ChatResult:
         payload = {**base, "think": True} if think else base
@@ -251,9 +268,20 @@ async def _openai_chat_stream(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]],
     on_delta: DeltaSink,
+    temperature: float | None = None,
+    tool_choice: str | None = None,
 ) -> ChatResult:
     url = f"{endpoint}/v1/chat/completions"
-    payload = {"model": model, "messages": messages, "tools": tools, "stream": True}
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "tools": tools,
+        "stream": True,
+    }
+    if temperature is not None:
+        payload["temperature"] = temperature
+    if tool_choice is not None:
+        payload["tool_choice"] = tool_choice
     content_parts: list[str] = []
     # OpenAI streams tool calls as partial deltas keyed by index; assemble them.
     tool_acc: dict[int, dict[str, Any]] = {}
@@ -325,9 +353,11 @@ async def generate(
     model: str,
     prompt: str,
     max_tokens: int = 64,
+    temperature: float = 0.2,
 ) -> str:
     """One non-streaming, short completion (for editor autosuggest), normalized
-    across dialects to a plain string. Token-capped to keep latency low."""
+    across dialects to a plain string. Token-capped to keep latency low; low
+    ``temperature`` by default so code completions are stable, not creative."""
     if info.dialect == "ollama":
         res = await client.post(
             f"{endpoint}/api/generate",
@@ -335,7 +365,7 @@ async def generate(
                 "model": model,
                 "prompt": prompt,
                 "stream": False,
-                "options": {"num_predict": max_tokens},
+                "options": {"num_predict": max_tokens, "temperature": temperature},
             },
         )
         res.raise_for_status()
@@ -347,6 +377,7 @@ async def generate(
             "messages": [{"role": "user", "content": prompt}],
             "stream": False,
             "max_tokens": max_tokens,
+            "temperature": temperature,
         },
     )
     res.raise_for_status()

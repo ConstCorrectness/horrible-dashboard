@@ -4,6 +4,8 @@
  * open buffer. Each mounted `BufferView` registers a controller; the agent reads
  * the active buffer via `getAgentContext` and targets edits by URI.
  */
+import type { AgentDiagnostic } from './lsp-registry';
+
 // A `type` (not `interface`) so it's assignable to `AgentContextSnapshot`
 // (`Record<string, unknown>`) — interfaces lack the implicit index signature.
 export type BufferSnapshot = {
@@ -12,6 +14,9 @@ export type BufferSnapshot = {
   content: string;
   dirty: boolean;
   selection: { from: number; to: number; text: string };
+  /** Live language-server diagnostics for the buffer (empty if none / no server),
+   * so the agent sees the errors it caused without a separate tool call. */
+  diagnostics: AgentDiagnostic[];
 };
 
 export interface BufferController {

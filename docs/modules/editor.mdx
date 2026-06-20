@@ -61,10 +61,13 @@ specific open buffer. Verified live: the agent replaced an open buffer's content
 via `editor.applyEdit`. The editor exposes
 [agent tools & `getAgentContext`](../architecture/agent-tools.mdx):
 
-- **Read (ungated):** the active buffer's uri, full text, selection, and dirty
-  state via the pane's `getAgentContext()` snapshot.
+- **Read (ungated):** the active buffer's uri, full text, selection, dirty state,
+  and live LSP **diagnostics** via the pane's `getAgentContext()` snapshot; plus the
+  `editor.getDiagnostics(uri)` and `editor.findReferences(...)` read tools (the
+  latter backed by LSP `references`).
 - **Gated:** `editor.proposeEdit(uri, content)`, `editor.applyEdit(uri, content)`,
-  and `editor.save(uri)`, matched by the same filesystem `Edit`/`files.write` rules
+  `editor.rename(...)` (LSP symbol rename, applied across files), and
+  `editor.save(uri)`, matched by the same filesystem `Edit`/`files.write` rules
   the tree uses. All auto-allow under the `acceptEdits` mode (Claude Code parity).
   See the [permission system](../architecture/agent-tools.mdx#the-permission-system).
 
@@ -108,9 +111,10 @@ Copilot side by side:
 | **L3 LLM**   | backend local model             | inline ghost text + agent edits, **grounded by L2**                  | ~0.1–n s       |
 
 L3 ships (the ghost-text autosuggest above + the agent edit tools). L1 is mostly
-CodeMirror's `basicSetup`. **L2 (LSP) now has its spine** — the transport plus
-**diagnostics**, **completion**, **hover**, and **go-to-definition** — with
-rename/references/format layering onto the same pipe next.
+CodeMirror's `basicSetup`. **L2 (LSP) now covers** the transport plus
+**diagnostics**, **completion**, **hover**, **go-to-definition**, **rename**, and
+**references** — with formatting layering onto the same pipe next. L2 also now
+**grounds L3**: the ghost-text prompt and the agent both read LSP state (see below).
 
 ### Where the LSP runs: the backend, over a `/ws` `lsp` channel (implemented)
 
@@ -126,17 +130,34 @@ is the LSP client**. `LspManager` (`backend/modules/lsp/manager.py`, mirroring
 translates LSP's `Content-Length` framing ↔ discrete `lsp`-channel messages
 (`start`/`rpc`/`stop` ↔ `started`/`rpc`/`exit`/`error`). It never parses LSP
 semantics, so every future capability flows through the one pipe with **no backend
-change**. The frontend client lives in `editor/lsp.ts` (a CodeMirror extension wired
+change**. The server is spawned with a blocking `subprocess.Popen` and its stdio is
+pumped on a per-session daemon thread (reads relayed to the socket via
+`run_coroutine_threadsafe`), **not** `asyncio.create_subprocess_exec` — that asyncio
+API needs the `ProactorEventLoop`, but uvicorn runs the app on the `SelectorEventLoop`
+under `--reload`/`--workers>1`, where it raises `NotImplementedError`. The thread
+approach is loop-agnostic, so servers spawn automatically regardless of how the
+backend was launched (the terminal PTY is already loop-agnostic the same way — a PTY
+library with blocking reads offloaded via `asyncio.to_thread`). The frontend client lives in `editor/lsp.ts` (a CodeMirror extension wired
 through a compartment in `BufferView.tsx`): it renders `publishDiagnostics` via
 `@codemirror/lint`, serves `textDocument/completion` as a `@codemirror/autocomplete`
-source, shows `textDocument/hover` in a CodeMirror hover tooltip, and binds **F12**
+source, shows `textDocument/hover` in a CodeMirror hover tooltip, binds **F12**
 to `textDocument/definition` (same-file jumps move the cursor; cross-file jumps open
-the target via the editor's `openBuffer` and reveal it in the tree). Request-shaped
+the target via the editor's `openBuffer` and reveal it in the tree), and binds **F2**
+to `textDocument/rename`. Request-shaped
 methods use JSON-RPC id correlation; same-file detection normalizes `file://` URIs
 (servers vary in drive-letter case). Servers spawn only when present on `PATH` (else the editor
 silently degrades); the registry currently maps `python → pylsp` (needs `pyflakes`/
 `pycodestyle` installed to emit diagnostics), `typescript`/`javascript →
 typescript-language-server`, and `rust → rust-analyzer`.
+
+A small **by-URI registry** (`editor/lsp-registry.ts`, keyed by the buffer's
+`workspace-file:` source URI — the same key the [agent edit tools](#agent-integration)
+use) is the seam the agent reaches LSP through without touching CodeMirror: the live
+client records its latest **diagnostics** there and registers a handle exposing
+**rename**, **find-references**, and ghost-text **grounding**. A rename's
+`WorkspaceEdit` is applied across files — the live buffer is edited in place, other
+open buffers update through their controller, and closed files are loaded, edited,
+and saved.
 
 The buffer — not the file on disk — is the source of truth while open, so the
 **document-sync lifecycle** matters:
@@ -179,26 +200,37 @@ agent edit a large file with a small local model.
 
 ### LSP-grounded ghost text
 
-The ghost-text prompt is `prefix<CURSOR>suffix` today. Enriching it with **L2
-context** — the LSP's completion candidates and the expected type at the cursor —
-makes the local model suggest code that actually resolves instead of hallucinating
-symbols. The split stays clean: **LSP drives the dropdown completion list, the LLM
-drives multi-token inline ghost text**, now grounded. (A dedicated small code model
-for `/agent/complete` is worth considering — see [agent chat](agent-chat.mdx).)
+**Status: implemented.** The ghost-text prompt was `prefix<CURSOR>suffix`; it is now
+enriched with **L2 context** — the LSP's completion candidates in scope and the
+hover type/signature at the cursor — so the local model suggests code that actually
+resolves instead of hallucinating symbols. Before each `/agent/complete` request the
+buffer pulls `grounding(offset)` from its LSP client (a parallel
+`completion`+`hover` round-trip), and `CompleteRequest` carries the `completions`
+list and `hover` text into the prompt (`_grounding` in `routes.py`). Only code
+buffers with a server get grounded; notes fall back to the plain prompt. The split
+stays clean: **LSP drives the dropdown completion list, the LLM drives multi-token
+inline ghost text**, now grounded. (A dedicated small code model for
+`/agent/complete` is worth considering — see [agent chat](agent-chat.mdx).)
 
 ### The agent reading & watching the buffer
 
-- **Passive (read):** add the buffer's LSP **diagnostics** to `getAgentContext` plus
-  a `get_diagnostics(uri)` read tool, so the agent sees the errors it causes and
-  self-corrects — the highest-leverage agent-editor upgrade.
-- **Proactive (opt-in):** an `editor.agentWatch` mode where each
+- **Passive (read) — implemented:** the buffer's LSP **diagnostics** are in
+  `getAgentContext` (the buffer snapshot's `diagnostics`) **and** behind a
+  `editor.getDiagnostics(uri)` read tool, so the agent sees the errors it causes and
+  self-corrects — the highest-leverage agent-editor upgrade. 1-based line/column,
+  plain severity.
+- **Agent-as-LSP-client tools — implemented:** `editor.rename` and
+  `editor.findReferences` backed by LSP `rename`/`references` — correct, scope-aware
+  cross-file edits instead of regex. Both take a `symbol` name (first occurrence) or
+  an explicit 1-based `line`/`column`. Reads (`getDiagnostics`/`findReferences`)
+  ungated; `rename` is gated like `applyEdit` (in `EDIT_SAFE_TOOLS`, so it
+  auto-allows under `acceptEdits`) — it is a language-server **symbol** rename, a
+  scoped refactor, not a filesystem rename. `editor.format` (LSP `formatting`) is the
+  remaining one.
+- **Proactive (opt-in) — design:** an `editor.agentWatch` mode where each
   `didChange → publishDiagnostics` with errors pings the orchestrator with the
   diagnostic + surrounding code; it may `proposeEdit` a fix (suggest, never
   auto-apply). Gated, off by default.
-- **Agent-as-LSP-client tools:** `editor.rename`, `editor.findReferences`,
-  `editor.format` backed by LSP `rename`/`references`/`formatting` — correct
-  cross-file edits instead of regex. Reads ungated; mutations gated like
-  `applyEdit` (auto-allow under `acceptEdits`).
 
 ## Browser vs desktop
 

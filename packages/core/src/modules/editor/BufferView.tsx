@@ -7,7 +7,7 @@
  * The Mod-s keymap saves directly here; C3 routes editing commands through the
  * shell keybinding service. See docs/modules/editor.md.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useContext, useEffect, useRef, useState } from 'react';
 import { basicSetup, EditorView } from 'codemirror';
 import { Compartment, EditorState } from '@codemirror/state';
 import { markdown } from '@codemirror/lang-markdown';
@@ -16,7 +16,12 @@ import { python } from '@codemirror/lang-python';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { unifiedMergeView } from '@codemirror/merge';
 
-import { useAgentContext } from '../../agent-context';
+import {
+  clearActiveContextInstance,
+  PaneInstanceContext,
+  setActiveContextInstance,
+  useAgentContext,
+} from '../../agent-context';
 import { ApiError } from '../../api';
 import { registry } from '../../registry';
 import { usePaneParams } from '../../panes';
@@ -26,6 +31,7 @@ import { autosuggest } from './autosuggest';
 import { registerBuffer, type BufferSnapshot } from './buffers';
 import { openBuffer, setActiveBufferSource } from './index';
 import { dirOf, lspExtension, lspLanguageId } from './lsp';
+import { getLspClient, readDiagnostics } from './lsp-registry';
 import { loadSource, saveSource } from './sources';
 
 const FILE_URI = 'workspace-file:';
@@ -44,7 +50,13 @@ function lspFor(source: string | null, title: string) {
   const language = lspLanguageId(title);
   if (!language) return [];
   const path = source.slice(FILE_URI.length);
-  return lspExtension({ path, languageId: language, root: dirOf(path), openFile: goToFile });
+  return lspExtension({
+    path,
+    languageId: language,
+    root: dirOf(path),
+    bufferUri: source,
+    openFile: goToFile,
+  });
 }
 
 function languageFor(title: string) {
@@ -59,12 +71,15 @@ function languageFor(title: string) {
 function languageHint(title: string): string {
   if (/\.tsx?$/i.test(title)) return 'TypeScript';
   if (/\.jsx?$|\.mjs$|\.cjs$/i.test(title)) return 'JavaScript';
+  if (/\.py$/i.test(title)) return 'Python';
+  if (/\.rs$/i.test(title)) return 'Rust';
   return 'Markdown';
 }
 
 export function BufferView() {
   const params = usePaneParams();
   const source = typeof params.source === 'string' ? params.source : null;
+  const instanceId = useContext(PaneInstanceContext);
 
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -100,8 +115,13 @@ export function BufferView() {
           EditorView.updateListener.of((u) => {
             if (u.docChanged) setDirty(true);
             // Track the focused buffer as "active" (Mod-s etc. route through the
-            // shell keybinding service → editor.save, never a hardcoded handler).
-            if (u.focusChanged && u.view.hasFocus && source) setActiveBufferSource(source);
+            // shell keybinding service → editor.save, never a hardcoded handler;
+            // the agent attaches this instance's snapshot to a turn so it can alter
+            // the open code without a discovery round-trip).
+            if (u.focusChanged && u.view.hasFocus) {
+              if (source) setActiveBufferSource(source);
+              if (instanceId) setActiveContextInstance(instanceId);
+            }
           }),
         ],
       }),
@@ -117,6 +137,7 @@ export function BufferView() {
       return;
     }
     setActiveBufferSource(source);
+    if (instanceId) setActiveContextInstance(instanceId);
     let cancelled = false;
     setStatus('Loading…');
     void loadSource(source)
@@ -145,6 +166,13 @@ export function BufferView() {
       cancelled = true;
     };
   }, [source]);
+
+  // Drop the active-context marker when this buffer unmounts, so a closed pane
+  // doesn't keep feeding stale content to the agent.
+  useEffect(() => {
+    if (!instanceId) return;
+    return () => clearActiveContextInstance(instanceId);
+  }, [instanceId]);
 
   const save = async () => {
     const view = viewRef.current;
@@ -211,6 +239,7 @@ export function BufferView() {
     content: '',
     dirty,
     selection: { from: 0, to: 0, text: '' },
+    diagnostics: [],
   }));
   snapshotRef.current = () => {
     const view = viewRef.current;
@@ -224,6 +253,7 @@ export function BufferView() {
         view && sel
           ? { from: sel.from, to: sel.to, text: view.state.doc.sliceString(sel.from, sel.to) }
           : { from: 0, to: 0, text: '' },
+      diagnostics: source ? readDiagnostics(source) : [],
     };
   };
 
@@ -238,8 +268,26 @@ export function BufferView() {
     const ext =
       autosuggestOn && !proposing
         ? autosuggest({
-            fetch: (prefix, suffix, signal) =>
-              completeCode(prefix, suffix, languageHint(title), signal),
+            fetch: async (prefix, suffix, signal) => {
+              // Ground the prompt with L2 (LSP) context — the symbols in scope and
+              // the type at the cursor — so the local model suggests code that
+              // resolves instead of hallucinating. Only code buffers have a client;
+              // notes fall back to the plain prefix/suffix prompt.
+              const client = source ? getLspClient(source) : undefined;
+              const grounding = client
+                ? await client.grounding(prefix.length).catch(() => null)
+                : null;
+              return completeCode(
+                {
+                  prefix,
+                  suffix,
+                  language: languageHint(title),
+                  completions: grounding?.completions,
+                  hover: grounding?.hover || undefined,
+                },
+                signal,
+              );
+            },
           })
         : [];
     view.dispatch({ effects: autoRef.current.reconfigure(ext) });

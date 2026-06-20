@@ -17,10 +17,13 @@ import {
 } from './api';
 import { refreshTree } from './store';
 
+const PATH_DESC =
+  'Path within a workspace root — absolute, or relative to a root (e.g. "notes.txt" or "src/app.py"); a leading segment matching a root name selects that root.';
+
 const pathParam = {
   type: 'object' as const,
   properties: {
-    path: { type: 'string' as const, description: 'Absolute path within a workspace root' },
+    path: { type: 'string' as const, description: PATH_DESC },
   },
   required: ['path'],
 };
@@ -54,7 +57,7 @@ export const filesAgentTools: AgentToolDecl[] = [
     params: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'Absolute path to create' },
+        path: { type: 'string', description: PATH_DESC },
         kind: { type: 'string', enum: ['file', 'dir'], description: 'Defaults to file' },
         content: { type: 'string', description: 'Initial content for a file' },
       },
@@ -75,7 +78,7 @@ export const filesAgentTools: AgentToolDecl[] = [
     params: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'Absolute path to write' },
+        path: { type: 'string', description: PATH_DESC },
         content: { type: 'string', description: 'New file content' },
       },
       required: ['path', 'content'],

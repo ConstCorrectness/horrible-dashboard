@@ -1,0 +1,305 @@
+---
+sidebar_position: 7
+sidebar_label: Agent ⇄ editor trajectories
+---
+
+# Agent ⇄ editor trajectories
+
+How the agent reaches the editor's language intelligence, how the LSP transport
+spawns servers, and the reliability work behind tool-calling — each as a sequence
+diagram of the actual flow, with the problem it solves. This is the "why it looks
+like this" companion to [editor](../modules/editor.mdx),
+[agent chat](../modules/agent-chat.mdx), and
+[agent tools](agent-tools.mdx).
+
+Participants used below:
+
+- **CM** — the CodeMirror buffer (`editor/lsp.ts`, `BufferView.tsx`)
+- **Reg** — the by-URI registries (`editor/lsp-registry.ts`, `editor/buffers.ts`)
+- **FE** — the frontend agent relay (`agent/orchestrator-client.ts`, `tool-exec.ts`)
+- **BE** — the backend orchestrator (`agent/orchestrator.py`)
+- **LspMgr** — the LSP transport (`lsp/manager.py`)
+- **LS** — the language server process (`pylsp` / `typescript-language-server`)
+- **Model** — the local model (Ollama / LM Studio / vLLM via `agent/providers.py`)
+
+---
+
+## 1. LSP transport — spawn on a thread, not the asyncio loop
+
+**Problem.** `asyncio.create_subprocess_exec` only works on Windows'
+`ProactorEventLoop`, but uvicorn runs the app on the `SelectorEventLoop` whenever
+`--reload` is set (its loop factory returns Selector when `use_subprocess=True`). On
+the Selector loop the spawn raises `NotImplementedError` — so under the documented
+dev command (`uvicorn … --reload`) the language server **silently never started**,
+and every LSP capability was dead.
+
+**Fix.** `LspManager` spawns with blocking `subprocess.Popen` and pumps stdio on a
+per-session **daemon thread**, scheduling WS sends back onto the loop with
+`run_coroutine_threadsafe(...).result()` (blocking the reader thread preserves
+message order and applies backpressure). Loop-agnostic — works on either loop.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant CM as CodeMirror (lsp.ts)
+    participant LspMgr as LspManager (loop)
+    participant T as Reader thread
+    participant LS as Language server (stdio)
+
+    CM->>LspMgr: ws lsp "start" {languageId, root}
+    Note over LspMgr: which(cmd) in fixed registry<br/>(never client input)
+    LspMgr->>LspMgr: await to_thread(Popen, …)
+    LspMgr-->>CM: ws lsp "started"
+    LspMgr->>T: start daemon thread(read_loop)
+
+    par editing (client → server)
+        CM->>LspMgr: ws lsp "rpc" {payload}
+        LspMgr->>LspMgr: await to_thread(write) under per-session lock
+        LspMgr->>LS: Content-Length framed JSON-RPC
+    and server → client (on the thread)
+        LS-->>T: framed JSON-RPC (blocking read)
+        T->>LspMgr: run_coroutine_threadsafe(send_json).result()
+        LspMgr-->>CM: ws lsp "rpc" {payload}
+    end
+
+    CM->>LspMgr: ws lsp "stop"
+    LspMgr->>LS: kill + close stdin
+    LS-->>T: EOF → thread exits, emits "exit"
+```
+
+The terminal PTY (`terminal/manager.py`) is unaffected — it already spawns via
+`pywinpty`/`ptyprocess` on a thread, not asyncio subprocess.
+
+---
+
+## 2. Agent-driven rename — `textDocument/rename` → WorkspaceEdit applied across files
+
+**Problem.** Regex rename is wrong across scopes/files. **Fix.** `editor.rename`
+(gated like `applyEdit`, auto-allow under `acceptEdits`) drives the LSP rename and
+applies the returned `WorkspaceEdit`: the live buffer is edited in place, other open
+buffers update through their controller, closed files are loaded/edited/saved.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Model
+    participant BE as orchestrator.py
+    participant FE as relay (tool-exec)
+    participant Reg as lsp-registry
+    participant CM as live buffer
+    participant LS as language server
+    participant Disk as files API
+
+    Model->>BE: tool_call editor.rename {symbol, newName}
+    Note over BE: _gate → EDIT_SAFE_TOOLS<br/>(allow under acceptEdits)
+    BE->>FE: ws agent "tool_call"
+    FE->>Reg: getLspClient(activeUri).rename(target, newName)
+    Reg->>CM: resolveTarget → position
+    CM->>LS: textDocument/rename
+    LS-->>CM: WorkspaceEdit {changes / documentChanges}
+    loop per file URI in the edit
+        alt is the live buffer
+            CM->>CM: view.dispatch(edits) (in place)
+        else another open buffer
+            CM->>Reg: getBuffer(uri).setContent(applyEdits(…))
+        else closed file
+            CM->>Disk: loadSource → applyEdits → saveSource
+        end
+    end
+    FE-->>BE: tool_result {changes: [{path, edits, open}]}
+    BE-->>Model: result → final answer
+```
+
+---
+
+## 3. `get_diagnostics` read path + diagnostics in `getAgentContext`
+
+**Problem.** The agent edited blind — it couldn't see the errors it caused.
+**Fix.** The LSP client records each `publishDiagnostics` into `lsp-registry`
+(keyed by the buffer's `workspace-file:` source URI). The agent reads them two ways:
+the ungated `editor.getDiagnostics(uri)` tool, and the buffer's `getAgentContext`
+snapshot (`BufferSnapshot.diagnostics`), so they ride along with `get_pane_context`.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant LS as language server
+    participant CM as lsp.ts
+    participant Reg as lsp-registry
+    participant FE as relay
+    participant Model
+
+    LS-->>CM: textDocument/publishDiagnostics
+    CM->>CM: render @codemirror/lint
+    CM->>Reg: recordDiagnostics(uri, flattened[])
+    Note over Reg: same raw array → linter AND store
+
+    Model->>FE: tool_call editor.getDiagnostics {uri?}
+    FE->>Reg: readDiagnostics(resolveUri(uri))
+    Reg-->>FE: [{severity, message, line, column, …}]
+    FE-->>Model: result (1-based positions)
+```
+
+---
+
+## 4. LSP-grounded ghost text — L2 grounds L3
+
+**Problem.** The ghost-text prompt was just `prefix<CURSOR>suffix`, so a small model
+hallucinated symbols. **Fix.** Before each completion the buffer pulls
+`grounding(offset)` (a parallel `completion` + `hover` round-trip) and threads the
+in-scope symbols + cursor type into the prompt. **LSP drives the dropdown; the LLM
+drives inline ghost text, now grounded.**
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant CM as autosuggest.ts
+    participant Reg as lsp-registry
+    participant LS as language server
+    participant BE as /agent/complete
+    participant Model
+
+    Note over CM: typing pause (debounced)
+    CM->>Reg: getLspClient(source)?.grounding(cursorOffset)
+    par
+        Reg->>LS: textDocument/completion
+        Reg->>LS: textDocument/hover
+    end
+    LS-->>Reg: items[] + hover text
+    Reg-->>CM: {completions, hover}
+    CM->>BE: POST /agent/complete {prefix, suffix, completions, hover}
+    Note over BE: _grounding() folds L2 context<br/>into the prompt
+    BE->>Model: generate (low temperature)
+    Model-->>BE: insertion text
+    BE-->>CM: {completion} → ghost text (Tab accepts)
+```
+
+---
+
+## 5. Agent file paths — anchor relative to a workspace root
+
+**Problem.** A model passes a bare path (`notes.txt`, "assuming the workspace
+root"); the API resolved it against the backend CWD → outside every root → `403`,
+so file creation failed *even after the user accepted the permission*. The model has
+no way to know absolute root paths. **Fix.** `_resolve` anchors a relative path to a
+root first (a leading segment matching a root name selects it, else the first root);
+the `is_relative_to(root)` boundary check runs **after** anchoring, so `../` escapes
+are still `403`.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Model
+    participant FE as relay
+    participant BE as files/routes.py _resolve
+    participant FS as filesystem
+
+    Model->>FE: tool_call files.write {path:"notes.txt", content}
+    FE->>BE: PUT /files/write
+    alt absolute path
+        BE->>BE: Path(raw).resolve()
+    else relative path
+        BE->>BE: _resolve_relative(raw, roots)
+        Note over BE: "notes.txt" → <root>/notes.txt<br/>"repo/x" → matches root name
+    end
+    BE->>BE: is_relative_to(root)?  ../escape → 403
+    BE->>FS: write file
+    BE-->>FE: 200 {entry}
+    FE-->>Model: ok
+```
+
+---
+
+## 6. Editor injection — don't trust a stale active buffer
+
+**Problem.** `editor.applyEdit` with no `uri` fell back to `getActiveBufferSource()`,
+which is sticky and never reset when a buffer closes → pointed at a dead URI →
+`getBuffer()` returned nothing → "no open buffer" (and the model hallucinated
+success over the error). **Fix.** `resolveUri` trusts the active source only if it's
+still a registered buffer; otherwise it falls back to any open buffer.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Model
+    participant FE as editor/agentTools
+    participant Reg as buffers registry
+    participant CM as live buffer
+
+    Model->>FE: tool_call editor.applyEdit {content} (no uri)
+    FE->>FE: resolveUri()
+    FE->>Reg: getBuffer(getActiveBufferSource())
+    alt active still registered
+        Reg-->>FE: controller
+    else stale (buffer closed)
+        Reg-->>FE: undefined
+        FE->>Reg: listBufferUris()[0] (a live buffer)
+    end
+    FE->>CM: controller.setContent(content)
+    FE-->>Model: {ok, uri}
+```
+
+---
+
+## 7. Tool-calling reliability — greedy decoding + one bounded forced retry
+
+The orchestrator sent no sampling options, so Ollama ran at its default temperature
+(0.8). The loop now decodes **greedily** (temp 0, settings-overridable via
+`agent.orchestrator.temperature`) and a **separate model override**
+(`agent.orchestrator.model`) can drive tool-calling with a stronger model than
+chat/autosuggest use — both adjustable in **Settings → Agent orchestrator**. It does
+**not** force a tool unconditionally; a conversational reply must stay a reply. Only
+when the prose reads like an *unemitted* call does it retry once with
+`tool_choice:"required"` — and only on the OpenAI dialect (Ollama has no reliable
+`tool_choice`).
+
+```mermaid
+flowchart TD
+    A[chat_stream<br/>temperature 0, model = override or configured] --> B{tool_calls?}
+    B -- yes --> C[gate + relay each call] --> A
+    B -- no --> D{OpenAI dialect<br/>and prose looks like<br/>an unemitted call<br/>and not retried yet?}
+    D -- yes --> E[append nudge<br/>retry once tool_choice=required] --> F{tool_calls?}
+    F -- yes --> C
+    F -- no --> G[send final answer]
+    D -- no --> G
+```
+
+---
+
+## 8. The reliability experiment — measuring tool emission
+
+To separate cause from coincidence, the A/B hit Ollama's `/api/chat` **directly**
+(bypassing the UI, dockview, and chat history), varying only one knob at a time and
+tallying whether `message.tool_calls` came back.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Test as A/B harness
+    participant Ollama as /api/chat
+    loop model × temperature × N trials
+        Test->>Ollama: {model, options.temperature, think, tools, messages}
+        Ollama-->>Test: message {tool_calls? / content}
+        Test->>Test: tally emitted = bool(tool_calls)
+    end
+    Test->>Test: print emission rate per cell
+```
+
+**Results (2026-06-20, this machine):**
+
+| Model | Setup | temp 0.8 | temp 0.0 |
+| --- | --- | --- | --- |
+| `gemma4:e2b` | 1 tool, plain prompt | 6/6 | 6/6 |
+| `gemma4:e2b` | full prompt, 6 tools, `think:true` | 8/8 | 8/8 |
+| `gemma4:12b` | any | — | — |
+
+**Findings.**
+
+- **Temperature was not the cause** of the "can't create files / inject code"
+  failures — `gemma4:e2b` emits the call reliably at both temperatures, even with
+  thinking on and a multi-tool catalog. The real causes were §5 (path `403`) and §6
+  (stale buffer); the temp-0 change is harmless hardening, not the fix.
+- **`gemma4:12b` can't run on this machine** — every request `500`s with
+  `cudaMalloc failed: out of memory` (GPU OOM, even after CPU-offload retry; gemma4's
+  vision projector adds VRAM pressure). The model-override **setting** works, but
+  point it at a model that fits VRAM, not 12b here.

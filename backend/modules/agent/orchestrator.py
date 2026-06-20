@@ -10,6 +10,7 @@ slice. See docs/modules/agent-chat.md.
 
 import asyncio
 import logging
+import re
 import uuid
 from typing import Any
 
@@ -18,6 +19,7 @@ import httpx
 from backend.modules.agent import permission_store, permissions
 from backend.modules.agent import providers as P
 from backend.modules.agent.routes import _load_config
+from backend.modules.settings.routes import get_value
 from backend.modules.telemetry.instrument import instrumented_client
 from backend.modules.ws import WsConnection
 
@@ -28,6 +30,53 @@ MAX_ROUNDS = 8
 TOOL_TIMEOUT_S = 30.0
 # A permission prompt waits on a human, so it gets a much longer leash.
 APPROVAL_TIMEOUT_S = 300.0
+
+# Greedy decoding for tool-calling turns: at higher temperatures small local models
+# narrate an action ("I'll call …") instead of emitting the structured tool call.
+# Overridable via the settings store (no frontend change required).
+DEFAULT_TOOL_TEMPERATURE = 0.0
+
+# A weak model sometimes describes an action in prose without emitting the call. On
+# the OpenAI dialect (which has a real `tool_choice`) we give it ONE forced retry
+# when the text reads like an unemitted call — action phrasing or a named tool.
+_ACTION_HINT = re.compile(
+    r"\b(I['’]?ll|I will|I have|I'm going to|I am going to|let me|"
+    r"calling|call the|use the|using the)\b",
+    re.IGNORECASE,
+)
+_FORCE_TOOL_NUDGE = (
+    "You described an action but did not emit a tool call. If an action is needed, "
+    "emit the appropriate tool call now."
+)
+
+
+def _tool_temperature() -> float:
+    """Sampling temperature for orchestrator turns (settings-overridable)."""
+    value = get_value("agent.orchestrator.temperature", DEFAULT_TOOL_TEMPERATURE)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_TOOL_TEMPERATURE
+
+
+def _orchestrator_model(default: str) -> str:
+    """Model for orchestrator turns. A separate override (settings-overridable)
+    lets a stronger model drive tool calls than the one used for chat/autosuggest;
+    blank falls back to the configured agent model."""
+    value = get_value("agent.orchestrator.model", "")
+    return value.strip() if isinstance(value, str) and value.strip() else default
+
+
+def _looks_like_unemitted_tool_call(content: str, tools: list[dict[str, Any]]) -> bool:
+    """Heuristic: the model answered in prose that reads like it meant to call a
+    tool (action phrasing, or it names one of the available tools)."""
+    if not content:
+        return False
+    if _ACTION_HINT.search(content):
+        return True
+    names = {t["function"]["name"] for t in tools}
+    return any(name in content for name in names)
+
 
 SYSTEM_PROMPT = (
     "You are the orchestrator for horrible-dashboard, a dockable dashboard app. "
@@ -262,12 +311,14 @@ async def handle_agent_message(conn: WsConnection, msg: dict[str, Any]) -> None:
         # Must not block the receive loop — the turn awaits tool_results that
         # arrive on that same loop. Run it detached.
         history = data.get("history")
+        context = data.get("context")
         asyncio.create_task(
             run_agent_turn(
                 conn,
                 str(data.get("turnId", "")),
                 str(data.get("prompt", "")),
                 history if isinstance(history, list) else None,
+                context if isinstance(context, dict) else None,
             )
         )
     elif event == "tool_result":
@@ -376,6 +427,42 @@ async def _gate(conn: WsConnection, turn_id: str, call: Any) -> bool:
     return choice == "allow_once"
 
 
+def _active_editor_message(context: dict[str, Any] | None) -> dict[str, Any] | None:
+    """A system message carrying the user's *focused* editor buffer, attached by the
+    frontend to the turn. It hands the model the open code up front so it can alter
+    it directly — modify this content, write the whole buffer back with
+    editor.proposeEdit(uri=…) — instead of first discovering and reading the buffer
+    via list_open_panes + get_pane_context (a dance weak local models often skip)."""
+    if not isinstance(context, dict):
+        return None
+    snap = context.get("snapshot")
+    if not isinstance(snap, dict):
+        return None
+    uri, content = snap.get("uri"), snap.get("content")
+    # A real, addressable buffer only — an unsaved scratch buffer has no uri to edit.
+    if not isinstance(uri, str) or uri == "(unsaved)" or not isinstance(content, str):
+        return None
+    title = snap.get("title") if isinstance(snap.get("title"), str) else uri
+    parts = [
+        f'The user is editing an open buffer "{title}" (uri: {uri}). Its current '
+        "full content is between the markers:",
+        "<<<BUFFER",
+        content,
+        "BUFFER>>>",
+    ]
+    selection = snap.get("selection")
+    sel_text = selection.get("text") if isinstance(selection, dict) else None
+    if isinstance(sel_text, str) and sel_text:
+        parts.append(f"The user's current selection within it is: {sel_text!r}")
+    parts.append(
+        "When the user asks to alter/refactor/fix/format this code, modify THIS "
+        "content and write the complete updated buffer back with "
+        f'editor.proposeEdit(uri="{uri}"). Do not call list_open_panes or '
+        "get_pane_context for it first — you already have its content here."
+    )
+    return {"role": "system", "content": "\n".join(parts)}
+
+
 def _history_messages(history: list[Any] | None) -> list[dict[str, Any]]:
     """Sanitize prior-turn messages sent by the chat widget into the bare
     {role, content} pairs the providers accept. Only user/assistant text is kept
@@ -396,12 +483,15 @@ async def run_agent_turn(
     turn_id: str,
     prompt: str,
     history: list[Any] | None = None,
+    context: dict[str, Any] | None = None,
 ) -> None:
     """Drive one user turn: loop the configured provider's chat, relaying tool
     calls to the UI. The provider dialect (Ollama vs OpenAI-compatible) is hidden
     behind providers.chat / providers.tool_result_message. `history` carries prior
     user/assistant turns from the chat widget so the conversation is multi-turn
-    while the backend stays stateless per turn."""
+    while the backend stays stateless per turn. `context` carries the user's focused
+    pane snapshot (currently the open editor buffer) so the model can act on what
+    the user is looking at without a discovery round-trip."""
     config = _load_config()
     if config is None:
         await conn.send_json(
@@ -410,10 +500,15 @@ async def run_agent_turn(
         return
     info = P.provider_for(config.provider)
     endpoint = config.endpoint or info.default_endpoint
+    model = _orchestrator_model(config.model)
     tools = _tools_for(conn)
+    editor_msg = _active_editor_message(context)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
         *_history_messages(history),
+        # The focused buffer goes right before the user turn so it's the freshest
+        # context the model sees (and isn't diluted by prior conversation).
+        *([editor_msg] if editor_msg else []),
         {"role": "user", "content": prompt},
     ]
 
@@ -427,13 +522,46 @@ async def run_agent_turn(
         if content:
             await conn.send_json(_evt("token", {"turnId": turn_id, "delta": content}))
 
+    temperature = _tool_temperature()
+    forced_retry_used = False
     try:
         async with instrumented_client(timeout=120) as client:
             for _ in range(MAX_ROUNDS):
                 result = await P.chat_stream(
-                    client, info, endpoint, config.model, messages, tools, on_delta
+                    client,
+                    info,
+                    endpoint,
+                    model,
+                    messages,
+                    tools,
+                    on_delta,
+                    temperature=temperature,
                 )
                 messages.append(result.assistant_message)
+
+                # Weak models sometimes narrate an action without emitting the call.
+                # On the OpenAI dialect, force one retry with tool_choice=required.
+                if (
+                    not result.tool_calls
+                    and not forced_retry_used
+                    and info.dialect == "openai"
+                    and _looks_like_unemitted_tool_call(result.content, tools)
+                ):
+                    forced_retry_used = True
+                    messages.append({"role": "system", "content": _FORCE_TOOL_NUDGE})
+                    result = await P.chat_stream(
+                        client,
+                        info,
+                        endpoint,
+                        model,
+                        messages,
+                        tools,
+                        on_delta,
+                        temperature=temperature,
+                        tool_choice="required",
+                    )
+                    messages.append(result.assistant_message)
+
                 if not result.tool_calls:
                     await conn.send_json(
                         _evt("answer", {"turnId": turn_id, "text": result.content})

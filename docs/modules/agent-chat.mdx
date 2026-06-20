@@ -71,29 +71,95 @@ channel — the turn is bidirectional and stateful, so running it on the socket
 
 ```mermaid
 sequenceDiagram
-    actor U as User (ask bar)
-    participant FE as Frontend<br/>orchestrator-client.ts
-    participant BE as Backend orchestrator
+    actor U as User<br/>(chat widget / ask bar)
+    participant FE as Frontend<br/>(orchestrator-client · tool-exec · manifest)
+    participant BE as Backend orchestrator<br/>(orchestrator.py)
     participant M as Local model<br/>(Ollama / OpenAI-compat)
 
+    Note over FE,BE: On connect / reconnect / registry change
+    FE->>BE: manifest {tools} — stored on WsConnection
+
     U->>FE: prompt
-    FE->>BE: ask {turnId, prompt} · /ws agent
+    FE->>FE: gather history + focused-pane<br/>context (readActiveAgentContext)
+    FE->>BE: ask {turnId, prompt, history, context}
+    BE->>BE: detached run_agent_turn —<br/>build messages (system, history,<br/>editor ctx, user), resolve tools<br/>(LAYOUT_TOOLS + manifest), model + temperature
+
     loop up to MAX_ROUNDS
-        BE->>M: chat(messages, LAYOUT_TOOLS)
-        alt model returns tool_calls
+        BE->>M: chat_stream(messages, tools, temperature)
+        M-->>BE: reasoning + content deltas
+        BE-->>FE: reasoning / token events
+        FE-->>U: stream thinking + answer
+
+        alt model emitted tool_calls
             M-->>BE: tool_calls
-            BE->>FE: tool_call {callId, name, args}
-            FE->>FE: execute vs registry / layoutController
-            FE-->>BE: tool_result {callId, ok, result}
+            loop each call
+                BE->>BE: _gate(call) — permission check
+                opt side-effecting tool, decision is ASK
+                    BE->>FE: approval_request {tool, specifier, mode}
+                    FE->>U: approval prompt
+                    U-->>FE: decision
+                    FE->>BE: approval_response {decision, rule?}
+                end
+                alt allowed
+                    BE->>FE: tool_call {callId, name, args}
+                    FE->>FE: executeTool — registry /<br/>layoutController / dynamic tool
+                    FE-->>BE: tool_result {callId, ok, result}
+                else denied
+                    BE->>BE: tool_result is an error
+                end
+                BE->>BE: append tool_result to messages
+            end
         else final answer
-            M-->>BE: reasoning + content deltas
-            BE->>FE: reasoning {delta} / token {delta}
             BE->>FE: answer {text}
             BE->>FE: done
-            FE-->>U: stream reasoning + content, render action log
+            FE-->>U: render reply + action log
         end
     end
 ```
+
+### End-to-end walkthrough
+
+The numbered phases below trace one turn through the code; the diagram above is the
+same flow visually.
+
+1. **Manifest (once per connection).** Before any turn, the frontend pushes its
+   **capability manifest** — the serialized agent-exposed commands and per-pane
+   `agentTools`, handlers stripped (`manifest.ts`, `initAgentManifestSync`) — on
+   socket open and on every registry change. The backend stores it on the
+   `WsConnection` and forgets it on disconnect (hence the re-push on reconnect).
+   `_tools_for` later merges it with the static `LAYOUT_TOOLS` into the tool list the
+   model sees each round.
+2. **Ask.** The chat widget (or home ask bar) calls `askAgent(prompt, cb, history)`.
+   `askAgent` attaches the user's **focused-pane snapshot** (`readActiveAgentContext`
+   — currently the active editor buffer) and sends `ask {turnId, prompt, history,
+   context}` on the `agent` channel.
+3. **Turn setup (backend).** `handle_agent_message` routes the `ask` to a **detached**
+   `run_agent_turn` task — it must run detached (`asyncio.create_task`) because it
+   awaits `tool_result`s that arrive on the *same* receive loop; awaiting inline would
+   deadlock. The task assembles the messages (`SYSTEM_PROMPT` + sanitized `history` +
+   the focused-buffer system message from `_active_editor_message` + the user prompt),
+   resolves the tool list (`_tools_for`), the model (`_orchestrator_model` — the
+   override or the configured model), and the sampling temperature (`_tool_temperature`).
+4. **The loop (≤ `MAX_ROUNDS`).** Each round streams the provider via
+   `providers.chat_stream`; the model's reasoning (`thinking`/`reasoning_content`) and
+   answer `content` token-deltas relay live as `reasoning`/`token` events the widget
+   renders as they arrive. A round ends with either `tool_calls` or a final answer.
+5. **Tool execution + gating.** For each `tool_call`, `_gate` decides: read-only and
+   layout verbs pass straight through; side-effecting tools are evaluated against the
+   permission **mode + rules**, prompting the user via
+   `approval_request`/`approval_response` on an `ASK` (and persisting a rule on
+   "always allow"). An **allowed** call is relayed to the browser as `tool_call`, where
+   `executeTool` runs it against the registry / `layoutController` seam /
+   `executeDynamicTool` and returns a `tool_result`; a **denied** call returns an error
+   to the model instead. Either way the result is appended to `messages`
+   (provider-formatted by `tool_result_message`) and the loop continues so the model
+   can react to it.
+6. **Completion.** When a round returns no tool calls, the backend sends the
+   authoritative `answer` then `done` (or `error` on an HTTP failure). If the model
+   *narrated* an action without emitting a call, the loop first grants **one** forced
+   retry (`tool_choice:"required"`, OpenAI dialect only) before giving up and
+   answering. The widget renders the reply plus the per-turn action log, and a completed
+   turn auto-saves to its [session](#sessions-persistence).
 
 **Loop** (`backend/modules/agent/orchestrator.py`): on an `ask`, a detached task
 **streams** the user's local Ollama `/api/chat` (`stream:true`) with
@@ -105,12 +171,32 @@ continuing; otherwise it sends the final (authoritative) `answer`. Capped at
 `MAX_ROUNDS`. Ollama gets `think:true` best-effort — models without a thinking mode
 reject it (400) and the round transparently retries without, still streaming content.
 
+**Tool-calling reliability.** Turns decode **greedily** (`temperature` 0, via
+`chat_stream`'s new `temperature` arg → Ollama `options` / OpenAI payload) — at
+higher temperatures small local models *narrate* an action ("I'll call …") instead
+of emitting the structured call. The temperature is overridable through the settings
+store (`agent.orchestrator.temperature`). When the model still answers in prose that
+reads like an unemitted call, the loop gives it **one** forced retry with
+`tool_choice:"required"` — but only on the OpenAI dialect, which has a real
+`tool_choice` (Ollama has no reliable equivalent, so it leans on the temperature
+fix). The loop never forces a tool unconditionally: a plain conversational reply must
+stay a reply. For weak emitters, prefer a larger model (e.g. `gemma4:12b`) for the
+orchestrator: the **`agent.orchestrator.model`** setting overrides only the
+orchestrator's model — leave it on the configured agent model to reuse it, so
+chat/autosuggest can stay on a smaller, faster model while the tool-calling loop runs
+a stronger one. Both knobs live in the **Agent orchestrator** section of the Settings
+page (a custom section — `OrchestratorSettings` — because the model is a **dropdown of
+the provider's live models** from `/agent/status`, not a static enum); the blank
+"Configured agent model" choice clears the override. The ghost-text `/agent/complete`
+path likewise samples at a low fixed temperature so completions are stable, not
+creative.
+
 **Channel protocol** (`{channel:'agent', event, data:{turnId, …}}`):
 
 | Direction     | event               | data                                          |
 | ------------- | ------------------- | --------------------------------------------- |
 | client→server | `manifest`          | `{tools: SerializedTool[]}`                   |
-| client→server | `ask`               | `{turnId, prompt, history?}`                  |
+| client→server | `ask`               | `{turnId, prompt, history?, context?}`        |
 | server→client | `tool_call`         | `{turnId, callId, name, args}`                |
 | client→server | `tool_result`       | `{turnId, callId, ok, result?, error?}`       |
 | server→client | `approval_request`  | `{turnId, approvalId, tool, specifier, mode}` |
@@ -134,6 +220,19 @@ calls that aren't layout verbs are dispatched on the frontend via
 denied calls return an error to the model, and an `ASK` decision prompts the user
 via `approval_request`/`approval_response` (the in-chat approval UI is the next
 slice) — see [agent tools & permissions](../architecture/agent-tools.mdx).
+
+**Focused-pane context.** Pane snapshots are normally read on demand (the model
+calls `get_pane_context` — pull, not push). As a convenience the frontend *also*
+attaches the user's **focused pane** snapshot to every `ask` as `context`: the
+editor's `BufferView` marks its instance active on focus/load (and clears it on
+unmount) through core's `agent-context` ambient slot
+(`setActiveContextInstance`/`readActiveAgentContext`), and `askAgent` reads it. When
+that snapshot is an addressable editor buffer, the backend injects it as a system
+message just before the user turn (`_active_editor_message`) handing the model the
+open code up front, so "alter/refactor/fix this code" modifies the open buffer and
+writes it back with `editor.proposeEdit(uri=…)` — no `list_open_panes` +
+`get_pane_context` discovery first (a multi-step dance weak local models often skip).
+Unsaved scratch buffers (no uri) are excluded.
 
 The frontend (`packages/core/src/modules/agent/orchestrator-client.ts`,
 `askAgent`) executes each `tool_call` against the registry and the

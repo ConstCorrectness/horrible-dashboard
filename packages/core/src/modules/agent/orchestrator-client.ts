@@ -4,6 +4,7 @@
  * this executes them against the registry and replies with results. See
  * docs/modules/agent-chat.md and backend/modules/agent/orchestrator.py.
  */
+import { readActiveAgentContext } from '../../agent-context';
 import { sendChannel, subscribeChannel } from '../../ws';
 import { executeTool, paneTitle } from './tool-exec';
 
@@ -118,6 +119,9 @@ export function askAgent(prompt: string, cb: AgentCallbacks, history?: AgentTurn
         }
       })();
     });
-    sendChannel('agent', 'ask', { turnId, prompt, history: history ?? [] });
+    // Attach the focused editor buffer (if any) so the backend can give the model
+    // the open code up front — it can then alter it without a discovery round-trip.
+    const context = readActiveAgentContext();
+    sendChannel('agent', 'ask', { turnId, prompt, history: history ?? [], context });
   });
 }

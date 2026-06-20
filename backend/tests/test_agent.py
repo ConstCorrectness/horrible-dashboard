@@ -106,3 +106,31 @@ def test_complete_returns_completion(client: TestClient, monkeypatch) -> None:
     )
     assert res.status_code == 200
     assert res.json()["completion"] == "x):\n    return x"
+
+
+def test_complete_prompt_includes_lsp_grounding(
+    client: TestClient, monkeypatch
+) -> None:
+    client.put("/api/agent/config", json={"model": "gemma4:e2b"})
+    captured: dict[str, str] = {}
+
+    async def fake_generate(_client, _info, _endpoint, _model, prompt) -> str:  # noqa: ANN001
+        captured["prompt"] = prompt
+        return "done"
+
+    monkeypatch.setattr(routes.P, "generate", fake_generate)
+    res = client.post(
+        "/api/agent/complete",
+        json={
+            "prefix": "user.",
+            "suffix": "",
+            "language": "TypeScript",
+            "completions": ["name", "email"],
+            "hover": "(property) User.name: string",
+        },
+    )
+    assert res.status_code == 200
+    prompt = captured["prompt"]
+    # The grounding (in-scope symbols + cursor type) is fed into the prompt.
+    assert "name, email" in prompt
+    assert "User.name: string" in prompt

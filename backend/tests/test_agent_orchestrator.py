@@ -139,6 +139,186 @@ def test_turn_calls_tool_then_answers(monkeypatch) -> None:
     assert calls["n"] == 2
 
 
+def test_turn_sends_low_temperature(monkeypatch) -> None:
+    # Tool-calling turns decode greedily so the model emits structured calls
+    # instead of narrating them; the temperature must reach the provider payload.
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200, json={"message": {"role": "assistant", "content": "ok"}}
+        )
+
+    _configure(monkeypatch)
+    _mock_ollama(monkeypatch, handler)
+    asyncio.run(orchestrator.run_agent_turn(FakeConn(), "t", "hi"))
+    assert seen["body"]["options"]["temperature"] == 0.0
+
+
+def test_tool_temperature_setting_override(monkeypatch) -> None:
+    monkeypatch.setattr(
+        orchestrator,
+        "get_value",
+        lambda key, default: 0.7 if "temperature" in key else default,
+    )
+    assert orchestrator._tool_temperature() == 0.7
+    # A non-numeric override falls back to the default rather than crashing a turn.
+    monkeypatch.setattr(orchestrator, "get_value", lambda key, default: "oops")
+    assert orchestrator._tool_temperature() == orchestrator.DEFAULT_TOOL_TEMPERATURE
+
+
+def test_orchestrator_model_setting_override(monkeypatch) -> None:
+    # A blank/whitespace/non-string override reuses the configured agent model;
+    # a real value lets a stronger model drive tool calls than chat/autosuggest.
+    monkeypatch.setattr(orchestrator, "get_value", lambda key, default: "gemma4:12b")
+    assert orchestrator._orchestrator_model("m") == "gemma4:12b"
+    monkeypatch.setattr(orchestrator, "get_value", lambda key, default: "   ")
+    assert orchestrator._orchestrator_model("m") == "m"
+    monkeypatch.setattr(orchestrator, "get_value", lambda key, default: 123)
+    assert orchestrator._orchestrator_model("m") == "m"
+
+
+def test_active_editor_message_carries_open_buffer() -> None:
+    ctx = {
+        "instanceId": "editor.buffer:workspace-file:/x/sample.py",
+        "snapshot": {
+            "uri": "workspace-file:/x/sample.py",
+            "title": "sample.py",
+            "content": "print('hi')",
+            "selection": {"from": 0, "to": 5, "text": "print"},
+        },
+    }
+    msg = orchestrator._active_editor_message(ctx)
+    assert msg is not None
+    assert msg["role"] == "system"
+    assert "print('hi')" in msg["content"]  # the open code is handed to the model
+    assert (
+        "workspace-file:/x/sample.py" in msg["content"]
+    )  # addressable for proposeEdit
+    assert "editor.proposeEdit" in msg["content"]
+    assert "'print'" in msg["content"]  # the selection is surfaced
+
+
+def test_active_editor_message_skips_unsaved_or_missing() -> None:
+    # An unsaved scratch buffer has no uri to target, and junk shapes are ignored.
+    assert orchestrator._active_editor_message(None) is None
+    assert orchestrator._active_editor_message({"snapshot": "nope"}) is None
+    assert (
+        orchestrator._active_editor_message(
+            {"snapshot": {"uri": "(unsaved)", "content": "x"}}
+        )
+        is None
+    )
+
+
+def test_turn_injects_active_editor_context(monkeypatch) -> None:
+    # The focused buffer must reach the provider payload, right before the user turn.
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200, json={"message": {"role": "assistant", "content": "ok"}}
+        )
+
+    _configure(monkeypatch)
+    _mock_ollama(monkeypatch, handler)
+    ctx = {
+        "snapshot": {
+            "uri": "note:abc",
+            "title": "draft.md",
+            "content": "ORIGINAL TEXT",
+            "selection": {"from": 0, "to": 0, "text": ""},
+        }
+    }
+    asyncio.run(orchestrator.run_agent_turn(FakeConn(), "t", "tidy this up", None, ctx))
+    msgs = seen["body"]["messages"]
+    assert any(m["role"] == "system" and "ORIGINAL TEXT" in m["content"] for m in msgs)
+    # The editor context is the message immediately before the user prompt.
+    user_idx = next(i for i, m in enumerate(msgs) if m["role"] == "user")
+    assert "ORIGINAL TEXT" in msgs[user_idx - 1]["content"]
+
+
+def test_turn_uses_orchestrator_model_override(monkeypatch) -> None:
+    # The override must reach the provider payload, leaving config.model for the
+    # chat/autosuggest paths untouched.
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200, json={"message": {"role": "assistant", "content": "ok"}}
+        )
+
+    _configure(monkeypatch)
+    monkeypatch.setattr(
+        orchestrator,
+        "get_value",
+        lambda key, default: "gemma4:12b" if key.endswith(".model") else default,
+    )
+    _mock_ollama(monkeypatch, handler)
+    asyncio.run(orchestrator.run_agent_turn(FakeConn(), "t", "hi"))
+    assert seen["body"]["model"] == "gemma4:12b"
+
+
+def test_orchestrator_model_override(monkeypatch) -> None:
+    # Blank/unset → the configured agent model; a non-blank override wins (lets a
+    # stronger model drive tool calls than chat/autosuggest use).
+    monkeypatch.setattr(orchestrator, "get_value", lambda key, default: default)
+    assert orchestrator._orchestrator_model("gemma4:e2b") == "gemma4:e2b"
+    monkeypatch.setattr(
+        orchestrator,
+        "get_value",
+        lambda key, default: (
+            "gemma4:12b" if key == "agent.orchestrator.model" else default
+        ),
+    )
+    assert orchestrator._orchestrator_model("gemma4:e2b") == "gemma4:12b"
+    # Whitespace-only override is treated as unset.
+    monkeypatch.setattr(orchestrator, "get_value", lambda key, default: "   ")
+    assert orchestrator._orchestrator_model("gemma4:e2b") == "gemma4:e2b"
+
+
+def test_turn_uses_orchestrator_model_override(monkeypatch) -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(
+            200, json={"message": {"role": "assistant", "content": "ok"}}
+        )
+
+    _configure(monkeypatch)  # configured model = "m"
+    monkeypatch.setattr(
+        orchestrator,
+        "get_value",
+        lambda key, default: (
+            "gemma4:12b" if key == "agent.orchestrator.model" else default
+        ),
+    )
+    _mock_ollama(monkeypatch, handler)
+    asyncio.run(orchestrator.run_agent_turn(FakeConn(), "t", "hi"))
+    assert seen["body"]["model"] == "gemma4:12b"
+
+
+def test_unemitted_tool_call_heuristic() -> None:
+    tools = [{"function": {"name": "editor.applyEdit"}}]
+    # Action phrasing → looks like it meant to act.
+    assert orchestrator._looks_like_unemitted_tool_call(
+        "I'll create the file now.", tools
+    )
+    # Naming a tool in prose → same.
+    assert orchestrator._looks_like_unemitted_tool_call(
+        "Calling editor.applyEdit.", tools
+    )
+    # A plain conversational reply → not a missed call (don't force a tool).
+    assert not orchestrator._looks_like_unemitted_tool_call(
+        "There are three panes open.", tools
+    )
+    assert not orchestrator._looks_like_unemitted_tool_call("", tools)
+
+
 def test_answer_without_tools(monkeypatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

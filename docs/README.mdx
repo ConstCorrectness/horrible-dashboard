@@ -62,6 +62,12 @@ flowchart TB
   `getAgentContext()`), the capability-manifest protocol, and the Claude
   Code–style permission system that gates side effects. (Implemented; the editor,
   file explorer, and terminal modules are layered onto it.)
+- [Agent ⇄ editor trajectories](architecture/agent-editor-trajectories.mdx) —
+  sequence diagrams of how the agent reaches the editor's language intelligence:
+  the thread-based LSP transport (the Windows `--reload` spawn fix), agent-driven
+  rename/diagnostics, LSP-grounded ghost text, workspace-relative file paths,
+  stale-buffer resolution, and the tool-calling reliability work (temperature,
+  forced retry) with the measured A/B results.
 
 **Modules** — one page per feature module, each describing how it plugs into the
 layout shell and how it behaves in the browser vs the desktop app:

@@ -138,8 +138,22 @@ _COMPLETE_SYSTEM = (
     "<CURSOR> marker so it fits naturally between the text before and after it. "
     "Reply with ONLY the raw text to insert — no explanation, no markdown fences, "
     "no repetition of the surrounding text. Keep it short (finish the current line "
-    "or statement)."
+    "or statement). When language-server context is provided, prefer the symbols it "
+    "lists so the completion actually resolves."
 )
+
+
+def _grounding(req: CompleteRequest) -> str:
+    """The LSP-context block for the prompt: the in-scope completion candidates and
+    the type/signature at the cursor. Empty when the client sent no grounding."""
+    parts: list[str] = []
+    if req.completions:
+        # Cap the list — a long candidate set bloats the prompt without helping.
+        symbols = ", ".join(req.completions[:40])
+        parts.append(f"Symbols in scope at the cursor: {symbols}")
+    if req.hover:
+        parts.append(f"Type/signature at the cursor:\n{req.hover}")
+    return ("\n\n" + "\n".join(parts)) if parts else ""
 
 
 @router.post("/complete")
@@ -154,7 +168,7 @@ async def complete(req: CompleteRequest) -> dict[str, str]:
     endpoint = config.endpoint or info.default_endpoint
     lang = f" The language is {req.language}." if req.language else ""
     prompt = (
-        f"{_COMPLETE_SYSTEM}{lang}\n\n"
+        f"{_COMPLETE_SYSTEM}{lang}{_grounding(req)}\n\n"
         f"{req.prefix}<CURSOR>{req.suffix}\n\n"
         "Text to insert at <CURSOR>:"
     )

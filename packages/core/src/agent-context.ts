@@ -34,6 +34,36 @@ export function hasAgentContext(instanceId: string): boolean {
   return providers.has(instanceId);
 }
 
+// --- Ambient "active" context -------------------------------------------------
+// The pane instance the user is actively working in (currently the focused editor
+// buffer). A turn attaches this snapshot up front so the agent can act on what the
+// user is looking at — e.g. alter the open code — without first discovering it via
+// list_open_panes + get_pane_context. The on-demand pull above still covers every
+// other pane; this is a convenience push for the focused one only.
+let activeInstanceId: string | null = null;
+
+/** Mark a pane instance as the one the user is actively working in. */
+export function setActiveContextInstance(instanceId: string): void {
+  activeInstanceId = instanceId;
+}
+
+/** Clear the active marker if it still points at `instanceId` (call on unmount). */
+export function clearActiveContextInstance(instanceId: string): void {
+  if (activeInstanceId === instanceId) activeInstanceId = null;
+}
+
+export interface ActiveAgentContext {
+  instanceId: string;
+  snapshot: AgentContextSnapshot;
+}
+
+/** The focused pane's live snapshot, or `null` when none is active/mounted. */
+export function readActiveAgentContext(): ActiveAgentContext | null {
+  if (!activeInstanceId) return null;
+  const snapshot = readAgentContext(activeInstanceId);
+  return snapshot ? { instanceId: activeInstanceId, snapshot } : null;
+}
+
 /**
  * Register the calling pane's agent-context provider for its instance. The latest
  * `provider` is always invoked (kept in a ref) without re-registering each

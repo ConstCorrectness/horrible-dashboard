@@ -63,20 +63,42 @@ def _roots() -> list[Path]:
     return roots
 
 
+def _resolve_relative(rel: Path, roots: list[Path]) -> Path:
+    """Anchor a *workspace-relative* path to a root. A leading segment that names a
+    root (its basename, e.g. ``myrepo/src/x.py``) selects that root; otherwise the
+    first root is used. Agents typically pass bare/relative paths (``notes.txt``)
+    because they don't know absolute root paths — without this they'd resolve against
+    the backend CWD and be rejected as outside every root."""
+    parts = rel.parts
+    if parts:
+        for root in roots:
+            if root.name == parts[0]:
+                return root.joinpath(*parts[1:]).resolve()
+    return (roots[0] / rel).resolve()
+
+
 def _resolve(raw: str, *, must_exist: bool = True) -> Path:
     """Resolve a requested path and enforce that it lives inside a workspace root.
-    `resolve()` collapses `..` and follows symlinks on existing components, so a
-    symlink or `../` escape lands outside every root and is rejected."""
+    Absolute paths resolve as-is; relative paths are anchored to a root (see
+    `_resolve_relative`). `resolve()` collapses `..` and follows symlinks on existing
+    components, so a symlink or `../` escape lands outside every root and is rejected
+    by the boundary check below — true for relative inputs too, since the check runs
+    after anchoring."""
     if not raw:
         raise HTTPException(status_code=400, detail="path is required")
-    try:
-        resolved = Path(raw).expanduser().resolve()
-    except OSError as exc:
-        raise HTTPException(status_code=400, detail=f"bad path: {exc}") from exc
-
     roots = _roots()
     if not roots:
         raise HTTPException(status_code=400, detail="no workspace roots configured")
+    try:
+        candidate = Path(raw).expanduser()
+        resolved = (
+            candidate.resolve()
+            if candidate.is_absolute()
+            else _resolve_relative(candidate, roots)
+        )
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"bad path: {exc}") from exc
+
     if not any(resolved == root or resolved.is_relative_to(root) for root in roots):
         raise HTTPException(status_code=403, detail="path outside workspace roots")
     if must_exist and not resolved.exists():

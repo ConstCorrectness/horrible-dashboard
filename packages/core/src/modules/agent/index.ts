@@ -1,5 +1,6 @@
 import { registry, type ModuleManifest } from '../../registry';
 import { ChatWidget } from './ChatWidget';
+import { OrchestratorSettings } from './OrchestratorSettings';
 import { PermissionsSettings } from './PermissionsSettings';
 
 /** See docs/modules/agent-chat.md. The home view hosts onboarding + a one-shot ask
@@ -33,7 +34,11 @@ export const agentModule: ModuleManifest = {
       default: true,
     },
   ],
+  // The orchestrator model is a dropdown of the provider's live models (not a static
+  // enum), so it's a custom section rather than a declarative SettingDecl; temperature
+  // rides along with it. See OrchestratorSettings.
   settingsSections: [
+    { id: 'agent.orchestrator', title: 'Agent orchestrator', component: OrchestratorSettings },
     { id: 'agent.permissions', title: 'Agent permissions', component: PermissionsSettings },
   ],
 };

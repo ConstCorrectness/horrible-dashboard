@@ -37,8 +37,12 @@ parity — an "Open Editors" section, auto-reveal, and drag-and-drop — is trac
 `backend/modules/files/` — **implemented (HTTP surface).** All paths are **rooted
 at configured workspace roots**: every request resolves the target (collapsing
 `..`, following symlinks) and rejects anything that lands outside a root with
-`403`. The path-traversal boundary lives here, not in the UI, so a remote backend
-can never be coaxed into serving paths outside its roots. Roots are configured in
+`403`. A **relative path is anchored to a root** first (a leading segment matching a
+root's name selects that root, else the first root) — so an agent that passes a bare
+`notes.txt` (it doesn't know absolute root paths) writes into the workspace instead
+of being rejected; the boundary check runs *after* anchoring, so a relative `../`
+escape is still `403`. The path-traversal boundary lives here, not in the UI, so a
+remote backend can never be coaxed into serving paths outside its roots. Roots are configured in
 the [settings module](settings.mdx) (`files.roots`; browser: paste a backend-host
 path; desktop: a native folder picker via `fs.nativeDialogs`), with an env
 override `HORRIBLE_WORKSPACE_ROOTS` for dev/test.

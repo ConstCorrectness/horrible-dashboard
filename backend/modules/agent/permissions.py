@@ -47,14 +47,18 @@ class Decision(str, Enum):
 
 
 # Tools auto-allowed under ACCEPT_EDITS (editor saves + safe filesystem creation).
-# Deliberately excludes destructive verbs (delete/rename) and shell exec, which
-# keep prompting. This is the v1 policy; refine as modules land.
+# Deliberately excludes *filesystem* delete/rename and shell exec, which keep
+# prompting. `editor.rename` is a language-server **symbol** rename — a scoped
+# refactor edit, gated like applyEdit, not a destructive file op. This is the v1
+# policy; refine as modules land.
 EDIT_SAFE_TOOLS: frozenset[str] = frozenset(
     {
         "editor.save",
         "editor.applyEdit",
         # Non-destructive: only shows a diff the user must accept in the editor.
         "editor.proposeEdit",
+        # LSP symbol rename — correct cross-file refactor, edits applied directly.
+        "editor.rename",
         "files.create",
         "files.write",
         "files.mkdir",

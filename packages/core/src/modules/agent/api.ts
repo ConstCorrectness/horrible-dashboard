@@ -99,16 +99,30 @@ export function streamAgentChat(prompt: string, onToken: (token: string) => void
   });
 }
 
+/** A fill-in completion request, optionally grounded with LSP context (the symbols
+ * in scope and the type/signature at the cursor) so the model's ghost text resolves. */
+export interface CompleteParams {
+  prefix: string;
+  suffix: string;
+  language?: string;
+  /** Completion-item labels the language server reports at the cursor. */
+  completions?: string[];
+  /** Hover text (the expected type / signature) at the cursor. */
+  hover?: string;
+}
+
 /** One short fill-in completion for the editor's inline autosuggest. */
-export function completeCode(
-  prefix: string,
-  suffix: string,
-  language?: string,
-  signal?: AbortSignal,
-): Promise<string> {
+export function completeCode(params: CompleteParams, signal?: AbortSignal): Promise<string> {
+  const { prefix, suffix, language, completions, hover } = params;
   return apiPost<{ completion: string }>(
     '/agent/complete',
-    { prefix, suffix, ...(language ? { language } : {}) },
+    {
+      prefix,
+      suffix,
+      ...(language ? { language } : {}),
+      ...(completions && completions.length ? { completions } : {}),
+      ...(hover ? { hover } : {}),
+    },
     signal,
   ).then((r) => r.completion);
 }

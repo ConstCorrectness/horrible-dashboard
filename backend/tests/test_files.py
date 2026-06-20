@@ -75,6 +75,37 @@ def test_dotdot_escape_rejected(client: TestClient, root) -> None:
     assert res.status_code in (403, 404)
 
 
+# --- workspace-relative paths (agents pass bare/relative paths) --------------
+
+
+def test_relative_write_anchors_to_root(client: TestClient, root) -> None:
+    # A bare filename (what a model passes for "create notes.txt") lands in the root,
+    # not the backend CWD — and is no longer rejected as outside the workspace.
+    res = client.put("/api/files/write", json={"path": "notes.txt", "content": "hi"})
+    assert res.status_code == 200
+    assert (root / "notes.txt").read_text(encoding="utf-8") == "hi"
+
+
+def test_relative_read_anchors_to_root(client: TestClient, root) -> None:
+    res = client.get("/api/files/read", params={"path": "a.txt"})
+    assert res.status_code == 200
+    assert res.json()["content"] == "hello"
+
+
+def test_relative_with_root_name_segment(client: TestClient, root) -> None:
+    # A leading segment naming the root selects it (e.g. "ws/sub/b.txt").
+    res = client.get("/api/files/read", params={"path": f"{root.name}/sub/b.txt"})
+    assert res.status_code == 200
+    assert res.json()["content"] == "nested"
+
+
+def test_relative_dotdot_escape_still_rejected(client: TestClient) -> None:
+    # Anchoring happens before the boundary check, so a relative `..` escape is
+    # still rejected.
+    res = client.get("/api/files/read", params={"path": "../secret.txt"})
+    assert res.status_code in (403, 404)
+
+
 def test_symlink_escape_rejected(client: TestClient, root, tmp_path) -> None:
     secret = tmp_path / "secret.txt"
     secret.write_text("classified", encoding="utf-8")

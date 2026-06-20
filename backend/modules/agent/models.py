@@ -54,11 +54,16 @@ class ChatRequest(BaseModel):
 
 class CompleteRequest(BaseModel):
     """A fill-in completion request for the editor's inline autosuggest: the text
-    before the cursor (`prefix`) and after it (`suffix`)."""
+    before the cursor (`prefix`) and after it (`suffix`). Optionally grounded with
+    LSP context — the completion candidates in scope (`completions`) and the
+    type/signature at the cursor (`hover`) — so the model suggests code that
+    resolves instead of hallucinating symbols."""
 
     prefix: str
     suffix: str = ""
     language: str | None = None
+    completions: list[str] = []
+    hover: str | None = None
 
 
 class PullRequest(BaseModel):
