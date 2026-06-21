@@ -77,3 +77,41 @@ class FollowUser(BaseModel):
 
 class FollowingList(BaseModel):
     users: list[FollowUser] = []
+
+
+class JoinChannelResult(BaseModel):
+    success: bool
+    channel_id: int | None = None
+    channel: str | None = None
+    token: str | None = None
+    rtm_token: str | None = None
+    pubnub_token: str | None = None
+    pubnub_origin: str | None = None
+    pubnub_heartbeat_value: int | None = None
+    pubnub_heartbeat_interval: int | None = None
+    pubnub_enable: bool | None = None
+    agora_native_mute: bool | None = None
+    user_id: int | None = None
+
+
+class MuteRequest(BaseModel):
+    is_muted: bool
+
+
+class HandRequest(BaseModel):
+    raise_hands: bool
+
+
+class AcceptSpeakerInviteRequest(BaseModel):
+    user_id: int
+
+
+class CreateChannelRequest(BaseModel):
+    topic: str = ""
+    is_private: bool = False
+    is_social_mode: bool = False
+
+
+class InviteUserRequest(BaseModel):
+    user_id: int
+

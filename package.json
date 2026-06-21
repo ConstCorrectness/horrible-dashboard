@@ -5,6 +5,7 @@
   "packageManager": "pnpm@10.28.2",
   "scripts": {
     "dev": "pnpm --filter @horrible/web dev",
+    "dev:all": "node scripts/dev.mjs",
     "dev:desktop": "pnpm --filter @horrible/desktop dev",
     "build": "pnpm --filter @horrible/web build",
     "build:desktop": "pnpm --filter @horrible/desktop build",

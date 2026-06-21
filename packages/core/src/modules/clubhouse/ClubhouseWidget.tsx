@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { useAgentContext } from '../../agent-context';
+import { RoomsPanel } from './RoomsPanel';
 import {
   completeClubhouseAuth,
   connectClubhouseWithToken,
@@ -51,25 +52,43 @@ export function ClubhouseWidget() {
 
   if (status.connected) {
     return (
-      <div className="ch-connected">
-        {status.photo_url && <img className="ch-avatar" src={status.photo_url} alt="" />}
-        <div className="ch-profile">
-          <strong>{status.name ?? 'Connected'}</strong>
-          {status.username && <span className="ch-username">@{status.username}</span>}
+      <div className="ch-rooms-panel-root" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+        <div className="ch-rooms-profile-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem 1.25rem', borderBottom: '1px solid var(--border)', background: 'var(--bg-raised)' }}>
+          <div className="ch-connected" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            {status.photo_url && <img className="ch-avatar" src={status.photo_url} alt="" style={{ width: '32px', height: '32px', borderRadius: '50%' }} />}
+            <div className="ch-profile">
+              <strong style={{ display: 'block', fontSize: '0.9rem', color: 'var(--text)' }}>{status.name ?? 'Connected'}</strong>
+              {status.username && <span className="ch-username" style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>@{status.username}</span>}
+            </div>
+          </div>
+          <button
+            className="ch-btn-disconnect"
+            style={{
+              background: 'transparent',
+              border: '1px solid var(--border)',
+              borderRadius: '6px',
+              padding: '0.25rem 0.6rem',
+              fontSize: '0.75rem',
+              cursor: 'pointer',
+              color: 'var(--text-dim)',
+            }}
+            onClick={() => {
+              void disconnectClubhouse().then(() => {
+                setStep('phone');
+                void refresh();
+              });
+            }}
+          >
+            Disconnect
+          </button>
         </div>
-        <button
-          onClick={() => {
-            void disconnectClubhouse().then(() => {
-              setStep('phone');
-              void refresh();
-            });
-          }}
-        >
-          Disconnect
-        </button>
+        <div style={{ flex: 1, minHeight: 0 }}>
+          <RoomsPanel />
+        </div>
       </div>
     );
   }
+
 
   const sendCode = async () => {
     setBusy(true);

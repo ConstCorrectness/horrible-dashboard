@@ -1,7 +1,6 @@
 import { registry, type ModuleManifest } from '../../registry';
 import { disconnectClubhouse, getClubhouseChannels, getClubhouseStatus } from './api';
 import { ClubhouseWidget } from './ClubhouseWidget';
-import { RoomsPanel } from './RoomsPanel';
 
 /** See docs/modules/clubhouse.md. */
 export const clubhouseModule: ModuleManifest = {
@@ -9,18 +8,11 @@ export const clubhouseModule: ModuleManifest = {
   title: 'Clubhouse',
   panels: [
     {
-      id: 'clubhouse.rooms',
-      title: 'Live rooms',
-      component: RoomsPanel,
-      defaultPlacement: 'center',
-      singleton: true,
-    },
-  ],
-  widgets: [
-    {
       id: 'clubhouse.account',
       title: 'Clubhouse',
       component: ClubhouseWidget,
+      defaultPlacement: 'center',
+      singleton: true,
       agentTools: [
         {
           name: 'clubhouse.status',
@@ -47,15 +39,13 @@ export const clubhouseModule: ModuleManifest = {
     {
       id: 'clubhouse.connect',
       title: 'Clubhouse: Connect account',
-      // Open the account widget as a pane in the active workspace.
+      // Open the account widget/panel in the active workspace.
       run: () => registry.openPanel('clubhouse.account'),
-    },
-    {
-      id: 'clubhouse.rooms',
-      title: 'Clubhouse: Live rooms',
-      run: () => registry.openPanel('clubhouse.rooms'),
     },
   ],
 };
 
 export * from './api';
+export * from './useClubhouseVoice';
+
+

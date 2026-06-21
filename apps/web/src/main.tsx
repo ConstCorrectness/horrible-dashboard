@@ -22,6 +22,8 @@ import {
   settingsModule,
   stubModule,
   terminalModule,
+  vectordbModule,
+  visualizerModule,
 } from '@horrible/core';
 import { AppShell } from '@horrible/ui';
 
@@ -42,7 +44,9 @@ async function boot(): Promise<void> {
   registry.register(layoutsModule);
   registry.register(agentModule);
   registry.register(scratchModule);
-  registry.register(clubhouseModule);
+  if (!isTauri()) {
+    registry.register(clubhouseModule);
+  }
   registry.register(observabilityModule);
   registry.register(marketplaceModule);
   registry.register(settingsModule);
@@ -50,6 +54,8 @@ async function boot(): Promise<void> {
   registry.register(filesModule);
   registry.register(terminalModule);
   registry.register(replModule);
+  registry.register(vectordbModule);
+  registry.register(visualizerModule);
   // Dev-only agent-tool reference/validation stub (see agent-tools.md).
   if (import.meta.env.DEV) registry.register(stubModule);
 

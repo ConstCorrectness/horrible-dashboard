@@ -9,79 +9,267 @@ Clubdeck-style onboarding for a Clubhouse account: a dashboard widget walks
 through phone number → SMS verification code → connected profile, **or** connects
 directly with an existing auth token.
 
-**Status: implemented** — frontend in `packages/core/src/modules/clubhouse/`,
-backend in `backend/modules/clubhouse/`. Token-connect is verified end to end
+**Status: implemented** — frontend in [ClubhouseWidget.tsx](file:///home/horrible/horrible-dashboard/packages/core/src/modules/clubhouse/ClubhouseWidget.tsx),
+backend in [routes.py](file:///home/horrible/horrible-dashboard/backend/modules/clubhouse/routes.py). Token-connect is verified end to end
 against the live API; phone-auth depends on Clubhouse's gate (see below).
 
-## The unofficial-API caveat
+## Unofficial API & The Verification Gate
 
 Clubhouse has no public API. Like Clubdeck, the backend speaks the
 reverse-engineered mobile client protocol (`www.clubhouseapi.com/api`,
 overridable via `HORRIBLE_CLUBHOUSE_API`), sending mobile-client headers and a
 stable per-install `CH-DeviceId`.
 
-**Client-version headers matter.** Clubhouse validates `CH-AppBuild` /
-`CH-AppVersion` / `User-Agent` and rejects stale clients with
-`login did not pass token validation` (HTTP 400). `routes.py` pins a current
-build (3375 / 24.01.02, iOS UA); if requests start failing with that error
-again, the build is stale — bump it from a current client.
+### 1. Client-Version Headers
 
-**Phone auth is gated.** `start_phone_number_auth` enforces an anti-abuse check;
-with current headers it may work, but Clubhouse can block it. The reliable path
-is **token-connect**: supply an existing `auth_token` + `user_id` (e.g. captured
-from another logged-in client), which the backend validates against the
-authenticated `/me` endpoint. The token may be bound to the device it was issued
-for, so an optional `device_id` is passed through on the authed headers.
+Clubhouse validates `CH-AppBuild` / `CH-AppVersion` / `User-Agent` and rejects stale clients with `login did not pass token validation` (HTTP 400).
+[routes.py](file:///home/horrible/horrible-dashboard/backend/modules/clubhouse/routes.py) pins a current build (build `3375` / app `24.01.02`, iOS User-Agent). If requests start failing with version mismatch errors, update these constants.
 
-## Contributions to the layout shell
+### 2. The Verification / reCAPTCHA Gate & Bypass
 
-- **Dashboard widgets:** `clubhouse.account` — the onboarding/connection card.
-  Not in the default grid; add it from the dashboard picker.
-- **Panels:** `clubhouse.rooms` (singleton) — the **Live rooms** browse panel
-  (Phase 1): lists currently-live channels for the connected account, read-only.
-- **Commands:** `clubhouse.connect` (opens the dashboard widget),
-  `clubhouse.rooms` (opens the Live rooms panel).
+To prevent spam, Clubhouse enforces anti-abuse checks on `/start_phone_number_auth` when it detects automated requests, responding with `{"success": true, "send_rc_token": true}`.
 
-## Backend surface
+- **Bypass Solution:** Because standard Python HTTP clients (like `httpx`) generate TLS/JA3 fingerprints that are flagged by Cloudflare/Clubhouse's WAF, the login request is immediately gated, and the SMS is not dispatched. However, the standard .NET 8 `HttpClient` TLS fingerprint is trust-listed. Under this context, the Clubhouse API successfully dispatches the SMS verification text even if it returns `send_rc_token: true`.
+- **Implementation:** The backend now packages and compiles a native C# helper console app (`ch-auth-helper`) under [backend/modules/clubhouse/auth_helper/](file:///home/horrible/horrible-dashboard/backend/modules/clubhouse/auth_helper/).
+- **Execution:** When `/auth/start` or `/auth/complete` is called, the Python backend executes this native helper as a subprocess, matching the exact TLS signature of official trusted clients (like Clubdeck). This successfully bypasses the bot gate, allowing the SMS verification text to arrive on the user's phone.
 
-`backend/modules/clubhouse/` proxies all Clubhouse traffic so the browser never
-talks to Clubhouse directly (no CORS issues, no token in the page):
+### 3. Headers & Endpoints Reference
 
-- `GET  /api/clubhouse/status` — `{connected, user_id, username, name,
-photo_url}`. **Never includes the token.**
-- `POST /api/clubhouse/auth/start` — `{phone_number}` (E.164) → triggers the
-  SMS. Sends a real text; don't poke it casually.
-- `POST /api/clubhouse/auth/complete` — `{phone_number, verification_code}` →
-  persists the session, returns status. 400 on a wrong/expired code.
-- `POST /api/clubhouse/auth/token` — `{auth_token, user_id, device_id?}` →
-  validates the token against `/me`, persists the session, returns status.
-- `GET  /api/clubhouse/channels` — live rooms (proxies Clubhouse
-  `GET /get_channels`); `409` if not connected.
-- `GET  /api/clubhouse/following` — accounts the user follows (proxies
-  `POST /get_following`); `409` if not connected.
-- `DELETE /api/clubhouse/auth` — disconnect (deletes the stored session).
+To communicate with Clubhouse, the backend passes specific metadata headers to authenticate and pass validation checks. If Clubhouse updates its mobile apps and starts rejecting requests, these headers and build versions must be updated in the backend config:
 
-Authed calls go through `_ch_authed_get` / `_ch_authed_post`, which attach
-`Authorization: Token <token>` + `CH-UserID` to the client headers. Browse
-responses are projected into lean Pydantic models (extra fields dropped) rather
-than echoing Clubhouse's full payloads.
+- **Base API URL:** `https://www.clubhouseapi.com/api`
+- **Common Request Headers:**
+  - `CH-Languages`: `en-US`
+  - `CH-Locale`: `en_US`
+  - `CH-AppBuild`: `3375` (build version)
+  - `CH-AppVersion`: `24.01.02` (app version)
+  - `CH-DeviceId`: A stable, per-install UUID generated by the backend (stored in `.data/clubhouse-device-id`).
+  - `User-Agent`: `clubhouse/3375 (iPhone; iOS 17.1.2; Scale/3.00)`
+- **Authenticated Request Headers:**
+  - `Authorization`: `Token <auth_token>`
+  - `CH-UserID`: The numeric user ID linked to the session.
 
-Clubhouse error messages (e.g. the validation gate) are surfaced through the
-API client's thrown `Error` so the widget shows the real reason, not a bare 400.
+#### Reversed Endpoints Reference:
 
-The session (auth token, refresh token, profile) is stored server-side in
-`$HORRIBLE_DATA_DIR/clubhouse-auth.json`. Treat that file as a credential.
+- **POST `/get_feed_v3`:** Fetches the active hallway rooms list. (Replaces the deprecated `/get_channels` endpoint which returns a Cloudflare/Clubhouse `404 Not Found`). It returns a list of feed items; the backend filters for entries containing a `channel` dictionary to extract room lists.
+- **POST `/get_following`:** Returns profiles of followed users.
+- **POST `/me`:** Used to validate an existing token and fetch the corresponding user profile.
+- **POST `/start_phone_number_auth`:** Starts phone authentication (handled by the native `ch-auth-helper`).
+- **POST `/complete_phone_number_auth`:** Verifies verification code (handled by the native `ch-auth-helper`).
 
-## Agent context
+> [!NOTE]
+> **Token-Connect (The Backup Path):** While the C# helper bypasses standard bot gating, users can still use **Token-Connect** to link their accounts directly. Users can supply an existing `auth_token` and `user_id` (captured from an active official app session).
 
-The account widget exposes a `getAgentContext()` snapshot of the connection state
-(connected, name, username, or the current onboarding step), and the live-rooms
-panel exposes the rooms it lists (topic, club, speaker/listener counts, people).
-Both are read-only — the agent can reason about who's connected and what's live,
-but there are no Clubhouse `agentTools` yet. See
-[agent tools](../architecture/agent-tools.mdx#reading-widget-state-getagentcontext).
+---
 
-## Browser vs desktop
+## Authentication Flow Diagrams
 
-Identical in both layouts — everything runs through the backend. As with the
-terminal: against a remote backend, the _backend host_ holds the credential.
+### SMS Phone Authentication Flow
+
+This diagram illustrates the phone verification flow, highlighting how the C# auth helper subprocess matches a trusted TLS signature to bypass Clubhouse's reCAPTCHA gate.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant Frontend as ClubhouseWidget (React)
+    participant Backend as FastAPI Backend
+    participant Helper as ch-auth-helper (C# Subprocess)
+    participant Clubhouse as Clubhouse API (clubhouseapi.com)
+
+    User->>Frontend: Enter phone number & click "Send code"
+    Frontend->>Backend: POST /api/clubhouse/auth/start (phone_number)
+    Backend->>Helper: Run ch-auth-helper start (phone_number, device_id)
+    Helper->>Clubhouse: POST /start_phone_number_auth (.NET HttpClient TLS)
+
+    alt Clubhouse returns API failure (e.g., bad build version)
+        Clubhouse-->>Helper: 200 OK {"success": false, "error_message": "..."}
+        Helper-->>Backend: Print JSON response
+        Backend-->>Frontend: 400 Bad Request (detail: error_message)
+        Frontend-->>User: Display verification error
+    else SMS Sent Successfully (Bypassed Path)
+        Clubhouse-->>Helper: 200 OK {"success": true, "send_rc_token": true/false}
+        Helper-->>Backend: Print JSON response
+        Backend-->>Frontend: 200 OK {"success": true}
+        Frontend-->>User: Transition to "Verify code" screen
+        User->>Frontend: Enter verification code & click "Verify"
+        Frontend->>Backend: POST /api/clubhouse/auth/complete (phone_number, verification_code)
+        Backend->>Helper: Run ch-auth-helper complete (phone_number, code, device_id)
+        Helper->>Clubhouse: POST /complete_phone_number_auth (.NET HttpClient TLS)
+        Clubhouse-->>Helper: 200 OK {"auth_token": "...", "user_profile": {...}}
+        Helper-->>Backend: Print JSON response
+        Backend-->>Frontend: 200 OK {"success": true}
+        Frontend-->>User: Transition to "Verify code" screen
+        User->>Frontend: Enter verification code & click "Verify"
+        Frontend->>Backend: POST /api/clubhouse/auth/complete (phone_number, verification_code)
+        Backend->>Helper: Run ch-auth-helper complete (phone_number, code, device_id)
+        Helper->>Clubhouse: POST /complete_phone_number_auth (.NET HttpClient TLS)
+        Clubhouse-->>Helper: 200 OK {"auth_token": "...", "user_profile": {...}}
+        Helper-->>Backend: Print JSON response
+        Backend->>Backend: Save session to clubhouse-auth.json
+        Backend-->>Frontend: 200 OK (status)
+        Frontend-->>User: Show connected status
+    end
+```
+
+### Token Connection Flow
+
+This diagram shows how users connect an existing session token (bypass path).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant Frontend as ClubhouseWidget (React)
+    participant Backend as FastAPI Backend
+    participant Clubhouse as Clubhouse API (clubhouseapi.com)
+
+    User->>Frontend: Select "Connect with an existing token"
+    User->>Frontend: Enter auth token, user ID & device ID (optional)
+    Frontend->>Backend: POST /api/clubhouse/auth/token (auth_token, user_id, device_id)
+    Backend->>Clubhouse: POST /me (Authorization: Token <token>, custom headers)
+
+    alt Token is valid
+        Clubhouse-->>Backend: 200 OK {"user_profile": {...}}
+        Backend->>Backend: Save session to clubhouse-auth.json
+        Backend-->>Frontend: 200 OK (status)
+        Frontend-->>User: Show connected status
+    else Token is invalid / unauthorized
+        Clubhouse-->>Backend: 401 Unauthorized
+        Backend-->>Frontend: 401 Unauthorized (detail: Clubhouse: unauthorized)
+        Frontend-->>User: Display connection error
+    end
+```
+
+---
+
+## Backend API Endpoints
+
+All routes are prefixed by `/api/clubhouse` and documented via Pydantic models in [models.py](file:///home/horrible/horrible-dashboard/backend/modules/clubhouse/models.py).
+
+### 1. `GET /status`
+
+Checks if the local dashboard is connected to a Clubhouse account.
+
+- **Response Schema:** [ClubhouseStatus](file:///home/horrible/horrible-dashboard/backend/modules/clubhouse/models.py#L32)
+- **Response Body:**
+  ```json
+  {
+    "connected": true,
+    "user_id": 4242,
+    "username": "horrible",
+    "name": "Horrible User",
+    "photo_url": "https://example.com/photo.jpg"
+  }
+  ```
+  _(Never exposes the stored `auth_token` to the browser.)_
+
+### 2. `POST /auth/start`
+
+Initiates the SMS verification process.
+
+- **Request Schema:** [StartAuthRequest](file:///home/horrible/horrible-dashboard/backend/modules/clubhouse/models.py#L10) (`phone_number`: E.164 string format `+15551234567`)
+- **Response Schema:** [StartAuthResult](file:///home/horrible/horrible-dashboard/backend/modules/clubhouse/models.py#L28)
+- **Errors:**
+  - **400 Bad Request:** Thrown if Detections match `send_rc_token: true` or `success: false` (displays a clean warning explaining the verification gate/reCAPTCHA blocker).
+
+### 3. `POST /auth/complete`
+
+Submits the texted code to complete authentication and retrieve the auth token.
+
+- **Request Schema:** [CompleteAuthRequest](file:///home/horrible/horrible-dashboard/backend/modules/clubhouse/models.py#L14) (`phone_number`, `verification_code`)
+- **Response Schema:** [ClubhouseStatus](file:///home/horrible/horrible-dashboard/backend/modules/clubhouse/models.py#L32)
+- **Behavior:** Stores session details (including the `auth_token` and optional `refresh_token`) inside `$HORRIBLE_DATA_DIR/clubhouse-auth.json`.
+
+### 4. `POST /auth/token`
+
+Directly connects an existing session token bypass.
+
+- **Request Schema:** [TokenConnectRequest](file:///home/horrible/horrible-dashboard/backend/modules/clubhouse/models.py#L19) (`auth_token`, `user_id`, `device_id` optional)
+- **Response Schema:** [ClubhouseStatus](file:///home/horrible/horrible-dashboard/backend/modules/clubhouse/models.py#L32)
+- **Behavior:** Validates the token against Clubhouse `/me`, sets headers, and persists configuration details.
+
+### 5. `DELETE /auth`
+
+Disconnects the account and cleans up stored credentials.
+
+- **Response Schema:** [ClubhouseStatus](file:///home/horrible/horrible-dashboard/backend/modules/clubhouse/models.py#L32) (resets connected to `False`)
+
+### 6. `GET /channels`
+
+Returns currently live Clubhouse channels.
+
+- **Response Schema:** [ChannelList](file:///home/horrible/horrible-dashboard/backend/modules/clubhouse/models.py#L67)
+- **Errors:** **409 Conflict** if not connected.
+
+### 7. `GET /following`
+
+Returns profiles of people followed by the connected account.
+
+- **Response Schema:** [FollowingList](file:///home/horrible/horrible-dashboard/backend/modules/clubhouse/models.py#L78)
+- **Errors:** **409 Conflict** if not connected.
+
+### 8. `POST /channels/{channel}/join`
+
+Joins a live Clubhouse room and retrieves voice / signaling tokens.
+
+- **Response Schema:** [JoinChannelResult](file:///home/horrible/horrible-dashboard/backend/modules/clubhouse/models.py#L82)
+- **Body Parameters:** None.
+- **Errors:** **409 Conflict** if not connected.
+
+### 9. `POST /channels/{channel}/leave`
+
+Leaves a live room.
+
+- **Response Schema:** Generic success object.
+- **Body Parameters:** None.
+- **Errors:** **409 Conflict** if not connected.
+
+### 10. `POST /channels/{channel}/ping`
+
+Keeps the room voice session active (heartbeat ping). Should be called every 30 seconds while connected to a channel.
+
+- **Response Schema:** Generic success object.
+- **Body Parameters:** None.
+- **Errors:** **409 Conflict** if not connected.
+
+### 11. `POST /channels/{channel}/mute`
+
+Notifies Clubhouse of speaker mute/unmute state.
+
+- **Request Schema:** `MuteRequest` (`is_muted` boolean)
+- **Response Schema:** Generic success object.
+- **Errors:** **409 Conflict** if not connected.
+
+### 12. `POST /channels/{channel}/hand`
+
+Raises or lowers a hand in the channel.
+
+- **Request Schema:** `HandRequest` (`raise_hands` boolean)
+- **Response Schema:** Generic success object.
+- **Errors:** **409 Conflict** if not connected.
+
+### 13. `POST /channels/{channel}/accept_speaker`
+
+Accepts an invitation to speak from a moderator.
+
+- **Request Schema:** `AcceptSpeakerInviteRequest` (`user_id` integer of the moderator who invited)
+- **Response Schema:** Generic success object.
+- **Errors:** **409 Conflict** if not connected.
+
+---
+
+## Contributions to the Layout Shell
+
+- **Singleton Panel:** `clubhouse.account` — The unified "Clubhouse" panel. Displays the account onboarding/connection card when disconnected, and the live rooms list when connected.
+- **Commands:**
+  - `clubhouse.connect` — Opens the unified Clubhouse panel.
+
+---
+
+## Agent Context Integrations
+
+The account widget exposes its connection status using `useAgentContext()`.
+
+- **State:** `loading`, `backend-down`, or connection state properties: `{ connected: boolean, name: string | null, username: string | null }`.
+- **Reference:** See the [Agent Tools Documentation](../architecture/agent-tools.mdx#reading-widget-state-getagentcontext).

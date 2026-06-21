@@ -1,0 +1,79 @@
+---
+sidebar_position: 11
+sidebar_label: Vector DB
+---
+
+# Module: vectordb
+
+A lightweight local Vector Database (Vector DB) manager that allows the user and agent to persist, query, and manage embeddings, widget settings, agent rules, and memory text.
+
+**Status: implemented** — frontend in `packages/core/src/modules/vectordb/`, backend in `backend/modules/vectordb/`.
+
+## The SQLite Vector Engine
+
+Rather than depending on heavy external databases (like PostgreSQL + `pgvector`) or platform-specific precompiled binary dependencies (like `sqlite-vec` or ChromaDB which can fail compilation on various operating systems or developer architectures), this module implements a clean, robust, and zero-dependency solution: **SQLite with Custom Python Cosine Similarity**.
+
+- **Storage**: Records are stored in a local SQLite file at `.data/vector_store.db`.
+- **Custom SQL Function**: Using python's `sqlite3.Connection.create_function`, we register a custom `cosine_similarity(v1_bytes, v2_bytes)` operation on the database session. This allows running fast, standard SQL semantic search queries:
+  ```sql
+  SELECT id, collection, text, metadata,
+         cosine_similarity(embedding, :query_emb) AS score
+  FROM documents
+  WHERE collection = :collection
+  ORDER BY score DESC LIMIT :limit
+  ```
+- **Robust Dimensions**: The similarity function automatically truncates or zero-pads vectors if dimensions mismatch (e.g. if the user changes embedding models or switches to/from the local fallback).
+
+## Embedding Model & Local Fallback
+
+Generating vector embeddings follows a tiered strategy:
+1. **Model Probe**: The backend checks the active agent's provider configuration (Ollama, Gemini, LM Studio, vLLM).
+2. **Provider API**: It queries the active provider (e.g. Ollama's `/api/embeddings` or `/api/embed`, or OpenAI-compatible `/v1/embeddings`).
+3. **Local Fallback**: If no agent is configured, the server is offline, or the embedding endpoint fails, the module gracefully falls back to a **deterministic local hash embedding** (384-dimensional vector based on sliding character trigrams and term frequency). This ensures the database is **always functional** even during offline development.
+
+## Contributions to the Layout Shell
+
+- **Widgets**: `vectordb.manager` — a rich dashboard widget comprising four tabs:
+  - **Overview**: Active embedding provider/model details, DB file size, total document count, and a list of collections.
+  - **Semantic Search**: Text query search sorted by match score with interactive, colored similarity progress bars.
+  - **Document Explorer**: A collection-filterable, paginated table of raw records.
+  - **Add Document**: A form to manual insert new text contents with arbitrary JSON metadata.
+- **Commands**: `vectordb.open` (synthesized search opener, e.g. `Vector DB: Open Manager`) — opens the Vector DB manager widget in the workspace center.
+
+## Backend REST API
+
+- `GET    /api/vectordb/status` — Returns database path, file size, total records, collections list, and active embedding model.
+- `GET    /api/vectordb/collections` — Returns list of unique collection names.
+- `GET    /api/vectordb/documents` — Lists paginated documents, optionally filtered by `collection`.
+- `POST   /api/vectordb/documents` — Generates embedding and stores the document (with auto-generated ID if omitted).
+- `DELETE /api/vectordb/documents/{id}` — Deletes a document by ID.
+- `POST   /api/vectordb/search` — Runs semantic similarity search in a collection.
+
+## Agent Tools
+
+To enable autonomous agent integration (e.g. storing memory, setting configurations, storing notes), the widget registers the following tools with the agent orchestrator:
+
+| Tool Name | Description | Parameters | Side Effect |
+| --- | --- | --- | --- |
+| `vectordb.search` | Queries a collection semantically. | `collection` (str), `text` (str), `limit` (int) | No |
+| `vectordb.upsert` | Inserts or updates a document. | `collection` (str), `text` (str), `id` (str, opt), `metadata` (dict, opt) | Yes |
+| `vectordb.delete` | Deletes a document by its ID. | `id` (str) | Yes |
+| `vectordb.get_stats` | Retrieves database status/stats. | None | No |
+
+## Agent Context
+
+The Vector DB manager widget hooks into `useAgentContext()` to expose its status:
+```typescript
+{
+  dbPath: "/home/user/.../.data/vector_store.db",
+  sizeBytes: 32768,
+  totalDocuments: 12,
+  collections: ["memories", "agent_rules"],
+  activeProvider: "ollama",
+  activeModel: "gemma4:e2b"
+}
+```
+
+## Browser vs Desktop
+
+Identical in both layouts — the frontend interfaces with the local FastAPI server backend which handles SQLite connections and Ollama API calls.

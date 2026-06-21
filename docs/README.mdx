@@ -22,14 +22,14 @@ flowchart TB
         Desk["apps/desktop<br/>(Tauri)"]
         UI["packages/ui<br/>layout shell"]
         Core["packages/core<br/>registry · commands · API client"]
-        Mods["Modules<br/>agent · dashboard · editor · files · terminal ·<br/>observability · marketplace · settings · clubhouse · scratch"]
+        Mods["Modules<br/>agent · dashboard · editor · files · terminal ·<br/>observability · marketplace · settings · clubhouse · scratch · vectordb · visualizer"]
         SDK["packages/sdk<br/>third-party plugins"]
     end
     subgraph BE["backend/ — FastAPI (the brain)"]
         Agent["agent orchestrator"]
         Tel["telemetry"]
         WSrv["workspace store"]
-        Other["clubhouse · settings · plugins"]
+        Other["clubhouse · settings · plugins · vectordb · visualizer"]
     end
     Ext[("Local models<br/>Ollama · LM Studio · vLLM")]
     CH[("Clubhouse API")]
@@ -82,6 +82,8 @@ layout shell and how it behaves in the browser vs the desktop app:
 - [Editor](modules/editor.mdx)
 - [Terminal](modules/terminal.mdx)
 - [File explorer](modules/file-explorer.mdx)
+- [Vector DB](modules/vectordb.mdx)
+- [Visualizer](modules/visualizer.mdx)
 
 ## Sync policy (enforced)
 
@@ -122,8 +124,9 @@ truth is this `docs/` directory — the site config lives in `website/` and read
 The monorepo (apps/web, apps/desktop, packages/core, packages/ui, backend/) is
 scaffolded and verified. Implemented modules: **dashboard**, **agent**,
 **observability**, **clubhouse**, **marketplace**, **settings**, **editor**
-(note/file buffers + recent-notes widget), **file explorer**, and **terminal**
-(PTY). The **agent tool & permission surface**
+(note/file buffers + recent-notes widget), **file explorer**, **terminal**
+(PTY), **vectordb** (SQLite engine + similarity queries), and **visualizer**
+(HTML5 Canvas, Three.js, Babylon.js scripts, and headless Pygame subprocess frame streaming). The **agent tool & permission surface**
 ([agent-tools.mdx](architecture/agent-tools.mdx)) is in place and the editor,
 files, and terminal modules are layered onto it (read tools + gated side-effecting
 tools behind the Claude Code–style permission engine).

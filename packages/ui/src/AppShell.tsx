@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { registry, useWorkspaces, type OpenPaneOptions, type ShellView } from '@horrible/core';
 
 import { ApprovalPrompts } from './ApprovalPrompts';
@@ -21,6 +22,40 @@ export function AppShell({ appTitle }: { appTitle: string }) {
   // custom workspaces, with the active one highlighted (state owned by Workspace,
   // read here via the shared store).
   const { workspaces, activeId } = useWorkspaces();
+
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    workspaceId: string;
+    workspaceName: string;
+    isPreset: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const clickOutside = () => setContextMenu(null);
+    window.addEventListener('mousedown', clickOutside);
+    window.addEventListener('keydown', clickOutside);
+    return () => {
+      window.removeEventListener('mousedown', clickOutside);
+      window.removeEventListener('keydown', clickOutside);
+    };
+  }, [contextMenu]);
+
+  const handleRename = async (id: string, currentName: string) => {
+    setContextMenu(null);
+    const newName = window.prompt('Rename workspace', currentName);
+    if (newName && newName.trim()) {
+      await registry.layoutController?.renameWorkspace(id, newName.trim());
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    setContextMenu(null);
+    if (window.confirm(`Are you sure you want to delete the workspace "${contextMenu?.workspaceName}"?`)) {
+      await registry.layoutController?.deleteWorkspace(id);
+    }
+  };
   // Bumped each time a panel should open, so the Workspace reacts even to repeats.
   const [pendingOpen, setPendingOpen] = useState<{
     panelId: string;
@@ -110,6 +145,16 @@ export function AppShell({ appTitle }: { appTitle: string }) {
             className={entry.id === activeId ? 'active' : ''}
             title={entry.title}
             onClick={() => registry.switchWorkspace(entry.id)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setContextMenu({
+                x: e.clientX,
+                y: e.clientY,
+                workspaceId: entry.id,
+                workspaceName: entry.title,
+                isPreset: presetIds.has(entry.id),
+              });
+            }}
           >
             {entry.glyph}
           </button>
@@ -134,6 +179,34 @@ export function AppShell({ appTitle }: { appTitle: string }) {
       </div>
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       <ApprovalPrompts />
+      {contextMenu &&
+        createPortal(
+          <div
+            className="pane-tab-menu"
+            style={{
+              left: contextMenu.x,
+              top: contextMenu.y,
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <button
+              className="pane-tab-menu-item"
+              onClick={() => handleRename(contextMenu.workspaceId, contextMenu.workspaceName)}
+            >
+              Rename
+            </button>
+            {!contextMenu.isPreset && (
+              <button
+                className="pane-tab-menu-item"
+                style={{ color: 'var(--danger, #f7768e)' }}
+                onClick={() => handleDelete(contextMenu.workspaceId)}
+              >
+                Delete
+              </button>
+            )}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

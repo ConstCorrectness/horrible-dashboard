@@ -20,26 +20,26 @@ class RelayCall(Protocol):
 
 
 class _Panes:
-    """Open, close, and inspect panes (panels and widgets) in the active workspace."""
+    """Open, close, and inspect active panes (layout slots hosting views) in the active workspace."""
 
     def __init__(self, call: RelayCall) -> None:
         self._call = call
 
     def available(self) -> Any:
-        """Every pane (panel + widget) that can be opened, with id and title."""
+        """Every view (panel + widget view definition) that can be opened into a pane, with id and title."""
         return self._call("list_available_panes", {})
 
     def open_list(self) -> Any:
-        """Panes currently open in the active workspace (type id, instanceId, …)."""
+        """Active pane instances currently open in the active workspace (view id, instanceId, …)."""
         return self._call("list_open_panes", {})
 
-    def open(self, pane_id: str) -> Any:
-        """Open a panel or widget by its id (from `available()`)."""
-        return self._call("open_pane", {"id": pane_id})
+    def open(self, view_id: str) -> Any:
+        """Open a view (panel or widget) in a new or focused pane by its view ID (from `available()`)."""
+        return self._call("open_pane", {"id": view_id})
 
-    def close(self, pane_id: str) -> Any:
-        """Close an open pane by its id."""
-        return self._call("close_pane", {"id": pane_id})
+    def close(self, instance_id: str) -> Any:
+        """Close an active pane instance by its instance ID (from `open_list()`)."""
+        return self._call("close_pane", {"id": instance_id})
 
 
 class _Workspaces:
@@ -60,8 +60,8 @@ class _Workspaces:
 
 
 class Dash:
-    """The dashboard handle. Drives panes/workspaces and reads live widget state;
-    `call` is the escape hatch for any other relayed tool (widget agentTools,
+    """The dashboard handle. Drives workspace layouts, manages active panes, and reads live view/pane state;
+    `call` is the escape hatch for any other relayed tool (view-specific agentTools,
     agent-exposed commands)."""
 
     def __init__(self, call: RelayCall) -> None:
@@ -70,7 +70,7 @@ class Dash:
         self.workspaces = _Workspaces(call)
 
     def context(self, instance_id: str) -> Any:
-        """Read a live pane's current state/selection snapshot (instanceId from
+        """Read an active pane instance's current state/selection snapshot (instanceId from
         `panes.open_list()`)."""
         return self._call("get_pane_context", {"instanceId": instance_id})
 

@@ -21,6 +21,8 @@ from backend.modules.telemetry import router as telemetry_router
 from backend.modules.telemetry.instrument import telemetry_middleware
 from backend.modules.terminal import TerminalManager
 from backend.modules.workspace import router as workspace_router
+from backend.modules.vectordb import router as vectordb_router
+from backend.modules.visualizer import visualizer_manager
 from backend.modules.ws import WsConnection
 
 APP_VERSION = "0.1.0"
@@ -50,6 +52,7 @@ def health() -> dict[str, str]:
 
 app.include_router(agent_router, prefix="/api")
 app.include_router(workspace_router, prefix="/api")
+app.include_router(vectordb_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(files_router, prefix="/api")
 app.include_router(notes_router, prefix="/api")
@@ -88,11 +91,14 @@ async def ws(websocket: WebSocket) -> None:
                 await repl.handle(msg)
             elif channel == "lsp":
                 await lsp.handle(msg)
+            elif channel == "visualizer":
+                await visualizer_manager.handle(conn, msg)
     except WebSocketDisconnect:
         pass
     finally:
         await terminals.close_all()
         await repl.close_all()
         await lsp.close_all()
+        visualizer_manager.stop_for(conn)
         telemetry_task.cancel()
         files_task.cancel()

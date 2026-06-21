@@ -28,6 +28,8 @@ import {
   type ChatSessionMeta,
 } from './sessions';
 import { matchSlash, runSlash } from './slash';
+import { listRoots, listDir } from '../files/api';
+import { registry, type OpenPaneInfo } from '../../registry';
 
 const AVATAR_MOODS = Object.keys(DEFAULT_AVATAR_MOODS);
 
@@ -63,6 +65,45 @@ function toTurns(messages: ChatMessage[]): ChatTurn[] {
   }));
 }
 
+async function getWorkspaceFiles(): Promise<string[]> {
+  try {
+    const roots = await listRoots();
+    const files: string[] = [];
+    const queue: string[] = roots.map((r) => r.path);
+    let count = 0;
+    while (queue.length > 0 && count < 1000) {
+      const current = queue.shift()!;
+      try {
+        const res = await listDir(current);
+        for (const entry of res.entries) {
+          if (entry.kind === 'dir') {
+            if (
+              entry.name !== 'node_modules' &&
+              entry.name !== '.git' &&
+              entry.name !== '.venv' &&
+              entry.name !== '__pycache__' &&
+              entry.name !== '.pytest_cache' &&
+              entry.name !== 'dist' &&
+              entry.name !== 'build'
+            ) {
+              queue.push(entry.path);
+            }
+          } else {
+            files.push(entry.path);
+            count++;
+          }
+        }
+      } catch (err) {
+        console.error('Failed to list dir', current, err);
+      }
+    }
+    return files;
+  } catch (err) {
+    console.error('Failed to list roots', err);
+    return [];
+  }
+}
+
 export function ChatWidget() {
   const [status, setStatus] = useState<AgentStatus | 'loading' | 'backend-down'>('loading');
   const [sessions, setSessions] = useState<ChatSessionMeta[]>([]);
@@ -79,6 +120,14 @@ export function ChatWidget() {
   // it off for a plain text pane (see agentModule settings).
   const animateAvatar = useSetting<boolean>('agent.avatarAnimation') ?? true;
   const [mood, setMood] = useState(DEFAULT_AVATAR_MOOD);
+
+  // Autocomplete states
+  const [showSuggestions, setShowSuggestions] = useState<'files' | 'panes' | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [triggerIndex, setTriggerIndex] = useState(-1);
+  const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(0);
+  const [workspaceFiles, setWorkspaceFiles] = useState<string[]>([]);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     getAgentStatus()
@@ -189,6 +238,118 @@ export function ChatWidget() {
       await refreshSessions();
     } catch {
       /* best-effort */
+    }
+  };
+
+  const getFilteredItems = () => {
+    if (showSuggestions === 'files') {
+      return workspaceFiles.filter((f) => f.toLowerCase().includes(searchQuery.toLowerCase())).slice(0, 10);
+    }
+    if (showSuggestions === 'panes') {
+      const openPanes = registry.layoutController?.listOpenPanes() ?? [];
+      return openPanes
+        .filter(
+          (p) =>
+            p.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            p.instanceId.toLowerCase().includes(searchQuery.toLowerCase()),
+        )
+        .slice(0, 10);
+    }
+    return [];
+  };
+
+  const selectSuggestion = (item: string | OpenPaneInfo) => {
+    const inputEl = inputRef.current;
+    if (!inputEl) return;
+
+    let insertText = '';
+
+    if (showSuggestions === 'files') {
+      const path = item as string;
+      insertText = `@${path} `;
+    } else if (showSuggestions === 'panes') {
+      const pane = item as OpenPaneInfo;
+      insertText = `pane:${pane.instanceId} `;
+    }
+
+    const start = triggerIndex;
+    const end = inputEl.selectionStart ?? 0;
+    const val = prompt;
+    const newValue = val.substring(0, start) + insertText + val.substring(end);
+    setPrompt(newValue);
+    setShowSuggestions(null);
+
+    // Focus input and set cursor position after a timeout
+    const newCursorPos = start + insertText.length;
+    setTimeout(() => {
+      if (inputRef.current) {
+        inputRef.current.focus();
+        inputRef.current.selectionStart = newCursorPos;
+        inputRef.current.selectionEnd = newCursorPos;
+      }
+    }, 0);
+  };
+
+  const handleInputChange = async (value: string) => {
+    setPrompt(value);
+
+    const inputEl = inputRef.current;
+    if (!inputEl) return;
+
+    const selectionStart = inputEl.selectionStart ?? 0;
+    const textBeforeCursor = value.substring(0, selectionStart);
+
+    // Check for @ symbol (files)
+    const atMatch = textBeforeCursor.match(/@([^\s]*)$/);
+    // Check for pane: prefix (panes)
+    const paneMatch = textBeforeCursor.match(/pane:([^\s]*)$/);
+
+    if (atMatch) {
+      const query = atMatch[1];
+      setSearchQuery(query);
+      setTriggerIndex(selectionStart - query.length - 1); // trigger is '@'
+      setShowSuggestions('files');
+      setSelectedSuggestionIndex(0);
+
+      // Lazily load files
+      if (workspaceFiles.length === 0) {
+        const list = await getWorkspaceFiles();
+        setWorkspaceFiles(list);
+      }
+    } else if (paneMatch) {
+      const query = paneMatch[1];
+      setSearchQuery(query);
+      setTriggerIndex(selectionStart - query.length - 5); // trigger is 'pane:'
+      setShowSuggestions('panes');
+      setSelectedSuggestionIndex(0);
+    } else {
+      setShowSuggestions(null);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (showSuggestions) {
+      const items = getFilteredItems();
+      if (items.length > 0) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          setSelectedSuggestionIndex((prev) => (prev + 1) % items.length);
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          setSelectedSuggestionIndex((prev) => (prev - 1 + items.length) % items.length);
+        } else if (e.key === 'Enter' || e.key === 'Tab') {
+          e.preventDefault();
+          selectSuggestion(items[selectedSuggestionIndex]);
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          setShowSuggestions(null);
+        }
+      } else {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          setShowSuggestions(null);
+        }
+      }
     }
   };
 
@@ -323,10 +484,56 @@ export function ChatWidget() {
           ))}
         </ul>
       )}
+      {showSuggestions && getFilteredItems().length > 0 && (
+        <ul className="agent-slash-suggest">
+          {getFilteredItems().map((item, idx) => {
+            const isSelected = idx === selectedSuggestionIndex;
+            const itemStyle: React.CSSProperties = isSelected
+              ? { background: 'color-mix(in srgb, var(--accent) 22%, var(--bg-hover))' }
+              : {};
+
+            if (showSuggestions === 'files') {
+              const path = item as string;
+              const parts = path.split(/[/\\]/);
+              const name = parts[parts.length - 1];
+              const dir = parts.slice(0, -1).join('/');
+
+              return (
+                <li key={path}>
+                  <button
+                    type="button"
+                    style={itemStyle}
+                    onClick={() => selectSuggestion(path)}
+                  >
+                    <span className="agent-slash-name">@{name}</span>
+                    <span className="agent-slash-desc">{dir}</span>
+                  </button>
+                </li>
+              );
+            } else {
+              const pane = item as OpenPaneInfo;
+              return (
+                <li key={pane.instanceId}>
+                  <button
+                    type="button"
+                    style={itemStyle}
+                    onClick={() => selectSuggestion(pane)}
+                  >
+                    <span className="agent-slash-name">pane:{pane.title}</span>
+                    <span className="agent-slash-desc">({pane.instanceId})</span>
+                  </button>
+                </li>
+              );
+            }
+          })}
+        </ul>
+      )}
       <form className="agent-chat-input" onSubmit={(e) => void send(e)}>
         <input
+          ref={inputRef}
           value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
+          onChange={(e) => handleInputChange(e.target.value)}
+          onKeyDown={handleKeyDown}
           placeholder={
             ready ? 'Ask the agent…  (/ for commands)' : 'Agent not ready — / for commands'
           }
