@@ -35,18 +35,23 @@ SYSTEM_PROMPT = (
     "resizing, moving, floating and maximizing them, and by managing workspaces, "
     "using the provided tools.\n"
     "Rules:\n"
-    "- A 'pane' is a panel or widget shown on screen (e.g. Marketplace, Settings, "
-    "Data flow, Backend status). To open/show/add something the user names, FIRST "
-    "call list_available_panes to find the pane whose title matches, THEN call "
-    "open_pane with that exact id. Do NOT treat it as a workspace.\n"
-    "- To arrange ALREADY-OPEN panes (split/resize/move/float/maximize), FIRST "
-    "call list_open_panes to get each pane's live instanceId. Geometry tools take "
-    "the instanceId, NOT the pane type id. split_pane also needs a paneId (from "
-    "list_available_panes) for the content to show in the new region.\n"
+    "- The screen layout is composed of 'panes' (layout containers) hosting 'views' "
+    "(registered panels or widgets, e.g. Marketplace, Settings, Data flow, Backend status). "
+    "To open/show/add a view, FIRST call list_available_panes to find the view whose title "
+    "matches, THEN call open_pane with that view ID. Do NOT treat it as a workspace.\n"
+    "- To arrange active panes (split/resize/move/float/maximize), FIRST call list_open_panes "
+    "to get each active pane's live instanceId. Geometry tools take the instanceId, NOT the "
+    "view ID. split_pane also needs a view ID (paneId parameter, from list_available_panes) "
+    "for the view content to show in the new split pane.\n"
+    "- If the user refers to a pane via a title, file name, or instance ID (e.g., 'pane:main.py' or 'pane:editor.buffer#1'), "
+    "match it against the title or instanceId of the open panes returned by list_open_panes to find the "
+    "correct active instanceId to target.\n"
+    "- If the user refers to a file via an absolute or relative path prefixed with '@' (e.g., '@absolute_path'), "
+    "use that path directly with files/editor tools.\n"
     "- Only use list_workspaces / create_workspace / switch_workspace when the "
     "user explicitly talks about workspaces or tabs.\n"
     "- Ids are not guessable; always discover them with a list_* tool first.\n"
-    "- When the user asks ABOUT what's on screen, the layout, or a widget's "
+    "- When the user asks ABOUT what's on screen, the layout, or a view's "
     "contents, call list_open_panes first, then get_pane_context on the relevant "
     "pane(s), and answer from what they return — do not guess.\n"
     "- To change code in an open editor buffer (format, rewrite, fix), use "
@@ -81,34 +86,39 @@ def _tool(
 LAYOUT_TOOLS: list[dict[str, Any]] = [
     _tool(
         "list_available_panes",
-        "List every pane (panel or widget) that can be opened, with id and title. "
-        "Call this to find a valid id before opening a pane.",
+        "List every view (panel or widget definition) that can be opened, with id and title. "
+        "Call this to find a valid view ID before opening a pane.",
     ),
     _tool("list_workspaces", "List the named workspaces and which one is active."),
     _tool(
         "list_open_panes",
-        "List the panes currently open in the active workspace, with each pane's "
-        "type id, live instanceId, title, and whether it exposes agent-readable "
+        "List the panes currently active in the active workspace, with each pane's "
+        "view ID, live instanceId, title, and whether it exposes agent-readable "
         "context. Use the instanceId with get_pane_context.",
     ),
     _tool(
         "get_pane_context",
-        "Read a live pane's current state/selection snapshot (e.g. the active "
+        "Read a live pane instance's current state/selection snapshot (e.g. the active "
         "editor buffer's text, a file tree's selection). Use instanceId from "
         "list_open_panes.",
-        {"instanceId": {"type": "string", "description": "Live pane instanceId"}},
+        {"instanceId": {"type": "string", "description": "Active pane instanceId"}},
         ["instanceId"],
     ),
     _tool(
         "open_pane",
-        "Open a panel or widget as a pane in the active workspace.",
-        {"id": {"type": "string", "description": "Pane id from list_available_panes"}},
+        "Open a view (panel or widget) in a pane in the active workspace.",
+        {"id": {"type": "string", "description": "View ID from list_available_panes"}},
         ["id"],
     ),
     _tool(
         "close_pane",
-        "Close an open pane by its id.",
-        {"id": {"type": "string", "description": "Id of an open pane"}},
+        "Close an active pane by its instanceId or view ID.",
+        {
+            "id": {
+                "type": "string",
+                "description": "Instance ID or view ID of the pane to close",
+            }
+        },
         ["id"],
     ),
     _tool(
@@ -125,18 +135,21 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
     ),
     _tool(
         "split_pane",
-        "Split an open pane, opening another pane beside it. 'left'/'right' give a "
+        "Split an active pane, opening a new view beside it. 'left'/'right' give a "
         "vertical split, 'above'/'below' a horizontal one. Use instanceId from "
-        "list_open_panes and paneId from list_available_panes.",
+        "list_open_panes and paneId (view ID) from list_available_panes.",
         {
-            "instanceId": {"type": "string", "description": "Live pane to split"},
+            "instanceId": {
+                "type": "string",
+                "description": "Live pane instance to split",
+            },
             "direction": {
                 "type": "string",
                 "enum": ["left", "right", "above", "below"],
             },
             "paneId": {
                 "type": "string",
-                "description": "Pane id (from list_available_panes) for the new region",
+                "description": "View ID (from list_available_panes) for the new split region",
             },
         },
         ["instanceId", "direction", "paneId"],

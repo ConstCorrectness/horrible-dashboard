@@ -19,10 +19,14 @@ import httpx
 from fastapi import APIRouter, HTTPException
 
 from backend.modules.clubhouse.models import (
+    AcceptSpeakerInviteRequest,
     ChannelList,
     ClubhouseStatus,
     CompleteAuthRequest,
     FollowingList,
+    HandRequest,
+    JoinChannelResult,
+    MuteRequest,
     StartAuthRequest,
     StartAuthResult,
     TokenConnectRequest,
@@ -389,3 +393,89 @@ async def following() -> dict[str, Any]:
 def disconnect() -> ClubhouseStatus:
     _auth_path().unlink(missing_ok=True)
     return ClubhouseStatus(connected=False)
+
+
+@router.post("/channels/{channel}/join", response_model=JoinChannelResult)
+async def join_channel(channel: str) -> dict[str, Any]:
+    """Join a live room (Clubhouse POST /join_channel) and retrieve tokens."""
+    auth = _require_auth()
+    res = await _ch_authed_post(
+        "/join_channel",
+        {"channel": channel},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+    res["user_id"] = auth["user_id"]
+    return res
+
+
+@router.post("/channels/{channel}/leave")
+async def leave_channel(channel: str) -> dict[str, Any]:
+    """Leave a room (Clubhouse POST /leave_channel)."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/leave_channel",
+        {"channel": channel},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+@router.post("/channels/{channel}/ping")
+async def active_ping(channel: str) -> dict[str, Any]:
+    """Keep the user session active (Clubhouse POST /active_ping)."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/active_ping",
+        {"channel": channel},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+@router.post("/channels/{channel}/mute")
+async def mute_channel(channel: str, body: MuteRequest) -> dict[str, Any]:
+    """Notify Clubhouse of speaker mute/unmute state (Clubhouse POST /update_is_muted)."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/update_is_muted",
+        {"channel": channel, "is_muted": body.is_muted},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+@router.post("/channels/{channel}/hand")
+async def hand_channel(channel: str, body: HandRequest) -> dict[str, Any]:
+    """Raise or lower hand in a room (Clubhouse POST /audience_reply)."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/audience_reply",
+        {
+            "channel": channel,
+            "raise_hands": body.raise_hands,
+            "unraise_hands": not body.raise_hands,
+        },
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+@router.post("/channels/{channel}/accept_speaker")
+async def accept_speaker(
+    channel: str, body: AcceptSpeakerInviteRequest
+) -> dict[str, Any]:
+    """Accept invitation to speak from a moderator (Clubhouse POST /accept_speaker_invite)."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/accept_speaker_invite",
+        {"channel": channel, "user_id": body.user_id},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )

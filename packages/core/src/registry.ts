@@ -86,17 +86,18 @@ export interface ModuleManifest {
 /** Top-level shell surfaces. `home` is the first-open view; `workspace` hosts panels. */
 export type ShellView = 'home' | 'workspace';
 
-/** An open pane in the active workspace. */
+/** An active pane instance in the workspace layout. */
 export interface OpenPaneInfo {
-  /** The pane **type** id (what `open_pane`/`close_pane` take). */
+  /** The ID of the View running in this pane (e.g., 'editor.buffer', 'observability'). */
   id: string;
   /**
-   * The live **instance** id (what `get_pane_context` targets). Differs from
-   * `id` for non-singleton panes (e.g. `scratch.note#2`).
+   * The unique ID of this active Pane Instance (e.g., 'editor.buffer#2').
+   * Used as the target for pane-specific actions and context snapshots.
    */
   instanceId: string;
+  /** The title displayed in the pane's tab. */
   title: string;
-  /** Whether this instance currently exposes `getAgentContext`. */
+  /** Whether this pane instance currently exposes an agent context snapshot. */
   hasContext: boolean;
 }
 
@@ -105,23 +106,23 @@ export interface WorkspaceInfo {
   name: string;
 }
 
-/** Options for opening a pane: an explicit instance id (so reopening the same
- * logical pane — e.g. a buffer for one source — focuses it instead of
- * duplicating) and params passed to the instance (read via `usePaneParams`). */
+/** Options for opening a pane: an explicit instance ID (so reopening the same
+ * logical pane focuses it instead of duplicating) and initial parameters. */
 export interface OpenPaneOptions {
   instanceId?: string;
   params?: Record<string, unknown>;
 }
 
 /**
- * Workspace mutations the agent orchestrator needs that don't already have a
- * seam. The Workspace component installs this; it owns the dockview api. Keeps
- * the agent (and any module) decoupled from the docking engine.
+ * Workspace mutations the agent orchestrator and layout controllers drive.
+ * Installed by the Workspace component to decouple UI logic from the docking engine.
  */
 export interface LayoutController {
+  /** Close a pane. Accepts either a View ID or a Pane Instance ID. */
   closePane(id: string): boolean;
   /** Bring a pane instance forward (activate its tab). Returns false if unknown. */
   focusPane(instanceId: string): boolean;
+  /** List all active pane instances in the active workspace. */
   listOpenPanes(): OpenPaneInfo[];
   createWorkspace(name: string): Promise<WorkspaceInfo>;
   listWorkspaces(): Promise<{ active: string | null; workspaces: WorkspaceInfo[] }>;
@@ -135,11 +136,11 @@ export interface LayoutController {
   // autosave (onDidLayoutChange), so the new layout persists like any other. ---
 
   /**
-   * Split the pane `instanceId`, opening `paneId` in a new region beside it
+   * Split the pane `instanceId`, opening `viewId` in a new region beside it
    * (`left`/`right` → vertical split, `above`/`below` → horizontal). Returns the
    * new pane's instance id, or null if either id is unknown.
    */
-  splitPane(instanceId: string, direction: SplitDirection, paneId: string): string | null;
+  splitPane(instanceId: string, direction: SplitDirection, viewId: string): string | null;
   /** Resize the group holding a pane (pixels; omit a dimension to leave it). */
   resizePane(instanceId: string, size: { width?: number; height?: number }): boolean;
   /** Move a pane beside another pane, or into its tab group with `within`. */
@@ -149,11 +150,10 @@ export interface LayoutController {
   /** Maximize a pane to fill the workspace (`true`) or restore the layout (`false`). */
   maximizePane(instanceId: string, maximized: boolean): boolean;
   /**
-   * Swap an open pane's content to another registered pane type in place (same
-   * instance id, so the layout/geometry is preserved). Returns false if either the
-   * pane instance or the target `paneId` is unknown.
+   * Swap an open pane's view content in place (preserves geometry and instanceId).
+   * Returns false if either the pane instance or the target `viewId` is unknown.
    */
-  changePaneType(instanceId: string, paneId: string): boolean;
+  changePaneType(instanceId: string, viewId: string): boolean;
 }
 
 class ModuleRegistry {

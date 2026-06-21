@@ -46,4 +46,6 @@ export const clubhouseModule: ModuleManifest = {
 };
 
 export * from './api';
+export * from './useClubhouseVoice';
+
 

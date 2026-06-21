@@ -79,21 +79,31 @@ export interface CommandDecl {
   agent?: AgentCommandDecl;
 }
 
+/**
+ * Declaration of a Panel View. A Panel is a multi-instance view (e.g. terminals,
+ * editor buffers) by default. Each time it is opened, a new Pane instance is
+ * created, unless `singleton` is set to true.
+ */
 export interface PanelDecl {
   id: string;
   title: string;
   component: ComponentType;
   defaultPlacement: 'left' | 'center' | 'right' | 'bottom';
   /**
-   * When true, only one window of this panel can exist — opening it again
-   * focuses the existing one (e.g. the dashboard). When false/omitted, each
-   * open creates a new instance (e.g. terminals, editor buffers).
+   * When true, only one Pane instance running this view can exist in a workspace —
+   * opening it again focuses the existing one. When false/omitted, each open
+   * creates a new Pane instance (e.g. terminals, editor buffers).
    */
   singleton?: boolean;
   /** Actions/state-reads this panel exposes to the agent orchestrator. */
   agentTools?: AgentToolDecl[];
 }
 
+/**
+ * Declaration of a Widget View. A Widget is a singleton view (e.g. dashboard welcome
+ * banner, observability stats, settings). Only one Pane instance running this
+ * view can exist in a workspace at any time; opening it focuses the existing pane.
+ */
 export interface WidgetDecl {
   id: string;
   title: string;
@@ -108,6 +118,7 @@ export interface WidgetDecl {
   /** Actions/state-reads this widget exposes to the agent orchestrator. */
   agentTools?: AgentToolDecl[];
 }
+
 
 /**
  * A JSON-serializable snapshot of a pane's current state/selection, read by the

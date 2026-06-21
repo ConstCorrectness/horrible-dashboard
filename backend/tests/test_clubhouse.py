@@ -246,3 +246,115 @@ def test_disconnect(client: TestClient, monkeypatch) -> None:
     res = client.delete("/api/clubhouse/auth")
     assert res.json()["connected"] is False
     assert client.get("/api/clubhouse/status").json()["connected"] is False
+
+
+def test_join_channel(client, tmp_path, monkeypatch) -> None:
+    _connect(tmp_path)
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        assert (path, token, user_id, device_id) == ("/join_channel", "T", 4242, "D")
+        assert payload == {"channel": "my-channel"}
+        return {
+            "success": True,
+            "channel_id": 999,
+            "channel": "my-channel",
+            "token": "AGORA-RTC-TOKEN",
+            "rtm_token": "AGORA-RTM-TOKEN",
+            "pubnub_token": "PN-TOKEN",
+        }
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    res = client.post("/api/clubhouse/channels/my-channel/join")
+    assert res.status_code == 200
+    body = res.json()
+    assert body["success"] is True
+    assert body["channel"] == "my-channel"
+    assert body["token"] == "AGORA-RTC-TOKEN"
+    assert body["rtm_token"] == "AGORA-RTM-TOKEN"
+    assert body["pubnub_token"] == "PN-TOKEN"
+    assert body["user_id"] == 4242
+
+
+def test_leave_channel(client, tmp_path, monkeypatch) -> None:
+    _connect(tmp_path)
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        assert (path, token, user_id, device_id) == ("/leave_channel", "T", 4242, "D")
+        assert payload == {"channel": "my-channel"}
+        return {"success": True}
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    res = client.post("/api/clubhouse/channels/my-channel/leave")
+    assert res.status_code == 200
+    assert res.json() == {"success": True}
+
+
+def test_active_ping(client, tmp_path, monkeypatch) -> None:
+    _connect(tmp_path)
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        assert (path, token, user_id, device_id) == ("/active_ping", "T", 4242, "D")
+        assert payload == {"channel": "my-channel"}
+        return {"success": True}
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    res = client.post("/api/clubhouse/channels/my-channel/ping")
+    assert res.status_code == 200
+    assert res.json() == {"success": True}
+
+
+def test_mute_channel(client, tmp_path, monkeypatch) -> None:
+    _connect(tmp_path)
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        assert (path, token, user_id, device_id) == ("/update_is_muted", "T", 4242, "D")
+        assert payload == {"channel": "my-channel", "is_muted": True}
+        return {"success": True}
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    res = client.post(
+        "/api/clubhouse/channels/my-channel/mute", json={"is_muted": True}
+    )
+    assert res.status_code == 200
+    assert res.json() == {"success": True}
+
+
+def test_hand_channel(client, tmp_path, monkeypatch) -> None:
+    _connect(tmp_path)
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        assert (path, token, user_id, device_id) == ("/audience_reply", "T", 4242, "D")
+        assert payload == {
+            "channel": "my-channel",
+            "raise_hands": True,
+            "unraise_hands": False,
+        }
+        return {"success": True}
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    res = client.post(
+        "/api/clubhouse/channels/my-channel/hand", json={"raise_hands": True}
+    )
+    assert res.status_code == 200
+    assert res.json() == {"success": True}
+
+
+def test_accept_speaker(client, tmp_path, monkeypatch) -> None:
+    _connect(tmp_path)
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        assert (path, token, user_id, device_id) == (
+            "/accept_speaker_invite",
+            "T",
+            4242,
+            "D",
+        )
+        assert payload == {"channel": "my-channel", "user_id": 12345}
+        return {"success": True}
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    res = client.post(
+        "/api/clubhouse/channels/my-channel/accept_speaker", json={"user_id": 12345}
+    )
+    assert res.status_code == 200
+    assert res.json() == {"success": True}

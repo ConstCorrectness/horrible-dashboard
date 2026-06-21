@@ -407,16 +407,16 @@ export function Workspace({
         if (!id || presetFor(id)) return;
         void removeWs(id);
       },
-      splitPane: (instanceId, direction, paneId) => {
+      splitPane: (instanceId, direction, viewId) => {
         const ref = api.getPanel(instanceId);
-        const decl = resolveContent(paneId);
+        const decl = resolveContent(viewId);
         if (!ref || !decl) return null;
-        const newId = freshInstanceId(api, paneId);
+        const newId = freshInstanceId(api, viewId);
         api.addPanel({
           id: newId,
           component: 'panel',
           title: decl.title,
-          params: { panelId: paneId },
+          params: { panelId: viewId },
           position: { referencePanel: instanceId, direction },
         });
         return newId;
@@ -459,12 +459,12 @@ export function Workspace({
         else panel.api.exitMaximized();
         return true;
       },
-      changePaneType: (instanceId, paneId) => {
+      changePaneType: (instanceId, viewId) => {
         const panel = api.getPanel(instanceId);
-        const decl = resolveContent(paneId);
+        const decl = resolveContent(viewId);
         if (!panel || !decl) return false;
         // Same instance id, new content: PanelHost re-renders via onDidParametersChange.
-        panel.api.updateParameters({ panelId: paneId });
+        panel.api.updateParameters({ panelId: viewId });
         panel.api.setTitle(decl.title);
         return true;
       },

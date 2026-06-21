@@ -74,3 +74,42 @@ export function getClubhouseChannels(): Promise<{ channels: Channel[] }> {
 export function getClubhouseFollowing(): Promise<{ users: FollowUser[] }> {
   return apiGet<{ users: FollowUser[] }>('/clubhouse/following');
 }
+
+export interface JoinChannelResult {
+  success: boolean;
+  channel_id: number | null;
+  channel: string | null;
+  token: string | null;
+  rtm_token: string | null;
+  pubnub_token: string | null;
+  pubnub_origin: string | null;
+  pubnub_heartbeat_value: number | null;
+  pubnub_heartbeat_interval: number | null;
+  pubnub_enable: boolean | null;
+  agora_native_mute: boolean | null;
+  user_id: number | null;
+}
+
+export function joinClubhouseChannel(channel: string): Promise<JoinChannelResult> {
+  return apiPost<JoinChannelResult>(`/clubhouse/channels/${channel}/join`, {});
+}
+
+export function leaveClubhouseChannel(channel: string): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/leave`, {});
+}
+
+export function pingClubhouseChannel(channel: string): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/ping`, {});
+}
+
+export function muteClubhouseChannel(channel: string, isMuted: boolean): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/mute`, { is_muted: isMuted });
+}
+
+export function setClubhouseHand(channel: string, raiseHands: boolean): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/hand`, { raise_hands: raiseHands });
+}
+
+export function acceptClubhouseSpeaker(channel: string, userId: number): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/accept_speaker`, { user_id: userId });
+}

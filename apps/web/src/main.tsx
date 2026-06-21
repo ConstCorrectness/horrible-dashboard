@@ -44,7 +44,9 @@ async function boot(): Promise<void> {
   registry.register(layoutsModule);
   registry.register(agentModule);
   registry.register(scratchModule);
-  registry.register(clubhouseModule);
+  if (!isTauri()) {
+    registry.register(clubhouseModule);
+  }
   registry.register(observabilityModule);
   registry.register(marketplaceModule);
   registry.register(settingsModule);

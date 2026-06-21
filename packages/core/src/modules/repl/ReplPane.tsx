@@ -93,6 +93,55 @@ export function ReplPane() {
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
     if (e.key === 'Enter' && !e.shiftKey) {
+      // Smart REPL enter behavior:
+      // If code is incomplete (ends with colon, has open brackets, or is in an indented block),
+      // insert a newline with auto-indentation. Otherwise, execute it.
+      const lines = input.split('\n');
+      const lastLine = lines[lines.length - 1];
+      const trimmedLastLine = lastLine.trim();
+
+      const countChar = (str: string, char: string) => {
+        let count = 0;
+        for (let i = 0; i < str.length; i++) {
+          if (str[i] === char) count++;
+        }
+        return count;
+      };
+
+      const openParentheses = countChar(input, '(') - countChar(input, ')');
+      const openBrackets = countChar(input, '[') - countChar(input, ']');
+      const openBraces = countChar(input, '{') - countChar(input, '}');
+      const hasOpenBrackets = openParentheses > 0 || openBrackets > 0 || openBraces > 0;
+
+      const endsWithColon = trimmedLastLine.endsWith(':');
+      const isIndentedBlock = lines.length > 1 || lastLine.startsWith(' ');
+      const lastLineNotEmpty = trimmedLastLine !== '';
+
+      const shouldSubmit = !endsWithColon && !hasOpenBrackets && (!isIndentedBlock || !lastLineNotEmpty);
+
+      if (!shouldSubmit) {
+        e.preventDefault();
+        const match = lastLine.match(/^(\s*)/);
+        const currentIndent = match ? match[1] : '';
+        const extraIndent = endsWithColon ? '    ' : '';
+        const newIndent = currentIndent + extraIndent;
+
+        const start = e.currentTarget.selectionStart;
+        const end = e.currentTarget.selectionEnd;
+        const val = e.currentTarget.value;
+        const newValue = val.substring(0, start) + '\n' + newIndent + val.substring(end);
+        setInput(newValue);
+
+        const newCursorPos = start + 1 + newIndent.length;
+        setTimeout(() => {
+          if (e.currentTarget) {
+            e.currentTarget.selectionStart = newCursorPos;
+            e.currentTarget.selectionEnd = newCursorPos;
+          }
+        }, 0);
+        return;
+      }
+
       e.preventDefault();
       submit();
     } else if (e.key === 'ArrowUp' && !input.includes('\n')) {
