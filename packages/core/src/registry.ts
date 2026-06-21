@@ -130,6 +130,10 @@ export interface LayoutController {
   resetLayout(): void;
   /** Delete the active workspace if it's a custom one (presets reset instead). */
   deleteActiveWorkspace(): void;
+  /** Rename a specific workspace. */
+  renameWorkspace(id: string, name: string): Promise<void>;
+  /** Delete a specific workspace. */
+  deleteWorkspace(id: string): Promise<void>;
 
   // --- Geometry: the shared operations the agent's tools AND the user's
   // Blender-style gestures both drive. Every mutation triggers the dockview

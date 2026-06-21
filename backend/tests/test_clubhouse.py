@@ -358,3 +358,96 @@ def test_accept_speaker(client, tmp_path, monkeypatch) -> None:
     )
     assert res.status_code == 200
     assert res.json() == {"success": True}
+
+
+def test_create_channel(client, tmp_path, monkeypatch) -> None:
+    _connect(tmp_path)
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        assert (path, token, user_id, device_id) == ("/create_channel", "T", 4242, "D")
+        assert payload == {
+            "topic": "Testing Create Room",
+            "is_private": False,
+            "is_social_mode": False,
+            "privacy_level": 1,
+            "club_id": None,
+            "user_ids": [],
+            "event_id": None,
+        }
+        return {
+            "success": True,
+            "channel_id": 111,
+            "channel": "new-channel",
+            "token": "AGORA-TOKEN",
+        }
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    res = client.post(
+        "/api/clubhouse/channels",
+        json={"topic": "Testing Create Room", "is_private": False, "is_social_mode": False},
+    )
+    assert res.status_code == 200
+    assert res.json()["channel"] == "new-channel"
+    assert res.json()["user_id"] == 4242
+
+
+def test_follow_user(client, tmp_path, monkeypatch) -> None:
+    _connect(tmp_path)
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        assert (path, token, user_id, device_id) == ("/follow", "T", 4242, "D")
+        assert payload == {"user_id": 99, "source": "feed"}
+        return {"success": True}
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    res = client.post("/api/clubhouse/users/99/follow")
+    assert res.status_code == 200
+    assert res.json() == {"success": True}
+
+
+def test_unfollow_user(client, tmp_path, monkeypatch) -> None:
+    _connect(tmp_path)
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        assert (path, token, user_id, device_id) == ("/unfollow", "T", 4242, "D")
+        assert payload == {"user_id": 99}
+        return {"success": True}
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    res = client.post("/api/clubhouse/users/99/unfollow")
+    assert res.status_code == 200
+    assert res.json() == {"success": True}
+
+
+def test_invite_user(client, tmp_path, monkeypatch) -> None:
+    _connect(tmp_path)
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        assert (path, token, user_id, device_id) == ("/invite_to_existing_channel", "T", 4242, "D")
+        assert payload == {"channel": "my-chan", "user_id": 77}
+        return {"success": True}
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    res = client.post("/api/clubhouse/channels/my-chan/invite", json={"user_id": 77})
+    assert res.status_code == 200
+    assert res.json() == {"success": True}
+
+
+def test_search_users(client, tmp_path, monkeypatch) -> None:
+    _connect(tmp_path)
+
+    async def fake_post(path, payload, token, user_id, device_id=None):
+        assert (path, token, user_id, device_id) == ("/search_users", "T", 4242, "D")
+        assert payload == {
+            "query": "alice",
+            "followers_only": False,
+            "following_only": False,
+            "cofollows_only": False,
+        }
+        return {"users": [{"user_id": 100, "name": "Alice"}]}
+
+    monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
+    res = client.get("/api/clubhouse/users/search?query=alice")
+    assert res.status_code == 200
+    assert res.json()["users"][0]["name"] == "Alice"
+

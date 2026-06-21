@@ -32,6 +32,15 @@ export function ReplPane() {
   const logRef = useRef<HTMLDivElement>(null);
   const history = useRef<string[]>([]);
   const histPos = useRef<number>(-1);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const wasBusyRef = useRef(false);
+
+  useEffect(() => {
+    if (wasBusyRef.current && !busy) {
+      inputRef.current?.focus();
+    }
+    wasBusyRef.current = busy;
+  }, [busy]);
 
   // Append text, merging consecutive same-stream chunks into one block.
   const append = (kind: EntryKind, text: string): void => {
@@ -164,6 +173,15 @@ export function ReplPane() {
     }
   };
 
+  const handleContainerClick = (): void => {
+    if (busy) return;
+    const selection = window.getSelection();
+    if (selection && selection.toString()) {
+      return;
+    }
+    inputRef.current?.focus();
+  };
+
   const containerStyle = useMemo<React.CSSProperties>(
     () => ({
       display: 'flex',
@@ -176,7 +194,7 @@ export function ReplPane() {
   );
 
   return (
-    <div className="repl-pane" style={containerStyle}>
+    <div className="repl-pane" style={containerStyle} onClick={handleContainerClick}>
       <div
         className="repl-log"
         ref={logRef}
@@ -200,6 +218,7 @@ export function ReplPane() {
           {busy ? '...' : '>>>'}
         </span>
         <textarea
+          ref={inputRef}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={onKeyDown}

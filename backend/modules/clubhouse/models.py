@@ -104,3 +104,14 @@ class HandRequest(BaseModel):
 
 class AcceptSpeakerInviteRequest(BaseModel):
     user_id: int
+
+
+class CreateChannelRequest(BaseModel):
+    topic: str = ""
+    is_private: bool = False
+    is_social_mode: bool = False
+
+
+class InviteUserRequest(BaseModel):
+    user_id: int
+

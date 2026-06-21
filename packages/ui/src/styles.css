@@ -528,7 +528,7 @@ body {
   padding: 0;
   padding-bottom: 1.5rem;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
   gap: 1rem;
   overflow-y: auto;
   flex: 1;
@@ -543,7 +543,7 @@ body {
   background: var(--bg-raised);
   border: 1px solid var(--border);
   border-radius: 12px;
-  min-height: 160px;
+  min-height: 190px;
   backdrop-filter: blur(12px);
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
   position: relative;
@@ -693,16 +693,18 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-.ch-btn-join {
+.ch-btn-join,
+.ch-btn-leave {
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.1);
   color: var(--text-dim);
-  padding: 0.3rem 0.65rem;
+  padding: 0.4rem 0.9rem;
   font-size: 0.75rem;
   font-weight: 600;
-  border-radius: 6px;
+  border-radius: 20px;
   cursor: pointer;
   transition: all 0.2s ease;
+  white-space: nowrap;
 }
 
 .ch-room:hover .ch-btn-join {
@@ -710,6 +712,19 @@ body {
   border-color: var(--accent);
   color: #14161a;
   box-shadow: 0 4px 12px rgba(110, 168, 254, 0.3);
+}
+
+.ch-btn-leave {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+}
+
+.ch-room:hover .ch-btn-leave {
+  background: #ef4444;
+  border-color: #ef4444;
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
 }
 
 .ch-pulse-dot {

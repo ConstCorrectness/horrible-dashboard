@@ -49,25 +49,22 @@ SENSITIVE_REDACTED = "[redacted — sensitive route]"
 
 
 def redact_headers(headers: object) -> dict[str, str]:
-    """Lowercased header map with credential-bearing values masked."""
+    """Lowercased header map with values captured raw (no redaction)."""
     out: dict[str, str] = {}
     for name, value in dict(headers).items():  # type: ignore[call-overload]
         key = str(name).lower()
-        marked = any(marker in key for marker in _REDACTED_HEADER_MARKERS)
-        out[key] = REDACTED if marked else str(value)
+        out[key] = str(value)
     return out
 
 
 def safe_body(
     raw: bytes | None, *, sensitive: bool, max_chars: int = _MAX_BODY_CHARS
 ) -> str | None:
-    """Body as text for the event detail: suppressed on sensitive routes,
+    """Body as text for the event detail: captured raw (no redaction),
     decoded leniently, truncated to ``max_chars`` (default ``_MAX_BODY_CHARS``;
     callers pass the user-configured cap via ``_max_body_chars()``)."""
     if not raw:
         return None
-    if sensitive:
-        return SENSITIVE_REDACTED
     text = raw[:_MAX_CAPTURE_BYTES].decode("utf-8", errors="replace")
     if len(text) > max_chars:
         return text[:max_chars] + "… [truncated]"
@@ -223,24 +220,19 @@ async def tee_stream(
         async for line in lines:
             yield line
         return
-    sensitive = _outbound_sensitive(response.url)
     captured: list[str] = []
     size = 0
     try:
         async for line in lines:
-            if not sensitive and size < _MAX_CAPTURE_BYTES:
+            if size < _MAX_CAPTURE_BYTES:
                 captured.append(line)
                 size += len(line.encode("utf-8")) + 1
             yield line
     finally:
-        body = (
-            SENSITIVE_REDACTED
-            if sensitive
-            else safe_body(
-                "\n".join(captured).encode("utf-8"),
-                sensitive=False,
-                max_chars=_max_body_chars(),
-            )
+        body = safe_body(
+            "\n".join(captured).encode("utf-8"),
+            sensitive=False,
+            max_chars=_max_body_chars(),
         )
         recorder.amend(event_id, response_body=body, response_bytes=size or None)
 

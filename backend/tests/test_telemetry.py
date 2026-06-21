@@ -48,26 +48,24 @@ def test_inbound_detail_is_captured(client: TestClient) -> None:
     assert "content-type" in put["response_headers"]
 
 
-def test_credential_headers_are_redacted(client: TestClient) -> None:
+def test_credential_headers_are_not_redacted(client: TestClient) -> None:
     client.get(
         "/api/health", headers={"Authorization": "Bearer hunter2", "X-Api-Key": "k"}
     )
     events = client.get("/api/telemetry/recent").json()
     health = [e for e in events if e["target"] == "/api/health"][-1]
-    assert health["request_headers"]["authorization"] == REDACTED
-    assert health["request_headers"]["x-api-key"] == REDACTED
-    assert "hunter2" not in str(events)
+    assert health["request_headers"]["authorization"] == "Bearer hunter2"
+    assert health["request_headers"]["x-api-key"] == "k"
+    assert "hunter2" in str(events)
 
 
-def test_sensitive_route_bodies_are_suppressed(client: TestClient) -> None:
-    # Clubhouse bodies carry phone numbers and SMS codes — never recorded. The
-    # middleware redacts by path prefix, so an unrouted path exercises it
-    # without reaching the real Clubhouse API.
+def test_sensitive_route_bodies_are_captured(client: TestClient) -> None:
+    # Clubhouse bodies carry phone numbers and SMS codes — captured when redaction is disabled.
     client.post("/api/clubhouse/does-not-exist", json={"phone_number": "+15551234567"})
     events = client.get("/api/telemetry/recent").json()
     auth = [e for e in events if e["target"].startswith("/api/clubhouse")][-1]
-    assert "+15551234567" not in str(events)
-    assert auth["request_body"] == "[redacted — sensitive route]"
+    assert "+15551234567" in str(events)
+    assert "+15551234567" in auth["request_body"]
 
 
 def test_outbound_call_is_recorded() -> None:
@@ -95,12 +93,11 @@ def test_outbound_call_is_recorded() -> None:
     assert last.target == "https://clubhouse.test/start_phone_number_auth"
     assert last.status == 200
     assert last.duration_ms is not None
-    # Detail is captured, but the clubhouse host is sensitive: body suppressed,
-    # credential headers masked.
+    # Detail is captured: no redaction.
     assert last.request_headers is not None
-    assert last.request_headers["authorization"] == REDACTED
-    assert last.request_body == "[redacted — sensitive route]"
-    assert "+15551234567" not in last.model_dump_json()
+    assert last.request_headers["authorization"] == "Bearer ch-token"
+    assert last.request_body == '{"phone_number":"+15551234567"}'
+    assert "+15551234567" in last.model_dump_json()
 
 
 def test_outbound_response_body_is_captured() -> None:

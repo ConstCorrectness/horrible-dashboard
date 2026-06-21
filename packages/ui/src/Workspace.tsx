@@ -407,6 +407,15 @@ export function Workspace({
         if (!id || presetFor(id)) return;
         void removeWs(id);
       },
+      renameWorkspace: async (id, name) => {
+        await saveWorkspace(id, { name });
+        const s = await getWorkspaces();
+        applyState(s.workspaces, activeIdRef.current);
+      },
+      deleteWorkspace: async (id) => {
+        if (presetFor(id)) return;
+        await removeWs(id);
+      },
       splitPane: (instanceId, direction, viewId) => {
         const ref = api.getPanel(instanceId);
         const decl = resolveContent(viewId);
