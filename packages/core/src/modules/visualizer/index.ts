@@ -14,14 +14,22 @@ export const visualizerModule: ModuleManifest = {
       agentTools: [
         {
           name: 'visualizer.render_js',
-          description: 'Render a JavaScript drawing/animation using HTML5 2D Canvas, Three.js, or Babylon.js. The script must return lifecycle hooks: init(canvas, THREE, BABYLON), tick(timeMs, canvas), and cleanup().',
+          description:
+            'Render a JavaScript drawing/animation using HTML5 2D Canvas, Three.js, or Babylon.js. ' +
+            'The script may EITHER return lifecycle hooks { init(canvas, THREE, BABYLON), tick(timeMs, canvas), cleanup() } ' +
+            'OR be a standalone script: a `canvas`, `THREE`, and `BABYLON` are in scope, and a renderer created with ' +
+            '`new THREE.WebGLRenderer()` automatically targets that canvas (no need to append it to the page).',
           params: {
             type: 'object',
             properties: {
-              mode: { type: 'string', enum: ['canvas', 'three', 'babylon'], description: 'The rendering engine mode.' },
-              code: { type: 'string', description: 'The raw JavaScript code.' }
+              mode: {
+                type: 'string',
+                enum: ['canvas', 'three', 'babylon'],
+                description: 'The rendering engine mode.',
+              },
+              code: { type: 'string', description: 'The raw JavaScript code.' },
             },
-            required: ['mode', 'code']
+            required: ['mode', 'code'],
           },
           sideEffect: true,
           handler: async (args) => {
@@ -39,17 +47,18 @@ export const visualizerModule: ModuleManifest = {
               return { success: true, mode, codeLength: code.length };
             }
             return { error: 'Visualizer pane is not open or mounted.' };
-          }
+          },
         },
         {
           name: 'visualizer.run_pygame',
-          description: 'Run a Python Pygame animation script on the backend and stream the frames to the visualizer panel.',
+          description:
+            'Run a Python Pygame animation script on the backend and stream the frames to the visualizer panel.',
           params: {
             type: 'object',
             properties: {
-              code: { type: 'string', description: 'The raw Python/Pygame script.' }
+              code: { type: 'string', description: 'The raw Python/Pygame script.' },
             },
-            required: ['code']
+            required: ['code'],
           },
           sideEffect: true,
           handler: async (args) => {
@@ -65,7 +74,7 @@ export const visualizerModule: ModuleManifest = {
               return { success: true, codeLength: code.length };
             }
             return { error: 'Visualizer pane is not open or mounted.' };
-          }
+          },
         },
         {
           name: 'visualizer.clear',
@@ -80,11 +89,12 @@ export const visualizerModule: ModuleManifest = {
               return { success: true };
             }
             return { error: 'Visualizer pane is not open.' };
-          }
+          },
         },
         {
           name: 'visualizer.get_state',
-          description: 'Retrieve the current visualizer rendering status, active mode, and error details.',
+          description:
+            'Retrieve the current visualizer rendering status, active mode, and error details.',
           params: { type: 'object', properties: {} },
           handler: () => {
             const active = getActiveVisualizer();
@@ -92,16 +102,16 @@ export const visualizerModule: ModuleManifest = {
               return active.getState();
             }
             return { error: 'Visualizer pane is not open.' };
-          }
-        }
-      ]
-    }
+          },
+        },
+      ],
+    },
   ],
   commands: [
     {
       id: 'visualizer.open',
       title: 'Visualizer: Open Pane',
       run: () => registry.openPanel('visualizer.pane'),
-    }
-  ]
+    },
+  ],
 };

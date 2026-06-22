@@ -16,7 +16,7 @@ The Visualizer module supports two execution environments for animations:
 ### 1. Client-Side JavaScript Animations
 JS visualizations execute in the main browser thread to achieve high-performance WebGL/2D canvas rendering (60 FPS).
 - **Libraries**: Native HTML5 Canvas 2D, **Three.js** (WebGL, pre-loaded), and **Babylon.js** (WebGL, loaded dynamically via CDN at runtime on first request).
-- **Lifecycle Contract**: Scripts compiled via `new Function(...)` must return an object implementing the lifecycle interface:
+- **Lifecycle Contract**: Scripts compiled via `new Function(...)` may return an object implementing the lifecycle interface:
   ```javascript
   return {
     init: (canvas, THREE, BABYLON) => {
@@ -31,6 +31,13 @@ JS visualizations execute in the main browser thread to achieve high-performance
     }
   }
   ```
+- **Standalone scripts also work**: a script that doesn't return hooks (e.g. an LLM-generated
+  Three.js scene with its own `animate()` loop) runs as-is. `canvas`, `THREE`, and `BABYLON`
+  are injected into scope; `new THREE.WebGLRenderer()` is bound to the pane canvas (so the
+  renderer renders in-pane even without a `{ canvas }` arg), `requestAnimationFrame` is tracked
+  so the loop is cancelled on stop/re-run, and `document.body.appendChild(...)` is a no-op to
+  keep a detached canvas from escaping the pane. This makes weak models' typical output render
+  without them having to emit the hook shape.
 
 ### 2. Backend-Side Headless Pygame Simulations
 Python simulations run inside an isolated subprocess on the backend, streaming frames in real-time.

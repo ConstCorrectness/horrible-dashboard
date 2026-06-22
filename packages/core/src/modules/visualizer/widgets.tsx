@@ -161,7 +161,7 @@ while running:
     clock.tick(30)
     
 pygame.quit()
-`
+`,
 };
 
 export function VisualizerWidget() {
@@ -292,7 +292,7 @@ export function VisualizerWidget() {
       try {
         activeScriptRef.current.cleanup();
       } catch (err) {
-        console.error("Cleanup error:", err);
+        console.error('Cleanup error:', err);
       }
     }
     activeScriptRef.current = null;
@@ -325,40 +325,115 @@ export function VisualizerWidget() {
     }
 
     try {
-      let babylonLib = null;
+      let babylonLib: unknown = null;
       if (mode === 'babylon') {
         babylonLib = await loadBabylonLib();
       }
 
-      // Compile JS code using Function constructor
-      const runFn = new Function('THREE', 'BABYLON', currentCode);
-      const hooks: ScriptHooks = runFn(THREE, babylonLib);
-
-      if (!hooks || typeof hooks !== 'object') {
-        throw new Error('Script must return a lifecycle hooks object.');
-      }
-
-      // Execute Init
-      if (hooks.init) {
-        hooks.init(canvas, THREE, babylonLib);
-      }
-
-      activeScriptRef.current = hooks;
-
-      // Start tick loop
-      if (hooks.tick) {
-        const startTime = performance.now();
-        const renderLoop = (now: number) => {
-          try {
-            if (hooks.tick) {
-              hooks.tick(now - startTime, canvas);
-            }
-            animationFrameRef.current = requestAnimationFrame(renderLoop);
-          } catch (err) {
-            setError(`Runtime execution error: ${String(err)}`);
+      // Track every frame a *standalone* script schedules, so its loop can be
+      // cancelled on stop/re-run (hook scripts are driven by our renderLoop instead).
+      const standaloneRafs = new Set<number>();
+      const scopedRAF = (cb: FrameRequestCallback): number => {
+        const id = requestAnimationFrame(cb);
+        standaloneRafs.add(id);
+        return id;
+      };
+      const scopedCAF = (id: number): void => {
+        standaloneRafs.delete(id);
+        cancelAnimationFrame(id);
+      };
+      // A standalone script commonly does `document.body.appendChild(renderer.domElement)`.
+      // We bind the renderer to OUR pane canvas (already in the DOM), so that append would
+      // yank the canvas out of the pane — no-op appends onto <body> to keep it contained.
+      const scopedDoc = new Proxy(document, {
+        get(target, prop) {
+          if (prop === 'body') {
+            return new Proxy(target.body, {
+              get(b, bp) {
+                if (bp === 'appendChild') return (node: Node) => node;
+                const v = Reflect.get(b, bp);
+                return typeof v === 'function' ? v.bind(b) : v;
+              },
+            });
           }
+          const v = Reflect.get(target, prop);
+          return typeof v === 'function' ? v.bind(target) : v;
+        },
+      });
+
+      // Bind THREE so a standalone `new THREE.WebGLRenderer()` (no canvas arg) renders
+      // into our pane canvas instead of creating a detached/fullscreen one.
+      class BoundRenderer extends THREE.WebGLRenderer {
+        constructor(params: THREE.WebGLRendererParameters = {}) {
+          super({ antialias: true, alpha: true, ...params, canvas });
+        }
+        setSize(width: number, height: number): void {
+          // Match the drawing buffer to the pane; CSS owns the displayed size.
+          super.setSize(canvas.clientWidth || width, canvas.clientHeight || height, false);
+        }
+      }
+      const boundThree = new Proxy(THREE, {
+        get: (target, prop, recv) =>
+          prop === 'WebGLRenderer' ? BoundRenderer : Reflect.get(target, prop, recv),
+      });
+
+      // Compile + run. A script may EITHER return lifecycle hooks {init, tick, cleanup}
+      // OR run standalone (set up its own scene/loop) against the provided `canvas`,
+      // `THREE`, and `BABYLON`. Scoped rAF/document keep a standalone script contained.
+      const runFn = new Function(
+        'THREE',
+        'BABYLON',
+        'canvas',
+        'requestAnimationFrame',
+        'cancelAnimationFrame',
+        'document',
+        currentCode,
+      );
+      const result: unknown = runFn(
+        boundThree,
+        babylonLib,
+        canvas,
+        scopedRAF,
+        scopedCAF,
+        scopedDoc,
+      );
+
+      const isHooks = (v: unknown): v is ScriptHooks =>
+        !!v && typeof v === 'object' && ('init' in v || 'tick' in v || 'cleanup' in v);
+
+      if (isHooks(result)) {
+        const hooks = result;
+        // Execute Init
+        if (hooks.init) {
+          hooks.init(canvas, THREE, babylonLib);
+        }
+
+        activeScriptRef.current = hooks;
+
+        // Start tick loop
+        if (hooks.tick) {
+          const startTime = performance.now();
+          const renderLoop = (now: number) => {
+            try {
+              if (hooks.tick) {
+                hooks.tick(now - startTime, canvas);
+              }
+              animationFrameRef.current = requestAnimationFrame(renderLoop);
+            } catch (err) {
+              setError(`Runtime execution error: ${String(err)}`);
+            }
+          };
+          animationFrameRef.current = requestAnimationFrame(renderLoop);
+        }
+      } else {
+        // Standalone script: it already ran and started its own loop (tracked via
+        // scopedRAF). Record a cleanup that cancels those frames on stop/re-run.
+        activeScriptRef.current = {
+          cleanup: () => {
+            for (const id of standaloneRafs) cancelAnimationFrame(id);
+            standaloneRafs.clear();
+          },
         };
-        animationFrameRef.current = requestAnimationFrame(renderLoop);
       }
     } catch (err) {
       const errMsg = String(err);
@@ -369,7 +444,7 @@ export function VisualizerWidget() {
         errMsg.toLowerCase().includes('webgl')
       ) {
         setError(
-          `WebGL Error: Failed to create WebGL context. Hardware acceleration or WebGL support might be disabled in this environment (e.g. headless shell, VM, or browser settings). Please switch to 'canvas' (Canvas 2D) or 'pygame' mode, or enable hardware acceleration in your client settings.`
+          `WebGL Error: Failed to create WebGL context. Hardware acceleration or WebGL support might be disabled in this environment (e.g. headless shell, VM, or browser settings). Please switch to 'canvas' (Canvas 2D) or 'pygame' mode, or enable hardware acceleration in your client settings.`,
         );
       } else {
         setError(`Compilation error: ${errMsg}`);
@@ -435,8 +510,14 @@ export function VisualizerWidget() {
   return (
     <div className="vdb-container visualizer-root" style={{ height: '100%', width: '100%' }}>
       {/* Renderer Pane */}
-      <div className="vdb-body visualizer-render-pane" style={{ flex: 1, padding: 0, display: 'flex', flexDirection: 'column', height: '100%' }}>
-        <div className="vdb-header visualizer-header" style={{ padding: '0.4rem 0.8rem', justifyContent: 'space-between' }}>
+      <div
+        className="vdb-body visualizer-render-pane"
+        style={{ flex: 1, padding: 0, display: 'flex', flexDirection: 'column', height: '100%' }}
+      >
+        <div
+          className="vdb-header visualizer-header"
+          style={{ padding: '0.4rem 0.8rem', justifyContent: 'space-between' }}
+        >
           <div style={{ display: 'flex', alignItems: 'center' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
               <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>Engine:</span>
@@ -461,7 +542,9 @@ export function VisualizerWidget() {
               </select>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginLeft: '1rem' }}>
+            <div
+              style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginLeft: '1rem' }}
+            >
               <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>Source:</span>
               <select
                 value={targetUri}
