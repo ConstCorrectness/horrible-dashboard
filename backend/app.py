@@ -2,14 +2,14 @@
 
 import asyncio
 import logging
+from pathlib import Path
+
+_LOG_PATH = Path(__file__).resolve().parent.parent / "backend.log"
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[
-        logging.FileHandler("/home/horrible/horrible-dashboard/backend.log"),
-        logging.StreamHandler()
-    ]
+    handlers=[logging.FileHandler(_LOG_PATH), logging.StreamHandler()],
 )
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
