@@ -2,7 +2,7 @@ import { registry, type ModuleManifest } from '../../registry';
 import { ChatWidget } from './ChatWidget';
 import { OrchestratorSettings } from './OrchestratorSettings';
 import { PermissionsSettings } from './PermissionsSettings';
-import { resetSetting, setSetting } from '../../settings';
+import { resetSetting, setSetting, type SettingValue } from '../../settings';
 
 /** See docs/modules/agent-chat.md. The home view hosts onboarding + a one-shot ask
  * bar; the `agent.chat` widget is the multi-turn conversational pane. The settings
@@ -19,7 +19,8 @@ export const agentModule: ModuleManifest = {
       agentTools: [
         {
           name: 'agent.setHyperparameters',
-          description: "Update the agent's model hyperparameters (temperature, contextSize, maxTokens, topP, or model override) for subsequent orchestrator turns. To clear an override, pass null or omit it.",
+          description:
+            "Update the agent's model hyperparameters (temperature, contextSize, maxTokens, topP, or model override) for subsequent orchestrator turns. To clear an override, pass null or omit it.",
           params: {
             type: 'object',
             properties: {
@@ -63,7 +64,7 @@ export const agentModule: ModuleManifest = {
                   await resetSetting(settingKey);
                   updated.push(`${key} (reset)`);
                 } else {
-                  await setSetting(settingKey, val as any);
+                  await setSetting(settingKey, val as SettingValue);
                   updated.push(`${key}=${val}`);
                 }
               }
