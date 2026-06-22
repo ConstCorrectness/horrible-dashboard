@@ -719,8 +719,12 @@ body {
 }
 
 @keyframes ch-spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
 }
 .ws-panel:has(.ch-rooms-panel-root) {
   padding: 0;
@@ -769,7 +773,9 @@ body {
 .ch-room:hover {
   transform: translateY(-2px);
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(110, 168, 254, 0.1);
+  box-shadow:
+    0 8px 24px rgba(0, 0, 0, 0.25),
+    0 0 0 1px rgba(110, 168, 254, 0.1);
   background: var(--bg-hover);
 }
 
@@ -830,7 +836,9 @@ body {
   margin-left: -8px;
   object-fit: cover;
   background: var(--bg);
-  transition: transform 0.2s ease, margin 0.2s ease;
+  transition:
+    transform 0.2s ease,
+    margin 0.2s ease;
 }
 
 .ch-room:hover .ch-avatar-stack-item {
@@ -975,8 +983,14 @@ body {
 }
 
 @keyframes ch-fade-in {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .ch-avatar {
@@ -1389,6 +1403,17 @@ body {
   border-radius: 14px;
   text-align: left;
   white-space: pre-wrap;
+}
+
+.home-reasoning {
+  width: 100%;
+  margin: 0 0 0.5rem;
+  text-align: left;
+}
+
+.home-reasoning .agent-reasoning-body {
+  max-height: 22vh;
+  overflow: auto;
 }
 
 .home-actions {
@@ -2317,7 +2342,9 @@ kbd {
   flex-direction: column;
   gap: 0.5rem;
   box-shadow: 0 4px 6px rgba(0, 0, 0, 0.15);
-  transition: transform 0.2s, box-shadow 0.2s;
+  transition:
+    transform 0.2s,
+    box-shadow 0.2s;
 }
 
 .vdb-card:hover {
@@ -2470,7 +2497,7 @@ kbd {
   letter-spacing: 0.02em;
 }
 
-.vdb-field input[type="text"],
+.vdb-field input[type='text'],
 .vdb-field select,
 .vdb-field textarea {
   background: var(--bg);
@@ -2484,7 +2511,7 @@ kbd {
   transition: border-color 0.2s;
 }
 
-.vdb-field input[type="text"]:focus,
+.vdb-field input[type='text']:focus,
 .vdb-field select:focus,
 .vdb-field textarea:focus {
   border-color: var(--accent);
@@ -2499,7 +2526,9 @@ kbd {
   font-weight: 600;
   font-size: 0.85rem;
   cursor: pointer;
-  transition: background 0.2s, opacity 0.2s;
+  transition:
+    background 0.2s,
+    opacity 0.2s;
   height: 2.1rem;
 }
 

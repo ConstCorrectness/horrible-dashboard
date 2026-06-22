@@ -21,7 +21,10 @@ exists today:
   Ollama's `/api/generate`) still exists; the home ask bar no longer uses it.
 - **Orchestrator (layout control)** — the home ask bar now drives the
   **agent orchestrator**: a backend tool-calling loop that arranges the user's
-  workspace. See "The orchestrator" below.
+  workspace. Like the chat widget, it renders the model's **streamed reasoning**
+  (a collapsible "Reasoning" disclosure) and streams answer tokens live, not just
+  the final answer — so a turn shows the thinking instead of looking silent if the
+  final `content` is sparse. See "The orchestrator" below.
 - **Conversational chat widget** (`agent.chat`, command `agent.openChat`): a
   dockable pane with a multi-turn transcript, a per-turn action log, and the
   model's reply. Each turn replays prior user/assistant turns to the backend as
@@ -143,8 +146,9 @@ same flow visually.
    override or the configured model), and the sampling temperature (`_tool_temperature`).
 4. **The loop (≤ `MAX_ROUNDS`).** Each round streams the provider via
    `providers.chat_stream`; the model's reasoning (`thinking`/`reasoning_content`) and
-   answer `content` token-deltas relay live as `reasoning`/`token` events the widget
-   renders as they arrive. A round ends with either `tool_calls` or a final answer.
+   answer `content` token-deltas relay live as `reasoning`/`token` events the chat
+   widget and home ask bar render as they arrive. A round ends with either
+   `tool_calls` or a final answer.
 5. **Tool execution + gating.** For each `tool_call`, `_gate` decides: read-only and
    layout verbs pass straight through; side-effecting tools are evaluated against the
    permission **mode + rules**, prompting the user via

@@ -20,6 +20,7 @@ export function HomeView() {
   const [status, setStatus] = useState<AgentStatus | 'loading' | 'backend-down'>('loading');
   const [prompt, setPrompt] = useState('');
   const [answer, setAnswer] = useState<string | null>(null);
+  const [reasoning, setReasoning] = useState('');
   const [actions, setActions] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const name = localStorage.getItem(NAME_KEY);
@@ -39,10 +40,14 @@ export function HomeView() {
     if (!prompt.trim() || busy || !ready) return;
     setBusy(true);
     setAnswer('');
+    setReasoning('');
     setActions([]);
     try {
       await askAgent(prompt, {
-        onAnswer: (text) => setAnswer(text),
+        onToken: (delta) => setAnswer((a) => (a ?? '') + delta),
+        onReasoning: (delta) => setReasoning((r) => r + delta),
+        // The final answer is authoritative; fall back to the streamed text if empty.
+        onAnswer: (text) => setAnswer((a) => text || a),
         onAction: (note) => setActions((a) => [...a, note]),
         onError: (msg) => setAnswer(`Something went wrong: ${msg}`),
       });
@@ -70,6 +75,12 @@ export function HomeView() {
             {busy ? '…' : '➤'}
           </button>
         </form>
+        {reasoning && (
+          <details className="agent-reasoning home-reasoning" open={!answer}>
+            <summary>Reasoning</summary>
+            <div className="agent-reasoning-body">{reasoning}</div>
+          </details>
+        )}
         {actions.length > 0 && (
           <ul className="home-actions">
             {actions.map((a, i) => (
