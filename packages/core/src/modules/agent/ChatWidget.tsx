@@ -104,6 +104,34 @@ async function getWorkspaceFiles(): Promise<string[]> {
   }
 }
 
+interface ReasoningBlockProps {
+  reasoning: string;
+  hasText: boolean;
+}
+
+function ReasoningBlock({ reasoning, hasText }: ReasoningBlockProps) {
+  const [open, setOpen] = useState(!hasText);
+  const [prevHasText, setPrevHasText] = useState(hasText);
+
+  if (hasText !== prevHasText) {
+    setPrevHasText(hasText);
+    if (hasText) {
+      setOpen(false);
+    }
+  }
+
+  return (
+    <details
+      className="agent-reasoning"
+      open={open}
+      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
+    >
+      <summary>Reasoning</summary>
+      <div className="agent-reasoning-body">{reasoning}</div>
+    </details>
+  );
+}
+
 export function ChatWidget() {
   const [status, setStatus] = useState<AgentStatus | 'loading' | 'backend-down'>('loading');
   const [sessions, setSessions] = useState<ChatSessionMeta[]>([]);
@@ -451,10 +479,7 @@ export function ChatWidget() {
           ) : (
             <div key={i} className={`agent-msg agent-msg-${turn.role}`}>
               {turn.reasoning && (
-                <details className="agent-reasoning" open={!turn.text}>
-                  <summary>Reasoning</summary>
-                  <div className="agent-reasoning-body">{turn.reasoning}</div>
-                </details>
+                <ReasoningBlock reasoning={turn.reasoning} hasText={!!turn.text} />
               )}
               {turn.actions && turn.actions.length > 0 && (
                 <ul className="agent-actions">

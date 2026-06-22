@@ -302,6 +302,78 @@ def test_turn_uses_orchestrator_model_override(monkeypatch) -> None:
     assert seen["body"]["model"] == "gemma4:12b"
 
 
+def test_turn_uses_hyperparameters_overrides(monkeypatch) -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["body"] = json.loads(request.content)
+        # return streamed response
+        body = '{"message":{"role":"assistant","content":"ok"},"done":true}\n'
+        return httpx.Response(200, text=body)
+
+    _configure(monkeypatch)  # configured model = "m"
+
+    settings_dict = {
+        "agent.orchestrator.temperature": 0.5,
+        "agent.orchestrator.contextSize": 4096,
+        "agent.orchestrator.maxTokens": 100,
+        "agent.orchestrator.topP": 0.85,
+    }
+    monkeypatch.setattr(
+        orchestrator,
+        "get_value",
+        lambda key, default: settings_dict.get(key, default),
+    )
+    _mock_ollama(monkeypatch, handler)
+
+    asyncio.run(orchestrator.run_agent_turn(FakeConn(), "t", "hi"))
+    options = seen["body"]["options"]
+    assert options["temperature"] == 0.5
+    assert options["num_ctx"] == 4096
+    assert options["num_predict"] == 100
+    assert options["top_p"] == 0.85
+
+
+def test_tools_for_pruning_and_prioritization() -> None:
+    # Build a list of dynamic tools such that layout + dynamic > 38.
+    # LAYOUT_TOOLS is 15 tools.
+    # We will add 30 dynamic tools.
+    dynamic = []
+    # Add core tools
+    for i in range(5):
+        dynamic.append({"name": f"files.tool_{i}", "description": "desc"})
+    for i in range(5):
+        dynamic.append({"name": f"editor.tool_{i}", "description": "desc"})
+    for i in range(5):
+        dynamic.append({"name": f"terminal.tool_{i}", "description": "desc"})
+    # Add optional groups
+    for i in range(5):
+        dynamic.append({"name": f"vectordb.tool_{i}", "description": "desc"})
+    for i in range(5):
+        dynamic.append({"name": f"visualizer.tool_{i}", "description": "desc"})
+    for i in range(5):
+        dynamic.append({"name": f"stub.tool_{i}", "description": "desc"})
+
+    conn = FakeConn(agent_tools=dynamic)
+
+    # 1. No keywords: should keep core tools, prune optional tools.
+    tools = orchestrator._tools_for(conn, prompt="hi")
+    assert len(tools) == 38
+    names = {t["function"]["name"] for t in tools}
+    # All files, editor, terminal tools should be selected
+    for i in range(5):
+        assert f"files.tool_{i}" in names
+        assert f"editor.tool_{i}" in names
+        assert f"terminal.tool_{i}" in names
+
+    # 2. vectordb keyword: should prioritize vectordb tools.
+    tools_db = orchestrator._tools_for(conn, prompt="use vectordb to search")
+    assert len(tools_db) == 38
+    names_db = {t["function"]["name"] for t in tools_db}
+    for i in range(5):
+        assert f"vectordb.tool_{i}" in names_db
+
+
 def test_unemitted_tool_call_heuristic() -> None:
     tools = [{"function": {"name": "editor.applyEdit"}}]
     # Action phrasing → looks like it meant to act.

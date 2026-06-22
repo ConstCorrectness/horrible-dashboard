@@ -1,0 +1,6 @@
+[[permission]]
+identifier = "allow-backend-status"
+description = "Enables the backend_status custom command"
+
+[permission.commands]
+allow = ["backend_status"]

@@ -57,7 +57,8 @@ Frontend client: `packages/core/src/modules/agent/sessions.ts`.
 ephemeral system output that is never persisted or replayed to the model
 (`packages/core/src/modules/agent/slash.ts`): `/tools` (the agent's live tool
 catalog, fetched via the `list_tools`→`tools` WS round-trip), `/help`, `/panes`
-(open panes), `/clear` (new session), and honest placeholders `/mcp` and `/skills`
+(open panes), `/clear` (new session), `/llm` (query, set, or reset orchestrator LLM
+hyperparameter overrides), and honest placeholders `/mcp` and `/skills`
 (those subsystems don't exist yet). Typing `/` shows a suggestion list.
 
 ## The orchestrator
@@ -175,7 +176,10 @@ reject it (400) and the round transparently retries without, still streaming con
 `chat_stream`'s new `temperature` arg → Ollama `options` / OpenAI payload) — at
 higher temperatures small local models *narrate* an action ("I'll call …") instead
 of emitting the structured call. The temperature is overridable through the settings
-store (`agent.orchestrator.temperature`). When the model still answers in prose that
+store (`agent.orchestrator.temperature`). Other model hyperparameters can be overridden
+using setting keys `agent.orchestrator.contextSize` (context window limit, maps to Ollama's
+`num_ctx`), `agent.orchestrator.maxTokens` (maps to OpenAI's `max_tokens` / Ollama's `num_predict`),
+and `agent.orchestrator.topP` (Top P nucleus sampling). When the model still answers in prose that
 reads like an unemitted call, the loop gives it **one** forced retry with
 `tool_choice:"required"` — but only on the OpenAI dialect, which has a real
 `tool_choice` (Ollama has no reliable equivalent, so it leans on the temperature
@@ -184,12 +188,14 @@ stay a reply. For weak emitters, prefer a larger model (e.g. `gemma4:12b`) for t
 orchestrator: the **`agent.orchestrator.model`** setting overrides only the
 orchestrator's model — leave it on the configured agent model to reuse it, so
 chat/autosuggest can stay on a smaller, faster model while the tool-calling loop runs
-a stronger one. Both knobs live in the **Agent orchestrator** section of the Settings
+a stronger one. All knobs live in the **Agent orchestrator** section of the Settings
 page (a custom section — `OrchestratorSettings` — because the model is a **dropdown of
 the provider's live models** from `/agent/status`, not a static enum); the blank
-"Configured agent model" choice clears the override. The ghost-text `/agent/complete`
-path likewise samples at a low fixed temperature so completions are stable, not
-creative.
+"Configured agent model" choice clears the override. These hyperparameters can also
+be inspected/configured directly in chat using the `/llm` slash command, or modified
+by the agent itself using the gated `agent.setHyperparameters` tool. The ghost-text
+`/agent/complete` path likewise samples at a low fixed temperature so completions
+are stable, not creative.
 
 **Channel protocol** (`{channel:'agent', event, data:{turnId, …}}`):
 
@@ -309,6 +315,17 @@ vLLM advertises its own port. All of these outbound calls go through
 request↔response bodies — the streamed tool-calling round, answer, and pull
 responses all via `tee_stream`. See
 [observability.md](observability.mdx).
+
+### Local Reasoning Models & Tool Count Thresholds
+
+Local reasoning models (e.g., `gemma4:e2b` under Ollama) exhibit a strict tool count capacity limit when handling streamed turns:
+* **Threshold Limit:** If a request payload lists **40 or more tool definitions**, the model silently skips its thinking phase entirely (bypassing the `<think>` tag / `thinking` field) and immediately streams the final content starting with its first token. If the list contains **39 or fewer tools**, reasoning streams normally.
+* **Dynamic Pruning & Prioritization:** To prevent exceeding this limit while supporting the full catalog of layout and dynamic tools (46+ tools in total), the backend employs a dynamic selection algorithm in `_tools_for()` to cap the tool count at exactly **38 tools**:
+  * **Always Kept:** All 15 static layout tools (`LAYOUT_TOOLS`) are preserved.
+  * **High Priority Core Tools:** Core workspace integrations (`files.*`, `editor.*`, `terminal.*`) are kept by default.
+  * **Contextual Promotion:** Optional plugin/widget tool groups (`vectordb.`, `visualizer.`, `clubhouse.`, `stub.`) are dynamically searched against the user's prompt and chat history keywords. If intent is detected (e.g., matching `"visualizer"`, `"vector"`, or `"room"`), the corresponding tools are prioritized.
+  * **Pruning:** Low-priority/inactive optional tools are pruned to satisfy the 38-tool ceiling, ensuring reasoning remains active.
+
 
 ## Contributions to the layout shell
 

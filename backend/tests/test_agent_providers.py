@@ -158,3 +158,101 @@ def test_vllm_double_spawn_is_rejected() -> None:
     mgr.spawn("m")
     with pytest.raises(RuntimeError, match="already running"):
         mgr.spawn("m")
+
+
+def test_ollama_chat_stream_hyperparameters() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/chat"
+        payload = json.loads(request.read())
+        assert payload["options"]["temperature"] == 0.7
+        assert payload["options"]["num_ctx"] == 8192
+        assert payload["options"]["num_predict"] == 256
+        assert payload["options"]["top_p"] == 0.95
+
+        # Stream response back
+        body = '{"message":{"role":"assistant","content":"ok"},"done":true}\n'
+        return httpx.Response(200, text=body)
+
+    async def go() -> P.ChatResult:
+        async with _client(handler) as c:
+            async def on_delta(r: str, c: str) -> None:
+                pass
+            return await P.chat_stream(
+                c,
+                P.provider_for("ollama"),
+                "http://o",
+                "m",
+                [],
+                [],
+                on_delta,
+                temperature=0.7,
+                context_size=8192,
+                max_tokens=256,
+                top_p=0.95,
+            )
+
+    result = asyncio.run(go())
+    assert result.content == "ok"
+
+
+def test_openai_chat_stream_hyperparameters() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v1/chat/completions"
+        payload = json.loads(request.read())
+        assert payload["temperature"] == 0.7
+        assert payload["max_tokens"] == 256
+        assert payload["top_p"] == 0.95
+        assert "context_size" not in payload
+        assert "num_ctx" not in payload
+
+        # Stream response back
+        body = 'data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n'
+        return httpx.Response(200, text=body)
+
+    async def go() -> P.ChatResult:
+        async with _client(handler) as c:
+            async def on_delta(r: str, c: str) -> None:
+                pass
+            return await P.chat_stream(
+                c,
+                P.provider_for("lmstudio"),
+                "http://o",
+                "m",
+                [],
+                [],
+                on_delta,
+                temperature=0.7,
+                max_tokens=256,
+                top_p=0.95,
+            )
+
+    result = asyncio.run(go())
+    assert result.content == "ok"
+
+
+def test_thinking_extractor() -> None:
+    deltas: list[tuple[str, str]] = []
+
+    async def on_delta(reasoning: str, content: str) -> None:
+        deltas.append((reasoning, content))
+
+    async def go() -> tuple[str, str]:
+        extractor = P.ThinkingExtractor(on_delta)
+        await extractor.feed_content("Hello ")
+        await extractor.feed_content("<th")
+        await extractor.feed_content("ink>Let's plan: ")
+        await extractor.feed_content("split the pane. </th")
+        await extractor.feed_content("ink>I will split the pane.")
+        return await extractor.flush()
+
+    reasoning, content = asyncio.run(go())
+    assert reasoning == "Let's plan: split the pane. "
+    assert content == "Hello I will split the pane."
+
+    non_empty_deltas = [d for d in deltas if d[0] or d[1]]
+    assert non_empty_deltas == [
+        ("", "Hello "),
+        ("Let's plan: ", ""),
+        ("split the pane. ", ""),
+        ("", "I will split the pane."),
+    ]

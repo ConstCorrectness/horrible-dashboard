@@ -7,6 +7,7 @@
  */
 import { registry } from '../../registry';
 import { requestAgentTools } from './orchestrator-client';
+import { getSetting, resetSetting, setSetting } from '../../settings';
 
 /** Hooks the chat widget passes in so commands can act on its state. */
 export interface SlashContext {
@@ -82,6 +83,87 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     name: 'skills',
     description: 'List available skills.',
     run: () => 'No skills available yet.',
+  },
+  {
+    name: 'llm',
+    description: 'Manage orchestrator LLM settings: /llm, /llm set <param> <val>, /llm reset [param]',
+    run: async (args) => {
+      const parts = args.trim().split(/\s+/).filter(Boolean);
+      const keys = {
+        model: { key: 'agent.orchestrator.model', type: 'string', name: 'Model override' },
+        temperature: { key: 'agent.orchestrator.temperature', type: 'number', name: 'Temperature' },
+        temp: { key: 'agent.orchestrator.temperature', type: 'number', name: 'Temperature' },
+        contextsize: { key: 'agent.orchestrator.contextSize', type: 'number', name: 'Context size' },
+        context_size: { key: 'agent.orchestrator.contextSize', type: 'number', name: 'Context size' },
+        ctx: { key: 'agent.orchestrator.contextSize', type: 'number', name: 'Context size' },
+        maxtokens: { key: 'agent.orchestrator.maxTokens', type: 'number', name: 'Max tokens' },
+        max_tokens: { key: 'agent.orchestrator.maxTokens', type: 'number', name: 'Max tokens' },
+        max_predict: { key: 'agent.orchestrator.maxTokens', type: 'number', name: 'Max tokens' },
+        topp: { key: 'agent.orchestrator.topP', type: 'number', name: 'Top P' },
+        top_p: { key: 'agent.orchestrator.topP', type: 'number', name: 'Top P' },
+      } as const;
+
+      if (parts.length === 0) {
+        const items = [
+          { name: 'Model override', key: 'agent.orchestrator.model', defaultVal: 'Configured model' },
+          { name: 'Temperature', key: 'agent.orchestrator.temperature', defaultVal: '0.0' },
+          { name: 'Context size', key: 'agent.orchestrator.contextSize', defaultVal: 'Default' },
+          { name: 'Max tokens', key: 'agent.orchestrator.maxTokens', defaultVal: 'Default' },
+          { name: 'Top P', key: 'agent.orchestrator.topP', defaultVal: 'Default' },
+        ];
+        const lines = items.map((item) => {
+          const val = getSetting(item.key);
+          const valStr = val !== undefined ? String(val) : `${item.defaultVal} (default)`;
+          return `  • ${item.name} (${item.key}): ${valStr}`;
+        });
+        return ['Orchestrator LLM settings overrides:', ...lines].join('\n');
+      }
+
+      const action = parts[0].toLowerCase();
+      if (action === 'set') {
+        if (parts.length < 3) {
+          return 'Error: /llm set <param> <value> requires both parameter name and value. Example: `/llm set temperature 0.5`';
+        }
+        const paramName = parts[1].toLowerCase();
+        const param = keys[paramName as keyof typeof keys];
+        if (!param) {
+          return `Error: Unknown parameter "${parts[1]}". Supported parameters: model, temperature, context_size, max_tokens, top_p`;
+        }
+        const rawVal = parts.slice(2).join(' ');
+        let val: string | number;
+        if (param.type === 'number') {
+          const num = Number(rawVal);
+          if (isNaN(num)) {
+            return `Error: Value for parameter "${param.name}" must be a number. Got: "${rawVal}"`;
+          }
+          val = num;
+        } else {
+          val = rawVal;
+        }
+        await setSetting(param.key, val);
+        return `Successfully set ${param.name} (${param.key}) to ${val}.`;
+      }
+
+      if (action === 'reset' || action === 'clear') {
+        if (parts.length === 1) {
+          await resetSetting('agent.orchestrator.model');
+          await resetSetting('agent.orchestrator.temperature');
+          await resetSetting('agent.orchestrator.contextSize');
+          await resetSetting('agent.orchestrator.maxTokens');
+          await resetSetting('agent.orchestrator.topP');
+          return 'Successfully reset all orchestrator LLM overrides to defaults.';
+        }
+        const paramName = parts[1].toLowerCase();
+        const param = keys[paramName as keyof typeof keys];
+        if (!param) {
+          return `Error: Unknown parameter "${parts[1]}". Supported parameters: model, temperature, context_size, max_tokens, top_p`;
+        }
+        await resetSetting(param.key);
+        return `Successfully reset ${param.name} (${param.key}) override.`;
+      }
+
+      return 'Unknown subcommand. Try `/llm`, `/llm set <param> <val>`, or `/llm reset [param]`.';
+    },
   },
 ];
 

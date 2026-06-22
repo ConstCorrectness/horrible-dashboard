@@ -13,11 +13,23 @@ import { getAgentStatus } from './api';
 
 const MODEL_KEY = 'agent.orchestrator.model';
 const TEMP_KEY = 'agent.orchestrator.temperature';
+const CTX_KEY = 'agent.orchestrator.contextSize';
+const MAX_TOKENS_KEY = 'agent.orchestrator.maxTokens';
+const TOP_P_KEY = 'agent.orchestrator.topP';
 
 export function OrchestratorSettings() {
   const model = useSetting<string>(MODEL_KEY) ?? '';
   const temperature = useSetting<number>(TEMP_KEY) ?? 0;
   const tempOverridden = isSettingOverridden(TEMP_KEY);
+
+  const contextSize = useSetting<number>(CTX_KEY);
+  const ctxOverridden = isSettingOverridden(CTX_KEY);
+
+  const maxTokens = useSetting<number>(MAX_TOKENS_KEY);
+  const maxTokensOverridden = isSettingOverridden(MAX_TOKENS_KEY);
+
+  const topP = useSetting<number>(TOP_P_KEY);
+  const topPOverridden = isSettingOverridden(TOP_P_KEY);
 
   const [models, setModels] = useState<string[]>([]);
   const [configuredModel, setConfiguredModel] = useState<string | null>(null);
@@ -89,6 +101,100 @@ export function OrchestratorSettings() {
               className="setting-reset"
               title="Reset to default"
               onClick={() => void resetSetting(TEMP_KEY)}
+            >
+              Reset
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="setting-row">
+        <div className="setting-label">
+          <label>Orchestrator context size</label>
+          <p className="setting-desc">
+            Maximum context window (tokens) for the orchestrator turns. For Ollama, this maps to
+            the num_ctx option.
+          </p>
+        </div>
+        <div className="setting-control">
+          <input
+            type="number"
+            value={contextSize ?? ''}
+            min={1}
+            placeholder="Default"
+            onChange={(e) => {
+              if (e.target.value !== '') void setSetting(CTX_KEY, e.target.valueAsNumber);
+              else void resetSetting(CTX_KEY);
+            }}
+          />
+          {ctxOverridden && (
+            <button
+              className="setting-reset"
+              title="Reset to default"
+              onClick={() => void resetSetting(CTX_KEY)}
+            >
+              Reset
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="setting-row">
+        <div className="setting-label">
+          <label>Orchestrator max output tokens</label>
+          <p className="setting-desc">
+            Maximum tokens the model can generate in a single turn. Maps to max_tokens for OpenAI
+            and num_predict for Ollama.
+          </p>
+        </div>
+        <div className="setting-control">
+          <input
+            type="number"
+            value={maxTokens ?? ''}
+            min={1}
+            placeholder="Default"
+            onChange={(e) => {
+              if (e.target.value !== '') void setSetting(MAX_TOKENS_KEY, e.target.valueAsNumber);
+              else void resetSetting(MAX_TOKENS_KEY);
+            }}
+          />
+          {maxTokensOverridden && (
+            <button
+              className="setting-reset"
+              title="Reset to default"
+              onClick={() => void resetSetting(MAX_TOKENS_KEY)}
+            >
+              Reset
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="setting-row">
+        <div className="setting-label">
+          <label>Orchestrator Top P</label>
+          <p className="setting-desc">
+            Top P sampling (nucleus sampling) threshold. Keep blank/default to let the provider decide.
+          </p>
+        </div>
+        <div className="setting-control">
+          <input
+            type="number"
+            value={topP ?? ''}
+            step={0.05}
+            min={0}
+            max={1}
+            placeholder="Default"
+            onChange={(e) => {
+              if (e.target.value !== '') void setSetting(TOP_P_KEY, e.target.valueAsNumber);
+              else void resetSetting(TOP_P_KEY);
+            }}
+          />
+          {topPOverridden && (
+            <button
+              className="setting-reset"
+              title="Reset to default"
+              onClick={() => void resetSetting(TOP_P_KEY)}
             >
               Reset
             </button>

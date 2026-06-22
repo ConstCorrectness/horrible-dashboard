@@ -182,6 +182,9 @@ async def chat_stream(
     on_delta: DeltaSink,
     temperature: float | None = None,
     tool_choice: str | None = None,
+    context_size: int | None = None,
+    max_tokens: int | None = None,
+    top_p: float | None = None,
 ) -> ChatResult:
     """One **streamed** tool-calling round. Emits the model's reasoning
     (``thinking`` / ``reasoning_content``) and answer ``content`` token-deltas via
@@ -194,11 +197,117 @@ async def chat_stream(
     reliable equivalent, so it's ignored there."""
     if info.dialect == "ollama":
         return await _ollama_chat_stream(
-            client, endpoint, model, messages, tools, on_delta, temperature
+            client,
+            endpoint,
+            model,
+            messages,
+            tools,
+            on_delta,
+            temperature,
+            context_size,
+            max_tokens,
+            top_p,
         )
     return await _openai_chat_stream(
-        client, endpoint, model, messages, tools, on_delta, temperature, tool_choice
+        client,
+        endpoint,
+        model,
+        messages,
+        tools,
+        on_delta,
+        temperature,
+        tool_choice,
+        max_tokens,
+        top_p,
     )
+
+
+class ThinkingExtractor:
+    """Extracts <think>...</think> blocks from a streaming content text,
+    separating reasoning deltas from final content deltas, and flushing the remainder."""
+
+    def __init__(self, on_delta: DeltaSink) -> None:
+        self.on_delta = on_delta
+        self.in_think = False
+        self.buffer = ""
+        self.reasoning_parts: list[str] = []
+        self.content_parts: list[str] = []
+
+    async def feed_reasoning(self, text: str) -> None:
+        if text:
+            self.reasoning_parts.append(text)
+            await self.on_delta(text, "")
+
+    async def feed_content(self, text: str) -> None:
+        if not text:
+            return
+        self.buffer += text
+        while self.buffer:
+            if not self.in_think:
+                idx = self.buffer.find("<think>")
+                if idx != -1:
+                    lead = self.buffer[:idx]
+                    if lead:
+                        self.content_parts.append(lead)
+                        await self.on_delta("", lead)
+                    self.in_think = True
+                    self.buffer = self.buffer[idx + 7:]
+                else:
+                    prefixes = ["<", "<t", "<th", "<thi", "<thin", "<think"]
+                    partial_match = False
+                    for pt in prefixes:
+                        if self.buffer.endswith(pt):
+                            emit_len = len(self.buffer) - len(pt)
+                            if emit_len > 0:
+                                lead = self.buffer[:emit_len]
+                                self.content_parts.append(lead)
+                                await self.on_delta("", lead)
+                                self.buffer = pt
+                            partial_match = True
+                            break
+                    if not partial_match:
+                        self.content_parts.append(self.buffer)
+                        await self.on_delta("", self.buffer)
+                        self.buffer = ""
+                    break
+            else:
+                idx = self.buffer.find("</think>")
+                if idx != -1:
+                    reason = self.buffer[:idx]
+                    if reason:
+                        self.reasoning_parts.append(reason)
+                        await self.on_delta(reason, "")
+                    self.in_think = False
+                    self.buffer = self.buffer[idx + 8:]
+                else:
+                    prefixes = ["</", "</t", "</th", "</thi", "</thin", "</think", "</think>"]
+                    partial_match = False
+                    for pt in prefixes:
+                        if self.buffer.endswith(pt):
+                            emit_len = len(self.buffer) - len(pt)
+                            if emit_len > 0:
+                                reason = self.buffer[:emit_len]
+                                self.reasoning_parts.append(reason)
+                                await self.on_delta(reason, "")
+                                self.buffer = pt
+                            partial_match = True
+                            break
+                    if not partial_match:
+                        self.reasoning_parts.append(self.buffer)
+                        await self.on_delta(self.buffer, "")
+                        self.buffer = ""
+                    break
+
+    async def flush(self) -> tuple[str, str]:
+        if self.buffer:
+            if self.in_think:
+                self.reasoning_parts.append(self.buffer)
+                await self.on_delta(self.buffer, "")
+            else:
+                self.content_parts.append(self.buffer)
+                await self.on_delta("", self.buffer)
+            self.buffer = ""
+        return "".join(self.reasoning_parts), "".join(self.content_parts)
 
 
 async def _ollama_chat_stream(
@@ -209,6 +318,9 @@ async def _ollama_chat_stream(
     tools: list[dict[str, Any]],
     on_delta: DeltaSink,
     temperature: float | None = None,
+    context_size: int | None = None,
+    max_tokens: int | None = None,
+    top_p: float | None = None,
 ) -> ChatResult:
     url = f"{endpoint}/api/chat"
     base: dict[str, Any] = {
@@ -217,16 +329,30 @@ async def _ollama_chat_stream(
         "tools": tools,
         "stream": True,
     }
+    options: dict[str, Any] = {}
     if temperature is not None:
-        base["options"] = {"temperature": temperature}
+        options["temperature"] = temperature
+    if context_size is not None:
+        options["num_ctx"] = context_size
+    if max_tokens is not None:
+        options["num_predict"] = max_tokens
+    if top_p is not None:
+        options["top_p"] = top_p
+    if options:
+        base["options"] = options
 
     async def run(think: bool) -> ChatResult:
+        import logging
+        logger = logging.getLogger("backend.agent.providers")
         payload = {**base, "think": True} if think else base
-        content_parts: list[str] = []
+        logger.info(f"Ollama Request Payload: {json.dumps(payload)}")
+        extractor = ThinkingExtractor(on_delta)
         tool_calls_raw: list[dict[str, Any]] = []
         async with client.stream("POST", url, json=payload) as res:
+            logger.info(f"Ollama Response Status: {res.status_code}")
             if res.status_code >= 400:
                 await res.aread()
+                logger.error(f"Ollama error body: {res.text}")
                 res.raise_for_status()
             async for line in tee_stream(res, res.aiter_lines()):
                 if not line:
@@ -236,17 +362,20 @@ async def _ollama_chat_stream(
                 thinking = msg.get("thinking")
                 content = msg.get("content")
                 if thinking:
-                    await on_delta(thinking, "")
+                    logger.info(f"Ollama thinking delta: {repr(thinking)}")
+                    await extractor.feed_reasoning(thinking)
                 if content:
-                    content_parts.append(content)
-                    await on_delta("", content)
+                    logger.info(f"Ollama content delta: {repr(content)}")
+                    await extractor.feed_content(content)
                 if msg.get("tool_calls"):
                     # Ollama emits the (accumulated) tool_calls in a chunk; take latest.
                     tool_calls_raw = msg["tool_calls"]
                 if obj.get("done"):
                     break
-        full = "".join(content_parts)
+        reasoning, full = await extractor.flush()
         assistant: dict[str, Any] = {"role": "assistant", "content": full}
+        if reasoning:
+            assistant["reasoning_content"] = reasoning
         if tool_calls_raw:
             assistant["tool_calls"] = tool_calls_raw
         return ChatResult(assistant, _parse_tool_calls(tool_calls_raw), full)
@@ -270,6 +399,8 @@ async def _openai_chat_stream(
     on_delta: DeltaSink,
     temperature: float | None = None,
     tool_choice: str | None = None,
+    max_tokens: int | None = None,
+    top_p: float | None = None,
 ) -> ChatResult:
     url = f"{endpoint}/v1/chat/completions"
     payload: dict[str, Any] = {
@@ -282,7 +413,11 @@ async def _openai_chat_stream(
         payload["temperature"] = temperature
     if tool_choice is not None:
         payload["tool_choice"] = tool_choice
-    content_parts: list[str] = []
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+    if top_p is not None:
+        payload["top_p"] = top_p
+    extractor = ThinkingExtractor(on_delta)
     # OpenAI streams tool calls as partial deltas keyed by index; assemble them.
     tool_acc: dict[int, dict[str, Any]] = {}
     async with client.stream("POST", url, json=payload) as res:
@@ -299,10 +434,9 @@ async def _openai_chat_stream(
             reasoning = delta.get("reasoning_content") or delta.get("reasoning")
             content = delta.get("content")
             if reasoning:
-                await on_delta(reasoning, "")
+                await extractor.feed_reasoning(reasoning)
             if content:
-                content_parts.append(content)
-                await on_delta("", content)
+                await extractor.feed_content(content)
             for tc in delta.get("tool_calls") or []:
                 slot = tool_acc.setdefault(
                     tc.get("index", 0), {"id": None, "name": "", "args": ""}
@@ -314,7 +448,7 @@ async def _openai_chat_stream(
                     slot["name"] = fn["name"]
                 if fn.get("arguments"):
                     slot["args"] += fn["arguments"]
-    full = "".join(content_parts)
+    reasoning, full = await extractor.flush()
     ordered = [tool_acc[i] for i in sorted(tool_acc)]
     tool_calls = [
         ToolCall(
@@ -323,6 +457,8 @@ async def _openai_chat_stream(
         for i, s in enumerate(ordered)
     ]
     assistant: dict[str, Any] = {"role": "assistant", "content": full}
+    if reasoning:
+        assistant["reasoning_content"] = reasoning
     if ordered:
         assistant["tool_calls"] = [
             {

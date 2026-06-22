@@ -59,6 +59,39 @@ def _tool_temperature() -> float:
         return DEFAULT_TOOL_TEMPERATURE
 
 
+def _tool_context_size() -> int | None:
+    """Context size limit (num_ctx) for orchestrator turns (settings-overridable)."""
+    value = get_value("agent.orchestrator.contextSize", None)
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _tool_max_tokens() -> int | None:
+    """Max output tokens for orchestrator turns (settings-overridable)."""
+    value = get_value("agent.orchestrator.maxTokens", None)
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _tool_top_p() -> float | None:
+    """Top P sampling for orchestrator turns (settings-overridable)."""
+    value = get_value("agent.orchestrator.topP", None)
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _orchestrator_model(default: str) -> str:
     """Model for orchestrator turns. A separate override (settings-overridable)
     lets a stronger model drive tool calls than the one used for chat/autosuggest;
@@ -281,17 +314,86 @@ def _manifest_to_tools(serialized: list[dict[str, Any]]) -> list[dict[str, Any]]
     return tools
 
 
-def _tools_for(conn: WsConnection) -> list[dict[str, Any]]:
+def _tools_for(
+    conn: WsConnection,
+    prompt: str = "",
+    history: list[Any] | None = None,
+) -> list[dict[str, Any]]:
     """The model's tool list for a turn: static LAYOUT_TOOLS plus the connection's
-    pushed dynamic tools, deduped by name (static wins)."""
+    pushed dynamic tools, deduped by name (static wins).
+
+    If the total tool count exceeds the model's capacity limit (38 tools) to enable
+    thinking/reasoning stream in local models, we dynamically select the most relevant
+    tools based on keywords in the prompt and conversation history."""
     merged = list(LAYOUT_TOOLS)
     seen = {t["function"]["name"] for t in merged}
+
+    dynamic_tools = []
     for t in _manifest_to_tools(getattr(conn, "agent_tools", [])):
         if t["function"]["name"] in seen:
             continue
-        merged.append(t)
+        dynamic_tools.append(t)
         seen.add(t["function"]["name"])
-    return merged
+
+    total_count = len(merged) + len(dynamic_tools)
+    if total_count <= 38:
+        return merged + dynamic_tools
+
+    # Build search context from prompt and history
+    text_to_search = prompt.lower()
+    if history:
+        for m in history:
+            if isinstance(m, dict) and isinstance(m.get("content"), str):
+                text_to_search += " " + m["content"].lower()
+
+    # Define optional groups and their keywords
+    groups = {
+        "visualizer": {
+            "prefixes": ("visualizer.",),
+            "keywords": ("visualizer", "render", "pygame", "canvas", "three", "babylon", "draw", "animation"),
+        },
+        "vectordb": {
+            "prefixes": ("vectordb.",),
+            "keywords": ("vector", "vectordb", "semantic", "embeddings", "upsert", "db search"),
+        },
+        "clubhouse": {
+            "prefixes": ("clubhouse.",),
+            "keywords": ("clubhouse", "room", "disconnect"),
+        },
+        "stub": {
+            "prefixes": ("stub.",),
+            "keywords": ("stub", "getvalue", "setvalue"),
+        },
+    }
+
+    active_prefixes = set()
+    for gname, ginfo in groups.items():
+        if any(kw in text_to_search for kw in ginfo["keywords"]):
+            active_prefixes.update(ginfo["prefixes"])
+
+    core_prefixes = ("files.", "editor.", "terminal.")
+
+    def get_priority(t: dict[str, Any]) -> int:
+        name = t["function"]["name"]
+        if any(name.startswith(p) for p in active_prefixes):
+            return 0
+        if any(name.startswith(p) for p in core_prefixes):
+            return 1
+        if name.startswith("agent.") or name.startswith("observability."):
+            return 2
+        return 3
+
+    dynamic_tools.sort(key=get_priority)
+    selected_dynamic = dynamic_tools[:23]
+
+    pruned = [t["function"]["name"] for t in dynamic_tools[23:]]
+    if pruned:
+        logger.warning(
+            f"Pruned {len(pruned)} dynamic tools to stay within the 38 tools threshold for reasoning models. "
+            f"Pruned tools: {pruned}"
+        )
+
+    return merged + selected_dynamic
 
 
 def _evt(event: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -514,7 +616,7 @@ async def run_agent_turn(
     info = P.provider_for(config.provider)
     endpoint = config.endpoint or info.default_endpoint
     model = _orchestrator_model(config.model)
-    tools = _tools_for(conn)
+    tools = _tools_for(conn, prompt=prompt, history=history)
     editor_msg = _active_editor_message(context)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -536,6 +638,9 @@ async def run_agent_turn(
             await conn.send_json(_evt("token", {"turnId": turn_id, "delta": content}))
 
     temperature = _tool_temperature()
+    context_size = _tool_context_size()
+    max_tokens = _tool_max_tokens()
+    top_p = _tool_top_p()
     forced_retry_used = False
     try:
         async with instrumented_client(timeout=120) as client:
@@ -549,6 +654,9 @@ async def run_agent_turn(
                     tools,
                     on_delta,
                     temperature=temperature,
+                    context_size=context_size,
+                    max_tokens=max_tokens,
+                    top_p=top_p,
                 )
                 messages.append(result.assistant_message)
 
@@ -572,6 +680,9 @@ async def run_agent_turn(
                         on_delta,
                         temperature=temperature,
                         tool_choice="required",
+                        context_size=context_size,
+                        max_tokens=max_tokens,
+                        top_p=top_p,
                     )
                     messages.append(result.assistant_message)
 

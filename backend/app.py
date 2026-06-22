@@ -1,6 +1,16 @@
 """horrible-dashboard backend: the app's brain, serving both layouts."""
 
 import asyncio
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        logging.FileHandler("/home/horrible/horrible-dashboard/backend.log"),
+        logging.StreamHandler()
+    ]
+)
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
