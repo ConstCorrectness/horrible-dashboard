@@ -1,3 +1,4 @@
+/* eslint-disable */
 import PubNub from 'pubnub';
 import fs from 'fs';
 import path from 'path';
