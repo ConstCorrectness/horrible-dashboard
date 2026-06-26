@@ -12,17 +12,24 @@ import { editorAgentTools } from './agentTools';
 import { BufferView } from './BufferView';
 import { getBuffer, listBufferUris } from './buffers';
 import { RecentNotesWidget } from './RecentNotes';
+import { registerEditorService } from './service';
 import { createNote, sourceTitle } from './sources';
+
+/** Optional knobs when opening a buffer. */
+export interface OpenBufferOptions {
+  /** Highlighting hint for sources with no extension to infer from (notes). */
+  language?: 'javascript' | 'python';
+}
 
 /**
  * Open a buffer for a source URI (`note:<id>`, `workspace-file:<path>`). The
  * instance id is derived from the source so reopening the same source focuses the
  * existing buffer instead of duplicating it.
  */
-export function openBuffer(source: string): void {
+export function openBuffer(source: string, opts?: OpenBufferOptions): void {
   registry.openPanel('editor.buffer', {
     instanceId: `editor.buffer:${source}`,
-    params: { source, title: sourceTitle(source) },
+    params: { source, title: sourceTitle(source), language: opts?.language },
   });
 }
 
@@ -54,6 +61,26 @@ async function saveAll(): Promise<void> {
   await Promise.all(listBufferUris().map((uri) => getBuffer(uri)?.save() ?? Promise.resolve()));
 }
 
+/**
+ * Open the active buffer in the visualizer, inferring the engine from the buffer's
+ * language (a `.py` buffer → pygame, JS → the visualizer's current/default engine).
+ * Lives in the editor so it can read the active buffer; the visualizer exposes the
+ * `setTarget` seam it drives.
+ */
+async function visualizeActiveBuffer(): Promise<void> {
+  const uri = getActiveBufferSource();
+  if (!uri) return;
+  const { getActiveVisualizer } = await import('../visualizer/store');
+  const { modeForLanguage, languageForUri } = await import('../visualizer/bridge');
+  registry.openPanel('visualizer.pane');
+  // Let the pane mount before pointing it at the buffer.
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  const viz = getActiveVisualizer();
+  if (!viz) return;
+  const current = viz.getState().mode;
+  viz.setTarget(uri, modeForLanguage(languageForUri(uri), current));
+}
+
 export const editorModule: ModuleManifest = {
   id: 'editor',
   title: 'Editor',
@@ -79,6 +106,11 @@ export const editorModule: ModuleManifest = {
     { id: 'editor.newNote', title: 'Editor: New note', run: newNote },
     { id: 'editor.save', title: 'Editor: Save', run: saveActive },
     { id: 'editor.saveAll', title: 'Editor: Save all', run: saveAll },
+    {
+      id: 'editor.visualizeBuffer',
+      title: 'Editor: Open in visualizer',
+      run: visualizeActiveBuffer,
+    },
   ],
   // Editing keys go through the shell keybinding service, never a hardcoded
   // handler in the component — so they stay rebindable.
@@ -95,4 +127,9 @@ export const editorModule: ModuleManifest = {
   ],
 };
 
+// Expose the editor's buffer surface to other modules (e.g. the visualizer) via
+// the registry, so they don't deep-import editor internals.
+registerEditorService();
+
 export { loadSource, saveSource, sourceTitle, type LoadedSource } from './sources';
+export type { EditorService, BufferLanguage, OpenBufferRequest } from './service';

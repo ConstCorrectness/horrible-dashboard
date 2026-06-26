@@ -31,12 +31,22 @@ keymap is exposed through the shell keybinding service so bindings stay rebindab
   same file/note focuses the existing buffer (generic windowing support added with
   `openPanel(id, { instanceId, params })`).
 - **Commands (C3):** `editor.newNote` (create + open a note), `editor.save`,
-  `editor.saveAll`. `mod+s` is a default **keybinding → `editor.save`** routed
-  through the shell keybinding service — the buffer has no hardcoded save handler,
-  so the key stays rebindable. (`editor.open` quick-open is still to come.)
-- **Services for other modules:** `editor.openBuffer(source)` is the public way
-  any module shows editable text. Sources are URIs (`note:`, `workspace-file:`,
-  `osfile:` on desktop) so the buffer layer doesn't care where content lives.
+  `editor.saveAll`, `editor.visualizeBuffer` (open the active buffer in the
+  visualizer, inferring the engine from its language). `mod+s` is a default
+  **keybinding → `editor.save`** routed through the shell keybinding service — the
+  buffer has no hardcoded save handler, so the key stays rebindable. (`editor.open`
+  quick-open is still to come.)
+- **Services for other modules:** `editor.openBuffer(source, { language? })` is the
+  public way any module shows editable text. Sources are URIs (`note:`,
+  `workspace-file:`, `osfile:` on desktop) so the buffer layer doesn't care where
+  content lives; an optional `language` param highlights extensionless sources (notes).
+  For richer cross-module use, the editor also registers an **`editor` service** on the
+  registry (`registry.getService('editor')`, from `service.ts`) — `openBufferFromContent`
+  (materialize content as a note or `scratch/` file), `getBufferContent` (live, or the
+  persisted bytes via `loadSource` when the tab is unmounted), `peekBufferContent` (sync,
+  live-only), `setBufferContent`, `getActiveBufferSource`, and `listBuffers`. The
+  visualizer uses this to bridge templates ⇄ buffers (see
+  [visualizer › Editor integration](visualizer.mdx#editor-integration)).
 - **Dashboard widgets:** `editor.recentNotes` — the most-recently-updated notes
   (`GET /notes`); click a row to open it as a `note:` buffer, with a "New note"
   affordance. Refreshes on window focus so notes created/saved elsewhere appear.

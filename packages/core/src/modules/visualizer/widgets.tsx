@@ -2,10 +2,15 @@ import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 
 import { useAgentContext } from '../../agent-context';
+import { registry } from '../../registry';
 import { sendChannel, subscribeChannel } from '../../ws';
 import { registerVisualizerInstance } from './store';
-import { getBuffer, listBufferUris } from '../editor/buffers';
-import { getActiveBufferSource } from '../editor/index';
+import { languageForMode } from './bridge';
+import type { EditorService } from '../editor/service';
+
+/** The editor's buffer surface, looked up lazily (the editor module registers it
+ * at load). Undefined only if the editor module never loaded. */
+const editor = (): EditorService | undefined => registry.getService<EditorService>('editor');
 
 type VisualizerMode = 'canvas' | 'three' | 'babylon' | 'pygame';
 
@@ -177,20 +182,24 @@ export function VisualizerWidget() {
   const activeScriptRef = useRef<ScriptHooks | null>(null);
   const animationFrameRef = useRef<number | null>(null);
 
-  // Helper to resolve the active code and targeted buffer URI
-  const getResolvedCode = (): { uri: string | null; code: string } => {
-    let uri: string | null = null;
-    if (targetUri === 'active') {
-      uri = getActiveBufferSource();
-    } else if (targetUri !== 'none') {
-      uri = targetUri;
-    }
+  // The editor buffer this visualizer is linked to (the "Source" dropdown):
+  // 'active' tracks the focused buffer, 'none' uses the pane's own code, or a
+  // specific buffer URI.
+  const resolveTargetUri = (): string | null => {
+    if (targetUri === 'active') return editor()?.getActiveBufferSource() ?? null;
+    if (targetUri !== 'none') return targetUri;
+    return null;
+  };
 
+  // Synchronous, live-only resolution: the targeted buffer's content if it's
+  // mounted, else the pane's own `code`. Used by the hot-poll loop and snapshots
+  // (a backend fetch per tick would be wasteful); the initial run uses the async
+  // path below so an unmounted target tab still resolves.
+  const getResolvedCode = (): { uri: string | null; code: string } => {
+    const uri = resolveTargetUri();
     if (uri) {
-      const buffer = getBuffer(uri);
-      if (buffer) {
-        return { uri, code: buffer.snapshot().content };
-      }
+      const live = editor()?.peekBufferContent(uri);
+      if (live != null) return { uri, code: live };
     }
     return { uri: null, code };
   };
@@ -214,13 +223,9 @@ export function VisualizerWidget() {
       setMode: (m) => setMode(m),
       updateCode: (newCode) => {
         setCode(newCode);
-        const resolved = getResolvedCode();
-        if (resolved.uri) {
-          const buffer = getBuffer(resolved.uri);
-          if (buffer) {
-            buffer.setContent(newCode);
-          }
-        }
+        // Mirror into the linked buffer so an edit here flows to the editor.
+        const uri = resolveTargetUri();
+        if (uri) editor()?.setBufferContent(uri, newCode);
       },
       run: () => {
         setIsRunning(true);
@@ -238,6 +243,12 @@ export function VisualizerWidget() {
           errorMsg: error,
           codeLength: resolved.code.length,
         };
+      },
+      exportToEditor: (prefer) => exportToEditor(prefer),
+      setTarget: (uri, m) => {
+        setMode(m);
+        setTargetUri(uri);
+        setIsRunning(true);
       },
     });
     return () => {
@@ -275,7 +286,7 @@ export function VisualizerWidget() {
   // Periodically refresh the list of open buffers in the dropdown
   useEffect(() => {
     const interval = setInterval(() => {
-      setOpenBuffers(listBufferUris());
+      setOpenBuffers(editor()?.listBuffers() ?? []);
     }, 1000);
     return () => clearInterval(interval);
   }, []);
@@ -458,14 +469,24 @@ export function VisualizerWidget() {
   useEffect(() => {
     if (!isRunning) return;
 
-    const runResolved = () => {
-      const resolved = getResolvedCode();
-      lastCodeRef.current = resolved.code;
-      runCode(resolved.code);
+    let cancelled = false;
+    // Initial run: prefer the live mounted content, but if the target buffer's tab
+    // is unmounted (dockview drops inactive panes), fall back to its persisted bytes
+    // so the visualization still renders.
+    const runInitial = async () => {
+      const uri = resolveTargetUri();
+      let code = getResolvedCode().code;
+      if (uri && editor()?.peekBufferContent(uri) == null) {
+        code = (await editor()?.getBufferContent(uri)) ?? code;
+      }
+      if (cancelled) return;
+      lastCodeRef.current = code;
+      runCode(code);
     };
 
-    runResolved();
+    void runInitial();
 
+    // Hot-reload poll: live edits only (a mounted buffer); cheap and synchronous.
     const interval = setInterval(() => {
       const resolved = getResolvedCode();
       if (resolved.code !== lastCodeRef.current) {
@@ -475,6 +496,7 @@ export function VisualizerWidget() {
     }, 500);
 
     return () => {
+      cancelled = true;
       clearInterval(interval);
       stopAll();
     };
@@ -505,6 +527,30 @@ export function VisualizerWidget() {
   const handleModeChange = (newMode: VisualizerMode) => {
     setMode(newMode);
     setCode(TEMPLATES[newMode]);
+  };
+
+  // Send the current script to the editor as a new buffer, then link to it so
+  // further edits there flow back into the visualization (the live "Source").
+  // Returns the new buffer's URI, or null if it couldn't be created.
+  const exportToEditor = async (prefer: 'note' | 'file'): Promise<string | null> => {
+    const svc = editor();
+    if (!svc) {
+      setError('Editor module is not available.');
+      return null;
+    }
+    try {
+      const uri = await svc.openBufferFromContent({
+        content: getResolvedCode().code,
+        language: languageForMode(mode),
+        title: `Visualizer (${mode})`,
+        prefer,
+      });
+      setTargetUri(uri);
+      return uri;
+    } catch (err) {
+      setError(`Export to editor failed: ${String(err)}`);
+      return null;
+    }
   };
 
   return (
@@ -605,6 +651,23 @@ export function VisualizerWidget() {
               }}
             >
               ↻
+            </button>
+            <button
+              className="vdb-btn-refresh"
+              onClick={(e) => void exportToEditor(e.shiftKey ? 'file' : 'note')}
+              title="Export to editor as a new note — Shift-click to write a workspace file instead"
+              style={{
+                height: '24px',
+                padding: '0 0.5rem',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '0.7rem',
+                borderRadius: '4px',
+                gap: '0.25rem',
+              }}
+            >
+              ⤴ Editor
             </button>
           </div>
         </div>

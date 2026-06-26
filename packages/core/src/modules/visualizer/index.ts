@@ -104,6 +104,32 @@ export const visualizerModule: ModuleManifest = {
             return { error: 'Visualizer pane is not open.' };
           },
         },
+        {
+          name: 'visualizer.export_to_editor',
+          description:
+            "Send the visualizer's current script to the editor as a new editable buffer, " +
+            'and link the visualizer to it so subsequent edits in the editor re-render live. ' +
+            "Use 'note' (default) for a backend-persisted scratch buffer, or 'file' to write a " +
+            'workspace file (falls back to a note when no workspace root is available).',
+          params: {
+            type: 'object',
+            properties: {
+              target: {
+                type: 'string',
+                enum: ['note', 'file'],
+                description: 'Where the exported buffer lives. Defaults to note.',
+              },
+            },
+          },
+          sideEffect: true,
+          handler: async (args) => {
+            const { target } = args as { target?: 'note' | 'file' };
+            const active = getActiveVisualizer();
+            if (!active) return { error: 'Visualizer pane is not open or mounted.' };
+            const uri = await active.exportToEditor(target ?? 'note');
+            return uri ? { success: true, uri } : { error: 'Export to editor failed.' };
+          },
+        },
       ],
     },
   ],

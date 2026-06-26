@@ -165,6 +165,7 @@ class ModuleRegistry {
   private panelOpener: ((panelId: string, opts?: OpenPaneOptions) => void) | null = null;
   private workspaceSwitcher: ((workspaceId: string) => void) | null = null;
   private layoutControllerImpl: LayoutController | null = null;
+  private services = new Map<string, unknown>();
   private changeListeners = new Set<() => void>();
 
   /** Idempotent: re-registering the same module id is a no-op (StrictMode-safe). */
@@ -268,6 +269,20 @@ class ModuleRegistry {
 
   get layoutController(): LayoutController | null {
     return this.layoutControllerImpl;
+  }
+
+  /**
+   * Register a named cross-module service (e.g. the editor exposes its buffer
+   * surface so the visualizer can open/read buffers without deep-importing the
+   * editor module's internals). One impl per id; last registration wins.
+   */
+  provideService<T>(id: string, impl: T): void {
+    this.services.set(id, impl);
+  }
+
+  /** Look up a service by id. Returns undefined if its provider hasn't loaded. */
+  getService<T>(id: string): T | undefined {
+    return this.services.get(id) as T | undefined;
   }
 }
 

@@ -67,6 +67,14 @@ function languageFor(title: string) {
   return markdown();
 }
 
+/** An explicit language hint (e.g. a note opened by the visualizer) wins over the
+ * title-based guess, since notes have no extension. */
+function languageForHint(hint: string | null, title: string) {
+  if (hint === 'javascript') return javascript();
+  if (hint === 'python') return python();
+  return languageFor(title);
+}
+
 /** A coarse language hint for the completion prompt. */
 function languageHint(title: string): string {
   if (/\.tsx?$/i.test(title)) return 'TypeScript';
@@ -79,6 +87,7 @@ function languageHint(title: string): string {
 export function BufferView() {
   const params = usePaneParams();
   const source = typeof params.source === 'string' ? params.source : null;
+  const langHint = typeof params.language === 'string' ? params.language : null;
   const instanceId = useContext(PaneInstanceContext);
 
   const hostRef = useRef<HTMLDivElement>(null);
@@ -149,7 +158,7 @@ export function BufferView() {
         view.dispatch({
           changes: { from: 0, to: view.state.doc.length, insert: loaded.content },
           effects: [
-            langRef.current.reconfigure(languageFor(loaded.title)),
+            langRef.current.reconfigure(languageForHint(langHint, loaded.title)),
             // Connect (or disconnect) a language server for this buffer. The
             // reconfigure tears down any prior session (didClose + stop) and the
             // new plugin sees the just-applied content for its didOpen.

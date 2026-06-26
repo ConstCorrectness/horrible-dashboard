@@ -82,7 +82,32 @@ flowchart TD
   - **Canvas Viewer**: A responsive layout wrapper displaying the output `<canvas>`.
   - **Control Strip**: Controls for Play/Pause, Restart, Engine selector (Canvas 2D, Three.js, Babylon.js, Pygame), and target buffer selection.
   - **Editor Link**: Dynamically binds to the active editor buffer or any other open file. Detects edits and automatically hot-reloads the animation in real-time (500ms debounce).
+  - **Export to editor** (`⤴ Editor` button): sends the current script to the editor as a new buffer and links to it (see [Editor integration](#editor-integration) below). Shift-click writes a workspace file instead of a note.
 - **Commands**: `visualizer.open` (`Visualizer: Open Pane`) — opens the visualizer widget.
+
+## Editor integration
+
+The visualizer and editor are bridged through a small **`editor` service** registered on
+the module registry (`registry.provideService('editor', …)` from
+`packages/core/src/modules/editor/service.ts`), so the visualizer no longer deep-imports
+editor internals. The service exposes `openBufferFromContent`, `getBufferContent`
+(live-or-`loadSource` fallback), `peekBufferContent` (sync, live-only), `setBufferContent`,
+`getActiveBufferSource`, and `listBuffers`.
+
+- **Visualizer → editor (export).** `openBufferFromContent({ content, language, prefer })`
+  materializes the current script as a new buffer — a backend **note** by default, or a
+  `scratch/viz-*.{js,py}` **workspace file** (`prefer:'file'`, falling back to a note when no
+  workspace root exists). The visualizer then sets that URI as its live **Source**, so further
+  edits in the editor hot-reload the animation.
+- **Editor → visualizer (`editor.visualizeBuffer`, "Editor: Open in visualizer").** Opens the
+  visualizer pane pointed at the active buffer via the visualizer's `setTarget(uri, mode)` seam,
+  inferring the engine from the buffer's language.
+- **Mode ⇄ language bridge** (`visualizer/bridge.ts`): engines map to a language for export
+  (`canvas|three|babylon → javascript`, `pygame → python`); the reverse is ambiguous, so import
+  preserves the current JS engine and otherwise defaults (`three` for JS, `pygame` for Python).
+- **Unmounted tabs.** dockview drops inactive panes, so the link reads through the service's
+  `getBufferContent` (which falls back to the persisted bytes) on the initial run; the 500ms
+  hot-reload poll uses the synchronous live-only `peekBufferContent`.
 
 ## WebSocket Protocol
 
@@ -105,6 +130,7 @@ The visualizer registers tools with the agent orchestrator to allow agents to ge
 | `visualizer.run_pygame` | Runs a Pygame script on the backend, streaming frames to the canvas. | `code` (str) | Yes |
 | `visualizer.clear` | Stops any running animation (JS loop or Python subprocess) and clears the canvas. | None | Yes |
 | `visualizer.get_state` | Retrieves the active mode and script source currently loaded in the widget. | None | No |
+| `visualizer.export_to_editor` | Exports the current script to the editor as a new buffer and links the visualizer to it. | `target` (`note`\|`file`, default `note`) | Yes |
 
 ## Browser vs Desktop
 
