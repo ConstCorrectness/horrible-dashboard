@@ -96,7 +96,9 @@ def load_identity() -> Identity:
 
 def node_name() -> str:
     """Display name advertised to peers — a setting, defaulting to the hostname."""
-    default = os.environ.get("HOSTNAME") or os.uname().nodename
+    import socket
+
+    default = os.environ.get("HOSTNAME") or socket.gethostname()
     value = get_value("network.nodeName", default)
     return str(value).strip() or default
 
