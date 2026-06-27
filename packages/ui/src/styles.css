@@ -2791,3 +2791,104 @@ kbd {
     transform: translateY(0);
   }
 }
+
+/* Toast Notifications */
+.toasts-container {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  z-index: 9999;
+  max-width: 20rem;
+  width: calc(100% - 2rem);
+  pointer-events: none;
+}
+
+.toast-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  background: rgba(30, 30, 40, 0.75);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+  color: var(--text);
+  pointer-events: auto;
+  animation: toastSlideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  transition: all 0.2s ease;
+}
+
+@keyframes toastSlideIn {
+  from {
+    opacity: 0;
+    transform: translateX(100%) translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) translateY(0);
+  }
+}
+
+.toast-icon {
+  font-size: 1.1rem;
+  flex-shrink: 0;
+  margin-top: 0.1rem;
+}
+
+.toast-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.toast-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+  margin-bottom: 0.2rem;
+}
+
+.toast-message {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  line-height: 1.3;
+}
+
+.toast-close {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 0 0.2rem;
+  margin-left: 0.25rem;
+  margin-top: -0.1rem;
+}
+
+.toast-close:hover {
+  color: var(--text);
+}
+
+.toast-success {
+  border-color: rgba(63, 185, 80, 0.3);
+  box-shadow: 0 8px 32px 0 rgba(63, 185, 80, 0.1);
+}
+
+.toast-info {
+  border-color: rgba(110, 168, 254, 0.3);
+  box-shadow: 0 8px 32px 0 rgba(110, 168, 254, 0.1);
+}
+
+.toast-warning {
+  border-color: rgba(210, 153, 34, 0.3);
+  box-shadow: 0 8px 32px 0 rgba(210, 153, 34, 0.1);
+}
+
+.toast-error {
+  border-color: rgba(248, 81, 73, 0.3);
+  box-shadow: 0 8px 32px 0 rgba(248, 81, 73, 0.1);
+}

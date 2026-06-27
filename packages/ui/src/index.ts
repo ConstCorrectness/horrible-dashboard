@@ -10,3 +10,4 @@ export {
 export { CommandPalette } from './CommandPalette';
 export { HomeView } from './HomeView';
 export { Workspace, openWorkspacePanel } from './Workspace';
+export { Toasts } from './Toasts';

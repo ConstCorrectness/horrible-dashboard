@@ -148,3 +148,4 @@ export {
   type SerializedTool,
   type VllmStatus,
 } from './modules/agent';
+export { toastsStore, type Toast } from './toasts';

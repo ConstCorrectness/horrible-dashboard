@@ -5,6 +5,7 @@
  * same pattern as the agent capability manifest.
  */
 import { onSocketOpen, sendChannel, subscribeChannel } from '../../ws';
+import { toastsStore } from '../../toasts';
 import type { NodeIdentity, PairResult, PeerInfo, PeersSnapshot } from './api';
 
 export interface NetworkState {
@@ -48,6 +49,24 @@ function applySnapshot(snap: PeersSnapshot): void {
 }
 
 function applyPeerUpdate(peer: PeerInfo): void {
+  const oldPeer = state.peers[peer.node_id];
+
+  if (oldPeer?.status !== peer.status) {
+    if (peer.status === 'connected') {
+      toastsStore.add(
+        'success',
+        'Peer Connected',
+        `${peer.node_name} is now connected.`,
+      );
+    } else if (peer.status === 'disconnected') {
+      toastsStore.add(
+        'info',
+        'Peer Disconnected',
+        `${oldPeer?.node_name || peer.node_name} disconnected.`,
+      );
+    }
+  }
+
   const peers = { ...state.peers };
   if (peer.status === 'disconnected') delete peers[peer.node_id];
   else peers[peer.node_id] = peer;
@@ -69,6 +88,12 @@ export function initNetwork(): void {
       emit();
     } else if (msg.event === 'pair_result') {
       pairListeners.forEach((l) => l(msg.data as PairResult));
+      const res = msg.data as PairResult;
+      if (res.ok && res.peer) {
+        toastsStore.add('success', 'Pairing Successful', `Paired with peer ${res.peer.node_name}.`);
+      } else if (res.error) {
+        toastsStore.add('error', 'Pairing Failed', res.error);
+      }
     }
   });
   onSocketOpen(() => sendChannel('network', 'list_peers', {}));

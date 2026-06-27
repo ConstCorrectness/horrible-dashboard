@@ -4,6 +4,7 @@ import { registry, useWorkspaces, type OpenPaneOptions, type ShellView } from '@
 
 import { ApprovalPrompts } from './ApprovalPrompts';
 import { CommandPalette } from './CommandPalette';
+import { Toasts } from './Toasts';
 import { HomeView } from './HomeView';
 import { Workspace } from './Workspace';
 import './styles.css';
@@ -179,6 +180,7 @@ export function AppShell({ appTitle }: { appTitle: string }) {
       </div>
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       <ApprovalPrompts />
+      <Toasts />
       {contextMenu &&
         createPortal(
           <div
