@@ -292,6 +292,43 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
 ]
 
 
+# Backend-resolved tools for the distributed peer fabric. Unlike LAYOUT_TOOLS (which
+# relay to the browser), these execute in the backend against the process-global
+# PeerHub, so agent-to-agent works with no browser handler. See modules/network.
+PEER_TOOLS: list[dict[str, Any]] = [
+    _tool(
+        "list_peers",
+        "List the connected peer nodes (other users' agents) you can ask, with "
+        "node_id, name, and capabilities. Call this before agent.ask_peer.",
+    ),
+    _tool(
+        "agent.ask_peer",
+        "Ask another user's agent a question and get its answer back. Use list_peers "
+        "first to find a peerId. The remote agent answers on its own machine under "
+        "its owner's permissions.",
+        {
+            "peerId": {"type": "string", "description": "node_id from list_peers"},
+            "prompt": {"type": "string", "description": "the question to ask"},
+        },
+        ["peerId", "prompt"],
+    ),
+]
+
+# Names dispatched in the backend (not relayed to the browser).
+BACKEND_TOOL_NAMES = {t["function"]["name"] for t in PEER_TOOLS}
+
+# Side-effect metadata for static backend tools (the browser manifest carries this
+# for frontend tools; static tools declare it here so the gate can see it).
+# agent.ask_peer reaches another machine, so it's gated; list_peers is read-only.
+_STATIC_TOOL_META: dict[str, dict[str, Any]] = {
+    "agent.ask_peer": {
+        "name": "agent.ask_peer",
+        "sideEffect": True,
+        "specifierTemplate": "{peerId}",
+    },
+}
+
+
 def _manifest_to_tools(serialized: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Convert the browser-pushed capability manifest (serialized AgentToolDecl /
     agent-command shapes) into provider tool definitions. Handlers never cross the
@@ -326,7 +363,7 @@ def _tools_for(
     If the total tool count exceeds the model's capacity limit (38 tools) to enable
     thinking/reasoning stream in local models, we dynamically select the most relevant
     tools based on keywords in the prompt and conversation history."""
-    merged = list(LAYOUT_TOOLS)
+    merged = list(LAYOUT_TOOLS) + list(PEER_TOOLS)
     seen = {t["function"]["name"] for t in merged}
 
     dynamic_tools = []
@@ -401,9 +438,12 @@ def _tools_for(
         return 3
 
     dynamic_tools.sort(key=get_priority)
-    selected_dynamic = dynamic_tools[:23]
+    # Keep the static catalog whole; fill the rest of the 38-tool budget with the
+    # highest-priority dynamic tools.
+    budget = max(0, 38 - len(merged))
+    selected_dynamic = dynamic_tools[:budget]
 
-    pruned = [t["function"]["name"] for t in dynamic_tools[23:]]
+    pruned = [t["function"]["name"] for t in dynamic_tools[budget:]]
     if pruned:
         logger.warning(
             f"Pruned {len(pruned)} dynamic tools to stay within the 38 tools threshold for reasoning models. "
@@ -489,7 +529,11 @@ async def _call_frontend_tool(
 
 
 def _tool_meta(conn: WsConnection, name: str) -> dict[str, Any] | None:
-    """The pushed manifest entry for a tool, or None for layout/unknown tools."""
+    """The metadata entry for a tool, or None for layout/unknown tools. Static
+    backend tools (e.g. agent.ask_peer) declare theirs in _STATIC_TOOL_META; frontend
+    tools carry theirs in the pushed manifest."""
+    if name in _STATIC_TOOL_META:
+        return _STATIC_TOOL_META[name]
     for t in getattr(conn, "agent_tools", []):
         if t.get("name") == name:
             return t
@@ -542,12 +586,17 @@ async def _gate(conn: WsConnection, turn_id: str, call: Any) -> bool:
     specifier = permissions.render_specifier(
         meta.get("specifierTemplate") if meta else None, call.arguments
     )
-    mode = permission_store.load_mode()
+    # A remote (peer-driven) turn forces its own mode (network.remoteAgentMode) and
+    # never has a human to prompt; a local turn uses the user's session mode.
+    mode = getattr(conn, "force_mode", None) or permission_store.load_mode()
     rules = permission_store.load_rules()
     decision = permissions.evaluate(call.name, specifier, side_effect, mode, rules)
     if decision is permissions.Decision.ALLOW:
         return True
     if decision is permissions.Decision.DENY:
+        return False
+    # ASK: a remote turn has no human behind it — deny rather than block/prompt.
+    if getattr(conn, "is_remote", False):
         return False
     response = await _request_approval(conn, turn_id, call.name, specifier, mode)
     choice = response.get("decision")
@@ -608,6 +657,25 @@ def _history_messages(history: list[Any] | None) -> list[dict[str, Any]]:
         if role in ("user", "assistant") and isinstance(content, str) and content:
             out.append({"role": role, "content": content})
     return out
+
+
+async def _run_backend_tool(conn: WsConnection, call: Any) -> Any:
+    """Execute a backend-resolved tool (the peer fabric verbs) against the
+    process-global PeerHub. Imported lazily to avoid an import cycle with the network
+    module (whose agent_bridge imports this orchestrator)."""
+    from backend.modules.network import agent_bridge
+    from backend.modules.network.hub import peer_hub
+
+    if call.name == "list_peers":
+        return {"peers": [p.model_dump() for p in peer_hub.list_peers()]}
+    if call.name == "agent.ask_peer":
+        peer_id = str(call.arguments.get("peerId", ""))
+        prompt = str(call.arguments.get("prompt", ""))
+        if not peer_id or not prompt:
+            return {"error": "agent.ask_peer needs peerId and prompt"}
+        origin_chain = getattr(conn, "origin_chain", None)
+        return await agent_bridge.ask_peer(peer_id, prompt, origin_chain=origin_chain)
+    return {"error": f"unknown backend tool {call.name}"}
 
 
 async def run_agent_loop(
@@ -683,12 +751,15 @@ async def run_agent_loop(
             if not result.tool_calls:
                 return result.content
             for call in result.tool_calls:
-                if await _gate(conn, turn_id, call):
+                if not await _gate(conn, turn_id, call):
+                    tool_result = {"error": "denied by permission policy"}
+                elif call.name in BACKEND_TOOL_NAMES:
+                    # Resolved in the backend (peer fabric), not relayed to the UI.
+                    tool_result = await _run_backend_tool(conn, call)
+                else:
                     tool_result = await _call_frontend_tool(
                         conn, turn_id, call.name, call.arguments
                     )
-                else:
-                    tool_result = {"error": "denied by permission policy"}
                 messages.append(P.tool_result_message(info, call, tool_result))
     return "(stopped after too many steps)"
 
@@ -699,6 +770,8 @@ async def run_agent_turn(
     prompt: str,
     history: list[Any] | None = None,
     context: dict[str, Any] | None = None,
+    *,
+    remote: bool = False,
 ) -> None:
     """Drive one user turn: assemble the conversation, run the shared tool-calling
     loop, and send the authoritative answer. The provider dialect (Ollama vs
@@ -706,7 +779,11 @@ async def run_agent_turn(
     user/assistant turns from the chat widget so the conversation is multi-turn
     while the backend stays stateless per turn. `context` carries the user's focused
     pane snapshot (currently the open editor buffer) so the model can act on what
-    the user is looking at without a discovery round-trip."""
+    the user is looking at without a discovery round-trip.
+
+    `remote=True` marks a turn driven by a *peer's* agent (no browser behind it): it
+    runs with no actuating tools, so a remote agent answers from the model but cannot
+    drive this machine. See modules/network agent_bridge."""
     config = _load_config()
     if config is None:
         await conn.send_json(
@@ -716,7 +793,9 @@ async def run_agent_turn(
     info = P.provider_for(config.provider)
     endpoint = config.endpoint or info.default_endpoint
     model = _orchestrator_model(config.model)
-    tools = _tools_for(conn, prompt=prompt, history=history)
+    # A remote turn gets no tools (it can't reach a browser to execute them, and must
+    # not act on this machine); a local turn gets the full layout/peer/widget catalog.
+    tools = [] if remote else _tools_for(conn, prompt=prompt, history=history)
     editor_msg = _active_editor_message(context)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": SYSTEM_PROMPT},

@@ -16,7 +16,9 @@ import {
   layoutsModule,
   loadPlugins,
   loadSettings,
+  initNetwork,
   marketplaceModule,
+  networkModule,
   observabilityModule,
   registry,
   replModule,
@@ -57,6 +59,7 @@ async function boot(): Promise<void> {
   registry.register(vectordbModule);
   registry.register(visualizerModule);
   registry.register(flowModule);
+  registry.register(networkModule);
   // Dev-only agent-tool reference/validation stub (see agent-tools.md).
   if (import.meta.env.DEV) registry.register(stubModule);
 
@@ -71,6 +74,8 @@ async function boot(): Promise<void> {
   // Always-on tool-call relay: executes tools the backend relays for any chat turn
   // OR flow run (so flow Tool nodes and agent nodes can drive tools).
   initAgentRelay();
+  // Subscribe to the peer fabric so presence syncs before the Peers widget opens.
+  initNetwork();
   // Listen for permission-approval prompts the gate raises during a turn.
   initApprovalListener();
 
