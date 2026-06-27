@@ -61,9 +61,9 @@ export default definePlugin({
   - `host.openPanel(panelId)` / `host.runCommand(commandId)`.
 
 Declaration types (`CommandDecl`, `PanelDecl`, `WidgetDecl`, `KeybindingDecl`,
-`SettingDecl`, `SettingType`, `Capability`, `WsMessage`) live in the SDK and are
-re-exported by `@horrible/core`, so plugins and built-in modules share one
-contract.
+`SettingDecl`, `SettingType`, `Capability`, `CollabDecl`, `WsMessage`) live in the
+SDK and are re-exported by `@horrible/core`, so plugins and built-in modules share
+one contract.
 
 A plugin's **widgets are dockable panes**, just like a built-in module's: they
 open into the workspace (tabbed/split/floating), so a `WidgetDecl` takes an
@@ -71,14 +71,22 @@ optional `defaultPlacement` (`left|center|right|bottom`) hinting where it docks.
 There is no separate widget board — see
 [windowing.md](windowing.mdx).
 
+A pane can also opt into the **distributed peer fabric** declaratively via the
+optional `collab` field (`CollabDecl`) on `PanelDecl`/`WidgetDecl`: it names the
+shared room the pane syncs through, and the pane consumes it with the
+`useCollab` host hook (live cross-node state + presence) rather than touching the
+`collab` channel directly. See
+[Module: network](../modules/network.mdx#network-aware-panes-the-collab-contract).
+
 ## Versioning
 
 `SDK_API_VERSION` (currently `1`) is bumped on **breaking** contract changes
 only. A plugin package declares the version it was built against (`sdkVersion`
 in its manifest); the loader skips plugins whose version doesn't match and
 surfaces the mismatch in the marketplace panel. Additive optional fields (like
-the `settings` contribution in SDK `0.2.0`, and `WidgetDecl.defaultPlacement` in
-`0.3.0`) do **not** bump it, so existing plugins keep loading.
+the `settings` contribution in SDK `0.2.0`, `WidgetDecl.defaultPlacement` in
+`0.3.0`, and the `collab` pane field in `0.4.0`) do **not** bump it, so existing
+plugins keep loading.
 
 ## Package format
 

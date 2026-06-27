@@ -80,6 +80,32 @@ export interface CommandDecl {
 }
 
 /**
+ * How a pane participates in the distributed peer fabric's `collab` channel.
+ *
+ * Declaring this makes a pane **network-aware** at the contract level: the shell
+ * and the `useCollab` host hook know the pane syncs its state across nodes, so a
+ * standard Share affordance + live peer-presence count come for free instead of
+ * each pane hand-wiring the collab channel. See docs/modules/network.mdx (collab)
+ * and docs/architecture/plugin-sdk.mdx.
+ */
+export interface CollabDecl {
+  /**
+   * Room-key strategy. `shared` joins one well-known room across every instance of
+   * this view (e.g. a single shared scratchpad everyone edits together);
+   * `instance` gives each open pane its own room (collaborators must share the key
+   * out of band). The host derives the actual `paneKey` from this + `key`.
+   */
+  room: 'shared' | 'instance';
+  /** Fixed key suffix; defaults to the view id. Combined with `room` into a paneKey. */
+  key?: string;
+  /**
+   * Whether sharing is on the moment the pane opens. Defaults to false — the user
+   * opts in via the Share toggle (the privacy-preserving default).
+   */
+  autoShare?: boolean;
+}
+
+/**
  * Declaration of a Panel View. A Panel is a multi-instance view (e.g. terminals,
  * editor buffers) by default. Each time it is opened, a new Pane instance is
  * created, unless `singleton` is set to true.
@@ -97,6 +123,8 @@ export interface PanelDecl {
   singleton?: boolean;
   /** Actions/state-reads this panel exposes to the agent orchestrator. */
   agentTools?: AgentToolDecl[];
+  /** When set, this pane is network-aware: it syncs over the `collab` channel. */
+  collab?: CollabDecl;
 }
 
 /**
@@ -117,8 +145,9 @@ export interface WidgetDecl {
   defaultPlacement?: 'left' | 'center' | 'right' | 'bottom';
   /** Actions/state-reads this widget exposes to the agent orchestrator. */
   agentTools?: AgentToolDecl[];
+  /** When set, this pane is network-aware: it syncs over the `collab` channel. */
+  collab?: CollabDecl;
 }
-
 
 /**
  * A JSON-serializable snapshot of a pane's current state/selection, read by the

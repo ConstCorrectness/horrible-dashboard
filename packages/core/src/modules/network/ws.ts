@@ -5,7 +5,7 @@
  * same pattern as the agent capability manifest.
  */
 import { onSocketOpen, sendChannel, subscribeChannel } from '../../ws';
-import type { NodeIdentity, PairResult, PeerInfo, PeersSnapshot } from './api';
+import type { NodeIdentity, PairResult, PeerInfo, PeerMetrics, PeersSnapshot } from './api';
 
 export interface NetworkState {
   self: NodeIdentity | null;
@@ -80,6 +80,23 @@ export function requestPeers(): void {
 
 export function connectViaChannel(address: string): void {
   sendChannel('network', 'connect', { address, transport: 'direct' });
+}
+
+/**
+ * Subscribe to the Peer Monitor's periodic `peer_metrics` push (also delivered
+ * once in reply to `requestMetrics`). Returns an unsubscribe function.
+ */
+export function subscribeMetrics(handler: (metrics: PeerMetrics[]) => void): () => void {
+  return subscribeChannel('network', (msg) => {
+    if (msg.event === 'peer_metrics') {
+      handler((msg.data as { metrics: PeerMetrics[] }).metrics ?? []);
+    }
+  });
+}
+
+/** Ask the backend for an immediate metrics snapshot (e.g. on panel open). */
+export function requestMetrics(): void {
+  sendChannel('network', 'list_metrics', {});
 }
 
 export function redeemViaChannel(invite: string): void {

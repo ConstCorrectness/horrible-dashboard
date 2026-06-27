@@ -39,6 +39,26 @@ export interface PairResult {
   error?: string | null;
 }
 
+/** Live link health for one peer, sampled by the backend Peer Monitor. */
+export interface PeerMetrics {
+  node_id: string;
+  node_name: string;
+  transport: 'direct' | 'relay' | 'lan';
+  status: PeerStatus;
+  rtt_ms: number | null;
+  bytes_in: number;
+  bytes_out: number;
+  msgs_in: number;
+  msgs_out: number;
+  last_seen: number | null;
+}
+
+export interface AskPeerResult {
+  ok: boolean;
+  answer?: string | null;
+  error?: string | null;
+}
+
 export function getNetworkIdentity(): Promise<NodeIdentity> {
   return apiGet<NodeIdentity>('/network/identity');
 }
@@ -61,4 +81,9 @@ export function connectPeer(address: string): Promise<PairResult> {
 
 export function disconnectPeer(nodeId: string): Promise<{ ok: boolean }> {
   return apiDelete<{ ok: boolean }>(`/network/peers/${nodeId}`);
+}
+
+/** Ask a connected peer's agent a question; the remote turn is gated read-only. */
+export function askPeer(peerId: string, prompt: string): Promise<AskPeerResult> {
+  return apiPost<AskPeerResult>('/network/ask-peer', { peer_id: peerId, prompt });
 }

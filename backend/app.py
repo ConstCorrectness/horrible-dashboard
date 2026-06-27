@@ -25,7 +25,9 @@ from backend.modules.files import router as files_router
 from backend.modules.files.watcher import push_file_events
 from backend.modules.lsp import LspManager
 from backend.modules.network import (
+    chat_manager,
     collab_manager,
+    handle_chat_message,
     handle_collab_message,
     handle_network_message,
     subscribe_conn,
@@ -152,6 +154,8 @@ async def ws(websocket: WebSocket) -> None:
                 await handle_network_message(conn, msg)
             elif channel == "collab":
                 await handle_collab_message(conn, msg)
+            elif channel == "peerchat":
+                await handle_chat_message(conn, msg)
     except WebSocketDisconnect:
         pass
     finally:
@@ -163,3 +167,4 @@ async def ws(websocket: WebSocket) -> None:
         files_task.cancel()
         network_unsub()  # type: ignore[operator]
         collab_manager.drop(conn)
+        chat_manager.drop(conn)

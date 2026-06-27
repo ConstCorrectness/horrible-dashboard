@@ -13,13 +13,27 @@ modules (editor, terminal) land.
 ## Contributions to the layout shell
 
 - **Panels:** `scratch.note` (a textarea, `defaultPlacement: center`,
-  **non-singleton** — every open creates a new window).
+  **non-singleton** — every open creates a new window). It declares
+  `collab: { room: 'shared', key: 'scratch:shared' }`, marking it a
+  **network-aware pane** (see below).
 - **Commands:** `scratch.open` (Scratch: New note).
+
+## Collaborative sharing (reference consumer)
+
+Scratch is the reference example of a **network-aware pane**. It declares a
+`collab` room in its manifest and drives the `useCollab` host hook from the
+[network module](network.mdx#collaborative-shared-panes) — toggling **Share**
+joins a well-known `collab` room so the note syncs live with other users on
+connected nodes (rev-checked last-writer-wins), and the header shows a live
+count of editors currently in the room. The pane does no channel plumbing of its
+own: `useCollab` owns the join/leave, revision tracking, rebase-on-reject, and
+presence. See [Module: network](network.mdx) and the `CollabDecl` contract in the
+[plugin SDK](../architecture/plugin-sdk.mdx).
 
 ## Backend surface
 
-None. Content is persisted client-side to `localStorage` under
-`horrible.scratch`.
+None of its own. Local content is persisted client-side to `localStorage` under
+`horrible.scratch`; while shared, the `collab` room is the source of truth.
 
 ## Browser vs desktop
 
