@@ -1,0 +1,73 @@
+---
+sidebar_position: 9
+sidebar_label: Future pane types (ideas)
+---
+
+# Future pane / view / window types (ideas)
+
+**Status: brainstorm, not committed.** This page parks ideas for new kinds of
+[views, panes, and windows](windowing.mdx) so they aren't lost. Nothing here is
+scheduled; each entry notes roughly where it would hook into the existing seams.
+
+Recall the three layers (see [windowing](windowing.mdx)):
+
+- **View type** — a `PanelDecl` (multi-instance) or `WidgetDecl` (singleton) in the
+  registry.
+- **Pane instance** — a live container slot in the dockview tree hosting a View.
+- **Window** — how a pane is arranged by the engine (tabbed / split / floated).
+
+The ideas split by which layer they touch.
+
+## New View *kinds* (registry layer)
+
+Today the only distinction between a Panel and a Widget is instance cardinality.
+These would add a kind with different **lifecycle** semantics — realistically a new
+flag on the View decl plus a lifecycle hook in `PanelHost`:
+
+- **Ephemeral / "Glance" panes** — auto-dismiss on blur or after N seconds. For
+  agent-surfaced "here's what I found" cards that shouldn't permanently clutter the
+  layout. Decl flag: `ephemeral?: { dismissOn: 'blur' | 'timeout', ms? }`.
+- **Companion panes** — a View *bound to* another pane instance: it docks beside its
+  host, follows focus, and closes with it. e.g. an LSP-diagnostics companion that
+  shadows whichever editor buffer is focused. Needs a binding field on the instance
+  and a `PanelHost` subscription to the host's lifecycle.
+- **Ambient / backdrop panes** — render *behind* the dock as a living backdrop (the
+  home avatar, but as a workspace layer). Zero interaction; pure atmosphere/status.
+  A new layer in `Workspace.tsx` below the dockview root.
+
+## New *Window* behaviors (engine layer)
+
+These are `LayoutController` operations alongside `splitPane` / `floatPane`, so both
+the user (direct manipulation) and the agent (geometry tools) drive them through the
+one seam:
+
+- **Picture-in-picture pane** — a tiny always-on-top floater that survives workspace
+  switches (a running terminal, the agent's avatar, a flow's run status).
+- **Stack / carousel group** — a TabGroup variant you flip through as a deck rather
+  than via tabs (cycling dashboards, agent-trajectory snapshots).
+- **Magnetic / peek panes** — collapsed to a screen edge, sliding out on hover.
+
+## Playful Views (fit "emacs for the agentic era")
+
+- **Portal pane** — mirrors a live View from *another workspace* so you can watch the
+  Scripting terminal while in Dashboard. Reuses the per-instance context plumbing.
+- **Time-travel pane** — a scrubber over a pane's autosaved layout/state history.
+- **Agent "thought bubble" pane** — streams the orchestrator's live `reasoning`
+  events as an ambient companion to whatever pane it's manipulating.
+
+## Relative effort
+
+| Idea | Layer | Rough hook | Effort |
+| --- | --- | --- | --- |
+| Ephemeral / Glance | registry | decl flag + `PanelHost` timer/blur | low |
+| Companion | registry | instance binding + lifecycle sub | medium |
+| Ambient backdrop | engine | new layer under dockview root | low |
+| PiP | engine | new `LayoutController` verb | medium |
+| Carousel group | engine | custom group renderer | medium |
+| Peek / magnetic | engine | new `LayoutController` verb + CSS | medium |
+| Portal | registry+engine | cross-workspace instance mirror | high |
+| Time-travel | registry | per-instance state history store | high |
+| Thought bubble | registry | companion + `reasoning` stream sub | low–medium |
+
+The highest-value/lowest-friction first pick is **companion panes** (unlocks a lot of
+agent UX); the most *delightful* is the **portal pane** or **ambient backdrop**.

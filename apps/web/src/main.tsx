@@ -7,7 +7,9 @@ import {
   dashboardModule,
   editorModule,
   filesModule,
+  flowModule,
   initAgentManifestSync,
+  initAgentRelay,
   initApprovalListener,
   initBackendOrigin,
   initCapabilities,
@@ -54,6 +56,7 @@ async function boot(): Promise<void> {
   registry.register(replModule);
   registry.register(vectordbModule);
   registry.register(visualizerModule);
+  registry.register(flowModule);
   // Dev-only agent-tool reference/validation stub (see agent-tools.md).
   if (import.meta.env.DEV) registry.register(stubModule);
 
@@ -65,6 +68,9 @@ async function boot(): Promise<void> {
   // Push the agent capability manifest (agent commands + widget/panel agentTools)
   // to the backend orchestrator, now and on every reconnect / registry change.
   initAgentManifestSync();
+  // Always-on tool-call relay: executes tools the backend relays for any chat turn
+  // OR flow run (so flow Tool nodes and agent nodes can drive tools).
+  initAgentRelay();
   // Listen for permission-approval prompts the gate raises during a turn.
   initApprovalListener();
 

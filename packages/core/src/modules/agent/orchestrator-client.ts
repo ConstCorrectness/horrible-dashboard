@@ -55,6 +55,44 @@ export function requestAgentTools(timeoutMs = 5000): Promise<AgentToolInfo[]> {
   });
 }
 
+let relayStarted = false;
+
+/**
+ * Always-on tool-call relay: execute any `tool_call` the backend relays on the
+ * `agent` channel and reply with the result — regardless of which turn/run it
+ * belongs to. The backend gates side effects before relaying, so anything that
+ * arrives here is cleared to run. This must be global (not scoped to a chat turn)
+ * so the [flow executor](../flow/executor.ts)'s Tool nodes and flow Agent nodes can
+ * drive tools too. `askAgent` keeps a turn-scoped listener only for its action log.
+ * Idempotent. Call once at boot.
+ */
+export function initAgentRelay(): void {
+  if (relayStarted) return;
+  relayStarted = true;
+  subscribeChannel('agent', (msg) => {
+    if (msg.event !== 'tool_call') return;
+    const data = (msg.data ?? {}) as Record<string, unknown>;
+    void (async () => {
+      let ok = true;
+      let result: unknown;
+      let error: string | undefined;
+      try {
+        result = await executeTool(String(data.name), (data.args ?? {}) as Record<string, unknown>);
+      } catch (e) {
+        ok = false;
+        error = String(e);
+      }
+      sendChannel('agent', 'tool_result', {
+        turnId: data.turnId,
+        callId: data.callId,
+        ok,
+        result,
+        error,
+      });
+    })();
+  });
+}
+
 /** A short log line for mutating tools; read-only `list_*` tools stay silent. */
 function describe(name: string, args: Record<string, unknown>): string | null {
   switch (name) {
@@ -82,20 +120,10 @@ export function askAgent(prompt: string, cb: AgentCallbacks, history?: AgentTurn
       void (async () => {
         switch (msg.event) {
           case 'tool_call': {
-            const name = String(data.name);
-            const args = (data.args ?? {}) as Record<string, unknown>;
-            const note = describe(name, args);
+            // Execution + reply happen in the global relay (initAgentRelay); here we
+            // only surface a per-turn action-log note for the chat widget.
+            const note = describe(String(data.name), (data.args ?? {}) as Record<string, unknown>);
             if (note) cb.onAction?.(note);
-            let ok = true;
-            let result: unknown;
-            let error: string | undefined;
-            try {
-              result = await executeTool(name, args);
-            } catch (e) {
-              ok = false;
-              error = String(e);
-            }
-            sendChannel('agent', 'tool_result', { turnId, callId: data.callId, ok, result, error });
             break;
           }
           case 'token':

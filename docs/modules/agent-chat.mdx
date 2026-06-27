@@ -166,6 +166,13 @@ same flow visually.
    answering. The widget renders the reply plus the per-turn action log, and a completed
    turn auto-saves to its [session](#sessions-persistence).
 
+The tool-calling loop itself is factored into a reusable
+**`run_agent_loop(conn, messages, tools, …, emit) → str`** (`orchestrator.py`):
+`run_agent_turn` assembles the messages/tools and supplies an `emit` that sends
+`agent`-channel `reasoning`/`token`, while the [flow canvas](./flow-canvas.mdx)'s
+Agent nodes reuse the same loop with a `flow`-channel `emit` — so chat and flow
+share one gated tool-calling implementation.
+
 **Loop** (`backend/modules/agent/orchestrator.py`): on an `ask`, a detached task
 **streams** the user's local Ollama `/api/chat` (`stream:true`) with
 `tools=LAYOUT_TOOLS` via `providers.chat_stream`. Each round's reasoning
@@ -244,12 +251,16 @@ writes it back with `editor.proposeEdit(uri=…)` — no `list_open_panes` +
 `get_pane_context` discovery first (a multi-step dance weak local models often skip).
 Unsaved scratch buffers (no uri) are excluded.
 
-The frontend (`packages/core/src/modules/agent/orchestrator-client.ts`,
-`askAgent`) executes each `tool_call` against the registry and the
-`registry.layoutController` seam (installed by `Workspace.tsx`), then replies. The
-executor itself lives in `packages/core/src/modules/agent/tool-exec.ts`
-(`executeTool`) — the **shared relay surface** the [Python REPL](./repl.mdx)'s
-`dash` SDK drives too, so the two stay in lockstep.
+The frontend executes each relayed `tool_call` against the registry and the
+`registry.layoutController` seam (installed by `Workspace.tsx`), then replies. This
+runs in an **always-on relay handler** (`initAgentRelay` in
+`packages/core/src/modules/agent/orchestrator-client.ts`, registered at boot) rather
+than inside a chat turn — so the same relay serves chat turns **and**
+[flow canvas](./flow-canvas.mdx) runs (Tool nodes + flow Agent nodes). `askAgent`
+keeps only a turn-scoped listener for its per-turn action log. The executor itself
+lives in `packages/core/src/modules/agent/tool-exec.ts` (`executeTool`) — the
+**shared relay surface** the [Python REPL](./repl.mdx)'s `dash` SDK drives too, so
+they all stay in lockstep.
 
 **`LAYOUT_TOOLS`** (app-level verbs; the model discovers ids via the read tools,
 so the catalog stays frontend-owned). Read/open: `list_available_panes`,

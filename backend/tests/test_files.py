@@ -119,11 +119,29 @@ def test_symlink_escape_rejected(client: TestClient, root, tmp_path) -> None:
 
 
 def test_no_roots_configured(monkeypatch, tmp_path) -> None:
+    # Opt out of the out-of-the-box default root to exercise the fail-closed path.
     monkeypatch.delenv("HORRIBLE_WORKSPACE_ROOTS", raising=False)
+    monkeypatch.setenv("HORRIBLE_NO_DEFAULT_ROOT", "1")
     monkeypatch.setenv("HORRIBLE_DATA_DIR", str(tmp_path / "data"))
     client = TestClient(app)
     res = client.get("/api/files/read", params={"path": str(tmp_path / "x")})
     assert res.status_code == 400
+
+
+def test_default_root_falls_back_to_cwd(monkeypatch, tmp_path) -> None:
+    # With nothing configured (and no opt-out), the launch dir becomes the root so
+    # file features work out of the box.
+    monkeypatch.delenv("HORRIBLE_WORKSPACE_ROOTS", raising=False)
+    monkeypatch.delenv("HORRIBLE_NO_DEFAULT_ROOT", raising=False)
+    monkeypatch.setenv("HORRIBLE_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "hello.txt").write_text("hi", encoding="utf-8")
+    client = TestClient(app)
+    roots = client.get("/api/files/roots").json()
+    assert [r["path"] for r in roots] == [str(tmp_path.resolve())]
+    res = client.get("/api/files/read", params={"path": "hello.txt"})
+    assert res.status_code == 200
+    assert res.json()["content"] == "hi"
 
 
 # --- mutations --------------------------------------------------------------

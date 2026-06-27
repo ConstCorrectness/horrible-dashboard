@@ -109,6 +109,7 @@ export * from './api';
 export * from './sessions';
 export {
   askAgent,
+  initAgentRelay,
   requestAgentTools,
   type AgentCallbacks,
   type AgentToolInfo,

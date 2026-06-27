@@ -21,6 +21,8 @@ from backend.modules.chat import router as chat_router
 from backend.modules.clubhouse import router as clubhouse_router
 from backend.modules.files import router as files_router
 from backend.modules.files.watcher import push_file_events
+from backend.modules.flow import handle_flow_message
+from backend.modules.flow import router as flow_router
 from backend.modules.lsp import LspManager
 from backend.modules.notes import router as notes_router
 from backend.modules.plugins import router as plugins_router
@@ -70,6 +72,7 @@ app.include_router(clubhouse_router, prefix="/api")
 app.include_router(telemetry_router, prefix="/api")
 app.include_router(plugins_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
+app.include_router(flow_router, prefix="/api")
 
 
 @app.websocket("/ws")
@@ -95,6 +98,8 @@ async def ws(websocket: WebSocket) -> None:
             channel = msg.get("channel")
             if channel == "agent":
                 await handle_agent_message(conn, msg)
+            elif channel == "flow":
+                await handle_flow_message(conn, msg)
             elif channel == "terminal":
                 await terminals.handle(msg)
             elif channel == "repl":

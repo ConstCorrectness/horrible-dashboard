@@ -85,6 +85,7 @@ export { scratchModule } from './modules/scratch';
 export { stubModule } from './modules/stub';
 export { vectordbModule } from './modules/vectordb';
 export { visualizerModule } from './modules/visualizer';
+export { flowModule } from './modules/flow';
 export {
   editorModule,
   getActiveBufferSource,
@@ -115,6 +116,7 @@ export {
   DEFAULT_VLLM_MODEL,
   getAgentStatus,
   initAgentManifestSync,
+  initAgentRelay,
   initApprovalListener,
   pullAgentModel,
   respondApproval,

@@ -5,7 +5,10 @@ configured roots — the path-traversal boundary lives here, not in the UI, so a
 remote backend can never be coaxed into serving paths outside its roots. Roots are
 configured in settings (`files.roots`, a list of absolute paths; see
 docs/modules/settings.md) with an env override (`HORRIBLE_WORKSPACE_ROOTS`,
-os.pathsep-separated) for dev/test. See docs/modules/file-explorer.md.
+os.pathsep-separated) for dev/test. When neither is set, the backend defaults to a
+single root (its launch directory — the repo checkout in dev and desktop) so file
+features work out of the box; `HORRIBLE_NO_DEFAULT_ROOT=1` restores the fail-closed
+boundary for hardened deployments. See docs/modules/file-explorer.md.
 
 This is the HTTP surface (list/read + create/write/rename/delete). Live watch
 events ship separately in `watcher.py` (the `files` `/ws` channel).
@@ -39,9 +42,31 @@ router = APIRouter(prefix="/files", tags=["files"])
 MAX_READ_BYTES = 2_000_000
 
 
+def _default_root() -> Path | None:
+    """A sensible default workspace root so file features work **out of the box**
+    when nothing is configured: the backend's launch directory (cwd) — which is the
+    repo checkout under both the documented dev command and the Tauri desktop spawn
+    (`.current_dir(root)`). Cross-platform via `Path.cwd()`.
+
+    Opt out with `HORRIBLE_NO_DEFAULT_ROOT=1` for hardened/remote deployments that
+    want the fail-closed boundary. A filesystem root (`/`, `C:\\`) is skipped as too
+    broad to expose implicitly."""
+    if os.environ.get("HORRIBLE_NO_DEFAULT_ROOT"):
+        return None
+    try:
+        cwd = Path.cwd().resolve()
+    except OSError:
+        return None
+    if cwd.parent == cwd:  # cwd is a filesystem root — too broad to default to.
+        return None
+    return cwd if cwd.is_dir() else None
+
+
 def _roots() -> list[Path]:
-    """Resolved, existing workspace-root directories. Settings first, then the
-    env override appended (deduped)."""
+    """Resolved, existing workspace-root directories. Settings first, then the env
+    override appended (deduped). When neither is configured, falls back to a single
+    default root (`_default_root`) so the file explorer and `files.*` tools work out
+    of the box."""
     raw: list[str] = []
     configured = get_value("files.roots", [])
     if isinstance(configured, list):
@@ -60,6 +85,11 @@ def _roots() -> list[Path]:
         if resolved.is_dir() and resolved not in seen:
             seen.add(resolved)
             roots.append(resolved)
+
+    if not roots:
+        default = _default_root()
+        if default is not None:
+            roots.append(default)
     return roots
 
 

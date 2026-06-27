@@ -68,6 +68,9 @@ flowchart TB
   rename/diagnostics, LSP-grounded ghost text, workspace-relative file paths,
   stale-buffer resolution, and the tool-calling reliability work (temperature,
   forced retry) with the measured A/B results.
+- [Future pane types (ideas)](architecture/future-pane-types.mdx) — **brainstorm,
+  not committed.** Parked ideas for new view/pane/window kinds (companion, ambient,
+  ephemeral, PiP, portal…) and where each would hook into the windowing seams.
 
 **Modules** — one page per feature module, each describing how it plugs into the
 layout shell and how it behaves in the browser vs the desktop app:
@@ -84,6 +87,9 @@ layout shell and how it behaves in the browser vs the desktop app:
 - [File explorer](modules/file-explorer.mdx)
 - [Vector DB](modules/vectordb.mdx)
 - [Visualizer](modules/visualizer.mdx)
+- [Flow canvas](modules/flow-canvas.mdx) — **Phase 0/1 implemented.** A node-graph
+  canvas (n8n-style) for composing runnable multi-agent orchestrations over the
+  existing orchestrator loop, tool surface, and permission gate.
 
 ## Sync policy (enforced)
 
@@ -129,7 +135,10 @@ scaffolded and verified. Implemented modules: **dashboard**, **agent**,
 (HTML5 Canvas, Three.js, Babylon.js scripts, and headless Pygame subprocess frame streaming). The **agent tool & permission surface**
 ([agent-tools.mdx](architecture/agent-tools.mdx)) is in place and the editor,
 files, and terminal modules are layered onto it (read tools + gated side-effecting
-tools behind the Claude Code–style permission engine).
+tools behind the Claude Code–style permission engine). The **flow canvas**
+([flow-canvas.mdx](modules/flow-canvas.mdx)) ships its Phase-0/1 spine: an
+n8n-style canvas whose Agent nodes reuse the shared orchestrator loop, runnable end
+to end (Phase 2+ — Tool/Router nodes, run history — is design).
 
 What still needs doing:
 

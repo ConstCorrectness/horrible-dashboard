@@ -12,6 +12,7 @@ import asyncio
 import logging
 import re
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import httpx
@@ -350,11 +351,27 @@ def _tools_for(
     groups = {
         "visualizer": {
             "prefixes": ("visualizer.",),
-            "keywords": ("visualizer", "render", "pygame", "canvas", "three", "babylon", "draw", "animation"),
+            "keywords": (
+                "visualizer",
+                "render",
+                "pygame",
+                "canvas",
+                "three",
+                "babylon",
+                "draw",
+                "animation",
+            ),
         },
         "vectordb": {
             "prefixes": ("vectordb.",),
-            "keywords": ("vector", "vectordb", "semantic", "embeddings", "upsert", "db search"),
+            "keywords": (
+                "vector",
+                "vectordb",
+                "semantic",
+                "embeddings",
+                "upsert",
+                "db search",
+            ),
         },
         "clubhouse": {
             "prefixes": ("clubhouse.",),
@@ -593,6 +610,89 @@ def _history_messages(history: list[Any] | None) -> list[dict[str, Any]]:
     return out
 
 
+async def run_agent_loop(
+    conn: WsConnection,
+    turn_id: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    info: Any,
+    endpoint: str,
+    model: str,
+    emit: Callable[[str, str], Awaitable[None]],
+    *,
+    temperature: float,
+    context_size: int | None = None,
+    max_tokens: int | None = None,
+    top_p: float | None = None,
+) -> str:
+    """The shared tool-calling loop: stream the provider, relay each gated tool call
+    to the frontend, and repeat until the model returns a final answer (no tool
+    calls) or `MAX_ROUNDS` is hit. Returns the final answer text; appends the
+    assistant/tool messages to `messages` in place.
+
+    Reused by the chat orchestrator (`run_agent_turn`) and the flow executor's Agent
+    nodes — each caller assembles its own `messages`/`tools`, passes an `emit`
+    callback (so reasoning/answer deltas go to the right channel + event shape), and
+    a `turn_id` that correlates the relayed `tool_call`/`approval_request` round
+    trips. Provider HTTP errors propagate to the caller. The same `conn` carries the
+    `agent`-channel tool relay and permission gate regardless of caller."""
+    forced_retry_used = False
+    async with instrumented_client(timeout=120) as client:
+        for _ in range(MAX_ROUNDS):
+            result = await P.chat_stream(
+                client,
+                info,
+                endpoint,
+                model,
+                messages,
+                tools,
+                emit,
+                temperature=temperature,
+                context_size=context_size,
+                max_tokens=max_tokens,
+                top_p=top_p,
+            )
+            messages.append(result.assistant_message)
+
+            # Weak models sometimes narrate an action without emitting the call.
+            # On the OpenAI dialect, force one retry with tool_choice=required.
+            if (
+                not result.tool_calls
+                and not forced_retry_used
+                and info.dialect == "openai"
+                and _looks_like_unemitted_tool_call(result.content, tools)
+            ):
+                forced_retry_used = True
+                messages.append({"role": "system", "content": _FORCE_TOOL_NUDGE})
+                result = await P.chat_stream(
+                    client,
+                    info,
+                    endpoint,
+                    model,
+                    messages,
+                    tools,
+                    emit,
+                    temperature=temperature,
+                    tool_choice="required",
+                    context_size=context_size,
+                    max_tokens=max_tokens,
+                    top_p=top_p,
+                )
+                messages.append(result.assistant_message)
+
+            if not result.tool_calls:
+                return result.content
+            for call in result.tool_calls:
+                if await _gate(conn, turn_id, call):
+                    tool_result = await _call_frontend_tool(
+                        conn, turn_id, call.name, call.arguments
+                    )
+                else:
+                    tool_result = {"error": "denied by permission policy"}
+                messages.append(P.tool_result_message(info, call, tool_result))
+    return "(stopped after too many steps)"
+
+
 async def run_agent_turn(
     conn: WsConnection,
     turn_id: str,
@@ -600,9 +700,9 @@ async def run_agent_turn(
     history: list[Any] | None = None,
     context: dict[str, Any] | None = None,
 ) -> None:
-    """Drive one user turn: loop the configured provider's chat, relaying tool
-    calls to the UI. The provider dialect (Ollama vs OpenAI-compatible) is hidden
-    behind providers.chat / providers.tool_result_message. `history` carries prior
+    """Drive one user turn: assemble the conversation, run the shared tool-calling
+    loop, and send the authoritative answer. The provider dialect (Ollama vs
+    OpenAI-compatible) is hidden behind providers. `history` carries prior
     user/assistant turns from the chat widget so the conversation is multi-turn
     while the backend stays stateless per turn. `context` carries the user's focused
     pane snapshot (currently the open editor buffer) so the model can act on what
@@ -627,7 +727,7 @@ async def run_agent_turn(
         {"role": "user", "content": prompt},
     ]
 
-    async def on_delta(reasoning: str, content: str) -> None:
+    async def emit(reasoning: str, content: str) -> None:
         # Relay the model's streamed reasoning + answer tokens to the chat widget as
         # they arrive (the final `answer` event below stays authoritative).
         if reasoning:
@@ -637,74 +737,22 @@ async def run_agent_turn(
         if content:
             await conn.send_json(_evt("token", {"turnId": turn_id, "delta": content}))
 
-    temperature = _tool_temperature()
-    context_size = _tool_context_size()
-    max_tokens = _tool_max_tokens()
-    top_p = _tool_top_p()
-    forced_retry_used = False
     try:
-        async with instrumented_client(timeout=120) as client:
-            for _ in range(MAX_ROUNDS):
-                result = await P.chat_stream(
-                    client,
-                    info,
-                    endpoint,
-                    model,
-                    messages,
-                    tools,
-                    on_delta,
-                    temperature=temperature,
-                    context_size=context_size,
-                    max_tokens=max_tokens,
-                    top_p=top_p,
-                )
-                messages.append(result.assistant_message)
-
-                # Weak models sometimes narrate an action without emitting the call.
-                # On the OpenAI dialect, force one retry with tool_choice=required.
-                if (
-                    not result.tool_calls
-                    and not forced_retry_used
-                    and info.dialect == "openai"
-                    and _looks_like_unemitted_tool_call(result.content, tools)
-                ):
-                    forced_retry_used = True
-                    messages.append({"role": "system", "content": _FORCE_TOOL_NUDGE})
-                    result = await P.chat_stream(
-                        client,
-                        info,
-                        endpoint,
-                        model,
-                        messages,
-                        tools,
-                        on_delta,
-                        temperature=temperature,
-                        tool_choice="required",
-                        context_size=context_size,
-                        max_tokens=max_tokens,
-                        top_p=top_p,
-                    )
-                    messages.append(result.assistant_message)
-
-                if not result.tool_calls:
-                    await conn.send_json(
-                        _evt("answer", {"turnId": turn_id, "text": result.content})
-                    )
-                    await conn.send_json(_evt("done", {"turnId": turn_id}))
-                    return
-                for call in result.tool_calls:
-                    if await _gate(conn, turn_id, call):
-                        tool_result = await _call_frontend_tool(
-                            conn, turn_id, call.name, call.arguments
-                        )
-                    else:
-                        tool_result = {"error": "denied by permission policy"}
-                    messages.append(P.tool_result_message(info, call, tool_result))
-        await conn.send_json(
-            _evt(
-                "answer", {"turnId": turn_id, "text": "(stopped after too many steps)"}
-            )
+        text = await run_agent_loop(
+            conn,
+            turn_id,
+            messages,
+            tools,
+            info,
+            endpoint,
+            model,
+            emit,
+            temperature=_tool_temperature(),
+            context_size=_tool_context_size(),
+            max_tokens=_tool_max_tokens(),
+            top_p=_tool_top_p(),
         )
+        await conn.send_json(_evt("answer", {"turnId": turn_id, "text": text}))
         await conn.send_json(_evt("done", {"turnId": turn_id}))
     except httpx.HTTPError as exc:
         await conn.send_json(
