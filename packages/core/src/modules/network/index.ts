@@ -97,4 +97,5 @@ export const networkModule: ModuleManifest = {
 };
 
 export { initNetwork };
+export { subscribeCollab, collabJoin, collabLeave, collabOp, type CollabUpdate } from './collab';
 export * from './api';

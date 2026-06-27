@@ -24,7 +24,12 @@ from backend.modules.clubhouse import router as clubhouse_router
 from backend.modules.files import router as files_router
 from backend.modules.files.watcher import push_file_events
 from backend.modules.lsp import LspManager
-from backend.modules.network import handle_network_message, subscribe_conn
+from backend.modules.network import (
+    collab_manager,
+    handle_collab_message,
+    handle_network_message,
+    subscribe_conn,
+)
 from backend.modules.network import router as network_router
 from backend.modules.network.hub import peer_hub
 from backend.modules.network.setup import start_network, stop_network
@@ -145,6 +150,8 @@ async def ws(websocket: WebSocket) -> None:
                 await visualizer_manager.handle(conn, msg)
             elif channel == "network":
                 await handle_network_message(conn, msg)
+            elif channel == "collab":
+                await handle_collab_message(conn, msg)
     except WebSocketDisconnect:
         pass
     finally:
@@ -155,3 +162,4 @@ async def ws(websocket: WebSocket) -> None:
         telemetry_task.cancel()
         files_task.cancel()
         network_unsub()  # type: ignore[operator]
+        collab_manager.drop(conn)
