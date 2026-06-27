@@ -14,7 +14,9 @@ import {
   layoutsModule,
   loadPlugins,
   loadSettings,
+  initNetwork,
   marketplaceModule,
+  networkModule,
   observabilityModule,
   registry,
   replModule,
@@ -54,6 +56,7 @@ async function boot(): Promise<void> {
   registry.register(replModule);
   registry.register(vectordbModule);
   registry.register(visualizerModule);
+  registry.register(networkModule);
   // Dev-only agent-tool reference/validation stub (see agent-tools.md).
   if (import.meta.env.DEV) registry.register(stubModule);
 
@@ -65,6 +68,8 @@ async function boot(): Promise<void> {
   // Push the agent capability manifest (agent commands + widget/panel agentTools)
   // to the backend orchestrator, now and on every reconnect / registry change.
   initAgentManifestSync();
+  // Subscribe to the peer fabric so presence syncs before the Peers widget opens.
+  initNetwork();
   // Listen for permission-approval prompts the gate raises during a turn.
   initApprovalListener();
 

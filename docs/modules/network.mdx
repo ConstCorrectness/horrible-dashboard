@@ -1,0 +1,112 @@
+---
+sidebar_position: 13
+sidebar_label: Network
+---
+
+# Module: network
+
+Distributed multi-user collaboration: connect this node to other users' nodes,
+share panes live, and let your agent talk to theirs. The frontend is a **Peers**
+widget plus settings; the heavy lifting is the backend peer fabric documented in
+[Distributed peer fabric](../architecture/distributed.mdx).
+
+**Status: implemented (groundwork).** Frontend in
+`packages/core/src/modules/network/`, backend in `backend/modules/network/`.
+
+## Contributions to the layout shell
+
+- **Widget** `network.peers` (Peers) — `PeersWidget.tsx`. Shows this node's identity
+  and the connected peers with status dots; dial a peer by `ws://…/peer-ws` address,
+  generate an invite link, or redeem one to pair. Exposes presence to the local
+  agent via `useAgentContext` (so the model can fill `agent.ask_peer(peerId)`).
+- **Command** `network.open` — Network: Open peers.
+- **Settings** (see below).
+
+The agent-to-agent tools `list_peers` and `agent.ask_peer` are **backend-static**
+(resolved in the orchestrator against the `PeerHub`), so unlike other modules they
+need **no frontend `agentTools` handler** — there's nothing for a browser to execute.
+They're documented in [Agent chat](agent-chat.mdx).
+
+## Backend surface
+
+### REST — `/api/network`
+
+| Method & path | Purpose |
+|---|---|
+| `GET /identity` | This node's `NodeIdentity` (node_id, public_key, node_name, capabilities). |
+| `GET /peers` | `{ self, peers[] }` snapshot. |
+| `POST /invite` | Mint a single-use invite `{ invite, token, expires }`. |
+| `POST /pair` | Redeem an invite (decode → dial → handshake with the token). |
+| `POST /connect` | Dial an address directly `{ address, transport }`. |
+| `DELETE /peers/{node_id}` | Disconnect a peer. |
+
+### WebSocket endpoints
+
+- **`/peer-ws`** — inbound peer connections (the signed `PeerEnvelope` protocol
+  between nodes; **not** the browser channel protocol). Distinct from `/ws`.
+- **`/ws` `network` channel** — live presence + control for the browser:
+
+  | Direction | event | data |
+  |---|---|---|
+  | client→server | `list_peers` | `{}` |
+  | client→server | `connect` | `{ address?, nodeId?, transport }` |
+  | client→server | `disconnect` | `{ nodeId }` |
+  | client→server | `pair_redeem` | `{ invite }` |
+  | server→client | `peers` | `{ self, peers[] }` |
+  | server→client | `peer_update` | `{ peer }` |
+  | server→client | `pair_result` | `{ ok, peer?, error? }` |
+  | server→client | `error` | `{ message }` |
+
+- **`/ws` `collab` channel** — shared-pane sync (see below).
+
+## Collaborative shared panes
+
+A `CollabRoom` (`collab.py`), keyed by an opaque `paneKey`, holds authoritative
+`text` + a monotonic `rev`. Members sync with a **rev check** — last-writer-wins,
+but no *lost* updates: an op with a stale `baseRev` is rejected and the writer
+rebases onto the authoritative state. Accepted ops are forwarded to connected peers
+(`collab_op` on the peer wire); inbound peer ops are adopted as authoritative by
+`rev` and rebroadcast to local members (not re-forwarded, so no loops). This is
+groundwork, not a CRDT — a clean seam for one later.
+
+| Direction | event | data |
+|---|---|---|
+| client→server | `join` | `{ paneKey }` |
+| client→server | `leave` | `{ paneKey }` |
+| client→server | `op` | `{ paneKey, baseRev, text }` |
+| server→client | `state` | `{ paneKey, rev, text, members }` |
+| server→client | `op` | `{ paneKey, rev, text, from }` |
+| server→client | `rejected` | `{ paneKey, rev, text }` |
+
+The reference consumer is the **scratch** panel's "Share" toggle
+(`modules/scratch/index.tsx` + `modules/network/collab.ts`), which joins a
+well-known room so notes sync across users. See [Scratch](scratch.mdx).
+
+## Settings
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `network.nodeName` | string | hostname | Display name advertised to peers. |
+| `network.advertisedAddress` | string | `ws://localhost:8000/peer-ws` | URL peers dial to reach this node (encoded into invites). |
+| `network.enableDirect` | boolean | `true` | Accept/dial direct WebSocket peers. |
+| `network.enableLanDiscovery` | boolean | `false` | Advertise/discover via mDNS. |
+| `network.relayUrl` | string | `""` | Rendezvous broker URL (blank = off). |
+| `network.trustMode` | enum | `manual` | `manual` / `directory` / `open-lan`. |
+| `network.directoryUrl` | string | `""` | Optional directory service. |
+| `network.allowRemoteAgent` | boolean | `false` | Let a trusted peer's agent ask yours. |
+| `network.remoteAgentMode` | enum | `plan` | Permission mode for a remote turn (`plan` = read-only). |
+
+Server-side state under `$HORRIBLE_DATA_DIR`: `network-identity.key`,
+`network-peers.json`, `network-invites.json`.
+
+## Browser vs desktop
+
+| | Browser | Desktop (Tauri) |
+|---|---|---|
+| Peers widget, REST, `/ws` channels | ✅ | ✅ |
+| Direct / relay transports | ✅ (backend) | ✅ (backend) |
+| LAN discovery (mDNS) | depends on the host network allowing multicast | same |
+
+Everything runs in the backend, so both layouts behave identically; LAN discovery is
+the only capability that depends on the host network (and degrades gracefully when
+multicast is unavailable).
