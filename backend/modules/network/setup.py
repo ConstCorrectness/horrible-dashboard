@@ -11,15 +11,24 @@ import logging
 from backend.modules.network.hub import peer_hub
 from backend.modules.network.transport.base import Transport
 from backend.modules.network.transport.direct import DirectWsTransport
+from backend.modules.network.transport.lan import LanDiscovery
+from backend.modules.network.transport.relay import RelayTransport
 from backend.modules.settings.routes import get_value
 
 logger = logging.getLogger(__name__)
 
 
 def build_transports() -> list[Transport]:
+    """The transports this node runs, per settings. Direct is on by default; relay
+    and LAN discovery are opt-in (a relay needs a broker URL; LAN needs multicast)."""
     transports: list[Transport] = []
     if get_value("network.enableDirect", True):
         transports.append(DirectWsTransport())
+    relay_url = str(get_value("network.relayUrl", "") or "").strip()
+    if relay_url:
+        transports.append(RelayTransport(relay_url))
+    if get_value("network.enableLanDiscovery", False):
+        transports.append(LanDiscovery())
     return transports
 
 

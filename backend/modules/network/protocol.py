@@ -33,9 +33,13 @@ ERROR = "error"
 
 
 def canonical_bytes(env: PeerEnvelope) -> bytes:
-    """The bytes an envelope signature covers: every field except `sig`, encoded
-    with sorted keys and compact separators for cross-node byte stability."""
-    payload = env.model_dump(exclude={"sig"})
+    """The bytes an envelope signature covers: the authenticated fields only,
+    encoded with sorted keys and compact separators for cross-node byte stability.
+
+    `dst` and `ttl` are routing headers a relay may legitimately set/rewrite while
+    forwarding, so they are excluded — the recipient still authenticates `src`,
+    `type`, `msg_id`, `re`, `ts`, and `data`."""
+    payload = env.model_dump(exclude={"sig", "dst", "ttl"})
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
