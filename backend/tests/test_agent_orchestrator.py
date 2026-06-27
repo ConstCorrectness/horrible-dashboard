@@ -516,11 +516,14 @@ def test_tools_for_dedupes_by_name_static_wins() -> None:
 def test_tools_for_skips_nameless_entries() -> None:
     conn = WsConnection(websocket=None)
     conn.agent_tools = [{"description": "no name", "kind": "agentTool"}, {"name": ""}]
+    static_names = {
+        lt["function"]["name"]
+        for lt in orchestrator.LAYOUT_TOOLS + orchestrator.PEER_TOOLS
+    }
     extra = [
         t
         for t in orchestrator._tools_for(conn)
-        if t["function"]["name"]
-        not in {lt["function"]["name"] for lt in orchestrator.LAYOUT_TOOLS}
+        if t["function"]["name"] not in static_names
     ]
     assert extra == []
 

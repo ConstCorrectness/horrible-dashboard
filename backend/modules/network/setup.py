@@ -33,6 +33,12 @@ def build_transports() -> list[Transport]:
 
 
 async def start_network() -> None:
+    # Handle inbound agent-to-agent requests (a peer's agent asking ours).
+    from backend.modules.network import agent_bridge, protocol
+
+    peer_hub.register_handler(
+        protocol.AGENT_REQUEST, agent_bridge.handle_remote_agent_request
+    )
     peer_hub.set_transports(build_transports())
     await peer_hub.start()
     logger.info("peer fabric started: node %s", peer_hub.identity().node_id)
