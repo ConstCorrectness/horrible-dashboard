@@ -110,6 +110,19 @@ export { observabilityModule } from './modules/observability';
 export { marketplaceModule } from './modules/marketplace';
 export { settingsModule } from './modules/settings';
 export {
+  networkModule,
+  initNetwork,
+  getPeers,
+  subscribeCollab,
+  collabJoin,
+  collabLeave,
+  collabOp,
+  type CollabUpdate,
+  type PeerInfo,
+  type NodeIdentity,
+  type PeersSnapshot,
+} from './modules/network';
+export {
   agentModule,
   askAgent,
   DEFAULT_AGENT_MODEL,

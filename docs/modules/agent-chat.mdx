@@ -238,6 +238,54 @@ denied calls return an error to the model, and an `ASK` decision prompts the use
 via `approval_request`/`approval_response` (the in-chat approval UI is the next
 slice) — see [agent tools & permissions](../architecture/agent-tools.mdx).
 
+### Agent-to-agent (talking to a peer's agent)
+
+When this node is connected to peers (see [Module: network](network.mdx) and
+[Distributed peer fabric](../architecture/distributed.mdx)), the orchestrator gains
+two **backend-static** tools, merged into the catalog by `_tools_for` and resolved
+in `_run_backend_tool` against the process-global `PeerHub` (no browser handler):
+
+- `list_peers()` — the connected peer nodes (node_id, name, capabilities). Read-only.
+- `agent.ask_peer(peerId, prompt)` — ask another user's agent and get its answer
+  back as an ordinary tool result. **Side-effecting** (specifier `{peerId}`), so it
+  passes the local permission gate first.
+
+```mermaid
+sequenceDiagram
+    participant MA as Node A model
+    participant OA as Node A orchestrator
+    participant HA as A PeerHub
+    participant HB as B PeerHub
+    participant OB as Node B orchestrator (remote turn)
+    participant MB as Node B model
+    MA->>OA: tool_call agent.ask_peer(peerId=B, prompt)
+    Note over OA: _gate (local permissions)
+    OA->>HA: agent_bridge.ask_peer
+    HA->>HB: agent_request {prompt, origin_chain, request_id}
+    Note over HB: admission: allowRemoteAgent + trusted<br/>loop/hop guards
+    HB->>OB: run_agent_turn(RemoteAgentConn, remote=True)
+    OB->>MB: chat (no actuating tools)
+    MB-->>OB: answer
+    OB-->>HB: answer captured
+    HB-->>HA: agent_result {ok, text}
+    HA-->>OA: {answer}
+    OA-->>MA: tool result
+```
+
+The **cross-peer boundary** is the security crux:
+
+- A remote turn runs behind a `RemoteAgentConn` (no browser) under a **forced mode**
+  = `network.remoteAgentMode` (default `plan` → read-only). It is given **no
+  actuating tools**, so a remote agent answers from the model but cannot drive your
+  panes, files, or terminal. Its gate never blocks on an absent human — an `ASK`
+  decision becomes a deny.
+- Admission requires `network.allowRemoteAgent` and a **trusted** peer.
+- Fan-out is bounded: an `origin_chain` cycle guard (reject if this node is already
+  in the chain), a `MAX_PEER_HOPS` cap, and a `PEER_AGENT_TIMEOUT_S` request timeout.
+
+Peer-wire message types (on `/peer-ws`, not the `agent` channel):
+`agent_request` → `agent_result` (caller awaits the reply via `PeerHub.request`).
+
 **Focused-pane context.** Pane snapshots are normally read on demand (the model
 calls `get_pane_context` — pull, not push). As a convenience the frontend *also*
 attaches the user's **focused pane** snapshot to every `ask` as `context`: the

@@ -16,7 +16,9 @@ import {
   layoutsModule,
   loadPlugins,
   loadSettings,
+  initNetwork,
   marketplaceModule,
+  networkModule,
   observabilityModule,
   registry,
   replModule,
@@ -56,7 +58,11 @@ async function boot(): Promise<void> {
   registry.register(replModule);
   registry.register(vectordbModule);
   registry.register(visualizerModule);
+<<<<<<< HEAD
   registry.register(flowModule);
+=======
+  registry.register(networkModule);
+>>>>>>> 3f35996b5155259eab463daeb38527646abf178d
   // Dev-only agent-tool reference/validation stub (see agent-tools.md).
   if (import.meta.env.DEV) registry.register(stubModule);
 
@@ -68,9 +74,14 @@ async function boot(): Promise<void> {
   // Push the agent capability manifest (agent commands + widget/panel agentTools)
   // to the backend orchestrator, now and on every reconnect / registry change.
   initAgentManifestSync();
+<<<<<<< HEAD
   // Always-on tool-call relay: executes tools the backend relays for any chat turn
   // OR flow run (so flow Tool nodes and agent nodes can drive tools).
   initAgentRelay();
+=======
+  // Subscribe to the peer fabric so presence syncs before the Peers widget opens.
+  initNetwork();
+>>>>>>> 3f35996b5155259eab463daeb38527646abf178d
   // Listen for permission-approval prompts the gate raises during a turn.
   initApprovalListener();
 

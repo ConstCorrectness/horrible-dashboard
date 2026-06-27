@@ -68,9 +68,16 @@ flowchart TB
   rename/diagnostics, LSP-grounded ghost text, workspace-relative file paths,
   stale-buffer resolution, and the tool-calling reliability work (temperature,
   forced retry) with the measured A/B results.
+<<<<<<< HEAD
 - [Future pane types (ideas)](architecture/future-pane-types.mdx) — **brainstorm,
   not committed.** Parked ideas for new view/pane/window kinds (companion, ambient,
   ephemeral, PiP, portal…) and where each would hook into the windowing seams.
+=======
+- [Distributed peer fabric](architecture/distributed.mdx) — how nodes connect to
+  other users' nodes over TCP/IP: Ed25519 node identity, the signed `PeerEnvelope`
+  wire protocol + handshake, the hybrid transport abstraction (direct, relay, LAN),
+  trust modes, and the process-global `PeerHub` vs the per-browser `/ws`.
+>>>>>>> 3f35996b5155259eab463daeb38527646abf178d
 
 **Modules** — one page per feature module, each describing how it plugs into the
 layout shell and how it behaves in the browser vs the desktop app:
@@ -87,9 +94,13 @@ layout shell and how it behaves in the browser vs the desktop app:
 - [File explorer](modules/file-explorer.mdx)
 - [Vector DB](modules/vectordb.mdx)
 - [Visualizer](modules/visualizer.mdx)
+<<<<<<< HEAD
 - [Flow canvas](modules/flow-canvas.mdx) — **Phase 0/1 implemented.** A node-graph
   canvas (n8n-style) for composing runnable multi-agent orchestrations over the
   existing orchestrator loop, tool surface, and permission gate.
+=======
+- [Network](modules/network.mdx)
+>>>>>>> 3f35996b5155259eab463daeb38527646abf178d
 
 ## Sync policy (enforced)
 
@@ -131,8 +142,8 @@ The monorepo (apps/web, apps/desktop, packages/core, packages/ui, backend/) is
 scaffolded and verified. Implemented modules: **dashboard**, **agent**,
 **observability**, **clubhouse**, **marketplace**, **settings**, **editor**
 (note/file buffers + recent-notes widget), **file explorer**, **terminal**
-(PTY), **vectordb** (SQLite engine + similarity queries), and **visualizer**
-(HTML5 Canvas, Three.js, Babylon.js scripts, and headless Pygame subprocess frame streaming). The **agent tool & permission surface**
+(PTY), **vectordb** (SQLite engine + similarity queries), **visualizer**
+(HTML5 Canvas, Three.js, Babylon.js scripts, and headless Pygame subprocess frame streaming), and **network** (the distributed peer fabric — node identity, hybrid direct/relay/LAN transports, agent-to-agent, and collaborative shared panes). The **agent tool & permission surface**
 ([agent-tools.mdx](architecture/agent-tools.mdx)) is in place and the editor,
 files, and terminal modules are layered onto it (read tools + gated side-effecting
 tools behind the Claude Code–style permission engine). The **flow canvas**
