@@ -12,6 +12,8 @@ logging.basicConfig(
     handlers=[logging.FileHandler(_LOG_PATH), logging.StreamHandler()],
 )
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -22,6 +24,11 @@ from backend.modules.clubhouse import router as clubhouse_router
 from backend.modules.files import router as files_router
 from backend.modules.files.watcher import push_file_events
 from backend.modules.lsp import LspManager
+from backend.modules.network import handle_network_message, subscribe_conn
+from backend.modules.network import router as network_router
+from backend.modules.network.hub import peer_hub
+from backend.modules.network.setup import start_network, stop_network
+from backend.modules.network.transport.direct import ServerPeerLink
 from backend.modules.notes import router as notes_router
 from backend.modules.plugins import router as plugins_router
 from backend.modules.repl import ReplManager
@@ -37,7 +44,18 @@ from backend.modules.ws import WsConnection
 
 APP_VERSION = "0.1.0"
 
-app = FastAPI(title="horrible-dashboard")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Bring the peer fabric up so this node can reach (and be reached by) others.
+    await start_network()
+    try:
+        yield
+    finally:
+        await stop_network()
+
+
+app = FastAPI(title="horrible-dashboard", lifespan=lifespan)
 
 # Browser layout dev server and Tauri webview origins.
 app.add_middleware(
@@ -70,13 +88,33 @@ app.include_router(clubhouse_router, prefix="/api")
 app.include_router(telemetry_router, prefix="/api")
 app.include_router(plugins_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
+app.include_router(network_router, prefix="/api")
+
+
+@app.websocket("/peer-ws")
+async def peer_ws(websocket: WebSocket) -> None:
+    """Inbound peer connections. Distinct from the user-facing `/ws`: this socket
+    speaks the signed `PeerEnvelope` protocol between backend nodes, not the
+    browser channel protocol. The handshake + read pump live in `PeerHub`."""
+    await websocket.accept()
+    link = ServerPeerLink(websocket)
+    session = await peer_hub.accept_link(link)
+    if session is None:
+        return  # handshake/trust rejected; link already closed
+    # accept_link started the read pump; block until the link closes so FastAPI
+    # keeps the socket open.
+    try:
+        await session.closed.wait()
+    except Exception:
+        pass
 
 
 @app.websocket("/ws")
 async def ws(websocket: WebSocket) -> None:
     """Shared multiplexed socket: greets, pushes telemetry, and routes inbound
-    channel messages (currently the `agent` orchestrator). One receive loop owns
-    reads; outbound work runs as tasks that send through the connection lock."""
+    channel messages (the `agent` orchestrator, `network` peer control, …). One
+    receive loop owns reads; outbound work runs as tasks that send through the
+    connection lock."""
     await websocket.accept()
     await websocket.send_json(
         {"channel": "system", "event": "hello", "version": APP_VERSION}
@@ -87,6 +125,8 @@ async def ws(websocket: WebSocket) -> None:
     lsp = LspManager(conn)
     telemetry_task = asyncio.create_task(push_telemetry(conn))
     files_task = asyncio.create_task(push_file_events(conn))
+    # Fan peer/presence events from the process-global hub out to this browser.
+    network_unsub = subscribe_conn(conn)
     try:
         while True:
             msg = await websocket.receive_json()
@@ -103,6 +143,8 @@ async def ws(websocket: WebSocket) -> None:
                 await lsp.handle(msg)
             elif channel == "visualizer":
                 await visualizer_manager.handle(conn, msg)
+            elif channel == "network":
+                await handle_network_message(conn, msg)
     except WebSocketDisconnect:
         pass
     finally:
@@ -112,3 +154,4 @@ async def ws(websocket: WebSocket) -> None:
         visualizer_manager.stop_for(conn)
         telemetry_task.cancel()
         files_task.cancel()
+        network_unsub()  # type: ignore[operator]
