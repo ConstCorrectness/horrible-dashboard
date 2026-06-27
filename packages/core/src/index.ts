@@ -108,6 +108,7 @@ export {
 export { observabilityModule } from './modules/observability';
 export { marketplaceModule } from './modules/marketplace';
 export { settingsModule } from './modules/settings';
+export { evalModule } from './modules/eval';
 export {
   agentModule,
   askAgent,

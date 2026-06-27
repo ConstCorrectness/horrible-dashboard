@@ -48,6 +48,34 @@ export const layoutsModule: ModuleManifest = {
         },
       ],
     },
+    {
+      id: 'evaluation',
+      name: 'Evaluation',
+      icon: '🧪',
+      panes: [
+        { id: 'files.tree' },
+        {
+          id: 'eval.dashboard',
+          position: { referencePanel: 'files.tree', direction: 'right' },
+        },
+        {
+          id: 'editor.buffer',
+          position: { referencePanel: 'eval.dashboard', direction: 'within' },
+        },
+        {
+          id: 'agent.chat',
+          position: { referencePanel: 'eval.dashboard', direction: 'right' },
+        },
+        {
+          id: 'terminal.instance',
+          position: { referencePanel: 'eval.dashboard', direction: 'below' },
+        },
+        {
+          id: 'observability.logs',
+          position: { referencePanel: 'terminal.instance', direction: 'right' },
+        },
+      ],
+    },
   ],
   commands: [
     {
@@ -67,6 +95,16 @@ export const layoutsModule: ModuleManifest = {
       id: 'workspace.delete',
       title: 'Workspace: Delete current',
       run: () => registry.layoutController?.deleteActiveWorkspace(),
+    },
+    {
+      id: 'evaluation.open',
+      title: 'Evaluation: Open',
+      run: () => registry.switchWorkspace('evaluation'),
+    },
+    {
+      id: 'scripting.open',
+      title: 'Scripting: Open',
+      run: () => registry.switchWorkspace('scripting'),
     },
   ],
 };

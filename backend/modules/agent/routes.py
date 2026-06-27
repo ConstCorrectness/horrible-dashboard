@@ -211,3 +211,21 @@ def vllm_spawn(req: VllmSpawnRequest) -> dict[str, Any]:
 @router.post("/vllm/stop")
 def vllm_stop() -> dict[str, Any]:
     return vllm_manager.stop()
+
+
+# Evaluator framework endpoints
+from backend.modules.agent.evaluator import EVAL_TASKS, run_evaluation, EvaluationTask, EvaluationResult
+
+@router.get("/eval/tasks")
+def list_eval_tasks() -> list[EvaluationTask]:
+    """List all registered evaluation/benchmark tasks."""
+    return list(EVAL_TASKS.values())
+
+
+@router.post("/eval/run/{task_id}", response_model=EvaluationResult)
+async def run_eval_task(task_id: str) -> EvaluationResult:
+    """Run a specific evaluation/benchmark task in the isolated sandbox."""
+    if task_id not in EVAL_TASKS:
+        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
+    return await run_evaluation(EVAL_TASKS[task_id])
+
