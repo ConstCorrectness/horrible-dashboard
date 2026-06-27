@@ -144,6 +144,26 @@ a planned follow-up — today anything on localhost can reach the API.
 The shell owns a single multiplexed WebSocket connection with reconnect/backoff;
 modules subscribe to channels on it rather than opening their own sockets.
 
+## Toast notifications
+
+The layout shell contributes a global **Toast Notification System** for displaying non-blocking, transient visual alerts (success, info, warning, error) that slide in from the top-right corner. It is designed to be usable by any module or plugin to announce background events (such as peer connections, file exports, or network status changes).
+
+* **Store (`toastsStore`)** — lives in `packages/core/src/toasts.ts` (exported as `toastsStore` and type `Toast` from `@horrible/core`). Operates as a simple pub/sub store with React `useSyncExternalStore` support:
+  * `toastsStore.add(type, title, message, duration?)` — triggers a new notification. Default duration is 4 seconds (`4000`ms); set to `0` or negative to keep it persistent until closed.
+  * `toastsStore.remove(id)` — clears a notification by its unique ID.
+* **Component (`Toasts`)** — lives in `packages/ui/src/Toasts.tsx` (rendered in the global `AppShell` layout overlay). Uses glassmorphism styling (`backdrop-filter: blur(12px)`) and cubic-bezier transition slide animations defined in `packages/ui/src/styles.css`.
+
+### Usage Example
+```typescript
+import { toastsStore } from '@horrible/core';
+
+// Success notification
+toastsStore.add('success', 'File Exported', 'Workspace layout successfully saved to disk.');
+
+// Error notification with persistent display
+toastsStore.add('error', 'Sync Failed', 'Failed to connect to the peer fabric.', 0);
+```
+
 ## What belongs in each entry
 
 - `apps/web`: boot the shell, resolve the backend origin (Tauri: ask the shell's
