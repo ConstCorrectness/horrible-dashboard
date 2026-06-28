@@ -1,0 +1,357 @@
+---
+sidebar_position: 9
+sidebar_label: Network protocol & scenarios
+---
+
+# Network protocol & scenarios
+
+This page diagrams the horrible-dashboard websocket protocols across the situations
+they run in — one user with two tabs, two users direct, two users through an
+intermediary, collaborative panes, and agent-to-agent — and lays out the target
+topology: **peer-to-peer first, a client/server intermediary as fallback, and an
+official lobby for discovery**. It complements [Distributed peer fabric](distributed.mdx)
+(the building blocks) and [Module: network](../modules/network.mdx) (the surface).
+
+## Two socket layers
+
+There are **two distinct websocket protocols**, and keeping them separate is the
+core of the design:
+
+| | `/ws` (browser ↔ its own node) | `/peer-ws` (node ↔ node) |
+|---|---|---|
+| Scope | **per browser tab** | **per remote peer** |
+| Frame | `WsMessage` `{channel, event, data}` | signed `PeerEnvelope` `{type, src, dst?, msg_id, re?, sig, …}` |
+| Channels/types | `agent`, `network`, `collab`, `peerchat`, `terminal`, … | `hello`, `auth`, `presence`, `agent_request`, `collab_op`, … |
+| Auth | local (same machine) | Ed25519 per-envelope signatures + trust policy |
+
+The bridge between them is the process-global **`PeerHub`** (one per node, shared by
+all of that node's tabs). The `/ws` `network`/`collab`/`peerchat` channels are just
+live views/controls onto the hub; the hub does the node-to-node work over `/peer-ws`.
+
+```mermaid
+flowchart TB
+    subgraph N1["Node A (one backend process)"]
+        T1["Tab 1"]; T2["Tab 2"]
+        WSA["/ws (per-tab)"]
+        HUB1["PeerHub (singleton)"]
+        T1 --> WSA; T2 --> WSA; WSA <--> HUB1
+    end
+    subgraph N2["Node B"]
+        TB["Tab"]; WSB["/ws"]; HUB2["PeerHub"]
+        TB --> WSB <--> HUB2
+    end
+    LOBBY["Lobby / relay<br/>(client–server intermediary)"]
+    HUB1 <-->|"/peer-ws · direct P2P"| HUB2
+    HUB1 -.->|"discovery · relay fallback"| LOBBY
+    HUB2 -.-> LOBBY
+```
+
+---
+
+## Scenario 1 — one user, two connections (two tabs, one node)
+
+The `/ws` socket is **per tab**, but peers and shared-pane state live on the
+process-global hub, so both tabs see the same peers and the same collaborative
+document. Opening a second tab doesn't open a second peer connection — it just
+attaches another subscriber to the hub.
+
+```mermaid
+sequenceDiagram
+    participant T1 as Tab 1
+    participant T2 as Tab 2
+    participant WS as Node /ws handler
+    participant HUB as PeerHub (singleton)
+
+    T1->>WS: connect /ws  (subscribe_conn)
+    WS->>HUB: subscribe(cb₁)
+    T2->>WS: connect /ws
+    WS->>HUB: subscribe(cb₂)
+
+    T1->>WS: network · list_peers
+    WS-->>T1: network · peers {self, peers[]}
+
+    Note over HUB: a peer connects/leaves (any cause)
+    HUB-->>T1: network · peer_update {peer}
+    HUB-->>T2: network · peer_update {peer}
+
+    Note over T1,T2: collab is the same — both tabs join the<br/>same room and see each other's ops
+    T1->>WS: collab · op {paneKey, baseRev, text}
+    WS->>HUB: apply (rev++)
+    HUB-->>T1: collab · op {rev, text}
+    HUB-->>T2: collab · op {rev, text}
+```
+
+---
+
+## Scenario 2 — two users, direct P2P
+
+Node A dials Node B's `/peer-ws` and runs the signed handshake. Either side can be
+the dialer; once paired, presence flows and the browsers are notified over their own
+`/ws` `network` channels.
+
+```mermaid
+sequenceDiagram
+    actor UA as User A (browser)
+    participant A as Node A (PeerHub)
+    participant B as Node B (PeerHub)
+    actor UB as User B (browser)
+
+    UA->>A: network · connect {address: ws://B/peer-ws}
+    A->>B: hello {public_key, nonce}
+    Note over B: verify node_id == fingerprint(public_key)
+    B-->>A: hello_ack {public_key, nonce, echo, sig}
+    A->>B: auth {echo, token?}
+    Note over B: trust.evaluate(node_id, token)
+    B-->>A: auth_result {ok}
+    par register + notify both sides
+        A-->>UA: network · peer_update {peer: B, status: connected}
+    and
+        B-->>UB: network · peer_update {peer: A, status: connected}
+    end
+    loop keepalive (Peer Monitor)
+        A->>B: ping
+        B-->>A: pong
+        Note over A: RTT sampled, pushed as peer_metrics on /ws
+    end
+```
+
+---
+
+## Scenario 3 — two users through an intermediary (relay)
+
+When a direct dial isn't possible (NAT, no reachable address), both nodes hold one
+WebSocket to a **relay broker** that forwards signed envelopes by `dst`. The
+envelopes are end-to-end signed, so the broker routes but **cannot read or forge**
+them. The handshake is identical — only the transport underneath changes.
+
+```mermaid
+sequenceDiagram
+    participant A as Node A (PeerHub)
+    participant R as Relay broker
+    participant B as Node B (PeerHub)
+
+    A->>R: ws connect /relay-ws · {register: node_a}
+    R-->>A: {registered: node_a}
+    B->>R: ws connect /relay-ws · {register: node_b}
+    R-->>B: {registered: node_b}
+
+    Note over A,B: same hello/auth handshake, now addressed by dst
+    A->>R: PeerEnvelope {type: hello, dst: node_b, sig}
+    R->>B: forward (by dst) — opaque, signed
+    B->>R: PeerEnvelope {type: hello_ack, dst: node_a, sig}
+    R->>A: forward
+    A->>R: auth {dst: node_b}
+    R->>B: forward
+    B->>R: auth_result {dst: node_a}
+    R->>A: forward
+    Note over A,B: peers registered; traffic continues via the relay
+```
+
+---
+
+## Scenario 4 — collaborative pane across two users
+
+A shared pane (e.g. scratch) syncs locally through the hub **and** forwards accepted
+ops to connected peers as `collab_op`. Inbound peer ops are adopted as authoritative
+by revision and rebroadcast to local tabs (never re-forwarded, so no loops).
+Last-writer-wins with a rev check — a stale `baseRev` is rejected and the writer
+rebases.
+
+```mermaid
+sequenceDiagram
+    actor UA as User A
+    participant A as Node A (CollabRoom)
+    participant B as Node B (CollabRoom)
+    actor UB as User B
+
+    UA->>A: collab · op {paneKey, baseRev=rev, text}
+    alt baseRev matches
+        Note over A: rev++, store text
+        A-->>UA: collab · op {rev, text} (echo incl. sender)
+        A->>B: peer wire · collab_op {paneKey, rev, text}
+        Note over B: adopt by rev (LWW)
+        B-->>UB: collab · op {rev, text, from: A}
+    else baseRev stale
+        A-->>UA: collab · rejected {rev, text}
+        Note over UA: rebase onto authoritative state, retry
+    end
+```
+
+---
+
+## Scenario 5 — multi-agent (agent-to-agent)
+
+User A's agent asks User B's agent a question. The local turn calls `agent.ask_peer`;
+the hub sends an `agent_request` to B, which runs its **own** orchestrator turn
+(behind a no-browser `RemoteAgentConn`, gated read-only by `network.remoteAgentMode`)
+and replies with `agent_result`. The answer comes back into A's turn as an ordinary
+tool result.
+
+```mermaid
+sequenceDiagram
+    participant MA as A model
+    participant OA as A orchestrator
+    participant A as A PeerHub
+    participant B as B PeerHub
+    participant OB as B orchestrator (RemoteAgentConn)
+    participant MB as B model
+
+    MA->>OA: tool_call agent.ask_peer {peerId: B, prompt}
+    Note over OA: _gate (local permissions)
+    OA->>A: ask_peer
+    A->>B: agent_request {prompt, origin_chain, request_id}
+    Note over B: admission: allowRemoteAgent + trusted<br/>reject if loop (self in chain) or hops exceeded
+    B->>OB: run_agent_turn(remote=True, no actuating tools)
+    OB->>MB: chat
+    MB-->>OB: answer
+    OB-->>B: answer captured
+    B-->>A: agent_result {ok, text} (re = request_id)
+    A-->>OA: {answer}
+    OA-->>MA: tool result (turn continues)
+```
+
+---
+
+## Scenario 6 — direct peer chat (1:1)
+
+`peerchat` is an append-only message log (vs `collab`'s editable document). A browser
+opens a conversation; the backend relays each message to the peer over the signed
+wire and mirrors it to this node's own tabs.
+
+```mermaid
+sequenceDiagram
+    actor UA as User A
+    participant A as Node A (ChatManager)
+    participant B as Node B (ChatManager)
+    actor UB as User B
+
+    UA->>A: peerchat · open {nodeId: B}
+    A-->>UA: peerchat · history {messages[]}
+    UA->>A: peerchat · send {nodeId: B, text}
+    A-->>UA: peerchat · message {from: A, direction: out}
+    A->>B: peer wire · peer_chat {text}
+    B-->>UB: peerchat · message {from: A, direction: in}
+```
+
+---
+
+## The lobby system (proposed)
+
+Today peers find each other by **manual invite link**, **direct address**, or **LAN
+mDNS**. The target adds an **official lobby**: a client/server intermediary that is
+more than a dumb relay — it's a **presence directory + room listing + signaling**
+service, with P2P as the preferred data path and relay as the fallback.
+
+**Status: design.** The relay broker (`relay_broker.py`) and `network.directoryUrl`
+setting are the seeds; the lobby extends them. Nothing below is implemented yet.
+
+### Roles
+
+- **P2P (preferred):** once two nodes know how to reach each other, bulk traffic
+  (collab, peer chat, agent-to-agent) flows node-to-node over `/peer-ws`.
+- **Intermediary / relay (fallback):** when direct fails, the lobby relays the same
+  signed envelopes — no plaintext exposure.
+- **Lobby (discovery + signaling):** a hosted service nodes connect out to; it lists
+  who's online and what **rooms** (named, hostable sessions) exist, and brokers the
+  address exchange that bootstraps a P2P link.
+
+```mermaid
+flowchart TB
+    subgraph Lobby["Lobby server (official intermediary)"]
+        DIR["Directory<br/>(online nodes, presence)"]
+        ROOMS["Room registry<br/>(named sessions)"]
+        SIG["Signaling + relay<br/>(NAT traversal, fallback)"]
+    end
+    A["Node A"] -->|register · publish presence| DIR
+    B["Node B"] -->|register| DIR
+    A -->|create_room 'A's workspace'| ROOMS
+    B -->|list_rooms · join_room| ROOMS
+    A <-->|"direct P2P /peer-ws (preferred)"| B
+    A -.->|"relay fallback"| SIG
+    B -.-> SIG
+```
+
+### Lobby wire protocol (proposed, over a `/lobby-ws` socket)
+
+| Direction | message | data | purpose |
+|---|---|---|---|
+| node→lobby | `register` | `{node_id, public_key, node_name, addresses[]}` | authenticate + publish reachability |
+| lobby→node | `registered` | `{session, presence[]}` | ack + initial directory |
+| node→lobby | `presence` | `{status, capabilities}` | heartbeat / status change |
+| node→lobby | `list_rooms` | `{}` | discover joinable sessions |
+| lobby→node | `rooms` | `{rooms[]: {id, name, host, members, locked}}` | room directory |
+| node→lobby | `create_room` | `{name, visibility, joinPolicy}` | host a session |
+| node→lobby | `join_room` | `{roomId, token?}` | request to join |
+| lobby→node | `room_info` | `{roomId, host: {node_id, public_key, addresses[]}}` | candidates to dial |
+| node↔lobby | `signal` | `{to, candidate}` | exchange addresses / future ICE |
+| node→lobby | `relay` | `{to, envelope}` | fallback path for signed envelopes |
+| lobby→node | `error` | `{code, message}` | rejection |
+
+### Join sequence: discover → P2P, with relay fallback
+
+```mermaid
+sequenceDiagram
+    participant H as Host node (A)
+    participant L as Lobby server
+    participant G as Guest node (B)
+
+    H->>L: register {node_id, public_key, addresses}
+    H->>L: create_room {name: "A's workspace"}
+    G->>L: register {…}
+    G->>L: list_rooms
+    L-->>G: rooms [{id, name, host: A}]
+    G->>L: join_room {roomId, token?}
+    Note over L: authorize (visibility / join policy / token)
+    L-->>G: room_info {host A: public_key, addresses[]}
+    L-->>H: peer_joining {guest B: public_key, addresses[]}
+
+    alt direct P2P reachable
+        G->>H: /peer-ws hello {…}  (Scenario 2 handshake)
+        H-->>G: hello_ack / auth_result
+        Note over G,H: collab / chat / agent flow node-to-node
+    else NAT blocks direct
+        G->>L: signal {to: A, candidate}
+        H->>L: signal {to: B, candidate}
+        opt still unreachable
+            G->>L: relay {to: A, envelope}
+            L->>H: forward (signed, opaque) — Scenario 3
+        end
+    end
+```
+
+### Trust & safety
+
+- The lobby authenticates nodes by their **Ed25519 identity** (same node_id =
+  fingerprint(public_key) rule); it can't impersonate them because every peer
+  envelope stays end-to-end signed.
+- Room **join policy**: open, token-gated (a per-room invite), or directory-trusted.
+  This reuses the existing `network.trustMode` ladder (`manual` / `directory` /
+  `open-lan`) plus a hosted `directory` option.
+- A node opts into the lobby via `network.directoryUrl`; with it blank, only direct
+  + LAN + manual invites are used (today's behavior).
+- The lobby sees **metadata** (who is online, room membership) but not pane contents
+  or agent prompts when traffic is P2P; even on the relay fallback, payloads are
+  signed/opaque.
+
+---
+
+## Implemented vs. proposed
+
+| Capability | Status |
+|---|---|
+| `/ws` per-tab channels (`network`, `collab`, `peerchat`) | ✅ implemented |
+| `/peer-ws` signed handshake + presence | ✅ implemented |
+| Direct P2P transport | ✅ implemented |
+| Relay broker (intermediary, store-and-forward) | ✅ implemented (`relay_broker.py`) |
+| LAN discovery (mDNS) | ✅ implemented |
+| Collaborative panes (`collab_op`, LWW+rev) | ✅ implemented |
+| Agent-to-agent (`agent_request`/`agent_result`) | ✅ implemented |
+| Peer chat (`peer_chat`) | ✅ implemented |
+| Peer monitor (RTT/throughput) | ✅ implemented |
+| **Lobby** (directory + rooms + signaling) | 🚧 proposed (this page) |
+| NAT hole-punching / ICE | 🚧 proposed |
+
+See [Distributed peer fabric](distributed.mdx) for identity, the envelope format, and
+the transport abstraction; [Module: network](../modules/network.mdx) for the channel
+tables and settings; and [Agent chat](../modules/agent-chat.mdx) for the agent-to-agent
+tools.

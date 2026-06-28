@@ -75,6 +75,10 @@ flowchart TB
   other users' nodes over TCP/IP: Ed25519 node identity, the signed `PeerEnvelope`
   wire protocol + handshake, the hybrid transport abstraction (direct, relay, LAN),
   trust modes, and the process-global `PeerHub` vs the per-browser `/ws`.
+- [Network protocol & scenarios](architecture/network-protocol.mdx) — mermaid
+  sequence diagrams of the websocket protocols across situations (one user/two tabs,
+  two users direct, via a relay intermediary, collaborative panes, agent-to-agent,
+  peer chat) and the proposed **lobby** (P2P + intermediary + discovery) design.
 
 **Modules** — one page per feature module, each describing how it plugs into the
 layout shell and how it behaves in the browser vs the desktop app:
