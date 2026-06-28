@@ -112,6 +112,7 @@ export { settingsModule } from './modules/settings';
 export {
   networkModule,
   initNetwork,
+  initLobby,
   getPeers,
   subscribeCollab,
   collabJoin,

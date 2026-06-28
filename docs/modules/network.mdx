@@ -19,7 +19,10 @@ widget plus settings; the heavy lifting is the backend peer fabric documented in
   and the connected peers with status dots; dial a peer by `ws://…/peer-ws` address,
   generate an invite link, or redeem one to pair. Exposes presence to the local
   agent via `useAgentContext` (so the model can fill `agent.ask_peer(peerId)`).
-- **Command** `network.open` — Network: Open peers.
+- **Widget** `network.lobby` (Lobby) — `LobbyPanel.tsx`. Connect to a lobby server,
+  see hosted **rooms**, host one, or join one — joining hands off to a direct P2P
+  link (relay fallback). See [the lobby system](../architecture/network-protocol.mdx#the-lobby-system).
+- **Commands** `network.open` (Open peers), `network.openLobby` (Open lobby).
 - **Settings** (see below).
 
 The agent-to-agent tools `list_peers` and `agent.ask_peer` are **backend-static**
@@ -58,6 +61,24 @@ They're documented in [Agent chat](agent-chat.mdx).
   | server→client | `error` | `{ message }` |
 
 - **`/ws` `collab` channel** — shared-pane sync (see below).
+- **`/ws` `lobby` channel** — discovery + rooms for the browser:
+
+  | Direction | event | data |
+  |---|---|---|
+  | client→server | `state` | `{}` (request a snapshot) |
+  | client→server | `connect` | `{ url? }` (connect to a lobby server) |
+  | client→server | `list_rooms` / `create_room` / `join_room` / `leave_room` | `{ … }` |
+  | server→client | `state` | `{ connected, url, rooms[], directory[], self }` |
+  | server→client | `rooms` | `{ rooms[] }` |
+  | server→client | `directory` | `{ directory[] }` |
+  | server→client | `room_created` / `joined` / `peer_joining` / `error` | `{ … }` |
+
+The **lobby server** itself is a standalone app (`lobby_server.py`) exposing
+`/lobby-ws` (directory + rooms + signaling) and the bundled `/relay-ws` for the
+fallback path; run it separately:
+`uv run uvicorn backend.modules.network.lobby_server:app --port 9000`. A node opts in
+via `network.lobbyUrl`. See
+[the lobby system](../architecture/network-protocol.mdx#the-lobby-system).
 
 ## Collaborative shared panes
 
@@ -93,6 +114,7 @@ well-known room so notes sync across users. See [Scratch](scratch.mdx).
 | `network.relayUrl` | string | `""` | Rendezvous broker URL (blank = off). |
 | `network.trustMode` | enum | `manual` | `manual` / `directory` / `open-lan`. |
 | `network.directoryUrl` | string | `""` | Optional directory service. |
+| `network.lobbyUrl` | string | `""` | Lobby server `ws://…/lobby-ws` for discovery + rooms (blank = off). |
 | `network.allowRemoteAgent` | boolean | `false` | Let a trusted peer's agent ask yours. |
 | `network.remoteAgentMode` | enum | `plan` | Permission mode for a remote turn (`plan` = read-only). |
 

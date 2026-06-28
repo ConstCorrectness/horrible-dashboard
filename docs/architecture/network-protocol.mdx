@@ -235,15 +235,18 @@ sequenceDiagram
 
 ---
 
-## The lobby system (proposed)
+## The lobby system
 
-Today peers find each other by **manual invite link**, **direct address**, or **LAN
-mDNS**. The target adds an **official lobby**: a client/server intermediary that is
-more than a dumb relay — it's a **presence directory + room listing + signaling**
-service, with P2P as the preferred data path and relay as the fallback.
+Beyond **manual invite link**, **direct address**, and **LAN mDNS**, the **official
+lobby** is a client/server intermediary that is more than a dumb relay — it's a
+**presence directory + room listing + signaling** service, with P2P as the preferred
+data path and relay as the fallback.
 
-**Status: design.** The relay broker (`relay_broker.py`) and `network.directoryUrl`
-setting are the seeds; the lobby extends them. Nothing below is implemented yet.
+**Status: implemented.** Server: `lobby_server.py` (a standalone app bundling the
+relay broker for fallback). Node client: `lobby.py` (`LobbyClient`, opt in via
+`network.lobbyUrl`). Frontend: the **Lobby** widget. Signaling frames are forwarded
+as plumbing; real NAT hole-punching (ICE) is still stubbed — joins use the host's
+advertised address (direct) then the relay fallback.
 
 ### Roles
 
@@ -271,7 +274,7 @@ flowchart TB
     B -.-> SIG
 ```
 
-### Lobby wire protocol (proposed, over a `/lobby-ws` socket)
+### Lobby wire protocol (over the `/lobby-ws` socket)
 
 | Direction | message | data | purpose |
 |---|---|---|---|
@@ -348,7 +351,8 @@ sequenceDiagram
 | Agent-to-agent (`agent_request`/`agent_result`) | ✅ implemented |
 | Peer chat (`peer_chat`) | ✅ implemented |
 | Peer monitor (RTT/throughput) | ✅ implemented |
-| **Lobby** (directory + rooms + signaling) | 🚧 proposed (this page) |
+| **Lobby** (directory + rooms, P2P handoff + relay fallback) | ✅ implemented (`lobby_server.py` / `lobby.py`) |
+| Signaling channel (address exchange) | ✅ plumbing implemented |
 | NAT hole-punching / ICE | 🚧 proposed |
 
 See [Distributed peer fabric](distributed.mdx) for identity, the envelope format, and
