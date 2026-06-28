@@ -1,5 +1,7 @@
 import { registry, type ModuleManifest } from '../../registry';
+import { LobbyPanel } from './LobbyPanel';
 import { PeersWidget } from './PeersWidget';
+import { initLobby } from './lobby';
 import { initNetwork } from './ws';
 
 /**
@@ -18,12 +20,23 @@ export const networkModule: ModuleManifest = {
       component: PeersWidget,
       defaultPlacement: 'right',
     },
+    {
+      id: 'network.lobby',
+      title: 'Lobby',
+      component: LobbyPanel,
+      defaultPlacement: 'right',
+    },
   ],
   commands: [
     {
       id: 'network.open',
       title: 'Network: Open peers',
       run: () => registry.openPanel('network.peers'),
+    },
+    {
+      id: 'network.openLobby',
+      title: 'Network: Open lobby',
+      run: () => registry.openPanel('network.lobby'),
     },
   ],
   settings: [
@@ -78,6 +91,14 @@ export const networkModule: ModuleManifest = {
       default: '',
     },
     {
+      key: 'network.lobbyUrl',
+      title: 'Lobby URL',
+      description:
+        'Lobby server ws://…/lobby-ws for discovery + rooms (blank = off). Joining a room hands off to direct P2P with relay fallback.',
+      type: 'string',
+      default: '',
+    },
+    {
       key: 'network.allowRemoteAgent',
       title: 'Allow remote agents',
       description: "Let a trusted peer's agent ask yours questions.",
@@ -97,5 +118,6 @@ export const networkModule: ModuleManifest = {
 };
 
 export { initNetwork };
+export { initLobby };
 export { subscribeCollab, collabJoin, collabLeave, collabOp, type CollabUpdate } from './collab';
 export * from './api';

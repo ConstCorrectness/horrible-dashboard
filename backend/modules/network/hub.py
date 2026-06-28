@@ -90,6 +90,18 @@ class PeerHub:
             except Exception:  # a broken transport must not sink the others
                 logger.exception("transport %s failed to start", tp.name)
 
+    async def add_transport(self, transport: Transport) -> None:
+        """Register an extra transport at runtime (e.g. the lobby's relay-fallback),
+        starting it if the hub is already running. No-op if one of that name exists."""
+        if any(t.name == transport.name for t in self.transports):
+            return
+        self.transports.append(transport)
+        if self._started:
+            try:
+                await transport.start(self)
+            except Exception:
+                logger.exception("transport %s failed to start", transport.name)
+
     async def stop(self) -> None:
         for session in list(self.peers.values()):
             await session.link.close()

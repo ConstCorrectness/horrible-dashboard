@@ -44,7 +44,14 @@ async def start_network() -> None:
     peer_hub.set_transports(build_transports())
     await peer_hub.start()
     logger.info("peer fabric started: node %s", peer_hub.identity().node_id)
+    # Connect to the lobby for discovery + rooms, if configured.
+    from backend.modules.network.lobby import lobby_client
+
+    await lobby_client.start()
 
 
 async def stop_network() -> None:
+    from backend.modules.network.lobby import lobby_client
+
+    await lobby_client.disconnect()
     await peer_hub.stop()

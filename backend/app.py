@@ -29,8 +29,10 @@ from backend.modules.lsp import LspManager
 from backend.modules.network import (
     collab_manager,
     handle_collab_message,
+    handle_lobby_message,
     handle_network_message,
     subscribe_conn,
+    subscribe_lobby_conn,
 )
 from backend.modules.network import router as network_router
 from backend.modules.network.hub import peer_hub
@@ -135,6 +137,8 @@ async def ws(websocket: WebSocket) -> None:
     files_task = asyncio.create_task(push_file_events(conn))
     # Fan peer/presence events from the process-global hub out to this browser.
     network_unsub = subscribe_conn(conn)
+    # Fan lobby (directory/rooms) events out to this browser.
+    lobby_unsub = subscribe_lobby_conn(conn)
     try:
         while True:
             msg = await websocket.receive_json()
@@ -157,6 +161,8 @@ async def ws(websocket: WebSocket) -> None:
                 await handle_network_message(conn, msg)
             elif channel == "collab":
                 await handle_collab_message(conn, msg)
+            elif channel == "lobby":
+                await handle_lobby_message(conn, msg)
     except WebSocketDisconnect:
         pass
     finally:
@@ -167,4 +173,5 @@ async def ws(websocket: WebSocket) -> None:
         telemetry_task.cancel()
         files_task.cancel()
         network_unsub()  # type: ignore[operator]
+        lobby_unsub()  # type: ignore[operator]
         collab_manager.drop(conn)

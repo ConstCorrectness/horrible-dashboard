@@ -16,6 +16,7 @@ import {
   layoutsModule,
   loadPlugins,
   loadSettings,
+  initLobby,
   initNetwork,
   marketplaceModule,
   networkModule,
@@ -76,6 +77,7 @@ async function boot(): Promise<void> {
   initAgentRelay();
   // Subscribe to the peer fabric so presence syncs before the Peers widget opens.
   initNetwork();
+  initLobby();
   // Listen for permission-approval prompts the gate raises during a turn.
   initApprovalListener();
 

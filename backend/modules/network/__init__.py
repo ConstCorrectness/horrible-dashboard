@@ -5,6 +5,11 @@ and docs/modules/network.mdx."""
 from backend.modules.network.bridge import handle_network_message, subscribe_conn
 from backend.modules.network.collab import collab_manager, handle_collab_message
 from backend.modules.network.hub import PeerHub, peer_hub
+from backend.modules.network.lobby import (
+    handle_lobby_message,
+    lobby_client,
+    subscribe_lobby_conn,
+)
 from backend.modules.network.routes import router
 
 __all__ = [
@@ -15,4 +20,7 @@ __all__ = [
     "subscribe_conn",
     "collab_manager",
     "handle_collab_message",
+    "lobby_client",
+    "handle_lobby_message",
+    "subscribe_lobby_conn",
 ]
