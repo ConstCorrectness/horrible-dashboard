@@ -49,3 +49,14 @@ def test_connect_requires_address():
     with TestClient(app) as client:
         res = client.post("/api/network/connect", json={"transport": "direct"})
         assert res.status_code == 400
+
+
+def test_ask_peer_unknown_peer_returns_error():
+    with TestClient(app) as client:
+        res = client.post(
+            "/api/network/ask-peer", json={"peer_id": "nope", "prompt": "hi"}
+        )
+        assert res.status_code == 200
+        body = res.json()
+        assert body["ok"] is False
+        assert "no connected peer" in body["error"]

@@ -39,7 +39,7 @@ flowchart LR
         BrowserB["Browser tabs"]
         BrowserB --> WSB --> HubB
     end
-    HubA <-->|"signed PeerEnvelope over /peer-ws, relay, or LAN"| HubB
+    HubA <-->|"signed PeerEnvelope over /peer-ws, relay, LAN, or WebRTC"| HubB
 ```
 
 ## Identity
@@ -98,6 +98,7 @@ selected from settings by `setup.build_transports`:
 | **direct** (`direct.py`) | default | Outbound `websockets` client dials `ws://host/peer-ws`; inbound via the `/peer-ws` endpoint wrapped in a `ServerPeerLink`. |
 | **relay** (`relay.py`) | `network.relayUrl` set | One WebSocket to a rendezvous broker carries traffic for all relayed peers, demultiplexed by `src` into a virtual link per peer. NAT traversal via store-and-forward; envelopes stay end-to-end signed so the broker can route but not forge. |
 | **lan** (`lan.py`) | `network.enableLanDiscovery` | Advertises/browses `_horrible-peer._tcp` via zeroconf (mDNS); discovered peers are dialed through the **direct** transport. Auto-connects only under `open-lan` trust. |
+| **webrtc** (`webrtc.py`) | `network.enableWebRtc` + `webrtc` extra | Peer links over an aiortc `RTCDataChannel`. ICE (STUN, optional TURN) punches cone NATs a TCP dial can't reach; the full SDP carries the candidates (aiortc is non-trickle), so signaling is a single offer/answer over the lobby's `signal` frames. Once open, it carries the same signed `PeerEnvelope`s — handshake/trust unchanged. `dial(node_id)` offers; an inbound offer is answered and handed to the hub's acceptor. The relay stays the fallback for paths ICE can't punch (symmetric NAT without TURN). |
 | **loopback** (`loopback.py`) | tests | Two hubs talk through paired queues, no sockets. |
 
 The standalone broker is `relay_broker.py`

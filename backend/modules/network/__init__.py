@@ -3,6 +3,7 @@ this backend node connect to other users' nodes. See docs/architecture/distribut
 and docs/modules/network.mdx."""
 
 from backend.modules.network.bridge import handle_network_message, subscribe_conn
+from backend.modules.network.chat import chat_manager, handle_chat_message
 from backend.modules.network.collab import collab_manager, handle_collab_message
 from backend.modules.network.hub import PeerHub, peer_hub
 from backend.modules.network.lobby import (
@@ -23,4 +24,6 @@ __all__ = [
     "lobby_client",
     "handle_lobby_message",
     "subscribe_lobby_conn",
+    "chat_manager",
+    "handle_chat_message",
 ]

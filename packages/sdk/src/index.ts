@@ -13,6 +13,7 @@ export type {
   AgentContextSnapshot,
   AgentToolDecl,
   Capability,
+  CollabDecl,
   CommandDecl,
   JSONSchema,
   KeybindingDecl,
