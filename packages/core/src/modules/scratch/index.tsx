@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect } from 'react';
 
-import { collabJoin, collabLeave, collabOp, subscribeCollab } from '../network';
+import { useCollab } from '../network';
 import { registry, type ModuleManifest } from '../../registry';
 
 /**
@@ -10,43 +10,26 @@ import { registry, type ModuleManifest } from '../../registry';
  * terminal) arrive. Content is shared across instances for now (one localStorage
  * key) — a per-instance store lands with real buffer identity.
  *
- * It's also the reference consumer for **collaborative shared panes**: toggling
- * Share joins a `collab` room (a fixed pane key) so the note syncs live with other
- * users on connected nodes — rev-checked last-writer-wins. See docs/modules/network.mdx.
+ * It's also the reference consumer for **network-aware panes**: it declares
+ * `collab` in its manifest and drives the `useCollab` host hook, so toggling Share
+ * syncs the note live with other users on connected nodes (rev-checked
+ * last-writer-wins) and shows a live presence count — with no channel plumbing of
+ * its own. See docs/modules/network.mdx (collab).
  */
 const STORAGE_KEY = 'horrible.scratch';
 // All shared scratch notes (across users/nodes) sync through one well-known room.
 const SHARE_KEY = 'scratch:shared';
 
 function ScratchPanel() {
-  const [text, setText] = useState(() => localStorage.getItem(STORAGE_KEY) ?? '');
-  const [shared, setShared] = useState(false);
-  // Last revision the backend acked, sent as baseRev with the next edit.
-  const revRef = useRef(0);
+  const { text, setText, shared, setShared, members } = useCollab(SHARE_KEY, {
+    initialText: localStorage.getItem(STORAGE_KEY) ?? '',
+  });
 
   useEffect(() => {
     if (shared) return; // while shared, the room is the source of truth
     const id = setTimeout(() => localStorage.setItem(STORAGE_KEY, text), 300);
     return () => clearTimeout(id);
   }, [text, shared]);
-
-  useEffect(() => {
-    if (!shared) return;
-    const unsub = subscribeCollab(SHARE_KEY, (update) => {
-      revRef.current = update.rev;
-      setText(update.text);
-    });
-    collabJoin(SHARE_KEY);
-    return () => {
-      collabLeave(SHARE_KEY);
-      unsub();
-    };
-  }, [shared]);
-
-  const onChange = (next: string) => {
-    setText(next);
-    if (shared) collabOp(SHARE_KEY, revRef.current, next);
-  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -64,14 +47,18 @@ function ScratchPanel() {
           <input type="checkbox" checked={shared} onChange={(e) => setShared(e.target.checked)} />
           Share
         </label>
-        {shared && <span style={{ color: 'var(--text-dim)' }}>live with peers</span>}
+        {shared && (
+          <span style={{ color: 'var(--text-dim)' }}>
+            live with peers · {members} {members === 1 ? 'editor' : 'editors'}
+          </span>
+        )}
       </div>
       <textarea
         className="scratch"
         value={text}
         spellCheck={false}
         placeholder="Scratch notes — open more, split and float them…"
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => setText(e.target.value)}
         style={{ flex: 1 }}
       />
     </div>
@@ -88,6 +75,9 @@ export const scratchModule: ModuleManifest = {
       component: ScratchPanel,
       defaultPlacement: 'center',
       // Not a singleton: every open creates a new window.
+      // Network-aware: declares the shared collab room it syncs through, so the
+      // shell knows this pane participates in the peer fabric.
+      collab: { room: 'shared', key: 'scratch:shared' },
     },
   ],
   commands: [

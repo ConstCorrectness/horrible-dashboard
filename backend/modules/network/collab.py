@@ -14,6 +14,7 @@ docs/modules/network.mdx (collab) and docs/modules/scratch.mdx.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -72,10 +73,13 @@ class CollabManager:
                     },
                 )
             )
+            # Tell everyone else the occupancy changed so presence stays live.
+            await self._broadcast_presence(room, exclude=conn)
         elif event == "leave":
             room = self.rooms.get(key)
             if room is not None:
                 room.members.discard(conn)
+                await self._broadcast_presence(room, exclude=None)
         elif event == "op":
             await self._local_op(conn, key, data)
 
@@ -104,6 +108,20 @@ class CollabManager:
         payload = _evt(
             "op", {"paneKey": room.key, "rev": room.rev, "text": room.text, "from": frm}
         )
+        for member in list(room.members):
+            if member is exclude:
+                continue
+            try:
+                await member.send_json(payload)
+            except Exception:
+                room.members.discard(member)
+
+    async def _broadcast_presence(
+        self, room: CollabRoom, *, exclude: WsConnection | None
+    ) -> None:
+        """Tell a room's members how many are now present, so each pane can show a
+        live peer-presence count (this node's local browsers; peers are remote)."""
+        payload = _evt("presence", {"paneKey": room.key, "members": len(room.members)})
         for member in list(room.members):
             if member is exclude:
                 continue
@@ -142,7 +160,11 @@ class CollabManager:
 
     def drop(self, conn: WsConnection) -> None:
         for room in self.rooms.values():
-            room.members.discard(conn)
+            if conn in room.members:
+                room.members.discard(conn)
+                # Schedule a presence refresh (drop is called synchronously from the
+                # /ws teardown, but a loop is running, so fire-and-forget is fine).
+                asyncio.ensure_future(self._broadcast_presence(room, exclude=None))
 
 
 collab_manager = CollabManager()

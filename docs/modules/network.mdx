@@ -22,8 +22,39 @@ widget plus settings; the heavy lifting is the backend peer fabric documented in
 - **Widget** `network.lobby` (Lobby) — `LobbyPanel.tsx`. Connect to a lobby server,
   see hosted **rooms**, host one, or join one — joining hands off to a direct P2P
   link (relay fallback). See [the lobby system](../architecture/network-protocol.mdx#the-lobby-system).
-- **Commands** `network.open` (Open peers), `network.openLobby` (Open lobby).
+- **Widget** `network.monitor` (Peer Monitor) — `PeerMonitor.tsx`. Live link health
+  per peer: transport, round-trip time, and throughput (bytes/messages in/out),
+  streamed from the backend [Peer Monitor](#peer-monitor) heartbeat.
+- **Widget** `network.chat` (Peer Chat) — `PeerChatPanel.tsx`. Direct 1:1 messaging
+  with a connected peer over the [`peerchat`](#peer-chat) channel.
+- **Widget** `network.relay` (Agent Relay) — `AgentRelayPanel.tsx`. Ask a peer's
+  agent a question and read its (gated, read-only) answer — the UI over
+  [`agent.ask_peer`](#agent-to-agent-relay).
+- **Commands** `network.open` (Open peers), `network.openLobby` (Open lobby),
+  `network.openMonitor` (Open peer monitor), `network.openChat` (Open peer chat),
+  `network.openRelay` (Ask a peer agent).
 - **Settings** (see below).
+
+## Network-aware panes (the collab contract)
+
+A pane declares it participates in the peer fabric through the **`collab`** field
+on its `PanelDecl`/`WidgetDecl` (the `CollabDecl` shape in
+[`@horribledashboard/sdk`](../architecture/plugin-sdk.mdx)):
+
+```ts
+collab?: {
+  room: 'shared' | 'instance'; // one well-known room, or one room per pane instance
+  key?: string;                // key suffix; defaults to the view id
+  autoShare?: boolean;         // start shared on open (default false — opt-in)
+}
+```
+
+This makes networking a **declared, first-class property of a pane** rather than
+something each pane hand-wires. Panes consume it through the **`useCollab(paneKey)`**
+host hook (exported from the network module), which owns joining/leaving the room,
+tracking the authoritative revision, rebasing on a rejected (stale) op, and
+surfacing a live presence count — returning `{ text, setText, shared, setShared,
+members }`. The [scratch](scratch.mdx) panel is the reference consumer.
 
 The agent-to-agent tools `list_peers` and `agent.ask_peer` are **backend-static**
 (resolved in the orchestrator against the `PeerHub`), so unlike other modules they
@@ -42,6 +73,7 @@ They're documented in [Agent chat](agent-chat.mdx).
 | `POST /pair` | Redeem an invite (decode → dial → handshake with the token). |
 | `POST /connect` | Dial an address directly `{ address, transport }`. |
 | `DELETE /peers/{node_id}` | Disconnect a peer. |
+| `POST /ask-peer` | Ask a peer's agent `{ peer_id, prompt }` → `{ ok, answer?, error? }` (REST entry to `agent.ask_peer`; the remote turn is gated read-only). |
 
 ### WebSocket endpoints
 
@@ -52,15 +84,18 @@ They're documented in [Agent chat](agent-chat.mdx).
   | Direction | event | data |
   |---|---|---|
   | client→server | `list_peers` | `{}` |
+  | client→server | `list_metrics` | `{}` (request an immediate Peer Monitor snapshot) |
   | client→server | `connect` | `{ address?, nodeId?, transport }` |
   | client→server | `disconnect` | `{ nodeId }` |
   | client→server | `pair_redeem` | `{ invite }` |
   | server→client | `peers` | `{ self, peers[] }` |
   | server→client | `peer_update` | `{ peer }` |
+  | server→client | `peer_metrics` | `{ metrics[] }` (periodic + on request — see [Peer Monitor](#peer-monitor)) |
   | server→client | `pair_result` | `{ ok, peer?, error? }` |
   | server→client | `error` | `{ message }` |
 
 - **`/ws` `collab` channel** — shared-pane sync (see below).
+- **`/ws` `peerchat` channel** — direct 1:1 peer messaging (see [Peer Chat](#peer-chat)).
 - **`/ws` `lobby` channel** — discovery + rooms for the browser:
 
   | Direction | event | data |
@@ -97,11 +132,55 @@ groundwork, not a CRDT — a clean seam for one later.
 | client→server | `op` | `{ paneKey, baseRev, text }` |
 | server→client | `state` | `{ paneKey, rev, text, members }` |
 | server→client | `op` | `{ paneKey, rev, text, from }` |
+| server→client | `presence` | `{ paneKey, members }` (occupancy changed) |
 | server→client | `rejected` | `{ paneKey, rev, text }` |
 
-The reference consumer is the **scratch** panel's "Share" toggle
-(`modules/scratch/index.tsx` + `modules/network/collab.ts`), which joins a
-well-known room so notes sync across users. See [Scratch](scratch.mdx).
+The reference consumer is the **scratch** panel's "Share" toggle, which declares a
+`collab` room and drives the [`useCollab`](#network-aware-panes-the-collab-contract)
+hook (`modules/scratch/index.tsx` + `modules/network/useCollab.ts`), joining a
+well-known room so notes sync across users and showing a live editor count. See
+[Scratch](scratch.mdx).
+
+## Peer Monitor
+
+A backend **`PeerMonitor`** (`monitor.py`, started by the app lifespan) heartbeats
+every connected peer on an interval: it pings each (the hub's `ping`/`pong`
+round-trip) to measure RTT and samples the per-session byte/message counters the
+hub maintains. Each tick is broadcast as a `peer_metrics` event on the `network`
+channel; a freshly opened monitor requests an immediate snapshot with
+`list_metrics`. The `network.monitor` widget renders the table. The monitor is
+read-only — it never mutates peer state beyond stamping each session's `rtt_ms`.
+
+Each `PeerMetrics` row: `{ node_id, node_name, transport, status, rtt_ms,
+bytes_in, bytes_out, msgs_in, msgs_out, last_seen }`.
+
+## Peer Chat
+
+Direct 1:1 messaging with a connected peer. A browser opens a conversation over the
+`/ws` `peerchat` channel; the backend **`ChatManager`** (`chat.py`) relays the
+message to that peer over the signed peer wire (a `peer_chat` envelope) and mirrors
+it to this node's own tabs. Inbound peer messages are fanned out to every local
+browser. History is held per-peer in memory, so a reopened panel gets the recent
+backlog. Where `collab` syncs an **editable document**, `peerchat` is an
+**append-only message log**.
+
+| Direction | event | data |
+|---|---|---|
+| client→server | `open` | `{ nodeId }` (subscribe + request backlog) |
+| client→server | `send` | `{ nodeId, text }` |
+| client→server | `close` | `{ nodeId }` |
+| server→client | `history` | `{ nodeId, messages[] }` |
+| server→client | `message` | `{ id, nodeId, from, text, ts, direction }` |
+| server→client | `error` | `{ nodeId, message }` |
+
+## Agent-to-agent relay
+
+The `network.relay` widget (Agent Relay) is the UI over agent-to-agent: pick an
+agent-capable peer, ask a question, and read the answer. It calls `POST
+/api/network/ask-peer`, a thin wrapper over the same `agent_bridge.ask_peer` the
+`agent.ask_peer` tool uses, so the remote turn runs gated and read-only-by-default
+on the peer's node (which must have `network.allowRemoteAgent` enabled). See
+[Agent chat](agent-chat.mdx#agent-to-agent).
 
 ## Settings
 
@@ -115,6 +194,12 @@ well-known room so notes sync across users. See [Scratch](scratch.mdx).
 | `network.trustMode` | enum | `manual` | `manual` / `directory` / `open-lan`. |
 | `network.directoryUrl` | string | `""` | Optional directory service. |
 | `network.lobbyUrl` | string | `""` | Lobby server `ws://…/lobby-ws` for discovery + rooms (blank = off). |
+| `network.iceEnabled` | boolean | `false` | Gather a STUN server-reflexive candidate (public IP) alongside host/LAN candidates. |
+| `network.stunServer` | string | `stun.l.google.com:19302` | `host:port` for STUN public-IP discovery (when ICE is on); also the STUN ICE server for the WebRTC transport. |
+| `network.enableWebRtc` | boolean | `false` | Connect over a WebRTC data channel (ICE/STUN NAT traversal), SDP signaled via the lobby. Needs the backend `webrtc` extra (`uv sync --extra webrtc`); the relay stays the fallback. |
+| `network.turnUrl` | string | `""` | Optional TURN relay for WebRTC (`turn:host:3478`) for NATs STUN can't punch (blank = STUN only). |
+| `network.turnUsername` | string | `""` | TURN username credential (if required). |
+| `network.turnCredential` | string | `""` | TURN password/credential (if required). |
 | `network.allowRemoteAgent` | boolean | `false` | Let a trusted peer's agent ask yours. |
 | `network.remoteAgentMode` | enum | `plan` | Permission mode for a remote turn (`plan` = read-only). |
 

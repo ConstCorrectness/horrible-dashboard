@@ -8,10 +8,12 @@
 import { sendChannel, subscribeChannel } from '../../ws';
 
 export interface CollabUpdate {
-  kind: 'state' | 'op' | 'rejected';
+  kind: 'state' | 'op' | 'rejected' | 'presence';
   rev: number;
   text: string;
   from?: string;
+  /** Live occupancy of the room (set on `state`/`presence`). */
+  members?: number;
 }
 
 /** Subscribe to updates for one shared pane. Returns an unsubscribe function. */
@@ -22,12 +24,15 @@ export function subscribeCollab(
   return subscribeChannel('collab', (msg) => {
     const d = (msg.data ?? {}) as Record<string, unknown>;
     if (d.paneKey !== paneKey) return;
-    if (msg.event === 'state' || msg.event === 'op' || msg.event === 'rejected') {
+    if (msg.event === 'presence') {
+      handler({ kind: 'presence', rev: 0, text: '', members: Number(d.members ?? 0) });
+    } else if (msg.event === 'state' || msg.event === 'op' || msg.event === 'rejected') {
       handler({
         kind: msg.event,
         rev: Number(d.rev ?? 0),
         text: String(d.text ?? ''),
         from: typeof d.from === 'string' ? d.from : undefined,
+        members: d.members !== undefined ? Number(d.members) : undefined,
       });
     }
   });

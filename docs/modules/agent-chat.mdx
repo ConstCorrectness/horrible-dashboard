@@ -252,6 +252,11 @@ in `_run_backend_tool` against the process-global `PeerHub` (no browser handler)
   back as an ordinary tool result. **Side-effecting** (specifier `{peerId}`), so it
   passes the local permission gate first.
 
+The network module's **Agent Relay** widget (`network.relay`) is the direct UI over
+this: it posts to `POST /api/network/ask-peer` (the same `agent_bridge.ask_peer`),
+so you can ask a peer's agent without going through your own model. See
+[Module: network](network.mdx#agent-to-agent-relay).
+
 ```mermaid
 sequenceDiagram
     participant MA as Node A model

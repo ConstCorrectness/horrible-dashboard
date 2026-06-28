@@ -1,5 +1,8 @@
 import { registry, type ModuleManifest } from '../../registry';
+import { AgentRelayPanel } from './AgentRelayPanel';
 import { LobbyPanel } from './LobbyPanel';
+import { PeerChatPanel } from './PeerChatPanel';
+import { PeerMonitor } from './PeerMonitor';
 import { PeersWidget } from './PeersWidget';
 import { initLobby } from './lobby';
 import { initNetwork } from './ws';
@@ -26,6 +29,24 @@ export const networkModule: ModuleManifest = {
       component: LobbyPanel,
       defaultPlacement: 'right',
     },
+    {
+      id: 'network.monitor',
+      title: 'Peer Monitor',
+      component: PeerMonitor,
+      defaultPlacement: 'bottom',
+    },
+    {
+      id: 'network.chat',
+      title: 'Peer Chat',
+      component: PeerChatPanel,
+      defaultPlacement: 'right',
+    },
+    {
+      id: 'network.relay',
+      title: 'Agent Relay',
+      component: AgentRelayPanel,
+      defaultPlacement: 'right',
+    },
   ],
   commands: [
     {
@@ -37,6 +58,21 @@ export const networkModule: ModuleManifest = {
       id: 'network.openLobby',
       title: 'Network: Open lobby',
       run: () => registry.openPanel('network.lobby'),
+    },
+    {
+      id: 'network.openMonitor',
+      title: 'Network: Open peer monitor',
+      run: () => registry.openPanel('network.monitor'),
+    },
+    {
+      id: 'network.openChat',
+      title: 'Network: Open peer chat',
+      run: () => registry.openPanel('network.chat'),
+    },
+    {
+      id: 'network.openRelay',
+      title: 'Network: Ask a peer agent',
+      run: () => registry.openPanel('network.relay'),
     },
   ],
   settings: [
@@ -99,6 +135,51 @@ export const networkModule: ModuleManifest = {
       default: '',
     },
     {
+      key: 'network.iceEnabled',
+      title: 'ICE candidate gathering',
+      description:
+        'Gather a STUN server-reflexive candidate (public IP) in addition to LAN/host candidates, so peers can try more paths before relaying.',
+      type: 'boolean',
+      default: false,
+    },
+    {
+      key: 'network.stunServer',
+      title: 'STUN server',
+      description: 'host:port used to discover this node’s public IP (when ICE is on).',
+      type: 'string',
+      default: 'stun.l.google.com:19302',
+    },
+    {
+      key: 'network.enableWebRtc',
+      title: 'Enable WebRTC transport',
+      description:
+        'Connect to peers over a WebRTC data channel (ICE/STUN NAT traversal), with SDP signaling via the lobby. Requires the backend `webrtc` extra (aiortc); the relay stays the fallback.',
+      type: 'boolean',
+      default: false,
+    },
+    {
+      key: 'network.turnUrl',
+      title: 'TURN server URL',
+      description:
+        'Optional TURN relay for WebRTC (e.g. turn:host:3478) used when STUN can’t punch the NAT (blank = STUN only).',
+      type: 'string',
+      default: '',
+    },
+    {
+      key: 'network.turnUsername',
+      title: 'TURN username',
+      description: 'Username credential for the TURN server (if it requires auth).',
+      type: 'string',
+      default: '',
+    },
+    {
+      key: 'network.turnCredential',
+      title: 'TURN credential',
+      description: 'Password/credential for the TURN server (if it requires auth).',
+      type: 'string',
+      default: '',
+    },
+    {
       key: 'network.allowRemoteAgent',
       title: 'Allow remote agents',
       description: "Let a trusted peer's agent ask yours questions.",
@@ -120,4 +201,13 @@ export const networkModule: ModuleManifest = {
 export { initNetwork };
 export { initLobby };
 export { subscribeCollab, collabJoin, collabLeave, collabOp, type CollabUpdate } from './collab';
+export { useCollab, type CollabPane, type UseCollabOptions } from './useCollab';
+export {
+  subscribeChat,
+  chatOpen,
+  chatSend,
+  chatClose,
+  type ChatMessage,
+  type ChatEvent,
+} from './peerchat';
 export * from './api';

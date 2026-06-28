@@ -27,7 +27,9 @@ from backend.modules.flow import handle_flow_message
 from backend.modules.flow import router as flow_router
 from backend.modules.lsp import LspManager
 from backend.modules.network import (
+    chat_manager,
     collab_manager,
+    handle_chat_message,
     handle_collab_message,
     handle_lobby_message,
     handle_network_message,
@@ -163,6 +165,8 @@ async def ws(websocket: WebSocket) -> None:
                 await handle_collab_message(conn, msg)
             elif channel == "lobby":
                 await handle_lobby_message(conn, msg)
+            elif channel == "peerchat":
+                await handle_chat_message(conn, msg)
     except WebSocketDisconnect:
         pass
     finally:
@@ -175,3 +179,4 @@ async def ws(websocket: WebSocket) -> None:
         network_unsub()  # type: ignore[operator]
         lobby_unsub()  # type: ignore[operator]
         collab_manager.drop(conn)
+        chat_manager.drop(conn)
