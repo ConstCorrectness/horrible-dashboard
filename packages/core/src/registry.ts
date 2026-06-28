@@ -141,10 +141,12 @@ export interface LayoutController {
 
   /**
    * Split the pane `instanceId`, opening `viewId` in a new region beside it
-   * (`left`/`right` → vertical split, `above`/`below` → horizontal). Returns the
-   * new pane's instance id, or null if either id is unknown.
+   * (`left`/`right` → vertical split, `above`/`below` → horizontal). `viewId` is
+   * optional — omit it to duplicate the split pane's own view into the new region.
+   * Returns the new pane's instance id, or null if the source id (or a given
+   * viewId) is unknown.
    */
-  splitPane(instanceId: string, direction: SplitDirection, viewId: string): string | null;
+  splitPane(instanceId: string, direction: SplitDirection, viewId?: string): string | null;
   /** Resize the group holding a pane (pixels; omit a dimension to leave it). */
   resizePane(instanceId: string, size: { width?: number; height?: number }): boolean;
   /** Move a pane beside another pane, or into its tab group with `within`. */

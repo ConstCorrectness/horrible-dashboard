@@ -218,11 +218,12 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
     ),
     _tool(
         "split_pane",
-        "Split an active pane, opening a new view beside it. 'left'/'right' give a "
-        "vertical split (panes side by side), 'above'/'below' a horizontal one "
-        "(panes stacked); the orientation aliases 'vertical'/'horizontal' are also "
-        "accepted. Use instanceId from list_open_panes and paneId (view ID) from "
-        "list_available_panes.",
+        "Split an active pane. 'left'/'right' give a vertical split (panes side by "
+        "side), 'above'/'below' a horizontal one (panes stacked); the orientation "
+        "aliases 'vertical'/'horizontal' are also accepted. Use instanceId from "
+        "list_open_panes. paneId (a view ID from list_available_panes) is OPTIONAL — "
+        "omit it to duplicate the pane's own view into the new region (the usual "
+        "'just split this pane'); pass it only to put a different view there.",
         {
             "instanceId": {
                 "type": "string",
@@ -235,10 +236,10 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
             },
             "paneId": {
                 "type": "string",
-                "description": "View ID (from list_available_panes) for the new split region",
+                "description": "Optional view ID for the new region; omit to duplicate the split pane's view",
             },
         },
-        ["instanceId", "direction", "paneId"],
+        ["instanceId", "direction"],
     ),
     _tool(
         "resize_pane",

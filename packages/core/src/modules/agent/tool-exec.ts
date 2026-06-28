@@ -76,7 +76,9 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
         return {
           error: `direction must be one of ${SPLIT_DIRS.join(', ')}, vertical, or horizontal`,
         };
-      const newInstanceId = lc.splitPane(String(args.instanceId), direction, String(args.paneId));
+      // paneId is optional: omitted → duplicate the split pane's own view.
+      const paneId = args.paneId != null ? String(args.paneId) : undefined;
+      const newInstanceId = lc.splitPane(String(args.instanceId), direction, paneId);
       return newInstanceId === null
         ? { error: 'unknown pane instanceId or paneId' }
         : { ok: true, newInstanceId };

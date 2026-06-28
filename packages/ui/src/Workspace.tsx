@@ -418,14 +418,18 @@ export function Workspace({
       },
       splitPane: (instanceId, direction, viewId) => {
         const ref = api.getPanel(instanceId);
-        const decl = resolveContent(viewId);
-        if (!ref || !decl) return null;
-        const newId = freshInstanceId(api, viewId);
+        if (!ref) return null;
+        // Default to duplicating the source pane's own view (matches the corner-grip
+        // split) when no explicit viewId is given — the natural "split this pane".
+        const targetViewId = viewId ?? (ref.params?.panelId as string | undefined);
+        const decl = targetViewId ? resolveContent(targetViewId) : undefined;
+        if (!targetViewId || !decl) return null;
+        const newId = freshInstanceId(api, targetViewId);
         api.addPanel({
           id: newId,
           component: 'panel',
           title: decl.title,
-          params: { panelId: viewId },
+          params: { panelId: targetViewId },
           position: { referencePanel: instanceId, direction },
         });
         return newId;
