@@ -99,6 +99,21 @@ export const networkModule: ModuleManifest = {
       default: '',
     },
     {
+      key: 'network.iceEnabled',
+      title: 'ICE candidate gathering',
+      description:
+        'Gather a STUN server-reflexive candidate (public IP) in addition to LAN/host candidates, so peers can try more paths before relaying.',
+      type: 'boolean',
+      default: false,
+    },
+    {
+      key: 'network.stunServer',
+      title: 'STUN server',
+      description: 'host:port used to discover this node’s public IP (when ICE is on).',
+      type: 'string',
+      default: 'stun.l.google.com:19302',
+    },
+    {
       key: 'network.allowRemoteAgent',
       title: 'Allow remote agents',
       description: "Let a trusted peer's agent ask yours questions.",

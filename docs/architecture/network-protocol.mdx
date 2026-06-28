@@ -336,6 +336,23 @@ sequenceDiagram
   or agent prompts when traffic is P2P; even on the relay fallback, payloads are
   signed/opaque.
 
+### ICE-lite candidate gathering
+
+Because peer links are WebSocket (TCP), the node gathers **ICE-lite** candidates
+(`ice.py`) rather than running full WebRTC ICE:
+
+- **host** — the advertised `/peer-ws` URL plus one per non-loopback LAN IPv4.
+- **server-reflexive (srflx)** — the node's public IP from a STUN binding request
+  (`network.stunServer`), paired with the advertised peer-ws port. Gathered only when
+  `network.iceEnabled` is on.
+
+The candidates ride the lobby's register `addresses` (so they flow through
+`room_info`); the joiner dials them **in priority order** (host → srflx), then falls
+back to the relay. This reaches a peer on the LAN, or one whose peer-ws port is
+forwarded/permissively NATed. **True hole-punching through symmetric NAT over TCP is
+out of scope** — that requires a WebRTC datachannel transport (future); until then
+the relay is the guaranteed fallback.
+
 ---
 
 ## Implemented vs. proposed
@@ -353,7 +370,8 @@ sequenceDiagram
 | Peer monitor (RTT/throughput) | ✅ implemented |
 | **Lobby** (directory + rooms, P2P handoff + relay fallback) | ✅ implemented (`lobby_server.py` / `lobby.py`) |
 | Signaling channel (address exchange) | ✅ plumbing implemented |
-| NAT hole-punching / ICE | 🚧 proposed |
+| ICE-lite candidates (host/LAN + STUN server-reflexive, prioritized dial) | ✅ implemented (`ice.py`) |
+| WebRTC hole-punching (symmetric NAT over TCP) | 🚧 future (needs a datachannel transport) |
 
 See [Distributed peer fabric](distributed.mdx) for identity, the envelope format, and
 the transport abstraction; [Module: network](../modules/network.mdx) for the channel

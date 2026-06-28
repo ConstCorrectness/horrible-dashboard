@@ -21,7 +21,7 @@ from urllib.parse import urlparse, urlunparse
 from websockets.asyncio.client import connect as ws_connect
 from websockets.exceptions import ConnectionClosed
 
-from backend.modules.network import identity, trust
+from backend.modules.network import ice, identity, trust
 from backend.modules.network.hub import peer_hub
 from backend.modules.network.transport.relay import RelayTransport
 from backend.modules.settings.routes import get_value
@@ -86,7 +86,8 @@ class LobbyClient:
             logger.info("lobby connect failed: %s", exc)
             self._emit("error", {"message": f"lobby connect failed: {exc}"})
             return
-        await self._send(self._register_message())
+        candidates = await ice.gather_candidates()
+        await self._send(self._register_message(candidates))
         self._reader = asyncio.ensure_future(self._read_loop())
 
     async def disconnect(self) -> None:
@@ -101,14 +102,17 @@ class LobbyClient:
             self._ws = None
         self.connected = False
 
-    def _register_message(self) -> dict[str, Any]:
+    def _register_message(self, candidates: list[str] | None = None) -> dict[str, Any]:
         me = peer_hub.signer
         return {
             "type": "register",
             "node_id": me.node_id,
             "public_key": me.public_key,
             "node_name": identity.node_name(),
-            "addresses": [trust.advertised_address()],
+            # Prioritized ICE-lite candidates (host LAN first, STUN srflx last); the
+            # joiner dials these in order, then the relay. Falls back to the single
+            # advertised address if gathering yielded nothing.
+            "addresses": candidates or [trust.advertised_address()],
             "capabilities": peer_hub.capabilities(),
             # Proof of key ownership for the node_id we claim.
             "sig": me.sign(me.node_id.encode()),

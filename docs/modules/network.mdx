@@ -115,6 +115,8 @@ well-known room so notes sync across users. See [Scratch](scratch.mdx).
 | `network.trustMode` | enum | `manual` | `manual` / `directory` / `open-lan`. |
 | `network.directoryUrl` | string | `""` | Optional directory service. |
 | `network.lobbyUrl` | string | `""` | Lobby server `ws://…/lobby-ws` for discovery + rooms (blank = off). |
+| `network.iceEnabled` | boolean | `false` | Gather a STUN server-reflexive candidate (public IP) alongside host/LAN candidates. |
+| `network.stunServer` | string | `stun.l.google.com:19302` | `host:port` for STUN public-IP discovery (when ICE is on). |
 | `network.allowRemoteAgent` | boolean | `false` | Let a trusted peer's agent ask yours. |
 | `network.remoteAgentMode` | enum | `plan` | Permission mode for a remote turn (`plan` = read-only). |
 
