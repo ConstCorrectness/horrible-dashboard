@@ -35,15 +35,15 @@ and blocks that thread until the reply arrives.
 ```mermaid
 sequenceDiagram
     participant Cell as REPL cell (worker thread)
-    participant Loop as backend event loop
+    participant EL as backend event loop
     participant FE as Browser (ReplSession)
     participant Reg as registry + layoutController
-    Cell->>Loop: dash.panes.open("settings.home")
-    Loop->>FE: tool_call {name:"open_pane", args:{id}}
+    Cell->>EL: dash.panes.open("settings.home")
+    EL->>FE: tool_call {name:"open_pane", args:{id}}
     FE->>Reg: executeTool(...)
     Reg-->>FE: result
-    FE-->>Loop: tool_result
-    Loop-->>Cell: returns {'ok': True, 'opened': 'settings.home'}
+    FE-->>EL: tool_result
+    EL-->>Cell: returns {'ok': True, 'opened': 'settings.home'}
 ```
 
 Each call blocks until the browser answers (or a **30-second relay timeout**, after
