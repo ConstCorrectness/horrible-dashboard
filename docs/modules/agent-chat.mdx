@@ -229,10 +229,12 @@ The frontend pushes the **capability manifest** (`manifest`) on connect, on ever
 reconnect, and whenever the registry changes
 (`packages/core/src/modules/agent/manifest.ts`, `initAgentManifestSync`): the
 serialized agent-exposed commands and per-widget/panel `agentTools` (handlers
-stripped). The backend stores it on the `WsConnection` and merges it with the
-static `LAYOUT_TOOLS` into the model's tool list each turn (`_tools_for`). Relayed
-calls that aren't layout verbs are dispatched on the frontend via
-`executeDynamicTool`. Side-effecting calls pass through the **permission gate**
+stripped). The backend stores it on the `WsConnection`, groups the pushed tools by
+prefix, and exposes them via **progressive disclosure** (see [Hierarchical tools
+& progressive disclosure](#hierarchical-tools--progressive-disclosure)): each turn
+the model sees the layout/peer core + meta-tools + whatever groups are active, and
+`load_tools` injects more as needed. Relayed calls that aren't layout verbs are
+dispatched on the frontend via `executeDynamicTool`. Side-effecting calls pass through the **permission gate**
 (`_gate` in the orchestrator) before relay: read-only tools pass straight through,
 denied calls return an error to the model, and an `ASK` decision prompts the user
 via `approval_request`/`approval_response` (the in-chat approval UI is the next
@@ -379,15 +381,37 @@ request↔response bodies — the streamed tool-calling round, answer, and pull
 responses all via `tee_stream`. See
 [observability.md](observability.mdx).
 
-### Local Reasoning Models & Tool Count Thresholds
+### Hierarchical tools & progressive disclosure
 
-Local reasoning models (e.g., `gemma4:e2b` under Ollama) exhibit a strict tool count capacity limit when handling streamed turns:
-* **Threshold Limit:** If a request payload lists **40 or more tool definitions**, the model silently skips its thinking phase entirely (bypassing the `<think>` tag / `thinking` field) and immediately streams the final content starting with its first token. If the list contains **39 or fewer tools**, reasoning streams normally.
-* **Dynamic Pruning & Prioritization:** To prevent exceeding this limit while supporting the full catalog of layout and dynamic tools (46+ tools in total), the backend employs a dynamic selection algorithm in `_tools_for()` to cap the tool count at exactly **38 tools**:
-  * **Always Kept:** All 15 static layout tools (`LAYOUT_TOOLS`) are preserved.
-  * **High Priority Core Tools:** Core workspace integrations (`files.*`, `editor.*`, `terminal.*`) are kept by default.
-  * **Contextual Promotion:** Optional plugin/widget tool groups (`vectordb.`, `visualizer.`, `clubhouse.`, `stub.`) are dynamically searched against the user's prompt and chat history keywords. If intent is detected (e.g., matching `"visualizer"`, `"vector"`, or `"room"`), the corresponding tools are prioritized.
-  * **Pruning:** Low-priority/inactive optional tools are pruned to satisfy the 38-tool ceiling, ensuring reasoning remains active.
+Local reasoning models (e.g. `gemma4:e2b` under Ollama) have a strict tool-count
+ceiling: list **40+ tool definitions** and the model silently skips its thinking
+phase and streams the final answer from the first token; with **≤39** it reasons
+normally. The whole catalog (layout + peer + every module/plugin tool) is well past
+that, so tools are exposed **hierarchically and injected on demand** rather than
+flattened and pruned.
+
+Tools belong to **groups** by name prefix (`files`, `editor`, `terminal`,
+`visualizer`, `vectordb`, `network`, …; layout verbs are the `layout` core). Each
+turn the model sees only:
+
+* the **core** — the layout verbs, the peer tools (`list_peers`, `agent.ask_peer`),
+  and two **meta-tools**: `list_tool_groups()` (discover groups + counts) and
+  `load_tools(groups[])` (enable a group); plus
+* the tools of every **active** group.
+
+`run_agent_turn` recomputes the presented list **each round** from `active_groups`,
+so a group loaded this round is **injected** into the next model call (true dynamic
+injection — nothing is ever dropped, just not-yet-loaded). `active_groups` is:
+
+* **seeded** by a keyword preload (`_preload_groups`): a prompt mentioning a file,
+  shell command, etc. auto-activates that group so common asks stay single-round;
+* **grown** when the model calls `load_tools`; and
+* **grown forgivingly** — if the model calls a known tool from a group it never
+  loaded, `_dispatch_call` activates the group and runs the call anyway.
+
+A `TOOL_BUDGET = 38` cap remains only as a backstop (core is always kept first). The
+`/tools` command (`list_tools`→`tools`) still reports the **full** catalog, labeled
+by group, independent of what any single turn has loaded.
 
 
 ## Contributions to the layout shell

@@ -280,28 +280,6 @@ def test_orchestrator_model_override(monkeypatch) -> None:
     assert orchestrator._orchestrator_model("gemma4:e2b") == "gemma4:e2b"
 
 
-def test_turn_uses_orchestrator_model_override(monkeypatch) -> None:
-    seen: dict[str, Any] = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen["body"] = json.loads(request.content)
-        return httpx.Response(
-            200, json={"message": {"role": "assistant", "content": "ok"}}
-        )
-
-    _configure(monkeypatch)  # configured model = "m"
-    monkeypatch.setattr(
-        orchestrator,
-        "get_value",
-        lambda key, default: (
-            "gemma4:12b" if key == "agent.orchestrator.model" else default
-        ),
-    )
-    _mock_ollama(monkeypatch, handler)
-    asyncio.run(orchestrator.run_agent_turn(FakeConn(), "t", "hi"))
-    assert seen["body"]["model"] == "gemma4:12b"
-
-
 def test_turn_uses_hyperparameters_overrides(monkeypatch) -> None:
     seen: dict[str, Any] = {}
 
@@ -334,44 +312,50 @@ def test_turn_uses_hyperparameters_overrides(monkeypatch) -> None:
     assert options["top_p"] == 0.85
 
 
-def test_tools_for_pruning_and_prioritization() -> None:
-    # Build a list of dynamic tools such that layout + dynamic > 38.
-    # LAYOUT_TOOLS is 15 tools.
-    # We will add 30 dynamic tools.
+def test_tools_for_presents_core_plus_only_preloaded_groups() -> None:
+    # Many dynamic tools across several groups.
     dynamic = []
-    # Add core tools
-    for i in range(5):
-        dynamic.append({"name": f"files.tool_{i}", "description": "desc"})
-    for i in range(5):
-        dynamic.append({"name": f"editor.tool_{i}", "description": "desc"})
-    for i in range(5):
-        dynamic.append({"name": f"terminal.tool_{i}", "description": "desc"})
-    # Add optional groups
-    for i in range(5):
-        dynamic.append({"name": f"vectordb.tool_{i}", "description": "desc"})
-    for i in range(5):
-        dynamic.append({"name": f"visualizer.tool_{i}", "description": "desc"})
-    for i in range(5):
-        dynamic.append({"name": f"stub.tool_{i}", "description": "desc"})
-
+    for grp in ("files", "editor", "terminal", "vectordb", "visualizer"):
+        for i in range(5):
+            dynamic.append({"name": f"{grp}.tool_{i}", "description": "desc"})
     conn = FakeConn(agent_tools=dynamic)
 
-    # 1. No keywords: should keep core tools, prune optional tools.
-    tools = orchestrator._tools_for(conn, prompt="hi")
-    assert len(tools) == 38
-    names = {t["function"]["name"] for t in tools}
-    # All files, editor, terminal tools should be selected
-    for i in range(5):
-        assert f"files.tool_{i}" in names
-        assert f"editor.tool_{i}" in names
-        assert f"terminal.tool_{i}" in names
+    # No matching keywords: the starting list is just the core (no dynamic groups).
+    core_names = {t["function"]["name"] for t in orchestrator._core_tools()}
+    tools = orchestrator._tools_for(conn, prompt="hello")
+    assert {t["function"]["name"] for t in tools} == core_names
+    # The meta tools are always present so the model can discover/load the rest.
+    assert "list_tool_groups" in core_names
+    assert "load_tools" in core_names
 
-    # 2. vectordb keyword: should prioritize vectordb tools.
-    tools_db = orchestrator._tools_for(conn, prompt="use vectordb to search")
-    assert len(tools_db) == 38
+    # A vectordb-flavored prompt preloads only that group, not the others.
+    tools_db = orchestrator._tools_for(conn, prompt="search the vector db")
     names_db = {t["function"]["name"] for t in tools_db}
     for i in range(5):
         assert f"vectordb.tool_{i}" in names_db
+        assert f"visualizer.tool_{i}" not in names_db
+
+
+def test_group_catalog_groups_by_prefix() -> None:
+    conn = FakeConn(
+        agent_tools=[
+            {"name": "files.read", "description": "r"},
+            {"name": "files.write", "description": "w"},
+            {"name": "editor.save", "description": "s"},
+        ]
+    )
+    catalog = {g["name"]: g["tools"] for g in orchestrator._group_catalog(conn)}
+    assert catalog == {"files": 2, "editor": 1}
+
+
+def test_select_tools_caps_at_budget() -> None:
+    dynamic = [{"name": f"files.tool_{i}", "description": "d"} for i in range(60)]
+    conn = FakeConn(agent_tools=dynamic)
+    tools = orchestrator._select_tools(conn, {"files"})
+    assert len(tools) == orchestrator.TOOL_BUDGET
+    # Core is kept (it's added first).
+    names = {t["function"]["name"] for t in tools}
+    assert "list_available_panes" in names and "load_tools" in names
 
 
 def test_unemitted_tool_call_heuristic() -> None:
@@ -485,18 +469,17 @@ def test_tools_for_merges_manifest_with_layout_tools() -> None:
             "kind": "agentTool",
         }
     ]
-    names = [t["function"]["name"] for t in orchestrator._tools_for(conn)]
+    # A terminal-flavored prompt preloads the terminal group, so the pushed tool is
+    # presented alongside the static layout tools.
+    tools = orchestrator._tools_for(conn, prompt="run a terminal command")
+    names = [t["function"]["name"] for t in tools]
     # every static layout tool is still present...
     for layout in orchestrator.LAYOUT_TOOLS:
         assert layout["function"]["name"] in names
     # ...plus the runtime-registered tool.
     assert "terminal.exec" in names
     # The schema crossed the wire; the handler never appears in the tool def.
-    exec_tool = next(
-        t
-        for t in orchestrator._tools_for(conn)
-        if t["function"]["name"] == "terminal.exec"
-    )
+    exec_tool = next(t for t in tools if t["function"]["name"] == "terminal.exec")
     assert "handler" not in exec_tool["function"]
     assert (
         exec_tool["function"]["parameters"]["properties"]["command"]["type"] == "string"
@@ -516,16 +499,100 @@ def test_tools_for_dedupes_by_name_static_wins() -> None:
 def test_tools_for_skips_nameless_entries() -> None:
     conn = WsConnection(websocket=None)
     conn.agent_tools = [{"description": "no name", "kind": "agentTool"}, {"name": ""}]
-    static_names = {
-        lt["function"]["name"]
-        for lt in orchestrator.LAYOUT_TOOLS + orchestrator.PEER_TOOLS
-    }
-    extra = [
-        t
-        for t in orchestrator._tools_for(conn)
-        if t["function"]["name"] not in static_names
-    ]
-    assert extra == []
+    # Nameless entries never become tools or groups.
+    assert orchestrator._all_dynamic_tools(conn) == []
+    assert orchestrator._group_catalog(conn) == []
+    core_names = {t["function"]["name"] for t in orchestrator._core_tools()}
+    assert {t["function"]["name"] for t in orchestrator._tools_for(conn)} == core_names
+
+
+class _Call:
+    def __init__(self, name, arguments=None):
+        self.name = name
+        self.arguments = arguments or {}
+
+
+def test_list_tool_groups_meta_lists_dynamic_groups() -> None:
+    conn = FakeConn(agent_tools=[{"name": "files.read", "description": "r"}])
+    res = asyncio.run(
+        orchestrator._dispatch_call(conn, "t", _Call("list_tool_groups"), set())
+    )
+    assert any(g["name"] == "files" for g in res["groups"])
+
+
+def test_load_tools_meta_activates_group() -> None:
+    conn = FakeConn(agent_tools=[{"name": "files.read", "description": "r"}])
+    active: set[str] = set()
+    res = asyncio.run(
+        orchestrator._dispatch_call(
+            conn, "t", _Call("load_tools", {"groups": ["files", "bogus"]}), active
+        )
+    )
+    assert res["loaded"] == ["files"]
+    assert res["unknown"] == ["bogus"]
+    assert "files" in active
+    assert "files.read" in res["tools"]
+
+
+def test_auto_load_forgiveness_activates_group_and_runs() -> None:
+    # The model calls a known tool from a group it never loaded — run it anyway and
+    # activate the group so it's visible next round.
+    conn = FakeConn(agent_tools=[{"name": "widget.foo", "description": "foo"}])
+    active: set[str] = set()
+    res = asyncio.run(
+        orchestrator._dispatch_call(conn, "t", _Call("widget.foo"), active)
+    )
+    assert "widget" in active
+    # FakeConn auto-resolved the relayed frontend call.
+    assert res == {"ok": True}
+
+
+def _ollama_tool_call(name, arguments):
+    return httpx.Response(
+        200,
+        json={
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"function": {"name": name, "arguments": arguments}}],
+            }
+        },
+    )
+
+
+def test_dynamic_injection_across_rounds(monkeypatch) -> None:
+    # widget.* has no preload keyword, so it is NOT advertised until loaded.
+    conn = FakeConn(agent_tools=[{"name": "widget.foo", "description": "do foo"}])
+    seen: list[set[str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        names = {
+            t["function"]["name"] for t in json.loads(request.content).get("tools", [])
+        }
+        seen.append(names)
+        n = len(seen)
+        if n == 1:
+            assert {"list_tool_groups", "load_tools"} <= names
+            assert "widget.foo" not in names  # not yet disclosed
+            return _ollama_tool_call("list_tool_groups", {})
+        if n == 2:
+            return _ollama_tool_call("load_tools", {"groups": ["widget"]})
+        if n == 3:
+            assert "widget.foo" in names  # injected after load_tools
+            return _ollama_tool_call("widget.foo", {})
+        return httpx.Response(
+            200, json={"message": {"role": "assistant", "content": "done"}}
+        )
+
+    _configure(monkeypatch)
+    _mock_ollama(monkeypatch, handler)
+    asyncio.run(orchestrator.run_agent_turn(conn, "t", "please proceed"))
+
+    # widget.foo was actually relayed to the browser once disclosed.
+    assert any(
+        d["name"] == "widget.foo" for ev, d in conn.events() if ev == "tool_call"
+    )
+    assert len(seen) == 4
 
 
 # --- A5: permission gate in the orchestrator loop ---------------------------

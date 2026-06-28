@@ -35,9 +35,13 @@ add their own: **observability** (`getAgentContext` I/O snapshot + gated
 `observability.clear`) and **clubhouse** (`clubhouse.status`/`listRooms` reads, gated
 `clubhouse.disconnect`) — illustrating that any widget gets agent tools just by
 declaring `agentTools` on its decl. The chat widget's **`/tools`** command lists the
-live catalog via a `list_tools`→`tools` WS round-trip (the backend's `_tools_for`,
-the exact set the model sees). Remaining work is incremental per-module polish (e.g.
-the editor's desktop-only `osfile:` source), not foundational.
+full catalog via a `list_tools`→`tools` WS round-trip, labeled by group. The model
+itself doesn't see the whole catalog at once: tools are grouped by prefix and
+disclosed **progressively** — a small core plus `list_tool_groups`/`load_tools`
+meta-tools, with each turn's list recomputed and groups injected on demand (see
+[Hierarchical tools & progressive disclosure](../modules/agent-chat.mdx#hierarchical-tools--progressive-disclosure)).
+Remaining work is incremental per-module polish (e.g. the editor's desktop-only
+`osfile:` source), not foundational.
 
 ## The model: one tool path, one gate
 

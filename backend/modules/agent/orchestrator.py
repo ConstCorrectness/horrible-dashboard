@@ -140,6 +140,11 @@ SYSTEM_PROMPT = (
     "- To change code in an open editor buffer (format, rewrite, fix), use "
     "editor.proposeEdit (NOT editor.applyEdit) so the user reviews the diff and "
     "accepts or declines it.\n"
+    "- Tools are organized into GROUPS. You start with the core layout tools; other "
+    "capabilities (files, editor, terminal, …) live in groups that aren't shown until "
+    "loaded. If a task needs a capability you don't see, call list_tool_groups to "
+    "discover what's available, then load_tools([...]) to enable the group(s) before "
+    "using their tools.\n"
     "- After acting, reply with one short sentence confirming what you did."
 )
 
@@ -353,105 +358,183 @@ def _manifest_to_tools(serialized: list[dict[str, Any]]) -> list[dict[str, Any]]
     return tools
 
 
-def _tools_for(
-    conn: WsConnection,
-    prompt: str = "",
-    history: list[Any] | None = None,
-) -> list[dict[str, Any]]:
-    """The model's tool list for a turn: static LAYOUT_TOOLS plus the connection's
-    pushed dynamic tools, deduped by name (static wins).
+# ---- Hierarchical / progressively-disclosed tools ---------------------------------
+#
+# Rather than flatten every tool into one list (and silently prune past a model's
+# capacity), tools are organized into GROUPS by name prefix. The model always sees a
+# small CORE — the layout verbs, the peer tools, and two META tools — and pulls in a
+# group's tools on demand with load_tools. The orchestrator recomputes the tool list
+# each round, so a loaded group's tools are injected into the next model call. This
+# scales past the ~38-tool ceiling local reasoning models choke on, with nothing ever
+# dropped — an unloaded tool is one load_tools call away, not gone.
 
-    If the total tool count exceeds the model's capacity limit (38 tools) to enable
-    thinking/reasoning stream in local models, we dynamically select the most relevant
-    tools based on keywords in the prompt and conversation history."""
-    merged = list(LAYOUT_TOOLS) + list(PEER_TOOLS)
-    seen = {t["function"]["name"] for t in merged}
+META_TOOLS: list[dict[str, Any]] = [
+    _tool(
+        "list_tool_groups",
+        "List the tool groups (capability categories) available beyond the core tools "
+        "you can already see — each with a short description and a tool count. Call this "
+        "to discover capabilities (files, editor, terminal, …) before using them.",
+    ),
+    _tool(
+        "load_tools",
+        "Enable one or more tool groups so their tools become callable. Pass group names "
+        "from list_tool_groups; the group's tools appear on your next step.",
+        {
+            "groups": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Group names to load, e.g. ['files','editor'].",
+            }
+        },
+        ["groups"],
+    ),
+]
 
-    dynamic_tools = []
+META_TOOL_NAMES = {t["function"]["name"] for t in META_TOOLS}
+
+# Cap kept only as a safety backstop now that groups load on demand.
+TOOL_BUDGET = 38
+
+# Human-readable blurbs for known groups; unknown groups get a generic fallback.
+_GROUP_DESCRIPTIONS: dict[str, str] = {
+    "files": "Browse, read, search, create, and edit files in the workspace.",
+    "editor": "Inspect and modify open editor buffers (read, propose edits, format, rename).",
+    "terminal": "Run shell commands and manage terminal sessions.",
+    "visualizer": "Render Canvas / Three.js / Babylon.js animations and stream Pygame frames.",
+    "vectordb": "Local vector database: upsert documents and run semantic similarity search.",
+    "network": "Distributed peer fabric: peer monitor, peer chat, agent relay.",
+    "clubhouse": "Connected Clubhouse account and its live rooms.",
+    "observability": "Inspect live client / inbound / outbound I/O data flow.",
+}
+
+# Keywords that auto-preload a group for a turn (so common asks stay one-shot). A
+# group's own name is always an implicit keyword.
+_GROUP_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "files": (
+        "file",
+        "directory",
+        "folder",
+        "read",
+        "write",
+        "create",
+        "delete",
+        "path",
+        "ls",
+    ),
+    "editor": (
+        "editor",
+        "buffer",
+        "code",
+        "edit",
+        "refactor",
+        "format",
+        "rename",
+        "diagnostic",
+    ),
+    "terminal": (
+        "terminal",
+        "shell",
+        "run",
+        "command",
+        "exec",
+        "bash",
+        "npm",
+        "pip",
+        "git",
+    ),
+    "visualizer": (
+        "visualizer",
+        "render",
+        "pygame",
+        "canvas",
+        "three",
+        "babylon",
+        "draw",
+        "animation",
+    ),
+    "vectordb": ("vector", "semantic", "embedding", "upsert", "similarity"),
+    "network": ("peer", "node", "collab", "relay", "monitor"),
+    "clubhouse": ("clubhouse", "room"),
+}
+
+
+def _group_of(name: str) -> str:
+    """The group a tool belongs to: its namespace before the first dot. Layout verbs
+    (no dot) belong to the always-present 'layout' core."""
+    return name.split(".", 1)[0] if "." in name else "layout"
+
+
+def _core_tools() -> list[dict[str, Any]]:
+    """Always-present tools: the layout verbs, the peer tools, and the meta tools."""
+    return list(LAYOUT_TOOLS) + list(PEER_TOOLS) + list(META_TOOLS)
+
+
+def _all_dynamic_tools(conn: WsConnection) -> list[dict[str, Any]]:
+    """Every browser-pushed tool, deduped against the static core (core wins)."""
+    seen = {t["function"]["name"] for t in _core_tools()}
+    out: list[dict[str, Any]] = []
     for t in _manifest_to_tools(getattr(conn, "agent_tools", [])):
-        if t["function"]["name"] in seen:
+        name = t["function"]["name"]
+        if name in seen:
             continue
-        dynamic_tools.append(t)
-        seen.add(t["function"]["name"])
+        out.append(t)
+        seen.add(name)
+    return out
 
-    total_count = len(merged) + len(dynamic_tools)
-    if total_count <= 38:
-        return merged + dynamic_tools
 
-    # Build search context from prompt and history
-    text_to_search = prompt.lower()
+def _group_catalog(conn: WsConnection) -> list[dict[str, Any]]:
+    """The loadable groups (dynamic tools only), each with a description + count."""
+    counts: dict[str, int] = {}
+    for t in _all_dynamic_tools(conn):
+        g = _group_of(t["function"]["name"])
+        counts[g] = counts.get(g, 0) + 1
+    return [
+        {"name": g, "description": _GROUP_DESCRIPTIONS.get(g, f"{g} tools"), "tools": n}
+        for g, n in sorted(counts.items())
+    ]
+
+
+def _preload_groups(
+    conn: WsConnection, prompt: str = "", history: list[Any] | None = None
+) -> set[str]:
+    """Groups to activate up front from prompt/history keywords, so a typical request
+    doesn't need an explicit load_tools round first."""
+    text = prompt.lower()
     if history:
         for m in history:
             if isinstance(m, dict) and isinstance(m.get("content"), str):
-                text_to_search += " " + m["content"].lower()
+                text += " " + m["content"].lower()
+    active: set[str] = set()
+    for g in {grp["name"] for grp in _group_catalog(conn)}:
+        if g in text or any(kw in text for kw in _GROUP_KEYWORDS.get(g, ())):
+            active.add(g)
+    return active
 
-    # Define optional groups and their keywords
-    groups = {
-        "visualizer": {
-            "prefixes": ("visualizer.",),
-            "keywords": (
-                "visualizer",
-                "render",
-                "pygame",
-                "canvas",
-                "three",
-                "babylon",
-                "draw",
-                "animation",
-            ),
-        },
-        "vectordb": {
-            "prefixes": ("vectordb.",),
-            "keywords": (
-                "vector",
-                "vectordb",
-                "semantic",
-                "embeddings",
-                "upsert",
-                "db search",
-            ),
-        },
-        "clubhouse": {
-            "prefixes": ("clubhouse.",),
-            "keywords": ("clubhouse", "room", "disconnect"),
-        },
-        "stub": {
-            "prefixes": ("stub.",),
-            "keywords": ("stub", "getvalue", "setvalue"),
-        },
-    }
 
-    active_prefixes = set()
-    for gname, ginfo in groups.items():
-        if any(kw in text_to_search for kw in ginfo["keywords"]):
-            active_prefixes.update(ginfo["prefixes"])
-
-    core_prefixes = ("files.", "editor.", "terminal.")
-
-    def get_priority(t: dict[str, Any]) -> int:
-        name = t["function"]["name"]
-        if any(name.startswith(p) for p in active_prefixes):
-            return 0
-        if any(name.startswith(p) for p in core_prefixes):
-            return 1
-        if name.startswith("agent.") or name.startswith("observability."):
-            return 2
-        return 3
-
-    dynamic_tools.sort(key=get_priority)
-    # Keep the static catalog whole; fill the rest of the 38-tool budget with the
-    # highest-priority dynamic tools.
-    budget = max(0, 38 - len(merged))
-    selected_dynamic = dynamic_tools[:budget]
-
-    pruned = [t["function"]["name"] for t in dynamic_tools[budget:]]
-    if pruned:
+def _select_tools(conn: WsConnection, active_groups: set[str]) -> list[dict[str, Any]]:
+    """The tool list presented this round: core + every dynamic tool whose group is
+    active. Capped at TOOL_BUDGET as a backstop (core is always kept first)."""
+    selected = _core_tools()
+    for t in _all_dynamic_tools(conn):
+        if _group_of(t["function"]["name"]) in active_groups:
+            selected.append(t)
+    if len(selected) > TOOL_BUDGET:
         logger.warning(
-            f"Pruned {len(pruned)} dynamic tools to stay within the 38 tools threshold for reasoning models. "
-            f"Pruned tools: {pruned}"
+            "tool list %d exceeds budget %d; truncating dynamic tools (active: %s)",
+            len(selected),
+            TOOL_BUDGET,
+            sorted(active_groups),
         )
+        selected = selected[:TOOL_BUDGET]
+    return selected
 
-    return merged + selected_dynamic
+
+def _tools_for(
+    conn: WsConnection, prompt: str = "", history: list[Any] | None = None
+) -> list[dict[str, Any]]:
+    """The tools a turn STARTS with: core + the keyword-preloaded groups. The turn
+    loop recomputes this per round as the model loads more groups (run_agent_turn)."""
+    return _select_tools(conn, _preload_groups(conn, prompt, history))
 
 
 def _evt(event: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -466,18 +549,16 @@ async def handle_agent_message(conn: WsConnection, msg: dict[str, Any]) -> None:
         tools = data.get("tools")
         conn.agent_tools = tools if isinstance(tools, list) else []
     elif event == "list_tools":
-        # Introspection for the chat widget's `/tools` command: the full catalog the
-        # model sees this turn (static layout verbs + the connection's pushed tools).
-        layout_names = {t["function"]["name"] for t in LAYOUT_TOOLS}
+        # Introspection for the chat widget's `/tools` command: the FULL catalog,
+        # labeled by group. With progressive disclosure the model only *sees* the core
+        # plus loaded groups per turn, but `/tools` shows everything that's reachable.
         catalog = [
             {
                 "name": t["function"]["name"],
                 "description": t["function"].get("description", ""),
-                "source": "layout"
-                if t["function"]["name"] in layout_names
-                else "widget",
+                "source": _group_of(t["function"]["name"]),
             }
-            for t in _tools_for(conn)
+            for t in (_core_tools() + _all_dynamic_tools(conn))
         ]
         await conn.send_json(_evt("tools", {"tools": catalog}))
     elif event == "ask":
@@ -679,6 +760,44 @@ async def _run_backend_tool(conn: WsConnection, call: Any) -> Any:
     return {"error": f"unknown backend tool {call.name}"}
 
 
+async def _dispatch_call(
+    conn: WsConnection, turn_id: str, call: Any, active_groups: set[str]
+) -> Any:
+    """Resolve one tool call under progressive disclosure. The meta tools mutate
+    `active_groups` (so the next round presents more tools); a known dynamic tool
+    whose group isn't active yet is auto-loaded (forgiving); everything else is gated,
+    then run in the backend or relayed to the browser."""
+    name = call.name
+    if name == "list_tool_groups":
+        return {"groups": _group_catalog(conn), "loaded": sorted(active_groups)}
+    if name == "load_tools":
+        requested = call.arguments.get("groups")
+        if isinstance(requested, str):
+            requested = [requested]
+        requested = requested if isinstance(requested, list) else []
+        available = {g["name"] for g in _group_catalog(conn)}
+        loaded = [g for g in requested if g in available]
+        active_groups.update(loaded)
+        tools_now = [
+            t["function"]["name"]
+            for t in _all_dynamic_tools(conn)
+            if _group_of(t["function"]["name"]) in loaded
+        ]
+        unknown = [g for g in requested if g not in available]
+        return {"loaded": loaded, "tools": tools_now, "unknown": unknown}
+
+    # Forgiveness: the model called a known tool from a group it hadn't loaded — pull
+    # the group in (so it stays visible next round) and run the call.
+    if any(t["function"]["name"] == name for t in _all_dynamic_tools(conn)):
+        active_groups.add(_group_of(name))
+
+    if not await _gate(conn, turn_id, call):
+        return {"error": "denied by permission policy"}
+    if name in BACKEND_TOOL_NAMES:
+        return await _run_backend_tool(conn, call)
+    return await _call_frontend_tool(conn, turn_id, name, call.arguments)
+
+
 async def run_agent_loop(
     conn: WsConnection,
     turn_id: str,
@@ -693,6 +812,7 @@ async def run_agent_loop(
     context_size: int | None = None,
     max_tokens: int | None = None,
     top_p: float | None = None,
+    active_groups: set[str] | None = None,
 ) -> str:
     """The shared tool-calling loop: stream the provider, relay each gated tool call
     to the frontend, and repeat until the model returns a final answer (no tool
@@ -703,11 +823,19 @@ async def run_agent_loop(
     nodes — each caller assembles its own `messages`/`tools`, passes an `emit`
     callback (so reasoning/answer deltas go to the right channel + event shape), and
     a `turn_id` that correlates the relayed `tool_call`/`approval_request` round
-    trips. Provider HTTP errors propagate to the caller. The same `conn` carries the
-    `agent`-channel tool relay and permission gate regardless of caller."""
+    trips. Provider HTTP errors propagate to the caller.
+
+    When `active_groups` is given, the loop runs **progressive disclosure**: the tool
+    list is recomputed each round from the active groups (`_select_tools`) and calls
+    route through `_dispatch_call` (meta tools + auto-load). Otherwise the fixed
+    `tools` list is used with direct dispatch — the path flow Agent nodes use."""
+    progressive = active_groups is not None
     forced_retry_used = False
     async with instrumented_client(timeout=120) as client:
         for _ in range(MAX_ROUNDS):
+            # Under progressive disclosure, inject the groups loaded last round.
+            if progressive:
+                tools = _select_tools(conn, active_groups)
             result = await P.chat_stream(
                 client,
                 info,
@@ -752,7 +880,11 @@ async def run_agent_loop(
             if not result.tool_calls:
                 return result.content
             for call in result.tool_calls:
-                if not await _gate(conn, turn_id, call):
+                if progressive:
+                    tool_result = await _dispatch_call(
+                        conn, turn_id, call, active_groups
+                    )
+                elif not await _gate(conn, turn_id, call):
                     tool_result = {"error": "denied by permission policy"}
                 elif call.name in BACKEND_TOOL_NAMES:
                     # Resolved in the backend (peer fabric), not relayed to the UI.
@@ -795,8 +927,15 @@ async def run_agent_turn(
     endpoint = config.endpoint or info.default_endpoint
     model = _orchestrator_model(config.model)
     # A remote turn gets no tools (it can't reach a browser to execute them, and must
-    # not act on this machine); a local turn gets the full layout/peer/widget catalog.
-    tools = [] if remote else _tools_for(conn, prompt=prompt, history=history)
+    # not act on this machine). A local turn presents the core plus whatever tool
+    # groups are active — seeded from the prompt's keywords and grown as the model
+    # calls load_tools; the list is recomputed each round (progressive disclosure).
+    # Local turns use progressive disclosure (active_groups drives a per-round tool
+    # list); a remote turn gets None → the loop runs with no tools (it has no browser
+    # to execute them and must not act on this machine).
+    active_groups: set[str] | None = (
+        None if remote else _preload_groups(conn, prompt, history)
+    )
     editor_msg = _active_editor_message(context)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -822,7 +961,7 @@ async def run_agent_turn(
             conn,
             turn_id,
             messages,
-            tools,
+            [],  # placeholder; progressive disclosure recomputes per round (local)
             info,
             endpoint,
             model,
@@ -831,6 +970,7 @@ async def run_agent_turn(
             context_size=_tool_context_size(),
             max_tokens=_tool_max_tokens(),
             top_p=_tool_top_p(),
+            active_groups=active_groups,
         )
         await conn.send_json(_evt("answer", {"turnId": turn_id, "text": text}))
         await conn.send_json(_evt("done", {"turnId": turn_id}))
