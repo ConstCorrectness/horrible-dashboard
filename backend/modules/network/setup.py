@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 
 from backend.modules.network.hub import peer_hub
+from backend.modules.network.monitor import peer_monitor
 from backend.modules.network.transport.base import Transport
 from backend.modules.network.transport.direct import DirectWsTransport
 from backend.modules.network.transport.lan import LanDiscovery
@@ -43,16 +44,19 @@ def build_transports() -> list[Transport]:
 
 
 async def start_network() -> None:
-    # Handle inbound agent-to-agent requests (a peer's agent asking ours) and
-    # shared-pane ops forwarded by peers.
-    from backend.modules.network import agent_bridge, collab, protocol
+    # Handle inbound agent-to-agent requests (a peer's agent asking ours),
+    # shared-pane ops, and peer chat forwarded by peers.
+    from backend.modules.network import agent_bridge, chat, collab, protocol
 
     peer_hub.register_handler(
         protocol.AGENT_REQUEST, agent_bridge.handle_remote_agent_request
     )
     peer_hub.register_handler(protocol.COLLAB_OP, collab.handle_peer_collab_op)
+    peer_hub.register_handler(protocol.PEER_CHAT, chat.handle_peer_chat)
     peer_hub.set_transports(build_transports())
     await peer_hub.start()
+    # Heartbeat the peers for live link health (RTT, throughput).
+    await peer_monitor.start()
     logger.info("peer fabric started: node %s", peer_hub.identity().node_id)
     # Connect to the lobby for discovery + rooms, if configured.
     from backend.modules.network.lobby import lobby_client
@@ -64,4 +68,5 @@ async def stop_network() -> None:
     from backend.modules.network.lobby import lobby_client
 
     await lobby_client.disconnect()
+    await peer_monitor.stop()
     await peer_hub.stop()

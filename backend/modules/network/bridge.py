@@ -50,6 +50,15 @@ async def handle_network_message(conn: WsConnection, msg: dict[str, Any]) -> Non
     data = msg.get("data") or {}
     if event == "list_peers":
         await conn.send_json(_evt("peers", peer_hub.snapshot().model_dump()))
+    elif event == "list_metrics":
+        from backend.modules.network.monitor import peer_monitor
+
+        await conn.send_json(
+            _evt(
+                "peer_metrics",
+                {"metrics": [m.model_dump() for m in peer_monitor.snapshot()]},
+            )
+        )
     elif event == "connect":
         # Dial + handshake can take a moment; don't block the receive loop.
         asyncio.create_task(_connect(conn, data))

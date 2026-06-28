@@ -103,3 +103,32 @@ class PairResult(BaseModel):
 class PeersSnapshot(BaseModel):
     self: NodeIdentity
     peers: list[PeerInfo] = Field(default_factory=list)
+
+
+class AskPeerRequest(BaseModel):
+    """Ask a connected peer's agent a question (the REST entry to `agent.ask_peer`)."""
+
+    peer_id: NodeId
+    prompt: str
+
+
+class AskPeerResult(BaseModel):
+    ok: bool
+    answer: str | None = None
+    error: str | None = None
+
+
+class PeerMetrics(BaseModel):
+    """Live link health for one peer, sampled by the Peer Monitor and streamed to
+    the browser as `peer_metrics` over the `/ws` `network` channel."""
+
+    node_id: NodeId
+    node_name: str
+    transport: Transport
+    status: PeerStatus
+    rtt_ms: float | None = None
+    bytes_in: int = 0
+    bytes_out: int = 0
+    msgs_in: int = 0
+    msgs_out: int = 0
+    last_seen: float | None = None

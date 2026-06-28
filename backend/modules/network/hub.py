@@ -50,9 +50,18 @@ class PeerSession:
         # Set when the session is torn down, so the inbound `/peer-ws` endpoint can
         # block on the link's lifetime.
         self.closed = asyncio.Event()
+        # Live link metrics surfaced by the Peer Monitor (see monitor.py). Counts
+        # post-handshake traffic; `rtt_ms` is filled by the monitor's heartbeat.
+        self.bytes_in = 0
+        self.bytes_out = 0
+        self.msgs_in = 0
+        self.msgs_out = 0
+        self.rtt_ms: float | None = None
 
     async def send(self, env: PeerEnvelope) -> None:
         async with self._send_lock:
+            self.bytes_out += len(env.model_dump_json())
+            self.msgs_out += 1
             await self.link.send(env)
 
 
@@ -125,6 +134,11 @@ class PeerHub:
         an unsubscribe function."""
         self._subscribers.add(cb)
         return lambda: self._subscribers.discard(cb)
+
+    def emit(self, event: str, data: dict[str, Any]) -> None:
+        """Broadcast an event to every subscribed browser connection (e.g. the
+        Peer Monitor's periodic `peer_metrics`). Public wrapper over `_emit`."""
+        self._emit(event, data)
 
     def _emit(self, event: str, data: dict[str, Any]) -> None:
         for cb in list(self._subscribers):
@@ -326,6 +340,8 @@ class PeerHub:
         logger.info("peer disconnected: %s", node_id)
 
     async def _dispatch(self, session: PeerSession, env: PeerEnvelope) -> None:
+        session.bytes_in += len(env.model_dump_json())
+        session.msgs_in += 1
         # Loop/replay guard, then signature check against the established peer key.
         if not self._seen.check(env.msg_id):
             return

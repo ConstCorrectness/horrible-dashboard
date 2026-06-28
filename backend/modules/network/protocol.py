@@ -29,6 +29,7 @@ AGENT_CANCEL = "agent_cancel"
 COLLAB_JOIN = "collab_join"
 COLLAB_LEAVE = "collab_leave"
 COLLAB_OP = "collab_op"
+PEER_CHAT = "peer_chat"
 ERROR = "error"
 
 

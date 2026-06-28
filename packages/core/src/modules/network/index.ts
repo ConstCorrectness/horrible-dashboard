@@ -1,5 +1,8 @@
 import { registry, type ModuleManifest } from '../../registry';
+import { AgentRelayPanel } from './AgentRelayPanel';
 import { LobbyPanel } from './LobbyPanel';
+import { PeerChatPanel } from './PeerChatPanel';
+import { PeerMonitor } from './PeerMonitor';
 import { PeersWidget } from './PeersWidget';
 import { initLobby } from './lobby';
 import { initNetwork } from './ws';
@@ -26,6 +29,24 @@ export const networkModule: ModuleManifest = {
       component: LobbyPanel,
       defaultPlacement: 'right',
     },
+    {
+      id: 'network.monitor',
+      title: 'Peer Monitor',
+      component: PeerMonitor,
+      defaultPlacement: 'bottom',
+    },
+    {
+      id: 'network.chat',
+      title: 'Peer Chat',
+      component: PeerChatPanel,
+      defaultPlacement: 'right',
+    },
+    {
+      id: 'network.relay',
+      title: 'Agent Relay',
+      component: AgentRelayPanel,
+      defaultPlacement: 'right',
+    },
   ],
   commands: [
     {
@@ -37,6 +58,21 @@ export const networkModule: ModuleManifest = {
       id: 'network.openLobby',
       title: 'Network: Open lobby',
       run: () => registry.openPanel('network.lobby'),
+    },
+    {
+      id: 'network.openMonitor',
+      title: 'Network: Open peer monitor',
+      run: () => registry.openPanel('network.monitor'),
+    },
+    {
+      id: 'network.openChat',
+      title: 'Network: Open peer chat',
+      run: () => registry.openPanel('network.chat'),
+    },
+    {
+      id: 'network.openRelay',
+      title: 'Network: Ask a peer agent',
+      run: () => registry.openPanel('network.relay'),
     },
   ],
   settings: [
@@ -165,4 +201,13 @@ export const networkModule: ModuleManifest = {
 export { initNetwork };
 export { initLobby };
 export { subscribeCollab, collabJoin, collabLeave, collabOp, type CollabUpdate } from './collab';
+export { useCollab, type CollabPane, type UseCollabOptions } from './useCollab';
+export {
+  subscribeChat,
+  chatOpen,
+  chatSend,
+  chatClose,
+  type ChatMessage,
+  type ChatEvent,
+} from './peerchat';
 export * from './api';
