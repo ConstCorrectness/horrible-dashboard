@@ -22,7 +22,7 @@ PROTOCOL_VERSION = 1
 # and self-certifying (it must equal the hash of the public key a peer presents).
 NodeId = str
 
-Transport = Literal["direct", "relay", "lan"]
+Transport = Literal["direct", "relay", "lan", "webrtc"]
 PeerStatus = Literal["connected", "connecting", "disconnected", "blocked"]
 
 

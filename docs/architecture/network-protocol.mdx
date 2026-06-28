@@ -244,9 +244,10 @@ data path and relay as the fallback.
 
 **Status: implemented.** Server: `lobby_server.py` (a standalone app bundling the
 relay broker for fallback). Node client: `lobby.py` (`LobbyClient`, opt in via
-`network.lobbyUrl`). Frontend: the **Lobby** widget. Signaling frames are forwarded
-as plumbing; real NAT hole-punching (ICE) is still stubbed — joins use the host's
-advertised address (direct) then the relay fallback.
+`network.lobbyUrl`). Frontend: the **Lobby** widget. `signal` frames carry the WebRTC
+SDP exchange: with `network.enableWebRtc` on, a join tries the host's advertised
+address (direct), then a **WebRTC** data-channel hole-punch (ICE/STUN, SDP over the
+lobby's `signal` frames), then the relay fallback.
 
 ### Roles
 
@@ -286,7 +287,7 @@ flowchart TB
 | node→lobby | `create_room` | `{name, visibility, joinPolicy}` | host a session |
 | node→lobby | `join_room` | `{roomId, token?}` | request to join |
 | lobby→node | `room_info` | `{roomId, host: {node_id, public_key, addresses[]}}` | candidates to dial |
-| node↔lobby | `signal` | `{to, candidate}` | exchange addresses / future ICE |
+| node↔lobby | `signal` | `{to, kind, sdp}` | WebRTC SDP offer/answer exchange |
 | node→lobby | `relay` | `{to, envelope}` | fallback path for signed envelopes |
 | lobby→node | `error` | `{code, message}` | rejection |
 
@@ -312,10 +313,13 @@ sequenceDiagram
         G->>H: /peer-ws hello {…}  (Scenario 2 handshake)
         H-->>G: hello_ack / auth_result
         Note over G,H: collab / chat / agent flow node-to-node
-    else NAT blocks direct
-        G->>L: signal {to: A, candidate}
-        H->>L: signal {to: B, candidate}
-        opt still unreachable
+    else NAT blocks direct (webrtc enabled)
+        G->>L: signal {to: A, kind: offer, sdp}
+        L->>H: signal {from: B, kind: offer, sdp}
+        H->>L: signal {to: B, kind: answer, sdp}
+        L->>G: signal {from: A, kind: answer, sdp}
+        Note over G,H: ICE connects → data channel → Scenario 2 handshake
+        opt still unreachable (symmetric NAT, no TURN)
             G->>L: relay {to: A, envelope}
             L->>H: forward (signed, opaque) — Scenario 3
         end
@@ -349,9 +353,14 @@ Because peer links are WebSocket (TCP), the node gathers **ICE-lite** candidates
 The candidates ride the lobby's register `addresses` (so they flow through
 `room_info`); the joiner dials them **in priority order** (host → srflx), then falls
 back to the relay. This reaches a peer on the LAN, or one whose peer-ws port is
-forwarded/permissively NATed. **True hole-punching through symmetric NAT over TCP is
-out of scope** — that requires a WebRTC datachannel transport (future); until then
-the relay is the guaranteed fallback.
+forwarded/permissively NATed.
+
+For NATs the ICE-lite TCP dial can't punch, the **WebRTC transport** (`webrtc.py`,
+`network.enableWebRtc` + the `webrtc` extra) negotiates a real ICE path: aiortc
+gathers candidates non-trickle (the full SDP carries them), so a single offer/answer
+over the lobby's `signal` frames bootstraps a data channel that then speaks the same
+signed `PeerEnvelope`s. Symmetric NAT still needs a TURN relay (`network.turnUrl`);
+without one, the store-and-forward relay remains the guaranteed fallback.
 
 ---
 
@@ -369,9 +378,10 @@ the relay is the guaranteed fallback.
 | Peer chat (`peer_chat`) | ✅ implemented |
 | Peer monitor (RTT/throughput) | ✅ implemented |
 | **Lobby** (directory + rooms, P2P handoff + relay fallback) | ✅ implemented (`lobby_server.py` / `lobby.py`) |
-| Signaling channel (address exchange) | ✅ plumbing implemented |
+| Signaling channel (WebRTC SDP exchange) | ✅ implemented (lobby `signal` frames) |
 | ICE-lite candidates (host/LAN + STUN server-reflexive, prioritized dial) | ✅ implemented (`ice.py`) |
-| WebRTC hole-punching (symmetric NAT over TCP) | 🚧 future (needs a datachannel transport) |
+| WebRTC datachannel transport (ICE/STUN hole-punching) | ✅ implemented (`webrtc.py`, opt-in `webrtc` extra) |
+| TURN-relayed WebRTC (symmetric NAT) | ✅ supported (`network.turnUrl`); store-and-forward relay is the default fallback |
 
 See [Distributed peer fabric](distributed.mdx) for identity, the envelope format, and
 the transport abstraction; [Module: network](../modules/network.mdx) for the channel

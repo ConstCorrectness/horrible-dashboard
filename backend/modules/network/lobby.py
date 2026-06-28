@@ -45,6 +45,9 @@ class LobbyClient:
         self._ws: Any = None
         self._reader: asyncio.Task[None] | None = None
         self._subscribers: set[Any] = set()
+        # Set by the webrtc transport: receives inbound `signal` frames (SDP) so the
+        # lobby doubles as the WebRTC signaling channel. Awaited but kept cheap.
+        self._signal_handler: Any = None
 
     # ---- frontend fanout ----------------------------------------------------------
 
@@ -58,6 +61,16 @@ class LobbyClient:
                 cb(event, data)
             except Exception:
                 logger.exception("lobby subscriber failed")
+
+    # ---- signaling seam (WebRTC) --------------------------------------------------
+
+    def set_signal_handler(self, cb: Any) -> None:
+        """Register the consumer of inbound `signal` frames (the webrtc transport)."""
+        self._signal_handler = cb
+
+    async def send_signal(self, to: str, payload: dict[str, Any]) -> None:
+        """Send a `signal` frame to a peer by node_id; the lobby forwards by `to`."""
+        await self._send({"type": "signal", "to": to, **payload})
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -197,8 +210,10 @@ class LobbyClient:
                 {"guest": msg.get("guest") or {}, "roomId": msg.get("roomId")},
             )
         elif mtype == "signal":
-            # Future ICE: candidates would be applied here. For now, plumbing only.
+            # WebRTC SDP exchange: hand off to the webrtc transport if it's listening.
             logger.info("lobby signal from %s", msg.get("from"))
+            if self._signal_handler is not None:
+                await self._signal_handler(str(msg.get("from") or ""), msg)
         elif mtype == "error":
             self._emit("error", {"message": msg.get("message", "lobby error")})
 
@@ -230,7 +245,23 @@ class LobbyClient:
                 return
             except Exception as exc:
                 logger.info("lobby direct dial %s failed: %s", address, exc)
-        # 2) relay fallback through the lobby host.
+        # 2) webrtc hole-punch (ICE/STUN) when the transport is enabled — SDP is
+        # exchanged over this same lobby's `signal` frames.
+        if any(t.name == "webrtc" for t in peer_hub.transports):
+            try:
+                info = await peer_hub.connect(host_id, "webrtc")
+                self._emit(
+                    "joined",
+                    {
+                        "roomId": msg.get("roomId"),
+                        "peer": info.node_id,
+                        "via": "webrtc",
+                    },
+                )
+                return
+            except Exception as exc:
+                logger.info("lobby webrtc dial to %s failed: %s", host_id, exc)
+        # 3) relay fallback through the lobby host.
         try:
             info = await peer_hub.connect(host_id, "relay")
             self._emit(

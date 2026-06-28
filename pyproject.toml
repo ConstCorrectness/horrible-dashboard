@@ -17,6 +17,11 @@ dependencies = [
     "zeroconf>=0.150.0",
 ]
 
+[project.optional-dependencies]
+# WebRTC datachannel transport (NAT traversal). Heavy native deps (PyAV/cffi), so it's
+# opt-in: `uv sync --extra webrtc`. The transport is lazy-imported and skipped without it.
+webrtc = ["aiortc>=1.9"]
+
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]
 

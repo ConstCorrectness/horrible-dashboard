@@ -114,6 +114,36 @@ export const networkModule: ModuleManifest = {
       default: 'stun.l.google.com:19302',
     },
     {
+      key: 'network.enableWebRtc',
+      title: 'Enable WebRTC transport',
+      description:
+        'Connect to peers over a WebRTC data channel (ICE/STUN NAT traversal), with SDP signaling via the lobby. Requires the backend `webrtc` extra (aiortc); the relay stays the fallback.',
+      type: 'boolean',
+      default: false,
+    },
+    {
+      key: 'network.turnUrl',
+      title: 'TURN server URL',
+      description:
+        'Optional TURN relay for WebRTC (e.g. turn:host:3478) used when STUN can’t punch the NAT (blank = STUN only).',
+      type: 'string',
+      default: '',
+    },
+    {
+      key: 'network.turnUsername',
+      title: 'TURN username',
+      description: 'Username credential for the TURN server (if it requires auth).',
+      type: 'string',
+      default: '',
+    },
+    {
+      key: 'network.turnCredential',
+      title: 'TURN credential',
+      description: 'Password/credential for the TURN server (if it requires auth).',
+      type: 'string',
+      default: '',
+    },
+    {
       key: 'network.allowRemoteAgent',
       title: 'Allow remote agents',
       description: "Let a trusted peer's agent ask yours questions.",

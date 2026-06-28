@@ -29,6 +29,16 @@ def build_transports() -> list[Transport]:
         transports.append(RelayTransport(relay_url))
     if get_value("network.enableLanDiscovery", False):
         transports.append(LanDiscovery())
+    if get_value("network.enableWebRtc", False):
+        from backend.modules.network.transport import webrtc
+
+        if webrtc.AIORTC_AVAILABLE:
+            transports.append(webrtc.WebRtcTransport())
+        else:
+            logger.warning(
+                "network.enableWebRtc is on but aiortc is not installed; "
+                "run `uv sync --extra webrtc` to enable the WebRTC transport"
+            )
     return transports
 
 
