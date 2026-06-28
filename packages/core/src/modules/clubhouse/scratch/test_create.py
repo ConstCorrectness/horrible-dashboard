@@ -1,8 +1,8 @@
 import asyncio
 import json
-import sys
 from pathlib import Path
 from backend.modules.clubhouse.routes import _ch_authed_post
+
 
 async def main():
     # Load credentials
@@ -73,7 +73,7 @@ async def main():
             "club_id": None,
             "user_ids": [],
             "event_id": None,
-        }
+        },
     ]
 
     for idx, p in enumerate(payloads, start=1):
@@ -86,9 +86,16 @@ async def main():
             # If succeeded, let's leave it immediately
             if res.get("channel"):
                 print(f"Leaving channel {res['channel']}...")
-                await _ch_authed_post("/leave_channel", {"channel": res["channel"]}, token, user_id, device_id)
+                await _ch_authed_post(
+                    "/leave_channel",
+                    {"channel": res["channel"]},
+                    token,
+                    user_id,
+                    device_id,
+                )
         except Exception as e:
             print("FAILED:", str(e))
+
 
 if __name__ == "__main__":
     asyncio.run(main())

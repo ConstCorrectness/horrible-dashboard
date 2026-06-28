@@ -251,7 +251,7 @@ class ThinkingExtractor:
                         self.content_parts.append(lead)
                         await self.on_delta("", lead)
                     self.in_think = True
-                    self.buffer = self.buffer[idx + 7:]
+                    self.buffer = self.buffer[idx + 7 :]
                 else:
                     prefixes = ["<", "<t", "<th", "<thi", "<thin", "<think"]
                     partial_match = False
@@ -278,9 +278,17 @@ class ThinkingExtractor:
                         self.reasoning_parts.append(reason)
                         await self.on_delta(reason, "")
                     self.in_think = False
-                    self.buffer = self.buffer[idx + 8:]
+                    self.buffer = self.buffer[idx + 8 :]
                 else:
-                    prefixes = ["</", "</t", "</th", "</thi", "</thin", "</think", "</think>"]
+                    prefixes = [
+                        "</",
+                        "</t",
+                        "</th",
+                        "</thi",
+                        "</thin",
+                        "</think",
+                        "</think>",
+                    ]
                     partial_match = False
                     for pt in prefixes:
                         if self.buffer.endswith(pt):
@@ -343,6 +351,7 @@ async def _ollama_chat_stream(
 
     async def run(think: bool) -> ChatResult:
         import logging
+
         logger = logging.getLogger("backend.agent.providers")
         payload = {**base, "think": True} if think else base
         logger.info(f"Ollama Request Payload: {json.dumps(payload)}")

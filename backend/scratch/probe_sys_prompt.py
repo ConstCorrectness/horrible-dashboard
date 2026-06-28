@@ -1,5 +1,4 @@
 import httpx
-import json
 import asyncio
 
 SYSTEM_PROMPT = (
@@ -33,37 +32,36 @@ SYSTEM_PROMPT = (
     "- After acting, reply with one short sentence confirming what you did."
 )
 
+
 async def test_run(temp):
     url = "http://localhost:11434/api/chat"
-    
-    tools = [{
-        "type": "function",
-        "function": {
-            "name": "get_current_weather",
-            "description": "Get the current weather",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "location": {"type": "string"}
-                }
-            }
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                },
+            },
         }
-    }]
-    
+    ]
+
     payload = {
         "model": "gemma4:e2b",
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": "Think about the number 42 as hard as you can"}
+            {"role": "user", "content": "Think about the number 42 as hard as you can"},
         ],
         "tools": tools,
         "think": True,
-        "options": {
-            "temperature": temp
-        },
-        "stream": False
+        "options": {"temperature": temp},
+        "stream": False,
     }
-    
+
     async with httpx.AsyncClient(timeout=60) as client:
         res = await client.post(url, json=payload)
         data = res.json()
@@ -74,10 +72,12 @@ async def test_run(temp):
         print(f"  Content length: {len(msg.get('content', ''))}")
         print(f"  Content snippet: {repr(msg.get('content', '')[:100])}...")
 
+
 async def main():
     print("--- Probing with SYSTEM_PROMPT ---")
     await test_run(0.0)
     await test_run(0.7)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -3,6 +3,7 @@ import json
 import asyncio
 from backend.modules.agent.orchestrator import LAYOUT_TOOLS
 
+
 async def main():
     url = "http://localhost:11434/api/chat"
     payload = {
@@ -10,16 +11,14 @@ async def main():
         "messages": [
             {"role": "user", "content": "Hello"},
             {"role": "assistant", "content": "Hello! How can I help you today?"},
-            {"role": "user", "content": "Think about the number 42 as hard as you can"}
+            {"role": "user", "content": "Think about the number 42 as hard as you can"},
         ],
         "tools": LAYOUT_TOOLS,
-        "options": {
-            "temperature": 0.7
-        },
+        "options": {"temperature": 0.7},
         "stream": True,
-        "think": True
+        "think": True,
     }
-    
+
     print("Sending streaming request with history to Ollama...")
     async with httpx.AsyncClient(timeout=60) as client:
         async with client.stream("POST", url, json=payload) as res:
@@ -36,7 +35,9 @@ async def main():
                     if "thinking" in msg:
                         has_thinking = True
                     if count <= 15 or count % 50 == 0:
-                        print(f"Chunk #{count}: keys={list(obj.keys())}, message_keys={list(msg.keys())}")
+                        print(
+                            f"Chunk #{count}: keys={list(obj.keys())}, message_keys={list(msg.keys())}"
+                        )
                         if "thinking" in msg:
                             print(f"  -> Thinking delta: {repr(msg['thinking'])}")
                         if "content" in msg:
@@ -45,6 +46,7 @@ async def main():
                     print(f"Chunk #{count} error: {e}, raw line: {line}")
             print(f"Total chunks: {count}")
             print(f"Had thinking field: {has_thinking}")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

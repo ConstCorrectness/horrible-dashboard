@@ -132,18 +132,64 @@ async def search(req: SearchRequest) -> list[SearchResult]:
     emb, _ = await get_embedding(req.text)
 
     # 2. Search database using cosine similarity
-    matches = search_documents(req.collection, emb, req.limit)
+    # We query with a larger limit to ensure we retrieve enough unique intents after grouping
+    db_limit = max(100, req.limit * 5)
+    matches = search_documents(req.collection, emb, db_limit)
 
-    return [
-        SearchResult(
-            id=m["id"],
-            collection=m["collection"],
-            text=m["text"],
-            metadata=m["metadata"],
-            score=m["score"],
-        )
+    # Check if this collection contains intent metadata (i.e. at least one match has "intent" key)
+    is_intent_collection = any(
+        isinstance(m.get("metadata"), dict) and "intent" in m["metadata"]
         for m in matches
-    ]
+    )
+
+    if is_intent_collection:
+        intent_groups = {}
+        for m in matches:
+            meta = m.get("metadata") or {}
+            # Try to get intent identifier: full_intent first, then intent
+            intent_val = meta.get("full_intent") or meta.get("intent")
+            if not intent_val:
+                continue
+
+            score = m["score"]
+            if (
+                intent_val not in intent_groups
+                or score > intent_groups[intent_val]["score"]
+            ):
+                intent_groups[intent_val] = {
+                    "id": m["id"],
+                    "collection": m["collection"],
+                    "text": intent_val,
+                    "metadata": meta,
+                    "score": score,
+                }
+
+        # Sort by score descending and limit to req.limit
+        sorted_groups = sorted(
+            intent_groups.values(), key=lambda x: x["score"], reverse=True
+        )
+        return [
+            SearchResult(
+                id=g["id"],
+                collection=g["collection"],
+                text=g["text"],
+                metadata=g["metadata"],
+                score=g["score"],
+            )
+            for g in sorted_groups[: req.limit]
+        ]
+    else:
+        # Fallback to standard document search (using requested limit)
+        return [
+            SearchResult(
+                id=m["id"],
+                collection=m["collection"],
+                text=m["text"],
+                metadata=m["metadata"],
+                score=m["score"],
+            )
+            for m in matches[: req.limit]
+        ]
 
 
 @router.post("/documents", response_model=DocumentResponse)

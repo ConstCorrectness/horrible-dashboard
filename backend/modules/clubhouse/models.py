@@ -114,4 +114,3 @@ class CreateChannelRequest(BaseModel):
 
 class InviteUserRequest(BaseModel):
     user_id: int
-

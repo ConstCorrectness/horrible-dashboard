@@ -7,7 +7,6 @@ from fastapi.testclient import TestClient
 from backend.app import app
 from backend.modules.telemetry.instrument import (
     _MAX_BODY_CHARS,
-    REDACTED,
     _max_body_chars,
     instrumented_client,
     safe_body,

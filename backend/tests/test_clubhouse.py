@@ -384,7 +384,11 @@ def test_create_channel(client, tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(routes, "_ch_authed_post", fake_post)
     res = client.post(
         "/api/clubhouse/channels",
-        json={"topic": "Testing Create Room", "is_private": False, "is_social_mode": False},
+        json={
+            "topic": "Testing Create Room",
+            "is_private": False,
+            "is_social_mode": False,
+        },
     )
     assert res.status_code == 200
     assert res.json()["channel"] == "new-channel"
@@ -423,7 +427,12 @@ def test_invite_user(client, tmp_path, monkeypatch) -> None:
     _connect(tmp_path)
 
     async def fake_post(path, payload, token, user_id, device_id=None):
-        assert (path, token, user_id, device_id) == ("/invite_to_existing_channel", "T", 4242, "D")
+        assert (path, token, user_id, device_id) == (
+            "/invite_to_existing_channel",
+            "T",
+            4242,
+            "D",
+        )
         assert payload == {"channel": "my-chan", "user_id": 77}
         return {"success": True}
 
@@ -450,4 +459,3 @@ def test_search_users(client, tmp_path, monkeypatch) -> None:
     res = client.get("/api/clubhouse/users/search?query=alice")
     assert res.status_code == 200
     assert res.json()["users"][0]["name"] == "Alice"
-

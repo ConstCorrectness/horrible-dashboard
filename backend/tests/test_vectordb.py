@@ -138,3 +138,66 @@ def test_delete_documents(client: TestClient) -> None:
     # Delete non-existent raises 404
     err_res = client.delete("/api/vectordb/documents/to_delete")
     assert err_res.status_code == 404
+
+
+def test_semantic_search_intents(client: TestClient) -> None:
+    # Insert multiple utterances mapping to the same intent, and some mapping to another
+    client.post(
+        "/api/vectordb/documents",
+        json={
+            "id": "utt1",
+            "collection": "intents_test",
+            "text": "what is the temperature today",
+            "metadata": {
+                "intent": "get_weather",
+                "namespace": "weather",
+                "full_intent": "weather/get_weather",
+            },
+        },
+    )
+    client.post(
+        "/api/vectordb/documents",
+        json={
+            "id": "utt2",
+            "collection": "intents_test",
+            "text": "is it raining outside",
+            "metadata": {
+                "intent": "get_weather",
+                "namespace": "weather",
+                "full_intent": "weather/get_weather",
+            },
+        },
+    )
+    client.post(
+        "/api/vectordb/documents",
+        json={
+            "id": "utt3",
+            "collection": "intents_test",
+            "text": "play some music please",
+            "metadata": {
+                "intent": "play_music",
+                "namespace": "media",
+                "full_intent": "media/play_music",
+            },
+        },
+    )
+
+    # Perform search
+    search_payload = {
+        "text": "is it hot or raining today?",
+        "collection": "intents_test",
+        "limit": 5,
+    }
+    res = client.post("/api/vectordb/search", json=search_payload)
+    assert res.status_code == 200
+    results = res.json()
+
+    # We should have grouped by intent, so we expect only 2 unique intents in results, not 3 utterances
+    assert len(results) == 2
+
+    # Check that text is the full_intent, not the utterances
+    assert results[0]["text"] == "weather/get_weather"
+    assert results[1]["text"] == "media/play_music"
+
+    # The score should be the highest of the grouped utterances
+    assert results[0]["score"] > results[1]["score"]

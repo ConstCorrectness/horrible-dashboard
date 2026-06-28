@@ -1,7 +1,6 @@
-import asyncio
-import json
 from fastapi.testclient import TestClient
 from backend.app import app
+
 
 def main():
     client = TestClient(app)
@@ -9,17 +8,11 @@ def main():
     with client.websocket_connect("/ws") as ws:
         # Receive hello message
         print("Greeting: ", ws.receive_json())
-        
+
         # In a real conversation, the client sends manifest first. Let's do that.
-        manifest_msg = {
-            "channel": "agent",
-            "event": "manifest",
-            "data": {
-                "tools": []
-            }
-        }
+        manifest_msg = {"channel": "agent", "event": "manifest", "data": {"tools": []}}
         ws.send_json(manifest_msg)
-        
+
         # Send ask message
         ask_msg = {
             "channel": "agent",
@@ -28,12 +21,12 @@ def main():
                 "turnId": "test-ws-reasoning-probe-1",
                 "prompt": "Think about the number 42 as hard as you can",
                 "history": [],
-                "context": {}
-            }
+                "context": {},
+            },
         }
         print("Sending ask...")
         ws.send_json(ask_msg)
-        
+
         while True:
             try:
                 msg = ws.receive_json()
@@ -56,6 +49,7 @@ def main():
             except Exception as e:
                 print(f"Exception: {e}")
                 break
+
 
 if __name__ == "__main__":
     main()

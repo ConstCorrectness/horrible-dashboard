@@ -175,8 +175,10 @@ def test_ollama_chat_stream_hyperparameters() -> None:
 
     async def go() -> P.ChatResult:
         async with _client(handler) as c:
+
             async def on_delta(r: str, c: str) -> None:
                 pass
+
             return await P.chat_stream(
                 c,
                 P.provider_for("ollama"),
@@ -211,8 +213,10 @@ def test_openai_chat_stream_hyperparameters() -> None:
 
     async def go() -> P.ChatResult:
         async with _client(handler) as c:
+
             async def on_delta(r: str, c: str) -> None:
                 pass
+
             return await P.chat_stream(
                 c,
                 P.provider_for("lmstudio"),

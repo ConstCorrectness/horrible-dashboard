@@ -1,6 +1,6 @@
-import asyncio
 from fastapi.testclient import TestClient
 from backend.app import app
+
 
 def main():
     client = TestClient(app)
@@ -9,7 +9,7 @@ def main():
         # Wait for system hello
         hello = ws.receive_json()
         print(f"Received greeting: {hello}")
-        
+
         # Send ask message
         ask_msg = {
             "channel": "agent",
@@ -18,12 +18,12 @@ def main():
                 "turnId": "test-turn-1",
                 "prompt": "think about the number 42 and say hello",
                 "history": [],
-                "context": {}
-            }
+                "context": {},
+            },
         }
         print("Sending ask message...")
         ws.send_json(ask_msg)
-        
+
         print("Waiting for responses...")
         reasoning_received = False
         tokens_received = False
@@ -33,7 +33,7 @@ def main():
                 channel = msg.get("channel")
                 event = msg.get("event")
                 data = msg.get("data") or {}
-                
+
                 if channel == "agent":
                     if event == "reasoning":
                         reasoning_received = True
@@ -56,9 +56,10 @@ def main():
             except Exception as e:
                 print(f"Connection closed or error: {e}")
                 break
-                
+
         print(f"Reasoning received: {reasoning_received}")
         print(f"Tokens received: {tokens_received}")
+
 
 if __name__ == "__main__":
     main()

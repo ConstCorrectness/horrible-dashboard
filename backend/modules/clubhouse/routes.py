@@ -485,9 +485,12 @@ async def join_channel(channel: str) -> dict[str, Any]:
     res["user_id"] = auth["user_id"]
     # Log the full response to help diagnose PubNub issues
     logger.info("join_channel response keys: %s", list(res.keys()))
-    logger.info("join_channel pubnub fields: pubnub_enable=%s pubnub_origin=%s pubnub_token_len=%s",
-                res.get("pubnub_enable"), res.get("pubnub_origin"),
-                len(res.get("pubnub_token") or ""))
+    logger.info(
+        "join_channel pubnub fields: pubnub_enable=%s pubnub_origin=%s pubnub_token_len=%s",
+        res.get("pubnub_enable"),
+        res.get("pubnub_origin"),
+        len(res.get("pubnub_token") or ""),
+    )
     return res
 
 
@@ -631,5 +634,3 @@ async def invite_user(channel: str, body: InviteUserRequest) -> dict[str, Any]:
         auth["user_id"],
         auth.get("device_id"),
     )
-
-
