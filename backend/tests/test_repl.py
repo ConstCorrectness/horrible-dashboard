@@ -11,6 +11,7 @@ from typing import Any
 
 from backend.modules.repl.kernel import ReplKernel
 from backend.modules.repl.manager import ReplManager
+from backend.modules.repl.sdk import Dash, build_namespace, render_help
 
 
 # --- kernel ----------------------------------------------------------------
@@ -191,3 +192,75 @@ def test_duplicate_start_errors() -> None:
         assert errors and errors[0]["id"] == "r1"
 
     asyncio.run(go())
+
+
+# --- dash SDK facades ------------------------------------------------------
+
+
+def _capturing_dash() -> tuple[Dash, list[tuple[str, dict[str, Any]]]]:
+    """A Dash whose relay just records (name, args) and returns a stub result."""
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def call(name: str, args: dict[str, Any]) -> Any:
+        calls.append((name, args))
+        return {"ok": True}
+
+    return Dash(call), calls
+
+
+def test_dash_layout_relays_split() -> None:
+    dash, calls = _capturing_dash()
+    dash.layout.split("editor.buffer#1", "right")
+    assert calls == [
+        ("split_pane", {"instanceId": "editor.buffer#1", "direction": "right"})
+    ]
+
+
+def test_dash_layout_split_with_view_id() -> None:
+    dash, calls = _capturing_dash()
+    dash.layout.split("a#1", "down", "terminal.instance")
+    assert calls[0] == (
+        "split_pane",
+        {"instanceId": "a#1", "direction": "down", "paneId": "terminal.instance"},
+    )
+
+
+def test_dash_io_reads_and_filters_recorder() -> None:
+    from backend.modules.telemetry.recorder import recorder
+
+    recorder.clear()
+    recorder.record(source="inbound", method="GET", target="/ok", status=200)
+    recorder.record(source="inbound", method="GET", target="/bad", status=500)
+    dash, _ = _capturing_dash()
+    assert any(e["target"] == "/ok" for e in dash.io.recent())
+    assert [e["target"] for e in dash.io.errors()] == ["/bad"]
+    dash.io.clear()
+    assert dash.io.recent() == []
+
+
+def test_dash_settings_roundtrip(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("HORRIBLE_DATA_DIR", str(tmp_path))
+    dash, _ = _capturing_dash()
+    assert dash.settings.get("foo.bar", "fallback") == "fallback"
+    dash.settings.set("foo.bar", 42)
+    assert dash.settings.get("foo.bar") == 42
+    assert dash.settings.all()["foo.bar"] == 42
+
+
+def test_dash_help_lists_every_facade() -> None:
+    dash, _ = _capturing_dash()
+    text = render_help(dash)
+    for facade in (
+        "dash.panes",
+        "dash.workspaces",
+        "dash.layout",
+        "dash.io",
+        "dash.settings",
+    ):
+        assert facade in text
+    assert "dash.call()" in text and "dash.help()" in text
+
+
+def test_build_namespace_seeds_dash() -> None:
+    ns = build_namespace(lambda name, args: None)
+    assert isinstance(ns["dash"], Dash)

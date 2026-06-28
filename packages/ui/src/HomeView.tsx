@@ -102,8 +102,8 @@ export function HomeView() {
             </p>
           ) : (
             <p className="home-hint">
-              Backend unreachable — start it with{' '}
-              <code>uv run uvicorn backend.app:app --port 8000</code>, then{' '}
+              Backend unreachable — start the full stack with <code>pnpm dev</code> (or just the
+              backend with <code>uv run uvicorn backend.app:app --port 8000</code>), then{' '}
               <button onClick={() => void refresh()}>retry</button>
             </p>
           ))}

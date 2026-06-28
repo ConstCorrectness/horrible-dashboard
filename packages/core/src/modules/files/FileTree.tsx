@@ -12,6 +12,7 @@ import { createPortal } from 'react-dom';
 import { useVirtualizer } from '@tanstack/react-virtual';
 
 import { useAgentContext } from '../../agent-context';
+import { dialogs } from '../../dialogs';
 import { registry } from '../../registry';
 import { openBuffer } from '../editor';
 import { deleteEntry, joinPath, parentDir, renameEntry } from './api';
@@ -160,7 +161,13 @@ export function FileTree() {
     const paths = selected.size ? [...selected] : active ? [active] : [];
     if (paths.length === 0) return;
     const label = paths.length === 1 ? paths[0] : `${paths.length} items`;
-    if (!window.confirm(`Delete ${label}?`)) return;
+    const ok = await dialogs.confirm({
+      title: 'Delete',
+      message: `Delete ${label}? This can't be undone.`,
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
     for (const p of paths) {
       try {
         await deleteEntry(p, kindFor(p) === 'dir');

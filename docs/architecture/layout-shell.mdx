@@ -93,8 +93,31 @@ Everything user-facing routes through two shell services:
   (`module.verb` ids, e.g. `terminal.new`, `chat.focusInput`). Panels' buttons
   invoke commands; the palette and keybindings invoke the same commands. This is
   what keeps both layouts behaviorally identical.
-- **Keybinding service** — maps keys to command ids. Modules declare defaults;
-  the shell resolves conflicts and (on desktop) registers any global shortcuts.
+- **Keybinding service** — maps keys to command ids with **focus scopes**.
+  Modules declare defaults; the shell resolves them against the focused pane (see
+  below) and (on desktop) registers any global shortcuts.
+
+### Keybinding scopes
+
+A `KeybindingDecl` (`{ key, command }`) is **global** by default — active
+everywhere. Two optional fields make bindings focus-aware:
+
+- **`scope`** — a pane view id (e.g. `terminal.instance`). The binding is only
+  active while a pane of that view is focused, and it **shadows a plain global**
+  binding for the same key. So a focused terminal can bind `mod+k` to
+  `terminal.clear` while `mod+k` opens the command palette everywhere else.
+- **`override`** (on a *global* binding) — when true, the global wins even if the
+  focused pane has a scoped binding for the same key. The escape hatch for
+  shortcuts that must never be shadowed.
+
+The shell tracks the **active scope** — the focused pane's view id — in
+`packages/core/src/keybindings.ts`: the workspace pane host calls `setActiveScope`
+on focus/pointer-down and `clearActiveScope` on unmount. The pure
+`resolveKeybinding(event, scope, bindings)` picks the command with precedence
+**override-global → focused-scope → plain-global**, so most globals are
+overridable by the focused pane but an `override` global always wins — the "may or
+may not override" rule. (CodeMirror/xterm keep their own internal keymaps; this
+service is for registry command bindings.)
 
 ## Platform capability service
 
@@ -162,6 +185,51 @@ toastsStore.add('success', 'File Exported', 'Workspace layout successfully saved
 
 // Error notification with persistent display
 toastsStore.add('error', 'Sync Failed', 'Failed to connect to the peer fabric.', 0);
+```
+
+## Modal dialogs (prompt / confirm)
+
+Toasts **inform**; dialogs **ask**. The shell contributes a promise-based modal
+system that replaces the browser's `window.prompt` / `window.confirm` (which are
+unstyled, untestable, and block the whole tab). No module calls the native dialogs
+anymore — they all route through here, so input and confirmation look and behave
+the same in both layouts.
+
+- **Store (`dialogsStore` / `dialogs`)** — `packages/core/src/dialogs.ts`,
+  exported from `@horrible/core`. Requests **queue** (one shown at a time) and each
+  returns a promise:
+  - `dialogs.prompt({ title, message?, defaultValue?, placeholder?, confirmLabel?, cancelLabel? })`
+    → `Promise<string | null>` (null on cancel).
+  - `dialogs.confirm({ title, message?, confirmLabel?, cancelLabel?, danger? })`
+    → `Promise<boolean>`. `danger: true` renders the confirm button red for
+    destructive actions (delete).
+- **Component (`Dialogs`)** — `packages/ui/src/Dialogs.tsx`, mounted in `AppShell`
+  beside `<Toasts />`. Renders the active dialog centered over a dimmed backdrop;
+  Enter submits, Escape and backdrop-click cancel, the field auto-focuses. Styles
+  (`.dialog-*`) live in `packages/ui/src/styles.css`.
+
+Outside React (commands, CodeMirror keymaps) call `await dialogs.prompt(...)`
+directly; where a handler must return synchronously (e.g. an editor keymap), fire
+the promise and act in `.then(...)`. Pair the result with a toast for feedback —
+e.g. confirm a delete, then `toastsStore.add('info', 'Deleted', …)`.
+
+### Usage Example
+```typescript
+import { dialogs, toastsStore } from '@horrible/core';
+
+const name = await dialogs.prompt({ title: 'New workspace', confirmLabel: 'Create' });
+if (name?.trim()) {
+  await createWorkspace(name.trim());
+  toastsStore.add('success', 'Workspace created', `“${name.trim()}” is ready.`);
+}
+
+const ok = await dialogs.confirm({
+  title: 'Delete file',
+  message: "This can't be undone.",
+  confirmLabel: 'Delete',
+  danger: true,
+});
+if (ok) await remove();
 ```
 
 ## What belongs in each entry

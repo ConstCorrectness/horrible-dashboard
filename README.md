@@ -25,9 +25,8 @@ frontend, two layouts: the browser (`apps/web`) and a cross-platform desktop app
 
 ```sh
 uv sync && pnpm install
-uv run uvicorn backend.app:app --reload --port 8000   # backend
-pnpm dev                                              # browser layout → http://localhost:5173
-# desktop layout: cd apps/desktop && pnpm dev
+pnpm dev            # browser layout: backend + UI together → http://localhost:5173
+pnpm dev:desktop    # desktop layout: Tauri window (supervises its own backend)
 ```
 
 Architecture and module docs live in [docs/](docs/README.md). Conventions for

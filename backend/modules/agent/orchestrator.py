@@ -465,8 +465,16 @@ def _group_of(name: str) -> str:
 
 
 def _core_tools() -> list[dict[str, Any]]:
-    """Always-present tools: the layout verbs, the peer tools, and the meta tools."""
-    return list(LAYOUT_TOOLS) + list(PEER_TOOLS) + list(META_TOOLS)
+    """Always-present tools: the layout verbs, the peer tools, the meta tools, and
+    any backend-plugin agent tools (registered via backend.sdk)."""
+    from backend.sdk.registry import registry as _plugins
+
+    return (
+        list(LAYOUT_TOOLS)
+        + list(PEER_TOOLS)
+        + list(META_TOOLS)
+        + _plugins.provider_tools()
+    )
 
 
 def _all_dynamic_tools(conn: WsConnection) -> list[dict[str, Any]]:
@@ -616,6 +624,11 @@ def _tool_meta(conn: WsConnection, name: str) -> dict[str, Any] | None:
     tools carry theirs in the pushed manifest."""
     if name in _STATIC_TOOL_META:
         return _STATIC_TOOL_META[name]
+    from backend.sdk.registry import registry as _plugins
+
+    plugin_tool = _plugins.agent_tools.get(name)
+    if plugin_tool is not None:
+        return plugin_tool.meta()
     for t in getattr(conn, "agent_tools", []):
         if t.get("name") == name:
             return t
@@ -793,6 +806,10 @@ async def _dispatch_call(
 
     if not await _gate(conn, turn_id, call):
         return {"error": "denied by permission policy"}
+    from backend.sdk.registry import registry as _plugins
+
+    if name in _plugins.agent_tools:
+        return await _plugins.invoke_agent_tool(name, call.arguments)
     if name in BACKEND_TOOL_NAMES:
         return await _run_backend_tool(conn, call)
     return await _call_frontend_tool(conn, turn_id, name, call.arguments)

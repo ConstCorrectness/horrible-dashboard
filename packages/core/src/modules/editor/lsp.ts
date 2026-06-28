@@ -26,6 +26,7 @@ import {
   type CompletionResult,
 } from '@codemirror/autocomplete';
 
+import { dialogs } from '../../dialogs';
 import { sendChannel, subscribeChannel, type WsMessage } from '../../ws';
 import { getBuffer } from './buffers';
 import {
@@ -690,8 +691,18 @@ export function lspExtension(opts: LspOptions): Extension {
         if (!ref.plugin?.initialized) return false;
         const word = view.state.wordAt(view.state.selection.main.head);
         const current = word ? view.state.sliceDoc(word.from, word.to) : '';
-        const next = window.prompt('Rename symbol to:', current)?.trim();
-        if (next && next !== current) void ref.plugin?.rename({}, next);
+        // The dialog is async; the keymap handler resolves synchronously and the
+        // rename fires once the user submits.
+        void dialogs
+          .prompt({
+            title: 'Rename symbol',
+            defaultValue: current,
+            confirmLabel: 'Rename',
+          })
+          .then((value) => {
+            const next = value?.trim();
+            if (next && next !== current) void ref.plugin?.rename({}, next);
+          });
         return true;
       },
     },

@@ -24,7 +24,13 @@ Clubhouse account via a widget (unofficial API, token held server-side). An `obs
 the shared `/ws` socket. A **public plugin SDK** (`packages/sdk`,
 `@horribledashboard/sdk`) plus a `marketplace` module let third-party frontend plugins
 (panels/widgets/commands/keybindings) be installed from a catalog and loaded at
-boot — see docs/architecture/plugin-sdk.mdx. A `settings` module gives a
+boot — see docs/architecture/plugin-sdk.mdx. A **backend plugin SDK** (`backend/sdk`,
+`backend.sdk`) is the server-side counterpart: plugins contribute HTTP routes,
+agent tools, `/ws` channels, lifespan hooks, and `dash` REPL facades, discovered
+from bundled dirs, `HORRIBLE_PLUGINS_DIR`, and pip entry points — see
+docs/architecture/backend-plugin-sdk.mdx. The **`dash`** Python REPL handle scripts
+the running app (panes/workspaces/layout/I-O/settings; `dash.help()`) — see
+docs/architecture/python-sdk.mdx. A `settings` module gives a
 VS Code–style settings page where any module or plugin contributes its own
 settings (declared in its manifest, read live via `useSetting`/`host.settings`,
 overrides persisted server-side) — see docs/modules/settings.mdx. A **vectordb** module manages a local vector database with cosine similarity searches and agent integration — see docs/modules/vectordb.mdx. A **visualizer** module renders HTML5 Canvas, Three.js, and Babylon.js dynamic client-side animations, and streams headless Pygame frames from backend subprocesses — see docs/modules/visualizer.mdx. A **network** module is the **distributed peer fabric**: a process-global `PeerHub` lets this backend node connect to other users' nodes over TCP/IP (hybrid direct/relay/LAN transports, Ed25519 node identity, settings-driven trust), so users collaborate via **agent-to-agent** (`agent.ask_peer` — your agent asks a peer's agent, gated read-only by default) and **collaborative shared panes** (a `collab` channel; scratch is the reference) — see docs/modules/network.mdx and docs/architecture/distributed.mdx. An experimental Electron shell lives on the `electron-shell` branch. Remaining modules (editor, terminal, files, full chat cockpit) are unimplemented — see docs/ for their designs.
@@ -38,8 +44,10 @@ overrides persisted server-side) — see docs/modules/settings.mdx. A **vectordb
 - **Extensibility:** built-in modules first. Every feature (chat, dashboard, notes,
   terminal, files) is an internal module registered through a central registry
   (commands, panels, keybindings). The public plugin API (`@horribledashboard/sdk` +
-  marketplace) exposes the same contract to third-party frontend plugins; v1 is
-  frontend-only, trusted/unsandboxed — see docs/architecture/plugin-sdk.mdx.
+  marketplace) exposes the same contract to third-party frontend plugins, and
+  `backend.sdk` exposes a server-side contract for backend plugins (routes, agent
+  tools, `/ws` channels); both are trusted/unsandboxed in v1 — see
+  docs/architecture/plugin-sdk.mdx and docs/architecture/backend-plugin-sdk.mdx.
 
 ## Target layout
 
@@ -63,9 +71,11 @@ buffers, terminal + file explorer.
 - `uv run uvicorn backend.app:app --reload --port 8000` — backend dev server
 - `uv run ruff format .` and `uv run ruff check --fix .` — Python format/lint
 - `uv add <pkg>` / `uv add --dev <pkg>` — Python dependencies (never pip)
-- `pnpm dev` — browser layout dev server (port 5173, proxies /api and /ws to 8000)
-- `pnpm dev` in `apps/desktop` — desktop layout (Tauri; starts the web dev server
-  **and spawns the backend itself** — reuses one already running on :8000)
+- `pnpm dev` — browser layout, full stack: starts the backend **and** the Vite UI
+  together (port 5173, proxies /api and /ws to 8000) via `scripts/dev.mjs`.
+  `pnpm dev:web` is UI-only; `pnpm dev:lan` exposes both on 0.0.0.0 (peer fabric).
+- `pnpm dev:desktop` — desktop layout (Tauri; **spawns/supervises the backend
+  itself** via `src-tauri/src/backend.rs` — reuses one already running on :8000)
 - `pnpm typecheck`, `pnpm lint` — whole workspace, from the root
 - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` — Rust check
 

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useAgentContext } from '../../agent-context';
 import { apiGet, apiPost, apiDelete } from '../../api';
+import { dialogs } from '../../dialogs';
+import { toastsStore } from '../../toasts';
 import { apiUrl } from '../../origin';
 
 interface CollectionStats {
@@ -41,7 +43,9 @@ interface SearchResult {
 }
 
 export function VectorDbWidget() {
-  const [activeTab, setActiveTab] = useState<'overview' | 'search' | 'explorer' | 'insert'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'search' | 'explorer' | 'insert'>(
+    'overview',
+  );
   const [status, setStatus] = useState<VectorDbStatus | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(false);
   const [statusError, setStatusError] = useState<string | null>(null);
@@ -97,12 +101,31 @@ export function VectorDbWidget() {
 
     if (provider === 'ollama') {
       return (
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: '0.75rem',
+          }}
+        >
           <div>
-            <strong>⚠️ Recommended embedding model missing:</strong> For higher search quality and standard dimensions, we recommend installing the <strong>all-minilm</strong> (all-MiniLM-L6-v2) embedding model.
+            <strong>⚠️ Recommended embedding model missing:</strong> For higher search quality and
+            standard dimensions, we recommend installing the <strong>all-minilm</strong>{' '}
+            (all-MiniLM-L6-v2) embedding model.
           </div>
           {!pulling && !pullProgress && (
-            <button className="vdb-btn-primary" onClick={handlePullModel} style={{ height: 'auto', padding: '0.3rem 0.75rem', background: '#ffda6a', color: '#14161a' }}>
+            <button
+              className="vdb-btn-primary"
+              onClick={handlePullModel}
+              style={{
+                height: 'auto',
+                padding: '0.3rem 0.75rem',
+                background: '#ffda6a',
+                color: '#14161a',
+              }}
+            >
               Pull all-minilm
             </button>
           )}
@@ -111,19 +134,25 @@ export function VectorDbWidget() {
     } else if (provider === 'lmstudio') {
       return (
         <div>
-          <strong>⚠️ Recommended embedding model missing:</strong> We recommend launching <strong>LM Studio</strong>, searching for <strong>all-MiniLM-L6-v2</strong> or <strong>nomic-embed-text</strong>, downloading it, and loading it as the active model.
+          <strong>⚠️ Recommended embedding model missing:</strong> We recommend launching{' '}
+          <strong>LM Studio</strong>, searching for <strong>all-MiniLM-L6-v2</strong> or{' '}
+          <strong>nomic-embed-text</strong>, downloading it, and loading it as the active model.
         </div>
       );
     } else if (provider === 'vllm') {
       return (
         <div>
-          <strong>⚠️ Recommended embedding model missing:</strong> We recommend starting your <strong>vLLM</strong> instance with a dedicated embedding model (such as <strong>all-MiniLM-L6-v2</strong>) by passing the <code>--model</code> CLI flag.
+          <strong>⚠️ Recommended embedding model missing:</strong> We recommend starting your{' '}
+          <strong>vLLM</strong> instance with a dedicated embedding model (such as{' '}
+          <strong>all-MiniLM-L6-v2</strong>) by passing the <code>--model</code> CLI flag.
         </div>
       );
     } else {
       return (
         <div>
-          <strong>⚠️ LLM Agent not configured:</strong> Finish agent onboarding in the chat home view, or configure Ollama, LM Studio, or vLLM to use a dedicated embedding model. Fallback is currently using local offline heuristics.
+          <strong>⚠️ LLM Agent not configured:</strong> Finish agent onboarding in the chat home
+          view, or configure Ollama, LM Studio, or vLLM to use a dedicated embedding model. Fallback
+          is currently using local offline heuristics.
         </div>
       );
     }
@@ -174,7 +203,7 @@ export function VectorDbWidget() {
             }
           }
         }
-        
+
         setPullProgress('Installation completed successfully!');
         setPulling(false);
         fetchStatus();
@@ -307,8 +336,14 @@ export function VectorDbWidget() {
       });
   };
 
-  const handleDelete = (docId: string, refreshCallback?: () => void) => {
-    if (!confirm('Are you sure you want to delete this document?')) return;
+  const handleDelete = async (docId: string, refreshCallback?: () => void) => {
+    const ok = await dialogs.confirm({
+      title: 'Delete document',
+      message: "This removes the document and its embeddings. This can't be undone.",
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (!ok) return;
 
     apiDelete<{ deleted: boolean }>(`/vectordb/documents/${docId}`)
       .then(() => {
@@ -316,7 +351,7 @@ export function VectorDbWidget() {
         if (refreshCallback) refreshCallback();
       })
       .catch((err: unknown) => {
-        alert(`Failed to delete document: ${err}`);
+        toastsStore.add('error', 'Delete failed', String(err));
       });
   };
 
@@ -381,11 +416,42 @@ export function VectorDbWidget() {
         )}
 
         {status && !status.active_model.includes('dedicated') && (
-          <div className="vdb-alert warning" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1rem', background: 'rgba(255, 193, 7, 0.08)', border: '1px solid rgba(255, 193, 7, 0.3)', color: '#ffda6a' }}>
+          <div
+            className="vdb-alert warning"
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.5rem',
+              marginBottom: '1rem',
+              background: 'rgba(255, 193, 7, 0.08)',
+              border: '1px solid rgba(255, 193, 7, 0.3)',
+              color: '#ffda6a',
+            }}
+          >
             {getWarningBannerContent()}
             {pullProgress && (
-              <div style={{ fontSize: '0.8rem', color: '#fff', display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.25rem' }}>
-                <span className="vdb-spinner" style={{ display: 'inline-block', width: '10px', height: '10px', border: '2px solid #fff', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+              <div
+                style={{
+                  fontSize: '0.8rem',
+                  color: '#fff',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  marginTop: '0.25rem',
+                }}
+              >
+                <span
+                  className="vdb-spinner"
+                  style={{
+                    display: 'inline-block',
+                    width: '10px',
+                    height: '10px',
+                    border: '2px solid #fff',
+                    borderTopColor: 'transparent',
+                    borderRadius: '50%',
+                    animation: 'spin 1s linear infinite',
+                  }}
+                />
                 <span>{pullProgress}</span>
               </div>
             )}
@@ -402,8 +468,12 @@ export function VectorDbWidget() {
             <div className="vdb-grid">
               <div className="vdb-card">
                 <h3>Database Size</h3>
-                <div className="vdb-card-val">{status ? formatBytes(status.size_bytes) : '...'}</div>
-                <div className="vdb-card-sub">{status?.db_path ? `Path: ${status.db_path}` : ''}</div>
+                <div className="vdb-card-val">
+                  {status ? formatBytes(status.size_bytes) : '...'}
+                </div>
+                <div className="vdb-card-sub">
+                  {status?.db_path ? `Path: ${status.db_path}` : ''}
+                </div>
               </div>
               <div className="vdb-card">
                 <h3>Total Documents</h3>
@@ -470,7 +540,9 @@ export function VectorDbWidget() {
                   </tbody>
                 </table>
               ) : (
-                <p className="vdb-placeholder">No collections created yet. Go to "Add Document" to start.</p>
+                <p className="vdb-placeholder">
+                  No collections created yet. Go to "Add Document" to start.
+                </p>
               )}
             </div>
           </div>
@@ -540,13 +612,15 @@ export function VectorDbWidget() {
                           <div className="vdb-score-track">
                             <div
                               className={`vdb-score-fill ${getScoreColorClass(result.score)}`}
-                              style={{ width: `${Math.max(0, Math.min(100, result.score * 100))}%` }}
+                              style={{
+                                width: `${Math.max(0, Math.min(100, result.score * 100))}%`,
+                              }}
                             />
                           </div>
                         </div>
                       </div>
                       <p className="vdb-result-text">{result.text}</p>
-                      
+
                       <div className="vdb-result-actions">
                         <button className="vdb-card-btn" onClick={() => toggleMetadata(result.id)}>
                           {expandedDocs[result.id] ? 'Hide Metadata' : 'View Metadata'}
@@ -573,7 +647,9 @@ export function VectorDbWidget() {
                 </div>
               ) : (
                 <p className="vdb-placeholder">
-                  {searchLoading ? 'Running vector search...' : 'Enter a query and click search to view matching documents.'}
+                  {searchLoading
+                    ? 'Running vector search...'
+                    : 'Enter a query and click search to view matching documents.'}
                 </p>
               )}
             </div>
@@ -615,10 +691,12 @@ export function VectorDbWidget() {
                     <div className="vdb-result-hdr">
                       <span className="vdb-result-id">ID: {doc.id}</span>
                       <span className="vdb-result-col-badge">{doc.collection}</span>
-                      <span className="vdb-result-date">{new Date(doc.created_at).toLocaleString()}</span>
+                      <span className="vdb-result-date">
+                        {new Date(doc.created_at).toLocaleString()}
+                      </span>
                     </div>
                     <p className="vdb-result-text">{doc.text}</p>
-                    
+
                     <div className="vdb-result-actions">
                       <button className="vdb-card-btn" onClick={() => toggleMetadata(doc.id)}>
                         {expandedDocs[doc.id] ? 'Hide Metadata' : 'View Metadata'}
@@ -669,7 +747,9 @@ export function VectorDbWidget() {
               </div>
             ) : (
               <p className="vdb-placeholder">
-                {explorerLoading ? 'Loading documents...' : 'No documents found in this collection.'}
+                {explorerLoading
+                  ? 'Loading documents...'
+                  : 'No documents found in this collection.'}
               </p>
             )}
           </div>

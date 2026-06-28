@@ -1,12 +1,16 @@
-"""Instrumentation seams: one for inbound HTTP, one for outbound httpx.
+"""Instrumentation seams: inbound HTTP, outbound httpx, and `/ws` frames.
 
-Both feed the recorder with metadata plus **redacted** detail: headers with
-credential-bearing values masked, bodies truncated, and bodies suppressed
-entirely on sensitive routes (Clubhouse auth carries phone numbers, SMS codes,
-and tokens). Wiring these once means every module's traffic is observed without
-per-module logging — see docs/modules/observability.md.
+This is a **local introspection tool** (the observability panel is the app's
+built-in Wireshark): traffic is captured **raw** — full headers and bodies, no
+masking — and held in an in-memory ring buffer. Treat that buffer as sensitive;
+it can contain credentials, tokens, and personal data flowing through the app.
+Bodies are only *size*-capped (truncated past the user-configured
+``observability.maxBodyChars``, and never reading past ``_MAX_CAPTURE_BYTES``).
+Wiring these once means every module's traffic is observed without per-module
+logging — see docs/modules/observability.md.
 """
 
+import json
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 
@@ -20,49 +24,34 @@ from backend.modules.telemetry.recorder import recorder
 # Don't observe the telemetry endpoints (noise) or the websocket itself.
 _SKIP_PREFIXES = ("/api/telemetry",)
 
-# Routes whose bodies must never be recorded (credentials, phone numbers, SMS
-# codes). Headers are still captured — redaction below masks the dangerous ones.
-_SENSITIVE_PATH_PREFIXES = ("/api/clubhouse",)
-_SENSITIVE_HOST_MARKERS = ("clubhouse",)
-
-# Header names (lowercased) whose values are masked; substring matches catch
-# vendor variants like x-api-key, ch-session-token, x-auth-secret.
-_REDACTED_HEADER_MARKERS = (
-    "authorization",
-    "cookie",
-    "token",
-    "secret",
-    "api-key",
-    "session",
-)
-
-_MAX_BODY_CHARS = 2048
-_MAX_CAPTURE_BYTES = 65536
+# Default body-truncation cap (characters) and the hard ceiling on how many bytes
+# are ever read from a body. Generous enough to inspect real payloads; the ceiling
+# bounds memory (inbound bodies are buffered to replay them downstream).
+_MAX_BODY_CHARS = 16384
+_MAX_CAPTURE_BYTES = 1_048_576  # 1 MB
 
 # Content types whose bodies stream incrementally (Ollama NDJSON, OpenAI SSE).
 # Reading these in the response hook would consume the stream before the caller
-# can iterate it, so their response bodies are never captured.
+# can iterate it, so their response bodies are tee'd later, not read here.
 _STREAMING_CONTENT_TYPES = ("text/event-stream", "application/x-ndjson")
 
-REDACTED = "[redacted]"
-SENSITIVE_REDACTED = "[redacted — sensitive route]"
+# `/ws` channels whose frames are not recorded: `telemetry` is the push channel
+# that carries these very events — recording it would feed back on itself.
+_SKIP_WS_CHANNELS = ("telemetry",)
 
 
-def redact_headers(headers: object) -> dict[str, str]:
-    """Lowercased header map with values captured raw (no redaction)."""
+def capture_headers(headers: object) -> dict[str, str]:
+    """Lowercased header map, values captured raw (no redaction)."""
     out: dict[str, str] = {}
     for name, value in dict(headers).items():  # type: ignore[call-overload]
-        key = str(name).lower()
-        out[key] = str(value)
+        out[str(name).lower()] = str(value)
     return out
 
 
-def safe_body(
-    raw: bytes | None, *, sensitive: bool, max_chars: int = _MAX_BODY_CHARS
-) -> str | None:
-    """Body as text for the event detail: captured raw (no redaction),
-    decoded leniently, truncated to ``max_chars`` (default ``_MAX_BODY_CHARS``;
-    callers pass the user-configured cap via ``_max_body_chars()``)."""
+def safe_body(raw: bytes | None, *, max_chars: int = _MAX_BODY_CHARS) -> str | None:
+    """Body as text for the event detail: captured raw, decoded leniently, and
+    truncated to ``max_chars`` (callers pass the user-configured cap via
+    ``_max_body_chars()``). Never reads past ``_MAX_CAPTURE_BYTES``."""
     if not raw:
         return None
     text = raw[:_MAX_CAPTURE_BYTES].decode("utf-8", errors="replace")
@@ -83,27 +72,17 @@ def _max_body_chars() -> int:
         return _MAX_BODY_CHARS
 
 
-def _inbound_sensitive(path: str) -> bool:
-    return path.startswith(_SENSITIVE_PATH_PREFIXES)
-
-
-def _outbound_sensitive(url: httpx.URL) -> bool:
-    return any(marker in url.host for marker in _SENSITIVE_HOST_MARKERS)
-
-
 def _is_streaming_response(response: httpx.Response) -> bool:
     ctype = response.headers.get("content-type", "")
     return any(marker in ctype for marker in _STREAMING_CONTENT_TYPES)
 
 
-async def _capture_response(
-    response: httpx.Response, *, sensitive: bool
-) -> tuple[str | None, int | None]:
-    """Read a *non-streaming* outbound response body for the event detail —
-    redacted and truncated like request bodies. Streaming responses are skipped
-    (see _is_streaming_response): reading them here would buffer them into memory
-    and consume the stream before the caller can. The body read is cached by
-    httpx, so the caller's subsequent ``.json()`` still works. Returns
+async def _capture_response(response: httpx.Response) -> tuple[str | None, int | None]:
+    """Read a *non-streaming* outbound response body for the event detail,
+    truncated like request bodies. Streaming responses are skipped (see
+    _is_streaming_response): reading them here would buffer them into memory and
+    consume the stream before the caller can. The body read is cached by httpx, so
+    the caller's subsequent ``.json()`` still works. Returns
     ``(body_text, byte_count)``."""
     if _is_streaming_response(response):
         return None, None
@@ -114,7 +93,7 @@ async def _capture_response(
         raw = await response.aread()
     except (httpx.StreamConsumed, httpx.StreamClosed, httpx.ResponseNotRead):
         return None, None
-    return safe_body(raw, sensitive=sensitive, max_chars=_max_body_chars()), len(raw)
+    return safe_body(raw, max_chars=_max_body_chars()), len(raw)
 
 
 async def telemetry_middleware(
@@ -138,7 +117,7 @@ async def telemetry_middleware(
     try:
         response = await call_next(request)
         status = response.status_code
-        response_headers = redact_headers(response.headers)
+        response_headers = capture_headers(response.headers)
         return response
     except Exception as exc:  # record then re-raise
         error = type(exc).__name__
@@ -151,13 +130,9 @@ async def telemetry_middleware(
             status=status,
             duration_ms=(time.perf_counter() - start) * 1000,
             error=error,
-            request_headers=redact_headers(request.headers),
+            request_headers=capture_headers(request.headers),
             response_headers=response_headers,
-            request_body=safe_body(
-                raw_body,
-                sensitive=_inbound_sensitive(path),
-                max_chars=_max_body_chars(),
-            ),
+            request_body=safe_body(raw_body, max_chars=_max_body_chars()),
             # Response bodies are not captured inbound: responses stream, and the
             # client-side event for the same round-trip already records them.
         )
@@ -179,13 +154,10 @@ async def _on_response(response: httpx.Response) -> None:
     start = _starts.pop(id(request), None)
     # Strip query/fragment so secrets in URLs (if any) aren't recorded.
     target = f"{request.url.scheme}://{request.url.host}{request.url.path}"
-    sensitive = _outbound_sensitive(request.url)
     # Non-streaming response bodies (e.g. the agent's stream:false /api/chat round)
     # are captured here; streaming ones (Ollama chat/pull NDJSON, OpenAI SSE) can't
     # be read here without consuming the stream — `tee_stream` amends them later.
-    response_body, response_bytes = await _capture_response(
-        response, sensitive=sensitive
-    )
+    response_body, response_bytes = await _capture_response(response)
     event = recorder.record(
         source="outbound",
         method=request.method,
@@ -194,11 +166,9 @@ async def _on_response(response: httpx.Response) -> None:
         duration_ms=(time.perf_counter() - start) * 1000 if start is not None else None,
         request_bytes=len(request.content) if request.content else None,
         response_bytes=response_bytes,
-        request_headers=redact_headers(request.headers),
-        response_headers=redact_headers(response.headers),
-        request_body=safe_body(
-            request.content, sensitive=sensitive, max_chars=_max_body_chars()
-        ),
+        request_headers=capture_headers(request.headers),
+        response_headers=capture_headers(response.headers),
+        request_body=safe_body(request.content, max_chars=_max_body_chars()),
         response_body=response_body,
     )
     if _is_streaming_response(response):
@@ -209,11 +179,11 @@ async def tee_stream(
     response: httpx.Response, lines: AsyncIterator[str]
 ) -> AsyncIterator[str]:
     """Pass a streaming outbound response's lines through unchanged while
-    accumulating a capped, redacted copy of the body, then amend the I/O event the
-    response hook already recorded (which has no body yet — see _on_response). This
-    is the only safe way to observe a stream: the hook can't read it without
-    consuming it. Accumulation stops at _MAX_CAPTURE_BYTES so a long generation
-    can't grow unbounded. Wrap the two streaming call sites (providers.generate_stream,
+    accumulating a capped copy of the body, then amend the I/O event the response
+    hook already recorded (which has no body yet — see _on_response). This is the
+    only safe way to observe a stream: the hook can't read it without consuming it.
+    Accumulation stops at _MAX_CAPTURE_BYTES so a long generation can't grow
+    unbounded. Wrap the two streaming call sites (providers.generate_stream,
     routes._proxy_ndjson) with this; a non-instrumented stream just passes through."""
     event_id = _stream_events.pop(id(response.request), None)
     if event_id is None:
@@ -230,11 +200,36 @@ async def tee_stream(
             yield line
     finally:
         body = safe_body(
-            "\n".join(captured).encode("utf-8"),
-            sensitive=False,
-            max_chars=_max_body_chars(),
+            "\n".join(captured).encode("utf-8"), max_chars=_max_body_chars()
         )
         recorder.amend(event_id, response_body=body, response_bytes=size or None)
+
+
+def record_ws_frame(direction: str, data: object) -> None:
+    """Record one `/ws` frame as an I/O event so the observability panel can show
+    the multiplexed socket traffic Wireshark-style. ``direction`` is ``"in"``
+    (browser → backend) or ``"out"`` (backend → browser). Frames on the telemetry
+    push channel are skipped to avoid observing our own output (a feedback loop).
+    Must never raise into the socket path — callers wrap it defensively too."""
+    if not isinstance(data, dict):
+        return
+    channel = str(data.get("channel", "?"))
+    if channel in _SKIP_WS_CHANNELS:
+        return
+    event_name = data.get("event") or data.get("type")
+    target = f"{channel}/{event_name}" if event_name else channel
+    try:
+        compact = json.dumps(data, separators=(",", ":"), default=str)
+        pretty = json.dumps(data, indent=2, default=str)
+    except (TypeError, ValueError):
+        compact = pretty = str(data)
+    recorder.record(
+        source="ws",
+        method="recv" if direction == "in" else "send",
+        target=target,
+        request_bytes=len(compact.encode("utf-8")),
+        request_body=safe_body(pretty.encode("utf-8"), max_chars=_max_body_chars()),
+    )
 
 
 def instrumented_client(**kwargs: object) -> httpx.AsyncClient:

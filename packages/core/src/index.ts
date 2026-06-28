@@ -149,4 +149,18 @@ export {
   type SerializedTool,
   type VllmStatus,
 } from './modules/agent';
+export {
+  clearActiveScope,
+  getActiveScope,
+  matchesKeySpec,
+  resolveKeybinding,
+  setActiveScope,
+} from './keybindings';
 export { toastsStore, type Toast } from './toasts';
+export {
+  dialogs,
+  dialogsStore,
+  type ActiveDialog,
+  type ConfirmOptions,
+  type PromptOptions,
+} from './dialogs';

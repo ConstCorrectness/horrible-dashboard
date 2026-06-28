@@ -6,6 +6,8 @@
  * modules' panes, so they live here rather than in any one feature module. See
  * docs/architecture/windowing.md.
  */
+import { dialogs } from '../../dialogs';
+import { toastsStore } from '../../toasts';
 import { registry, type ModuleManifest } from '../../registry';
 
 export const layoutsModule: ModuleManifest = {
@@ -58,9 +60,26 @@ export const layoutsModule: ModuleManifest = {
     {
       id: 'workspace.new',
       title: 'Workspace: New',
-      run: () => {
-        const name = window.prompt('New workspace name', 'Workspace');
-        if (name) void registry.layoutController?.createWorkspace(name);
+      run: async () => {
+        const controller = registry.layoutController;
+        if (!controller) {
+          toastsStore.add(
+            'warning',
+            'Open a workspace first',
+            'Switch to a workspace to add another.',
+          );
+          return;
+        }
+        const name = await dialogs.prompt({
+          title: 'New workspace',
+          placeholder: 'Workspace name',
+          defaultValue: 'Workspace',
+          confirmLabel: 'Create',
+        });
+        const trimmed = name?.trim();
+        if (!trimmed) return;
+        await controller.createWorkspace(trimmed);
+        toastsStore.add('success', 'Workspace created', `“${trimmed}” is ready.`);
       },
     },
     {

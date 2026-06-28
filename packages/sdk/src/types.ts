@@ -167,6 +167,21 @@ export interface KeybindingDecl {
   /** e.g. `mod+k` — `mod` is ctrl (or cmd on macOS). */
   key: string;
   command: string;
+  /**
+   * Pane view id this binding is scoped to (e.g. `terminal.instance`). When set,
+   * the binding is only active while a pane of that view is focused, and it
+   * **takes precedence over a plain global binding** for the same key — so a
+   * focused pane can shadow a global shortcut. Omit for a global binding active
+   * everywhere.
+   */
+  scope?: string;
+  /**
+   * For a *global* binding (no `scope`): when true it wins even if the focused
+   * pane has a scoped binding for the same key. The escape hatch for shortcuts
+   * that must never be shadowed (e.g. the command palette). Ignored on a scoped
+   * binding.
+   */
+  override?: boolean;
 }
 
 /** The value kinds a setting can hold in v1. */

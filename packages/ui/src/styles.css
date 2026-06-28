@@ -1235,6 +1235,134 @@ body {
   word-break: break-all;
 }
 
+.io-ws {
+  background: rgb(190 130 246 / 22%);
+  color: #be82f6;
+}
+
+.io-mono {
+  font-family:
+    ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+}
+
+/* Master-detail: packet list (table) over the inspector, Wireshark-style. */
+.obs-split {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.obs-split.obs-split-open .obs-table-wrap {
+  flex: 0 0 45%;
+}
+
+.io-row {
+  cursor: pointer;
+}
+
+.io-row:hover td {
+  background: rgb(255 255 255 / 4%);
+}
+
+.io-row-selected td {
+  background: rgb(110 168 254 / 14%);
+}
+
+.io-inspector {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border-top: 2px solid var(--border);
+  padding: 0.5rem 0.25rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.io-inspector-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.io-inspector-head .io-target {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-dim);
+}
+
+.io-inspector-close {
+  margin-left: auto;
+}
+
+.io-inspector-section h4 {
+  margin: 0 0 0.25rem;
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+/* Body viewer with Pretty/Raw + Copy controls */
+.io-body-bar {
+  display: flex;
+  gap: 0.3rem;
+  margin-bottom: 0.25rem;
+}
+
+.io-mini-btn {
+  padding: 0.1rem 0.45rem;
+  font-size: 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.io-mini-btn:hover {
+  color: var(--text);
+  background: rgb(255 255 255 / 6%);
+}
+
+.io-body-pre {
+  margin: 0;
+  padding: 0.45rem 0.6rem;
+  max-height: 20rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgb(0 0 0 / 28%);
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-family:
+    ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+  line-height: 1.45;
+}
+
+/* Lightweight JSON syntax highlight (see highlightJson in view.tsx). */
+.io-j-key {
+  color: #6ea8fe;
+}
+
+.io-j-str {
+  color: #7ee787;
+}
+
+.io-j-num {
+  color: #ffa657;
+}
+
+.io-j-lit {
+  color: #d2a8ff;
+}
+
 .scratch {
   width: 100%;
   height: 100%;
@@ -2891,4 +3019,124 @@ kbd {
 .toast-error {
   border-color: rgba(248, 81, 73, 0.3);
   box-shadow: 0 8px 32px 0 rgba(248, 81, 73, 0.1);
+}
+
+/* In-app modal dialogs (prompt/confirm) — see Dialogs.tsx / core/dialogs.ts. */
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  animation: dialogFadeIn 0.12s ease forwards;
+}
+
+@keyframes dialogFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.dialog-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: min(26rem, calc(100% - 2rem));
+  padding: 1.25rem;
+  background: rgba(30, 30, 40, 0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  box-shadow: 0 16px 48px 0 rgba(0, 0, 0, 0.45);
+  color: var(--text);
+  animation: dialogPop 0.16s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes dialogPop {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.dialog-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.dialog-message {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  line-height: 1.4;
+  margin-top: -0.35rem;
+}
+
+.dialog-input {
+  width: 100%;
+  padding: 0.55rem 0.7rem;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.85rem;
+  outline: none;
+}
+
+.dialog-input:focus {
+  border-color: rgba(110, 168, 254, 0.6);
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.dialog-btn {
+  padding: 0.45rem 0.9rem;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  background: transparent;
+  color: var(--text);
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.dialog-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.dialog-btn-primary {
+  background: rgba(110, 168, 254, 0.9);
+  border-color: rgba(110, 168, 254, 0.9);
+  color: #07121f;
+  font-weight: 600;
+}
+
+.dialog-btn-primary:hover {
+  background: rgba(110, 168, 254, 1);
+}
+
+.dialog-btn-danger {
+  background: rgba(248, 81, 73, 0.9);
+  border-color: rgba(248, 81, 73, 0.9);
+  color: #1a0606;
+}
+
+.dialog-btn-danger:hover {
+  background: rgba(248, 81, 73, 1);
 }

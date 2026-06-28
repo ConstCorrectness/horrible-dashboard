@@ -46,12 +46,18 @@ from backend.modules.repl import ReplManager
 from backend.modules.settings import router as settings_router
 from backend.modules.telemetry import push_telemetry
 from backend.modules.telemetry import router as telemetry_router
-from backend.modules.telemetry.instrument import telemetry_middleware
+from backend.modules.telemetry.instrument import record_ws_frame, telemetry_middleware
 from backend.modules.terminal import TerminalManager
 from backend.modules.workspace import router as workspace_router
 from backend.modules.vectordb import router as vectordb_router
 from backend.modules.visualizer import visualizer_manager
-from backend.modules.ws import WsConnection
+from backend.modules.ws import WsConnection, set_ws_send_observer
+from backend.sdk import load_plugins
+from backend.sdk import registry as plugin_registry
+
+# Observe every outbound `/ws` frame for the observability panel (inbound frames
+# are recorded in the receive loop below). One global observer covers all sockets.
+set_ws_send_observer(record_ws_frame)
 
 APP_VERSION = "0.1.0"
 
@@ -60,9 +66,11 @@ APP_VERSION = "0.1.0"
 async def lifespan(app: FastAPI):
     # Bring the peer fabric up so this node can reach (and be reached by) others.
     await start_network()
+    await plugin_registry.run_startup()  # backend plugins' startup hooks
     try:
         yield
     finally:
+        await plugin_registry.run_shutdown()
         await stop_network()
 
 
@@ -101,6 +109,14 @@ app.include_router(plugins_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
 app.include_router(flow_router, prefix="/api")
 app.include_router(network_router, prefix="/api")
+
+# Discover and mount backend plugins (bundled, HORRIBLE_PLUGINS_DIR, and pip entry
+# points). Ships empty; each plugin's routes mount under /api + its prefix. Agent
+# tools, /ws channels, dash facades, and lifespan hooks are read from the registry
+# where they're used (orchestrator, /ws loop, repl, lifespan).
+load_plugins()
+for _mounted in plugin_registry.routers:
+    app.include_router(_mounted.router, prefix=f"/api{_mounted.prefix}")
 
 
 @app.websocket("/peer-ws")
@@ -146,6 +162,7 @@ async def ws(websocket: WebSocket) -> None:
             msg = await websocket.receive_json()
             if not isinstance(msg, dict):
                 continue
+            record_ws_frame("in", msg)
             channel = msg.get("channel")
             if channel == "agent":
                 await handle_agent_message(conn, msg)
@@ -167,6 +184,9 @@ async def ws(websocket: WebSocket) -> None:
                 await handle_lobby_message(conn, msg)
             elif channel == "peerchat":
                 await handle_chat_message(conn, msg)
+            else:
+                # Unknown built-in channel — offer it to backend plugins.
+                await plugin_registry.dispatch_ws(conn, str(channel), msg)
     except WebSocketDisconnect:
         pass
     finally:

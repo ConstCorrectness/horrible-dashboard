@@ -11,6 +11,10 @@ things a built-in module does — commands, panels, dashboard widgets,
 keybindings — using the exact same declaration types, and is installed from the
 in-app [marketplace](../modules/marketplace.mdx).
 
+This is the **frontend** contract. For server-side contributions (HTTP routes,
+agent tools, `/ws` channels), see the
+[backend plugin SDK](backend-plugin-sdk.mdx) — a rich plugin can ship both halves.
+
 The package is published to npm as
 [`@horribledashboard/sdk`](https://www.npmjs.com/package/@horribledashboard/sdk) (MIT). Inside
 the monorepo its exports point at the TypeScript source; the published tarball
@@ -63,7 +67,10 @@ export default definePlugin({
 Declaration types (`CommandDecl`, `PanelDecl`, `WidgetDecl`, `KeybindingDecl`,
 `SettingDecl`, `SettingType`, `Capability`, `CollabDecl`, `WsMessage`) live in the
 SDK and are re-exported by `@horrible/core`, so plugins and built-in modules share
-one contract.
+one contract. A `KeybindingDecl` can be **focus-scoped**: set `scope` to a pane
+view id so the binding is active only while that pane is focused (shadowing plain
+globals), or `override: true` on a global so it can't be shadowed — see
+[keybinding scopes](layout-shell.mdx#keybinding-scopes).
 
 A plugin's **widgets are dockable panes**, just like a built-in module's: they
 open into the workspace (tabbed/split/floating), so a `WidgetDecl` takes an

@@ -58,9 +58,9 @@ export const observabilityModule: ModuleManifest = {
       key: 'observability.maxBodyChars',
       title: 'Captured body size (characters)',
       description:
-        'How many characters of each request/response body to keep for the expandable detail view (applied by the backend at capture time). Bodies are still hard-capped at 64 KB.',
+        'How many characters of each request/response body (and /ws frame) to keep for the inspector (applied by the backend at capture time). Bodies are still hard-capped at 1 MB.',
       type: 'number',
-      default: 2048,
+      default: 16384,
     },
   ],
 };

@@ -1,20 +1,23 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { registry, useWorkspaces, type OpenPaneOptions, type ShellView } from '@horrible/core';
+import {
+  dialogs,
+  getActiveScope,
+  registry,
+  resolveKeybinding,
+  toastsStore,
+  useWorkspaces,
+  type OpenPaneOptions,
+  type ShellView,
+} from '@horrible/core';
 
 import { ApprovalPrompts } from './ApprovalPrompts';
 import { CommandPalette } from './CommandPalette';
+import { Dialogs } from './Dialogs';
 import { Toasts } from './Toasts';
 import { HomeView } from './HomeView';
 import { Workspace } from './Workspace';
 import './styles.css';
-
-function matchesBinding(e: KeyboardEvent, key: string): boolean {
-  const wantsMod = key.startsWith('mod+');
-  const plain = wantsMod ? key.slice(4) : key;
-  const hasMod = e.ctrlKey || e.metaKey;
-  return wantsMod === hasMod && e.key.toLowerCase() === plain;
-}
 
 export function AppShell({ appTitle }: { appTitle: string }) {
   const [view, setView] = useState<ShellView>('home');
@@ -45,16 +48,28 @@ export function AppShell({ appTitle }: { appTitle: string }) {
 
   const handleRename = async (id: string, currentName: string) => {
     setContextMenu(null);
-    const newName = window.prompt('Rename workspace', currentName);
+    const newName = await dialogs.prompt({
+      title: 'Rename workspace',
+      defaultValue: currentName,
+      confirmLabel: 'Rename',
+    });
     if (newName && newName.trim()) {
       await registry.layoutController?.renameWorkspace(id, newName.trim());
     }
   };
 
   const handleDelete = async (id: string) => {
+    const name = contextMenu?.workspaceName;
     setContextMenu(null);
-    if (window.confirm(`Are you sure you want to delete the workspace "${contextMenu?.workspaceName}"?`)) {
+    const ok = await dialogs.confirm({
+      title: 'Delete workspace',
+      message: `“${name}” and its layout will be removed. This can't be undone.`,
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (ok) {
       await registry.layoutController?.deleteWorkspace(id);
+      toastsStore.add('info', 'Workspace deleted', `“${name}” was removed.`);
     }
   };
   // Bumped each time a panel should open, so the Workspace reacts even to repeats.
@@ -103,10 +118,10 @@ export function AppShell({ appTitle }: { appTitle: string }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const binding = registry.keybindings.find((b) => matchesBinding(e, b.key));
-      if (binding) {
+      const command = resolveKeybinding(e, getActiveScope(), registry.keybindings);
+      if (command) {
         e.preventDefault();
-        void registry.runCommand(binding.command);
+        void registry.runCommand(command);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -181,6 +196,7 @@ export function AppShell({ appTitle }: { appTitle: string }) {
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       <ApprovalPrompts />
       <Toasts />
+      <Dialogs />
       {contextMenu &&
         createPortal(
           <div

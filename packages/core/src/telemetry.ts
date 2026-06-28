@@ -6,7 +6,7 @@ import { subscribeChannel, type WsMessage } from './ws';
  * and `inbound`/`outbound` events streamed from the backend over `/ws`. See
  * docs/modules/observability.md.
  */
-export type IoSource = 'client' | 'inbound' | 'outbound';
+export type IoSource = 'client' | 'inbound' | 'outbound' | 'ws';
 
 export interface IoEvent {
   id: number | string;

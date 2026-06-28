@@ -67,6 +67,10 @@ export const terminalModule: ModuleManifest = {
     { id: 'terminal.focusNext', title: 'Terminal: Focus next', run: () => focusSibling(1) },
     { id: 'terminal.focusPrev', title: 'Terminal: Focus previous', run: () => focusSibling(-1) },
   ],
+  // Scoped to the terminal pane: while a terminal is focused, mod+k clears it
+  // (the iTerm/VS Code convention), shadowing the global palette shortcut; pressed
+  // anywhere else, mod+k still opens the command palette. See core/keybindings.
+  keybindings: [{ key: 'mod+k', command: 'terminal.clear', scope: 'terminal.instance' }],
   settings: [
     {
       key: 'terminal.fontFamily',

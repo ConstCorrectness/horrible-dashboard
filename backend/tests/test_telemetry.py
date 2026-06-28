@@ -9,6 +9,7 @@ from backend.modules.telemetry.instrument import (
     _MAX_BODY_CHARS,
     _max_body_chars,
     instrumented_client,
+    record_ws_frame,
     safe_body,
     tee_stream,
 )
@@ -65,6 +66,26 @@ def test_sensitive_route_bodies_are_captured(client: TestClient) -> None:
     auth = [e for e in events if e["target"].startswith("/api/clubhouse")][-1]
     assert "+15551234567" in str(events)
     assert "+15551234567" in auth["request_body"]
+
+
+def test_ws_frame_is_recorded() -> None:
+    recorder.clear()
+    record_ws_frame("in", {"channel": "agent", "event": "ask", "text": "hi"})
+    record_ws_frame("out", {"channel": "collab", "type": "op", "data": [1, 2, 3]})
+    ws = [e for e in recorder.recent() if e.source == "ws"]
+    assert len(ws) == 2
+    assert ws[0].method == "recv" and ws[0].target == "agent/ask"
+    assert ws[1].method == "send" and ws[1].target == "collab/op"
+    # The full frame payload is captured as the (pretty) body.
+    assert ws[0].request_body is not None and '"text": "hi"' in ws[0].request_body
+    assert ws[0].request_bytes is not None
+
+
+def test_ws_telemetry_channel_is_not_recorded() -> None:
+    # Recording the telemetry push channel would observe our own output (a loop).
+    recorder.clear()
+    record_ws_frame("out", {"channel": "telemetry", "event": "io", "data": {}})
+    assert not [e for e in recorder.recent() if e.source == "ws"]
 
 
 def test_outbound_call_is_recorded() -> None:
@@ -188,9 +209,9 @@ def test_streaming_response_is_captured_via_tee() -> None:
 
 def test_safe_body_truncates_to_max_chars() -> None:
     big = b"x" * 5000
-    assert safe_body(big, sensitive=False, max_chars=10) == "x" * 10 + "… [truncated]"
+    assert safe_body(big, max_chars=10) == "x" * 10 + "… [truncated]"
     # A cap above the body length keeps the whole thing.
-    assert safe_body(big, sensitive=False, max_chars=10000) == "x" * 5000
+    assert safe_body(big, max_chars=10000) == "x" * 5000
 
 
 def test_max_body_chars_reads_setting(tmp_path, monkeypatch) -> None:
@@ -207,7 +228,7 @@ def test_max_body_chars_reads_setting(tmp_path, monkeypatch) -> None:
     (tmp_path / "settings.json").write_text(
         json.dumps({"observability.maxBodyChars": 10_000_000})
     )
-    assert _max_body_chars() == 65536
+    assert _max_body_chars() == 1_048_576
     # A garbage value falls back to the default rather than raising.
     (tmp_path / "settings.json").write_text(
         json.dumps({"observability.maxBodyChars": "lots"})

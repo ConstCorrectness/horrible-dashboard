@@ -4,6 +4,8 @@
  * service; "open terminal here" / desktop reveal are B5/B6. See
  * docs/modules/file-explorer.md.
  */
+import { dialogs } from '../../dialogs';
+import { toastsStore } from '../../toasts';
 import { registry, type ModuleManifest } from '../../registry';
 import { getActiveBufferSource, openBuffer } from '../editor';
 import { openTerminal } from '../terminal';
@@ -35,7 +37,11 @@ async function targetDir(): Promise<string | null> {
 async function newFile(): Promise<void> {
   const dir = await targetDir();
   if (!dir) return;
-  const name = window.prompt('New file name', 'untitled.md');
+  const name = await dialogs.prompt({
+    title: 'New file',
+    defaultValue: 'untitled.md',
+    confirmLabel: 'Create',
+  });
   if (!name) return;
   const path = joinPath(dir, name);
   await createEntry(path, 'file');
@@ -46,7 +52,11 @@ async function newFile(): Promise<void> {
 async function newFolder(): Promise<void> {
   const dir = await targetDir();
   if (!dir) return;
-  const name = window.prompt('New folder name', 'folder');
+  const name = await dialogs.prompt({
+    title: 'New folder',
+    defaultValue: 'folder',
+    confirmLabel: 'Create',
+  });
   if (!name) return;
   await createEntry(joinPath(dir, name), 'dir');
   refreshTree();
@@ -57,7 +67,7 @@ async function newFolder(): Promise<void> {
 function renameSelected(): void {
   const active = getActivePath();
   if (!active) {
-    window.alert('Select a file or folder to rename.');
+    toastsStore.add('warning', 'Nothing selected', 'Select a file or folder to rename.');
     return;
   }
   registry.openPanel('files.tree');
@@ -69,11 +79,17 @@ function renameSelected(): void {
 async function deleteSelected(): Promise<void> {
   const paths = [...getSelectedPaths()];
   if (paths.length === 0) {
-    window.alert('Select a file or folder to delete.');
+    toastsStore.add('warning', 'Nothing selected', 'Select a file or folder to delete.');
     return;
   }
   const label = paths.length === 1 ? paths[0] : `${paths.length} items`;
-  if (!window.confirm(`Delete ${label}?`)) return;
+  const ok = await dialogs.confirm({
+    title: 'Delete',
+    message: `Delete ${label}? This can't be undone.`,
+    confirmLabel: 'Delete',
+    danger: true,
+  });
+  if (!ok) return;
   for (const p of paths) {
     try {
       await deleteEntry(p, kindFor(p) === 'dir');

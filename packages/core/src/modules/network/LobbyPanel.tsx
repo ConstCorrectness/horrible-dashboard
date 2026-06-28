@@ -1,5 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 
+import { dialogs } from '../../dialogs';
 import {
   getLobbyState,
   initLobby,
@@ -123,8 +124,20 @@ export function LobbyPanel() {
                 <button
                   style={{ marginLeft: 'auto' }}
                   onClick={() => {
-                    const token = r.locked ? (prompt('Room token:') ?? undefined) : undefined;
-                    lobbyJoinRoom(r.id, token);
+                    if (!r.locked) {
+                      lobbyJoinRoom(r.id, undefined);
+                      return;
+                    }
+                    void dialogs
+                      .prompt({
+                        title: 'Join locked room',
+                        message: `“${r.name}” requires a token to join.`,
+                        placeholder: 'Room token',
+                        confirmLabel: 'Join',
+                      })
+                      .then((token) => {
+                        if (token) lobbyJoinRoom(r.id, token);
+                      });
                   }}
                 >
                   Join

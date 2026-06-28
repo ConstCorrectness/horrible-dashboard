@@ -2,11 +2,11 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-# Detail fields (headers/bodies) are captured **redacted and truncated** — see
-# instrument.py: credential-bearing headers are masked, bodies on sensitive
-# routes (Clubhouse auth: phone numbers, SMS codes, tokens) are suppressed, and
-# everything is capped in size. Never record a raw header or body.
-IoSource = Literal["inbound", "outbound"]
+# Detail fields (headers/bodies) are captured **raw**, only size-capped — see
+# instrument.py. This is a local introspection tool; the buffer can hold
+# credentials and personal data. `inbound`/`outbound` are HTTP; `ws` is one frame
+# of the multiplexed `/ws` socket (payload in request_body, direction in method).
+IoSource = Literal["inbound", "outbound", "ws"]
 
 
 class IoEvent(BaseModel):

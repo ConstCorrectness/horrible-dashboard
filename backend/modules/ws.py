@@ -5,7 +5,21 @@ the agent orchestrator can depend on it without an import cycle.
 """
 
 import asyncio
+from collections.abc import Callable
 from typing import Any
+
+# Optional observer for outbound `/ws` frames (the telemetry module registers one
+# for the observability panel). Kept as a plain callable set from outside so this
+# module stays free of telemetry imports — the very cycle it exists to avoid.
+_send_observer: Callable[[str, dict[str, Any]], None] | None = None
+
+
+def set_ws_send_observer(
+    observer: Callable[[str, dict[str, Any]], None] | None,
+) -> None:
+    """Register (or clear) the observer invoked for every outbound frame."""
+    global _send_observer
+    _send_observer = observer
 
 
 class WsConnection:
@@ -28,3 +42,10 @@ class WsConnection:
     async def send_json(self, data: dict[str, Any]) -> None:
         async with self._send_lock:
             await self.ws.send_json(data)
+        observer = _send_observer
+        if observer is not None:
+            try:
+                observer("out", data)
+            except Exception:
+                # Observation must never break the socket.
+                pass

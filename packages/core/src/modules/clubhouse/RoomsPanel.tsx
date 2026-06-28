@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { useAgentContext } from '../../agent-context';
+import { toastsStore } from '../../toasts';
 import {
   getClubhouseChannels,
   getClubhouseStatus,
@@ -70,14 +71,14 @@ export function RoomsPanel() {
           num_speakers: 1,
           num_all: 1,
           club: null,
-          users: []
+          users: [],
         };
         setActiveRoomInfo(roomInfo);
         void joinRoom(res.channel, roomInfo.users);
       }
     } catch (err) {
       console.error('Failed to start room:', err);
-      alert('Failed to start room: ' + String(err));
+      toastsStore.add('error', 'Failed to start room', String(err));
     } finally {
       setCreatingRoom(false);
     }
@@ -87,7 +88,8 @@ export function RoomsPanel() {
     if (!selectedUser) return;
     setFollowingLoading(true);
     try {
-      const isCurrentlyFollowing = selectedUser.notification_type !== undefined && selectedUser.notification_type > 0;
+      const isCurrentlyFollowing =
+        selectedUser.notification_type !== undefined && selectedUser.notification_type > 0;
       if (isCurrentlyFollowing) {
         await unfollowClubhouseUser(selectedUser.user_id);
         setSelectedUser((prev) =>
@@ -97,7 +99,7 @@ export function RoomsPanel() {
                 notification_type: 0,
                 num_followers: Math.max(0, prev.num_followers - 1),
               }
-            : null
+            : null,
         );
       } else {
         await followClubhouseUser(selectedUser.user_id);
@@ -108,7 +110,7 @@ export function RoomsPanel() {
                 notification_type: 1,
                 num_followers: prev.num_followers + 1,
               }
-            : null
+            : null,
         );
       }
     } catch (err) {
@@ -156,7 +158,7 @@ export function RoomsPanel() {
       });
     } catch (err) {
       console.error('Failed to send invite:', err);
-      alert('Failed to send invite: ' + String(err));
+      toastsStore.add('error', 'Failed to send invite', String(err));
     }
   };
 
@@ -176,12 +178,15 @@ export function RoomsPanel() {
   const renderProfileOverlay = () => {
     if (!selectedUser) return null;
     const isCurrentUser = selectedUser.user_id === myUserId;
-    const isFollowing = selectedUser.notification_type !== undefined && selectedUser.notification_type > 0;
-    
+    const isFollowing =
+      selectedUser.notification_type !== undefined && selectedUser.notification_type > 0;
+
     return (
       <div className="ch-profile-overlay" onClick={() => setSelectedUser(null)}>
         <div className="ch-profile-card" onClick={(e) => e.stopPropagation()}>
-          <button className="ch-profile-close" onClick={() => setSelectedUser(null)}>✕</button>
+          <button className="ch-profile-close" onClick={() => setSelectedUser(null)}>
+            ✕
+          </button>
           <div className="ch-profile-header">
             {selectedUser.photo_url ? (
               <img className="ch-profile-avatar" src={selectedUser.photo_url} alt="" />
@@ -193,16 +198,14 @@ export function RoomsPanel() {
             <div className="ch-profile-names">
               <h4 className="ch-profile-name">{selectedUser.name}</h4>
               <p className="ch-profile-username">@{selectedUser.username}</p>
-              {selectedUser.follows_me && (
-                <span className="ch-follows-badge">Follows you</span>
-              )}
+              {selectedUser.follows_me && <span className="ch-follows-badge">Follows you</span>}
               {!isCurrentUser && (
                 <button
                   className={`ch-profile-follow-btn ${isFollowing ? 'following' : ''}`}
                   onClick={handleToggleFollow}
                   disabled={followingLoading}
                 >
-                  {followingLoading ? 'Updating...' : (isFollowing ? '✓ Following' : '+ Follow')}
+                  {followingLoading ? 'Updating...' : isFollowing ? '✓ Following' : '+ Follow'}
                 </button>
               )}
             </div>
@@ -219,11 +222,7 @@ export function RoomsPanel() {
             </div>
           </div>
 
-          {selectedUser.bio && (
-            <div className="ch-profile-bio">
-              {selectedUser.bio}
-            </div>
-          )}
+          {selectedUser.bio && <div className="ch-profile-bio">{selectedUser.bio}</div>}
 
           {(selectedUser.twitter || selectedUser.instagram) && (
             <div className="ch-profile-socials">
@@ -304,9 +303,7 @@ export function RoomsPanel() {
     const updateActiveChannel = async () => {
       try {
         const details = await getClubhouseChannelDetails(activeChannel);
-        setChannels((prev) =>
-          prev.map((ch) => (ch.channel === activeChannel ? details : ch))
-        );
+        setChannels((prev) => prev.map((ch) => (ch.channel === activeChannel ? details : ch)));
       } catch (err) {
         console.error('Failed to poll active channel details:', err);
       }
@@ -360,19 +357,24 @@ export function RoomsPanel() {
   // Render the Dedicated Room View when joined
   if (joined && activeChannel) {
     const currentRoom = channels.find((ch) => ch.channel === activeChannel) || activeRoomInfo;
-    const isCurrentUserSpeaker = currentRoom?.users.find((u) => u.user_id === myUserId)?.is_speaker ?? false;
+    const isCurrentUserSpeaker =
+      currentRoom?.users.find((u) => u.user_id === myUserId)?.is_speaker ?? false;
     const moderators = currentRoom?.users.filter((u) => u.is_moderator && u.user_id) ?? [];
     const speakers = currentRoom?.users.filter((u) => u.is_speaker) ?? [];
     const audience = currentRoom?.users.filter((u) => !u.is_speaker) ?? [];
 
     const renderUserCard = (u: ChannelUser, isSpeaker: boolean) => {
       const initials = u.name
-        ? u.name.split(' ').map((n) => n[0]).join('').slice(0, 2)
+        ? u.name
+            .split(' ')
+            .map((n) => n[0])
+            .join('')
+            .slice(0, 2)
         : '?';
       const shortName = u.name ? u.name.split(' ')[0] : 'Anonymous';
       const uid = u.user_id ?? 0;
       // Get live state for this user from PubNub events
-      const liveState = liveUsers.find(l => l.userId === uid);
+      const liveState = liveUsers.find((l) => l.userId === uid);
       const isHandRaised = uid === myUserId ? handRaised : (liveState?.handRaised ?? false);
       const isSpeaking = uid > 0 && (speakingVolumes[uid] ?? 0) > 8;
       const speakingLevel = Math.min(1, (speakingVolumes[uid] ?? 0) / 60);
@@ -415,7 +417,9 @@ export function RoomsPanel() {
                   fontSize: isSpeaker ? '0.8rem' : '0.7rem',
                   fontWeight: 700,
                   textTransform: 'uppercase',
-                  border: isSpeaker ? '2px solid var(--accent, #6ea8fe)' : '1px solid var(--border)',
+                  border: isSpeaker
+                    ? '2px solid var(--accent, #6ea8fe)'
+                    : '1px solid var(--border)',
                   transform: `scale(${speakingScale})`,
                   boxShadow: speakingGlow,
                   transition: 'transform 0.15s ease, box-shadow 0.15s ease',
@@ -425,10 +429,14 @@ export function RoomsPanel() {
               </div>
             )}
             {u.is_moderator && (
-              <span className="ch-mod-badge" title="Moderator">✳️</span>
+              <span className="ch-mod-badge" title="Moderator">
+                ✳️
+              </span>
             )}
             {isHandRaised && (
-              <span className="ch-hand-badge" title="Hand Raised">🖐️</span>
+              <span className="ch-hand-badge" title="Hand Raised">
+                🖐️
+              </span>
             )}
             {isSpeaking && (
               <span
@@ -446,7 +454,9 @@ export function RoomsPanel() {
                   pointerEvents: 'none',
                   whiteSpace: 'nowrap',
                 }}
-              >🎙</span>
+              >
+                🎙
+              </span>
             )}
           </div>
           <span className={`ch-user-name ${isSpeaker ? '' : 'dim'}`}>{shortName}</span>
@@ -458,31 +468,61 @@ export function RoomsPanel() {
     const renderSpeakerInviteToast = () => {
       if (!speakerInvite) return null;
       return (
-        <div style={{
-          position: 'absolute',
-          top: '60px',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          zIndex: 200,
-          background: 'linear-gradient(135deg, #1a2235, #1d2740)',
-          border: '1px solid rgba(110,168,254,0.4)',
-          borderRadius: '16px',
-          padding: '1rem 1.25rem',
-          boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
-          minWidth: '260px',
-          maxWidth: '320px',
-          backdropFilter: 'blur(12px)',
-          animation: 'slideDown 0.25s ease',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
+        <div
+          style={{
+            position: 'absolute',
+            top: '60px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 200,
+            background: 'linear-gradient(135deg, #1a2235, #1d2740)',
+            border: '1px solid rgba(110,168,254,0.4)',
+            borderRadius: '16px',
+            padding: '1rem 1.25rem',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+            minWidth: '260px',
+            maxWidth: '320px',
+            backdropFilter: 'blur(12px)',
+            animation: 'slideDown 0.25s ease',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.75rem',
+              marginBottom: '0.75rem',
+            }}
+          >
             {speakerInvite.moderatorPhoto ? (
-              <img src={speakerInvite.moderatorPhoto} alt="" style={{ width: 36, height: 36, borderRadius: '12px', objectFit: 'cover' }} />
+              <img
+                src={speakerInvite.moderatorPhoto}
+                alt=""
+                style={{ width: 36, height: 36, borderRadius: '12px', objectFit: 'cover' }}
+              />
             ) : (
-              <div style={{ width: 36, height: 36, borderRadius: '12px', background: '#2e3a4e', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem' }}>🎤</div>
+              <div
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: '12px',
+                  background: '#2e3a4e',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '1rem',
+                }}
+              >
+                🎤
+              </div>
             )}
             <div>
-              <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#f1f5f9' }}>You're invited to speak!</div>
-              <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: '2px' }}>{speakerInvite.moderatorName} wants you on stage</div>
+              <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#f1f5f9' }}>
+                You're invited to speak!
+              </div>
+              <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: '2px' }}>
+                {speakerInvite.moderatorName} wants you on stage
+              </div>
             </div>
           </div>
           <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -499,7 +539,9 @@ export function RoomsPanel() {
                 fontSize: '0.8rem',
                 cursor: 'pointer',
               }}
-            >🎤 Accept</button>
+            >
+              🎤 Accept
+            </button>
             <button
               onClick={dismissSpeakerInvite}
               style={{
@@ -513,7 +555,9 @@ export function RoomsPanel() {
                 fontSize: '0.8rem',
                 cursor: 'pointer',
               }}
-            >Decline</button>
+            >
+              Decline
+            </button>
           </div>
         </div>
       );
@@ -1669,13 +1713,20 @@ export function RoomsPanel() {
             </button>
             <button
               className="ch-btn-action"
-              style={{ padding: '0.4rem 0.8rem', borderRadius: '20px', fontSize: '0.75rem', fontWeight: 600, flex: 'none', background: 'rgba(255, 255, 255, 0.05)' }}
+              style={{
+                padding: '0.4rem 0.8rem',
+                borderRadius: '20px',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                flex: 'none',
+                background: 'rgba(255, 255, 255, 0.05)',
+              }}
               onClick={handleOpenInvite}
             >
               ➕ Invite Friends
             </button>
           </div>
-          
+
           <div className="ch-room-title-section">
             {currentRoom?.club?.name && (
               <p className="ch-room-club-text">{currentRoom.club.name}</p>
@@ -1704,9 +1755,7 @@ export function RoomsPanel() {
             <div className="ch-section-heading">
               <span>Speakers ({speakers.length})</span>
             </div>
-            <div className="ch-speakers-grid">
-              {speakers.map((u) => renderUserCard(u, true))}
-            </div>
+            <div className="ch-speakers-grid">{speakers.map((u) => renderUserCard(u, true))}</div>
 
             {/* Audience */}
             {audience.length > 0 && (
@@ -1723,7 +1772,14 @@ export function RoomsPanel() {
 
           {/* Chat / Comments Feed */}
           <div className="ch-chat-section">
-            <div className="ch-section-heading" style={{ padding: '0.75rem 1rem 0.25rem 1rem', background: '#111317', borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
+            <div
+              className="ch-section-heading"
+              style={{
+                padding: '0.75rem 1rem 0.25rem 1rem',
+                background: '#111317',
+                borderBottom: '1px solid rgba(255,255,255,0.03)',
+              }}
+            >
               <span>Live Chat</span>
             </div>
             <div className="ch-chat-scroll">
@@ -1757,7 +1813,10 @@ export function RoomsPanel() {
                       <div className="ch-comment-header">
                         <span className="ch-comment-user">{c.userName}</span>
                         <span className="ch-comment-time">
-                          {new Date(c.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          {new Date(c.timestamp).toLocaleTimeString([], {
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
                         </span>
                       </div>
                       <div className="ch-comment-bubble">{c.text}</div>
@@ -1802,7 +1861,16 @@ export function RoomsPanel() {
               disabled={voiceLoading || !commentText.trim()}
               title="Send comment"
             >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
                 <line x1="22" y1="2" x2="11" y2="13"></line>
                 <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
               </svg>
@@ -1843,7 +1911,15 @@ export function RoomsPanel() {
         </div>
 
         {voiceError && (
-          <div style={{ padding: '0.5rem 1rem', background: '#7f1d1d', color: '#fca5a5', fontSize: '0.8rem', textAlign: 'center' }}>
+          <div
+            style={{
+              padding: '0.5rem 1rem',
+              background: '#7f1d1d',
+              color: '#fca5a5',
+              fontSize: '0.8rem',
+              textAlign: 'center',
+            }}
+          >
             Voice Error: {voiceError}
           </div>
         )}
@@ -1864,7 +1940,9 @@ export function RoomsPanel() {
             <div className="ch-modal-card" onClick={(e) => e.stopPropagation()}>
               <div className="ch-modal-header">
                 <h3 className="ch-modal-title">Invite Friends</h3>
-                <button className="ch-modal-close" onClick={() => setShowInviteModal(false)}>✕</button>
+                <button className="ch-modal-close" onClick={() => setShowInviteModal(false)}>
+                  ✕
+                </button>
               </div>
               <div className="ch-modal-body">
                 {loadingFollowing ? (
@@ -1873,11 +1951,19 @@ export function RoomsPanel() {
                     <span>Loading friends...</span>
                   </div>
                 ) : followingUsers.length === 0 ? (
-                  <p className="dashboard-hint" style={{ textAlign: 'center' }}>You are not following anyone yet.</p>
+                  <p className="dashboard-hint" style={{ textAlign: 'center' }}>
+                    You are not following anyone yet.
+                  </p>
                 ) : (
                   <ul className="ch-invite-list">
                     {followingUsers.map((u) => {
-                      const initials = u.name ? u.name.split(' ').map((n) => n[0]).join('').slice(0, 2) : '?';
+                      const initials = u.name
+                        ? u.name
+                            .split(' ')
+                            .map((n) => n[0])
+                            .join('')
+                            .slice(0, 2)
+                        : '?';
                       const isInvited = invitedUserIds.has(u.user_id!);
                       return (
                         <li key={u.user_id} className="ch-invite-item">
@@ -2028,16 +2114,17 @@ export function RoomsPanel() {
 
       {state === 'ready' && activeTab === 'rooms' && (
         <>
-          {channels.length === 0 && (
-            <p className="dashboard-hint">No rooms are live right now.</p>
-          )}
+          {channels.length === 0 && <p className="dashboard-hint">No rooms are live right now.</p>}
           {channels.length > 0 && filteredChannels.length === 0 && (
             <p className="dashboard-hint">No rooms match your search query.</p>
           )}
           <ul className="ch-room-list" style={{ padding: '0 1.25rem' }}>
             {filteredChannels.map((c) => {
               const mainSpeakers = c.users.filter((u) => u.is_speaker).slice(0, 3);
-              const otherSpeakersCount = Math.max(0, c.users.filter((u) => u.is_speaker).length - 3);
+              const otherSpeakersCount = Math.max(
+                0,
+                c.users.filter((u) => u.is_speaker).length - 3,
+              );
 
               return (
                 <li key={c.channel} className="ch-room">
@@ -2179,7 +2266,17 @@ export function RoomsPanel() {
       )}
 
       {state === 'ready' && activeTab === 'people' && (
-        <div className="ch-people-search-section" style={{ padding: '0 1.25rem 1.5rem 1.25rem', display: 'flex', flexDirection: 'column', gap: '1rem', flex: 1, overflow: 'hidden' }}>
+        <div
+          className="ch-people-search-section"
+          style={{
+            padding: '0 1.25rem 1.5rem 1.25rem',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '1rem',
+            flex: 1,
+            overflow: 'hidden',
+          }}
+        >
           <form onSubmit={handlePeopleSearch} className="ch-input-row" style={{ width: '100%' }}>
             <input
               className="ch-comment-input"
@@ -2198,7 +2295,16 @@ export function RoomsPanel() {
               {loadingPeople ? (
                 <div className="ch-spinner" style={{ width: '14px', height: '14px' }} />
               ) : (
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
                   <circle cx="11" cy="11" r="8" />
                   <line x1="21" x2="16.65" y1="21" y2="16.65" />
                 </svg>
@@ -2214,7 +2320,11 @@ export function RoomsPanel() {
             <ul className="ch-people-list">
               {peopleSearchResults.map((u) => {
                 const initials = u.name
-                  ? u.name.split(' ').map((n) => n[0]).join('').slice(0, 2)
+                  ? u.name
+                      .split(' ')
+                      .map((n) => n[0])
+                      .join('')
+                      .slice(0, 2)
                   : '?';
                 const isFollowing = u.is_following;
 
@@ -2223,10 +2333,18 @@ export function RoomsPanel() {
                   try {
                     if (isFollowing) {
                       await unfollowClubhouseUser(u.user_id);
-                      setPeopleSearchResults(prev => prev.map(item => item.user_id === u.user_id ? { ...item, is_following: false } : item));
+                      setPeopleSearchResults((prev) =>
+                        prev.map((item) =>
+                          item.user_id === u.user_id ? { ...item, is_following: false } : item,
+                        ),
+                      );
                     } else {
                       await followClubhouseUser(u.user_id);
-                      setPeopleSearchResults(prev => prev.map(item => item.user_id === u.user_id ? { ...item, is_following: true } : item));
+                      setPeopleSearchResults((prev) =>
+                        prev.map((item) =>
+                          item.user_id === u.user_id ? { ...item, is_following: true } : item,
+                        ),
+                      );
                     }
                   } catch (err) {
                     console.error('Failed to toggle follow inline:', err);
@@ -2234,7 +2352,11 @@ export function RoomsPanel() {
                 };
 
                 return (
-                  <li key={u.user_id} className="ch-person-card" onClick={() => handleUserClick(u.user_id)}>
+                  <li
+                    key={u.user_id}
+                    className="ch-person-card"
+                    onClick={() => handleUserClick(u.user_id)}
+                  >
                     {u.photo_url ? (
                       <img className="ch-person-avatar" src={u.photo_url} alt="" />
                     ) : (
@@ -2275,9 +2397,14 @@ export function RoomsPanel() {
           <div className="ch-modal-card" onClick={(e) => e.stopPropagation()}>
             <div className="ch-modal-header">
               <h3 className="ch-modal-title">Start a Room</h3>
-              <button className="ch-modal-close" onClick={() => setShowStartRoomModal(false)}>✕</button>
+              <button className="ch-modal-close" onClick={() => setShowStartRoomModal(false)}>
+                ✕
+              </button>
             </div>
-            <form onSubmit={handleStartRoom} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <form
+              onSubmit={handleStartRoom}
+              style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}
+            >
               <div className="ch-form-group">
                 <label className="ch-label">Topic</label>
                 <input
@@ -2292,7 +2419,9 @@ export function RoomsPanel() {
               <div className="ch-form-group">
                 <label className="ch-label">Privacy</label>
                 <div className="ch-radio-group">
-                  <label className={`ch-radio-label ${newRoomPrivacy === 'public' ? 'active' : ''}`}>
+                  <label
+                    className={`ch-radio-label ${newRoomPrivacy === 'public' ? 'active' : ''}`}
+                  >
                     <input
                       className="ch-radio-input"
                       type="radio"
@@ -2306,7 +2435,9 @@ export function RoomsPanel() {
                       <span className="ch-radio-desc">Anyone can join your room</span>
                     </div>
                   </label>
-                  <label className={`ch-radio-label ${newRoomPrivacy === 'social' ? 'active' : ''}`}>
+                  <label
+                    className={`ch-radio-label ${newRoomPrivacy === 'social' ? 'active' : ''}`}
+                  >
                     <input
                       className="ch-radio-input"
                       type="radio"
@@ -2320,7 +2451,9 @@ export function RoomsPanel() {
                       <span className="ch-radio-desc">Only people you follow can join</span>
                     </div>
                   </label>
-                  <label className={`ch-radio-label ${newRoomPrivacy === 'private' ? 'active' : ''}`}>
+                  <label
+                    className={`ch-radio-label ${newRoomPrivacy === 'private' ? 'active' : ''}`}
+                  >
                     <input
                       className="ch-radio-input"
                       type="radio"
@@ -2337,7 +2470,7 @@ export function RoomsPanel() {
                 </div>
               </div>
               <button className="ch-btn-submit" type="submit" disabled={creatingRoom}>
-                {creatingRoom ? 'Starting Room...' : '🎉 Let\'s go'}
+                {creatingRoom ? 'Starting Room...' : "🎉 Let's go"}
               </button>
             </form>
           </div>

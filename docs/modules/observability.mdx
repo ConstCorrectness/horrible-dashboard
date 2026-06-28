@@ -17,7 +17,7 @@ of the seeded Dashboard workspace; the full I/O panel is opened on demand.
 
 A useful observability view can't be per-module logging — it instruments the
 **chokepoints once** so every module's traffic shows up for free (like the
-Docker daemon already seeing all container I/O). Three sources feed one stream:
+Docker daemon already seeing all container I/O). Four sources feed one stream:
 
 - **`client`** — every frontend→backend round-trip, recorded in the API client's
   `request<T>` ([packages/core/src/api.ts](../../packages/core/src/api.ts)).
@@ -26,6 +26,12 @@ Docker daemon already seeing all container I/O). Three sources feed one stream:
 - **`outbound`** — the backend's calls to external services (Clubhouse, Ollama),
   via `instrumented_client()` wrapping httpx; agent and clubhouse use it. This is
   the part the frontend can't see on its own.
+- **`ws`** — individual frames of the multiplexed `/ws` socket (agent, collab,
+  network, lobby, terminal…), captured at the two chokepoints: outbound at
+  `WsConnection.send_json` (via a telemetry-free observer hook the app registers),
+  inbound in the `/ws` receive loop. The `telemetry` channel itself is skipped so
+  the push stream doesn't observe its own output. The frame's JSON payload is the
+  body; the direction (`send`/`recv`) is the method.
 
 So a single user action reads end to end: `client GET /agent/status` →
 `inbound /api/agent/status` → `outbound GET …/api/tags` (Ollama).
@@ -43,20 +49,22 @@ flowchart LR
     Store --> DF["Data flow widget / I/O panel"]
 ```
 
-## Detail is captured redacted — never raw
+## Detail is captured raw — this is a local Wireshark
 
-Every event carries metadata (method, target, status, duration, byte counts)
-plus **redacted detail** for the expandable row view: headers with
-credential-bearing values masked (`authorization`, `cookie`, anything matching
-token/secret/api-key/session), bodies truncated to a configurable size
-(`observability.maxBodyChars`, default 2 KB; hard-capped at 64 KB regardless),
-and bodies on
-sensitive routes suppressed entirely (Clubhouse paths/hosts — phone numbers,
-SMS codes, tokens; the Clubhouse token never reaches the browser). Outbound
-URLs are recorded scheme+host+path only (query/fragment stripped). Response
-bodies are captured on `client` events and on all `outbound` calls — so the
-request↔response pair to the LLM reads end to end — redacted and truncated like
-request bodies:
+The panel is the app's built-in protocol analyzer, so it deliberately hides
+nothing at the application layer: every event carries metadata (method, target,
+status, duration, byte counts) plus the **full headers and bodies, unredacted**,
+for the inspector. Nothing is masked or suppressed — credential headers
+(`authorization`, `cookie`, tokens) and sensitive bodies (Clubhouse phone
+numbers, SMS codes) are shown verbatim. The only limit is **size**: bodies are
+truncated to a configurable cap (`observability.maxBodyChars`, default 16 KB) and
+never read past a 1 MB hard ceiling. Outbound URLs are recorded scheme+host+path
+only (query/fragment stripped). Treat the in-memory buffer as sensitive — it is a
+local introspection tool, and the data never leaves the machine.
+
+Response bodies are captured on `client` events and on all `outbound` calls — so
+the request↔response pair to the LLM reads end to end — truncated like request
+bodies:
 
 - **Non-streaming** outbound responses (e.g. the agent's `stream:false`
   `/api/chat` tool-calling round) are read in the response hook; httpx caches the
@@ -67,11 +75,11 @@ request bodies:
   streaming call sites (`providers.generate_stream`, `routes._proxy_ndjson`) —
   passes each line through to the caller while accumulating a capped copy, and
   `recorder.amend` fills the body into the same event once the stream finishes
-  (capped at 64 KB of capture so a long generation can't grow unbounded).
+  (capped at the 1 MB ceiling so a long generation can't grow unbounded).
 
 Inbound response bodies aren't captured (the `client` event for the same
-round-trip shows the payload). The redaction lives at the capture chokepoints
-(`instrument.py`, `api.ts`) — never record a raw header or body.
+round-trip shows the payload). Capture and truncation live at the chokepoints
+(`instrument.py`, `api.ts`).
 
 ## Transport
 
@@ -86,13 +94,16 @@ replaces its row in place rather than duplicating it.
 
 ## Contributions to the layout shell
 
-- **Panels:** `observability.logs` (singleton, `defaultPlacement: bottom`) — the
-  full I/O table (time, source badge, method, target, status, ms, size) with a
-  Clear button. A toolbar **filter** narrows the rows live (client-side, over the
-  same in-memory list): a free-text query over method+target, a source selector
-  (all / client / inbound / outbound), and an **errors only** toggle; the count
-  reads `shown / total` while a filter is active. Rows with captured detail show a
-  caret and expand on click to the redacted headers/bodies.
+- **Panels:** `observability.logs` (singleton, `defaultPlacement: bottom`) — a
+  Wireshark-style **master-detail**: a packet-list table (time, source badge,
+  method, target, status, ms, size) over an **inspector** for the selected row.
+  The inspector shows General metadata, then request/response headers and bodies
+  (for a `ws` frame, a single "Frame payload"); bodies are JSON pretty-printed and
+  syntax-highlighted with a **Raw⇄Pretty** toggle and **Copy**. A toolbar
+  **filter** narrows rows live (client-side): a free-text query over
+  method+target+**body**, a source selector (all / client / inbound / outbound /
+  ws), and an **errors only** toggle; the count reads `shown / total` while a
+  filter is active. A Clear button empties the buffer.
 - **Widgets:** `observability.io` ("Data flow") — compact summary (call/error
   counts + last few, expandable the same way), opened as a pane. Part of the
   seeded Dashboard workspace; also addable to any workspace from the palette
@@ -100,11 +111,11 @@ replaces its row in place rather than duplicating it.
 - **Commands:** `observability.open` (opens the panel).
 - **Settings:** `observability.recentCount` (number, default 5) — how many recent
   calls the Data flow widget lists; read live via `useSetting`.
-  `observability.maxBodyChars` (number, default 2048) — how many characters of
-  each captured request/response body to keep for the expandable detail view.
+  `observability.maxBodyChars` (number, default 16384) — how many characters of
+  each captured request/response body (and `ws` frame) to keep for the inspector.
   Unlike `recentCount`, this one is consumed on the **backend** (the truncation
   happens at capture, in `instrument.py`, which reads the persisted value via the
-  settings module's `get_value`); it's still hard-capped at 64 KB. See
+  settings module's `get_value`); it's still hard-capped at 1 MB. See
   [settings.md](settings.mdx).
 
 ## Backend surface

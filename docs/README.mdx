@@ -54,9 +54,15 @@ flowchart TB
 - [Windowing](architecture/windowing.mdx) — the dockable workspace: how views
   (panels and widgets) open as tabbed/split/floating panes, views vs pane
   instances, and layout persistence.
-- [Plugin SDK](architecture/plugin-sdk.mdx) — the public plugin contract
-  (`@horribledashboard/sdk`): package format, authoring guide, runtime shims,
-  versioning, trust model, catalog/install lifecycle.
+- [Plugin SDK](architecture/plugin-sdk.mdx) — the public **frontend** plugin
+  contract (`@horribledashboard/sdk`): package format, authoring guide, runtime
+  shims, versioning, trust model, catalog/install lifecycle.
+- [Backend plugin SDK](architecture/backend-plugin-sdk.mdx) — its **server-side**
+  counterpart (`backend.sdk`): plugins contribute HTTP routes, agent tools, `/ws`
+  channels, lifespan hooks, and `dash` facades; discovered from bundled dirs,
+  `HORRIBLE_PLUGINS_DIR`, and pip entry points.
+- [Python SDK (`dash`)](architecture/python-sdk.mdx) — the in-REPL handle for
+  scripting the running app (panes, workspaces, layout, I/O telemetry, settings).
 - [Agent tools & permissions](architecture/agent-tools.mdx) — the generalized
   agent tool surface (`agentTools`, agent-exposed commands, pull-based
   `getAgentContext()`), the capability-manifest protocol, and the Claude

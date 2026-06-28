@@ -8,6 +8,7 @@ import {
 } from 'dockview';
 import 'dockview/dist/styles/dockview.css';
 import {
+  clearActiveScope,
   createWorkspace,
   deleteWorkspace,
   getWorkspaces,
@@ -16,6 +17,7 @@ import {
   PaneParamsContext,
   registry,
   saveWorkspace,
+  setActiveScope,
   setActiveWorkspace,
   workspaceStore,
   type LayoutPreset,
@@ -55,6 +57,9 @@ function PanelHost(props: IDockviewPanelProps<{ panelId: string }>) {
     return () => sub.dispose();
   }, [props.api]);
 
+  // Drop this view as the active keybinding scope when the pane unmounts.
+  useEffect(() => () => clearActiveScope(panelId), [panelId]);
+
   const decl = resolveContent(panelId);
   if (!decl) {
     return <div className="ws-panel ws-panel-missing">Unknown pane: {panelId}</div>;
@@ -66,12 +71,18 @@ function PanelHost(props: IDockviewPanelProps<{ panelId: string }>) {
   const onSplit = (direction: SplitDirection) => {
     registry.layoutController?.splitPane(props.api.id, direction, panelId);
   };
+  // Focusing this pane makes its view id the active keybinding scope, so a pane's
+  // scoped bindings shadow plain globals while it's focused (see core/keybindings).
+  // focus (any descendant) and pointerdown both count — a click on non-focusable
+  // pane content still selects it. Cleared on unmount if it's still the active one.
+  const markActive = () => setActiveScope(panelId);
+
   // Expose this pane's live instance id (for useAgentContext, keyed by instance)
   // and the params it was opened with (for usePaneParams, e.g. a buffer source).
   return (
     <PaneInstanceContext.Provider value={props.api.id}>
       <PaneParamsContext.Provider value={props.params}>
-        <div className="ws-pane-host">
+        <div className="ws-pane-host" onFocusCapture={markActive} onPointerDownCapture={markActive}>
           <div className="ws-panel">
             <Component />
           </div>
