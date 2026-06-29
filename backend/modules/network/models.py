@@ -8,6 +8,7 @@ protocols never collide. See docs/architecture/distributed.mdx.
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from typing import Any, Literal
@@ -132,3 +133,54 @@ class PeerMetrics(BaseModel):
     msgs_in: int = 0
     msgs_out: int = 0
     last_seen: float | None = None
+
+
+# ---- Agent commons (see docs/architecture/agent-commons.mdx) -----------------------
+
+
+class ProfileLink(BaseModel):
+    label: str
+    url: str
+
+
+class CommonsProfile(BaseModel):
+    """A node's public storefront in the agent commons.
+
+    A **superset of an A2A Agent Card** — `display_name`/`headline`/`agent_capabilities`
+    map to the card's `name`/`description`/skills — extended with the self-certifying
+    node identity, discovery `tags`, and a signature so the profile is tamper-evident
+    even when re-served by a federated index. `sig` is an Ed25519 signature over
+    `canonical_profile_bytes(self)` by the holder of `public_key`; the index rejects a
+    profile whose signature is bad or whose `node_id` isn't the fingerprint of
+    `public_key`.
+    """
+
+    node_id: NodeId
+    public_key: str  # base64 Ed25519 public key (raw 32 bytes)
+    display_name: str
+    headline: str = ""
+    bio: str | None = None
+    avatar_url: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    seeking: str | None = None
+    agent_capabilities: list[str] = Field(default_factory=list)
+    links: list[ProfileLink] = Field(default_factory=list)
+    visibility: Literal["public", "unlisted"] = "public"
+    sig: str | None = None
+
+
+class CommonsCandidate(BaseModel):
+    """One ranked search hit from the commons index — a profile plus its cosine score.
+    The viewer-relative trust tier is computed client-side, not here."""
+
+    profile: CommonsProfile
+    score: float
+
+
+def canonical_profile_bytes(profile: CommonsProfile) -> bytes:
+    """The deterministic bytes a profile's `sig` is computed and verified over: every
+    field except the signature itself, serialized with sorted keys and no whitespace.
+    Signer and verifier must agree byte-for-byte, so the serialization is pinned here
+    rather than relying on dict/JSON ordering."""
+    data = profile.model_dump(exclude={"sig"})
+    return json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8")

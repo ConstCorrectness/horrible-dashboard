@@ -124,6 +124,24 @@ export {
   type PeersSnapshot,
 } from './modules/network';
 export {
+  commonsModule,
+  initCommons,
+  getCommonsState,
+  subscribeCommons,
+  commonsConnect,
+  commonsSearch,
+  commonsRefresh,
+  commonsPublish,
+  commonsRequest,
+  commonsRespond,
+  commonsBlock,
+  commonsUnblock,
+  type CommonsProfile,
+  type CommonsCandidate,
+  type CommonsRequest,
+  type CommonsState,
+} from './modules/commons';
+export {
   agentModule,
   askAgent,
   DEFAULT_AGENT_MODEL,

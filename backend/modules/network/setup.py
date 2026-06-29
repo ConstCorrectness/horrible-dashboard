@@ -62,11 +62,17 @@ async def start_network() -> None:
     from backend.modules.network.lobby import lobby_client
 
     await lobby_client.start()
+    # Connect to the agent commons (profiles + matchmaking), if enabled.
+    from backend.modules.network.commons import commons_client
+
+    await commons_client.start()
 
 
 async def stop_network() -> None:
+    from backend.modules.network.commons import commons_client
     from backend.modules.network.lobby import lobby_client
 
+    await commons_client.disconnect()
     await lobby_client.disconnect()
     await peer_monitor.stop()
     await peer_hub.stop()

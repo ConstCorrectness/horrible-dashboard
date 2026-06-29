@@ -4,6 +4,7 @@ import {
   agentModule,
   BROWSER_CAPABILITIES,
   clubhouseModule,
+  commonsModule,
   dashboardModule,
   editorModule,
   filesModule,
@@ -13,6 +14,7 @@ import {
   initApprovalListener,
   initBackendOrigin,
   initCapabilities,
+  initCommons,
   layoutsModule,
   loadPlugins,
   loadSettings,
@@ -61,6 +63,7 @@ async function boot(): Promise<void> {
   registry.register(visualizerModule);
   registry.register(flowModule);
   registry.register(networkModule);
+  registry.register(commonsModule);
   // Dev-only agent-tool reference/validation stub (see agent-tools.md).
   if (import.meta.env.DEV) registry.register(stubModule);
 
@@ -78,6 +81,7 @@ async function boot(): Promise<void> {
   // Subscribe to the peer fabric so presence syncs before the Peers widget opens.
   initNetwork();
   initLobby();
+  initCommons();
   // Listen for permission-approval prompts the gate raises during a turn.
   initApprovalListener();
 

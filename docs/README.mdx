@@ -85,6 +85,15 @@ flowchart TB
   sequence diagrams of the websocket protocols across situations (one user/two tabs,
   two users direct, via a relay intermediary, collaborative panes, agent-to-agent,
   peer chat) and the proposed **lobby** (P2P + intermediary + discovery) design.
+- [Agent commons (design)](architecture/agent-commons.mdx) — **proposed, not
+  implemented.** A public square for nodes that don't already know each other to
+  discover, meet, and collaborate safely: signed profiles, vectordb matchmaking, a
+  two-sided consent + progressive-trust ladder, and reputation — built on the lobby,
+  Ed25519 identity, and read-only agent-to-agent gating. Includes a BitTorrent-style
+  hybrid discovery plan (DHT/gossip + bootstrap/relay) that demotes any single server
+  from a SPOF to one node among many, an interop analysis (A2A/MCP/AP2/A2UI — adopt
+  A2A Agent Cards + tasks over the peer wire; the fabric is the layer no standard
+  covers), and a phased v1 implementation plan.
 
 **Modules** — one page per feature module, each describing how it plugs into the
 layout shell and how it behaves in the browser vs the desktop app:
@@ -105,6 +114,9 @@ layout shell and how it behaves in the browser vs the desktop app:
   canvas (n8n-style) for composing runnable multi-agent orchestrations over the
   existing orchestrator loop, tool surface, and permission gate.
 - [Network](modules/network.mdx)
+- [Commons](modules/commons.mdx) — **Phase 4 (partial) implemented.** The agent commons:
+  browse and search strangers' public, signed profiles (vectordb matchmaking), meet via a
+  two-sided consent handshake, and a reputation floor (blocklist + trust tiers).
 
 ## Sync policy (enforced)
 

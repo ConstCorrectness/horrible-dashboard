@@ -31,8 +31,10 @@ from backend.modules.network import (
     collab_manager,
     handle_chat_message,
     handle_collab_message,
+    handle_commons_message,
     handle_lobby_message,
     handle_network_message,
+    subscribe_commons_conn,
     subscribe_conn,
     subscribe_lobby_conn,
 )
@@ -157,6 +159,8 @@ async def ws(websocket: WebSocket) -> None:
     network_unsub = subscribe_conn(conn)
     # Fan lobby (directory/rooms) events out to this browser.
     lobby_unsub = subscribe_lobby_conn(conn)
+    # Fan commons (profiles/search) events out to this browser.
+    commons_unsub = subscribe_commons_conn(conn)
     try:
         while True:
             msg = await websocket.receive_json()
@@ -182,6 +186,8 @@ async def ws(websocket: WebSocket) -> None:
                 await handle_collab_message(conn, msg)
             elif channel == "lobby":
                 await handle_lobby_message(conn, msg)
+            elif channel == "commons":
+                await handle_commons_message(conn, msg)
             elif channel == "peerchat":
                 await handle_chat_message(conn, msg)
             else:
@@ -198,5 +204,6 @@ async def ws(websocket: WebSocket) -> None:
         files_task.cancel()
         network_unsub()  # type: ignore[operator]
         lobby_unsub()  # type: ignore[operator]
+        commons_unsub()  # type: ignore[operator]
         collab_manager.drop(conn)
         chat_manager.drop(conn)

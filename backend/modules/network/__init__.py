@@ -5,6 +5,11 @@ and docs/modules/network.mdx."""
 from backend.modules.network.bridge import handle_network_message, subscribe_conn
 from backend.modules.network.chat import chat_manager, handle_chat_message
 from backend.modules.network.collab import collab_manager, handle_collab_message
+from backend.modules.network.commons import (
+    commons_client,
+    handle_commons_message,
+    subscribe_commons_conn,
+)
 from backend.modules.network.hub import PeerHub, peer_hub
 from backend.modules.network.lobby import (
     handle_lobby_message,
@@ -24,6 +29,9 @@ __all__ = [
     "lobby_client",
     "handle_lobby_message",
     "subscribe_lobby_conn",
+    "commons_client",
+    "handle_commons_message",
+    "subscribe_commons_conn",
     "chat_manager",
     "handle_chat_message",
 ]

@@ -1,0 +1,161 @@
+---
+sidebar_position: 14
+sidebar_label: Commons
+---
+
+# Module: commons
+
+The **agent commons**: a public square where nodes that don't already know each other
+discover one another and (eventually) collaborate safely. Where [network](network.mdx)
+connects peers you've already paired with, the commons is for meeting **strangers** —
+browse and search public profiles, with trust earned in steps rather than assumed.
+
+**Status: Phase 4 (partial) implemented.** Browse + search, the **two-sided consent
+handshake** (request-to-meet → accept/decline → peer link), and the **reputation floor**
+— a local blocklist and per-profile trust tiers (`known` / `unknown` / `blocked`) — all
+work end to end against a commons index. Remaining: vouches/reports, a profile editor,
+and a dedicated requests widget. The full design — safety ladder, matchmaking,
+federation, standards interop — is in [Agent commons](../architecture/agent-commons.mdx).
+
+Frontend in `packages/core/src/modules/commons/`; node-side client in
+`backend/modules/network/commons.py`; the standalone index server in
+`backend/modules/network/commons_server.py`.
+
+## Contributions to the layout shell
+
+- **Widget** `commons.directory` (Commons) — `CommonsDirectory.tsx`. Connection status,
+  a search box (cosine match over the index's vectordb), the directory / match results
+  as profile cards (name, headline, tags, online dot, **trust-tier badge**) each with
+  **Meet** / **Block** (or **Unblock**) buttons, and a **Requests to meet** section with
+  Accept / Decline for inbound requests.
+- **Command** `commons.open` (Open directory).
+- **Settings** (see below).
+
+## How it works
+
+```mermaid
+flowchart LR
+    Browser["Commons widget"] -->|"/ws · commons"| Client["CommonsClient (node)"]
+    Client -->|"ws · /commons-ws"| Index["commons_server (index)"]
+    Index -->|"embed + cosine"| VDB["vectordb"]
+    Client -->|"signs profile with node key"| Index
+```
+
+A node opts in (`commons.enabled` + `commons.serverUrl`) and the backend
+**`CommonsClient`** connects to the index. On connect it **builds and signs this node's
+`CommonsProfile` from settings** — signing happens on the backend because the Ed25519
+node key never crosses an API; the frontend edits the *settings* that feed the profile,
+never the key. The browser drives browse/search over the `/ws` `commons` channel; the
+index answers search by embedding the query and ranking profiles by cosine similarity
+(the same `get_embedding` used to index them, so even the local fallback stays
+self-consistent).
+
+Profiles are **self-certifying**: the index verifies that a profile's signature is valid
+and that its `node_id` is the fingerprint of its `public_key`, so it can list but never
+forge a profile (and a federated index could re-serve it later).
+
+### `/ws` `commons` channel
+
+| Direction | event | data |
+|---|---|---|
+| client→server | `state` | `{}` (request a snapshot) |
+| client→server | `connect` | `{ url? }` |
+| client→server | `disconnect` | `{}` |
+| client→server | `search` | `{ query, limit }` |
+| client→server | `directory` | `{}` |
+| client→server | `publish` | `{}` |
+| client→server | `request` | `{ nodeId, note? }` (ask to meet) |
+| client→server | `respond` | `{ requestId, accept }` (consent to an inbound request) |
+| client→server | `block` / `unblock` | `{ nodeId }` |
+| server→client | `state` | `{ connected, url, self, directory, results, requests }` |
+| server→client | `directory` | `{ profiles[] }` |
+| server→client | `candidates` | `{ results[]: { profile, score } }` |
+| server→client | `requests` | `{ requests[]: { request_id, from, note } }` (inbound, changed) |
+| server→client | `met` | `{ peer, request_id }` (mutual consent — peer link established) |
+| server→client | `declined` | `{ node_id }` |
+| server→client | `error` | `{ message }` |
+
+### Consent handshake (the safety core)
+
+Meeting a stranger is **two-sided and explicit** — nothing happens on the target's node
+until its human accepts. A wants to meet B:
+
+```mermaid
+sequenceDiagram
+    actor UA as User A
+    participant A as A · CommonsClient
+    participant I as Commons index
+    participant B as B · CommonsClient
+    actor UB as User B
+    UA->>A: Meet (commons · request {nodeId: B})
+    A->>I: connect_request {to_node_id: B, note}
+    I->>B: connect_request {request_id, from: A's profile, note}
+    B-->>UB: surfaced as a pending request (Accept / Decline)
+    UB->>B: Accept
+    B->>I: connect_response {request_id, accept: true}
+    par mutual consent — establish the peer link
+        I->>A: connected {dial: true, peer: B reachability}
+        Note over A: A dials B (direct → webrtc → relay)
+    and
+        I->>B: connected {dial: false, peer: A reachability}
+    end
+    A-->>UA: met
+    B-->>UB: met
+```
+
+The index only **brokers consent** — it holds an in-flight `request_id → (requester,
+target)` map and hands out reachability *only after* the target accepts. On decline it
+sends `declined` to the requester and nothing else; if the target is offline the
+requester gets `request_failed`. The requester dials (mirrors the lobby guest→host
+handoff); the responder waits to accept the inbound link. Read-only agent-to-agent
+([`network.remoteAgentMode=plan`](network.mdx#settings)) remains the ceiling for a freshly
+met stranger.
+
+### Reputation floor (blocklist + trust tiers)
+
+Each profile the node hands to the browser is annotated **node-side** with a
+viewer-relative `trust_tier` — `known` (already trusted in `network-peers.json`),
+`blocked`, or `unknown` — never trusted to the index. **Blocking** a node
+(`block {nodeId}`) sets `blocked` in the local trust store via
+`trust.save_known_peer`, which has two effects: the commons **auto-declines that node's
+meet requests silently** (it never surfaces), and the peer fabric's
+[`trust.evaluate`](../architecture/distributed.mdx#trust) refuses it at the handshake —
+so one block ends contact across both layers. Because the `node_id` is a key
+fingerprint, a blocked node can't slip back under a new name. `unblock {nodeId}` clears
+it. (Signed vouches and index-side reports are a later phase.)
+
+### The index server (`/commons-ws`)
+
+Run separately: `uv run uvicorn backend.modules.network.commons_server:app --port 9100`.
+It mounts `/commons-ws` and **bundles `/lobby-ws` + `/relay-ws`** so one host serves
+both discovery and connectivity. It speaks `publish_profile` / `search` / `directory` /
+`unpublish` plus the consent frames `connect_request` / `connect_response` /
+`connected` (above), persists the registry to
+`$HORRIBLE_DATA_DIR/commons-profiles.json`, and stores embeddings in the
+[vectordb](vectordb.mdx) SQLite store. Disconnect marks a
+profile offline (kept, still discoverable); `unpublish` removes it.
+
+## Settings
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `commons.enabled` | boolean | `false` | Connect to a commons index at startup. |
+| `commons.serverUrl` | string | `""` | The `ws://…/commons-ws` index (blank = off). |
+| `commons.autoPublish` | boolean | `true` | Publish this node's signed profile on connect. |
+| `commons.headline` | string | `""` | One-line storefront tagline. |
+| `commons.bio` | string | `""` | Longer profile description. |
+| `commons.tags` | string | `""` | Comma-separated skills/interests. |
+| `commons.seeking` | string | `""` | What collaboration you're looking for. |
+| `commons.visibility` | enum | `public` | `public` (listed) or `unlisted` (link-only). |
+
+The display name is the node's `network.nodeName`; agent capabilities are advertised
+from the node's hub. Server-side state lives under the *index's* `$HORRIBLE_DATA_DIR`.
+
+## Browser vs desktop
+
+| | Browser | Desktop (Tauri) |
+|---|---|---|
+| Commons widget, `/ws` `commons` channel | ✅ | ✅ |
+| Profile signing + index connection (backend) | ✅ | ✅ |
+
+Everything runs in the backend, so both layouts behave identically.
