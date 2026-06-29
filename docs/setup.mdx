@@ -1,0 +1,119 @@
+---
+sidebar_position: 2
+sidebar_label: Setup & running
+---
+
+# Setup & running
+
+How to get horrible-dashboard running from a fresh clone — the **browser** layout and
+the **desktop** (Tauri) layout share one frontend, so most of the setup is common.
+
+:::info Kept in sync with `package.json`
+The [Scripts reference](#scripts-reference) below mirrors the `scripts` block in the
+repo-root `package.json`. **If you add, rename, or change a pnpm script, update this
+page in the same change** (a Stop hook flags a `package.json` change that doesn't touch
+`docs/`). See the [sync policy](README.mdx#sync-policy-enforced).
+:::
+
+## Prerequisites
+
+| Tool | Version | Notes |
+|---|---|---|
+| **Node.js** | LTS (≥ 20) | Runtime for pnpm and Vite. |
+| **pnpm** | `10.28.2` | Pinned via `packageManager`. Easiest: `corepack enable` (uses the pinned version automatically). |
+| **Python** | ≥ 3.12 | The backend (`requires-python = ">=3.12"`). |
+| **uv** | latest | Python package/venv manager — [install guide](https://docs.astral.sh/uv/). The backend is managed with `uv`, never `pip`. |
+| **Rust + Tauri prereqs** | stable toolchain | **Desktop layout only.** `rustup` plus the [Tauri v2 system dependencies](https://v2.tauri.app/start/prerequisites/) (WebView2 — preinstalled on Windows 11; `webkit2gtk` on Linux; Xcode Command Line Tools on macOS). The Tauri CLI itself comes from `pnpm install`. |
+
+## Install
+
+```bash
+corepack enable        # make the pinned pnpm available (first time only)
+pnpm install           # JS deps for every workspace (apps/*, packages/*)
+uv sync                # backend Python deps + a local .venv
+```
+
+Optional: `uv sync --extra webrtc` adds the WebRTC data-channel transport for the peer
+fabric (heavy native deps, so it's opt-in).
+
+## Run the browser layout
+
+```bash
+pnpm dev               # backend + Vite UI together
+```
+
+Open **http://localhost:5173**. `pnpm dev` (via `scripts/dev.mjs`) starts the FastAPI
+backend on **:8000** _and_ the Vite UI on **:5173**, which proxies `/api` and `/ws` to
+the backend — so API panels work out of the box. Backend health check:
+`GET http://localhost:8000/api/health`.
+
+- `pnpm dev:web` — UI only, when a backend is already running.
+- `pnpm dev:lan` — bind both servers to `0.0.0.0` so other machines can reach this
+  node (needed for the [peer fabric](architecture/distributed.mdx) / collaboration).
+
+## Run the desktop layout (Tauri)
+
+```bash
+pnpm dev:desktop       # runs `tauri dev`
+```
+
+The Tauri shell **supervises the backend itself** (`apps/desktop/src-tauri/src/backend.rs`):
+it spawns uvicorn, or reuses one already running on :8000 — no separate backend start
+needed. The **first** run compiles Rust and takes several minutes; that's expected.
+
+## Production builds
+
+```bash
+pnpm build             # static web bundle (apps/web/dist)
+pnpm build:desktop     # native desktop installers (Tauri)
+```
+
+## Backend on its own
+
+`pnpm dev` already runs the backend; start it standalone only when iterating on Python:
+
+```bash
+uv run uvicorn backend.app:app --reload --port 8000   # dev server
+uv run pytest                                          # backend tests
+uv run ruff format . && uv run ruff check --fix .      # format + lint Python
+```
+
+## Checks
+
+```bash
+pnpm typecheck         # all TS workspaces
+pnpm lint              # ESLint
+pnpm format            # Prettier (writes)
+uv run pytest          # backend tests
+```
+
+## Scripts reference
+
+Every script in the repo-root `package.json`:
+
+| Script | Underlying command | Purpose |
+|---|---|---|
+| `pnpm dev` | `node scripts/dev.mjs` | Full browser stack: FastAPI backend **and** Vite UI together (localhost:5173). |
+| `pnpm dev:web` | `pnpm --filter @horrible/web dev` | Frontend only (assumes a backend is already up). |
+| `pnpm dev:lan` | `node scripts/dev.mjs --host 0.0.0.0` | Same as `dev` but bound to `0.0.0.0` for LAN / peer-fabric access. |
+| `pnpm dev:desktop` | `pnpm --filter @horrible/desktop dev` | Desktop layout (`tauri dev`); the shell supervises the backend. |
+| `pnpm build` | `pnpm --filter @horrible/web build` | Production web bundle. |
+| `pnpm build:desktop` | `pnpm --filter @horrible/desktop build` | Native desktop build (`tauri build`). |
+| `pnpm build:icons` | `node scripts/build_icons.mjs` | Regenerate app icons from source art. |
+| `pnpm typecheck` | `pnpm -r typecheck` | Typecheck every workspace package. |
+| `pnpm lint` | `eslint .` | Lint the whole repo. |
+| `pnpm format` | `prettier --write .` | Format the whole repo. |
+
+## Troubleshooting
+
+- **Vite proxy `ECONNRESET` / `ECONNREFUSED`, or the backend aborts with
+  `OPENSSL_Uplink ... no OPENSSL_Applink` (Windows).** A MinGW `libcrypto` on `PATH`
+  (e.g. `C:\msys64\mingw64\bin`) can get loaded for TLS and crash the worker.
+  `backend/__init__.py` strips MinGW dirs from the process `PATH` at import, so the
+  standard commands above work regardless of your shell `PATH`.
+- **Port :8000 stays bound after Ctrl-C (Windows).** `pnpm dev` tree-kills the backend
+  on exit, but a manually started `uv run uvicorn --reload` can orphan a worker — kill
+  the whole process tree if a stale one holds the port.
+- **Desktop first build seems stuck.** It's compiling Rust; give it a few minutes.
+
+For how to verify a change in the running app, see the `running-the-app` workflow.

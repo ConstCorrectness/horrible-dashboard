@@ -1,9 +1,10 @@
 """Stop hook: nudge to keep docs/ in sync with code changes.
 
 If the working tree has changes under the code roots (apps/, packages/,
-backend/) but nothing under docs/, block the stop once with a reminder to
-update the docs or state why they are unaffected. A state file remembers the
-last reviewed change set so the same nudge doesn't repeat every turn.
+backend/) or in watched root files (package.json — its pnpm scripts are
+documented in docs/setup.mdx) but nothing under docs/, block the stop once with a
+reminder to update the docs or state why they are unaffected. A state file
+remembers the last reviewed change set so the same nudge doesn't repeat every turn.
 """
 
 import hashlib
@@ -13,6 +14,9 @@ import sys
 from pathlib import Path
 
 CODE_PREFIXES = ("apps/", "packages/", "backend/")
+# Exact root files whose changes should also be reflected in docs/ (e.g. the
+# package.json scripts mirrored in docs/setup.mdx).
+WATCHED_FILES = ("package.json",)
 STATE_FILE = Path(".claude/.docs_check_state")
 
 
@@ -43,7 +47,7 @@ def main() -> None:
         return
 
     files = changed_files()
-    code = sorted(f for f in files if f.startswith(CODE_PREFIXES))
+    code = sorted(f for f in files if f.startswith(CODE_PREFIXES) or f in WATCHED_FILES)
     docs_touched = any(f.startswith("docs/") for f in files)
     if not code or docs_touched:
         return
@@ -65,9 +69,10 @@ def main() -> None:
                     + " but nothing under docs/. Per docs/README.md, new or "
                     "changed modules, panels, commands, capabilities, or "
                     "layout-shell behavior must update the matching page in "
-                    "docs/. Update the relevant docs now, or if these changes "
-                    "genuinely don't affect anything documented (pure refactor, "
-                    "config, tests), state that briefly and finish."
+                    "docs/ (and pnpm-script changes in package.json must update "
+                    "docs/setup.mdx). Update the relevant docs now, or if these "
+                    "changes genuinely don't affect anything documented (pure "
+                    "refactor, config, tests), state that briefly and finish."
                 ),
             }
         )

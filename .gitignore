@@ -139,8 +139,12 @@ node_modules/
 src-tauri/target/
 apps/desktop/src-tauri/gen/
 
-# App local data
+# App local data (HORRIBLE_DATA_DIR — node identity key, peers, settings, vectordb).
+# Covers the default `.data/` and any sibling data dir (e.g. `.data-peer2/` for a
+# second local node during peer-fabric testing). Never commit these — they hold a
+# private Ed25519 node key.
 .data/
+.data-*/
 
 # Claude Code local overrides
 .claude/settings.local.json

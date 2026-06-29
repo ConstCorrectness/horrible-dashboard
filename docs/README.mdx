@@ -46,6 +46,11 @@ flowchart TB
 
 ## Contents
 
+**Getting started**
+
+- [Setup & running](setup.mdx) — prerequisites, install, and how to bring up the
+  browser and desktop layouts; mirrors the `package.json` scripts.
+
 **Architecture**
 
 - [Layout shell](architecture/layout-shell.mdx) — the shared frontend layout
@@ -134,11 +139,13 @@ them **in the same change**:
   `docs/architecture/layout-shell.mdx`.
 - Renaming or removing any of the above → same rule, including deleting docs for
   removed features.
+- Adding, renaming, or changing a script in the repo-root `package.json` (or the
+  backend run/test commands) → update [`docs/setup.mdx`](setup.mdx).
 
 A Stop hook (`.claude/hooks/docs_check.py`) flags any change set that touches
-`apps/`, `packages/`, or `backend/` without touching `docs/`, as a safety net.
-Pure refactors with no behavioral or interface change don't need doc edits — say
-so when the hook asks.
+`apps/`, `packages/`, `backend/`, or `package.json` without touching `docs/`, as a
+safety net. Pure refactors with no behavioral or interface change don't need doc
+edits — say so when the hook asks.
 
 ## This documentation site
 
