@@ -24,8 +24,12 @@ from websockets.exceptions import ConnectionClosed
 
 from backend.modules.network import ice, identity, trust
 from backend.modules.network.hub import peer_hub
-from backend.modules.network.models import CommonsProfile, canonical_profile_bytes
-from backend.modules.settings.routes import get_value
+from backend.modules.network.models import (
+    CommonsProfile,
+    canonical_profile_bytes,
+    canonical_vouch_bytes,
+)
+from backend.modules.settings.routes import get_value, set_value
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +92,7 @@ class CommonsClient:
             "connected": self.connected,
             "url": self.url,
             "self": peer_hub.identity().model_dump(),
+            "my_profile": _build_profile().model_dump(),
             "directory": self.directory,
             "results": self.results,
             "requests": self.requests,
@@ -154,6 +159,16 @@ class CommonsClient:
             }
         )
 
+    async def set_profile(self, fields: dict[str, Any]) -> None:
+        """Persist this node's profile fields (the storefront) and republish. Signing
+        stays here; the browser only supplies the editable text."""
+        for key in ("headline", "bio", "tags", "seeking", "visibility"):
+            if key in fields:
+                set_value(f"commons.{key}", fields[key])
+        if self.connected:
+            await self.publish()
+        self._emit("state", self.snapshot())
+
     async def search(self, query: str, limit: int = 10) -> None:
         await self._send({"type": "search", "query": query, "limit": limit})
 
@@ -200,21 +215,38 @@ class CommonsClient:
             logger.info("commons relay dial %s failed: %s", node_id, exc)
             self._emit("error", {"message": f"could not reach {node_id}"})
 
-    # ---- reputation (trust tiers + blocklist) -------------------------------------
+    # ---- reputation (trust tiers + blocklist + vouches) ---------------------------
 
-    def _tier(self, node_id: str) -> str:
-        """This viewer's trust tier for a node: `blocked`, `known` (already paired), or
-        `unknown`. Computed node-side against the local trust store — never trusted to
-        the index — so it's viewer-relative. (`vouched` is a later phase.)"""
+    def _trusted_set(self) -> set[str]:
+        """Node ids this viewer already trusts (paired, not blocked) — the basis for
+        weighting vouches by *your* graph rather than a gameable global count."""
+        return {
+            nid
+            for nid, rec in trust.load_known_peers().items()
+            if rec.get("trusted") and not rec.get("blocked")
+        }
+
+    def _tier(self, node_id: str, vouchers: list[str] | None = None) -> str:
+        """This viewer's trust tier for a node: `blocked`, `known` (already paired),
+        `vouched` (vouched for by someone you trust), or `unknown`. Computed node-side
+        against the local trust store — never trusted to the index — so it's
+        viewer-relative."""
         if trust.is_blocked(node_id):
             return "blocked"
         if trust.is_trusted(node_id):
             return "known"
+        if vouchers and self._trusted_set().intersection(vouchers):
+            return "vouched"
         return "unknown"
 
     def _annotate(self, profiles: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [
-            {**p, "trust_tier": self._tier(str(p.get("node_id") or ""))}
+            {
+                **p,
+                "trust_tier": self._tier(
+                    str(p.get("node_id") or ""), p.get("vouchers")
+                ),
+            }
             for p in profiles
         ]
 
@@ -231,13 +263,37 @@ class CommonsClient:
         self._reannotate()
         self._emit("state", self.snapshot())
 
+    async def vouch(self, subject_node_id: str) -> None:
+        """Publish a signed attestation that you trust a node — raises it to the
+        `vouched` tier for others who already trust *you*."""
+        if not subject_node_id:
+            return
+        signer = peer_hub.signer
+        sig = signer.sign(canonical_vouch_bytes(signer.node_id, subject_node_id))
+        await self._send(
+            {"type": "vouch", "subject_node_id": subject_node_id, "sig": sig}
+        )
+        await self.request_directory()
+
+    async def report(self, subject_node_id: str, reason: str = "") -> None:
+        """Send a moderation report to the index (recorded, not auto-acted)."""
+        if not subject_node_id:
+            return
+        await self._send(
+            {"type": "report", "subject_node_id": subject_node_id, "reason": reason}
+        )
+
     def _reannotate(self) -> None:
         """Recompute trust tiers in place after a block/unblock changes the store."""
         for profile in self.directory:
-            profile["trust_tier"] = self._tier(str(profile.get("node_id") or ""))
+            profile["trust_tier"] = self._tier(
+                str(profile.get("node_id") or ""), profile.get("vouchers")
+            )
         for result in self.results:
             inner = result.get("profile") or {}
-            inner["trust_tier"] = self._tier(str(inner.get("node_id") or ""))
+            inner["trust_tier"] = self._tier(
+                str(inner.get("node_id") or ""), inner.get("vouchers")
+            )
 
     # ---- inbound ------------------------------------------------------------------
 
@@ -267,7 +323,9 @@ class CommonsClient:
             results = msg.get("results") or []
             for result in results:
                 inner = result.get("profile") or {}
-                inner["trust_tier"] = self._tier(str(inner.get("node_id") or ""))
+                inner["trust_tier"] = self._tier(
+                    str(inner.get("node_id") or ""), inner.get("vouchers")
+                )
             self.results = results
             self._emit("candidates", {"results": self.results})
         elif mtype == "published":
@@ -358,3 +416,11 @@ async def handle_commons_message(conn: Any, msg: dict[str, Any]) -> None:
         asyncio.create_task(commons_client.block(str(data.get("nodeId") or "")))
     elif event == "unblock":
         asyncio.create_task(commons_client.unblock(str(data.get("nodeId") or "")))
+    elif event == "vouch":
+        await commons_client.vouch(str(data.get("nodeId") or ""))
+    elif event == "report":
+        await commons_client.report(
+            str(data.get("nodeId") or ""), str(data.get("reason") or "")
+        )
+    elif event == "set_profile":
+        await commons_client.set_profile(data if isinstance(data, dict) else {})

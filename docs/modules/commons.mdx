@@ -10,12 +10,14 @@ discover one another and (eventually) collaborate safely. Where [network](networ
 connects peers you've already paired with, the commons is for meeting **strangers** —
 browse and search public profiles, with trust earned in steps rather than assumed.
 
-**Status: Phase 4 (partial) implemented.** Browse + search, the **two-sided consent
-handshake** (request-to-meet → accept/decline → peer link), and the **reputation floor**
-— a local blocklist and per-profile trust tiers (`known` / `unknown` / `blocked`) — all
-work end to end against a commons index. Remaining: vouches/reports, a profile editor,
-and a dedicated requests widget. The full design — safety ladder, matchmaking,
-federation, standards interop — is in [Agent commons](../architecture/agent-commons.mdx).
+**Status: Phase 4 implemented.** Browse + search, the **two-sided consent handshake**
+(request-to-meet → accept/decline → peer link), and the **full reputation floor** — a
+local blocklist, signed vouches, moderation reports, and per-profile trust tiers
+(`known` / `vouched` / `unknown` / `blocked`) — plus a profile editor and a dedicated
+requests inbox, all work end to end against a commons index. Remaining (v2): DHT/PEX
+decentralized discovery and index federation. The full design — safety ladder,
+matchmaking, federation, standards interop — is in
+[Agent commons](../architecture/agent-commons.mdx).
 
 Frontend in `packages/core/src/modules/commons/`; node-side client in
 `backend/modules/network/commons.py`; the standalone index server in
@@ -24,11 +26,15 @@ Frontend in `packages/core/src/modules/commons/`; node-side client in
 ## Contributions to the layout shell
 
 - **Widget** `commons.directory` (Commons) — `CommonsDirectory.tsx`. Connection status,
-  a search box (cosine match over the index's vectordb), the directory / match results
-  as profile cards (name, headline, tags, online dot, **trust-tier badge**) each with
-  **Meet** / **Block** (or **Unblock**) buttons, and a **Requests to meet** section with
-  Accept / Decline for inbound requests.
-- **Command** `commons.open` (Open directory).
+  a search box (cosine match over the index's vectordb), and the directory / match
+  results as profile cards (name, headline, tags, online dot, **trust-tier badge**) each
+  with **Meet** / **Vouch** / **Block** (or **Unblock**) / **Report** actions.
+- **Widget** `commons.requests` (Commons Requests) — `CommonsRequests.tsx`. The consent
+  inbox: inbound meet requests with Accept / Decline.
+- **Widget** `commons.profile` (Commons Profile) — `CommonsProfileEditor.tsx`. Edit your
+  storefront (headline, bio, tags, seeking, visibility) and re-sign + republish.
+- **Commands** `commons.open` (Open directory), `commons.openRequests` (Open requests),
+  `commons.openProfile` (Edit my profile).
 - **Settings** (see below).
 
 ## How it works
@@ -67,7 +73,10 @@ forge a profile (and a federated index could re-serve it later).
 | client→server | `request` | `{ nodeId, note? }` (ask to meet) |
 | client→server | `respond` | `{ requestId, accept }` (consent to an inbound request) |
 | client→server | `block` / `unblock` | `{ nodeId }` |
-| server→client | `state` | `{ connected, url, self, directory, results, requests }` |
+| client→server | `vouch` | `{ nodeId }` (signed attestation, built backend-side) |
+| client→server | `report` | `{ nodeId, reason }` |
+| client→server | `set_profile` | `{ headline?, bio?, tags?, seeking?, visibility? }` |
+| server→client | `state` | `{ connected, url, self, my_profile, directory, results, requests }` |
 | server→client | `directory` | `{ profiles[] }` |
 | server→client | `candidates` | `{ results[]: { profile, score } }` |
 | server→client | `requests` | `{ requests[]: { request_id, from, note } }` (inbound, changed) |
@@ -111,28 +120,37 @@ handoff); the responder waits to accept the inbound link. Read-only agent-to-age
 ([`network.remoteAgentMode=plan`](network.mdx#settings)) remains the ceiling for a freshly
 met stranger.
 
-### Reputation floor (blocklist + trust tiers)
+### Reputation floor (blocklist + vouches + tiers)
 
 Each profile the node hands to the browser is annotated **node-side** with a
-viewer-relative `trust_tier` — `known` (already trusted in `network-peers.json`),
-`blocked`, or `unknown` — never trusted to the index. **Blocking** a node
-(`block {nodeId}`) sets `blocked` in the local trust store via
-`trust.save_known_peer`, which has two effects: the commons **auto-declines that node's
-meet requests silently** (it never surfaces), and the peer fabric's
-[`trust.evaluate`](../architecture/distributed.mdx#trust) refuses it at the handshake —
-so one block ends contact across both layers. Because the `node_id` is a key
-fingerprint, a blocked node can't slip back under a new name. `unblock {nodeId}` clears
-it. (Signed vouches and index-side reports are a later phase.)
+viewer-relative `trust_tier` — `blocked` > `known` (trusted in `network-peers.json`) >
+`vouched` > `unknown` — never trusted to the index. The index supplies the raw
+`vouchers` list per profile; the node decides the tier.
+
+- **Block.** `block {nodeId}` sets `blocked` in the local trust store via
+  `trust.save_known_peer`, with two effects: the commons **auto-declines that node's
+  meet requests silently**, and the peer fabric's
+  [`trust.evaluate`](../architecture/distributed.mdx#trust) refuses it at the handshake —
+  one block ends contact across both layers. Because the `node_id` is a key fingerprint,
+  a blocked node can't slip back under a new name. `unblock {nodeId}` clears it.
+- **Vouch.** `vouch {nodeId}` publishes a **signed attestation** (signed backend-side
+  over `canonical_vouch_bytes`; the index verifies against the voucher's key and stores
+  it attributably). A profile reaches the `vouched` tier only when a node *you already
+  trust* vouched for it — weighting by your own trust graph, not a global count, so it's
+  Sybil-resistant.
+- **Report.** `report {nodeId, reason}` is recorded at the index
+  (`commons-reports.json`) for moderation; v1 does **not** auto-de-list.
 
 ### The index server (`/commons-ws`)
 
 Run separately: `uv run uvicorn backend.modules.network.commons_server:app --port 9100`.
 It mounts `/commons-ws` and **bundles `/lobby-ws` + `/relay-ws`** so one host serves
 both discovery and connectivity. It speaks `publish_profile` / `search` / `directory` /
-`unpublish` plus the consent frames `connect_request` / `connect_response` /
-`connected` (above), persists the registry to
-`$HORRIBLE_DATA_DIR/commons-profiles.json`, and stores embeddings in the
-[vectordb](vectordb.mdx) SQLite store. Disconnect marks a
+`unpublish`, the consent frames `connect_request` / `connect_response` / `connected`
+(above), and the reputation frames `vouch` / `report`; it persists the registry to
+`$HORRIBLE_DATA_DIR/commons-profiles.json`, vouches to `commons-vouches.json`, reports
+to `commons-reports.json`, and stores embeddings in the [vectordb](vectordb.mdx) SQLite
+store. Disconnect marks a
 profile offline (kept, still discoverable); `unpublish` removes it.
 
 ## Settings

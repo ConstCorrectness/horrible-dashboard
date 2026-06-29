@@ -9,16 +9,16 @@ A public square where nodes that **don't already know each other** can discover 
 another, get acquainted, and collaborate — safely, with trust earned in steps rather
 than assumed up front.
 
-**Status: design, with Phases 1–4 (partial) landed.** Implemented: the standalone index
-server (signed profiles + vectordb matchmaking — `backend/modules/network/commons_server.py`,
+**Status: design, with Phases 1–4 landed.** Implemented: the standalone index server
+(signed profiles + vectordb matchmaking — `backend/modules/network/commons_server.py`,
 `backend/tests/test_commons_server.py`), discovery end to end (the node-side
 `backend/modules/network/commons.py`, the `/ws` `commons` channel, the
 `commons.directory` widget), the two-sided consent handshake (request-to-meet →
-accept/decline → `connected` → peer dial), **and the reputation floor** — a local
-blocklist (auto-declines a blocked node and refuses it at the peer fabric too) and
-per-profile trust tiers (`known` / `unknown` / `blocked`); see
-[Module: commons](../modules/commons.mdx). Still design: vouches/reports, a profile
-editor, a dedicated requests widget, and DHT/PEX. It builds entirely on shipped
+accept/decline → `connected` → peer dial), and the full reputation floor — a local
+blocklist, signed vouches, moderation reports, and per-profile trust tiers
+(`known` / `vouched` / `unknown` / `blocked`) — plus a profile editor and a dedicated
+requests inbox (see [Module: commons](../modules/commons.mdx)). Still design (v2):
+DHT/PEX decentralized discovery and index federation. It builds entirely on shipped
 primitives — the
 [lobby](network-protocol.mdx#the-lobby-system) (directory + rooms + signaling),
 [Ed25519 node identity](distributed.mdx#identity), the signed
@@ -183,10 +183,15 @@ accrete:
   (viewer-relative) and annotated onto each profile before it reaches the browser:
   `known` = already trusted in `network-peers.json`, `blocked` = blocked, else
   `unknown`. The directory shows the tier; the user decides.
-- **Vouches — design.** A node you already trust publishes a **signed attestation** for
-  another (`vouch {subject_node_id, sig}`), weighted by *your* trust graph (not a global
-  count, for Sybil resistance), adding a `vouched` tier between `unknown` and `known`.
-- **Reports — design.** Abusive nodes reported to the index for de-listing; the local
+- **Vouches — ✅ implemented.** A node publishes a **signed attestation** for another
+  (`vouch {subject_node_id, sig}`, signed over `canonical_vouch_bytes`); the index stores
+  attributable vouches and lists them per profile. Weighting is **viewer-relative** — a
+  profile reaches the `vouched` tier only when a node *you already trust* vouched for it
+  (your trust graph, not a global count → Sybil-resistant). Tier order:
+  `blocked` > `known` > `vouched` > `unknown`.
+- **Reports — ✅ implemented (record-only).** `report {subject_node_id, reason}` is logged
+  and appended to `commons-reports.json` at the index. There is **no automatic de-listing**
+  yet — that's gameable without a moderation authority (an open question below); the local
   block above is the floor that works without any index cooperation.
 - **The commons advises; it never auto-connects.** (Contrast `open-lan` trust, which is
   demo-only for exactly this reason.)
@@ -577,11 +582,11 @@ one process with explicit signers): construct an in-process commons index + two
    `commons` channel `request`/`respond` + inbound `requests`/`met`/`declined`; the
    directory widget's Meet button + Accept/Decline. Verified live across two nodes.)
 4. **Reputation floor** (block/report, trust-tier display) + profile editor + requests UI.
-   **◐ partial** — blocklist + trust-tier display (`known`/`unknown`/`blocked`) shipped
-   (`commons` channel `block`/`unblock`, node-side `trust`-backed; directory badges +
-   Block/Unblock; verified live across two nodes). Remaining: vouches/reports, a profile
-   editor, and a dedicated requests widget.
-5. **v2 (separate effort):** DHT/PEX, signed vouches, federation between indexes.
+   **✅ implemented** — blocklist, signed vouches, record-only reports, trust-tier badges
+   (`known`/`vouched`/`unknown`/`blocked`); the `commons.profile` editor and the
+   `commons.requests` inbox; node-side `trust`-backed and viewer-relative. Verified live
+   across two nodes (block auto-decline, vouch in directory, profile edit → republish).
+5. **v2 (separate effort):** DHT/PEX, federation between indexes, index-side moderation.
 
 ## Relationship to existing pages
 

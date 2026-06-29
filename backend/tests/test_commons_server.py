@@ -10,7 +10,11 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 
 from backend.modules.network import commons, commons_server, identity, trust
-from backend.modules.network.models import CommonsProfile, canonical_profile_bytes
+from backend.modules.network.models import (
+    CommonsProfile,
+    canonical_profile_bytes,
+    canonical_vouch_bytes,
+)
 from backend.modules.vectordb.embeddings import get_local_fallback_embedding
 
 
@@ -224,7 +228,7 @@ def test_unpublish_removes_from_search(client: TestClient) -> None:
 def test_trust_tiers_and_annotation(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The node-side viewer-relative trust tier: blocked / known / unknown."""
+    """The node-side viewer-relative trust tier: blocked / known / vouched / unknown."""
     monkeypatch.setenv("HORRIBLE_DATA_DIR", str(tmp_path))
     cc = commons.CommonsClient()
     trust.save_known_peer("blockedone111", {"blocked": True})
@@ -234,8 +238,54 @@ def test_trust_tiers_and_annotation(
     assert cc._tier("knownone22222") == "known"
     assert cc._tier("strangerxxxxx") == "unknown"
 
+    # Vouched: a stranger vouched for by a node I already trust.
+    assert cc._tier("strangerxxxxx", ["knownone22222"]) == "vouched"
+    # A vouch from someone I don't trust doesn't count.
+    assert cc._tier("strangerxxxxx", ["randovouchr00"]) == "unknown"
+    # Blocked/known take precedence over vouches.
+    assert cc._tier("blockedone111", ["knownone22222"]) == "blocked"
+
     annotated = cc._annotate(
-        [{"node_id": "knownone22222"}, {"node_id": "strangerxxxxx"}]
+        [
+            {"node_id": "knownone22222"},
+            {"node_id": "strangerxxxxx", "vouchers": ["knownone22222"]},
+        ]
     )
     assert annotated[0]["trust_tier"] == "known"
-    assert annotated[1]["trust_tier"] == "unknown"
+    assert annotated[1]["trust_tier"] == "vouched"
+
+
+def test_vouch_appears_in_directory(client: TestClient) -> None:
+    a_key, alice = _make_profile("Alice")
+    b_key, bob = _make_profile("Bob")
+    with (
+        client.websocket_connect("/commons-ws") as wsa,
+        client.websocket_connect("/commons-ws") as wsb,
+    ):
+        assert _publish(wsa, alice)["ok"] is True
+        assert _publish(wsb, bob)["ok"] is True
+        sig = a_key.sign(canonical_vouch_bytes(a_key.node_id, b_key.node_id))
+        wsa.send_json({"type": "vouch", "subject_node_id": b_key.node_id, "sig": sig})
+        wsa.send_json({"type": "directory"})
+        directory = wsa.receive_json()
+    assert directory["type"] == "directory"
+    bob_entry = next(p for p in directory["profiles"] if p["node_id"] == b_key.node_id)
+    assert a_key.node_id in bob_entry["vouchers"]
+
+
+def test_vouch_rejects_bad_signature(client: TestClient) -> None:
+    a_key, alice = _make_profile("Alice")
+    b_key, bob = _make_profile("Bob")
+    with (
+        client.websocket_connect("/commons-ws") as wsa,
+        client.websocket_connect("/commons-ws") as wsb,
+    ):
+        assert _publish(wsa, alice)["ok"] is True
+        assert _publish(wsb, bob)["ok"] is True
+        wsa.send_json(
+            {"type": "vouch", "subject_node_id": b_key.node_id, "sig": "bm90LWEtc2ln"}
+        )
+        wsa.send_json({"type": "directory"})
+        directory = wsa.receive_json()
+    bob_entry = next(p for p in directory["profiles"] if p["node_id"] == b_key.node_id)
+    assert a_key.node_id not in bob_entry.get("vouchers", [])

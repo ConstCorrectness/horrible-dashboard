@@ -1,11 +1,13 @@
 import { registry, type ModuleManifest } from '../../registry';
 import { CommonsDirectory } from './CommonsDirectory';
+import { CommonsProfileEditor } from './CommonsProfileEditor';
+import { CommonsRequests } from './CommonsRequests';
 
 /**
- * The **agent commons**, frontend side: a directory widget to browse and search other
- * nodes' public profiles over the `/ws` `commons` channel. Profiles are built + signed
- * on the backend (the node key never leaves it). Phase 2 = discovery; the consent
- * handshake (request-to-meet) and reputation are later phases. See
+ * The **agent commons**, frontend side: browse/search other nodes' public profiles, the
+ * two-sided consent handshake, a reputation floor (block/vouch/report + trust tiers),
+ * a profile editor, and an inbound-requests inbox — all over the `/ws` `commons` channel.
+ * Profiles are built + signed on the backend (the node key never leaves it). See
  * docs/modules/commons.mdx and docs/architecture/agent-commons.mdx.
  */
 export const commonsModule: ModuleManifest = {
@@ -18,12 +20,34 @@ export const commonsModule: ModuleManifest = {
       component: CommonsDirectory,
       defaultPlacement: 'right',
     },
+    {
+      id: 'commons.requests',
+      title: 'Commons Requests',
+      component: CommonsRequests,
+      defaultPlacement: 'right',
+    },
+    {
+      id: 'commons.profile',
+      title: 'Commons Profile',
+      component: CommonsProfileEditor,
+      defaultPlacement: 'right',
+    },
   ],
   commands: [
     {
       id: 'commons.open',
       title: 'Commons: Open directory',
       run: () => registry.openPanel('commons.directory'),
+    },
+    {
+      id: 'commons.openRequests',
+      title: 'Commons: Open requests',
+      run: () => registry.openPanel('commons.requests'),
+    },
+    {
+      id: 'commons.openProfile',
+      title: 'Commons: Edit my profile',
+      run: () => registry.openPanel('commons.profile'),
     },
   ],
   settings: [
@@ -99,6 +123,9 @@ export {
   commonsRespond,
   commonsBlock,
   commonsUnblock,
+  commonsVouch,
+  commonsReport,
+  commonsSetProfile,
   type CommonsProfile,
   type CommonsCandidate,
   type CommonsRequest,

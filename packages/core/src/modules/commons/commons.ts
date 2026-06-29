@@ -21,7 +21,8 @@ export interface CommonsProfile {
   links: { label: string; url: string }[];
   visibility: string;
   status?: string; // present on directory entries (connected/disconnected)
-  trust_tier?: 'blocked' | 'known' | 'unknown'; // viewer-relative, annotated node-side
+  vouchers?: string[]; // node_ids that have vouched for this profile
+  trust_tier?: 'blocked' | 'known' | 'vouched' | 'unknown'; // viewer-relative, node-side
   sig: string | null;
 }
 
@@ -40,6 +41,7 @@ export interface CommonsState {
   connected: boolean;
   url: string | null;
   self: { node_id: string; node_name: string } | null;
+  myProfile: CommonsProfile | null;
   directory: CommonsProfile[];
   results: CommonsCandidate[];
   requests: CommonsRequest[];
@@ -49,6 +51,7 @@ let state: CommonsState = {
   connected: false,
   url: null,
   self: null,
+  myProfile: null,
   directory: [],
   results: [],
   requests: [],
@@ -83,6 +86,7 @@ export function initCommons(): void {
         connected: Boolean(d.connected),
         url: (d.url as string | null) ?? null,
         self: (d.self as CommonsState['self']) ?? null,
+        myProfile: (d.my_profile as CommonsProfile) ?? null,
         directory: (d.directory as CommonsProfile[]) ?? [],
         results: (d.results as CommonsCandidate[]) ?? [],
         requests: (d.requests as CommonsRequest[]) ?? [],
@@ -146,4 +150,25 @@ export function commonsBlock(nodeId: string): void {
 
 export function commonsUnblock(nodeId: string): void {
   sendChannel('commons', 'unblock', { nodeId });
+}
+
+/** Publish a signed attestation that you trust a node (raises it to `vouched`). */
+export function commonsVouch(nodeId: string): void {
+  sendChannel('commons', 'vouch', { nodeId });
+}
+
+/** Report a node to the index (recorded for moderation; not auto-acted). */
+export function commonsReport(nodeId: string, reason = ''): void {
+  sendChannel('commons', 'report', { nodeId, reason });
+}
+
+/** Update this node's profile fields and republish (signed backend-side). */
+export function commonsSetProfile(fields: {
+  headline?: string;
+  bio?: string;
+  tags?: string;
+  seeking?: string;
+  visibility?: string;
+}): void {
+  sendChannel('commons', 'set_profile', fields);
 }

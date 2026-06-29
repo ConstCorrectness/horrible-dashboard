@@ -5,10 +5,11 @@ import {
   commonsBlock,
   commonsConnect,
   commonsRefresh,
+  commonsReport,
   commonsRequest,
-  commonsRespond,
   commonsSearch,
   commonsUnblock,
+  commonsVouch,
   getCommonsState,
   initCommons,
   subscribeCommons,
@@ -17,6 +18,7 @@ import {
 
 const TIER_BADGE: Record<string, { label: string; color: string }> = {
   known: { label: 'known', color: '#3fb950' },
+  vouched: { label: 'vouched', color: '#58a6ff' },
   blocked: { label: 'blocked', color: '#f85149' },
 };
 
@@ -35,6 +37,7 @@ function ProfileCard({
 }) {
   const online = profile.status === 'connected';
   const blocked = profile.trust_tier === 'blocked';
+  const known = profile.trust_tier === 'known';
   const badge = profile.trust_tier ? TIER_BADGE[profile.trust_tier] : undefined;
   return (
     <li
@@ -88,31 +91,55 @@ function ProfileCard({
               Unblock
             </button>
           ) : (
-            canMeet && (
-              <>
+            <>
+              {known && (
                 <button
                   style={{ fontSize: '0.75rem' }}
-                  title="Send a request to meet — they must accept"
+                  title="Vouch — publicly attest you trust this node"
                   onClick={() => {
-                    commonsRequest(profile.node_id);
-                    toastsStore.add(
-                      'info',
-                      'Commons',
-                      `Requested to meet ${profile.display_name}.`,
-                    );
+                    commonsVouch(profile.node_id);
+                    toastsStore.add('success', 'Commons', `Vouched for ${profile.display_name}.`);
                   }}
                 >
-                  Meet
+                  Vouch
                 </button>
-                <button
-                  style={{ fontSize: '0.75rem' }}
-                  title="Block — auto-declines their requests and refuses the peer link"
-                  onClick={() => commonsBlock(profile.node_id)}
-                >
-                  Block
-                </button>
-              </>
-            )
+              )}
+              {canMeet && (
+                <>
+                  <button
+                    style={{ fontSize: '0.75rem' }}
+                    title="Send a request to meet — they must accept"
+                    onClick={() => {
+                      commonsRequest(profile.node_id);
+                      toastsStore.add(
+                        'info',
+                        'Commons',
+                        `Requested to meet ${profile.display_name}.`,
+                      );
+                    }}
+                  >
+                    Meet
+                  </button>
+                  <button
+                    style={{ fontSize: '0.75rem' }}
+                    title="Block — auto-declines their requests and refuses the peer link"
+                    onClick={() => commonsBlock(profile.node_id)}
+                  >
+                    Block
+                  </button>
+                  <button
+                    style={{ fontSize: '0.75rem' }}
+                    title="Report this node to the index"
+                    onClick={() => {
+                      commonsReport(profile.node_id);
+                      toastsStore.add('info', 'Commons', `Reported ${profile.display_name}.`);
+                    }}
+                  >
+                    Report
+                  </button>
+                </>
+              )}
+            </>
           )}
         </span>
       </div>
@@ -141,8 +168,8 @@ function ProfileCard({
 
 /**
  * The agent commons directory: browse + search public profiles (cosine match over the
- * index's vectordb), request to meet someone, and accept/decline inbound requests — the
- * two-sided consent handshake. See docs/modules/commons.mdx.
+ * index's vectordb) and act on them — request to meet, vouch, block, report. Inbound
+ * meet requests live in the separate Commons Requests widget. See docs/modules/commons.mdx.
  */
 export function CommonsDirectory() {
   const { connected, url, directory, results, requests, self } = useCommons();
@@ -195,46 +222,16 @@ export function CommonsDirectory() {
       </section>
 
       {requests.length > 0 && (
-        <section>
-          <h3 style={{ margin: '0 0 0.5rem' }}>Requests to meet ({requests.length})</h3>
-          <ul
-            style={{
-              listStyle: 'none',
-              margin: 0,
-              padding: 0,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '0.4rem',
-            }}
-          >
-            {requests.map((r) => (
-              <li
-                key={r.request_id}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  fontSize: '0.85rem',
-                  padding: '0.4rem 0.6rem',
-                  border: '1px solid var(--border, #2a2a2a)',
-                  borderRadius: 6,
-                }}
-              >
-                <span>
-                  <strong>{r.from.display_name ?? r.from.node_id}</strong>
-                  {r.note ? ` — “${r.note}”` : ' wants to meet'}
-                </span>
-                <button
-                  style={{ marginLeft: 'auto' }}
-                  onClick={() => commonsRespond(r.request_id, true)}
-                >
-                  Accept
-                </button>
-                <button onClick={() => commonsRespond(r.request_id, false)}>Decline</button>
-              </li>
-            ))}
-          </ul>
-        </section>
+        <p
+          style={{
+            margin: 0,
+            fontSize: '0.8rem',
+            color: '#58a6ff',
+          }}
+        >
+          {requests.length} pending request{requests.length === 1 ? '' : 's'} to meet — open the
+          Commons Requests panel to respond.
+        </p>
       )}
 
       <form

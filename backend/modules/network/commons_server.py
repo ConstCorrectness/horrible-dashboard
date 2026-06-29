@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -32,9 +33,9 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 
 from backend.modules.network import identity, lobby_server, relay_broker
 from backend.modules.network.models import (
-    CommonsCandidate,
     CommonsProfile,
     canonical_profile_bytes,
+    canonical_vouch_bytes,
 )
 from backend.modules.vectordb.database import (
     delete_document,
@@ -65,6 +66,7 @@ async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
     # their node reconnects).
     init_db()
     load_profiles()
+    load_vouches()
     yield
 
 
@@ -99,6 +101,10 @@ _profiles: dict[str, _Entry] = {}
 # request_id -> (requester_node_id, target_node_id): in-flight meet requests awaiting
 # the target's accept/decline. The index only brokers consent; it never auto-connects.
 _pending: dict[str, tuple[str, str]] = {}
+
+# subject_node_id -> {voucher_node_id: sig}: signed attestations. Tier weighting is
+# viewer-relative and happens node-side; the index just stores attributable vouches.
+_vouches: dict[str, dict[str, str]] = {}
 
 
 # ---- helpers ----------------------------------------------------------------------
@@ -156,11 +162,21 @@ def load_profiles() -> None:
         _profiles[profile.node_id] = _Entry(profile)
 
 
+def _profile_out(entry: _Entry) -> dict[str, Any]:
+    """A profile as sent to a node: the signed object plus index-held annotations
+    (live status, the node_ids that have vouched for it). Trust *tier* is computed
+    node-side from these — the index never decides who a viewer should trust."""
+    nid = entry.profile.node_id
+    return {
+        **entry.profile.model_dump(),
+        "status": entry.status,
+        "vouchers": list(_vouches.get(nid, {}).keys()),
+    }
+
+
 def _directory() -> list[dict[str, Any]]:
     return [
-        {**e.profile.model_dump(), "status": e.status}
-        for e in _profiles.values()
-        if e.profile.visibility == "public"
+        _profile_out(e) for e in _profiles.values() if e.profile.visibility == "public"
     ]
 
 
@@ -224,6 +240,12 @@ async def commons_ws(websocket: WebSocket) -> None:
             elif mtype == "connect_response":
                 if node_id is not None:
                     await _handle_connect_response(node_id, msg)
+            elif mtype == "vouch":
+                if node_id is not None:
+                    await _handle_vouch(node_id, msg)
+            elif mtype == "report":
+                if node_id is not None:
+                    _handle_report(node_id, msg)
     except WebSocketDisconnect:
         pass
     finally:
@@ -285,11 +307,7 @@ async def _handle_search(ws: WebSocket, msg: dict[str, Any]) -> None:
         entry = _profiles.get(match["id"])
         if entry is None or entry.profile.visibility != "public":
             continue
-        results.append(
-            CommonsCandidate(
-                profile=entry.profile, score=float(match["score"])
-            ).model_dump()
-        )
+        results.append({"profile": _profile_out(entry), "score": float(match["score"])})
     await _send(ws, {"type": "candidates", "results": results[:limit]})
 
 
@@ -383,3 +401,78 @@ async def _handle_connect_response(responder_id: str, msg: dict[str, Any]) -> No
                 "peer": _reachability(requester_id),
             },
         )
+
+
+# ---- reputation: vouches + reports ------------------------------------------------
+
+
+def _vouches_path() -> Path:
+    return _data_dir() / "commons-vouches.json"
+
+
+def save_vouches() -> None:
+    path = _vouches_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(_vouches), encoding="utf-8")
+
+
+def load_vouches() -> None:
+    _vouches.clear()
+    path = _vouches_path()
+    if not path.is_file():
+        return
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError:
+        return
+    if isinstance(raw, dict):
+        for subject, vouchers in raw.items():
+            if isinstance(vouchers, dict):
+                _vouches[subject] = {str(k): str(v) for k, v in vouchers.items()}
+
+
+async def _handle_vouch(voucher_id: str, msg: dict[str, Any]) -> None:
+    """Record a signed attestation that `voucher_id` trusts `subject_node_id`. The
+    signature is verified against the voucher's published key so the vouch is
+    attributable and portable; weighting is left to each viewer."""
+    subject = str(msg.get("subject_node_id") or "")
+    sig = str(msg.get("sig") or "")
+    voucher = _profiles.get(voucher_id)
+    if not subject or subject == voucher_id or voucher is None or not sig:
+        return
+    if subject not in _profiles:
+        return
+    if not identity.verify(
+        voucher.profile.public_key, canonical_vouch_bytes(voucher_id, subject), sig
+    ):
+        return
+    _vouches.setdefault(subject, {})[voucher_id] = sig
+    save_vouches()
+
+
+def _handle_report(reporter_id: str, msg: dict[str, Any]) -> None:
+    """Append a moderation report. v1 only records (and logs) reports — there is no
+    automatic de-listing, since that is gameable without a moderation authority."""
+    subject = str(msg.get("subject_node_id") or "")
+    reason = str(msg.get("reason") or "")
+    if not subject:
+        return
+    record = {
+        "reporter": reporter_id,
+        "subject": subject,
+        "reason": reason,
+        "ts": time.time(),
+    }
+    logger.warning("commons report: %s", record)
+    path = _data_dir() / "commons-reports.json"
+    try:
+        existing = (
+            json.loads(path.read_text(encoding="utf-8")) if path.is_file() else []
+        )
+    except ValueError:
+        existing = []
+    if not isinstance(existing, list):
+        existing = []
+    existing.append(record)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(existing), encoding="utf-8")

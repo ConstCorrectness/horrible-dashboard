@@ -184,3 +184,14 @@ def canonical_profile_bytes(profile: CommonsProfile) -> bytes:
     rather than relying on dict/JSON ordering."""
     data = profile.model_dump(exclude={"sig"})
     return json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def canonical_vouch_bytes(voucher_id: NodeId, subject_id: NodeId) -> bytes:
+    """The bytes a vouch's signature covers: who is vouching for whom. A vouch is a
+    signed attestation by `voucher_id` that `subject_id` is trustworthy — verifiable and
+    portable (a federated index could re-serve it)."""
+    return json.dumps(
+        {"subject": subject_id, "voucher": voucher_id},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
