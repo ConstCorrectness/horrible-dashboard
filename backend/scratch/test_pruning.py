@@ -31,14 +31,15 @@ def prune_tools(original_tools, prompt, layout_tools_count=15):
                 "animation",
             ),
         },
-        "vectordb": {
-            "prefixes": ("vectordb.",),
+        "database": {
+            "prefixes": ("database.",),
             "keywords": (
+                "database",
+                "sql",
+                "query",
                 "vector",
-                "vectordb",
                 "semantic",
                 "embeddings",
-                "upsert",
                 "db search",
             ),
         },
@@ -125,22 +126,20 @@ async def main():
     has_thinking1 = await test_payload("Pruned (no keywords)", payload1)
     print(f"Has thinking: {has_thinking1}")
 
-    # Case 2: Prompt asking for Vector DB
-    prompt2 = (
-        "Please perform a semantic search in my vectordb collection for 'ai projects'"
-    )
+    # Case 2: Prompt asking for the database
+    prompt2 = "Please run a SQL query against my database for 'ai projects'"
     pruned2 = prune_tools(original_tools, prompt2)
     print(f"\nPrompt: '{prompt2}' -> Tools count: {len(pruned2)}")
     print(f"Selected tools: {[t['function']['name'] for t in pruned2]}")
-    # Verify vectordb tools are included
-    vectordb_included = any(
-        t["function"]["name"].startswith("vectordb.") for t in pruned2
+    # Verify database tools are included
+    database_included = any(
+        t["function"]["name"].startswith("database.") for t in pruned2
     )
-    print(f"VectorDB tools included: {vectordb_included}")
+    print(f"Database tools included: {database_included}")
     payload2 = dict(payload)
     payload2["messages"] = [{"role": "user", "content": prompt2}]
     payload2["tools"] = pruned2
-    has_thinking2 = await test_payload("Pruned (vectordb keyword)", payload2)
+    has_thinking2 = await test_payload("Pruned (database keyword)", payload2)
     print(f"Has thinking: {has_thinking2}")
 
 

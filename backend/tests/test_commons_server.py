@@ -1,5 +1,5 @@
 """Phase 1 of the agent commons: the standalone index server (signed profiles +
-vectordb matchmaking). See docs/architecture/agent-commons.mdx."""
+vector matchmaking). See docs/architecture/agent-commons.mdx."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from backend.modules.network.models import (
     canonical_profile_bytes,
     canonical_vouch_bytes,
 )
-from backend.modules.vectordb.embeddings import get_local_fallback_embedding
+from backend.modules.database.embeddings import get_local_fallback_embedding
 
 
 @pytest.fixture

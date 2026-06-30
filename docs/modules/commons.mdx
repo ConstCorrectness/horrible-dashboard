@@ -25,10 +25,15 @@ Frontend in `packages/core/src/modules/commons/`; node-side client in
 
 ## Contributions to the layout shell
 
-- **Widget** `commons.directory` (Commons) — `CommonsDirectory.tsx`. Connection status,
-  a search box (cosine match over the index's vectordb), and the directory / match
-  results as profile cards (name, headline, tags, online dot, **trust-tier badge**) each
-  with **Meet** / **Vouch** / **Block** (or **Unblock**) / **Report** actions.
+The three commons widgets form the **Agent Commons** panel group (`commons.hub`).
+Opening any one of them shows a companion strip on the right edge with toggle
+buttons for the others. See [Panel Groups](../architecture/panel-groups.mdx).
+
+- **Widget** `commons.directory` (Commons) — `CommonsDirectory.tsx`. The group
+  **primary** (hub). Connection status, a search box (cosine match over the index's
+  vector store), and the directory / match results as profile cards (name, headline,
+  tags, online dot, **trust-tier badge**) each with **Meet** / **Vouch** / **Block**
+  (or **Unblock**) / **Report** actions.
 - **Widget** `commons.requests` (Commons Requests) — `CommonsRequests.tsx`. The consent
   inbox: inbound meet requests with Accept / Decline.
 - **Widget** `commons.profile` (Commons Profile) — `CommonsProfileEditor.tsx`. Edit your
@@ -43,7 +48,7 @@ Frontend in `packages/core/src/modules/commons/`; node-side client in
 flowchart LR
     Browser["Commons widget"] -->|"/ws · commons"| Client["CommonsClient (node)"]
     Client -->|"ws · /commons-ws"| Index["commons_server (index)"]
-    Index -->|"embed + cosine"| VDB["vectordb"]
+    Index -->|"embed + cosine"| VDB["vector store"]
     Client -->|"signs profile with node key"| Index
 ```
 
@@ -149,8 +154,8 @@ both discovery and connectivity. It speaks `publish_profile` / `search` / `direc
 `unpublish`, the consent frames `connect_request` / `connect_response` / `connected`
 (above), and the reputation frames `vouch` / `report`; it persists the registry to
 `$HORRIBLE_DATA_DIR/commons-profiles.json`, vouches to `commons-vouches.json`, reports
-to `commons-reports.json`, and stores embeddings in the [vectordb](vectordb.mdx) SQLite
-store. Disconnect marks a
+to `commons-reports.json`, and stores embeddings in the [database](database.mdx) module's
+SQLite vector store. Disconnect marks a
 profile offline (kept, still discoverable); `unpublish` removes it.
 
 ## Settings

@@ -1,4 +1,4 @@
-import { registry, type ModuleManifest } from '../../registry';
+import { registry, type ModuleManifest, type PanelGroupDecl } from '../../registry';
 import { AgentRelayPanel } from './AgentRelayPanel';
 import { LobbyPanel } from './LobbyPanel';
 import { PeerChatPanel } from './PeerChatPanel';
@@ -48,31 +48,24 @@ export const networkModule: ModuleManifest = {
       defaultPlacement: 'right',
     },
   ],
+  panelGroups: [
+    {
+      id: 'network.fabric',
+      label: 'Peer Fabric',
+      primary: 'network.peers',
+      companions: [
+        { id: 'network.chat', label: 'Peer Chat', icon: '✉' },
+        { id: 'network.monitor', label: 'Peer Monitor', icon: '◈' },
+        { id: 'network.lobby', label: 'Lobby', icon: '⊞' },
+        { id: 'network.relay', label: 'Agent Relay', icon: '⇌' },
+      ],
+    } satisfies PanelGroupDecl,
+  ],
   commands: [
     {
       id: 'network.open',
       title: 'Network: Open peers',
       run: () => registry.openPanel('network.peers'),
-    },
-    {
-      id: 'network.openLobby',
-      title: 'Network: Open lobby',
-      run: () => registry.openPanel('network.lobby'),
-    },
-    {
-      id: 'network.openMonitor',
-      title: 'Network: Open peer monitor',
-      run: () => registry.openPanel('network.monitor'),
-    },
-    {
-      id: 'network.openChat',
-      title: 'Network: Open peer chat',
-      run: () => registry.openPanel('network.chat'),
-    },
-    {
-      id: 'network.openRelay',
-      title: 'Network: Ask a peer agent',
-      run: () => registry.openPanel('network.relay'),
     },
   ],
   settings: [

@@ -51,7 +51,7 @@ from backend.modules.telemetry import router as telemetry_router
 from backend.modules.telemetry.instrument import record_ws_frame, telemetry_middleware
 from backend.modules.terminal import TerminalManager
 from backend.modules.workspace import router as workspace_router
-from backend.modules.vectordb import router as vectordb_router
+from backend.modules.database import router as database_router
 from backend.modules.visualizer import visualizer_manager
 from backend.modules.ws import WsConnection, set_ws_send_observer
 from backend.sdk import load_plugins
@@ -101,7 +101,7 @@ def health() -> dict[str, str]:
 
 app.include_router(agent_router, prefix="/api")
 app.include_router(workspace_router, prefix="/api")
-app.include_router(vectordb_router, prefix="/api")
+app.include_router(database_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(files_router, prefix="/api")
 app.include_router(notes_router, prefix="/api")

@@ -71,6 +71,8 @@ export {
   type PaneDirection,
   type PanePlacement,
   type PanelDecl,
+  type PanelGroupCompanion,
+  type PanelGroupDecl,
   type SplitDirection,
   type SettingDecl,
   type SettingType,
@@ -83,7 +85,7 @@ export { dashboardModule } from './modules/dashboard';
 export { layoutsModule } from './modules/layouts';
 export { scratchModule } from './modules/scratch';
 export { stubModule } from './modules/stub';
-export { vectordbModule } from './modules/vectordb';
+export { databaseModule } from './modules/database';
 export { visualizerModule } from './modules/visualizer';
 export { flowModule } from './modules/flow';
 export {

@@ -15,10 +15,17 @@ widget plus settings; the heavy lifting is the backend peer fabric documented in
 
 ## Contributions to the layout shell
 
-- **Widget** `network.peers` (Peers) — `PeersWidget.tsx`. Shows this node's identity
-  and the connected peers with status dots; dial a peer by `ws://…/peer-ws` address,
-  generate an invite link, or redeem one to pair. Exposes presence to the local
-  agent via `useAgentContext` (so the model can fill `agent.ask_peer(peerId)`).
+All five network widgets form the **Peer Fabric** panel group (`network.fabric`).
+Opening any one of them shows a companion strip on the right edge of the pane with
+toggle buttons for the other members — click to expand a companion into the
+workspace, click again to close ("rail") it. See
+[Panel Groups](../architecture/panel-groups.mdx) for the architecture.
+
+- **Widget** `network.peers` (Peers) — `PeersWidget.tsx`. The group **primary** (hub).
+  Shows this node's identity and connected peers with status dots; dial a peer by
+  `ws://…/peer-ws` address, generate an invite link, or redeem one to pair. Exposes
+  presence to the local agent via `useAgentContext` (so the model can fill
+  `agent.ask_peer(peerId)`).
 - **Widget** `network.lobby` (Lobby) — `LobbyPanel.tsx`. Connect to a lobby server,
   see hosted **rooms**, host one, or join one — joining hands off to a direct P2P
   link (relay fallback). See [the lobby system](../architecture/network-protocol.mdx#the-lobby-system).

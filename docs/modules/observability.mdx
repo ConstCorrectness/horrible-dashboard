@@ -94,6 +94,15 @@ replaces its row in place rather than duplicating it.
 
 ## Contributions to the layout shell
 
+- **Panel group:** `observability.monitor` — `observability.io` is the primary
+  (the entry point that appears in the command palette and in the tab-strip
+  picker). Opening Data flow renders a `PaneGroupShell` with an **`⊡ Inspector`**
+  toggle in the strip; clicking it opens `observability.logs` as a resizable
+  companion pane. See [panel groups](../architecture/panel-groups.mdx).
+- **Widgets:** `observability.io` ("Data flow") — compact summary (call/error
+  counts + last few, expandable the same way), opened as a pane. Part of the
+  seeded Dashboard workspace; also addable to any workspace from the palette
+  ("Open widget: Data flow") or the tab-strip picker.
 - **Panels:** `observability.logs` (singleton, `defaultPlacement: bottom`) — a
   Wireshark-style **master-detail**: a packet-list table (time, source badge,
   method, target, status, ms, size) over an **inspector** for the selected row.
@@ -103,12 +112,10 @@ replaces its row in place rather than duplicating it.
   **filter** narrows rows live (client-side): a free-text query over
   method+target+**body**, a source selector (all / client / inbound / outbound /
   ws), and an **errors only** toggle; the count reads `shown / total` while a
-  filter is active. A Clear button empties the buffer.
-- **Widgets:** `observability.io` ("Data flow") — compact summary (call/error
-  counts + last few, expandable the same way), opened as a pane. Part of the
-  seeded Dashboard workspace; also addable to any workspace from the palette
-  ("Open widget: Data flow") or the tab-strip picker.
-- **Commands:** `observability.open` (opens the panel).
+  filter is active. A Clear button empties the buffer. Accessible only via the
+  toggle strip on the Data flow widget (use the `⊡ Inspector` toggle) — not
+  openable as a standalone command.
+- **Commands:** `observability.open` (opens the Data flow widget — the primary).
 - **Settings:** `observability.recentCount` (number, default 5) — how many recent
   calls the Data flow widget lists; read live via `useSetting`.
   `observability.maxBodyChars` (number, default 16384) — how many characters of

@@ -1,0 +1,125 @@
+# Panel Groups
+
+Panel groups cluster related panels/widgets into one dockview pane — a **group
+shell** — so they feel like a single coherent feature with clear visual boundaries
+rather than N independent panels scattered in the workspace.
+
+## Concept
+
+A **panel group** has one **primary** panel (the hub entry point) and one or more
+**companions** (secondary panels). When the primary is opened, `PanelHost`
+renders a `PaneGroupShell` instead of the bare component.
+
+The shell has two zones:
+
+- A **toggle strip** across the top: one button per companion. Clicking a button
+  shows or hides that companion (independent toggles, like VS Code's sidebar
+  toggles). All companions are **hidden by default**.
+- A **content row** below: the primary always fills the left area; each companion
+  that is toggled on appears as a **right-side split** inside the same shell.
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│ [Peer Chat ✉]  [Peer Monitor ◈]  [Lobby ⊞]  [Agent Relay ⇌]  │ ← toggle strip
+├─────────────────────────────────┬─────────────────────────────┤
+│                                 │  PEER CHAT  → ↓ ←      ✕   │
+│   Primary (Peers)               ├─────────────────────────────┤
+│   always visible                │  chat content here…         │
+│                                 │                             │
+└─────────────────────────────────┴─────────────────────────────┘
+```
+
+Each companion has a **resize handle** (drag the 4 px border between companion
+and primary to resize) and a **position cycle button** (`→ ↓ ←`) that rotates
+the companion through right → bottom → left → right docking.
+
+The entire shell is **one dockview pane**: it can be split, floated, moved, or
+maximized as a single unit in the workspace. Companions are not independent panes.
+
+## Palette visibility
+
+Only the **primary** appears in the command palette ("Open widget: Peers"). Companion
+widget IDs are suppressed from the auto-generated `widget.open:*` commands so users
+can't accidentally open a companion detached from its group. Companions are only
+reachable via the toggle strip of their primary.
+
+## Declaring a group
+
+Add `panelGroups` to the module manifest:
+
+```ts
+import type { PanelGroupDecl } from '@horrible/core';
+
+panelGroups: [
+  {
+    id: 'network.fabric',
+    label: 'Peer Fabric',
+    primary: 'network.peers',       // only this id appears in the palette
+    companions: [
+      { id: 'network.chat',    label: 'Peer Chat',    icon: '✉' },
+      { id: 'network.monitor', label: 'Peer Monitor', icon: '◈' },
+      { id: 'network.lobby',   label: 'Lobby',        icon: '⊞' },
+      { id: 'network.relay',   label: 'Agent Relay',  icon: '⇌' },
+    ],
+  } satisfies PanelGroupDecl,
+],
+```
+
+The `icon` field appears in the toggle button alongside the label.
+
+## Built-in groups
+
+| Group id | Primary | Companions |
+|---|---|---|
+| `network.fabric` | `network.peers` | chat, monitor, lobby, relay |
+| `commons.hub` | `commons.directory` | requests, profile |
+| `flow.studio` | `flow.library` | canvas (`flow.editor`) |
+| `observability.monitor` | `observability.io` | inspector (`observability.logs`) |
+
+## How it works
+
+- `registry.getGroupFor(panelId)` returns the `PanelGroupDecl` for any group
+  member, or `undefined` for unaffiliated panels.
+- `registry.commands` suppresses `widget.open:*` entries for any widget id that
+  appears in a group's `companions` list.
+- `PanelHost` in `packages/ui/src/Workspace.tsx` calls `getGroupFor`. If the
+  view is the group primary, it renders `<PaneGroupShell group={...} />` inside
+  `.ws-panel` (with the shell-specific zero-padding modifier).
+- `PaneGroupShell` (`packages/ui/src/PaneGroupShell.tsx`) holds local
+  `useState<Record<string, CompanionViewState>>` tracking which companions are
+  open and each one's current position (`'right' | 'bottom' | 'left'`) and pixel
+  size. Toggling adds/removes an entry; open companions render in a resizable split
+  at their chosen position alongside the always-visible primary. The position
+  cycles right → bottom → left → right via a header button; the resize handle
+  is a 4 px border that fires `mousemove` on `window` to update size without
+  dockview intercepting the drag.
+- Companion panels opened **standalone** via a direct command still render their
+  raw component — the shell only activates when the primary is opened.
+
+## Future: decoupling companions
+
+In a future advanced-settings option, individual companions can be "decoupled" from
+their primary so they appear as independent panes in the workspace and in the palette.
+This is intentionally not the default — the grouped UX is strongly preferred.
+
+## Types
+
+```ts
+// packages/sdk/src/types.ts (re-exported from @horrible/core)
+
+interface PanelGroupCompanion {
+  id: string;
+  label: string;
+  icon?: string;   // shown in the toggle button
+}
+
+interface PanelGroupDecl {
+  id: string;
+  label: string;
+  primary: string;
+  companions: PanelGroupCompanion[];
+}
+```
+
+`PanelGroupDecl` is part of the public SDK (`@horribledashboard/sdk`) so
+third-party plugins can declare groups too.

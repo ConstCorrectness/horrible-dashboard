@@ -27,6 +27,7 @@ import {
   type Workspace as WorkspaceModel,
 } from '@horrible/core';
 
+import { PaneGroupShell } from './PaneGroupShell';
 import { PaneTab } from './PaneTab';
 import { SplitHandle } from './SplitHandle';
 
@@ -77,14 +78,17 @@ function PanelHost(props: IDockviewPanelProps<{ panelId: string }>) {
   // pane content still selects it. Cleared on unmount if it's still the active one.
   const markActive = () => setActiveScope(panelId);
 
+  const group = registry.getGroupFor(panelId);
+  const isGroupPrimary = group?.primary === panelId;
+
   // Expose this pane's live instance id (for useAgentContext, keyed by instance)
   // and the params it was opened with (for usePaneParams, e.g. a buffer source).
   return (
     <PaneInstanceContext.Provider value={props.api.id}>
       <PaneParamsContext.Provider value={props.params}>
         <div className="ws-pane-host" onFocusCapture={markActive} onPointerDownCapture={markActive}>
-          <div className="ws-panel">
-            <Component />
+          <div className={`ws-panel${isGroupPrimary ? ' ws-panel--shell' : ''}`}>
+            {isGroupPrimary ? <PaneGroupShell group={group!} /> : <Component />}
           </div>
           <SplitHandle onSplit={onSplit} />
         </div>

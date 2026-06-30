@@ -17,9 +17,12 @@ interface PaneOption {
 }
 
 function paneOptions(): PaneOption[] {
+  const companionIds = new Set(registry.panelGroups.flatMap((g) => g.companions.map((c) => c.id)));
   return [
     ...registry.panels.map((p) => ({ id: p.id, title: p.title, kind: 'Panel' as const })),
-    ...registry.widgets.map((w) => ({ id: w.id, title: w.title, kind: 'Widget' as const })),
+    ...registry.widgets
+      .filter((w) => !companionIds.has(w.id))
+      .map((w) => ({ id: w.id, title: w.title, kind: 'Widget' as const })),
   ].sort((a, b) => a.title.localeCompare(b.title));
 }
 

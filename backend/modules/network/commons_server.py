@@ -1,11 +1,12 @@
 """Standalone **commons** server: the federatable *agent commons* index — public,
-signed profiles plus semantic (vectordb) matchmaking — bundling the lobby + relay so
+signed profiles plus semantic (vector) matchmaking — bundling the lobby + relay so
 one process gives both discovery and connectivity.
 
 Where the [lobby](lobby_server.py) is a bare presence directory + rooms, the commons is
 a **marketplace for strangers**: nodes publish a rich `CommonsProfile` (a superset of an
-A2A Agent Card), and others discover them by cosine-similarity search over the
-[vectordb](../vectordb/database.py). Profiles are self-signed (Ed25519), so the index
+A2A Agent Card), and others discover them by cosine-similarity search over the database
+module's vector store ([vectorstore](../database/vectorstore.py)). Profiles are
+self-signed (Ed25519), so the index
 verifies but cannot forge them — and a federated/DHT index could re-serve them later.
 
 This is **Phase 1** of docs/architecture/agent-commons.mdx (profiles + search). The
@@ -37,17 +38,17 @@ from backend.modules.network.models import (
     canonical_profile_bytes,
     canonical_vouch_bytes,
 )
-from backend.modules.vectordb.database import (
+from backend.modules.database.vectorstore import (
     delete_document,
     init_db,
     search_documents,
     upsert_document,
 )
-from backend.modules.vectordb.embeddings import get_embedding
+from backend.modules.database.embeddings import get_embedding
 
 logger = logging.getLogger(__name__)
 
-# The vectordb collection profiles are embedded into for matchmaking.
+# The vector-store collection profiles are embedded into for matchmaking.
 PROFILE_COLLECTION = "commons-profiles"
 
 
@@ -61,7 +62,7 @@ def _profiles_path() -> Path:
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
-    # Embeddings live in the vectordb's SQLite store; profile metadata is mirrored to a
+    # Embeddings live in the database module's SQLite vector store; profile metadata is mirrored to a
     # JSON file so the directory survives a restart (entries load back as offline until
     # their node reconnects).
     init_db()

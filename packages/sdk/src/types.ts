@@ -210,3 +210,32 @@ export interface WsMessage {
   event: string;
   data?: unknown;
 }
+
+/** One member entry in a panel group's companion list. */
+export interface PanelGroupCompanion {
+  /** Panel or widget id (e.g. `network.chat`). */
+  id: string;
+  /** Tooltip / aria-label shown on the toggle button. */
+  label: string;
+  /**
+   * Single glyph rendered inside the toggle button. Falls back to the first
+   * character of `label` when omitted.
+   */
+  icon?: string;
+}
+
+/**
+ * A logical cluster of related panels/widgets. The primary panel is the "hub"
+ * entry point; companions are secondary panels that can be toggled open or closed
+ * from a strip on any group member's edge. See docs/architecture/panel-groups.mdx.
+ */
+export interface PanelGroupDecl {
+  /** Stable id, e.g. `network.fabric`. */
+  id: string;
+  /** Display label for the group (used in the companion strip header tooltip). */
+  label: string;
+  /** View id of the primary (hub) panel or widget, e.g. `network.peers`. */
+  primary: string;
+  /** Companion panels/widgets in the order they appear in the strip. */
+  companions: PanelGroupCompanion[];
+}

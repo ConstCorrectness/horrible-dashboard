@@ -116,6 +116,202 @@ body {
   padding: 1rem;
 }
 
+/* Panel group shell: toggle strip + side-by-side content area.
+   The whole shell is one dockview pane — it splits/floats/moves as a unit.
+   Companions are hidden by default; toggle buttons show/hide them as splits. */
+.pane-group-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+/* Companion toggle strip — thin bar across the top with one button per companion */
+.pane-group-toggles {
+  display: flex;
+  flex-direction: row;
+  flex-shrink: 0;
+  gap: 2px;
+  padding: 3px 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.pane-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  font-size: 11px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    color 0.1s,
+    background 0.1s,
+    border-color 0.1s;
+}
+
+.pane-group-toggle:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.pane-group-toggle.active {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.pane-group-toggle-icon {
+  font-size: 12px;
+  line-height: 1;
+}
+
+/* Content area: middle row (left | primary | right) + optional bottom row */
+.pane-group-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pane-group-middle-row {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pane-group-bottom-row {
+  display: flex;
+  flex-direction: row;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.pane-group-primary {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 1rem;
+}
+
+/* Companion panel — flex-shrink: 0 so it keeps its explicit width/height */
+.pane-group-companion {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  position: relative;
+}
+
+/* Resize handle — sits on the edge facing the primary */
+.pane-group-resize-handle--v {
+  width: 4px;
+  height: 100%;
+  cursor: col-resize;
+  background: var(--border);
+  flex-shrink: 0;
+  transition: background 0.1s;
+  user-select: none;
+}
+
+.pane-group-resize-handle--v:hover,
+.pane-group-resize-handle--v:active {
+  background: var(--accent);
+}
+
+.pane-group-resize-handle--h {
+  width: 100%;
+  height: 4px;
+  cursor: row-resize;
+  background: var(--border);
+  flex-shrink: 0;
+  transition: background 0.1s;
+  user-select: none;
+}
+
+.pane-group-resize-handle--h:hover,
+.pane-group-resize-handle--h:active {
+  background: var(--accent);
+}
+
+/* Left/right companions use row layout so the resize handle is a vertical strip on the inner edge.
+   Bottom companions use column layout so the handle is a horizontal strip on the top edge. */
+.pane-group-companion--left,
+.pane-group-companion--right {
+  flex-direction: row;
+}
+
+.pane-group-companion--bottom {
+  flex: 1;
+  flex-direction: column;
+}
+
+/* Inner content area: header + body stacked vertically */
+.pane-group-companion-content {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pane-group-companion-header {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+  flex-shrink: 0;
+}
+
+.pane-group-companion-title {
+  flex: 1;
+}
+
+.pane-group-companion-btn {
+  padding: 1px 5px;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1.4;
+  border-radius: 3px;
+}
+
+.pane-group-companion-btn:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.pane-group-companion-body {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  padding: 1rem;
+}
+
+/* When a panel hosts the group shell, remove the outer padding so the toggle
+   strip sits flush with the pane edges. The shell's content areas own padding. */
+.ws-panel--shell {
+  padding: 0;
+}
+
 .ws-panel-missing {
   color: var(--text-dim);
 }
@@ -2902,6 +3098,358 @@ kbd {
   flex-direction: column;
   gap: 1.25rem;
   max-width: 48rem;
+}
+
+/* ── Database console (psql-like inspector) ───────────────────────────────── */
+.dbc-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  position: relative;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.85rem;
+}
+
+.dbc-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.dbc-conn-label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text-dim);
+  font-size: 0.78rem;
+}
+
+.dbc-select {
+  background: var(--bg-raised);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.25rem 0.45rem;
+  font-size: 0.8rem;
+}
+
+.dbc-history {
+  margin-left: auto;
+  max-width: 16rem;
+}
+
+.dbc-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--text-dim);
+  font-size: 0.78rem;
+}
+
+.dbc-btn {
+  background: var(--bg-raised);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.dbc-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.dbc-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.dbc-btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0b0d10;
+  font-weight: 600;
+}
+
+.dbc-btn-danger {
+  color: #e5534b;
+  border-color: color-mix(in srgb, #e5534b 40%, transparent);
+}
+
+.dbc-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.dbc-sidebar {
+  width: 15rem;
+  flex-shrink: 0;
+  overflow: auto;
+  border-right: 1px solid var(--border);
+  padding: 0.5rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.75rem;
+}
+
+.dbc-sidebar-muted,
+.dbc-sidebar-error {
+  color: var(--text-dim);
+  padding: 0.4rem;
+}
+
+.dbc-sidebar-error {
+  color: #e5534b;
+}
+
+.dbc-tree-table {
+  margin-bottom: 0.5rem;
+}
+
+.dbc-tree-table-name {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0.2rem 0.3rem;
+  border-radius: 4px;
+  font: inherit;
+}
+
+.dbc-tree-table-name:hover {
+  background: var(--bg-hover);
+}
+
+.dbc-tree-cols {
+  padding-left: 0.75rem;
+}
+
+.dbc-tree-col {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.1rem 0.3rem;
+  color: var(--text);
+}
+
+.dbc-col-pk {
+  font-weight: 700;
+}
+
+.dbc-col-type {
+  color: var(--text-dim);
+  font-size: 0.72rem;
+}
+
+.dbc-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  padding: 0.6rem;
+  gap: 0.5rem;
+}
+
+.dbc-editor {
+  width: 100%;
+  min-height: 6rem;
+  resize: vertical;
+  background: var(--bg-raised);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.6rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.dbc-run-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.dbc-status {
+  color: var(--text-dim);
+  font-size: 0.78rem;
+}
+
+.dbc-error {
+  background: color-mix(in srgb, #e5534b 12%, transparent);
+  border: 1px solid color-mix(in srgb, #e5534b 40%, transparent);
+  color: #f3a39d;
+  border-radius: 6px;
+  padding: 0.5rem 0.7rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+}
+
+.dbc-empty {
+  color: var(--text-dim);
+  padding: 1rem;
+  text-align: center;
+}
+
+.dbc-result-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.dbc-result-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.78rem;
+}
+
+.dbc-result-table th,
+.dbc-result-table td {
+  border: 1px solid var(--border);
+  padding: 0.3rem 0.55rem;
+  text-align: left;
+  white-space: nowrap;
+  max-width: 28rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dbc-result-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-raised);
+  color: var(--text);
+}
+
+.dbc-result-table tr:hover td {
+  background: var(--bg-hover);
+}
+
+.dbc-rownum {
+  color: var(--text-dim);
+  text-align: right;
+}
+
+.dbc-null {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.dbc-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.dbc-modal {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  width: 28rem;
+  max-width: calc(100% - 2rem);
+  max-height: calc(100% - 2rem);
+  overflow: auto;
+  padding: 1rem;
+}
+
+.dbc-modal-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.dbc-modal-hdr h3 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.dbc-conn-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.dbc-conn-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.dbc-conn-row-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.dbc-builtin-badge {
+  margin-left: 0.5rem;
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.05rem 0.35rem;
+}
+
+.dbc-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.dbc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.78rem;
+  color: var(--text-dim);
+}
+
+.dbc-field input,
+.dbc-field select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.82rem;
+}
+
+.dbc-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.dbc-test-ok {
+  color: #3fb950;
+  font-size: 0.8rem;
+}
+
+.dbc-test-err {
+  color: #e5534b;
+  font-size: 0.8rem;
+  white-space: pre-wrap;
 }
 
 /* Micro-animations */

@@ -22,14 +22,14 @@ flowchart TB
         Desk["apps/desktop<br/>(Tauri)"]
         UI["packages/ui<br/>layout shell"]
         Core["packages/core<br/>registry · commands · API client"]
-        Mods["Modules<br/>agent · dashboard · editor · files · terminal ·<br/>observability · marketplace · settings · clubhouse · scratch · vectordb · visualizer"]
+        Mods["Modules<br/>agent · dashboard · editor · files · terminal ·<br/>observability · marketplace · settings · clubhouse · scratch · database · visualizer"]
         SDK["packages/sdk<br/>third-party plugins"]
     end
     subgraph BE["backend/ — FastAPI (the brain)"]
         Agent["agent orchestrator"]
         Tel["telemetry"]
         WSrv["workspace store"]
-        Other["clubhouse · settings · plugins · vectordb · visualizer"]
+        Other["clubhouse · settings · plugins · database · visualizer"]
     end
     Ext[("Local models<br/>Ollama · LM Studio · vLLM")]
     CH[("Clubhouse API")]
@@ -92,7 +92,7 @@ flowchart TB
   peer chat) and the proposed **lobby** (P2P + intermediary + discovery) design.
 - [Agent commons (design)](architecture/agent-commons.mdx) — **proposed, not
   implemented.** A public square for nodes that don't already know each other to
-  discover, meet, and collaborate safely: signed profiles, vectordb matchmaking, a
+  discover, meet, and collaborate safely: signed profiles, vector matchmaking, a
   two-sided consent + progressive-trust ladder, and reputation — built on the lobby,
   Ed25519 identity, and read-only agent-to-agent gating. Includes a BitTorrent-style
   hybrid discovery plan (DHT/gossip + bootstrap/relay) that demotes any single server
@@ -113,14 +113,14 @@ layout shell and how it behaves in the browser vs the desktop app:
 - [Editor](modules/editor.mdx)
 - [Terminal](modules/terminal.mdx)
 - [File explorer](modules/file-explorer.mdx)
-- [Vector DB](modules/vectordb.mdx)
+- [Database](modules/database.mdx)
 - [Visualizer](modules/visualizer.mdx)
 - [Flow canvas](modules/flow-canvas.mdx) — **Phase 0/1 implemented.** A node-graph
   canvas (n8n-style) for composing runnable multi-agent orchestrations over the
   existing orchestrator loop, tool surface, and permission gate.
 - [Network](modules/network.mdx)
 - [Commons](modules/commons.mdx) — **Phase 4 implemented.** The agent commons: browse and
-  search strangers' public, signed profiles (vectordb matchmaking), meet via a two-sided
+  search strangers' public, signed profiles (vector matchmaking), meet via a two-sided
   consent handshake, and a reputation floor (blocklist, signed vouches, reports, trust
   tiers) with a profile editor and requests inbox.
 
@@ -166,7 +166,7 @@ The monorepo (apps/web, apps/desktop, packages/core, packages/ui, backend/) is
 scaffolded and verified. Implemented modules: **dashboard**, **agent**,
 **observability**, **clubhouse**, **marketplace**, **settings**, **editor**
 (note/file buffers + recent-notes widget), **file explorer**, **terminal**
-(PTY), **vectordb** (SQLite engine + similarity queries), **visualizer**
+(PTY), **database** (psql-like inspector + SQLite vector store), **visualizer**
 (HTML5 Canvas, Three.js, Babylon.js scripts, and headless Pygame subprocess frame streaming), and **network** (the distributed peer fabric — node identity, hybrid direct/relay/LAN transports, agent-to-agent, and collaborative shared panes). The **agent tool & permission surface**
 ([agent-tools.mdx](architecture/agent-tools.mdx)) is in place and the editor,
 files, and terminal modules are layered onto it (read tools + gated side-effecting

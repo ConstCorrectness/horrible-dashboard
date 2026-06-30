@@ -41,6 +41,7 @@ export default definePlugin({
       commands: [{ id: 'my-plugin.doIt', title: 'My Plugin: Do it', run: () => {} }],
       settings: [{ key: 'my-plugin.size', title: 'Size', type: 'number', default: 5 }],
       // panels?, keybindings? — same shapes built-in modules use
+      // panelGroups? — cluster related panels/widgets into a toggle-strip group
     };
   },
 });
@@ -65,9 +66,9 @@ export default definePlugin({
   - `host.openPanel(panelId)` / `host.runCommand(commandId)`.
 
 Declaration types (`CommandDecl`, `PanelDecl`, `WidgetDecl`, `KeybindingDecl`,
-`SettingDecl`, `SettingType`, `Capability`, `CollabDecl`, `WsMessage`) live in the
-SDK and are re-exported by `@horrible/core`, so plugins and built-in modules share
-one contract. A `KeybindingDecl` can be **focus-scoped**: set `scope` to a pane
+`SettingDecl`, `SettingType`, `Capability`, `CollabDecl`, `PanelGroupDecl`,
+`WsMessage`) live in the SDK and are re-exported by `@horrible/core`, so plugins
+and built-in modules share one contract. A `KeybindingDecl` can be **focus-scoped**: set `scope` to a pane
 view id so the binding is active only while that pane is focused (shadowing plain
 globals), or `override: true` on a global so it can't be shadowed — see
 [keybinding scopes](layout-shell.mdx#keybinding-scopes).

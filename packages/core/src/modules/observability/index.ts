@@ -1,4 +1,4 @@
-import { registry, type ModuleManifest } from '../../registry';
+import { registry, type ModuleManifest, type PanelGroupDecl } from '../../registry';
 import { telemetryStore } from '../../telemetry';
 import { ObservabilityPanel, ObservabilityWidget } from './view';
 
@@ -10,6 +10,14 @@ import { ObservabilityPanel, ObservabilityWidget } from './view';
 export const observabilityModule: ModuleManifest = {
   id: 'observability',
   title: 'Observability',
+  panelGroups: [
+    {
+      id: 'observability.monitor',
+      label: 'Observability',
+      primary: 'observability.io',
+      companions: [{ id: 'observability.logs', label: 'Inspector', icon: '⊡' }],
+    } satisfies PanelGroupDecl,
+  ],
   panels: [
     {
       id: 'observability.logs',
@@ -42,8 +50,8 @@ export const observabilityModule: ModuleManifest = {
   commands: [
     {
       id: 'observability.open',
-      title: 'Observability: Open data-flow panel',
-      run: () => registry.openPanel('observability.logs'),
+      title: 'Observability: Open data-flow view',
+      run: () => registry.openPanel('observability.io'),
     },
   ],
   settings: [

@@ -1,4 +1,4 @@
-import { registry, type ModuleManifest } from '../../registry';
+import { registry, type ModuleManifest, type PanelGroupDecl } from '../../registry';
 import { CommonsDirectory } from './CommonsDirectory';
 import { CommonsProfileEditor } from './CommonsProfileEditor';
 import { CommonsRequests } from './CommonsRequests';
@@ -33,21 +33,22 @@ export const commonsModule: ModuleManifest = {
       defaultPlacement: 'right',
     },
   ],
+  panelGroups: [
+    {
+      id: 'commons.hub',
+      label: 'Agent Commons',
+      primary: 'commons.directory',
+      companions: [
+        { id: 'commons.requests', label: 'Requests', icon: '↙' },
+        { id: 'commons.profile', label: 'Profile', icon: '◉' },
+      ],
+    } satisfies PanelGroupDecl,
+  ],
   commands: [
     {
       id: 'commons.open',
       title: 'Commons: Open directory',
       run: () => registry.openPanel('commons.directory'),
-    },
-    {
-      id: 'commons.openRequests',
-      title: 'Commons: Open requests',
-      run: () => registry.openPanel('commons.requests'),
-    },
-    {
-      id: 'commons.openProfile',
-      title: 'Commons: Edit my profile',
-      run: () => registry.openPanel('commons.profile'),
     },
   ],
   settings: [

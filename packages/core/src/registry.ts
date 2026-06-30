@@ -11,6 +11,8 @@ import type {
   JSONSchema,
   KeybindingDecl,
   PanelDecl,
+  PanelGroupCompanion,
+  PanelGroupDecl,
   SettingDecl,
   SettingType,
   UseAgentContext,
@@ -26,6 +28,8 @@ export type {
   JSONSchema,
   KeybindingDecl,
   PanelDecl,
+  PanelGroupCompanion,
+  PanelGroupDecl,
   SettingDecl,
   SettingType,
   UseAgentContext,
@@ -83,6 +87,11 @@ export interface ModuleManifest {
   keybindings?: KeybindingDecl[];
   settings?: SettingDecl[];
   settingsSections?: SettingsSectionDecl[];
+  /**
+   * Logical panel clusters: a primary (hub) panel plus companions that can be
+   * toggled from any group member's companion strip. See docs/architecture/panel-groups.mdx.
+   */
+  panelGroups?: PanelGroupDecl[];
 }
 
 /** Top-level shell surfaces. `home` is the first-open view; `workspace` hosts panels. */
@@ -193,15 +202,17 @@ class ModuleRegistry {
 
   get commands(): CommandDecl[] {
     const declared = [...this.modules.values()].flatMap((m) => m.commands ?? []);
-    // Every widget is openable as a pane from the palette — synthesize an open
-    // command per widget so "Open widget: <title>" is discoverable via Ctrl+K.
-    // Opening routes through the same panel-opener seam (the workspace resolves
-    // widget ids against registry.widgets).
-    const widgetOpeners: CommandDecl[] = this.widgets.map((w) => ({
-      id: `widget.open:${w.id}`,
-      title: `Open widget: ${w.title}`,
-      run: () => this.openPanel(w.id),
-    }));
+    // Companions are only reachable via their group's primary shell — suppress
+    // their standalone "Open widget" entries so the palette only surfaces the
+    // primary (which carries the whole group with it).
+    const companionIds = new Set(this.panelGroups.flatMap((g) => g.companions.map((c) => c.id)));
+    const widgetOpeners: CommandDecl[] = this.widgets
+      .filter((w) => !companionIds.has(w.id))
+      .map((w) => ({
+        id: `widget.open:${w.id}`,
+        title: `Open widget: ${w.title}`,
+        run: () => this.openPanel(w.id),
+      }));
     return [...declared, ...widgetOpeners];
   }
 
@@ -228,6 +239,22 @@ class ModuleRegistry {
 
   get settingsSections(): SettingsSectionDecl[] {
     return [...this.modules.values()].flatMap((m) => m.settingsSections ?? []);
+  }
+
+  /** All declared panel groups, in module registration order. */
+  get panelGroups(): PanelGroupDecl[] {
+    return [...this.modules.values()].flatMap((m) => m.panelGroups ?? []);
+  }
+
+  /**
+   * Returns the group that contains `panelId` (either as primary or companion),
+   * or undefined if the panel does not belong to any group.
+   */
+  getGroupFor(panelId: string): PanelGroupDecl | undefined {
+    return this.panelGroups.find(
+      (g) =>
+        g.primary === panelId || g.companions.some((c: PanelGroupCompanion) => c.id === panelId),
+    );
   }
 
   /**

@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 import httpx
 from typing import Annotated, Any
@@ -6,7 +7,19 @@ from fastapi.responses import StreamingResponse
 
 from backend.modules.agent import providers as P
 from backend.modules.agent.routes import _load_config
-from backend.modules.vectordb.database import (
+from backend.modules.database.connections import (
+    BUILTIN_APP_ID,
+    add_connection,
+    delete_connection,
+    get_connection,
+    list_connections,
+    redact,
+    resolve_config,
+    update_connection,
+)
+from backend.modules.database.drivers import PROVIDERS, DriverError, get_driver
+from backend.modules.database.drivers.base import looks_read_only
+from backend.modules.database.vectorstore import (
     init_db,
     get_db_stats,
     list_documents,
@@ -14,8 +27,19 @@ from backend.modules.vectordb.database import (
     delete_document,
     search_documents,
 )
-from backend.modules.vectordb.embeddings import get_embedding
-from backend.modules.vectordb.models import (
+from backend.modules.database.embeddings import get_embedding
+from backend.modules.database.models import (
+    ConnectionInfo,
+    ConnectionInput,
+    ConnectionTestResult,
+    ConnectionsResponse,
+    ProviderInfo,
+    QueryRequest,
+    QueryResultModel,
+    ResultColumn,
+    SchemaColumn,
+    SchemaResponse,
+    SchemaTable,
     VectorDbStatus,
     SearchRequest,
     SearchResult,
@@ -24,10 +48,148 @@ from backend.modules.vectordb.models import (
     DocumentsListResponse,
 )
 
-# Initialize database schema immediately on module load
+# Initialize the built-in app vector store schema immediately on module load.
 init_db()
 
-router = APIRouter(prefix="/vectordb", tags=["vectordb"])
+router = APIRouter(prefix="/database", tags=["database"])
+
+
+# ---------------------------------------------------------------------------
+# Generic inspector: connections, query, schema
+# ---------------------------------------------------------------------------
+
+
+@router.get("/connections", response_model=ConnectionsResponse)
+async def get_connections() -> ConnectionsResponse:
+    return ConnectionsResponse(
+        connections=[ConnectionInfo(**redact(c)) for c in list_connections()],
+        providers=[ProviderInfo(**p) for p in PROVIDERS],
+    )
+
+
+@router.post("/connections", response_model=ConnectionInfo)
+async def create_connection(body: ConnectionInput) -> ConnectionInfo:
+    record = add_connection(body.name, body.provider, body.config)
+    return ConnectionInfo(**redact(record))
+
+
+@router.put("/connections/{conn_id}", response_model=ConnectionInfo)
+async def edit_connection(conn_id: str, body: ConnectionInput) -> ConnectionInfo:
+    if conn_id == BUILTIN_APP_ID:
+        raise HTTPException(
+            status_code=400, detail="The built-in connection is read-only"
+        )
+    record = update_connection(conn_id, body.name, body.provider, body.config)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"No connection '{conn_id}'")
+    return ConnectionInfo(**redact(record))
+
+
+@router.delete("/connections/{conn_id}")
+async def remove_connection(conn_id: str) -> dict[str, Any]:
+    if conn_id == BUILTIN_APP_ID:
+        raise HTTPException(
+            status_code=400, detail="The built-in connection is read-only"
+        )
+    if not delete_connection(conn_id):
+        raise HTTPException(status_code=404, detail=f"No connection '{conn_id}'")
+    return {"deleted": True, "id": conn_id}
+
+
+def _test_config(provider: str, config: dict[str, Any]) -> ConnectionTestResult:
+    try:
+        get_driver(provider).test(config)
+        return ConnectionTestResult(ok=True)
+    except DriverError as exc:
+        return ConnectionTestResult(ok=False, error=str(exc))
+    except Exception as exc:  # surface unexpected client errors as a failed probe
+        return ConnectionTestResult(ok=False, error=str(exc))
+
+
+@router.post("/connections/test", response_model=ConnectionTestResult)
+async def test_unsaved_connection(body: ConnectionInput) -> ConnectionTestResult:
+    """Probe an unsaved connection (the add/edit form still holds the password)."""
+    return await asyncio.to_thread(_test_config, body.provider, body.config)
+
+
+@router.post("/connections/{conn_id}/test", response_model=ConnectionTestResult)
+async def test_saved_connection(conn_id: str) -> ConnectionTestResult:
+    conn = get_connection(conn_id)
+    if conn is None:
+        raise HTTPException(status_code=404, detail=f"No connection '{conn_id}'")
+    return await asyncio.to_thread(_test_config, conn["provider"], resolve_config(conn))
+
+
+@router.get("/connections/{conn_id}/schema", response_model=SchemaResponse)
+async def get_schema(conn_id: str) -> SchemaResponse:
+    conn = get_connection(conn_id)
+    if conn is None:
+        raise HTTPException(status_code=404, detail=f"No connection '{conn_id}'")
+    driver = get_driver(conn["provider"])
+    try:
+        schema = await asyncio.to_thread(driver.introspect, resolve_config(conn))
+    except DriverError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return SchemaResponse(
+        tables=[
+            SchemaTable(
+                name=t.name,
+                schema_name=t.schema,
+                columns=[
+                    SchemaColumn(
+                        name=c.name,
+                        type=c.type,
+                        nullable=c.nullable,
+                        primary_key=c.primary_key,
+                    )
+                    for c in t.columns
+                ],
+            )
+            for t in schema.tables
+        ]
+    )
+
+
+@router.post("/query", response_model=QueryResultModel)
+async def run_query(req: QueryRequest) -> QueryResultModel:
+    conn = get_connection(req.connection_id)
+    if conn is None:
+        raise HTTPException(
+            status_code=404, detail=f"No connection '{req.connection_id}'"
+        )
+    if req.read_only and not looks_read_only(req.sql):
+        raise HTTPException(
+            status_code=400,
+            detail="Read-only mode allows a single SELECT/WITH/EXPLAIN statement only.",
+        )
+    driver = get_driver(conn["provider"])
+    try:
+        result = await asyncio.to_thread(
+            driver.run_query,
+            resolve_config(conn),
+            req.sql,
+            req.params,
+            read_only=req.read_only,
+            row_limit=req.row_limit,
+        )
+    except DriverError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return QueryResultModel(
+        columns=[ResultColumn(name=c.name, type=c.type) for c in result.columns],
+        rows=result.rows,
+        rowcount=result.rowcount,
+        elapsed_ms=result.elapsed_ms,
+        truncated=result.truncated,
+        affected=result.affected,
+        message=result.message,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Built-in app vector store: status, embedding-model pull, semantic search,
+# document CRUD. These operate on the local vector_store.db (the `app` connection)
+# and back the semantic-search agent tool + commons matchmaking config.
+# ---------------------------------------------------------------------------
 
 
 @router.get("/status", response_model=VectorDbStatus)

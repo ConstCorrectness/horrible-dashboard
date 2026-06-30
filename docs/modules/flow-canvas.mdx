@@ -65,7 +65,7 @@ so a plugin can contribute node types with no backend change.
   output = final answer + any structured fields it produced. This is the multi-agent
   primitive — wire several, each with its own role/tools/model.
 - **Tool node**: a single deterministic call to one existing agent tool or command
-  (`files.read`, `terminal.exec`, `vectordb.search`, `open_pane`, `visualizer.*`…).
+  (`files.read`, `terminal.exec`, `database.query`, `open_pane`, `visualizer.*`…).
   No LLM. Goes through the same gate. The inspector renders the tool's JSON-schema
   params as fields, and an **"Upstream output fills"** selector maps the previous
   node's output onto one chosen param (defaulting to a param named `input`, else the
@@ -83,7 +83,7 @@ so a plugin can contribute node types with no backend change.
   [no-sandboxing note](../architecture/agent-tools.mdx#out-of-scope-for-v1).
 - **Human-in-the-loop node**: pause and ask the user — reuses the
   `approval_request` / approval UI surface.
-- **Data nodes**: vectordb upsert/search, read a pane's `getAgentContext`, write to a
+- **Data nodes**: database query/semantic-search, read a pane's `getAgentContext`, write to a
   pane / file / notification.
 - **Sub-flow node**: embed another flow as a single node (composition).
 - **Output / sink nodes**: render to a pane, write a file, send a notification,
@@ -114,7 +114,7 @@ flowchart LR
     T["Trigger<br/>(prompt)"] --> A1["Agent: Researcher<br/>(model + tools)"]
     A1 --> R{"Router<br/>(found?)"}
     R -->|yes| A2["Agent: Writer"]
-    R -->|no| TL["Tool: vectordb.search"]
+    R -->|no| TL["Tool: database.query"]
     TL --> A2
     A2 --> O["Output → pane"]
 ```
@@ -206,10 +206,17 @@ channel is execution *telemetry* for the canvas.
 
 ## Contributions to the layout shell
 
-- **Panels:** `flow.editor` (center, multi-instance), `flow.library` (left,
-  singleton). `flow.runs` is Phase 2.
-- **Commands:** `flow.new`, `flow.open`, `flow.openLibrary`. (Run/stop live on the
-  canvas toolbar; agent flow-CRUD tools are Phase 3.)
+- **Panels:** `flow.editor` (center, multi-instance — one pane per open flow keyed
+  by `flowId` param; falls back to the active flow when opened with no param),
+  `flow.library` (left, singleton). `flow.runs` is Phase 2.
+- **Panel group:** `flow.studio` — `flow.library` is the primary (the entry point
+  that appears in the command palette). Opening Flows renders a `PaneGroupShell`
+  with a **`⬡ Canvas`** toggle in the strip; clicking it opens `flow.editor` as a
+  resizable companion pane showing the active flow. The companion falls back to
+  the active flow via `getFlows().active` (same logic the standalone editor uses
+  when opened with no param). See [panel groups](../architecture/panel-groups.mdx).
+- **Commands:** `flow.new` (create + open a new flow), `flow.openLibrary` (open
+  the library). (Run/stop live on the canvas toolbar; agent flow-CRUD tools are Phase 3.)
 - **Layout preset:** an **Orchestration** workflow layout (library · canvas) on the
   shell rail.
 

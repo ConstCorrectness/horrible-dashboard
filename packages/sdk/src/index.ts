@@ -18,6 +18,8 @@ export type {
   JSONSchema,
   KeybindingDecl,
   PanelDecl,
+  PanelGroupCompanion,
+  PanelGroupDecl,
   SettingDecl,
   SettingType,
   UseAgentContext,

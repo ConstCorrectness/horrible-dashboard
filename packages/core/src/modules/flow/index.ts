@@ -6,14 +6,22 @@
  */
 import './canvas/flow.css';
 
-import { registry, type ModuleManifest } from '../../registry';
+import { registry, type ModuleManifest, type PanelGroupDecl } from '../../registry';
 import { FlowEditorPanel } from './panels/FlowEditorPanel';
 import { FlowLibraryPanel, openFlow } from './panels/FlowLibraryPanel';
-import { createFlow, getFlows } from './flows';
+import { createFlow } from './flows';
 
 export const flowModule: ModuleManifest = {
   id: 'flow',
   title: 'Flow',
+  panelGroups: [
+    {
+      id: 'flow.studio',
+      label: 'Flow Studio',
+      primary: 'flow.library',
+      companions: [{ id: 'flow.editor', label: 'Canvas', icon: '⬡' }],
+    } satisfies PanelGroupDecl,
+  ],
   panels: [
     {
       id: 'flow.editor',
@@ -43,15 +51,6 @@ export const flowModule: ModuleManifest = {
       id: 'flow.openLibrary',
       title: 'Flow: Open library',
       run: () => registry.openPanel('flow.library'),
-    },
-    {
-      id: 'flow.open',
-      title: 'Flow: Open active orchestration',
-      run: async () => {
-        const state = await getFlows();
-        const id = state.active ?? (await createFlow('My first flow')).id;
-        openFlow(id);
-      },
     },
   ],
   layouts: [

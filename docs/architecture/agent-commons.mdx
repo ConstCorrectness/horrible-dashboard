@@ -10,7 +10,7 @@ another, get acquainted, and collaborate — safely, with trust earned in steps 
 than assumed up front.
 
 **Status: design, with Phases 1–4 landed.** Implemented: the standalone index server
-(signed profiles + vectordb matchmaking — `backend/modules/network/commons_server.py`,
+(signed profiles + vector store matchmaking — `backend/modules/network/commons_server.py`,
 `backend/tests/test_commons_server.py`), discovery end to end (the node-side
 `backend/modules/network/commons.py`, the `/ws` `commons` channel, the
 `commons.directory` widget), the two-sided consent handshake (request-to-meet →
@@ -101,10 +101,10 @@ class CommonsProfile(BaseModel):
 `agent_capabilities` is **advertising, not authorization** — it tells others what your
 agent is willing to talk about; it grants a stranger nothing (see the trust ladder).
 
-## 2. Matchmaking (the vectordb seam)
+## 2. Matchmaking (the vector store seam)
 
 Keyword filtering on `tags` is the floor. The real win reuses the
-[vectordb module](../modules/vectordb.mdx): the commons server embeds each profile
+[database module](../modules/database.mdx)'s vector store: the commons server embeds each profile
 (`headline` + `bio` + `tags` + `seeking`) into a collection and answers discovery as a
 **cosine-similarity** query.
 
@@ -113,7 +113,7 @@ sequenceDiagram
     participant U as User / their agent
     participant N as Local node
     participant C as Commons server
-    participant V as vectordb (cosine)
+    participant V as vector store (cosine)
     U->>N: "find an agent that can help with X"
     N->>C: search {query: "…", filters: {tags?, online?}}
     C->>V: embed(query) → top-k by cosine
@@ -124,7 +124,7 @@ sequenceDiagram
 
 This makes discovery **agent-native**: the local agent can state a need in natural
 language and get ranked peers back, instead of the human eyeballing a list. It's a
-clean seam — the commons server owns one vectordb collection of profiles; nothing
+clean seam — the commons server owns one vector store collection of profiles; nothing
 about the existing module changes.
 
 ## 3. The consent + progressive-trust ladder (the heart of "safely")
@@ -278,7 +278,7 @@ I reach node X" needs no central directory.
 A DHT/gossip layer answers **"find peers for known key X"** and **"how do I reach node
 X."** It is poor at exactly what makes a commons a commons:
 
-- **Semantic search** (the vectordb matchmaking) — DHTs do exact-key lookup, not ranked
+- **Semantic search** (the vector store matchmaking) — DHTs do exact-key lookup, not ranked
   similarity.
 - **Reputation aggregation** — vouch tiers want a consistent view; gossip is eventual,
   partial, and game-able.
@@ -298,7 +298,7 @@ flowchart TB
         BOOT["Bootstrap nodes<br/>(many, swappable, community-run)"]
     end
     subgraph Index["Commons index (federatable, self-hostable)"]
-        SRCH["Semantic search (vectordb)"]
+        SRCH["Semantic search (vector store)"]
         REP2["Reputation / moderation"]
     end
     NAT["STUN / TURN / relay<br/>(NAT data path — stays reachable)"]
@@ -396,7 +396,7 @@ A2A standardizes precisely what this design currently hand-rolls:
    `PeerEnvelope`** ("A2A-over-PeerEnvelope") — drop bespoke semantics, gain interop
    with off-fabric A2A agents (a peer with a public A2A endpoint, or a cloud agent).
 3. **Treat the commons index as an A2A curated registry** — same vocabulary, plus our
-   consent gate and vectordb ranking.
+   consent gate and vector store ranking.
 
 What A2A still can't do — and why the fabric stays: NAT traversal / P2P, self-certifying
 identity + trust between strangers, and discovery of people who never published a URL.
@@ -442,7 +442,7 @@ flowchart TB
 
 ## v1 implementation plan
 
-**Scope of v1:** a hosted, federatable index (profiles + vectordb matchmaking) + the
+**Scope of v1:** a hosted, federatable index (profiles + vector store matchmaking) + the
 two-sided consent handshake + a local-first reputation floor (block/report).
 **Explicitly deferred to v2:** the DHT/PEX decentralization pass (see
 [Decentralizing discovery](#decentralizing-discovery-hybrid-like-bittorrent)) and
@@ -459,7 +459,7 @@ A standalone app, bundling the lobby + relay the way `lobby_server.py` already m
 the relay broker (`app.add_api_websocket_route("/relay-ws", …)`). It adds a
 `/commons-ws` endpoint and an in-process profile index. **As built:** it mounts
 `/relay-ws` *and* `/lobby-ws`, persists the registry to
-`$HORRIBLE_DATA_DIR/commons-profiles.json` (embeddings live in the vectordb SQLite
+`$HORRIBLE_DATA_DIR/commons-profiles.json` (embeddings live in the vector store SQLite
 store), and speaks `publish_profile` / `search` / `directory` / `unpublish`. Run it
 with `uv run uvicorn backend.modules.network.commons_server:app --port 9100`.
 
@@ -470,8 +470,8 @@ with `uv run uvicorn backend.modules.network.commons_server:app --port 9100`.
   A2A Agent Card** per [Interop & standards](#interop--standards-a2a--mcp--ap2--a2ui))
   kept in memory + persisted to a JSON file; `node_id` is the key. `publish_profile`
   upserts; disconnect marks offline (mirrors `_drop_node`).
-- **Match index → vectordb, reused directly.** The server process imports
-  `backend.modules.vectordb.database` and `embeddings`:
+- **Match index → vector store, reused directly.** The server process imports
+  `backend.modules.database.vectorstore` and `embeddings`:
   - on `publish_profile`: `emb, _ = await get_embedding(headline + bio + tags + seeking)`
     then `upsert_document(node_id, "commons-profiles", profile_text, metadata, emb)`.
   - on `search`: `q, _ = await get_embedding(query)` then
@@ -571,7 +571,7 @@ one process with explicit signers): construct an in-process commons index + two
 
 ### Suggested phase order (each independently shippable)
 
-1. **Server profiles + search** (`commons_server.py` + vectordb index) — testable via
+1. **Server profiles + search** (`commons_server.py` + vector store index) — testable via
    `wscat`/pytest with no UI. **✅ implemented** (`commons_server.py`,
    `test_commons_server.py`).
 2. **`CommonsClient` + `/ws` channel + directory widget** — browse/search end to end.
@@ -595,5 +595,5 @@ one process with explicit signers): construct an in-process commons index + two
   scenarios](network-protocol.mdx#the-lobby-system).
 - Read-only remote-agent gating (the safety floor): [Agent
   chat](../modules/agent-chat.mdx#agent-to-agent-talking-to-a-peers-agent).
-- Matchmaking engine: [Vector DB](../modules/vectordb.mdx).
+- Matchmaking engine: [Database](../modules/database.mdx).
 - User-facing network surface this sits beside: [Module: network](../modules/network.mdx).

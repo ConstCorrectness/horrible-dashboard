@@ -10,13 +10,13 @@ project_root = Path(__file__).resolve().parent.parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from backend.modules.vectordb.database import (
+from backend.modules.database.vectorstore import (
     init_db,
     upsert_document,
     search_documents,
     get_db_stats,
 )
-from backend.modules.vectordb.embeddings import get_embedding
+from backend.modules.database.embeddings import get_embedding
 
 COLLECTION = "yaml_intents"
 

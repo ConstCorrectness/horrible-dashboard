@@ -315,7 +315,7 @@ def test_turn_uses_hyperparameters_overrides(monkeypatch) -> None:
 def test_tools_for_presents_core_plus_only_preloaded_groups() -> None:
     # Many dynamic tools across several groups.
     dynamic = []
-    for grp in ("files", "editor", "terminal", "vectordb", "visualizer"):
+    for grp in ("files", "editor", "terminal", "database", "visualizer"):
         for i in range(5):
             dynamic.append({"name": f"{grp}.tool_{i}", "description": "desc"})
     conn = FakeConn(agent_tools=dynamic)
@@ -328,11 +328,11 @@ def test_tools_for_presents_core_plus_only_preloaded_groups() -> None:
     assert "list_tool_groups" in core_names
     assert "load_tools" in core_names
 
-    # A vectordb-flavored prompt preloads only that group, not the others.
-    tools_db = orchestrator._tools_for(conn, prompt="search the vector db")
+    # A database-flavored prompt preloads only that group, not the others.
+    tools_db = orchestrator._tools_for(conn, prompt="run a sql query on the database")
     names_db = {t["function"]["name"] for t in tools_db}
     for i in range(5):
-        assert f"vectordb.tool_{i}" in names_db
+        assert f"database.tool_{i}" in names_db
         assert f"visualizer.tool_{i}" not in names_db
 
 

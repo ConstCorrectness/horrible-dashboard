@@ -2,15 +2,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app import app
-from backend.modules.vectordb.database import cosine_similarity, float_list_to_bytes
+from backend.modules.database.vectorstore import cosine_similarity, float_list_to_bytes
 
 
 @pytest.fixture
 def client(tmp_path, monkeypatch) -> TestClient:
     # Set data dir to temp path so we don't mess up project data
     monkeypatch.setenv("HORRIBLE_DATA_DIR", str(tmp_path))
-    # Re-import routes/database under the mock environment
-    from backend.modules.vectordb.database import init_db
+    # Re-import routes/vectorstore under the mock environment
+    from backend.modules.database.vectorstore import init_db
 
     init_db()
     return TestClient(app)
@@ -40,7 +40,7 @@ def test_cosine_similarity_edge_cases() -> None:
 
 
 def test_status_endpoint(client: TestClient) -> None:
-    res = client.get("/api/vectordb/status")
+    res = client.get("/api/database/status")
     assert res.status_code == 200
     data = res.json()
     assert "db_path" in data
@@ -56,7 +56,7 @@ def test_upsert_and_list_documents(client: TestClient) -> None:
         "text": "The agent should always be polite and help with coding.",
         "metadata": {"source": "user_settings", "category": "agent_rules"},
     }
-    res = client.post("/api/vectordb/documents", json=doc_payload)
+    res = client.post("/api/database/documents", json=doc_payload)
     assert res.status_code == 200
     data = res.json()
     assert data["id"] == "doc1"
@@ -66,14 +66,14 @@ def test_upsert_and_list_documents(client: TestClient) -> None:
     assert "_embedding_source" in data["metadata"]
 
     # Verify status reflects 1 document
-    status_res = client.get("/api/vectordb/status").json()
+    status_res = client.get("/api/database/status").json()
     assert status_res["num_documents"] == 1
     assert len(status_res["collections"]) == 1
     assert status_res["collections"][0]["name"] == "test_settings"
     assert status_res["collections"][0]["count"] == 1
 
     # List documents
-    list_res = client.get("/api/vectordb/documents?collection=test_settings")
+    list_res = client.get("/api/database/documents?collection=test_settings")
     assert list_res.status_code == 200
     list_data = list_res.json()
     assert list_data["total"] == 1
@@ -84,7 +84,7 @@ def test_upsert_and_list_documents(client: TestClient) -> None:
 def test_semantic_search(client: TestClient) -> None:
     # Insert two documents with distinct topics
     client.post(
-        "/api/vectordb/documents",
+        "/api/database/documents",
         json={
             "id": "doc_agent",
             "collection": "memories",
@@ -93,7 +93,7 @@ def test_semantic_search(client: TestClient) -> None:
         },
     )
     client.post(
-        "/api/vectordb/documents",
+        "/api/database/documents",
         json={
             "id": "doc_ui",
             "collection": "memories",
@@ -108,7 +108,7 @@ def test_semantic_search(client: TestClient) -> None:
         "collection": "memories",
         "limit": 5,
     }
-    res = client.post("/api/vectordb/search", json=search_payload)
+    res = client.post("/api/database/search", json=search_payload)
     assert res.status_code == 200
     results = res.json()
     assert len(results) == 2
@@ -120,30 +120,30 @@ def test_semantic_search(client: TestClient) -> None:
 def test_delete_documents(client: TestClient) -> None:
     # Insert document
     client.post(
-        "/api/vectordb/documents",
+        "/api/database/documents",
         json={"id": "to_delete", "collection": "trash", "text": "temporary dump"},
     )
 
     # Verify count is 1
-    assert client.get("/api/vectordb/status").json()["num_documents"] == 1
+    assert client.get("/api/database/status").json()["num_documents"] == 1
 
     # Delete
-    del_res = client.delete("/api/vectordb/documents/to_delete")
+    del_res = client.delete("/api/database/documents/to_delete")
     assert del_res.status_code == 200
     assert del_res.json() == {"deleted": True, "id": "to_delete"}
 
     # Verify count is 0
-    assert client.get("/api/vectordb/status").json()["num_documents"] == 0
+    assert client.get("/api/database/status").json()["num_documents"] == 0
 
     # Delete non-existent raises 404
-    err_res = client.delete("/api/vectordb/documents/to_delete")
+    err_res = client.delete("/api/database/documents/to_delete")
     assert err_res.status_code == 404
 
 
 def test_semantic_search_intents(client: TestClient) -> None:
     # Insert multiple utterances mapping to the same intent, and some mapping to another
     client.post(
-        "/api/vectordb/documents",
+        "/api/database/documents",
         json={
             "id": "utt1",
             "collection": "intents_test",
@@ -156,7 +156,7 @@ def test_semantic_search_intents(client: TestClient) -> None:
         },
     )
     client.post(
-        "/api/vectordb/documents",
+        "/api/database/documents",
         json={
             "id": "utt2",
             "collection": "intents_test",
@@ -169,7 +169,7 @@ def test_semantic_search_intents(client: TestClient) -> None:
         },
     )
     client.post(
-        "/api/vectordb/documents",
+        "/api/database/documents",
         json={
             "id": "utt3",
             "collection": "intents_test",
@@ -188,7 +188,7 @@ def test_semantic_search_intents(client: TestClient) -> None:
         "collection": "intents_test",
         "limit": 5,
     }
-    res = client.post("/api/vectordb/search", json=search_payload)
+    res = client.post("/api/database/search", json=search_payload)
     assert res.status_code == 200
     results = res.json()
 
@@ -201,3 +201,106 @@ def test_semantic_search_intents(client: TestClient) -> None:
 
     # The score should be the highest of the grouped utterances
     assert results[0]["score"] > results[1]["score"]
+
+
+# ---------------------------------------------------------------------------
+# Generic inspector: connections, query, schema
+# ---------------------------------------------------------------------------
+
+
+def test_connections_lists_builtin_app(client: TestClient) -> None:
+    res = client.get("/api/database/connections")
+    assert res.status_code == 200
+    data = res.json()
+    ids = [c["id"] for c in data["connections"]]
+    assert "app" in ids
+    app_conn = next(c for c in data["connections"] if c["id"] == "app")
+    assert app_conn["builtin"] is True
+    assert app_conn["provider"] == "sqlite"
+    assert {p["id"] for p in data["providers"]} >= {
+        "sqlite",
+        "postgres",
+        "duckdb",
+        "mysql",
+    }
+
+
+def test_connection_crud_and_secret_redaction(client: TestClient, tmp_path) -> None:
+    payload = {
+        "name": "My PG",
+        "provider": "postgres",
+        "config": {"host": "localhost", "user": "me", "password": "s3cret"},
+    }
+    created = client.post("/api/database/connections", json=payload).json()
+    assert created["name"] == "My PG"
+    # Password must never be echoed back; it is redacted to a boolean.
+    assert created["config"]["password"] is True
+
+    conn_id = created["id"]
+    listed = client.get("/api/database/connections").json()["connections"]
+    assert any(c["id"] == conn_id for c in listed)
+
+    deleted = client.delete(f"/api/database/connections/{conn_id}")
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"] is True
+
+
+def test_builtin_connection_is_read_only(client: TestClient) -> None:
+    assert client.delete("/api/database/connections/app").status_code == 400
+    assert (
+        client.put(
+            "/api/database/connections/app",
+            json={"name": "x", "provider": "sqlite", "config": {}},
+        ).status_code
+        == 400
+    )
+
+
+def test_query_app_connection(client: TestClient) -> None:
+    client.post(
+        "/api/database/documents",
+        json={"id": "q1", "collection": "qtest", "text": "hello world"},
+    )
+    res = client.post(
+        "/api/database/query",
+        json={
+            "connection_id": "app",
+            "sql": "SELECT id, collection FROM documents",
+            "read_only": True,
+        },
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert [c["name"] for c in data["columns"]] == ["id", "collection"]
+    assert data["rowcount"] == 1
+    assert data["rows"][0][0] == "q1"
+    assert data["elapsed_ms"] >= 0
+
+
+def test_query_read_only_rejects_writes(client: TestClient) -> None:
+    res = client.post(
+        "/api/database/query",
+        json={
+            "connection_id": "app",
+            "sql": "DELETE FROM documents",
+            "read_only": True,
+        },
+    )
+    assert res.status_code == 400
+
+
+def test_query_unknown_connection_404(client: TestClient) -> None:
+    res = client.post(
+        "/api/database/query",
+        json={"connection_id": "nope", "sql": "SELECT 1"},
+    )
+    assert res.status_code == 404
+
+
+def test_schema_app_connection(client: TestClient) -> None:
+    res = client.get("/api/database/connections/app/schema")
+    assert res.status_code == 200
+    tables = {t["name"]: t for t in res.json()["tables"]}
+    assert "documents" in tables
+    cols = {c["name"] for c in tables["documents"]["columns"]}
+    assert {"id", "collection", "text", "embedding"} <= cols

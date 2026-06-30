@@ -9,6 +9,7 @@ import type {
   CommandDecl,
   KeybindingDecl,
   PanelDecl,
+  PanelGroupDecl,
   SettingDecl,
   WidgetDecl,
   WsMessage,
@@ -89,6 +90,8 @@ export interface PluginContributions {
   panels?: PanelDecl[];
   widgets?: WidgetDecl[];
   keybindings?: KeybindingDecl[];
+  /** Cluster related panels/widgets into a toggle-strip group (see PanelGroupDecl). */
+  panelGroups?: PanelGroupDecl[];
   /** User-configurable settings shown on the settings page (keys namespaced). */
   settings?: SettingDecl[];
 }
