@@ -174,15 +174,24 @@ def _tool(
 LAYOUT_TOOLS: list[dict[str, Any]] = [
     _tool(
         "list_available_panes",
-        "List every view (panel or widget definition) that can be opened, with id and title. "
-        "Call this to find a valid view ID before opening a pane.",
+        "List every view (panel or widget definition) that can be opened, with id, title, "
+        "and groupId (the primary view ID of its panel group, if it belongs to one — see "
+        "get_pane_group). Call this to find a valid view ID before opening a pane.",
     ),
     _tool("list_workspaces", "List the named workspaces and which one is active."),
     _tool(
         "list_open_panes",
         "List the panes currently active in the active workspace, with each pane's "
-        "view ID, live instanceId, title, and whether it exposes agent-readable "
-        "context. Use the instanceId with get_pane_context.",
+        "view ID, live instanceId, title, groupId (if it belongs to a panel group), and "
+        "whether it exposes agent-readable context. Use the instanceId with get_pane_context.",
+    ),
+    _tool(
+        "get_pane_group",
+        "Look up the panel group a view belongs to (a primary hub view plus companion "
+        "views toggled from its companion strip, e.g. Peers + Chat + Monitor in the "
+        "network module). Returns groupId: null if the view isn't grouped.",
+        {"id": {"type": "string", "description": "View ID from list_available_panes"}},
+        ["id"],
     ),
     _tool(
         "get_pane_context",

@@ -89,6 +89,22 @@ export function ReplPane() {
     if (log) log.scrollTop = log.scrollHeight;
   }, [entries]);
 
+  // Grow the input box to fit its content (or its placeholder, when empty) so a
+  // narrow pane that wraps the placeholder onto multiple lines doesn't clip it
+  // against a box still sized for one row.
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    const resize = (): void => {
+      el.style.height = 'auto';
+      el.style.height = `${el.scrollHeight}px`;
+    };
+    resize();
+    const observer = new ResizeObserver(resize);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [input]);
+
   const submit = (): void => {
     const code = input.trim();
     if (!code || busy) return;
@@ -126,7 +142,8 @@ export function ReplPane() {
       const isIndentedBlock = lines.length > 1 || lastLine.startsWith(' ');
       const lastLineNotEmpty = trimmedLastLine !== '';
 
-      const shouldSubmit = !endsWithColon && !hasOpenBrackets && (!isIndentedBlock || !lastLineNotEmpty);
+      const shouldSubmit =
+        !endsWithColon && !hasOpenBrackets && (!isIndentedBlock || !lastLineNotEmpty);
 
       if (!shouldSubmit) {
         e.preventDefault();
@@ -229,12 +246,14 @@ export function ReplPane() {
           style={{
             flex: 1,
             resize: 'none',
+            overflow: 'hidden',
             border: 'none',
             outline: 'none',
             background: 'transparent',
             color: 'inherit',
             font: 'inherit',
             padding: '6px 10px 6px 4px',
+            lineHeight: 1.4,
           }}
         />
       </div>

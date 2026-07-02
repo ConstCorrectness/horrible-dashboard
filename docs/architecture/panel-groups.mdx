@@ -82,6 +82,12 @@ The `icon` field appears in the toggle button alongside the label.
   member, or `undefined` for unaffiliated panels.
 - `registry.commands` suppresses `widget.open:*` entries for any widget id that
   appears in a group's `companions` list.
+- Group membership is also relayed to the agent and the `dash` REPL: `getGroupFor`
+  backs a `groupId` field on `list_available_panes`/`list_open_panes` and a
+  dedicated `get_pane_group` tool (`packages/core/src/modules/agent/tool-exec.ts`,
+  `dash.panes.group()` — see [python-sdk.mdx](python-sdk.mdx)), so scripted and
+  agent-driven layout logic can discover and reason about groups the same way the
+  companion strip UI does.
 - `PanelHost` in `packages/ui/src/Workspace.tsx` calls `getGroupFor`. If the
   view is the group primary, it renders `<PaneGroupShell group={...} />` inside
   `.ws-panel` (with the shell-specific zero-padding modifier).

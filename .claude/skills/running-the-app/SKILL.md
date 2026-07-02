@@ -22,10 +22,13 @@ Add `pnpm dev:lan` to expose both on `0.0.0.0` for peer-fabric collaboration.
 `pnpm dev` already starts this; run it standalone only when iterating on the backend:
 
 ```
-uv run uvicorn backend.app:app --reload --port 8000
+uv run uvicorn backend.app:app --reload --reload-dir backend --reload-exclude "logs/*" --port 8000
 ```
 
 - Run from the repo root. Health check: `GET http://localhost:8000/api/health`.
+- **Don't drop `--reload-dir`/`--reload-exclude`.** A bare `uvicorn --reload` watches
+  the whole repo root, including `logs/backend.log` — every log write then triggers a
+  restart, which writes another log line, which triggers another restart.
 - **Windows OpenSSL gotcha (handled in code):** if `C:\msys64\mingw64\bin` (or
   Git's `mingw64\bin`) is on PATH, MinGW's applink-less `libcrypto` could be
   loaded for TLS and abort the worker — `OPENSSL_Uplink ... no OPENSSL_Applink`,

@@ -46,13 +46,33 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
   switch (name) {
     case 'list_available_panes':
       return {
-        panels: registry.panels.map((p) => ({ id: p.id, title: p.title })),
-        widgets: registry.widgets.map((w) => ({ id: w.id, title: w.title })),
+        panels: registry.panels.map((p) => ({
+          id: p.id,
+          title: p.title,
+          groupId: registry.getGroupFor(p.id)?.primary,
+        })),
+        widgets: registry.widgets.map((w) => ({
+          id: w.id,
+          title: w.title,
+          groupId: registry.getGroupFor(w.id)?.primary,
+        })),
       };
     case 'list_workspaces':
       return lc ? await lc.listWorkspaces() : { error: 'workspace not ready' };
     case 'list_open_panes':
-      return lc ? { panes: lc.listOpenPanes() } : { error: 'workspace not ready' };
+      return lc
+        ? {
+            panes: lc
+              .listOpenPanes()
+              .map((p) => ({ ...p, groupId: registry.getGroupFor(p.id)?.primary })),
+          }
+        : { error: 'workspace not ready' };
+    case 'get_pane_group': {
+      const group = registry.getGroupFor(String(args.id));
+      return group
+        ? { groupId: group.primary, label: group.label, companions: group.companions }
+        : { groupId: null };
+    }
     case 'get_pane_context': {
       const snapshot = readAgentContext(String(args.instanceId));
       return snapshot === null

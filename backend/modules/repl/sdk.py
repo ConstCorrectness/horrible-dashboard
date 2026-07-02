@@ -35,11 +35,13 @@ class _Panes:
         self._call = call
 
     def available(self) -> Any:
-        """Every view (panel + widget) that can be opened into a pane, with id and title."""
+        """Every view (panel + widget) that can be opened into a pane, with id, title, and
+        groupId (its panel group's primary view id, if it belongs to one — see `group()`)."""
         return self._call("list_available_panes", {})
 
     def open_list(self) -> Any:
-        """Active pane instances currently open in the active workspace (view id, instanceId, …)."""
+        """Active pane instances currently open in the active workspace (view id, instanceId,
+        groupId, …)."""
         return self._call("list_open_panes", {})
 
     def open(self, view_id: str) -> Any:
@@ -49,6 +51,11 @@ class _Panes:
     def close(self, instance_id: str) -> Any:
         """Close an active pane instance by its instance ID (from `open_list()`)."""
         return self._call("close_pane", {"id": instance_id})
+
+    def group(self, view_id: str) -> Any:
+        """The panel group `view_id` belongs to (primary hub + companion views toggled
+        from its companion strip), or `{"groupId": None}` if it isn't grouped."""
+        return self._call("get_pane_group", {"id": view_id})
 
 
 class _Workspaces:

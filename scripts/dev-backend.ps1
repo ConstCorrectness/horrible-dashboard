@@ -30,4 +30,6 @@ $env:Path = ($env:Path -split ';' | Where-Object { $_ -and $_ -notmatch 'mingw64
 $env:SSLKEYLOGFILE = $null
 # --reload-dir: only watch backend code. Watching the repo root means every
 # $HORRIBLE_DATA_DIR write (dashboard layout, plugin storage) restarts the server.
-uv run uvicorn backend.app:app --reload --reload-dir backend --port $Port
+# --reload-exclude: belt-and-suspenders so logs/backend.log (outside --reload-dir
+# already, but excluded explicitly too) never triggers a reload loop.
+uv run uvicorn backend.app:app --reload --reload-dir backend --reload-exclude "logs/*" --port $Port

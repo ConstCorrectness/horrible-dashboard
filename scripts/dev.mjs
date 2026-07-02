@@ -21,7 +21,20 @@ console.log(`🚀 Starting backend and frontend dev servers on ${host}...`);
 // Start the FastAPI backend.
 const backend = spawn(
   'uv',
-  ['run', 'uvicorn', 'backend.app:app', '--reload', '--reload-dir', 'backend', '--host', host, '--port', '8000'],
+  [
+    'run',
+    'uvicorn',
+    'backend.app:app',
+    '--reload',
+    '--reload-dir',
+    'backend',
+    '--reload-exclude',
+    'logs/*',
+    '--host',
+    host,
+    '--port',
+    '8000',
+  ],
   { stdio: 'inherit', shell: useShell },
 );
 

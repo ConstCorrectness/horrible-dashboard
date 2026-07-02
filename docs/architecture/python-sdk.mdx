@@ -64,14 +64,17 @@ Open, close, and inspect panes (panels and widgets) in the **active workspace**.
 
 | Method | Relayed tool | Returns |
 | --- | --- | --- |
-| `dash.panes.available()` | `list_available_panes` | `{'panels': [{'id', 'title'}], 'widgets': [{'id', 'title'}]}` — everything openable |
-| `dash.panes.open_list()` | `list_open_panes` | `{'panes': [{'id', 'instanceId', 'title', 'hasContext'}]}` — what's open now |
+| `dash.panes.available()` | `list_available_panes` | `{'panels': [{'id', 'title', 'groupId'}], 'widgets': [{'id', 'title', 'groupId'}]}` — everything openable |
+| `dash.panes.open_list()` | `list_open_panes` | `{'panes': [{'id', 'instanceId', 'title', 'hasContext', 'groupId'}]}` — what's open now |
 | `dash.panes.open(pane_id)` | `open_pane` | `{'ok': True, 'opened': pane_id}` |
 | `dash.panes.close(pane_id)` | `close_pane` | `{'closed': bool}` (`False` if no such open pane) |
+| `dash.panes.group(pane_id)` | `get_pane_group` | `{'groupId', 'label', 'companions'}`, or `{'groupId': None}` if ungrouped |
 
 - `id` is the **pane type** id (e.g. `settings.home`); `instanceId` identifies a
   **live instance** (e.g. `repl.console#1`) and is what `dash.context` takes.
 - `hasContext` is `True` when that instance exposes a readable state snapshot.
+- `groupId` is the primary view id of the [panel group](panel-groups.mdx) `id`
+  belongs to (e.g. `network.peers`), or absent/`None` if it isn't grouped.
 - `open` of an unknown id is a no-op on the UI but still returns `{'ok': True}`;
   always discover ids with `available()` first.
 

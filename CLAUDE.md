@@ -68,7 +68,7 @@ buffers, terminal + file explorer.
 ## Commands
 
 - `uv run pytest` — backend tests
-- `uv run uvicorn backend.app:app --reload --port 8000` — backend dev server
+- `uv run uvicorn backend.app:app --reload --reload-dir backend --reload-exclude "logs/*" --port 8000` — backend dev server (the `--reload-dir`/`--reload-exclude` scoping keeps `logs/backend.log` writes from triggering a reload loop)
 - `uv run ruff format .` and `uv run ruff check --fix .` — Python format/lint
 - `uv add <pkg>` / `uv add --dev <pkg>` — Python dependencies (never pip)
 - `pnpm dev` — browser layout, full stack: starts the backend **and** the Vite UI

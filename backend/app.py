@@ -4,7 +4,9 @@ import asyncio
 import logging
 from pathlib import Path
 
-_LOG_PATH = Path(__file__).resolve().parent.parent / "backend.log"
+_LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
+_LOG_DIR.mkdir(exist_ok=True)
+_LOG_PATH = _LOG_DIR / "backend.log"
 
 logging.basicConfig(
     level=logging.INFO,

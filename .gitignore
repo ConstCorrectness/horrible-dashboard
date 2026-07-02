@@ -158,6 +158,9 @@ apps/desktop/src-tauri/gen/
 *.swp
 *.swo
 
+# Backend runtime logs (backend/app.py writes logs/backend.log)
+logs/
+
 # OS specific
 .DS_Store
 Thumbs.db

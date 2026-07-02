@@ -73,10 +73,14 @@ pnpm build:desktop     # native desktop installers (Tauri)
 `pnpm dev` already runs the backend; start it standalone only when iterating on Python:
 
 ```bash
-uv run uvicorn backend.app:app --reload --port 8000   # dev server
+uv run uvicorn backend.app:app --reload --reload-dir backend --reload-exclude "logs/*" --port 8000   # dev server
 uv run pytest                                          # backend tests
 uv run ruff format . && uv run ruff check --fix .      # format + lint Python
 ```
+
+`--reload-dir backend` scopes the watcher to Python source only; `--reload-exclude`
+additionally excludes `logs/` (where `backend.log` lives) so writing a log line never
+triggers a reload loop.
 
 ## Checks
 
@@ -114,6 +118,11 @@ Every script in the repo-root `package.json`:
 - **Port :8000 stays bound after Ctrl-C (Windows).** `pnpm dev` tree-kills the backend
   on exit, but a manually started `uv run uvicorn --reload` can orphan a worker — kill
   the whole process tree if a stale one holds the port.
+- **Backend stuck in a restart loop.** Almost always the reload watcher seeing its own
+  log writes. Use the standard commands above (`--reload-dir backend --reload-exclude
+  "logs/*"`, already set in `scripts/dev.mjs`/`dev-backend.ps1`) rather than a bare
+  `uvicorn --reload` with no scoping — that watches the whole repo root, including
+  `logs/backend.log`.
 - **Desktop first build seems stuck.** It's compiling Rust; give it a few minutes.
 
 For how to verify a change in the running app, see the `running-the-app` workflow.
