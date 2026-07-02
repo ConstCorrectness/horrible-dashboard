@@ -1,9 +1,14 @@
-import pytest
+import asyncio
+import os
 import time
+from typing import Any
+
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.app import app
 from backend.modules.visualizer import visualizer_manager
+from backend.modules.visualizer.runner import PygameProcess
 
 
 @pytest.fixture
@@ -109,3 +114,84 @@ x = 1 / 0
         assert error_received, (
             "Failed to receive a visualizer error from faulty Pygame subprocess"
         )
+
+
+class FakeConn:
+    def __init__(self) -> None:
+        self.sent: list[dict[str, Any]] = []
+
+    async def send_json(self, data: dict[str, Any]) -> None:
+        self.sent.append(data)
+
+
+def _events(conn: FakeConn, event: str) -> list[dict[str, Any]]:
+    return [
+        m["data"]
+        for m in conn.sent
+        if m.get("channel") == "visualizer" and m.get("event") == event
+    ]
+
+
+def test_pygame_process_streams_frames_on_selector_event_loop() -> None:
+    """Regression: uvicorn --reload on Windows runs the app on the
+    SelectorEventLoop, where asyncio's subprocess API raises NotImplementedError.
+    The thread-based runner must stream frames on that loop too."""
+    loop = asyncio.SelectorEventLoop()
+    conn = FakeConn()
+    proc = PygameProcess(
+        conn,  # type: ignore[arg-type] — duck-typed WsConnection stand-in
+        """
+import pygame
+import time
+pygame.init()
+screen = pygame.display.set_mode((50, 50))
+screen.fill((255, 0, 0))
+pygame.display.flip()
+time.sleep(1.0)
+""",
+    )
+
+    async def go() -> None:
+        await proc.start()
+        deadline = time.monotonic() + 10.0
+        # Keep the loop running so run_coroutine_threadsafe relays can land.
+        while time.monotonic() < deadline:
+            if _events(conn, "frame") or _events(conn, "error"):
+                return
+            await asyncio.sleep(0.05)
+
+    try:
+        loop.run_until_complete(go())
+    finally:
+        proc.terminate()
+        loop.close()
+
+    assert not _events(conn, "error"), (
+        f"unexpected visualizer error: {_events(conn, 'error')}"
+    )
+    frames = _events(conn, "frame")
+    assert frames, "no frame relayed from the Pygame subprocess"
+    assert frames[0]["frame"].startswith("data:image/jpeg;base64,")
+
+
+def test_pygame_process_terminate_kills_and_cleans_up() -> None:
+    loop = asyncio.SelectorEventLoop()
+    conn = FakeConn()
+    proc = PygameProcess(
+        conn,  # type: ignore[arg-type] — duck-typed WsConnection stand-in
+        "import time\ntime.sleep(30)",
+    )
+
+    try:
+        loop.run_until_complete(proc.start())
+        assert proc.proc is not None
+        assert proc.proc.poll() is None, "subprocess should be running"
+        temp_path = proc.temp_file_path
+        assert temp_path is not None and os.path.exists(temp_path)
+
+        proc.terminate()
+        assert proc.closing
+        proc.proc.wait(timeout=5)
+        assert proc.temp_file_path is None
+    finally:
+        loop.close()

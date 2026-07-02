@@ -44,7 +44,7 @@ Python simulations run inside an isolated subprocess on the backend, streaming f
 - **Headless Mode**: Sets `os.environ["SDL_VIDEODRIVER"] = "dummy"` before importing `pygame` to allow running on headless servers.
 - **Display Interception**: Monkeypatches `pygame.display.flip()` and `pygame.display.update()` to capture the current frame buffer.
 - **Frame Streaming**: Encodes the captured frame into JPEG, formats it as a Base64 string, and prints `FRAME:<base64_data>` to `stdout`.
-- **WebSocket Relay**: The backend reads `stdout` in an async task and pipes each frame back to the frontend over a multiplexed WebSocket.
+- **WebSocket Relay**: The backend spawns the subprocess with blocking `subprocess.Popen` and pumps `stdout`/`stderr` on daemon reader threads, relaying each frame onto the event loop with `asyncio.run_coroutine_threadsafe` and out over the multiplexed WebSocket. Threads instead of the asyncio subprocess API on purpose: on Windows that API raises `NotImplementedError` under the `SelectorEventLoop` that `uvicorn --reload` uses, so the thread-based runner is loop-agnostic and streams under the documented dev command — the same reasoning as the LSP transport (`backend/modules/lsp/manager.py`) and terminal PTY.
 
 ```mermaid
 flowchart TD
