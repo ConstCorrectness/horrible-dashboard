@@ -151,6 +151,11 @@ class KernelSession:
         self._set_status("restarting")
         # Drop anything still queued; the kernel state it assumed is gone.
         self._drain_queue()
+        if self.kc is not None:
+            try:
+                self.kc.stop_channels()
+            except Exception:
+                pass
         self.km.restart_kernel(now=True)
         self.kc = self.km.client()
         self.kc.start_channels()

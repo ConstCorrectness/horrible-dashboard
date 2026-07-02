@@ -48,8 +48,14 @@ def python_path(project: ProjectModel) -> Path:
     return venv_dir(project) / "bin" / "python"
 
 
-def venv_ready(project: ProjectModel) -> bool:
+def venv_exists(project: ProjectModel) -> bool:
+    """True if the python executable physically exists in the project venv on disk."""
     return python_path(project).is_file()
+
+
+def venv_ready(project: ProjectModel) -> bool:
+    """True if the project venv bootstrap has completed and the python executable exists."""
+    return project.venv_ready and venv_exists(project)
 
 
 def _uv() -> str:
@@ -85,7 +91,7 @@ def _run(cmd: list[str], cwd: str, progress: ProgressLine) -> None:
 def create(project: ProjectModel, progress: ProgressLine) -> None:
     """`uv venv .venv --python <ver>` in the project root (idempotent)."""
     with _lock_for(project.id):
-        if venv_ready(project):
+        if venv_exists(project):
             progress(".venv already exists")
             return
         _run(
@@ -100,7 +106,7 @@ def install(project: ProjectModel, packages: list[str], progress: ProgressLine) 
     if not packages:
         return
     with _lock_for(project.id):
-        if not venv_ready(project):
+        if not venv_exists(project):
             raise ProviderError("project venv missing — create it first")
         _run(
             [_uv(), "pip", "install", "--python", str(python_path(project)), *packages],
