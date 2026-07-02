@@ -1,0 +1,9 @@
+node_modules
+apps
+packages
+website
+.git
+.data
+logs
+*.log
+.claude/worktrees

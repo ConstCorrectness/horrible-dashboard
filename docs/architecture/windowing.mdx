@@ -47,6 +47,18 @@ A `PanelDecl`/`WidgetDecl` in the registry represents a **View type** (e.g. `edi
 
 `defaultPlacement` (`left|center|right|bottom`) on either view decl hints where a freshly opened pane docks; once the user rearranges, the persisted layout wins.
 
+**Same-direction opens tab, they don't keep splitting.** The first pane opened
+for a given direction splits a new group off the grid; every subsequent pane
+with that same `defaultPlacement` (or explicit split direction) tabs onto that
+existing group instead of splitting again — VS Code–style, so opening several
+`left`-placed panels stacks them as tabs in one sidebar group rather than
+tiling new columns. `Workspace.tsx`'s `findGroupForDirection` resolves the
+target group per dockview instance: a per-open cache first (recorded whenever
+a pane is placed with an explicit direction, including preset-seeded panes),
+falling back to scanning existing groups for a pane whose declared
+`defaultPlacement` matches. Explicit user/agent splits (the split grip,
+`splitPane`) are unaffected — this only governs automatic placement on open.
+
 **Changing a pane's view:** each tab carries a **▾ switcher** (a custom
 `defaultTabComponent`, `packages/ui/src/PaneTab.tsx`, wrapping dockview's
 `DockviewDefaultTab`) listing every registry view. Picking one calls

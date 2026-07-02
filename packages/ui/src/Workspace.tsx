@@ -143,6 +143,47 @@ function placementDirection(placement?: string): Direction | undefined {
   }
 }
 
+/** Which dockview group last received a pane opened in a given direction, per
+ * dockview instance — so the next same-direction open tabs onto it (VS Code–style)
+ * instead of splitting the grid again. Without this, every direction-placed open
+ * splits fresh off the root, since dockview's `position.direction` with no
+ * reference always splits relative to the whole grid. */
+const directionGroups = new WeakMap<DockviewApi, Partial<Record<Direction, string>>>();
+
+function rememberDirectionGroup(api: DockviewApi, direction: Direction, groupId: string): void {
+  let cache = directionGroups.get(api);
+  if (!cache) {
+    cache = {};
+    directionGroups.set(api, cache);
+  }
+  cache[direction] = groupId;
+}
+
+/** A group's placement, inferred from the declared `defaultPlacement` of the
+ * panes already sitting in it — the fallback for groups seeded without an
+ * explicit direction (e.g. a preset's root pane), which the cache alone misses. */
+function inferredGroupDirection(group: {
+  panels: { params?: unknown; id: string }[];
+}): Direction | undefined {
+  for (const gp of group.panels) {
+    const panelId = (gp.params as { panelId?: string } | undefined)?.panelId ?? gp.id;
+    const panel = registry.panels.find((p) => p.id === panelId);
+    const widget = panel ? undefined : registry.widgets.find((w) => w.id === panelId);
+    const direction = placementDirection(panel?.defaultPlacement ?? widget?.defaultPlacement);
+    if (direction) return direction;
+  }
+  return undefined;
+}
+
+function findGroupForDirection(api: DockviewApi, direction: Direction): string | undefined {
+  const cached = directionGroups.get(api)?.[direction];
+  if (cached && api.getGroup(cached)) return cached;
+  for (const group of api.groups) {
+    if (inferredGroupDirection(group) === direction) return group.id;
+  }
+  return undefined;
+}
+
 /** Add a pane for a panel/widget id at an optional position. */
 function addPane(
   api: DockviewApi,
@@ -151,13 +192,14 @@ function addPane(
 ): void {
   const decl = resolveContent(id);
   if (!decl) return;
-  api.addPanel({
+  const added = api.addPanel({
     id,
     component: 'panel',
     title: decl.title,
     params: { panelId: id },
     ...(position ? { position } : {}),
   });
+  if (position?.direction) rememberDirectionGroup(api, position.direction, added.group.id);
 }
 
 /** Open a registry pane (panel or widget) — focuses an existing singleton, or an
@@ -186,13 +228,21 @@ function openPane(
     }
   }
   const direction = placementDirection(panel?.defaultPlacement ?? widget?.defaultPlacement);
-  api.addPanel({
+  const referenceGroup = direction ? findGroupForDirection(api, direction) : undefined;
+  const added = api.addPanel({
     id: instanceId,
     component: 'panel',
     title: decl.title,
     params: { panelId: id, ...(opts?.params ?? {}) },
-    ...(opts?.floating ? { floating: true } : direction ? { position: { direction } } : {}),
+    ...(opts?.floating
+      ? { floating: true }
+      : referenceGroup
+        ? { position: { referenceGroup } }
+        : direction
+          ? { position: { direction } }
+          : {}),
   });
+  if (direction && !opts?.floating) rememberDirectionGroup(api, direction, added.group.id);
 }
 
 /** Lay out a workflow layout from its preset (replacing the current contents).

@@ -282,6 +282,42 @@ body {
   flex: 1;
 }
 
+.pane-group-companion-tabs {
+  display: flex;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.pane-group-companion-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.pane-group-companion-tab:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.pane-group-companion-tab.active {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
 .pane-group-companion-btn {
   padding: 1px 5px;
   background: transparent;

@@ -13,6 +13,18 @@
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@horrible/docs", "start", "--no-open"],
       "port": 3000
+    },
+    {
+      "name": "lobby",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": [
+        "run",
+        "uvicorn",
+        "backend.modules.network.lobby_server:app",
+        "--port",
+        "9000"
+      ],
+      "port": 9000
     }
   ]
 }

@@ -15,23 +15,28 @@ The shell has two zones:
 - A **toggle strip** across the top: one button per companion. Clicking a button
   shows or hides that companion (independent toggles, like VS Code's sidebar
   toggles). All companions are **hidden by default**.
-- A **content row** below: the primary always fills the left area; each companion
-  that is toggled on appears as a **right-side split** inside the same shell.
+- A **content row** below: the primary always fills the left area; companions dock
+  at one of three positions (right/bottom/left). **One dock per position** —
+  opening a second companion at a position it already shares tabs onto that same
+  dock instead of splitting the shell again, so N open companions at one position
+  never costs more than one split.
 
 ```
 ┌───────────────────────────────────────────────────────────────┐
 │ [Peer Chat ✉]  [Peer Monitor ◈]  [Lobby ⊞]  [Agent Relay ⇌]  │ ← toggle strip
 ├─────────────────────────────────┬─────────────────────────────┤
-│                                 │  PEER CHAT  → ↓ ←      ✕   │
+│                                 │ PEER CHAT  LOBBY  → ↓ ←  ✕ │ ← both open at "right", one dock
 │   Primary (Peers)               ├─────────────────────────────┤
-│   always visible                │  chat content here…         │
+│   always visible                │  active tab's content here… │
 │                                 │                             │
 └─────────────────────────────────┴─────────────────────────────┘
 ```
 
-Each companion has a **resize handle** (drag the 4 px border between companion
-and primary to resize) and a **position cycle button** (`→ ↓ ←`) that rotates
-the companion through right → bottom → left → right docking.
+Each dock has a **resize handle** (drag the 4 px border between the dock and
+primary to resize — sized to the active tab) and a **position cycle button**
+(`→ ↓ ←`) that moves the active companion through right → bottom → left → right
+docking; moving it out of a multi-tab dock leaves the others tabbed at the old
+position and either joins or starts a dock at the new one.
 
 The entire shell is **one dockview pane**: it can be split, floated, moved, or
 maximized as a single unit in the workspace. Companions are not independent panes.
@@ -93,12 +98,20 @@ The `icon` field appears in the toggle button alongside the label.
   `.ws-panel` (with the shell-specific zero-padding modifier).
 - `PaneGroupShell` (`packages/ui/src/PaneGroupShell.tsx`) holds local
   `useState<Record<string, CompanionViewState>>` tracking which companions are
-  open and each one's current position (`'right' | 'bottom' | 'left'`) and pixel
-  size. Toggling adds/removes an entry; open companions render in a resizable split
-  at their chosen position alongside the always-visible primary. The position
-  cycles right → bottom → left → right via a header button; the resize handle
-  is a 4 px border that fires `mousemove` on `window` to update size without
-  dockview intercepting the drag.
+  open and each one's current position (`'right' | 'bottom' | 'left'`); a
+  separate `activeByPosition: Partial<Record<DockPosition, string>>` tracks
+  which open companion is the visible tab within each position's shared dock;
+  and `sizeByPosition: Record<DockPosition, number>` owns the pixel size **per
+  dock**, not per companion — so switching the active tab within a dock keeps
+  its width/height instead of resetting to whichever tab's own size. Toggling
+  adds/removes an `openStates` entry and updates `activeByPosition` (closing
+  the active tab falls back to another companion still open at that position,
+  if any). The position-cycle button moves only the active companion to the
+  next position, reassigning `activeByPosition` for both the old and new
+  position (the dock's `sizeByPosition` entry is independent of which
+  companion is docked there); the resize handle is a 4 px border that fires
+  `mousemove` on `window` to update `sizeByPosition` without dockview
+  intercepting the drag.
 - Companion panels opened **standalone** via a direct command still render their
   raw component — the shell only activates when the primary is opened.
 

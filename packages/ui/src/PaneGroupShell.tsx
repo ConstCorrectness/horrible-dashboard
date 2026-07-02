@@ -19,11 +19,15 @@ type DockPosition = 'right' | 'bottom' | 'left';
 
 interface CompanionViewState {
   position: DockPosition;
-  size: number;
 }
 
 const DEFAULT_SIDE_SIZE = 300;
 const DEFAULT_BOTTOM_SIZE = 220;
+const DEFAULT_SIZE: Record<DockPosition, number> = {
+  right: DEFAULT_SIDE_SIZE,
+  left: DEFAULT_SIDE_SIZE,
+  bottom: DEFAULT_BOTTOM_SIZE,
+};
 const MIN_SIZE = 120;
 const MAX_SIDE_SIZE = 700;
 const MAX_BOTTOM_SIZE = 480;
@@ -49,37 +53,67 @@ function resolveComponent(id: string) {
 
 export function PaneGroupShell({ group }: Props) {
   const [openStates, setOpenStates] = useState<Record<string, CompanionViewState>>({});
+  // Which companion is the visible tab within its position's shared dock (one
+  // dock per position — opening a second companion at the same position tabs
+  // onto it rather than carving out another split).
+  const [activeByPosition, setActiveByPosition] = useState<Partial<Record<DockPosition, string>>>(
+    {},
+  );
+  // Size belongs to the dock (position), not the tab — so switching the active
+  // companion within a dock keeps the width/height the user set.
+  const [sizeByPosition, setSizeByPosition] = useState<Record<DockPosition, number>>(DEFAULT_SIZE);
   // Ref so resize drag closures always read current state without re-subscribing.
   const openStatesRef = useRef(openStates);
   openStatesRef.current = openStates;
 
   const toggle = (id: string) => {
+    const wasOpen = id in openStatesRef.current;
     setOpenStates((prev) => {
       if (id in prev) {
         const next = { ...prev };
         delete next[id];
         return next;
       }
-      return { ...prev, [id]: { position: 'right', size: DEFAULT_SIDE_SIZE } };
+      return { ...prev, [id]: { position: 'right' } };
+    });
+    setActiveByPosition((prev) => {
+      if (wasOpen) {
+        const pos = openStatesRef.current[id].position;
+        if (prev[pos] !== id) return prev;
+        const remaining = Object.entries(openStatesRef.current)
+          .filter(([cid, st]) => cid !== id && st.position === pos)
+          .map(([cid]) => cid);
+        return { ...prev, [pos]: remaining[0] };
+      }
+      return { ...prev, right: id };
     });
   };
 
   const cyclePosition = (id: string) => {
-    setOpenStates((prev) => {
-      if (!(id in prev)) return prev;
-      const current = prev[id];
-      const position = NEXT_POSITION[current.position];
-      const size = position === 'bottom' ? DEFAULT_BOTTOM_SIZE : DEFAULT_SIDE_SIZE;
-      return { ...prev, [id]: { position, size } };
+    const current = openStatesRef.current[id];
+    if (!current) return;
+    const oldPos = current.position;
+    const newPos = NEXT_POSITION[oldPos];
+    setOpenStates((prev) => (id in prev ? { ...prev, [id]: { position: newPos } } : prev));
+    setActiveByPosition((prev) => {
+      const next = { ...prev };
+      if (next[oldPos] === id) {
+        const remaining = Object.entries(openStatesRef.current)
+          .filter(([cid, st]) => cid !== id && st.position === oldPos)
+          .map(([cid]) => cid);
+        next[oldPos] = remaining[0];
+      }
+      next[newPos] = id;
+      return next;
     });
   };
 
-  const startResize = (e: React.MouseEvent, id: string, position: DockPosition) => {
+  const startResize = (e: React.MouseEvent, position: DockPosition) => {
     e.preventDefault();
     e.stopPropagation();
     const startX = e.clientX;
     const startY = e.clientY;
-    const startSize = openStatesRef.current[id]?.size ?? DEFAULT_SIDE_SIZE;
+    const startSize = sizeByPosition[position];
 
     const onMove = (me: MouseEvent) => {
       let newSize: number;
@@ -95,7 +129,7 @@ export function PaneGroupShell({ group }: Props) {
       }
       const max = position === 'bottom' ? MAX_BOTTOM_SIZE : MAX_SIDE_SIZE;
       newSize = Math.max(MIN_SIZE, Math.min(max, newSize));
-      setOpenStates((prev) => ({ ...prev, [id]: { ...prev[id], size: newSize } }));
+      setSizeByPosition((prev) => ({ ...prev, [position]: newSize }));
     };
 
     const onUp = () => {
@@ -117,13 +151,17 @@ export function PaneGroupShell({ group }: Props) {
   const right = openEntries.filter((e) => e.state.position === 'right');
   const bottom = openEntries.filter((e) => e.state.position === 'bottom');
 
-  const renderCompanion = (entry: {
-    companion: PanelGroupCompanion;
-    state: CompanionViewState;
-  }) => {
-    const { companion: c, state } = entry;
-    const Comp = resolveComponent(c.id);
-    const { position, size } = state;
+  // One dock per position: every companion opened at that position tabs onto
+  // this same box (VS Code–style) instead of each carving out its own split.
+  const renderPositionGroup = (
+    position: DockPosition,
+    entries: { companion: PanelGroupCompanion; state: CompanionViewState }[],
+  ) => {
+    if (entries.length === 0) return null;
+    const activeId = activeByPosition[position] ?? entries[0].companion.id;
+    const active = entries.find((e) => e.companion.id === activeId) ?? entries[0];
+    const Comp = resolveComponent(active.companion.id);
+    const size = sizeByPosition[position];
     const isVertical = position === 'left' || position === 'right';
     const style = isVertical ? { width: size } : { height: size };
     const nextPos = NEXT_POSITION[position];
@@ -134,19 +172,37 @@ export function PaneGroupShell({ group }: Props) {
     const content = (
       <div className="pane-group-companion-content">
         <div className="pane-group-companion-header">
-          {c.icon ? <span>{c.icon}</span> : null}
-          <span className="pane-group-companion-title">{c.label}</span>
+          {entries.length > 1 ? (
+            <div className="pane-group-companion-tabs">
+              {entries.map(({ companion: c }) => (
+                <button
+                  key={c.id}
+                  className={`pane-group-companion-tab${c.id === activeId ? ' active' : ''}`}
+                  title={c.label}
+                  onClick={() => setActiveByPosition((prev) => ({ ...prev, [position]: c.id }))}
+                >
+                  {c.icon ? <span>{c.icon}</span> : null}
+                  <span>{c.label}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <>
+              {active.companion.icon ? <span>{active.companion.icon}</span> : null}
+              <span className="pane-group-companion-title">{active.companion.label}</span>
+            </>
+          )}
           <button
             className="pane-group-companion-btn"
             title={`Move to ${nextPos}`}
-            onClick={() => cyclePosition(c.id)}
+            onClick={() => cyclePosition(activeId)}
           >
             {DOCK_ICON[nextPos]}
           </button>
           <button
             className="pane-group-companion-btn"
-            title={`Close ${c.label}`}
-            onClick={() => toggle(c.id)}
+            title={`Close ${active.companion.label}`}
+            onClick={() => toggle(activeId)}
           >
             ✕
           </button>
@@ -158,13 +214,13 @@ export function PaneGroupShell({ group }: Props) {
     const handle = (
       <div
         className={`pane-group-resize-handle pane-group-resize-handle--${isVertical ? 'v' : 'h'}`}
-        onMouseDown={(e) => startResize(e, c.id, position)}
+        onMouseDown={(e) => startResize(e, position)}
       />
     );
 
     return (
       <div
-        key={c.id}
+        key={position}
         className={`pane-group-companion pane-group-companion--${position}`}
         style={style}
       >
@@ -200,12 +256,12 @@ export function PaneGroupShell({ group }: Props) {
       {/* Content: middle row (left | primary | right) + optional bottom row */}
       <div className="pane-group-body">
         <div className="pane-group-middle-row">
-          {left.map(renderCompanion)}
+          {renderPositionGroup('left', left)}
           <div className="pane-group-primary">{PrimaryComp && <PrimaryComp />}</div>
-          {right.map(renderCompanion)}
+          {renderPositionGroup('right', right)}
         </div>
         {bottom.length > 0 && (
-          <div className="pane-group-bottom-row">{bottom.map(renderCompanion)}</div>
+          <div className="pane-group-bottom-row">{renderPositionGroup('bottom', bottom)}</div>
         )}
       </div>
     </div>
