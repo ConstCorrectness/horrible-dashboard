@@ -345,7 +345,10 @@ def test_group_catalog_groups_by_prefix() -> None:
         ]
     )
     catalog = {g["name"]: g["tools"] for g in orchestrator._group_catalog(conn)}
-    assert catalog == {"files": 2, "editor": 1}
+    # Browser-pushed tools group by their name prefix. (Backend-registered grouped
+    # tools, e.g. the training module's, may also appear in the catalog — assert on
+    # the groups this test set up rather than the whole catalog.)
+    assert catalog["files"] == 2 and catalog["editor"] == 1
 
 
 def test_select_tools_caps_at_budget() -> None:
@@ -499,9 +502,17 @@ def test_tools_for_dedupes_by_name_static_wins() -> None:
 def test_tools_for_skips_nameless_entries() -> None:
     conn = WsConnection(websocket=None)
     conn.agent_tools = [{"description": "no name", "kind": "agentTool"}, {"name": ""}]
-    # Nameless entries never become tools or groups.
-    assert orchestrator._all_dynamic_tools(conn) == []
-    assert orchestrator._group_catalog(conn) == []
+    # Nameless browser entries never become tools or groups. (Backend-registered
+    # grouped tools may still populate the dynamic pool; assert the nameless
+    # *browser* entries contributed nothing, not that the pool is empty.)
+    dynamic_names = {
+        t["function"]["name"] for t in orchestrator._all_dynamic_tools(conn)
+    }
+    assert "" not in dynamic_names
+    assert all(name for name in dynamic_names)  # no empty/None names
+    # The conn's own (nameless) entries added no groups beyond backend ones.
+    assert not any(g["name"] == "" for g in orchestrator._group_catalog(conn))
+    # With nothing keyword-preloaded, the turn still starts from exactly core.
     core_names = {t["function"]["name"] for t in orchestrator._core_tools()}
     assert {t["function"]["name"] for t in orchestrator._tools_for(conn)} == core_names
 

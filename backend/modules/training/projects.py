@@ -1,0 +1,120 @@
+"""Training-project store: one directory per project under the projects root.
+
+The directory *is* the record — `project.json` inside it holds the ProjectModel
+dump, so listing projects is a scan for that file (mirrors the database module's
+file-backed connection store; no DB involved). Layout per project:
+
+    main.ipynb        # scaffolded notebook (nbformat v4)
+    project.json      # ProjectModel dump
+    data/             # provider-fetched datasets
+    media/            # manim renders, saved frames
+    .venv/            # uv-managed project venv
+"""
+
+from __future__ import annotations
+
+import datetime as _dt
+import json
+import re
+import shutil
+from pathlib import Path
+
+from backend.modules.settings.routes import get_value
+from backend.modules.training.models import EnvironmentRefModel, ProjectModel
+
+DEFAULT_NOTEBOOK = "main.ipynb"
+
+
+def projects_root() -> Path:
+    raw = str(get_value("training.projectsRoot", "~/horrible/training"))
+    return Path(raw).expanduser()
+
+
+def slugify(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    return slug or "project"
+
+
+def _unique_slug(name: str) -> str:
+    base = slugify(name)
+    root = projects_root()
+    slug = base
+    n = 2
+    while (root / slug).exists():
+        slug = f"{base}-{n}"
+        n += 1
+    return slug
+
+
+def _project_file(root: Path) -> Path:
+    return root / "project.json"
+
+
+def _write(project: ProjectModel) -> None:
+    _project_file(Path(project.root)).write_text(
+        project.model_dump_json(indent=2), encoding="utf-8"
+    )
+
+
+def _read(directory: Path) -> ProjectModel | None:
+    path = _project_file(directory)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError:
+        return None
+    try:
+        project = ProjectModel.model_validate(data)
+    except ValueError:
+        return None
+    # The tree may have been moved/copied; the directory on disk wins.
+    project.root = str(directory)
+    return project
+
+
+def list_projects() -> list[ProjectModel]:
+    root = projects_root()
+    if not root.is_dir():
+        return []
+    found = [p for d in sorted(root.iterdir()) if d.is_dir() and (p := _read(d))]
+    return found
+
+
+def get_project(project_id: str) -> ProjectModel | None:
+    root = projects_root()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", project_id):
+        return None  # ids are slugs; anything else could escape the root
+    return _read(root / project_id)
+
+
+def create_project(
+    name: str, refs: list[EnvironmentRefModel], python: str
+) -> ProjectModel:
+    slug = _unique_slug(name)
+    directory = projects_root() / slug
+    (directory / "data").mkdir(parents=True, exist_ok=True)
+    (directory / "media").mkdir(parents=True, exist_ok=True)
+    project = ProjectModel(
+        id=slug,
+        name=name,
+        root=str(directory),
+        refs=refs,
+        python=python,
+        created_at=_dt.datetime.now(_dt.UTC).isoformat(),
+    )
+    _write(project)
+    return project
+
+
+def update_project(project: ProjectModel) -> ProjectModel:
+    _write(project)
+    return project
+
+
+def delete_project(project_id: str) -> bool:
+    project = get_project(project_id)
+    if project is None:
+        return False
+    shutil.rmtree(project.root, ignore_errors=True)
+    return True

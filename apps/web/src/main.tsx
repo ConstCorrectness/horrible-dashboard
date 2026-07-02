@@ -30,6 +30,7 @@ import {
   stubModule,
   terminalModule,
   databaseModule,
+  trainingModule,
   visualizerModule,
 } from '@horrible/core';
 import { AppShell } from '@horrible/ui';
@@ -60,6 +61,7 @@ async function boot(): Promise<void> {
   registry.register(terminalModule);
   registry.register(replModule);
   registry.register(databaseModule);
+  registry.register(trainingModule);
   registry.register(visualizerModule);
   registry.register(flowModule);
   registry.register(networkModule);

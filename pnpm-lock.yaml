@@ -121,6 +121,9 @@ importers:
       '@codemirror/view':
         specifier: ^6.43.1
         version: 6.43.1
+      '@dagrejs/dagre':
+        specifier: ^3.0.0
+        version: 3.0.0
       '@horribledashboard/sdk':
         specifier: workspace:*
         version: link:../sdk
@@ -148,6 +151,9 @@ importers:
       three:
         specifier: ^0.184.0
         version: 0.184.0
+      uplot:
+        specifier: ^1.6.32
+        version: 1.6.32
     devDependencies:
       '@types/react':
         specifier: ^19.0.0
@@ -1287,6 +1293,12 @@ packages:
     engines: {node: '>=18'}
     peerDependencies:
       postcss: ^8.4
+
+  '@dagrejs/dagre@3.0.0':
+    resolution: {integrity: sha512-ZzhnTy1rfuoew9Ez3EIw4L2znPGnYYhfn8vc9c4oB8iw6QAsszbiU0vRhlxWPFnmmNSFAkrYeF1PhM5m4lAN0Q==}
+
+  '@dagrejs/graphlib@4.0.1':
+    resolution: {integrity: sha512-IvcV6FduIIAmLwnH+yun+QtV36SC7mERqa86aClNqmMN09WhmPPYU8ckHrZBozErf+UvHPWOTJYaGYiIcs0DgA==}
 
   '@dimforge/rapier3d-compat@0.12.0':
     resolution: {integrity: sha512-uekIGetywIgopfD97oDL5PfeezkFpNhwlzlaEYNOA0N6ghdsOvh/HYjSMek5Q2O1PYvRSDFcqFVJl4r4ZBwOow==}
@@ -7045,6 +7057,9 @@ packages:
     resolution: {integrity: sha512-EDxhTEVPZZRLWYcJ4ZXjGFN0oP7qYvbXWzEgRm/Yql4dHX5wDbvh89YHP6PK1lzZJYrMtXUuZZz8XGK+U6U1og==}
     engines: {node: '>=14.16'}
 
+  uplot@1.6.32:
+    resolution: {integrity: sha512-KIMVnG68zvu5XXUbC4LQEPnhwOxBuLyW1AHtpm6IKTXImkbLgkMy+jabjLgSLMasNuGGzQm/ep3tOkyTxpiQIw==}
+
   uri-js@4.4.1:
     resolution: {integrity: sha512-7rKUyy33Q1yc98pQ1DAmLtwX109F7TIfWlW1Ydo8Wl1ii1SeHieeh0HHfPeL2fMXK6z0s8ecKs9frCuLJvndBg==}
 
@@ -8734,6 +8749,12 @@ snapshots:
   '@csstools/utilities@2.0.0(postcss@8.5.15)':
     dependencies:
       postcss: 8.5.15
+
+  '@dagrejs/dagre@3.0.0':
+    dependencies:
+      '@dagrejs/graphlib': 4.0.1
+
+  '@dagrejs/graphlib@4.0.1': {}
 
   '@dimforge/rapier3d-compat@0.12.0': {}
 
@@ -16125,6 +16146,8 @@ snapshots:
       semver: 7.8.4
       semver-diff: 4.0.0
       xdg-basedir: 5.1.0
+
+  uplot@1.6.32: {}
 
   uri-js@4.4.1:
     dependencies:

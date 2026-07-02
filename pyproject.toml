@@ -8,7 +8,13 @@ dependencies = [
     "cryptography>=49.0.0",
     "duckdb>=1.5.4",
     "fastapi>=0.136.3",
+    "google-api-python-client>=2",
+    "google-auth-oauthlib>=1.2",
     "httpx>=0.28.1",
+    "huggingface-hub>=0.30",
+    "jupyter-client>=8.6",
+    "kaggle>=1.6",
+    "nbformat>=5.10",
     "psycopg[binary]>=3.3.4",
     "ptyprocess>=0.7.0 ; sys_platform != 'win32'",
     "pydantic>=2.13.4",
@@ -31,6 +37,7 @@ testpaths = ["backend/tests"]
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",
+    "ipykernel>=6",
     "pygame>=2.6.1",
     "pytest>=9.0.3",
     "ruff>=0.15.16",

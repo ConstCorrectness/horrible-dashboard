@@ -86,6 +86,7 @@ export { layoutsModule } from './modules/layouts';
 export { scratchModule } from './modules/scratch';
 export { stubModule } from './modules/stub';
 export { databaseModule } from './modules/database';
+export { trainingModule } from './modules/training';
 export { visualizerModule } from './modules/visualizer';
 export { flowModule } from './modules/flow';
 export {

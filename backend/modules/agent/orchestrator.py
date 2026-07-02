@@ -203,8 +203,19 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
     ),
     _tool(
         "open_pane",
-        "Open a view (panel or widget) in a pane in the active workspace.",
-        {"id": {"type": "string", "description": "View ID from list_available_panes"}},
+        "Open a view (panel or widget) in a pane in the active workspace. Some panes "
+        "take params — e.g. the training notebook needs "
+        "`params: {projectId, notebook}` to know which project to open.",
+        {
+            "id": {
+                "type": "string",
+                "description": "View ID from list_available_panes",
+            },
+            "params": {
+                "type": "object",
+                "description": "Optional pane parameters (e.g. {projectId, notebook}).",
+            },
+        },
         ["id"],
     ),
     _tool(
@@ -401,8 +412,10 @@ META_TOOLS: list[dict[str, Any]] = [
 
 META_TOOL_NAMES = {t["function"]["name"] for t in META_TOOLS}
 
-# Cap kept only as a safety backstop now that groups load on demand.
-TOOL_BUDGET = 38
+# Cap kept only as a safety backstop now that groups load on demand. The flagship
+# training flow legitimately loads both the `training` and `notebook` groups at once
+# (core 18 + training 12 + notebook 9 = 39), so the backstop sits above that.
+TOOL_BUDGET = 44
 
 # Human-readable blurbs for known groups; unknown groups get a generic fallback.
 _GROUP_DESCRIPTIONS: dict[str, str] = {
@@ -414,6 +427,12 @@ _GROUP_DESCRIPTIONS: dict[str, str] = {
     "network": "Distributed peer fabric: peer monitor, peer chat, agent relay.",
     "clubhouse": "Connected Clubhouse account and its live rooms.",
     "observability": "Inspect live client / inbound / outbound I/O data flow.",
+    "training": (
+        "Build & train neural networks: search/create Kaggle/HF/Gym projects, "
+        "per-project venvs, install deps, start/stop training runs, push to "
+        "Kaggle kernels or Colab, render manim explainers."
+    ),
+    "notebook": "Read, edit, and execute cells of the open training notebook.",
 }
 
 # Keywords that auto-preload a group for a turn (so common asks stay one-shot). A
@@ -479,6 +498,24 @@ _GROUP_KEYWORDS: dict[str, tuple[str, ...]] = {
     ),
     "network": ("peer", "node", "collab", "relay", "monitor"),
     "clubhouse": ("clubhouse", "room"),
+    "training": (
+        "train",
+        "training",
+        "kaggle",
+        "dataset",
+        "gym",
+        "gymnasium",
+        "colab",
+        "huggingface",
+        "competition",
+        "neural",
+        "pytorch",
+        "torch",
+        "manim",
+        "venv",
+        "model",
+    ),
+    "notebook": ("notebook", "cell", "kernel", "ipynb", "jupyter"),
 }
 
 
@@ -490,22 +527,30 @@ def _group_of(name: str) -> str:
 
 def _core_tools() -> list[dict[str, Any]]:
     """Always-present tools: the layout verbs, the peer tools, the meta tools, and
-    any backend-plugin agent tools (registered via backend.sdk)."""
+    the *ungrouped* backend-plugin agent tools (registered via backend.sdk). Plugin
+    tools that declare a `group` are disclosed progressively instead (see
+    `_all_dynamic_tools`)."""
     from backend.sdk.registry import registry as _plugins
 
     return (
         list(LAYOUT_TOOLS)
         + list(PEER_TOOLS)
         + list(META_TOOLS)
-        + _plugins.provider_tools()
+        + _plugins.provider_tools(grouped=False)
     )
 
 
 def _all_dynamic_tools(conn: WsConnection) -> list[dict[str, Any]]:
-    """Every browser-pushed tool, deduped against the static core (core wins)."""
+    """Every progressively-disclosed tool — grouped backend-plugin tools plus every
+    browser-pushed tool — deduped against the static core (core wins)."""
+    from backend.sdk.registry import registry as _plugins
+
     seen = {t["function"]["name"] for t in _core_tools()}
     out: list[dict[str, Any]] = []
-    for t in _manifest_to_tools(getattr(conn, "agent_tools", [])):
+    candidates = _plugins.provider_tools(grouped=True) + _manifest_to_tools(
+        getattr(conn, "agent_tools", [])
+    )
+    for t in candidates:
         name = t["function"]["name"]
         if name in seen:
             continue

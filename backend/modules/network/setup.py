@@ -53,6 +53,10 @@ async def start_network() -> None:
     )
     peer_hub.register_handler(protocol.COLLAB_OP, collab.handle_peer_collab_op)
     peer_hub.register_handler(protocol.PEER_CHAT, chat.handle_peer_chat)
+    # Training fabric: advertise/receive "GPU offered / help wanted" ads.
+    from backend.modules.training import fabric as training_fabric
+
+    training_fabric.register(peer_hub)
     peer_hub.set_transports(build_transports())
     await peer_hub.start()
     # Heartbeat the peers for live link health (RTT, throughput).

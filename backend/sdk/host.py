@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from abc import ABC, abstractmethod
+from typing import Any
 
 from fastapi import APIRouter
 
@@ -55,6 +56,13 @@ class PluginHost:
         """Handle a new channel on the shared `/ws` socket. Built-in channels
         (`agent`, `collab`, …) take precedence; pick a unique channel name."""
         self._registry.ws_channels[channel] = handler
+
+    def add_training_provider(self, provider: Any) -> None:
+        """Expose a training environment provider (an object satisfying
+        `backend.modules.training.providers.base.EnvironmentProvider`): search,
+        resolve, fetch, and scaffold one kind of trainable environment. Built-in
+        providers (kaggle, huggingface, gymnasium) win id conflicts."""
+        self._registry.training_providers[provider.provider] = provider
 
     def add_dash_facade(self, name: str, factory: DashFacadeFactory) -> None:
         """Attach `dash.<name>` in every REPL session (factory builds the object)."""

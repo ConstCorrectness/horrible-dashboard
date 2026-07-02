@@ -52,6 +52,13 @@ from backend.modules.telemetry import push_telemetry
 from backend.modules.telemetry import router as telemetry_router
 from backend.modules.telemetry.instrument import record_ws_frame, telemetry_middleware
 from backend.modules.terminal import TerminalManager
+from backend.modules.training import register_agent_tools as register_training_tools
+from backend.modules.training import router as training_router
+from backend.modules.training import subscribe_training_conn
+from backend.modules.training.kernels import (
+    handle_training_message,
+    training_kernels,
+)
 from backend.modules.workspace import router as workspace_router
 from backend.modules.database import router as database_router
 from backend.modules.visualizer import visualizer_manager
@@ -75,6 +82,9 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await plugin_registry.run_shutdown()
+        # Kernels are child processes; leaving them behind on reload/shutdown
+        # would strand orphaned ipykernels.
+        await training_kernels.shutdown_all()
         await stop_network()
 
 
@@ -113,6 +123,12 @@ app.include_router(plugins_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
 app.include_router(flow_router, prefix="/api")
 app.include_router(network_router, prefix="/api")
+app.include_router(training_router, prefix="/api")
+
+# Register the training module's backend agent tools into the sdk registry (the
+# training module is a first-party consumer of the same registry backend plugins
+# write to). Grouped under `training`, disclosed progressively by the orchestrator.
+register_training_tools()
 
 # Discover and mount backend plugins (bundled, HORRIBLE_PLUGINS_DIR, and pip entry
 # points). Ships empty; each plugin's routes mount under /api + its prefix. Agent
@@ -163,6 +179,8 @@ async def ws(websocket: WebSocket) -> None:
     lobby_unsub = subscribe_lobby_conn(conn)
     # Fan commons (profiles/search) events out to this browser.
     commons_unsub = subscribe_commons_conn(conn)
+    # Fan training events (venv/fetch progress, metrics, frames) to this browser.
+    training_unsub = subscribe_training_conn(conn)
     try:
         while True:
             msg = await websocket.receive_json()
@@ -182,6 +200,8 @@ async def ws(websocket: WebSocket) -> None:
                 await lsp.handle(msg)
             elif channel == "visualizer":
                 await visualizer_manager.handle(conn, msg)
+            elif channel == "training":
+                await handle_training_message(conn, msg)
             elif channel == "network":
                 await handle_network_message(conn, msg)
             elif channel == "collab":
@@ -207,5 +227,7 @@ async def ws(websocket: WebSocket) -> None:
         network_unsub()  # type: ignore[operator]
         lobby_unsub()  # type: ignore[operator]
         commons_unsub()  # type: ignore[operator]
+        training_unsub()
+        training_kernels.detach(conn)
         collab_manager.drop(conn)
         chat_manager.drop(conn)

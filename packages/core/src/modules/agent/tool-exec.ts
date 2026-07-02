@@ -79,9 +79,16 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
         ? { error: `no agent context for pane: ${String(args.instanceId)}` }
         : { context: snapshot };
     }
-    case 'open_pane':
-      registry.openPanel(String(args.id));
+    case 'open_pane': {
+      // Optional params thread through to the pane instance (e.g. a training
+      // notebook's {projectId, notebook}); read by the pane via usePaneParams.
+      const params =
+        args.params && typeof args.params === 'object'
+          ? (args.params as Record<string, unknown>)
+          : undefined;
+      registry.openPanel(String(args.id), params ? { params } : undefined);
       return { ok: true, opened: args.id };
+    }
     case 'close_pane':
       return { closed: lc?.closePane(String(args.id)) ?? false };
     case 'create_workspace':

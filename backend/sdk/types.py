@@ -51,6 +51,10 @@ class AgentTool:
     required: list[str] = field(default_factory=list)
     side_effect: bool = False
     specifier_template: str | None = None
+    # When set, the tool is disclosed progressively under this group (loaded on
+    # demand / by keyword) instead of always-present. `None` keeps the default:
+    # the tool is part of the always-loaded core, unchanged from before.
+    group: str | None = None
 
     def provider_tool(self) -> dict[str, Any]:
         """The provider (Ollama/OpenAI) tool definition for this tool."""

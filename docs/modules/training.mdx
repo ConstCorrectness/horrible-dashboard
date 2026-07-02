@@ -1,0 +1,258 @@
+---
+sidebar_position: 14
+sidebar_label: Training
+---
+
+# Module: training
+
+**Notebook-driven neural-network training** inside the dashboard: pick an environment
+(a Kaggle competition, a Hugging Face dataset, a Gymnasium env — or any plugin-provided
+source), get a **project** with its own uv-managed venv and a scaffolded `.ipynb`
+notebook, then build and train models with live visual feedback (metrics charts, model
+architecture graph, manim explainers, gym rollout frames). The agent drives the whole
+flow: *"i want to work on kaggle's pokemon tcg competition"* resolves the competition,
+creates the project, downloads the data, and opens the right panes.
+
+**Status: implemented** — frontend in `packages/core/src/modules/training/`, backend in
+`backend/modules/training/`. Projects + per-project venvs + the environment provider
+layer, the native notebook pane on the Jupyter kernel protocol, the live metrics
+pipeline + chart pane, the architecture graph pane, the manim + gym-rollout runners,
+Kaggle-kernels/Colab push, the peer-fabric training ads, and the agent tool integration
+that drives the whole flow from a natural-language ask.
+
+## Projects on disk
+
+Each project is one directory under `training.projectsRoot` (default
+`~/horrible/training`); the directory **is** the record:
+
+```
+<projectsRoot>/<slug>/
+  main.ipynb        # scaffolded notebook (nbformat v4, Kaggle-compatible)
+  project.json      # ProjectModel dump (id, name, refs, python, flags)
+  data/             # provider-fetched datasets
+  media/            # manim renders, saved frames
+  .venv/            # uv-managed project venv
+```
+
+Torch-sized dependencies live in the **project venv**, never the backend env. The venv
+is created with `uv venv --python <training.defaultPython>` and bootstrapped with
+`ipykernel` (kernel side of the Jupyter protocol) plus the local **`horrible-train`**
+helper package, then the provider's scaffold requirements (`pandas`,
+`gymnasium[box2d]`, …). All subprocess work (uv, kernels, renderers) uses blocking
+`Popen` pumped on daemon threads — the Windows-safe pattern shared with the LSP/terminal
+modules — with output lines streamed to the UI.
+
+## Environment providers
+
+A provider is a thin synchronous adapter behind one uniform contract
+(`backend/modules/training/providers/base.py`), mirroring the database module's driver
+layer: `search`, `resolve`, `fetch` (into `data/`, with progress), and `scaffold`
+(starter notebook cells + venv requirements). Client libraries import lazily inside
+methods; short calls run via `asyncio.to_thread`, fetches on daemon threads.
+
+| Provider | Kinds | Fetch | Scaffold |
+| --- | --- | --- | --- |
+| `kaggle` | competition, dataset | download + unzip into `data/` (creds: `training.kaggle.*` settings → `~/.kaggle/kaggle.json`) | pandas data-loading starter |
+| `huggingface` | dataset | lazy — the notebook calls `datasets.load_dataset(id)`; snapshot into `data/` on request | `load_dataset` starter |
+| `gymnasium` | env | nothing to fetch (bundled static catalog; no gym import in the backend env) | RL rollout loop streaming frames + episode rewards |
+
+**Plugins add providers**: a backend plugin calls `host.add_training_provider(provider)`
+(see [backend plugin SDK](../architecture/backend-plugin-sdk.mdx)); `get_provider()`
+falls back to the plugin registry, so a new environment type is one file or one plugin
+call.
+
+## The `horrible-train` helper
+
+`backend/modules/training/helper/` is a zero-dependency pip package installed into every
+project venv. Training code (notebook cells or scripts) calls:
+
+```python
+import horrible_train as ht
+ht.run("baseline")            # name the run (auto-created on first log)
+ht.log(step=i, loss=0.42)     # → live metrics chart pane
+ht.frame(env.render())        # → live rollout pane
+ht.watch(model, example=x)    # → architecture graph pane (torch.fx, tree fallback)
+```
+
+Each call prints one `@@HORRIBLE@@{json}` **sentinel line** to stdout; the backend
+strips these from visible output and fans them out as `training` channel events — the
+same line-protocol trick the visualizer uses for Pygame frames, so it works identically
+under a kernel, a script runner, or manim.
+
+## The notebook pane & kernel sessions
+
+`training.notebook` is a **native cell UI** (CodeMirror cells, non-singleton, opened
+with params `{projectId, notebook}`) speaking the Jupyter kernel protocol — no iframed
+JupyterLab. The backend side (`kernels.py`) runs one `KernelSession` per open notebook:
+
+- The kernel spawns from the **project venv's python** (`-m ipykernel_launcher`) via
+  `jupyter_client`'s sync API on daemon threads (event-loop-agnostic: works under
+  uvicorn `--reload` on Windows). No kernelspec files — an in-memory spec pins the venv.
+- Sessions are **process-global**: closing the pane (or the tab) leaves training
+  running; reopening reattaches and replays the current notebook state.
+- The in-memory nbformat doc is authoritative — UI/agent edits mutate it, iopub
+  outputs append to it, and it's flushed atomically to the `.ipynb` (debounced 2 s +
+  after each completed cell), so the on-disk notebook stays Kaggle-compatible truth.
+- Executions run serially through a queue; stream output passes through the sentinel
+  splitter, so `horrible_train` telemetry never appears as cell text.
+- **Interrupt** rides the platform interrupt (Win32 event / SIGINT). Windows caveat:
+  it lands *between* statements — training loops stop in milliseconds, but a single
+  long blocking C call (one `time.sleep(600)`) defers it until that call returns;
+  **Restart** is the hard stop.
+
+Kernel slice of the `training` ws channel: client sends `open`, `run_cell`, `run_all`,
+`cells` (ops: insert/edit/delete/move), `interrupt`, `restart`, `shutdown`, `watch_run`;
+server sends `opened`, `kernel_status`, `execution_state`, `output` (raw nbformat output
+dicts), `cells_changed`, `run_backfill`, and `error`.
+
+## Visualizations
+
+All four visual panes feed off the same `training` channel; the notebook (or a script
+run) drives them through the `horrible_train` helper's sentinel events:
+
+- **Metrics** (`training.metrics`, uPlot) — one streaming chart per metric of the
+  selected run. `metrics.py` keeps a per-run ring buffer (`training.metrics.bufferPoints`,
+  default 5000) so a chart opened mid-run backfills via `watch_run`, and coalesces the
+  wire to ≤20 events/s per run while keeping every point server-side.
+- **Architecture** (`training.modelgraph`, dagre SVG) — the layer graph from
+  `horrible_train.watch(model)`: `torch.fx` topology (with tensor shapes when an
+  `example=` input is given), or the `named_modules` tree when the model isn't
+  traceable. With `weights=True`, per-layer gradient norms color-map the nodes live
+  during training (`model_stats` events).
+- **Rollout** (`training.rollout`) — the latest `frame` event as an `<img>`,
+  rAF-throttled with an fps readout; gym envs stream via `horrible_train.frame(env.render())`.
+- **Manim** (`training.manim`) — plays the mp4 a render produces (`manim_status`
+  progress lines + `manim_done {url}`), served by the media route.
+
+## Runners
+
+Two subprocess runners live outside the kernel (both Popen-on-thread, sentinel-parsed,
+process-global so they survive pane/tab closes):
+
+- **Script runner** (`runners/script_runner.py`) — `python -u <script>` in the project
+  venv; `ht.log()`/`ht.frame()` in the script are indistinguishable from notebook cells.
+  Driven by `POST/GET/DELETE /projects/{id}/runs`.
+- **Manim runner** (`runners/manim_runner.py`) — `python -m manim render` against a
+  scene file under `media/scenes/`; auto-installs manim into the venv on first use;
+  locates the newest mp4 and serves it via the traversal-guarded media route.
+
+## Cloud push
+
+A `PushTarget` driver layer (`push/`, same shape as the provider layer) sends a
+project's `main.ipynb` to cloud compute:
+
+- **Kaggle kernels** (`push/kaggle_push.py`) — generates `kernel-metadata.json`
+  (competition/dataset sources drawn from the project's Kaggle refs, `enable_gpu`),
+  then `kernels_push`; `status` polls `kernels_status`. Competition *submissions* stay
+  manual (`kaggle competitions submit …` in the terminal pane).
+- **Google Colab** (`push/colab_push.py` + `google_auth.py`) — Colab has no API, so the
+  notebook uploads to Drive with the Colab mimetype; the file id is remembered
+  (`.push-colab.json`) so re-pushes update in place. OAuth uses the user's own client
+  (settings `training.google.clientId/clientSecret`), manual-code flow, refresh token in
+  `.data/training_google_token.json` — **never** returned to the client.
+
+## Peer fabric (advertise + manual handoff)
+
+Training compute is shared across the distributed [network](network.mdx) fabric without
+any remote-execution engine in v1: a node **advertises** that it's offering GPU or
+seeking help, matches surface in the UI, and the actual handoff is a normal collab/agent
+chat.
+
+- `fabric.py` registers a `training_ad` handler on the `PeerHub` at network startup.
+  Received ads are validated into `TrainingAdModel`, **pinned to the sending session's
+  node id** (a peer can't advertise on another node's behalf), stored, and fanned to
+  every browser on the `training` channel (`training_ad` event). A `status: "none"` ad
+  retracts.
+- `specs.py` snapshots hardware for the ad — platform/CPU/RAM from the stdlib, GPU via
+  `nvidia-smi` (no torch in the backend env); a node with no NVIDIA GPU simply
+  advertises none.
+- Advertise mode is settings-driven (`training.fabric.advertise`: off | offering |
+  seeking, plus `training.fabric.note`). Changing it re-broadcasts to peers; a new peer
+  connecting (`peer_update`) triggers a re-send so late joiners see the ad.
+- The `training.peers` pane shows ads with **match highlighting** (their offering ×
+  my seeking, and vice versa) and an "Open chat" button that opens the network module's
+  peer-chat pane — module boundary respected via `registry.openPanel('network.chat')`.
+
+## Agent integration (the flagship)
+
+Typing *"i want to work on kaggle's pokemon tcg competition"* into the ask bar drives
+the whole flow. Two tool groups make this work, both **progressively disclosed** (loaded
+on demand or by keyword) so they don't bloat the model's tool budget:
+
+- **`training` — backend tools** (`agent_tools.py`, registered into the backend-sdk
+  registry via `register_agent_tools()`, called from `app.py`). Server-resolved, so they
+  run with no tab attached: `training.search_environments`, `resolve_environment`,
+  `list_projects`, `project_status` (read-only); `create_project`, `fetch_data`,
+  `install_deps`, `start_run`, `stop_run`, `push`, `render_manim` (side-effecting, gated
+  by the agent permission engine with a `specifierTemplate` like `{provider}:{ref}`).
+- **`notebook` — frontend tools** (`agentTools` on the `training.notebook` panel). Full
+  cell CRUD + execute against the pane's session store: `notebook.list_cells`,
+  `read_cell`, `kernel_status` (read-only); `insert_cell`, `edit_cell`, `delete_cell`,
+  `run_cell` (waits ≤120s, returns outputs/traceback), `run_all`, `interrupt`, `restart`.
+
+The orchestrator changes are generic (`backend/modules/agent/orchestrator.py`): `AgentTool`
+gained an optional `group` field (`backend/sdk/types.py`) — `None` keeps a plugin tool in
+the always-loaded core (unchanged), a set group moves it into the progressive-disclosure
+pool. `_GROUP_KEYWORDS` preloads `training` on "kaggle/train/dataset/gym/…" and `notebook`
+on "notebook/cell/kernel/…"; `TOOL_BUDGET` was bumped to 44 to fit both groups at once.
+`open_pane` now accepts optional `params`, so the agent opens the notebook pane bound to a
+project (`open_pane("training.notebook", {params: {projectId, notebook}})`).
+
+**Flow**: keyword-preload `training` → `search_environments` → `create_project` (approval
+gate, specifier `provider:ref`) → `fetch_data` → `open_pane(training.notebook, params)` →
+`split_pane` for the metrics pane → `notebook.insert_cell`/`run_cell` to build the
+starter. Verified end to end against a live Ollama model: the ask reaches
+`training.create_project`, the gate fires with the right specifier, and on approval the
+project + scaffolded notebook land on disk.
+
+## Backend surface
+
+`/api/training` (`backend/modules/training/routes.py`):
+
+| Route | Purpose |
+| --- | --- |
+| `GET /providers`, `GET /providers/{p}/search?q=&kind=`, `POST /providers/{p}/resolve` | provider catalog + discovery |
+| `GET/POST /projects`, `GET/DELETE /projects/{id}` | project store (create resolves the ref, scaffolds `main.ipynb`, kicks off the venv bootstrap) |
+| `POST /projects/{id}/fetch` (202) | dataset download on a worker thread |
+| `POST /projects/{id}/deps` (202) | `uv pip install` extra packages into the venv |
+| `GET/PUT /projects/{id}/notebook?path=` | whole-document notebook read/replace (path-traversal-guarded) |
+| `POST/GET/DELETE /projects/{id}/runs`, `GET/DELETE /runs/{id}` | script runs (start/list/stop) |
+| `POST /projects/{id}/manim` (202), `GET /projects/{id}/media/{path}` | manim render + traversal-guarded media serving |
+| `GET /push/targets`, `POST/GET /projects/{id}/push/{target}[/status]` | Kaggle/Colab push + status |
+| `POST /google/auth/start`, `POST /google/auth/complete`, `GET/DELETE /google/...` | Colab Drive OAuth (server-held token) |
+| `GET /fabric/ads`, `POST /fabric/advertise` | peer training ads (list / set advertise mode) |
+
+Long-running work reports over the shared `/ws` socket on the **`training` channel**
+(every connection is subscribed on connect): `env_progress` / `fetch_progress`
+`{projectId, line, pct?}`, `project_changed` (a full `ProjectModel`), the kernel-protocol
+events, plus `metrics` / `model_graph` / `model_stats` / `frame` / `run_output` /
+`run_state` / `manim_status` / `manim_done`.
+
+## Contributions to the Layout Shell
+
+| Contribution | Value |
+| --- | --- |
+| Panel `training.projects` | singleton hub (left): provider search → create project, project list with live venv/data status, open-notebook buttons |
+| Panel `training.notebook` | non-singleton notebook pane (center), params `{projectId, notebook}`; CodeMirror cells, run/interrupt/restart toolbar, nbformat output renderers (stream+ANSI, results, images, HTML, tracebacks) |
+| Widget `training.metrics` | live metric charts (uPlot, one per metric of the selected run; ring-buffer backfill via `watch_run`, ≤20 wire events/s per run with every point kept server-side) |
+| Widget `training.modelgraph` | model architecture graph (dagre SVG; fx/module-tree, grad-norm heatmap) |
+| Widget `training.rollout` | live gym/render frame stream with fps readout |
+| Widget `training.manim` | manim render viewer (progress log + mp4 player) |
+| Widget `training.peers` | peer training ads: advertise offer/seek, match-highlighted peer list, open-chat handoff |
+| Panel group `training.workbench` | notebook primary + metrics/architecture/rollout/manim/peers/projects companions |
+| Layout preset `training` (🧠) | projects · notebook · metrics workspace |
+| Commands | `training.open`, `training.openMetrics`, `training.openModelGraph`, `training.openRollout`, `training.openManim`, `training.openPeers` |
+| Project row actions | open notebook, ⇪ push to Kaggle, ⇪ push to Colab, delete |
+| Settings | `training.projectsRoot`, `training.defaultPython`, `training.kaggle.username`, `training.kaggle.key`, `training.hf.token`, `training.google.clientId`, `training.google.clientSecret`, `training.metrics.bufferPoints`, `training.manim.quality`, `training.fabric.advertise`, `training.fabric.note` |
+
+Credentials note: settings persist in the plaintext `.data/settings.json` store — same
+v1 posture as database connection credentials (encryption is a tracked follow-up).
+
+## Browser vs desktop
+
+| Capability | Browser | Desktop (Tauri) |
+| --- | --- | --- |
+| Project/provider management | ✅ | ✅ |
+| Venv + kernel subprocesses | ✅ (backend-side) | ✅ (backend-side) |
+
+Everything runs on the backend node; both layouts are equivalent.

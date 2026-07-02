@@ -42,6 +42,10 @@ class PluginRegistry:
     agent_tools: dict[str, AgentTool] = field(default_factory=dict)
     ws_channels: dict[str, WsChannelHandler] = field(default_factory=dict)
     dash_facades: dict[str, DashFacadeFactory] = field(default_factory=dict)
+    # Environment providers for the training module (duck-typed against
+    # backend.modules.training.providers.base.EnvironmentProvider; kept as Any so
+    # the SDK stays dependency-light).
+    training_providers: dict[str, Any] = field(default_factory=dict)
     startup_hooks: list[LifecycleHook] = field(default_factory=list)
     shutdown_hooks: list[LifecycleHook] = field(default_factory=list)
     # Per-plugin load failures, surfaced rather than crashing the app.
@@ -54,15 +58,26 @@ class PluginRegistry:
         self.agent_tools.clear()
         self.ws_channels.clear()
         self.dash_facades.clear()
+        self.training_providers.clear()
         self.startup_hooks.clear()
         self.shutdown_hooks.clear()
         self.errors.clear()
 
     # --- reads used by the app / orchestrator / repl -----------------------
 
-    def provider_tools(self) -> list[dict[str, Any]]:
-        """Plugin agent tools as provider tool definitions (for the model)."""
-        return [t.provider_tool() for t in self.agent_tools.values()]
+    def provider_tools(self, *, grouped: bool | None = None) -> list[dict[str, Any]]:
+        """Plugin agent tools as provider tool definitions (for the model).
+
+        `grouped=None` returns all (back-compat). `grouped=False` returns only
+        always-core tools (no `group`); `grouped=True` returns only the ones
+        disclosed under a group, for the progressive-disclosure pool."""
+        return [
+            t.provider_tool()
+            for t in self.agent_tools.values()
+            if grouped is None
+            or (grouped is False and t.group is None)
+            or (grouped is True and t.group is not None)
+        ]
 
     async def invoke_agent_tool(self, name: str, args: dict[str, Any]) -> Any:
         """Run a plugin agent tool by name, awaiting an async handler. Failures come
