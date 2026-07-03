@@ -5,10 +5,11 @@ configured roots — the path-traversal boundary lives here, not in the UI, so a
 remote backend can never be coaxed into serving paths outside its roots. Roots are
 configured in settings (`files.roots`, a list of absolute paths; see
 docs/modules/settings.md) with an env override (`HORRIBLE_WORKSPACE_ROOTS`,
-os.pathsep-separated) for dev/test. When neither is set, the backend defaults to a
-single root (its launch directory — the repo checkout in dev and desktop) so file
-features work out of the box; `HORRIBLE_NO_DEFAULT_ROOT=1` restores the fail-closed
-boundary for hardened deployments. See docs/modules/file-explorer.md.
+os.pathsep-separated) for dev/test. When neither is set, the backend sets up a
+default workspace — `~/Projects`, created if missing — so file features work out of
+the box on the *user's* projects rather than the app's own checkout;
+`HORRIBLE_NO_DEFAULT_ROOT=1` restores the fail-closed boundary for hardened
+deployments. See docs/modules/file-explorer.md.
 
 This is the HTTP surface (list/read + create/write/rename/delete). Live watch
 events ship separately in `watcher.py` (the `files` `/ws` channel).
@@ -44,22 +45,20 @@ MAX_READ_BYTES = 2_000_000
 
 def _default_root() -> Path | None:
     """A sensible default workspace root so file features work **out of the box**
-    when nothing is configured: the backend's launch directory (cwd) — which is the
-    repo checkout under both the documented dev command and the Tauri desktop spawn
-    (`.current_dir(root)`). Cross-platform via `Path.cwd()`.
+    when nothing is configured: `~/Projects`, created if it doesn't exist — a *user*
+    workspace, deliberately not the backend's launch directory (which in dev and
+    desktop is this app's own repo checkout). Cross-platform via `Path.home()`.
 
     Opt out with `HORRIBLE_NO_DEFAULT_ROOT=1` for hardened/remote deployments that
-    want the fail-closed boundary. A filesystem root (`/`, `C:\\`) is skipped as too
-    broad to expose implicitly."""
+    want the fail-closed boundary (no implicit root, and nothing created)."""
     if os.environ.get("HORRIBLE_NO_DEFAULT_ROOT"):
         return None
     try:
-        cwd = Path.cwd().resolve()
-    except OSError:
+        projects = (Path.home() / "Projects").resolve()
+        projects.mkdir(parents=True, exist_ok=True)
+    except (OSError, RuntimeError):  # no resolvable home / can't create — fail closed
         return None
-    if cwd.parent == cwd:  # cwd is a filesystem root — too broad to default to.
-        return None
-    return cwd if cwd.is_dir() else None
+    return projects
 
 
 def _roots() -> list[Path]:

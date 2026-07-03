@@ -9,7 +9,10 @@
  */
 import { useContext, useEffect, useRef, useState } from 'react';
 import { basicSetup, EditorView } from 'codemirror';
-import { Compartment, EditorState } from '@codemirror/state';
+import { keymap } from '@codemirror/view';
+import { Compartment, EditorState, Prec } from '@codemirror/state';
+import { indentWithTab } from '@codemirror/commands';
+import { acceptCompletion } from '@codemirror/autocomplete';
 import { markdown } from '@codemirror/lang-markdown';
 import { javascript } from '@codemirror/lang-javascript';
 import { python } from '@codemirror/lang-python';
@@ -44,8 +47,16 @@ function goToFile(path: string): void {
 }
 
 /** The LSP extension for a just-loaded source, or `[]` when there's no language
- * server for it (only `workspace-file:` buffers with a known language get one). */
-function lspFor(source: string | null, title: string) {
+ * server for it (only `workspace-file:` buffers with a known language get one).
+ * `pythonPath` (the `editor.pythonPath` setting) overrides the backend's auto-detected
+ * interpreter so third-party imports resolve; `frameworkImports` toggles the curated
+ * framework-import completions. */
+function lspFor(
+  source: string | null,
+  title: string,
+  pythonPath?: string,
+  frameworkImports?: boolean,
+) {
   if (!source || !source.startsWith(FILE_URI)) return [];
   const language = lspLanguageId(title);
   if (!language) return [];
@@ -56,6 +67,8 @@ function lspFor(source: string | null, title: string) {
     root: dirOf(path),
     bufferUri: source,
     openFile: goToFile,
+    pythonPathOverride: pythonPath || undefined,
+    frameworkImports,
   });
 }
 
@@ -106,6 +119,12 @@ export function BufferView() {
   const [proposing, setProposing] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const autosuggestOn = useSetting<boolean>('editor.autosuggest') ?? false;
+  // Interpreter for basedpyright (Python third-party import completions); overrides
+  // the backend's auto-detected one. Captured when a buffer opens (see the load
+  // effect) — changing it takes effect on reopen.
+  const pythonPath = useSetting<string>('editor.pythonPath') ?? '';
+  // Curated framework-import suggestions (see pythonImports.ts); on by default.
+  const frameworkImports = useSetting<boolean>('editor.frameworkImports') ?? true;
 
   // Mount CodeMirror once.
   useEffect(() => {
@@ -117,6 +136,13 @@ export function BufferView() {
         extensions: [
           basicSetup,
           oneDark,
+          // Tab does editor work instead of moving focus to the next control —
+          // `basicSetup` deliberately leaves Tab unbound (accessibility), which is why
+          // it otherwise escapes to the browser's focus traversal. With a completion
+          // popup open Tab accepts it (Enter-style, like VS Code); otherwise it indents,
+          // and Shift-Tab dedents. Ghost-text autosuggest binds Tab at `Prec.highest`,
+          // so an inline suggestion is still accepted first when one is showing.
+          Prec.high(keymap.of([{ key: 'Tab', run: acceptCompletion }, indentWithTab])),
           langRef.current.of(markdown()),
           mergeRef.current.of([]),
           autoRef.current.of([]),
@@ -162,7 +188,7 @@ export function BufferView() {
             // Connect (or disconnect) a language server for this buffer. The
             // reconfigure tears down any prior session (didClose + stop) and the
             // new plugin sees the just-applied content for its didOpen.
-            lspRef.current.reconfigure(lspFor(source, loaded.title)),
+            lspRef.current.reconfigure(lspFor(source, loaded.title, pythonPath, frameworkImports)),
           ],
         });
         setDirty(false);

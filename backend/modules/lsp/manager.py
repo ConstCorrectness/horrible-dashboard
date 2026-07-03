@@ -44,18 +44,35 @@ import subprocess
 import threading
 from typing import Any
 
+from backend.modules.lsp.pyenv import resolve_python_interpreter
+
 logger = logging.getLogger(__name__)
 
-# languageId → server command. Only these (resolvable on PATH) are ever spawned;
-# the client can't supply a command, so this is not an arbitrary-exec surface.
-LSP_SERVERS: dict[str, list[str]] = {
-    "python": ["pylsp"],
-    "typescript": ["typescript-language-server", "--stdio"],
-    "javascript": ["typescript-language-server", "--stdio"],
-    "typescriptreact": ["typescript-language-server", "--stdio"],
-    "javascriptreact": ["typescript-language-server", "--stdio"],
-    "rust": ["rust-analyzer"],
+# languageId → ordered server candidates. Each candidate is a full argv; the first
+# whose executable resolves on PATH wins (so we prefer the richer server and fall back
+# to a simpler one). Only these are ever spawned — the client can't supply a command,
+# so this is not an arbitrary-exec surface. Python prefers **basedpyright** (MIT,
+# uv-installable, Pylance-grade completions/hover; `uv add --dev basedpyright`) and
+# falls back to `pylsp` when it isn't installed.
+LSP_SERVERS: dict[str, list[list[str]]] = {
+    "python": [["basedpyright-langserver", "--stdio"], ["pylsp"]],
+    "typescript": [["typescript-language-server", "--stdio"]],
+    "javascript": [["typescript-language-server", "--stdio"]],
+    "typescriptreact": [["typescript-language-server", "--stdio"]],
+    "javascriptreact": [["typescript-language-server", "--stdio"]],
+    "rust": [["rust-analyzer"]],
 }
+
+
+def resolve_server(language: str) -> tuple[str, list[str]] | None:
+    """The first candidate server for `language` whose executable is on PATH, as
+    `(resolved_exe, argv)`, or None if the language is unknown / no server installed."""
+    for cmd in LSP_SERVERS.get(language, []):
+        exe = shutil.which(cmd[0])
+        if exe is not None:
+            return exe, cmd
+    return None
+
 
 # Cap a single LSP message; a server going haywire shouldn't let us allocate without
 # bound. Real payloads (even big completion lists) sit well under this.
@@ -115,12 +132,12 @@ class LspManager:
         if not sid or sid in self.sessions:
             await self._error(sid, "bad or duplicate sessionId")
             return
-        cmd = LSP_SERVERS.get(language)
-        exe = shutil.which(cmd[0]) if cmd else None
-        if not cmd or exe is None:
+        resolved = resolve_server(language)
+        if resolved is None:
             # No server for this language — the editor degrades to no diagnostics.
             await self._error(sid, f"no language server for {language!r}")
             return
+        exe, cmd = resolved
         root = data.get("root")
         cwd = root if isinstance(root, str) and os.path.isdir(root) else None
         try:
@@ -144,7 +161,16 @@ class LspManager:
             target=self._read_loop, args=(session,), name=f"lsp-{sid}", daemon=True
         )
         session.reader.start()
-        await self._conn.send_json(_evt("started", {"sessionId": sid}))
+        started: dict[str, Any] = {"sessionId": sid}
+        # For Python, hand the client the interpreter to analyze against so third-party
+        # imports resolve — the client relays it as `python.pythonPath`. Discovery only
+        # (the pipe never parses LSP); offloaded so the `py`-launcher probe can't stall
+        # the loop.
+        if language == "python":
+            started["pythonPath"] = await asyncio.to_thread(
+                resolve_python_interpreter, cwd
+            )
+        await self._conn.send_json(_evt("started", started))
 
     async def _rpc(self, data: dict[str, Any]) -> None:
         session = self.sessions.get(str(data.get("sessionId", "")))

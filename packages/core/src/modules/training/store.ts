@@ -25,6 +25,7 @@ export interface SessionState {
   kernel: KernelStatus;
   runStates: Record<string, CellRunState>;
   error: string | null;
+  errorCode: string | null; // e.g. 'unknown_project' — lets the pane self-heal
 }
 
 const EMPTY = (projectId: string, notebookPath: string): SessionState => ({
@@ -35,6 +36,7 @@ const EMPTY = (projectId: string, notebookPath: string): SessionState => ({
   kernel: 'starting',
   runStates: {},
   error: null,
+  errorCode: null,
 });
 
 export class SessionStore {
@@ -62,7 +64,13 @@ export class SessionStore {
   // --- ws ingestion ---------------------------------------------------------
 
   onOpened(notebook: Notebook, kernel: KernelStatus): void {
-    this.set({ sessionKey: this.id, cells: notebook.cells, kernel, error: null });
+    this.set({
+      sessionKey: this.id,
+      cells: notebook.cells,
+      kernel,
+      error: null,
+      errorCode: null,
+    });
   }
 
   onKernelStatus(status: KernelStatus): void {
@@ -111,8 +119,8 @@ export class SessionStore {
     this.set({ cells: notebook.cells });
   }
 
-  onError(message: string): void {
-    this.set({ error: message });
+  onError(message: string, code?: string): void {
+    this.set({ error: message, errorCode: code ?? null });
   }
 
   // --- local mutations (optimistic; backend doc is authoritative) -----------
@@ -139,7 +147,7 @@ function wireChannel(): void {
   onTrainingEvent('output', (d) => stores.get(d.sessionKey)?.onOutput(d.cellId, d.output));
   onTrainingEvent('cells_changed', (d) => stores.get(d.sessionKey)?.onCellsChanged(d.notebook));
   onTrainingEvent('error', (d) => {
-    if (d.sessionKey) stores.get(d.sessionKey)?.onError(d.message);
+    if (d.sessionKey) stores.get(d.sessionKey)?.onError(d.message, d.code);
   });
 }
 

@@ -2,6 +2,7 @@
 load-bearing concern, so it gets the most coverage."""
 
 import subprocess
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -128,17 +129,19 @@ def test_no_roots_configured(monkeypatch, tmp_path) -> None:
     assert res.status_code == 400
 
 
-def test_default_root_falls_back_to_cwd(monkeypatch, tmp_path) -> None:
-    # With nothing configured (and no opt-out), the launch dir becomes the root so
-    # file features work out of the box.
+def test_default_root_sets_up_home_projects(monkeypatch, tmp_path) -> None:
+    # With nothing configured (and no opt-out), ~/Projects is created and becomes
+    # the root — a user workspace, not the app's own checkout (the backend cwd).
     monkeypatch.delenv("HORRIBLE_WORKSPACE_ROOTS", raising=False)
     monkeypatch.delenv("HORRIBLE_NO_DEFAULT_ROOT", raising=False)
     monkeypatch.setenv("HORRIBLE_DATA_DIR", str(tmp_path / "data"))
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "hello.txt").write_text("hi", encoding="utf-8")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
     client = TestClient(app)
+    projects = (tmp_path / "Projects").resolve()
     roots = client.get("/api/files/roots").json()
-    assert [r["path"] for r in roots] == [str(tmp_path.resolve())]
+    assert [r["path"] for r in roots] == [str(projects)]
+    assert projects.is_dir()  # set up on first use
+    (projects / "hello.txt").write_text("hi", encoding="utf-8")
     res = client.get("/api/files/read", params={"path": "hello.txt"})
     assert res.status_code == 200
     assert res.json()["content"] == "hi"

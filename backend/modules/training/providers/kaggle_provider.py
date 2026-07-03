@@ -46,6 +46,20 @@ def _api() -> Any:
     return api
 
 
+def _as_items(result: Any, attr: str) -> list[Any]:
+    """Normalize a Kaggle list call to a plain list of items. Kaggle 2.2+ wraps
+    some list calls in a response object (e.g. `competitions_list` →
+    `ApiListCompetitionsResponse`, whose `.competitions` holds the items) while
+    others still return a bare list — so we unwrap the named attribute when present
+    and otherwise treat the result as the list itself. `None` → empty."""
+    if result is None:
+        return []
+    items = getattr(result, attr, None)
+    if items is not None:
+        return list(items)
+    return list(result)
+
+
 def _competition_ref(c: Any) -> EnvironmentRefModel:
     ref = str(getattr(c, "ref", "") or "")
     cid = ref.rsplit("/", 1)[-1]
@@ -87,10 +101,10 @@ class KaggleProvider:
         out: list[EnvironmentRefModel] = []
         try:
             if kind in (None, "competition"):
-                for c in api.competitions_list(search=query) or []:
+                for c in _as_items(api.competitions_list(search=query), "competitions"):
                     out.append(_competition_ref(c))
             if kind in (None, "dataset"):
-                for d in api.dataset_list(search=query) or []:
+                for d in _as_items(api.dataset_list(search=query), "datasets"):
                     out.append(_dataset_ref(d))
         except ProviderError:
             raise
@@ -105,12 +119,14 @@ class KaggleProvider:
         try:
             if inferred == "competition":
                 slug = ref_id.rsplit("/", 1)[-1]
-                for c in api.competitions_list(search=slug) or []:
+                for c in _as_items(api.competitions_list(search=slug), "competitions"):
                     ref = _competition_ref(c)
                     if ref.id == slug:
                         return ref
                 raise ProviderError(f"competition not found: {ref_id}")
-            for d in api.dataset_list(search=ref_id.rsplit("/", 1)[-1]) or []:
+            for d in _as_items(
+                api.dataset_list(search=ref_id.rsplit("/", 1)[-1]), "datasets"
+            ):
                 ref = _dataset_ref(d)
                 if ref.id == ref_id:
                     return ref

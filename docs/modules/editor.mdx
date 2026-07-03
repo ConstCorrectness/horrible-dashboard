@@ -35,7 +35,14 @@ keymap is exposed through the shell keybinding service so bindings stay rebindab
   visualizer, inferring the engine from its language). `mod+s` is a default
   **keybinding → `editor.save`** routed through the shell keybinding service — the
   buffer has no hardcoded save handler, so the key stays rebindable. (`editor.open`
-  quick-open is still to come.)
+  quick-open is still to come.) App-level keys route through the shell service;
+  **editor-internal keys are CodeMirror keymaps scoped to the view** (they act on
+  cursor/selection state, so a global command can't express them): **Tab** accepts an
+  open completion popup, else indents (**Shift-Tab** dedents); **F12** go-to-definition
+  and **F2** rename (see the LSP section); **Tab**/**Esc** accept/dismiss inline
+  autosuggest at higher precedence. Binding Tab is deliberate — `basicSetup` leaves it
+  unbound for accessibility, which made it escape to the browser's focus traversal
+  instead of indenting.
 - **Services for other modules:** `editor.openBuffer(source, { language? })` is the
   public way any module shows editable text. Sources are URIs (`note:`,
   `workspace-file:`, `osfile:` on desktop) so the buffer layer doesn't care where
@@ -135,7 +142,7 @@ one path, and with a remote backend the server must run **where the files are**.
 
 The key design choice: the **backend is a dumb JSON-RPC pipe**, and the **frontend
 is the LSP client**. `LspManager` (`backend/modules/lsp/manager.py`, mirroring
-`terminal/manager.py`) spawns a server per buffer session — chosen from a fixed
+`terminal/manager.py`) spawns one server per **session** — chosen from a fixed
 `languageId → command` registry so the channel can't run arbitrary processes — and
 translates LSP's `Content-Length` framing ↔ discrete `lsp`-channel messages
 (`start`/`rpc`/`stop` ↔ `started`/`rpc`/`exit`/`error`). It never parses LSP
@@ -155,10 +162,79 @@ to `textDocument/definition` (same-file jumps move the cursor; cross-file jumps 
 the target via the editor's `openBuffer` and reveal it in the tree), and binds **F2**
 to `textDocument/rename`. Request-shaped
 methods use JSON-RPC id correlation; same-file detection normalizes `file://` URIs
-(servers vary in drive-letter case). Servers spawn only when present on `PATH` (else the editor
-silently degrades); the registry currently maps `python → pylsp` (needs `pyflakes`/
-`pycodestyle` installed to emit diagnostics), `typescript`/`javascript →
-typescript-language-server`, and `rust → rust-analyzer`.
+(servers vary in drive-letter case).
+
+**IntelliSense depth (implemented).** Completion is a full IDE experience, not a bare
+name list: each item carries a **documentation pane** fetched lazily via
+`completionItem/resolve` when it's focused, and **function/snippet items expand their
+placeholders** (`insertTextFormat: 2` → CodeMirror `snippetCompletion`). The list
+**auto-opens on the server's trigger characters** (e.g. `.` for members — captured
+from the initialize response's `completionProvider.triggerCharacters`), matching VS
+Code rather than waiting for the next word character. Both the doc pane and the hover
+tooltip **render markdown** (code blocks, bold, lists) through a small self-contained
+`renderMarkdown` helper — HTML-escaped first, so a docstring can't inject markup.
+Completion, resolve, and hover results are **cached per document version** and cleared
+on every debounced `didChange`, so re-opening a dropdown or re-hovering the same spot
+doesn't re-hit the server.
+
+Servers spawn only when present on `PATH` (else the editor silently degrades); each
+language maps to an **ordered list of candidate servers** — the first whose executable
+resolves wins. Python prefers **`basedpyright`** (`basedpyright-langserver --stdio`;
+MIT-licensed pyright fork with Pylance-grade completions, hover docstrings, and inlay
+hints — install with `uv add --dev basedpyright`) and falls back to **`pylsp`** (needs
+`pyflakes`/`pycodestyle` for diagnostics) when basedpyright isn't installed. Pylance
+itself is not an option — its licence restricts it to official Microsoft VS Code
+builds. `typescript`/`javascript → typescript-language-server`, and `rust →
+rust-analyzer`.
+
+**Which interpreter Python resolves against.** stdlib (`os.`, …) resolves from
+basedpyright's bundled typeshed, but third-party imports (`torch`, `numpy`, …) only
+complete when the server is pointed at a real interpreter whose site-packages holds
+them. The client tells basedpyright which one by **answering `workspace/configuration`**
+(it advertises `workspace.configuration` and replies with `python.pythonPath` +
+`analysis` knobs; other server→client requests get a `null` ack so nothing stalls). The
+path is resolved per file: the backend (`backend/modules/lsp/pyenv.py`,
+`resolve_python_interpreter`) walks up from the file for a `.venv`/`venv` (the app's venv
+convention, shared with training), else the **system default** interpreter (the `py`
+launcher on Windows, `python3`/`python` elsewhere — never the backend's own venv), and
+sends it on the `started` event. The **`editor.pythonPath`** setting overrides it. The
+interpreter is resolved when a buffer opens; changing the setting (or adding a venv)
+takes effect on reopen.
+
+**One shared server per interpreter+project.** The frontend LSP client is **pooled**:
+buffers with the same `${languageId}::${projectRoot}::${interpreter}` key share a single
+`LspSession` (`editor/lsp.ts`) — one `start`/`sessionId`, so the backend spawns **one
+basedpyright indexed once for the whole project** rather than one per file. The session
+owns the transport (a single JSON-RPC id space, `workspace/configuration` answering) and
+a document registry, routing each `publishDiagnostics` to the owning buffer by URI; the
+per-buffer plugin is a thin adapter (its own version/caches, diagnostics rendering, and
+the completion/hover/rename logic) that delegates requests to the session. Sessions are
+**refcounted with a 60 s idle grace period**, so switching tabs — which unmounts one
+buffer and mounts another — reuses the already-indexed server instead of respawning it;
+the server stops once no buffer has reused it. The project root and interpreter come from
+`GET /api/editor/python-env` (below), so files anywhere under a project pool together.
+
+**Framework auto-imports.** basedpyright only auto-imports **stdlib and workspace
+symbols** — it never indexes installed third-party libraries (a documented limitation,
+unlike Pylance), so `torch`/`numpy`/`pandas`/… symbols aren't offered in a file until
+you've imported them. The editor ships a curated **framework-import completion source**
+(`editor/pythonImports.ts`) to fill the gap: typing a known symbol or alias (`np`, `pd`,
+`plt`, `nn`, `DataFrame`, `Tensor`, `AutoModelForCausalLM`, `LLM`, …) offers it in any
+`.py` buffer, and accepting **inserts the symbol and prepends the matching `import`**
+(deduped, skipped when already imported). It merges into the same completion popup as
+the LSP results but ranks below them, works even when no language server is running, and
+is toggled by the **`editor.frameworkImports`** setting (on by default).
+
+Those suggestions are **gated to installed packages and annotated with the version**: a
+backend service (`backend/modules/lsp/pyenv.py`, `GET /api/editor/python-env`) resolves
+the interpreter, project root, and the installed pip **versions** of the tracked
+framework packages — cached per interpreter, so it's computed once and shared by every
+buffer. Only installed packages are suggested, and the popup shows the version
+(`numpy 2.2.6`). The **Indexed packages** settings section
+(`editor/IndexedPackages.tsx`) lists those packages × versions for the active
+interpreter and persists a **version snapshot** (`editor.indexedPackages`), flagging when
+the installed versions drift from it — so it's clear which library versions intellisense
+is running against.
 
 A small **by-URI registry** (`editor/lsp-registry.ts`, keyed by the buffer's
 `workspace-file:` source URI — the same key the [agent edit tools](#agent-integration)

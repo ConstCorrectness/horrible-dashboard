@@ -676,15 +676,96 @@ body {
   font-size: 0.7rem;
 }
 
-/* LSP hover tooltip (editor/lsp.ts → CodeMirror hoverTooltip). */
-.cm-lsp-hover {
+/* Indexed-packages settings section (editor/IndexedPackages.tsx): framework versions
+ * per interpreter, live vs. saved snapshot. */
+.indexed-packages-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+}
+.indexed-packages-table th,
+.indexed-packages-table td {
+  text-align: left;
+  padding: 0.25rem 0.6rem;
+  border-bottom: 1px solid var(--border, rgba(127, 127, 127, 0.2));
+}
+.indexed-packages-table th {
+  opacity: 0.7;
+  font-weight: 600;
+}
+.indexed-packages-missing td {
+  opacity: 0.5;
+}
+.indexed-packages-changed {
+  color: #e2c08d;
+}
+.indexed-packages-drift {
+  color: #e2c08d;
+  font-size: 0.85rem;
+  margin: 0.4rem 0 0;
+}
+
+/* LSP hover tooltip and completion documentation pane (editor/lsp.ts → CodeMirror
+ * hoverTooltip / completion `info`). Both hold markdown rendered by `renderMarkdown`. */
+.cm-lsp-hover,
+.cm-lsp-doc {
   max-width: 480px;
   max-height: 320px;
   overflow: auto;
   padding: 0.4rem 0.6rem;
-  white-space: pre-wrap;
   font-size: 0.82rem;
   line-height: 1.4;
+}
+
+/* The `detail` signature line above a completion item's documentation. */
+.cm-lsp-doc-detail {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  opacity: 0.85;
+  margin-bottom: 0.35rem;
+}
+
+/* Markdown element styling shared by hover + doc panes: tight blocks, mono code. */
+.cm-lsp-hover p,
+.cm-lsp-doc p {
+  margin: 0 0 0.4rem;
+}
+.cm-lsp-hover p:last-child,
+.cm-lsp-doc p:last-child {
+  margin-bottom: 0;
+}
+.cm-lsp-hover pre,
+.cm-lsp-doc pre {
+  margin: 0 0 0.4rem;
+  padding: 0.35rem 0.5rem;
+  overflow: auto;
+  border-radius: 4px;
+  background: var(--surface-2, rgba(127, 127, 127, 0.12));
+}
+.cm-lsp-hover code,
+.cm-lsp-doc code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.95em;
+}
+.cm-lsp-hover pre code,
+.cm-lsp-doc pre code {
+  white-space: pre;
+}
+.cm-lsp-hover ul,
+.cm-lsp-doc ul {
+  margin: 0 0 0.4rem;
+  padding-left: 1.1rem;
+}
+.cm-lsp-hover h1,
+.cm-lsp-hover h2,
+.cm-lsp-hover h3,
+.cm-lsp-hover h4,
+.cm-lsp-doc h1,
+.cm-lsp-doc h2,
+.cm-lsp-doc h3,
+.cm-lsp-doc h4 {
+  margin: 0.3rem 0;
+  font-size: 0.9rem;
 }
 
 /* Git decorations (see files/store.ts, files/FileTree.tsx). Per-status color is
@@ -3723,4 +3804,258 @@ kbd {
 
 .dialog-btn-danger:hover {
   background: rgba(248, 81, 73, 1);
+}
+
+/* --- Library module (knowledge base / RAG) --- */
+.lib-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: auto;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.lib-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 1;
+}
+
+.lib-searchbox {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 180px;
+}
+
+.lib-input,
+.lib-textarea,
+.lib-select {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 5px 8px;
+  font: inherit;
+}
+
+.lib-input {
+  flex: 1;
+  min-width: 120px;
+}
+
+.lib-textarea {
+  width: 100%;
+  resize: vertical;
+}
+
+.lib-btn {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.lib-btn:hover {
+  background: var(--bg-hover);
+}
+
+.lib-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.lib-btn-primary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.lib-btn-ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.lib-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+
+.lib-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.lib-tab {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.lib-tab.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.lib-error {
+  color: var(--danger, #e06c75);
+  padding: 8px 10px;
+}
+
+.lib-empty {
+  color: var(--text-dim);
+  padding: 24px 12px;
+  text-align: center;
+}
+
+.lib-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.lib-table th {
+  text-align: left;
+  color: var(--text-dim);
+  font-weight: 500;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 41px;
+  background: var(--bg);
+}
+
+.lib-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.lib-icon {
+  font-size: 15px;
+}
+
+.lib-num {
+  text-align: right;
+  color: var(--text-dim);
+}
+
+.lib-title a {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.lib-title a:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.lib-sub {
+  display: flex;
+  gap: 8px;
+  color: var(--text-dim);
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.lib-tag {
+  display: inline-block;
+  background: var(--bg-hover);
+  border-radius: 3px;
+  padding: 1px 6px;
+  margin: 0 3px 3px 0;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.lib-status {
+  display: inline-block;
+  border-radius: 10px;
+  padding: 1px 8px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+
+.lib-status-ready {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.lib-status-failed {
+  color: var(--danger, #e06c75);
+  border-color: var(--danger, #e06c75);
+}
+
+.lib-status-fetching,
+.lib-status-chunking,
+.lib-status-embedding,
+.lib-status-queued {
+  opacity: 0.85;
+}
+
+.lib-errmark {
+  cursor: help;
+  color: var(--danger, #e06c75);
+}
+
+.lib-results {
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lib-results-head {
+  color: var(--text-dim);
+}
+
+.lib-result {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: var(--bg-raised);
+}
+
+.lib-result-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.lib-result-title a {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.lib-score {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.lib-snippet {
+  margin: 6px 0 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.5;
 }

@@ -56,6 +56,12 @@ START_TIMEOUT_S = 60.0
 _STOP = object()  # worker-queue poison pill
 
 
+class UnknownProjectError(ValueError):
+    """The requested project no longer exists (e.g. a persisted pane referencing a
+    deleted/corrupt project). Carries an `unknown_project` code to the pane so it
+    can self-heal instead of showing a dead-end error."""
+
+
 def _evt(event: str, data: dict[str, Any]) -> dict[str, Any]:
     return {"channel": "training", "event": event, "data": data}
 
@@ -510,9 +516,11 @@ class TrainingKernelManager:
                     self.sessions[key] = session
         except Exception as exc:  # noqa: BLE001 — surfaced to the pane
             logger.exception("kernel open failed for %s", key)
-            await conn.send_json(
-                _evt("error", {"sessionKey": key, "message": str(exc)})
-            )
+            payload: dict[str, Any] = {"sessionKey": key, "message": str(exc)}
+            if isinstance(exc, UnknownProjectError):
+                # Lets the pane self-heal (close the dead pane) rather than string-match.
+                payload["code"] = "unknown_project"
+            await conn.send_json(_evt("error", payload))
             return
         session.subscribers.add(conn)
         await conn.send_json(
@@ -530,7 +538,7 @@ class TrainingKernelManager:
     def _create(self, project_id: str, nb_rel: str, key: str) -> KernelSession:
         project = projects.get_project(project_id)
         if project is None:
-            raise ValueError(f"unknown project: {project_id}")
+            raise UnknownProjectError(f"unknown project: {project_id}")
         if not venv_ready(project):
             raise ValueError("project venv is not ready yet — wait for the bootstrap")
         session = KernelSession(key, project, nb_rel, self._loop())

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { NotebookCell } from '../api';
 import {
@@ -12,8 +12,9 @@ import {
 import { openSession, useSession } from '../store';
 import { OutputRenderer } from '../outputs/OutputRenderer';
 import { CellEditor } from './CellEditor';
-import { useAgentContext } from '../../../agent-context';
+import { PaneInstanceContext, useAgentContext } from '../../../agent-context';
 import { usePaneParams } from '../../../panes';
+import { registry } from '../../../registry';
 
 const dim = { color: 'var(--text-dim)' } as const;
 
@@ -34,6 +35,7 @@ const EDIT_SYNC_MS = 400;
  */
 export function NotebookPane() {
   const params = usePaneParams();
+  const instanceId = useContext(PaneInstanceContext);
   const projectId = String(params.projectId ?? '');
   const notebookPath = String(params.notebook ?? 'main.ipynb');
   const store = useMemo(() => openSession(projectId, notebookPath), [projectId, notebookPath]);
@@ -117,6 +119,35 @@ export function NotebookPane() {
     return (
       <div style={{ padding: '1rem', ...dim }}>
         No project — open me from the Training projects pane.
+      </div>
+    );
+  }
+
+  // The project this pane was persisted against no longer exists (deleted, or a
+  // partial dir with no project.json). Offer to close the dead pane — closing it
+  // drops it from the saved layout so it won't reattach-and-error on next load.
+  if (state.errorCode === 'unknown_project') {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '0.6rem',
+          alignItems: 'flex-start',
+          padding: '1rem',
+          fontSize: '0.85rem',
+        }}
+      >
+        <div>
+          <strong>{projectId}</strong> no longer exists.
+        </div>
+        <div style={dim}>This training project was deleted or is missing its data.</div>
+        <button
+          onClick={() => instanceId && registry.layoutController?.closePane(instanceId)}
+          disabled={!instanceId}
+        >
+          Close pane
+        </button>
       </div>
     );
   }

@@ -42,6 +42,15 @@ helper package, then the provider's scaffold requirements (`pandas`,
 `Popen` pumped on daemon threads — the Windows-safe pattern shared with the LSP/terminal
 modules — with output lines streamed to the UI.
 
+A directory whose `project.json` is missing or unreadable (e.g. a partial dir left by an
+aborted bootstrap — just a `.venv`) is treated as **not a project**: it's skipped by
+listing/lookup, creating the same env **adopts** the slug (writes `project.json`, reuses
+the existing `.venv`) instead of stranding it behind a `-2` suffix, and `delete` removes
+such partial dirs (which `get_project` can't resolve). If a persisted notebook pane
+references a project that no longer exists, the kernel-open error carries an
+`unknown_project` code and the pane shows a "no longer exists" state with a **Close**
+button that drops the dead pane from the saved layout — so it self-heals on the next load.
+
 ## Environment providers
 
 A provider is a thin synchronous adapter behind one uniform contract

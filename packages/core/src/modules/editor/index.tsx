@@ -10,6 +10,7 @@
 import { registry, type ModuleManifest } from '../../registry';
 import { editorAgentTools } from './agentTools';
 import { BufferView } from './BufferView';
+import { IndexedPackages } from './IndexedPackages';
 import { getBuffer, listBufferUris } from './buffers';
 import { RecentNotesWidget } from './RecentNotes';
 import { registerEditorService } from './service';
@@ -124,6 +125,27 @@ export const editorModule: ModuleManifest = {
       type: 'boolean',
       default: false,
     },
+    {
+      key: 'editor.pythonPath',
+      title: 'Python interpreter',
+      description:
+        'Path to the Python interpreter basedpyright analyzes against, so third-party import completions (e.g. torch, numpy) resolve. Leave empty to auto-detect a project .venv or your system Python. Takes effect for buffers opened after it changes.',
+      type: 'string',
+      default: '',
+    },
+    {
+      key: 'editor.frameworkImports',
+      title: 'Framework import suggestions',
+      description:
+        'Suggest common Python framework symbols and aliases (numpy/np, pandas/DataFrame, torch/nn, transformers/AutoModelForCausalLM, …) in any .py file and insert the import automatically when accepted. Fills the gap where the language server cannot auto-import installed libraries.',
+      type: 'boolean',
+      default: true,
+    },
+  ],
+  // The indexed-packages table (framework versions per interpreter) is richer than a
+  // declarative control, so it's a custom section.
+  settingsSections: [
+    { id: 'editor.indexedPackages', title: 'Indexed packages', component: IndexedPackages },
   ],
 };
 

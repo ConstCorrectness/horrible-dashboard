@@ -36,11 +36,16 @@ def slugify(name: str) -> str:
 
 
 def _unique_slug(name: str) -> str:
+    """A slug not already used by a **valid** project. A directory that lacks a
+    readable `project.json` (an orphan — e.g. a stray `.venv` from an aborted
+    create) is not a project, so its slug is reusable: `create_project` writes
+    `project.json` into it and adopts any existing `.venv` instead of stranding it
+    behind a `-2` suffix."""
     base = slugify(name)
     root = projects_root()
     slug = base
     n = 2
-    while (root / slug).exists():
+    while _read(root / slug) is not None:
         slug = f"{base}-{n}"
         n += 1
     return slug
@@ -113,8 +118,15 @@ def update_project(project: ProjectModel) -> ProjectModel:
 
 
 def delete_project(project_id: str) -> bool:
-    project = get_project(project_id)
-    if project is None:
+    """Remove a project directory by slug. Deletes **partial/orphan** dirs too (a
+    dir with no readable `project.json`), so a corrupt project can be cleaned up —
+    `get_project` would return `None` for those, which previously left them
+    undeletable. The slug regex guards against `..`/absolute escapes out of the
+    projects root."""
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", project_id):
         return False
-    shutil.rmtree(project.root, ignore_errors=True)
+    directory = projects_root() / project_id
+    if not directory.is_dir():
+        return False
+    shutil.rmtree(directory, ignore_errors=True)
     return True

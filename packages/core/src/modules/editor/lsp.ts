@@ -21,6 +21,9 @@ import {
 import { lintGutter, setDiagnostics, type Diagnostic } from '@codemirror/lint';
 import {
   autocompletion,
+  pickedCompletion,
+  snippetCompletion,
+  startCompletion,
   type Completion,
   type CompletionContext,
   type CompletionResult,
@@ -40,6 +43,8 @@ import {
   type RenameOutcome,
 } from './lsp-registry';
 import { loadSource, saveSource } from './sources';
+import { frameworkImportSource } from './pythonImports';
+import { fetchPythonEnv } from './pythonEnv';
 
 /** LSP CompletionItemKind → CodeMirror completion `type` (drives the icon). */
 const COMPLETION_KIND: Record<number, string> = {
@@ -60,14 +65,29 @@ const COMPLETION_KIND: Record<number, string> = {
   25: 'type', // type parameter
 };
 
+/** LSP MarkupContent (or the legacy plain-string form) — hover/documentation bodies. */
+type MarkupContent = string | { kind?: string; value: string };
+
 interface LspCompletionItem {
   label: string;
   kind?: number;
   detail?: string;
+  documentation?: MarkupContent;
   insertText?: string;
   insertTextFormat?: number; // 1 = plain, 2 = snippet
-  textEdit?: { newText: string };
+  // A plain `TextEdit` (`range`) or an `InsertReplaceEdit` (`insert`/`replace`); the
+  // range says what `newText` replaces, which can extend before the typed word (e.g.
+  // an auto-import whose `newText` is a qualified `os.O_ASYNC` over `os.`).
+  textEdit?: {
+    newText: string;
+    range?: { start: LspPosition; end: LspPosition };
+    insert?: { start: LspPosition; end: LspPosition };
+    replace?: { start: LspPosition; end: LspPosition };
+  };
   sortText?: string;
+  // `data` (and any other server-specific fields) ride along on the parsed object so
+  // `completionItem/resolve` can echo the item back verbatim; not all are typed here.
+  data?: unknown;
 }
 
 interface PendingRequest {
@@ -80,16 +100,127 @@ interface PendingRequest {
  * reach through `ref.plugin`. Extends the agent-facing `LspBufferClient`. */
 interface LspClient extends LspBufferClient {
   initialized: boolean;
+  dead: boolean;
+  /** Characters that auto-open the completion list (from the server's capabilities). */
+  triggerChars: string[];
   complete(context: CompletionContext): Promise<CompletionResult | null>;
   hover(pos: number): Promise<Tooltip | null>;
   definition(pos: number): Promise<void>;
 }
 
-/** The text a completion inserts. Snippets (format 2) carry `${1:…}` placeholders
- * we don't expand yet, so fall back to the plain label for those. */
-function completionApply(it: LspCompletionItem): string {
-  if (it.insertTextFormat === 2) return it.label;
+/** The literal text a plain (non-snippet) completion inserts. */
+function completionInsertText(it: LspCompletionItem): string {
   return it.textEdit?.newText ?? it.insertText ?? it.label;
+}
+
+/** The start position an item's `textEdit` replaces — a plain `TextEdit` `range`, or
+ * an `InsertReplaceEdit`'s `replace`/`insert` — or undefined for a bare insert. The
+ * start is what matters: it can sit before the typed word, so honoring it stops
+ * qualified inserts (auto-imports) from doubling. */
+function textEditStart(te: LspCompletionItem['textEdit']): LspPosition | undefined {
+  return (te?.range ?? te?.replace ?? te?.insert)?.start;
+}
+
+/** Convert an LSP snippet body to a CodeMirror snippet template. LSP tab stops
+ * (`${1:default}`, bare `$1`, final `$0`) map onto CodeMirror's `${…}` fields;
+ * CodeMirror orders fields by document position, which matches how servers emit
+ * them, and `$0`/`${0}` become the empty final field. */
+function lspSnippetToCm(body: string): string {
+  return body
+    .replace(/\$\{0(:[^}]*)?\}/g, '${}') // ${0} / ${0:x} → final cursor
+    .replace(/\$0/g, '${}') // $0 → final cursor
+    .replace(/\$(\d+)/g, '${$1}'); // bare $1 → ${1}
+}
+
+/** Plain-text body of an LSP MarkupContent (or legacy string), else empty. */
+function markupText(doc: MarkupContent | undefined): string {
+  if (!doc) return '';
+  return typeof doc === 'string' ? doc : (doc.value ?? '');
+}
+
+/** Escape the HTML-significant characters so text can't inject markup. */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/** Inline markdown → HTML on an already-escaped string: inline code, bold, italics,
+ * and links flattened to their text (doc panes aren't a place to navigate away). */
+function renderInline(escaped: string): string {
+  return escaped
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1');
+}
+
+/** Render a small subset of markdown (fenced/inline code, headings, bullet lists,
+ * bold/italics, paragraphs) to a safe DOM node. Every user-supplied span is
+ * HTML-escaped before any tag is added, so the built string carries only our own
+ * markup — no XSS surface from a docstring. Used for completion doc panes and hover. */
+function renderMarkdown(md: string): HTMLElement {
+  const container = document.createElement('div');
+  const lines = md.replace(/\r\n/g, '\n').split('\n');
+  let html = '';
+  let listOpen = false;
+  let i = 0;
+  const closeList = (): void => {
+    if (listOpen) {
+      html += '</ul>';
+      listOpen = false;
+    }
+  };
+  const isBlockStart = (l: string): boolean =>
+    /^\s*```/.test(l) || /^#{1,6}\s/.test(l) || /^\s*[-*+]\s/.test(l);
+  while (i < lines.length) {
+    const line = lines[i];
+    if (/^\s*```/.test(line)) {
+      closeList();
+      const buf: string[] = [];
+      i++;
+      while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) buf.push(lines[i++]);
+      i++; // skip the closing fence
+      html += `<pre><code>${escapeHtml(buf.join('\n'))}</code></pre>`;
+      continue;
+    }
+    const heading = line.match(/^(#{1,6})\s+(.*)$/);
+    if (heading) {
+      closeList();
+      const level = heading[1].length;
+      html += `<h${level}>${renderInline(escapeHtml(heading[2]))}</h${level}>`;
+      i++;
+      continue;
+    }
+    const item = line.match(/^\s*[-*+]\s+(.*)$/);
+    if (item) {
+      if (!listOpen) {
+        html += '<ul>';
+        listOpen = true;
+      }
+      html += `<li>${renderInline(escapeHtml(item[1]))}</li>`;
+      i++;
+      continue;
+    }
+    if (line.trim() === '') {
+      closeList();
+      i++;
+      continue;
+    }
+    closeList();
+    const para: string[] = [line];
+    i++;
+    while (i < lines.length && lines[i].trim() !== '' && !isBlockStart(lines[i])) {
+      para.push(lines[i++]);
+    }
+    html += `<p>${renderInline(escapeHtml(para.join(' ')))}</p>`;
+  }
+  closeList();
+  container.innerHTML = html;
+  return container;
 }
 
 /** Map a file extension to an LSP languageId the backend has a server for, or null
@@ -285,6 +416,259 @@ function firstLocation(result: unknown): LspLocation | null {
 
 let sessionCounter = 0;
 
+/** A document open on a shared session: the callback the session invokes to route this
+ * document's diagnostics back to its buffer's linter. */
+interface SessionDoc {
+  onDiagnostics: (raw: LspDiagnostic[]) => void;
+}
+
+/**
+ * One language-server session, **shared by every buffer** on the same interpreter +
+ * project root (the pool key). Owns the transport — its `sessionId`, the `start`/
+ * `initialize` handshake, a single JSON-RPC id space + pending map, and
+ * `workspace/configuration` answering — plus a registry of open documents, routing each
+ * server `publishDiagnostics` to the owning buffer by URI. The backend spawns one
+ * process per `sessionId`, so one session here is **one basedpyright indexed once for
+ * the whole project**. Refcounted: the server is stopped when the last document closes.
+ */
+class LspSession {
+  readonly sessionId = `lsp-${++sessionCounter}`;
+  initialized = false;
+  dead = false;
+  triggerChars: string[] = [];
+  resolveProvider = false;
+  refcount = 0;
+  // Set while the session is idle (no open documents) but kept warm before disposal —
+  // cleared if a buffer re-acquires it (see `acquireSession`).
+  disposeTimer: number | undefined;
+  private nextId = 2; // 1 is reserved for initialize
+  private pending = new Map<number, PendingRequest>();
+  private docs = new Map<string, SessionDoc>();
+  private queuedOpens: (() => void)[] = [];
+  private readonly unsubscribe: () => void;
+
+  constructor(
+    readonly key: string,
+    readonly languageId: string,
+    readonly root: string,
+    readonly interpreter: string | undefined,
+  ) {
+    this.unsubscribe = subscribeChannel('lsp', (msg) => this.onMessage(msg));
+    sendChannel('lsp', 'start', { sessionId: this.sessionId, languageId, root });
+  }
+
+  ready(): boolean {
+    return this.initialized && !this.dead;
+  }
+
+  private rpc(payload: Record<string, unknown>): void {
+    sendChannel('lsp', 'rpc', { sessionId: this.sessionId, payload });
+  }
+
+  /** A JSON-RPC request whose response resolves the returned promise. */
+  request(method: string, params: Record<string, unknown>, timeoutMs = 4000): Promise<unknown> {
+    if (this.dead) return Promise.reject(new Error('lsp session dead'));
+    const id = this.nextId++;
+    return new Promise<unknown>((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.rpc({ jsonrpc: '2.0', id, method, params });
+      window.setTimeout(() => {
+        if (this.pending.delete(id)) reject(new Error('lsp request timed out'));
+      }, timeoutMs);
+    });
+  }
+
+  /** Register a document and open it on the server (queued until initialize completes). */
+  openDocument(uri: string, languageId: string, text: string, doc: SessionDoc): void {
+    this.docs.set(uri, doc);
+    const open = (): void => {
+      if (this.dead) return;
+      this.rpc({
+        jsonrpc: '2.0',
+        method: 'textDocument/didOpen',
+        params: { textDocument: { uri, languageId, version: 1, text } },
+      });
+    };
+    if (this.initialized) open();
+    else this.queuedOpens.push(open);
+  }
+
+  didChange(uri: string, version: number, text: string): void {
+    if (!this.ready()) return;
+    this.rpc({
+      jsonrpc: '2.0',
+      method: 'textDocument/didChange',
+      params: { textDocument: { uri, version }, contentChanges: [{ text }] },
+    });
+  }
+
+  closeDocument(uri: string): void {
+    if (this.ready()) {
+      this.rpc({
+        jsonrpc: '2.0',
+        method: 'textDocument/didClose',
+        params: { textDocument: { uri } },
+      });
+    }
+    this.docs.delete(uri);
+  }
+
+  dispose(): void {
+    sendChannel('lsp', 'stop', { sessionId: this.sessionId });
+    this.unsubscribe();
+    this.dead = true;
+  }
+
+  /** Reply to a server→client request. We service `workspace/configuration` (how
+   * basedpyright pulls `python.pythonPath` so third-party imports resolve) and ack
+   * everything else with a `null` result so nothing blocks. */
+  private answerServerRequest(id: number | string, method: string, params: unknown): void {
+    let result: unknown = null;
+    if (method === 'workspace/configuration') {
+      const items = (params as { items?: { section?: string }[] } | undefined)?.items ?? [];
+      result = items.map((it) => this.configFor(it?.section));
+    }
+    this.rpc({ jsonrpc: '2.0', id, result });
+  }
+
+  /** The value for one `workspace/configuration` section: `python` carries the session's
+   * interpreter (part of its pool key) + the analysis knobs; an `analysis` section gets
+   * just those; anything else is empty (the server keeps its defaults). */
+  private configFor(section: string | undefined): Record<string, unknown> {
+    const analysis = {
+      autoSearchPaths: true,
+      useLibraryCodeForTypes: true,
+      diagnosticMode: 'openFilesOnly',
+    };
+    if (section && section.includes('analysis')) return analysis;
+    if (section && section !== 'python') return {};
+    return this.interpreter ? { pythonPath: this.interpreter, analysis } : { analysis };
+  }
+
+  private onMessage(msg: WsMessage): void {
+    const data = (msg.data ?? {}) as { sessionId?: string; payload?: Record<string, unknown> };
+    if (data.sessionId !== this.sessionId) return;
+    if (msg.event === 'error' || msg.event === 'exit') {
+      this.dead = true;
+      return;
+    }
+    if (msg.event === 'started') {
+      this.rpc({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          processId: null,
+          rootUri: pathToUri(this.root),
+          capabilities: {
+            workspace: {
+              configuration: true,
+              didChangeConfiguration: { dynamicRegistration: true },
+            },
+            textDocument: {
+              synchronization: { dynamicRegistration: false },
+              publishDiagnostics: { relatedInformation: false },
+              completion: {
+                completionItem: {
+                  snippetSupport: true,
+                  documentationFormat: ['markdown', 'plaintext'],
+                  resolveSupport: { properties: ['documentation', 'detail'] },
+                },
+                contextSupport: false,
+              },
+              hover: { contentFormat: ['markdown', 'plaintext'] },
+              definition: { dynamicRegistration: false },
+            },
+          },
+          workspaceFolders: null,
+        },
+      });
+      return;
+    }
+    if (msg.event !== 'rpc' || !data.payload) return;
+    const p = data.payload;
+    // Initialize response → capture completion capabilities, complete the handshake,
+    // then flush the didOpens that were queued while it was in flight.
+    if (!this.initialized && p.id === 1 && 'result' in p) {
+      const caps = (
+        p.result as {
+          capabilities?: {
+            completionProvider?: { triggerCharacters?: string[]; resolveProvider?: boolean };
+          };
+        } | null
+      )?.capabilities;
+      const cp = caps?.completionProvider;
+      if (Array.isArray(cp?.triggerCharacters)) this.triggerChars = cp.triggerCharacters;
+      this.resolveProvider = cp?.resolveProvider === true;
+      this.initialized = true;
+      this.rpc({ jsonrpc: '2.0', method: 'initialized', params: {} });
+      for (const open of this.queuedOpens) open();
+      this.queuedOpens = [];
+      return;
+    }
+    // A server→client *request* (a `method` plus an `id`) must be answered or the server
+    // stalls. Checked before the response branch because responses carry no `method`.
+    if (typeof p.method === 'string' && (typeof p.id === 'number' || typeof p.id === 'string')) {
+      this.answerServerRequest(p.id, p.method, p.params);
+      return;
+    }
+    // Resolve a pending request (completion, hover, …) by its JSON-RPC id.
+    if (typeof p.id === 'number' && this.pending.has(p.id)) {
+      const waiter = this.pending.get(p.id)!;
+      this.pending.delete(p.id);
+      if ('error' in p) waiter.reject(p.error);
+      else waiter.resolve(p.result);
+      return;
+    }
+    // Diagnostics → route to the owning document's buffer by URI.
+    if (p.method === 'textDocument/publishDiagnostics') {
+      const params = p.params as { uri?: string; diagnostics?: LspDiagnostic[] } | undefined;
+      if (!params?.uri) return;
+      this.docs.get(params.uri)?.onDiagnostics(params.diagnostics ?? []);
+    }
+  }
+}
+
+// Pool of live sessions keyed by `${languageId}::${root}::${interpreter}` — every buffer
+// sharing a key shares one server (indexed once).
+const sessionPool = new Map<string, LspSession>();
+
+// Keep an idle (no-documents) session warm this long before stopping its server, so
+// switching tabs — which unmounts one buffer and mounts another — reuses the already-
+// indexed server instead of respawning and reindexing it.
+const SESSION_IDLE_MS = 60_000;
+
+function acquireSession(
+  key: string,
+  languageId: string,
+  root: string,
+  interpreter: string | undefined,
+): LspSession {
+  let session = sessionPool.get(key);
+  if (!session || session.dead) {
+    session = new LspSession(key, languageId, root, interpreter);
+    sessionPool.set(key, session);
+  } else if (session.disposeTimer !== undefined) {
+    // Re-acquired while idle — cancel the pending disposal and reuse the warm server.
+    window.clearTimeout(session.disposeTimer);
+    session.disposeTimer = undefined;
+  }
+  session.refcount++;
+  return session;
+}
+
+function releaseSession(session: LspSession): void {
+  session.refcount--;
+  if (session.refcount > 0 || session.disposeTimer !== undefined) return;
+  // Idle: stop the server after a grace period unless it's re-acquired first.
+  session.disposeTimer = window.setTimeout(() => {
+    session.disposeTimer = undefined;
+    if (session.refcount > 0) return;
+    if (sessionPool.get(session.key) === session) sessionPool.delete(session.key);
+    session.dispose();
+  }, SESSION_IDLE_MS);
+}
+
 export interface LspOptions {
   path: string;
   languageId: string;
@@ -296,6 +680,13 @@ export interface LspOptions {
   /** Open another file at a 0-based line for cross-file go-to-definition (the
    * editor module supplies this; same-file jumps move the cursor directly). */
   openFile?: (path: string, line: number) => void;
+  /** Explicit Python interpreter (the `editor.pythonPath` setting) reported to the
+   * server as `python.pythonPath`, so third-party imports resolve. Overrides the
+   * backend's auto-detected interpreter; empty/undefined falls back to that. */
+  pythonPathOverride?: string;
+  /** Whether to offer the curated framework-import completions (the
+   * `editor.frameworkImports` setting; Python only). Defaults to on. */
+  frameworkImports?: boolean;
 }
 
 /** Build the LSP extension for one buffer. Manages a server session for its
@@ -308,49 +699,94 @@ export function lspExtension(opts: LspOptions): Extension {
   // The completion source is configured once (below) but must reach the *live*
   // plugin instance to issue requests — share it through this ref.
   const ref: { plugin: LspClient | null } = { plugin: null };
+  // Installed framework versions for this file's interpreter, populated async once the
+  // plugin resolves the environment — the framework-import source gates/annotates on them.
+  // (The interpreter itself keys the shared session; see `connect`.)
+  const env: { packages?: Record<string, string> } = {};
 
   const plugin = ViewPlugin.fromClass(
     class implements LspClient {
-      sessionId = `lsp-${++sessionCounter}`;
       version = 1;
-      initialized = false;
-      dead = false;
       changeTimer: number | undefined;
-      nextId = 2; // 1 is reserved for initialize
-      pending = new Map<number, PendingRequest>();
-      unsubscribe: () => void;
+      disposed = false;
+      // The shared session for this buffer's (interpreter, project) — acquired async once
+      // the Python environment resolves (see `connect`). Null until then, or for a buffer
+      // torn down before it resolved. Transport/capabilities are read through it.
+      session: LspSession | null = null;
       unregisterClient: () => void;
+      // Version-keyed caches so re-opening the same dropdown / re-hovering the same spot
+      // doesn't re-hit the server. All cleared on every `didChange` (see `clearCaches`),
+      // the correctness boundary — results only describe the document at `this.version`.
+      // `resolveCache` is keyed by the item object (unique per request), so it's scoped
+      // to one dropdown.
+      completionCache = new Map<string, LspCompletionItem[]>();
+      resolveCache = new Map<LspCompletionItem, LspCompletionItem>();
+      hoverCache = new Map<string, string>();
 
       constructor(readonly view: EditorView) {
-        this.unsubscribe = subscribeChannel('lsp', (msg) => this.onMessage(msg));
-        sendChannel('lsp', 'start', {
-          sessionId: this.sessionId,
-          languageId: opts.languageId,
-          root: opts.root,
-        });
         ref.plugin = this;
         // Expose this buffer's live client to the agent tools by its source URI.
         this.unregisterClient = registerLspClient(opts.bufferUri, this);
+        void this.connect();
+      }
+
+      /** Resolve the environment (Python), then join — or start — the shared session for
+       * this interpreter+project and open this document on it. */
+      async connect(): Promise<void> {
+        let root = opts.root;
+        let interpreter: string | undefined;
+        if (opts.languageId === 'python') {
+          const resolved = await fetchPythonEnv(dirOf(opts.path));
+          env.packages = resolved.packages;
+          root = resolved.root || opts.root;
+          // The setting override wins over the auto-detected interpreter; both key the
+          // pool, so buffers only share a server when they'd analyze identically.
+          interpreter = opts.pythonPathOverride || resolved.interpreter || undefined;
+        }
+        if (this.disposed) return; // torn down while the env fetch was in flight
+        const session = acquireSession(
+          `${opts.languageId}::${root}::${interpreter ?? ''}`,
+          opts.languageId,
+          root,
+          interpreter,
+        );
+        this.session = session;
+        session.openDocument(uri, opts.languageId, this.view.state.doc.toString(), {
+          onDiagnostics: (raw) => this.applyDiagnostics(raw),
+        });
+      }
+
+      // Session-backed state the statically-configured extensions read through `ref`.
+      get initialized(): boolean {
+        return this.session?.ready() ?? false;
+      }
+      get dead(): boolean {
+        return this.session?.dead ?? false;
+      }
+      get triggerChars(): string[] {
+        return this.session?.triggerChars ?? [];
+      }
+      get resolveProvider(): boolean {
+        return this.session?.resolveProvider ?? false;
       }
 
       ready(): boolean {
-        return this.initialized && !this.dead;
+        return this.session?.ready() ?? false;
       }
 
-      rpc(payload: Record<string, unknown>): void {
-        sendChannel('lsp', 'rpc', { sessionId: this.sessionId, payload });
-      }
-
-      /** A JSON-RPC request whose response resolves the returned promise. */
+      /** A JSON-RPC request over the shared session, scoped to this document by `uri`. */
       request(method: string, params: Record<string, unknown>, timeoutMs = 4000): Promise<unknown> {
-        const id = this.nextId++;
-        return new Promise<unknown>((resolve, reject) => {
-          this.pending.set(id, { resolve, reject });
-          this.rpc({ jsonrpc: '2.0', id, method, params });
-          window.setTimeout(() => {
-            if (this.pending.delete(id)) reject(new Error('lsp request timed out'));
-          }, timeoutMs);
-        });
+        return this.session
+          ? this.session.request(method, params, timeoutMs)
+          : Promise.reject(new Error('lsp session not connected'));
+      }
+
+      /** Render the server's diagnostics for this document into the linter and stash the
+       * flattened form for the agent's read tools. */
+      applyDiagnostics(raw: LspDiagnostic[]): void {
+        recordDiagnostics(opts.bufferUri, raw.map(toAgentDiagnostic));
+        const diags = raw.map((d) => toCmDiagnostic(this.view, d)).sort((a, b) => a.from - b.from);
+        this.view.dispatch(setDiagnostics(this.view.state, diags));
       }
 
       /** Resolve an `LspTarget` (explicit 1-based line/column, a symbol's first
@@ -483,6 +919,61 @@ export function lspExtension(opts: LspOptions): Extension {
         const doc = this.view.state.doc;
         const line = doc.lineAt(context.pos);
         const position = { line: line.number - 1, character: context.pos - line.from };
+        const items = await this.completionItems(position);
+        if (!items.length) return null;
+        const options: Completion[] = items.slice(0, 200).map((it) => {
+          // Shared metadata; the doc pane is resolved lazily when the item is focused.
+          const meta = {
+            label: it.label,
+            type: it.kind ? COMPLETION_KIND[it.kind] : undefined,
+            detail: it.detail,
+            info: () => this.completionInfo(it),
+          };
+          const newText = completionInsertText(it);
+          // When the server specifies the range its `newText` replaces, honor that
+          // start (mapped to an offset at apply time) — it can reach before the typed
+          // word, so a qualified auto-import (`os.O_ASYNC` over `os.`) replaces `os.`
+          // instead of doubling it. The end stays live (CodeMirror's `to`) so anything
+          // typed after the list opened is still replaced. Bare inserts (no textEdit)
+          // keep the simple string/snippet apply anchored at the completion `from`.
+          const editStart = textEditStart(it.textEdit);
+          if (it.insertTextFormat === 2) {
+            const snip = snippetCompletion(lspSnippetToCm(newText), meta);
+            if (!editStart) return snip;
+            const expand = snip.apply as (
+              v: EditorView,
+              c: Completion,
+              f: number,
+              t: number,
+            ) => void;
+            return {
+              ...meta,
+              apply: (view: EditorView, c: Completion, _from: number, to: number) =>
+                expand(view, c, offsetAt(view, editStart), to),
+            };
+          }
+          if (!editStart) return { ...meta, apply: newText };
+          return {
+            ...meta,
+            apply: (view: EditorView, _c: Completion, _from: number, to: number) => {
+              const from = offsetAt(view, editStart);
+              view.dispatch({
+                changes: { from, to, insert: newText },
+                selection: { anchor: from + newText.length },
+                annotations: pickedCompletion.of({ label: it.label }),
+              });
+            },
+          };
+        });
+        return { from: word ? word.from : context.pos, options, validFor: /^[\w$]*$/ };
+      }
+
+      /** Completion items at a position, cached for the current document version so a
+       * re-opened dropdown at the same spot doesn't re-hit the server. */
+      async completionItems(position: LspPosition): Promise<LspCompletionItem[]> {
+        const key = `${this.version}:${position.line}:${position.character}`;
+        const cached = this.completionCache.get(key);
+        if (cached) return cached;
         let result: unknown;
         try {
           result = await this.request('textDocument/completion', {
@@ -490,42 +981,80 @@ export function lspExtension(opts: LspOptions): Extension {
             position,
           });
         } catch {
-          return null; // timed out / errored — no completions
+          return []; // timed out / errored — no completions
         }
         const items = (
           Array.isArray(result)
             ? result
             : ((result as { items?: LspCompletionItem[] })?.items ?? [])
         ) as LspCompletionItem[];
-        if (!items.length) return null;
-        const options: Completion[] = items.slice(0, 200).map((it) => ({
-          label: it.label,
-          type: it.kind ? COMPLETION_KIND[it.kind] : undefined,
-          detail: it.detail,
-          apply: completionApply(it),
-        }));
-        return { from: word ? word.from : context.pos, options, validFor: /^[\w$]*$/ };
+        this.completionCache.set(key, items);
+        return items;
+      }
+
+      /** Enrich an item with its documentation via `completionItem/resolve` (cached
+       * per item). Falls back to the unresolved item if the server can't resolve. */
+      async resolveItem(it: LspCompletionItem): Promise<LspCompletionItem> {
+        const cached = this.resolveCache.get(it);
+        if (cached) return cached;
+        let resolved = it;
+        try {
+          const result = await this.request(
+            'completionItem/resolve',
+            it as unknown as Record<string, unknown>,
+          );
+          if (result && typeof result === 'object') resolved = result as LspCompletionItem;
+        } catch {
+          // resolve failed/timed out — show what the item already carries.
+        }
+        this.resolveCache.set(it, resolved);
+        return resolved;
+      }
+
+      /** The completion doc pane: the item's `detail` signature plus its (markdown)
+       * documentation, resolved on demand. Null when there's nothing to show. */
+      async completionInfo(it: LspCompletionItem): Promise<Node | null> {
+        const resolved = this.resolveProvider ? await this.resolveItem(it) : it;
+        const body = markupText(resolved.documentation);
+        const detail = resolved.detail;
+        if (!body && !detail) return null;
+        const dom = document.createElement('div');
+        dom.className = 'cm-lsp-doc';
+        if (detail) {
+          const sig = document.createElement('div');
+          sig.className = 'cm-lsp-doc-detail';
+          sig.textContent = detail;
+          dom.appendChild(sig);
+        }
+        if (body) dom.appendChild(renderMarkdown(body));
+        return dom;
       }
 
       async hover(pos: number): Promise<Tooltip | null> {
-        let result: unknown;
-        try {
-          result = await this.request('textDocument/hover', {
-            textDocument: { uri },
-            position: positionAt(this.view.state.doc, pos),
-          });
-        } catch {
-          return null;
+        const key = `${this.version}:${pos}`;
+        let text = this.hoverCache.get(key);
+        if (text === undefined) {
+          let result: unknown;
+          try {
+            result = await this.request('textDocument/hover', {
+              textDocument: { uri },
+              position: positionAt(this.view.state.doc, pos),
+            });
+          } catch {
+            return null;
+          }
+          text = hoverText(result);
+          this.hoverCache.set(key, text);
         }
-        const text = hoverText(result);
         if (!text) return null;
+        const body = text;
         return {
           pos,
           above: true,
           create: () => {
             const dom = document.createElement('div');
             dom.className = 'cm-lsp-hover';
-            dom.textContent = text;
+            dom.appendChild(renderMarkdown(body));
             return { dom };
           },
         };
@@ -553,109 +1082,33 @@ export function lspExtension(opts: LspOptions): Extension {
         }
       }
 
-      onMessage(msg: WsMessage): void {
-        const data = (msg.data ?? {}) as { sessionId?: string; payload?: Record<string, unknown> };
-        if (data.sessionId !== this.sessionId) return;
-        if (msg.event === 'error' || msg.event === 'exit') {
-          this.dead = true;
-          return;
-        }
-        if (msg.event === 'started') {
-          this.rpc({
-            jsonrpc: '2.0',
-            id: 1,
-            method: 'initialize',
-            params: {
-              processId: null,
-              rootUri: pathToUri(opts.root),
-              capabilities: {
-                textDocument: {
-                  synchronization: { dynamicRegistration: false },
-                  publishDiagnostics: { relatedInformation: false },
-                  completion: {
-                    completionItem: { snippetSupport: false },
-                    contextSupport: false,
-                  },
-                  hover: { contentFormat: ['plaintext', 'markdown'] },
-                  definition: { dynamicRegistration: false },
-                },
-              },
-              workspaceFolders: null,
-            },
-          });
-          return;
-        }
-        if (msg.event !== 'rpc' || !data.payload) return;
-        const p = data.payload;
-        // The initialize response → complete the handshake and open the document.
-        if (!this.initialized && p.id === 1 && 'result' in p) {
-          this.initialized = true;
-          this.rpc({ jsonrpc: '2.0', method: 'initialized', params: {} });
-          this.rpc({
-            jsonrpc: '2.0',
-            method: 'textDocument/didOpen',
-            params: {
-              textDocument: {
-                uri,
-                languageId: opts.languageId,
-                version: this.version,
-                text: this.view.state.doc.toString(),
-              },
-            },
-          });
-          return;
-        }
-        // Resolve a pending request (completion, hover, …) by its JSON-RPC id.
-        if (typeof p.id === 'number' && this.pending.has(p.id)) {
-          const waiter = this.pending.get(p.id)!;
-          this.pending.delete(p.id);
-          if ('error' in p) waiter.reject(p.error);
-          else waiter.resolve(p.result);
-          return;
-        }
-        if (p.method === 'textDocument/publishDiagnostics') {
-          const params = p.params as { uri?: string; diagnostics?: LspDiagnostic[] } | undefined;
-          if (!params || params.uri !== uri) return;
-          const raw = params.diagnostics ?? [];
-          // Stash the flattened form for the agent's get_diagnostics read tool /
-          // getAgentContext, and render the CodeMirror form in the linter.
-          recordDiagnostics(opts.bufferUri, raw.map(toAgentDiagnostic));
-          const diags = raw
-            .map((d) => toCmDiagnostic(this.view, d))
-            .sort((a, b) => a.from - b.from);
-          this.view.dispatch(setDiagnostics(this.view.state, diags));
-        }
-      }
-
       update(u: ViewUpdate): void {
-        if (!u.docChanged || !this.initialized || this.dead) return;
+        if (!u.docChanged || !this.ready()) return;
         if (this.changeTimer !== undefined) window.clearTimeout(this.changeTimer);
         this.changeTimer = window.setTimeout(() => this.sendChange(), 300);
       }
 
       sendChange(): void {
-        if (this.dead) return;
-        this.rpc({
-          jsonrpc: '2.0',
-          method: 'textDocument/didChange',
-          params: {
-            textDocument: { uri, version: ++this.version },
-            contentChanges: [{ text: this.view.state.doc.toString() }],
-          },
-        });
+        if (!this.session?.ready()) return;
+        // The document moved on — every cached result described the old version.
+        this.clearCaches();
+        this.session.didChange(uri, ++this.version, this.view.state.doc.toString());
+      }
+
+      clearCaches(): void {
+        this.completionCache.clear();
+        this.resolveCache.clear();
+        this.hoverCache.clear();
       }
 
       destroy(): void {
+        this.disposed = true;
         if (this.changeTimer !== undefined) window.clearTimeout(this.changeTimer);
-        if (this.initialized && !this.dead) {
-          this.rpc({
-            jsonrpc: '2.0',
-            method: 'textDocument/didClose',
-            params: { textDocument: { uri } },
-          });
+        if (this.session) {
+          // Close this document; the session stops the server when its last doc closes.
+          this.session.closeDocument(uri);
+          releaseSession(this.session);
         }
-        sendChannel('lsp', 'stop', { sessionId: this.sessionId });
-        this.unsubscribe();
         this.unregisterClient();
         ref.plugin = null;
       }
@@ -708,12 +1161,36 @@ export function lspExtension(opts: LspOptions): Extension {
     },
   ]);
 
+  // Open the completion list the instant a server-declared trigger character is typed
+  // (e.g. `.` for members), matching VS Code — CodeMirror otherwise only re-queries on
+  // word characters. Only on real typing, and only for the trigger set the server
+  // advertised at initialize.
+  const triggerCompletion = EditorView.updateListener.of((update) => {
+    const p = ref.plugin;
+    if (!p?.initialized || p.dead || !p.triggerChars.length || !update.docChanged) return;
+    if (!update.transactions.some((tr) => tr.isUserEvent('input.type'))) return;
+    let last = '';
+    update.changes.iterChanges((_fromA, _toA, _fromB, _toB, inserted) => {
+      const s = inserted.toString();
+      if (s) last = s[s.length - 1];
+    });
+    if (last && p.triggerChars.includes(last)) startCompletion(update.view);
+  });
+
+  // Python buffers also get the curated framework-import source (basedpyright can't
+  // auto-import installed libraries) — merged into the same popup, ranked below LSP.
+  const useFrameworkImports = opts.languageId === 'python' && opts.frameworkImports !== false;
+  const completionSources = useFrameworkImports
+    ? [completionSource, frameworkImportSource(() => env.packages)]
+    : [completionSource];
+
   return [
     lintGutter(),
     plugin,
-    autocompletion({ override: [completionSource] }),
+    autocompletion({ override: completionSources }),
     hover,
     gotoDefinition,
     renameSymbol,
+    triggerCompletion,
   ];
 }

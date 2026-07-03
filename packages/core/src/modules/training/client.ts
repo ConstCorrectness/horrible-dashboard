@@ -44,7 +44,7 @@ export interface TrainingEventMap {
   frame: { projectId: string; source?: string; dataUrl: string };
   model_graph: { projectId: string; graph: ModelGraph };
   model_stats: { projectId: string; stats: Record<string, { w_norm: number; g_norm: number }> };
-  error: { sessionKey?: string; message: string };
+  error: { sessionKey?: string; message: string; code?: string };
 }
 
 export interface ModelGraphNode {

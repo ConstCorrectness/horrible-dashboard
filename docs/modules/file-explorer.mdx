@@ -47,14 +47,16 @@ the [settings module](settings.mdx) (`files.roots`; browser: paste a backend-hos
 path; desktop: a native folder picker via `fs.nativeDialogs`), with an env
 override `HORRIBLE_WORKSPACE_ROOTS` for dev/test.
 
-**Out of the box:** when neither setting nor env is configured, the backend defaults
-to a single root — its **launch directory** (`Path.cwd()`), which is the repo
-checkout under both the dev command and the Tauri desktop spawn (`.current_dir`).
-This is cross-platform and means the file explorer and every `files.*` agent/flow
-tool work immediately with no setup. A filesystem root (`/`, `C:\`) is skipped as too
-broad, and `HORRIBLE_NO_DEFAULT_ROOT=1` restores the fail-closed boundary (empty
-roots → `400`) for hardened/remote deployments. Explicit `files.roots`/env config
-always takes precedence over the default.
+**Out of the box:** when neither setting nor env is configured, the backend **sets
+up a default workspace** — a single root at **`~/Projects`**, created if it doesn't
+exist. That's deliberately a *user* workspace rather than the backend's launch
+directory, which under both the dev command and the Tauri desktop spawn is this
+app's own repo checkout — not what a user wants their file explorer rooted at. This
+is cross-platform (`Path.home()`) and means the file explorer and every `files.*`
+agent/flow tool work immediately with no setup. `HORRIBLE_NO_DEFAULT_ROOT=1`
+restores the fail-closed boundary (empty roots → `400`, nothing created) for
+hardened/remote deployments. Explicit `files.roots`/env config always takes
+precedence over the default.
 
 | Route                  | Purpose                                          |
 | ---------------------- | ------------------------------------------------ |

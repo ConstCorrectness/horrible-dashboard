@@ -125,6 +125,35 @@ def test_kaggle_resolve_unknown_raises(fake_kaggle) -> None:
         kaggle.resolve("does-not-exist", "competition")
 
 
+class _CompetitionsResponse:
+    """Mimics kaggle 2.2+ `competitions_list`, which returns a response *wrapper*
+    (its `.competitions` holds the items) rather than a bare list."""
+
+    def __init__(self, competitions: list) -> None:
+        self.competitions = competitions
+        self.next_page_token = ""
+
+
+class _WrappedKaggleApi(_FakeKaggleApi):
+    def competitions_list(self, search: str = ""):
+        return _CompetitionsResponse(
+            [_FakeCompetition()] if "pokemon" in search.lower() else []
+        )
+
+
+def test_kaggle_search_unwraps_response_object(tmp_path: Path, monkeypatch) -> None:
+    # Regression: the 2.2+ client wraps competitions in a response object, so a bare
+    # `for c in api.competitions_list(...)` raised "object is not iterable".
+    from backend.modules.training.providers import kaggle_provider
+
+    monkeypatch.setattr(kaggle_provider, "_api", lambda: _WrappedKaggleApi())
+    kaggle = get_provider("kaggle")
+    hits = kaggle.search("pokemon tcg", "competition", 5)
+    assert hits and hits[0].id == "pokemon-tcg"
+    ref = kaggle.resolve("pokemon-tcg", "competition")
+    assert ref.title == "Pokemon TCG"
+
+
 # --- huggingface (mocked client factory) -------------------------------------
 
 

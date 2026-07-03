@@ -27,7 +27,10 @@ from backend.modules.files import router as files_router
 from backend.modules.files.watcher import push_file_events
 from backend.modules.flow import handle_flow_message
 from backend.modules.flow import router as flow_router
+from backend.modules.library import push_library_events
+from backend.modules.library import router as library_router
 from backend.modules.lsp import LspManager
+from backend.modules.lsp import router as lsp_router
 from backend.modules.network import (
     chat_manager,
     collab_manager,
@@ -114,6 +117,7 @@ def health() -> dict[str, str]:
 app.include_router(agent_router, prefix="/api")
 app.include_router(workspace_router, prefix="/api")
 app.include_router(database_router, prefix="/api")
+app.include_router(library_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(files_router, prefix="/api")
 app.include_router(notes_router, prefix="/api")
@@ -124,6 +128,7 @@ app.include_router(settings_router, prefix="/api")
 app.include_router(flow_router, prefix="/api")
 app.include_router(network_router, prefix="/api")
 app.include_router(training_router, prefix="/api")
+app.include_router(lsp_router, prefix="/api")
 
 # Register the training module's backend agent tools into the sdk registry (the
 # training module is a first-party consumer of the same registry backend plugins
@@ -173,6 +178,8 @@ async def ws(websocket: WebSocket) -> None:
     lsp = LspManager(conn)
     telemetry_task = asyncio.create_task(push_telemetry(conn))
     files_task = asyncio.create_task(push_file_events(conn))
+    # Fan library ingestion status (queued→…→ready/failed) to this browser.
+    library_task = asyncio.create_task(push_library_events(conn))
     # Fan peer/presence events from the process-global hub out to this browser.
     network_unsub = subscribe_conn(conn)
     # Fan lobby (directory/rooms) events out to this browser.
@@ -224,6 +231,7 @@ async def ws(websocket: WebSocket) -> None:
         visualizer_manager.stop_for(conn)
         telemetry_task.cancel()
         files_task.cancel()
+        library_task.cancel()
         network_unsub()  # type: ignore[operator]
         lobby_unsub()  # type: ignore[operator]
         commons_unsub()  # type: ignore[operator]

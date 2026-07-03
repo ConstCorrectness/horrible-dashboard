@@ -16,6 +16,7 @@ import {
   initCapabilities,
   initCommons,
   layoutsModule,
+  libraryModule,
   loadPlugins,
   loadSettings,
   initLobby,
@@ -61,6 +62,7 @@ async function boot(): Promise<void> {
   registry.register(terminalModule);
   registry.register(replModule);
   registry.register(databaseModule);
+  registry.register(libraryModule);
   registry.register(trainingModule);
   registry.register(visualizerModule);
   registry.register(flowModule);
