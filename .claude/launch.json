@@ -25,6 +25,12 @@
         "9000"
       ],
       "port": 9000
+    },
+    {
+      "name": "gameserver",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "uvicorn", "backend.games_server.app:app", "--port", "9200"],
+      "port": 9200
     }
   ]
 }

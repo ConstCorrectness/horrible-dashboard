@@ -27,6 +27,9 @@ from backend.modules.files import router as files_router
 from backend.modules.files.watcher import push_file_events
 from backend.modules.flow import handle_flow_message
 from backend.modules.flow import router as flow_router
+from backend.modules.games import drop_games_conn, handle_games_message
+from backend.modules.games import register_agent_tools as register_games_tools
+from backend.modules.games import router as games_router
 from backend.modules.library import push_library_events
 from backend.modules.library import router as library_router
 from backend.modules.lsp import LspManager
@@ -129,11 +132,16 @@ app.include_router(flow_router, prefix="/api")
 app.include_router(network_router, prefix="/api")
 app.include_router(training_router, prefix="/api")
 app.include_router(lsp_router, prefix="/api")
+app.include_router(games_router, prefix="/api")
 
 # Register the training module's backend agent tools into the sdk registry (the
 # training module is a first-party consumer of the same registry backend plugins
 # write to). Grouped under `training`, disclosed progressively by the orchestrator.
 register_training_tools()
+
+# Register the games module's backend agent tools (grouped under `games`); the
+# manual-play seat drives its move through game.getObservation/game.chooseAction.
+register_games_tools()
 
 # Discover and mount backend plugins (bundled, HORRIBLE_PLUGINS_DIR, and pip entry
 # points). Ships empty; each plugin's routes mount under /api + its prefix. Agent
@@ -213,6 +221,8 @@ async def ws(websocket: WebSocket) -> None:
                 await handle_network_message(conn, msg)
             elif channel == "collab":
                 await handle_collab_message(conn, msg)
+            elif channel == "games":
+                await handle_games_message(conn, msg)
             elif channel == "lobby":
                 await handle_lobby_message(conn, msg)
             elif channel == "commons":
@@ -239,3 +249,4 @@ async def ws(websocket: WebSocket) -> None:
         training_kernels.detach(conn)
         collab_manager.drop(conn)
         chat_manager.drop(conn)
+        drop_games_conn(conn)

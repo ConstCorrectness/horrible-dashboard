@@ -90,6 +90,7 @@ export { libraryModule } from './modules/library';
 export { trainingModule } from './modules/training';
 export { visualizerModule } from './modules/visualizer';
 export { flowModule } from './modules/flow';
+export { gamesModule } from './modules/games';
 export {
   editorModule,
   getActiveBufferSource,

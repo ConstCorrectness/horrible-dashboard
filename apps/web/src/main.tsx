@@ -9,6 +9,7 @@ import {
   editorModule,
   filesModule,
   flowModule,
+  gamesModule,
   initAgentManifestSync,
   initAgentRelay,
   initApprovalListener,
@@ -66,6 +67,7 @@ async function boot(): Promise<void> {
   registry.register(trainingModule);
   registry.register(visualizerModule);
   registry.register(flowModule);
+  registry.register(gamesModule);
   registry.register(networkModule);
   registry.register(commonsModule);
   // Dev-only agent-tool reference/validation stub (see agent-tools.md).
