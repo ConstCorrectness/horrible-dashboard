@@ -39,17 +39,23 @@ fabric (heavy native deps, so it's opt-in).
 ## Run the browser layout
 
 ```bash
-pnpm dev               # backend + Vite UI together
+pnpm dev               # backend + Vite UI + game server together
 ```
 
 Open **http://localhost:5173**. `pnpm dev` (via `scripts/dev.mjs`) starts the FastAPI
-backend on **:8000** _and_ the Vite UI on **:5173**, which proxies `/api` and `/ws` to
-the backend — so API panels work out of the box. Backend health check:
-`GET http://localhost:8000/api/health`.
+backend on **:8000**, the Vite UI on **:5173** (which proxies `/api` and `/ws` to the
+backend, so API panels work out of the box), _and_ the central [game
+server](modules/games.mdx) on **:9200** so the games module works with no extra steps.
+Backend health check: `GET http://localhost:8000/api/health`.
 
 - `pnpm dev:web` — UI only, when a backend is already running.
 - `pnpm dev:lan` — bind both servers to `0.0.0.0` so other machines can reach this
   node (needed for the [peer fabric](architecture/distributed.mdx) / collaboration).
+- `pnpm dev --no-gameserver` (or `HORRIBLE_DEV_NO_GAMESERVER=1`) — skip the bundled
+  game server, e.g. when you run one yourself or point at a hosted one. The game
+  server is a *standalone/central* service (hosted in production, not per-node), so
+  bundling it into `pnpm dev` is purely a local-dev convenience; if `:9200` is already
+  in use it just logs a warning and the rest of the stack stays up.
 
 ## Run the desktop layout (Tauri)
 
@@ -97,7 +103,7 @@ Every script in the repo-root `package.json`:
 
 | Script | Underlying command | Purpose |
 |---|---|---|
-| `pnpm dev` | `node scripts/dev.mjs` | Full browser stack: FastAPI backend **and** Vite UI together (localhost:5173). |
+| `pnpm dev` | `node scripts/dev.mjs` | Full browser stack: FastAPI backend, Vite UI, **and** the game server (:9200) together (localhost:5173). `--no-gameserver` skips the last. |
 | `pnpm dev:web` | `pnpm --filter @horrible/web dev` | Frontend only (assumes a backend is already up). |
 | `pnpm dev:lan` | `node scripts/dev.mjs --host 0.0.0.0` | Same as `dev` but bound to `0.0.0.0` for LAN / peer-fabric access. |
 | `pnpm dev:desktop` | `pnpm --filter @horrible/desktop dev` | Desktop layout (`tauri dev`); the shell supervises the backend. |

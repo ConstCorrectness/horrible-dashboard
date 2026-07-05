@@ -130,4 +130,7 @@ players by best score.
 uv run uvicorn backend.games_server.app:app --port 9200
 ```
 
-The server is process-global: every connection shares one lobby of tables.
+The server is process-global: every connection shares one lobby of tables. `pnpm dev`
+starts one on `:9200` for local development; for a hosted deployment (Fly.io and other
+options, plus the config/secrets it needs) see
+[Game server hosting](game-server-hosting.mdx).

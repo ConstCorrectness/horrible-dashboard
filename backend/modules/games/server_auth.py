@@ -58,13 +58,27 @@ def _http_base() -> str:
     return url.replace("wss://", "https://").replace("ws://", "http://")
 
 
+def _unreachable_error() -> dict[str, str]:
+    """The `{error}` shape the browser already understands (see signInWithGitHub),
+    for when the central game server isn't running — a friendly message beats a 500."""
+    return {
+        "error": (
+            f"game server unreachable at {_http_base()} — start it with "
+            "`uv run uvicorn backend.games_server.app:app --port 9200`"
+        )
+    }
+
+
 async def github_start() -> dict[str, Any]:
     import httpx
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        res = await client.post(f"{_http_base()}/auth/github/start")
-        res.raise_for_status()
-        return res.json()
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.post(f"{_http_base()}/auth/github/start")
+            res.raise_for_status()
+            return res.json()
+    except httpx.HTTPError:
+        return _unreachable_error()
 
 
 async def github_poll(device_code: str) -> dict[str, Any]:
@@ -72,12 +86,15 @@ async def github_poll(device_code: str) -> dict[str, Any]:
     return only the account (never the raw token) to the browser."""
     import httpx
 
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        res = await client.post(
-            f"{_http_base()}/auth/github/poll", json={"device_code": device_code}
-        )
-        res.raise_for_status()
-        data = res.json()
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.post(
+                f"{_http_base()}/auth/github/poll", json={"device_code": device_code}
+            )
+            res.raise_for_status()
+            data = res.json()
+    except httpx.HTTPError:
+        return _unreachable_error()
     if data.get("token"):
         path = _token_path()
         path.parent.mkdir(parents=True, exist_ok=True)

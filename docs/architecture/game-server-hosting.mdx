@@ -1,0 +1,110 @@
+---
+sidebar_label: Game server hosting
+---
+
+# Deploying the game server
+
+The [central game server](game-server.mdx) is the one piece of horrible-dashboard that
+runs as a **hosted, always-on service** rather than on each user's node. This page
+covers where to host it, the constraints that drive that choice, and the config it
+needs. The chosen path is **[Fly.io](#flyio-the-chosen-path)**; the
+[options comparison](#hosting-options) documents the alternatives for when that changes.
+
+## What the server needs from a host
+
+Three properties of `backend/games_server/` decide which hosts fit:
+
+1. **Stateful, single-process.** The `GameHub` holds the lobby of tables, live
+   `Referee` instances, and the account→connection map **in process memory**. A second
+   replica wouldn't see the first's tables, so it must run as **one instance** — no
+   autoscaling, no multi-replica load balancing (yet).
+2. **Long-lived WebSockets.** Nodes hold a persistent `/game-ws` connection. The host
+   must support WebSockets, allow long idle periods (a turn clock can sit ~30s between
+   moves), and **never scale to zero** — a cold start drops every live match.
+3. **Persistent disk.** State lives in SQLite at `$HORRIBLE_DATA_DIR/game_server.db`
+   (accounts, ELO ratings, results, challenge scores) plus a generated JWT-secret file.
+   It needs a **persistent volume**, not an ephemeral container filesystem.
+
+This rules out serverless/edge functions (no long-lived WS server), anything that
+scales to zero, and multi-replica-behind-a-load-balancer — for now. See
+[scaling path](#scaling-path) for how those unlock later.
+
+## Configuration & secrets
+
+Set via the host's env/secret mechanism (all read by `backend/games_server/auth.py`
+and `store.py`):
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `GAMES_JWT_SECRET` | **Yes** in prod | HMAC key that signs session JWTs. If unset the server writes a random secret into `HORRIBLE_DATA_DIR` — on an ephemeral FS that regenerates on every restart and **logs everyone out**. Set it explicitly (`openssl rand -hex 32`). |
+| `GAMES_GITHUB_CLIENT_ID` | For sign-in | GitHub OAuth app **client id** (device flow — no client secret needed). Without it, "Sign in with GitHub" returns a friendly *"not configured"* error and only the dev token works. Also settable as the `games.github.clientId` setting. |
+| `GAMES_ALLOW_DEV_AUTH` | Recommended `0` | The dev token treats `token == account_id` (no auth). Fine locally; set to `0` in prod to require real sign-in. |
+| `HORRIBLE_DATA_DIR` | **Yes** | Where the SQLite db + JWT secret live. Point at the mounted persistent volume. |
+
+Nodes connect by setting the `games.serverUrl` setting to your server's **`wss://`**
+URL (e.g. `wss://games.example.com`); terminate TLS at the host/proxy.
+
+Run it without `--reload`:
+
+```bash
+uv run uvicorn backend.games_server.app:app --host 0.0.0.0 --port 9200
+```
+
+## Fly.io (the chosen path)
+
+A single Fly Machine with a small volume fits all three constraints: native
+WebSockets, automatic TLS + subdomain, a persistent volume for SQLite, and you pin it
+to one always-on instance. Deploy assets live in `deploy/game-server/`
+(`Dockerfile` + `fly.toml`); the build context is the repo root (it needs
+`pyproject.toml`, `uv.lock`, and `backend/`).
+
+```bash
+# From the repo root. One-time:
+fly launch --no-deploy --copy-config --config deploy/game-server/fly.toml \
+  --dockerfile deploy/game-server/Dockerfile
+fly volumes create game_data --size 1 --region <region>
+fly secrets set GAMES_JWT_SECRET="$(openssl rand -hex 32)" \
+  GAMES_GITHUB_CLIENT_ID=<your-oauth-client-id>
+
+# Deploy / redeploy:
+fly deploy --config deploy/game-server/fly.toml --dockerfile deploy/game-server/Dockerfile
+```
+
+The `fly.toml` pins the important bits: `internal_port = 9200`, `force_https`,
+`auto_stop_machines = false`, `min/max_machines_running = 1` (single authority), a
+`/health` check, and a `game_data` volume mounted at `/data`. Secrets are set with
+`fly secrets` — never committed. Cost is roughly a `shared-cpu-1x`/512 MB machine plus
+a 1 GB volume.
+
+## Hosting options
+
+All of these satisfy the "single always-on instance + WebSockets + persistent disk"
+shape. Pick on ops appetite and budget.
+
+| Option | Best when | Notes |
+| --- | --- | --- |
+| **Fly.io** *(chosen)* | You want managed TLS + a subdomain and minimal ops, from a Dockerfile. | Pin to one Machine + a volume. WS supported natively. `deploy/game-server/` is ready to go. |
+| **Plain VPS + Caddy** (Hetzner ~€4/mo, DigitalOcean $6) | Cheapest, simplest mental model; you're comfortable with a Linux box. | `uv run uvicorn …` under a systemd unit, behind [Caddy](https://caddyserver.com) for automatic HTTPS + WS pass-through (a ~5-line Caddyfile). SQLite on the box's disk. Most control, most (light) ops. |
+| **Render / Railway** | You want click-to-deploy PaaS. | Create a *web service* with a **persistent disk** attached; **turn scale-to-zero OFF** and keep it a single instance. Slightly pricier; disk semantics vary by plan. |
+| **Bare container host** (ECS/Cloud Run/K8s) | You already run container infra. | Works, but overkill for one stateful process — and Cloud Run's scale-to-zero/request model fights the long-lived WS. Use only if it's where your ops already live, pinned to one always-on task with a volume. |
+
+**Avoid for now:** Vercel/Netlify functions and other serverless/edge (no persistent
+WS server), anything that scales to zero, and multi-replica behind a load balancer
+(splits the in-memory game state).
+
+## Scaling path
+
+None of this is needed for turn-based, play-money games at launch — one small box
+serves a lot — but when it matters:
+
+- **Durability / backups:** `backend/games_server/store.py` is the only DB layer.
+  Swap SQLite → managed **Postgres** (the schema is a handful of simple tables:
+  accounts, ratings, results, challenge_scores).
+- **Horizontal scale:** only once you need >1 instance, move the hub's live table/seat
+  state out of process memory (e.g. **Redis**) with sticky routing per table, so the
+  authority can span machines. Until then, single-instance is a feature (one referee,
+  one source of truth), not a limitation.
+
+See [game server architecture](game-server.mdx) for the referee, anti-cheat, and
+identity design, and [setup](../setup.mdx) for the local `pnpm dev` workflow (which
+runs a game server on `:9200` for you).

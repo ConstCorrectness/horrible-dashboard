@@ -7,3 +7,7 @@ website
 logs
 *.log
 .claude/worktrees
+# Python build noise + local state that must not leak into the image.
+**/__pycache__
+.venv
+*.db

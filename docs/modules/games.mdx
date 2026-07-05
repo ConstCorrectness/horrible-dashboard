@@ -191,12 +191,22 @@ rated.
 
 ## Running it
 
-Start the central server separately, then the app:
+`pnpm dev` starts the central game server (:9200) alongside the backend and UI, so
+there's nothing extra to run:
 
 ```bash
-uv run uvicorn backend.games_server.app:app --port 9200   # the referee
-pnpm dev                                                   # the app
+pnpm dev   # backend + Vite UI + game server (:9200) together
 ```
+
+If you run the game server yourself (or point at a hosted one), skip the bundled copy
+with `pnpm dev --no-gameserver` and start it standalone:
+
+```bash
+uv run uvicorn backend.games_server.app:app --port 9200   # the referee, on its own
+```
+
+To deploy the game server as a hosted service (Fly.io + other options), see
+[Game server hosting](../architecture/game-server-hosting.mdx).
 
 Open **Games** (`games.openLobby`), click **Connect (self-play)**, then a game
 (**Tic-Tac-Toe** or **Connect Four**) — the board opens and the two agents play it

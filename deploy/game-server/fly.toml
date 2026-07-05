@@ -1,0 +1,47 @@
+# Fly.io deployment for the central game server (backend/games_server).
+#
+# One-time setup (run from the repo ROOT):
+#   fly launch --no-deploy --copy-config --config deploy/game-server/fly.toml \
+#     --dockerfile deploy/game-server/Dockerfile
+#   fly volumes create game_data --size 1 --region <region>   # persistent SQLite db
+#   fly secrets set GAMES_JWT_SECRET="$(openssl rand -hex 32)" \
+#     GAMES_GITHUB_CLIENT_ID=<your-github-oauth-client-id>
+#
+# Deploy (from the repo root):
+#   fly deploy --config deploy/game-server/fly.toml --dockerfile deploy/game-server/Dockerfile
+#
+# It must stay a SINGLE, always-on machine: the lobby of tables and live referees live
+# in process memory, and /game-ws is a long-lived WebSocket. Do NOT run >1 machine or
+# enable scale-to-zero — either would drop live matches and split game state.
+
+app = "horrible-game-server"   # change to your Fly app name
+primary_region = "iad"         # pick the region nearest your players
+
+[env]
+  HORRIBLE_DATA_DIR = "/data"
+  GAMES_ALLOW_DEV_AUTH = "0"
+
+[http_service]
+  internal_port = 9200
+  force_https = true
+  auto_stop_machines = false   # keep it warm: WebSockets + in-memory game state
+  auto_start_machines = true
+  min_machines_running = 1
+  max_machines_running = 1     # single authority — never multi-replica
+
+  [[http_service.checks]]
+    method = "GET"
+    path = "/health"
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "10s"
+
+# Persistent volume for game_server.db + the generated JWT secret file. Without this
+# the SQLite db (accounts/ratings/results) would vanish on every redeploy.
+[mounts]
+  source = "game_data"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"             # plenty for turn-based, play-money games

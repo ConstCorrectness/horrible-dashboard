@@ -71,9 +71,10 @@ buffers, terminal + file explorer.
 - `uv run uvicorn backend.app:app --reload --reload-dir backend --reload-exclude "logs/*" --port 8000` — backend dev server (the `--reload-dir`/`--reload-exclude` scoping keeps `logs/backend.log` writes from triggering a reload loop)
 - `uv run ruff format .` and `uv run ruff check --fix .` — Python format/lint
 - `uv add <pkg>` / `uv add --dev <pkg>` — Python dependencies (never pip)
-- `pnpm dev` — browser layout, full stack: starts the backend **and** the Vite UI
-  together (port 5173, proxies /api and /ws to 8000) via `scripts/dev.mjs`.
-  `pnpm dev:web` is UI-only; `pnpm dev:lan` exposes both on 0.0.0.0 (peer fabric).
+- `pnpm dev` — browser layout, full stack: starts the backend, the Vite UI (port 5173,
+  proxies /api and /ws to 8000), **and** the central game server (:9200) together via
+  `scripts/dev.mjs`. `--no-gameserver` (or `HORRIBLE_DEV_NO_GAMESERVER=1`) skips the
+  game server. `pnpm dev:web` is UI-only; `pnpm dev:lan` exposes both on 0.0.0.0 (peer fabric).
 - `pnpm dev:desktop` — desktop layout (Tauri; **spawns/supervises the backend
   itself** via `src-tauri/src/backend.rs` — reuses one already running on :8000)
 - `pnpm typecheck`, `pnpm lint` — whole workspace, from the root
