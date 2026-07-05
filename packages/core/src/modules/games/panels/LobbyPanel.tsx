@@ -9,10 +9,13 @@ import {
   gamesListTables,
   useGames,
 } from '../game-ws';
-import { fetchStatus, signInWithGitHub, signOut } from '../games-api';
-
-// Phase-1 catalog (mirrors backend.games_engine registry). More games land later.
-const GAMES = [{ id: 'tictactoe', name: 'Tic-Tac-Toe' }];
+import {
+  fetchGamesCatalog,
+  fetchStatus,
+  signInWithGitHub,
+  signOut,
+  type GameCatalogEntry,
+} from '../games-api';
 
 /** Sign-in status + GitHub device-flow sign-in. Identity lives on the node (the JWT
  * is held server-side); this just reflects and toggles it. */
@@ -84,6 +87,11 @@ function SignIn() {
  */
 export function LobbyPanel() {
   const { connected, accountId, selfPlay, tables } = useGames();
+  const [games, setGames] = useState<GameCatalogEntry[]>([]);
+
+  useEffect(() => {
+    fetchGamesCatalog().then(setGames);
+  }, []);
 
   useEffect(() => {
     if (connected) gamesListTables();
@@ -134,7 +142,7 @@ export function LobbyPanel() {
           <div>
             <div style={{ color: 'var(--text-dim)', marginBottom: '0.3rem' }}>New match</div>
             <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
-              {GAMES.map((g) => (
+              {games.map((g) => (
                 <button key={g.id} type="button" onClick={() => startMatch(g.id)}>
                   {g.name}
                 </button>

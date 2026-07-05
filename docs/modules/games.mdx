@@ -10,12 +10,16 @@ a central [game server](../architecture/game-server.mdx). The dashboard is the
 spectator seat: you connect your node, start or join a table, and the board renders
 each move live as the agents play.
 
-**Status: phases 1–2b.** Tic-Tac-Toe plays end to end — matchmaking → authoritative
-referee → each node auto-picks a legal move → live spectate. Identity is now
-**persistent accounts** (GitHub sign-in issues a JWT; a dev token is the fallback),
-and finished games update an **ELO ladder** with a leaderboard, all persisted
-server-side in SQLite. Connect Four, Chess (`python-chess`), and No-Limit Hold'em
-(`pokerkit`) are the later phases (see [Roadmap](#roadmap)).
+**Status: phases 1–2c, plus Connect Four (phase 3).** Tic-Tac-Toe and **Connect
+Four** both play end to end — matchmaking → authoritative referee → each node
+auto-picks a legal move → live spectate — off the one shared engine contract, with no
+server-side special-casing. Identity is **persistent accounts** (GitHub sign-in issues
+a JWT; a dev token is the fallback); finished games update an **ELO ladder** with a
+leaderboard; and the **challenge track** grades harnesses off-table — all persisted
+server-side in SQLite. The lobby, challenge, and harness game pickers are driven by the
+engine catalog (`/games/status`), so a newly-registered game appears in the UI
+automatically. Chess (`python-chess`) and No-Limit Hold'em (`pokerkit`) are the
+remaining phases (see [Roadmap](#roadmap)).
 
 ## How a match runs
 
@@ -105,9 +109,13 @@ scores them off-table (see [Challenge track](#challenge-track)).
 ## Challenge track
 
 A second, non-competitive way to measure a harness: fixed **category scenarios** the
-server grades. The **Challenges** panel (`games.openChallenges`) runs your harness
-against every scenario and shows a report card — how many you got right, and which
-categories (`win`, `block`, `center`, …) you cover — plus a challenge leaderboard.
+server grades. The **Challenges** panel (`games.openChallenges`) has a game picker;
+it runs your harness against every scenario for the chosen game and shows a report
+card — how many you got right, and which categories you cover — plus a challenge
+leaderboard. Each game contributes its own category set: Tic-Tac-Toe has `win` /
+`block` / `center`; Connect Four adds `double` — a single drop that makes two
+simultaneous threats (an open-ended three) the opponent can't both block. The set
+grows with the tactical vocabulary of each new game.
 
 It's cheat-resistant by the same design as the referee: the **server owns the
 scenarios and the hidden solutions**. It sends the node only the positions
@@ -190,10 +198,10 @@ uv run uvicorn backend.games_server.app:app --port 9200   # the referee
 pnpm dev                                                   # the app
 ```
 
-Open **Games** (`games.openLobby`), click **Connect (self-play)**, then
-**Tic-Tac-Toe** — the board opens and the two agents play it out. To play with a real
-model, set `games.policy = agent` and craft tools in **Agent Harness**
-(`games.openLoadout`).
+Open **Games** (`games.openLobby`), click **Connect (self-play)**, then a game
+(**Tic-Tac-Toe** or **Connect Four**) — the board opens and the two agents play it
+out. To play with a real model, set `games.policy = agent` and craft tools in **Agent
+Harness** (`games.openLoadout`).
 
 ## Browser vs desktop
 
@@ -209,7 +217,8 @@ the one the shell supervises.
 | 2a (done) | **Agent harness**: author real Python tools + context, agent tool loop, harness editor. |
 | 2b (done) | GitHub OAuth accounts + JWT, ELO **ladder** + leaderboard, SQLite persistence. |
 | 2c (done) | **Challenge track**: server-graded category scenarios (coverage + correctness), report card + leaderboard. |
-| 3 | Connect Four, then Chess (`python-chess`) + richer boards. |
+| 3a (done) | **Connect Four**: second engine + disc board, catalog-driven game pickers, challenge set with the new `double` (fork) category. |
+| 3b | Chess (`python-chess`) + richer boards. |
 | 4 | No-Limit Hold'em (`pokerkit`): imperfect info, chance, chips, betting UI. |
 | 5 | Breadth: more games spanning a gamut of agentic tasks. |
 

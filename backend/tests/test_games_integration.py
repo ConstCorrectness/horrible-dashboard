@@ -91,3 +91,14 @@ def test_stub_selfplay_tictactoe_reaches_a_terminal_result() -> None:
     assert sum(returns.values()) == 0.0
     if over["winner"] is not None:
         assert returns[over["winner"]] == 1.0
+
+
+def test_stub_selfplay_connect_four_reaches_a_terminal_result() -> None:
+    # The same generic referee loop drives Connect Four unchanged — a second game
+    # plays end to end with no server-side special-casing.
+    over = asyncio.run(_run_stub_game("connect_four"))
+    returns = {int(k): v for k, v in over["returns"].items()}
+    assert set(returns.keys()) == {0, 1}
+    assert sum(returns.values()) == 0.0
+    if over["winner"] is not None:
+        assert returns[over["winner"]] == 1.0

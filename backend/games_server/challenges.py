@@ -16,10 +16,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from backend.games_engine.connect_four import COLS, ROWS, ConnectFour
 from backend.games_engine.tictactoe import TicTacToe
 
 # 'X' = seat 0, 'O' = seat 1, '.' = empty.
 _SEAT = {"X": 0, "O": 1}
+# Connect Four: 'R' = seat 0 (Red, moves first), 'Y' = seat 1, '.' = empty.
+_C4_SEAT = {"R": 0, "Y": 1}
 
 
 @dataclass(frozen=True)
@@ -109,7 +112,134 @@ _TTT_CHALLENGES: list[Challenge] = [
     ),
 ]
 
-_CHALLENGES: dict[str, list[Challenge]] = {"tictactoe": _TTT_CHALLENGES}
+
+def _c4(
+    id: str,
+    category: str,
+    description: str,
+    rows: list[str],
+    turn: int,
+    solution: list[str],
+) -> Challenge:
+    """Build a Connect Four challenge from a top-to-bottom board (six rows of seven
+    'R'/'Y'/'.' chars). The engine derives the observation + legal actions, so the
+    scenario shape exactly matches a live game. Positions are gravity-valid."""
+    st = ConnectFour()
+    for r in range(ROWS):
+        line = rows[ROWS - 1 - r]  # rows are top-first; grid[0] is the bottom row
+        for c in range(COLS):
+            ch = line[c]
+            st.grid[r][c] = None if ch == "." else _C4_SEAT[ch]
+    st.turn = turn
+    return Challenge(
+        id=id,
+        game_id="connect_four",
+        category=category,
+        description=description,
+        observation=st.observation(turn),
+        legal_actions=[a.to_wire() for a in st.legal_actions(turn)],
+        solution=solution,
+    )
+
+
+# Connect Four scenarios. 'win'/'block'/'center' mirror tic-tac-toe; 'double' is the
+# new tactical category — a single drop that makes two simultaneous threats (an
+# open-ended three) the opponent can't both block.
+_C4_CHALLENGES: list[Challenge] = [
+    # win: Red already has three in a line — complete the fourth and win outright.
+    _c4(
+        "c4-win-row",
+        "win",
+        "Red to move: complete the bottom row and win.",
+        [
+            ".......",
+            ".......",
+            ".......",
+            ".......",
+            ".....Y.",
+            "RRR.YY.",
+        ],
+        0,
+        ["3"],
+    ),
+    _c4(
+        "c4-win-vertical",
+        "win",
+        "Red to move: stack the fourth disc and win the column.",
+        [
+            ".......",
+            ".......",
+            ".......",
+            "..R....",
+            "..RY...",
+            "..RYY..",
+        ],
+        0,
+        ["2"],
+    ),
+    # block: Yellow threatens four next move — Red must block, not wander.
+    _c4(
+        "c4-block-row",
+        "block",
+        "Red to move: Yellow threatens the bottom row — block the open end.",
+        [
+            ".......",
+            ".......",
+            ".......",
+            ".......",
+            ".......",
+            "RYYY.RR",
+        ],
+        0,
+        ["4"],
+    ),
+    _c4(
+        "c4-block-vertical",
+        "block",
+        "Red to move: Yellow has three stacked — cap the column.",
+        [
+            ".......",
+            ".......",
+            ".......",
+            "...Y...",
+            "...Y...",
+            "RRRY...",
+        ],
+        0,
+        ["3"],
+    ),
+    # center: on an empty board the center column is the strongest opening.
+    _c4(
+        "c4-center",
+        "center",
+        "Red to move on an empty board: take the strongest opening.",
+        ["......."] * ROWS,
+        0,
+        ["3"],
+    ),
+    # double: drop between two of your discs to make an open-ended three — two ways
+    # to win at once, so the opponent can only stop one (a fork).
+    _c4(
+        "c4-double",
+        "double",
+        "Red to move: create an open-ended three the opponent can't both block.",
+        [
+            ".......",
+            ".......",
+            ".......",
+            ".......",
+            ".......",
+            "Y.R.R.Y",
+        ],
+        0,
+        ["3"],
+    ),
+]
+
+_CHALLENGES: dict[str, list[Challenge]] = {
+    "tictactoe": _TTT_CHALLENGES,
+    "connect_four": _C4_CHALLENGES,
+}
 
 
 def scenarios_for(game_id: str) -> list[dict[str, Any]]:

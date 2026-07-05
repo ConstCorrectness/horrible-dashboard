@@ -34,8 +34,29 @@ interface DeviceStart {
   error?: string;
 }
 
+export interface GameCatalogEntry {
+  id: string;
+  name: string;
+}
+
 export function fetchStatus(): Promise<GamesStatus> {
   return apiGet<GamesStatus>('/games/status');
+}
+
+/**
+ * The engine's game catalog (`{id, name}`), sourced from the node's registry via
+ * `/games/status`. Panels use it to drive game pickers so a newly-registered game
+ * appears everywhere without touching the UI. Falls back to Tic-Tac-Toe if the node
+ * is unreachable, so the lobby still renders.
+ */
+export async function fetchGamesCatalog(): Promise<GameCatalogEntry[]> {
+  try {
+    const status = await fetchStatus();
+    if (status.games?.length) return status.games;
+  } catch {
+    // node down / not yet started — fall through to the built-in default
+  }
+  return [{ id: 'tictactoe', name: 'Tic-Tac-Toe' }];
 }
 
 export function fetchLeaderboard(

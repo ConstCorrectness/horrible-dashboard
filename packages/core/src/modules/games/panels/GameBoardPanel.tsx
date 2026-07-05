@@ -1,7 +1,12 @@
 import { useGames } from '../game-ws';
+import { ConnectFourBoard } from './ConnectFourBoard';
 import { TicTacToeBoard } from './TicTacToeBoard';
 
-const MARKS = ['X', 'O'];
+// Per-game seat labels (seat 0, seat 1). Falls back to "Seat N" for other games.
+const SEAT_LABELS: Record<string, [string, string]> = {
+  tictactoe: ['X', 'O'],
+  connect_four: ['Red', 'Yellow'],
+};
 
 /** The live board. Dispatches to a per-game renderer by `board.game`. Spectator
  * view — you watch your agent play. */
@@ -16,13 +21,16 @@ export function GameBoardPanel() {
     );
   }
 
+  const seat = (n: number | null | undefined): string =>
+    n === null || n === undefined ? '—' : (SEAT_LABELS[board.game]?.[n] ?? `Seat ${n}`);
+
   const banner = over
     ? over.winner === null
       ? 'Draw'
-      : `${MARKS[over.winner] ?? `Seat ${over.winner}`} wins`
+      : `${seat(over.winner)} wins`
     : thinkingSeat !== null
-      ? `${MARKS[thinkingSeat] ?? `Seat ${thinkingSeat}`} is thinking…`
-      : `Turn: ${board.turn !== null && board.turn !== undefined ? (MARKS[board.turn] ?? board.turn) : '—'}`;
+      ? `${seat(thinkingSeat)} is thinking…`
+      : `Turn: ${seat(board.turn)}`;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -40,6 +48,8 @@ export function GameBoardPanel() {
       <div style={{ flex: 1, overflow: 'auto' }}>
         {board.game === 'tictactoe' ? (
           <TicTacToeBoard board={board} />
+        ) : board.game === 'connect_four' ? (
+          <ConnectFourBoard board={board} />
         ) : (
           <pre style={{ padding: '0.5rem', fontSize: '0.75rem' }}>
             {JSON.stringify(board, null, 2)}

@@ -1,24 +1,34 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { gamesRunChallenges, useGames } from '../game-ws';
-import { fetchChallengeLeaderboard, type ChallengeRow } from '../games-api';
-
-const GAME_ID = 'tictactoe';
+import {
+  fetchChallengeLeaderboard,
+  fetchGamesCatalog,
+  type ChallengeRow,
+  type GameCatalogEntry,
+} from '../games-api';
 
 /**
  * The challenge track: run your harness against category scenarios (off-table) and
  * see a graded report card — how many you got right, and which categories you cover.
- * The server owns the answers, so this measures the harness, not luck.
+ * The server owns the answers, so this measures the harness, not luck. Pick which
+ * game's challenge set to run from the catalog.
  */
 export function ChallengesPanel() {
   const { connected, challengeRunning, challengeReport } = useGames();
+  const [games, setGames] = useState<GameCatalogEntry[]>([]);
+  const [gameId, setGameId] = useState('tictactoe');
   const [board, setBoard] = useState<ChallengeRow[]>([]);
 
+  useEffect(() => {
+    fetchGamesCatalog().then(setGames);
+  }, []);
+
   const loadBoard = useCallback(() => {
-    fetchChallengeLeaderboard(GAME_ID)
+    fetchChallengeLeaderboard(gameId)
       .then((r) => setBoard(r.entries))
       .catch(() => setBoard([]));
-  }, []);
+  }, [gameId]);
 
   useEffect(() => loadBoard(), [loadBoard]);
   // Refresh the board when a run finishes (a new best may have landed).
@@ -40,11 +50,17 @@ export function ChallengesPanel() {
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
         <strong>Challenge track</strong>
-        <code style={{ color: 'var(--text-dim)' }}>{GAME_ID}</code>
+        <select value={gameId} onChange={(e) => setGameId(e.target.value)}>
+          {games.map((g) => (
+            <option key={g.id} value={g.id}>
+              {g.name}
+            </option>
+          ))}
+        </select>
         <button
           type="button"
           disabled={!connected || challengeRunning}
-          onClick={() => gamesRunChallenges(GAME_ID)}
+          onClick={() => gamesRunChallenges(gameId)}
           title={connected ? '' : 'Connect in the lobby first'}
         >
           {challengeRunning ? 'Running…' : 'Run my harness'}

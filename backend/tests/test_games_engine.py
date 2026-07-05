@@ -1,10 +1,11 @@
-"""Unit tests for the shared game engine (base contract + tic-tac-toe)."""
+"""Unit tests for the shared game engine (base contract + tic-tac-toe + connect four)."""
 
 from __future__ import annotations
 
 import pytest
 
 from backend.games_engine import CHANCE, TERMINAL, get_game, list_games
+from backend.games_engine.connect_four import COLS, ROWS, ConnectFour
 from backend.games_engine.tictactoe import TicTacToe
 
 
@@ -87,3 +88,94 @@ def test_perfect_info_observation_equals_public_state() -> None:
     # Tic-tac-toe hides nothing: each player's observation is the public state.
     assert state.observation(0) == state.public_state()
     assert state.observation(1) == state.public_state()
+
+
+# ---- connect four ----------------------------------------------------------
+
+
+def _c4_from(rows: list[str], turn: int) -> ConnectFour:
+    """Build a Connect Four state from a top-to-bottom board of 'R'/'Y'/'.' chars."""
+    seat = {"R": 0, "Y": 1}
+    st = ConnectFour()
+    for r in range(ROWS):
+        line = rows[ROWS - 1 - r]  # rows are top-first; grid[0] is the bottom row
+        for c in range(COLS):
+            st.grid[r][c] = None if line[c] == "." else seat[line[c]]
+    st.turn = turn
+    return st
+
+
+def test_registry_lists_connect_four() -> None:
+    spec = get_game("connect_four")
+    assert spec.min_players == 2 and spec.max_players == 2
+    assert isinstance(spec.new(), ConnectFour)
+
+
+def test_drops_stack_and_full_column_is_illegal() -> None:
+    st = ConnectFour()
+    assert st.current_player() == 0
+    assert sorted(int(a.id) for a in st.legal_actions(0)) == list(range(COLS))
+    # Fill column 0 (six discs, alternating seats via the turn order is fine).
+    for expected_turn in range(ROWS):
+        st.apply_action(st.current_player(), "0")
+    # Column 0 is now full, so it drops out of the legal set.
+    assert all(a.id != "0" for a in st.legal_actions(st.current_player()))
+    with pytest.raises(ValueError):
+        st.apply_action(st.current_player(), "0")
+
+
+def test_off_board_and_wrong_turn_raise() -> None:
+    st = ConnectFour()
+    with pytest.raises(ValueError):
+        st.apply_action(0, "7")  # off board
+    with pytest.raises(ValueError):
+        st.apply_action(1, "3")  # not Yellow's turn
+
+
+def test_horizontal_win_detected_and_scored() -> None:
+    st = _c4_from(["......."] * 5 + ["RRR.YY."], 0)
+    assert not st.is_terminal()
+    st.apply_action(0, "3")  # complete cols 0-3 on the bottom row
+    assert st.is_terminal()
+    assert st.public_state()["winner"] == 0
+    assert st.returns() == {0: 1.0, 1: -1.0}
+    assert st.legal_actions(0) == []
+
+
+def test_vertical_win_detected() -> None:
+    st = _c4_from(["......."] * 3 + ["..R....", "..RY...", "..RYY.."], 0)
+    st.apply_action(0, "2")  # fourth Red disc stacked in column 2
+    assert st.is_terminal()
+    assert st.public_state()["winner"] == 0
+
+
+def test_diagonal_win_detected() -> None:
+    # A rising diagonal for Red through (col0,row0)…(col3,row3).
+    st = _c4_from(
+        [
+            ".......",
+            ".......",
+            "...R...",
+            "..RY...",
+            ".RYR...",
+            "RYYY...",
+        ],
+        0,
+    )
+    assert st.public_state()["winner"] == 0
+    assert st.current_player() == TERMINAL
+
+
+def test_board_orientation_is_top_first() -> None:
+    st = ConnectFour()
+    st.apply_action(0, "0")  # Red lands on the bottom row
+    board = st.public_state()["board"]
+    assert len(board) == ROWS and len(board[0]) == COLS
+    assert board[-1][0] == "R"  # bottom row, first column
+    assert board[0][0] is None  # top row is still empty
+
+
+def test_connect_four_has_no_chance_node() -> None:
+    st = ConnectFour()
+    assert st.current_player() not in (CHANCE, TERMINAL)
+    assert st.observation(0) == st.public_state()

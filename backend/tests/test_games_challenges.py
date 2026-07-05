@@ -6,11 +6,13 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from backend.games_engine.connect_four import COLS, ROWS, ConnectFour
 from backend.games_server import challenges, models, store
 from backend.games_server.hub import GameHub
 
 # The known-correct answer for every bundled tic-tac-toe challenge (test-only).
 PERFECT = {c.id: c.solution[0] for c in challenges._TTT_CHALLENGES}
+C4_PERFECT = {c.id: c.solution[0] for c in challenges._C4_CHALLENGES}
 
 
 def test_scenarios_never_include_solutions() -> None:
@@ -50,6 +52,90 @@ def test_record_challenge_keeps_best() -> None:
     board = store.challenge_leaderboard("tictactoe")
     assert board[0]["account_id"] == "alice"
     assert board[0]["correct"] == good["correct"]
+
+
+# ---- connect four challenge set --------------------------------------------
+
+
+def _c4_from_obs(obs: dict[str, Any]) -> ConnectFour:
+    """Rebuild the engine state a challenge was generated from (perfect info, so the
+    observation carries the whole board and whose turn it is)."""
+    seat = {"R": 0, "Y": 1}
+    st = ConnectFour()
+    board = obs["board"]  # top row first
+    for r in range(ROWS):
+        line = board[ROWS - 1 - r]
+        for c in range(COLS):
+            st.grid[r][c] = None if line[c] is None else seat[line[c]]
+    st.turn = int(obs["turn"])
+    return st
+
+
+def _drop_wins(st: ConnectFour, seat: int, col: int) -> bool:
+    """Would dropping `seat`'s disc in `col` win right now? (Ignores whose turn it is.)"""
+    row = st._drop_row(col)
+    if row is None:
+        return False
+    st.grid[row][col] = seat
+    won = st._winner() == seat
+    st.grid[row][col] = None
+    return won
+
+
+def _winning_cols(st: ConnectFour, seat: int) -> set[str]:
+    return {str(c) for c in range(COLS) if _drop_wins(st, seat, c)}
+
+
+def test_c4_scenarios_never_include_solutions() -> None:
+    scenarios = challenges.scenarios_for("connect_four")
+    assert scenarios, "connect four should have challenge scenarios"
+    for sc in scenarios:
+        assert "solution" not in sc
+        assert sc["observation"]["game"] == "connect_four"
+
+
+def test_c4_grade_perfect_covers_every_category() -> None:
+    report = challenges.grade("connect_four", C4_PERFECT)
+    assert report["correct"] == report["total"] == len(challenges._C4_CHALLENGES)
+    assert report["score"] == 1.0
+    # More categories than tic-tac-toe (which has win/block/center) — 'double' is new.
+    assert set(report["categories"]) == {"win", "block", "center", "double"}
+    assert report["covered"] == report["category_count"]
+
+
+def test_c4_every_solution_is_legal() -> None:
+    for ch in challenges._C4_CHALLENGES:
+        legal = {a["id"] for a in ch.legal_actions}
+        assert set(ch.solution) <= legal, ch.id
+
+
+def test_c4_solutions_are_semantically_correct() -> None:
+    """Replay each scenario through the engine to prove the hand-authored solution
+    actually does what its category claims — so a mistyped board can't slip through."""
+    for ch in challenges._C4_CHALLENGES:
+        st = _c4_from_obs(ch.observation)
+        mover = st.turn
+        opp = 1 - mover
+        sol = ch.solution[0]
+        if ch.category == "win":
+            # The solution wins immediately, and it's the only move that does.
+            assert _winning_cols(st, mover) == set(ch.solution), ch.id
+        elif ch.category == "block":
+            # The opponent has a live threat, and the solution covers exactly it.
+            assert _winning_cols(st, opp) == set(ch.solution), ch.id
+            assert _winning_cols(st, mover) == set(), ch.id  # not a 'win' in disguise
+        elif ch.category == "center":
+            assert sol == "3" and all(
+                c is None for row in ch.observation["board"] for c in row
+            )
+        elif ch.category == "double":
+            # After the solution the mover has two+ ways to win — an unstoppable fork.
+            row = st._drop_row(int(sol))
+            assert row is not None
+            st.grid[row][int(sol)] = mover
+            assert len(_winning_cols(st, mover)) >= 2, ch.id
+        else:  # pragma: no cover - guards against an unhandled new category
+            raise AssertionError(f"unclassified category {ch.category!r} in {ch.id}")
 
 
 # ---- hub exchange ----------------------------------------------------------

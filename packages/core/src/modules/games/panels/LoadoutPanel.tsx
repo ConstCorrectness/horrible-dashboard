@@ -1,6 +1,7 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 
 import { apiGet, apiPost, apiPut } from '../../../api';
+import { fetchGamesCatalog } from '../games-api';
 
 const labelStyle: CSSProperties = {
   display: 'block',
@@ -29,7 +30,11 @@ interface LoadoutModel {
   tools: ToolDef[];
 }
 
-const GAMES = ['tictactoe', 'default'];
+// `default` is the fallback harness used when a game has no game-specific loadout.
+const DEFAULT_GAMES = [
+  { id: 'tictactoe', name: 'Tic-Tac-Toe' },
+  { id: 'default', name: 'default' },
+];
 
 const STARTER_CODE = `def run(args, obs):
     # obs = your seat's observation (e.g. obs["board"] for tic-tac-toe).
@@ -49,12 +54,20 @@ function newTool(n: number): ToolDef {
 
 export function LoadoutPanel() {
   const [gameId, setGameId] = useState('tictactoe');
+  const [games, setGames] = useState(DEFAULT_GAMES);
   const [loadout, setLoadout] = useState<LoadoutModel | null>(null);
   const [sampleObs, setSampleObs] = useState(
     '{"board": [null,null,null,null,null,null,null,null,null]}',
   );
   const [results, setResults] = useState<Record<number, string>>({});
   const [status, setStatus] = useState('');
+
+  useEffect(() => {
+    // Catalog games + the shared `default` fallback harness.
+    fetchGamesCatalog().then((catalog) =>
+      setGames([...catalog, { id: 'default', name: 'default' }]),
+    );
+  }, []);
 
   useEffect(() => {
     setStatus('loading…');
@@ -118,9 +131,9 @@ export function LoadoutPanel() {
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
         <span>Harness for</span>
         <select value={gameId} onChange={(e) => setGameId(e.target.value)}>
-          {GAMES.map((g) => (
-            <option key={g} value={g}>
-              {g}
+          {games.map((g) => (
+            <option key={g.id} value={g.id}>
+              {g.name}
             </option>
           ))}
         </select>
