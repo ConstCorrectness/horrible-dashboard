@@ -121,9 +121,13 @@ Every script in the repo-root `package.json`:
   (e.g. `C:\msys64\mingw64\bin`) can get loaded for TLS and crash the worker.
   `backend/__init__.py` strips MinGW dirs from the process `PATH` at import, so the
   standard commands above work regardless of your shell `PATH`.
-- **Port :8000 stays bound after Ctrl-C (Windows).** `pnpm dev` tree-kills the backend
-  on exit, but a manually started `uv run uvicorn --reload` can orphan a worker — kill
-  the whole process tree if a stale one holds the port.
+- **A dev port (`:5173`/`:8000`/`:9200`) stays bound after an interrupted run (Windows).**
+  `uvicorn --reload` respawns workers, so an ungraceful stop can orphan one holding a
+  port. `pnpm dev` now self-heals: it frees its own ports before starting *and*
+  synchronously tree-kills + port-frees them on shutdown (`scripts/dev.mjs`), so a
+  stale worker no longer cascades into "port in use" on the next run. A *manually*
+  started `uv run uvicorn --reload` can still orphan a worker — kill the whole process
+  tree if a stale one holds the port.
 - **Backend stuck in a restart loop.** Almost always the reload watcher seeing its own
   log writes. Use the standard commands above (`--reload-dir backend --reload-exclude
   "logs/*"`, already set in `scripts/dev.mjs`/`dev-backend.ps1`) rather than a bare

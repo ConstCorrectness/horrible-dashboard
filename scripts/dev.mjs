@@ -1,6 +1,7 @@
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 
-// Full-stack dev: one `pnpm dev` brings up the FastAPI backend AND the Vite UI.
+// Full-stack dev: one `pnpm dev` brings up the FastAPI backend, the Vite UI, and
+// (unless opted out) the central game server.
 //
 // Interface the dev servers bind to. Defaults to 127.0.0.1 (local only). Pass
 // `--host 0.0.0.0` (see the `dev:lan` script) or set HORRIBLE_DEV_HOST to expose
@@ -15,6 +16,42 @@ const host =
 // pnpm/uv are `.cmd` shims on Windows, which `spawn` can't exec directly — go
 // through a shell there. (POSIX resolves them off PATH without one.)
 const useShell = process.platform === 'win32';
+
+// The central game server (:9200) comes up with the app so the games module works
+// out of the box. It's a *standalone/central* service (hosted in production, not
+// per-node), so this is a dev convenience: opt out with `--no-gameserver` or
+// HORRIBLE_DEV_NO_GAMESERVER=1 if you run your own / point at the hosted one.
+const startGameServer =
+  !process.argv.includes('--no-gameserver') && !process.env.HORRIBLE_DEV_NO_GAMESERVER;
+
+// The ports this run owns. Used to self-heal a prior interrupted run and to backstop
+// our own shutdown. 9200 is only ours when we start the bundled game server — never
+// kill a game server the user runs themselves.
+const ownedPorts = [5173, 8000, ...(startGameServer ? [9200] : [])];
+
+// On Windows, `uv run`/pnpm wrap uvicorn/vite in a shell and `uvicorn --reload`
+// respawns workers, so an interrupted run can orphan a worker that keeps a port
+// bound — which then makes the next `pnpm dev` fail with "port in use". Free our
+// ports synchronously (so it completes before Node moves on), both before starting
+// and on shutdown. No-op on POSIX, where child.kill('SIGINT') is enough.
+function freeOwnedPorts() {
+  if (process.platform !== 'win32') return;
+  spawnSync(
+    'powershell',
+    [
+      '-NoProfile',
+      '-Command',
+      `Get-NetTCPConnection -State Listen -LocalPort ${ownedPorts.join(',')} -ErrorAction SilentlyContinue | ` +
+        `Select-Object -ExpandProperty OwningProcess -Unique | ` +
+        `ForEach-Object { taskkill /PID $_ /T /F 2>$null }`,
+    ],
+    { stdio: 'ignore' },
+  );
+}
+
+// Heal any orphans a previous interrupted run left on our ports, so a fresh
+// `pnpm dev` always starts clean.
+freeOwnedPorts();
 
 console.log(`🚀 Starting backend and frontend dev servers on ${host}...`);
 
@@ -54,12 +91,6 @@ const frontend = spawn('pnpm', ['--filter', '@horrible/web', 'dev'], {
   env: { ...process.env, HORRIBLE_DEV_HOST: host },
 });
 
-// Optionally start the central game server (:9200) so the games module works out of
-// the box — one `pnpm dev` and you can play. It's a *standalone/central* service
-// (in production it's hosted, not per-node), so this is a dev convenience: opt out
-// with `--no-gameserver` or HORRIBLE_DEV_NO_GAMESERVER=1 if you run it yourself.
-const startGameServer =
-  !process.argv.includes('--no-gameserver') && !process.env.HORRIBLE_DEV_NO_GAMESERVER;
 const gameserver = startGameServer
   ? spawn(
       'uv',
@@ -90,12 +121,17 @@ function cleanup() {
     if (child == null || child.exitCode !== null || child.pid == null) continue;
     if (process.platform === 'win32') {
       // `uv run` / pnpm wrap the real server in a shell, so a plain kill orphans
-      // uvicorn (and leaves the port bound). Tree-kill the whole process group.
-      spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+      // uvicorn (and leaves the port bound). Tree-kill the whole process group —
+      // synchronously, so it finishes before Node exits (an async spawn here can be
+      // cut off mid-kill and orphan the worker).
+      spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
     } else {
       child.kill('SIGINT');
     }
   }
+  // Backstop: kill any reloader worker that respawned onto a port after (or during)
+  // the tree-kill, so the next `pnpm dev` starts clean.
+  freeOwnedPorts();
 }
 
 // If a *core* server dies, tear the other down so we don't leave a half-stack up.
