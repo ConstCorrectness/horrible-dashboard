@@ -17,6 +17,9 @@ primary_region = 'iad'
 
 [env]
   GAMES_ALLOW_DEV_AUTH = '0'
+  # GitHub OAuth App client id for device-flow sign-in. Public (not a secret), so it
+  # lives here rather than in `fly secrets`. Changing it takes effect on `fly deploy`.
+  GAMES_GITHUB_CLIENT_ID = 'Ov23liSfhaUr1XbRj9aT'
   HORRIBLE_DATA_DIR = '/data'
 
 [[mounts]]
