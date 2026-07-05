@@ -18,7 +18,9 @@ const useShell = process.platform === 'win32';
 
 console.log(`🚀 Starting backend and frontend dev servers on ${host}...`);
 
-// Start the FastAPI backend.
+// Start the FastAPI backend. Point the node's games client at the local game server
+// (below) rather than the shipped hosted default, unless the user set GAMES_SERVER_URL
+// themselves. So `pnpm dev` is self-contained; a packaged node still defaults to hosted.
 const backend = spawn(
   'uv',
   [
@@ -35,7 +37,14 @@ const backend = spawn(
     '--port',
     '8000',
   ],
-  { stdio: 'inherit', shell: useShell },
+  {
+    stdio: 'inherit',
+    shell: useShell,
+    env: {
+      ...process.env,
+      GAMES_SERVER_URL: process.env.GAMES_SERVER_URL || 'ws://localhost:9200',
+    },
+  },
 );
 
 // Start the Vite frontend (its config reads HORRIBLE_DEV_HOST for the listen host).

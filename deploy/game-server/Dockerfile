@@ -1,8 +1,8 @@
 # Container image for the central game server (backend/games_server).
 #
 # Build context is the repo ROOT (it needs pyproject.toml, uv.lock, and backend/).
-# Deploy from the repo root, e.g.:
-#   fly deploy --config deploy/game-server/fly.toml --dockerfile deploy/game-server/Dockerfile
+# The repo-root fly.toml points here via [build].dockerfile, so deploy from the root:
+#   fly deploy
 #   docker build -f deploy/game-server/Dockerfile -t horrible-game-server .
 #
 # Only backend/ is copied in; the frontend and local .data/logs are excluded by the

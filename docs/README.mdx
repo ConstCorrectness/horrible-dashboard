@@ -92,7 +92,8 @@ flowchart TB
   peer chat) and the proposed **lobby** (P2P + intermediary + discovery) design.
 - [Game server hosting](architecture/game-server-hosting.mdx) — deploying the central
   game server as a hosted service: the always-on/single-instance/persistent-disk
-  constraints, config + secrets, the **Fly.io** path (`deploy/game-server/`), and a
+  constraints, config + secrets, the **Fly.io** path (root `fly.toml` +
+  `deploy/game-server/Dockerfile`), and a
   comparison of hosting options (VPS + Caddy, Render/Railway) with a scaling path.
 - [Agent commons (design)](architecture/agent-commons.mdx) — **proposed, not
   implemented.** A public square for nodes that don't already know each other to

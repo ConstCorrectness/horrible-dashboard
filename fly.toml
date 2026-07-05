@@ -1,0 +1,45 @@
+# Fly.io deployment for the central game server (backend/games_server).
+#
+# This lives at the repo ROOT on purpose: flyctl resolves the build context and the
+# Dockerfile path relative to the config file's directory, and the image needs repo-root
+# files (pyproject.toml, uv.lock, backend/). So deploy from the repo root:
+#   fly deploy
+# One-time setup (volume + secrets) is in docs/architecture/game-server-hosting.mdx.
+#
+# Keep this a SINGLE, always-on machine: the lobby of tables and live referees live in
+# process memory, and /game-ws is a long-lived WebSocket. Never scale to >1 or to zero.
+
+app = 'horrible-games'
+primary_region = 'iad'
+
+[build]
+  dockerfile = 'deploy/game-server/Dockerfile'
+
+[env]
+  GAMES_ALLOW_DEV_AUTH = '0'
+  HORRIBLE_DATA_DIR = '/data'
+
+[[mounts]]
+  source = 'game_data'
+  destination = '/data'
+
+[http_service]
+  internal_port = 9200
+  force_https = true
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+  min_machines_running = 1
+  max_machines_running = 1  # single authority: never let Fly start a 2nd machine
+
+  [[http_service.checks]]
+    interval = '15s'
+    timeout = '2s'
+    grace_period = '10s'
+    method = 'GET'
+    path = '/health'
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '512mb'
+  cpus = 1
+  memory_mb = 512

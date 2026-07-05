@@ -54,27 +54,34 @@ uv run uvicorn backend.games_server.app:app --host 0.0.0.0 --port 9200
 
 A single Fly Machine with a small volume fits all three constraints: native
 WebSockets, automatic TLS + subdomain, a persistent volume for SQLite, and you pin it
-to one always-on instance. Deploy assets live in `deploy/game-server/`
-(`Dockerfile` + `fly.toml`); the build context is the repo root (it needs
-`pyproject.toml`, `uv.lock`, and `backend/`).
+to one always-on instance. The config is `fly.toml` at the **repo root**, and it points
+at the image via `[build] dockerfile = "deploy/game-server/Dockerfile"`. `fly.toml`
+lives at the root deliberately: flyctl resolves the build context (and the Dockerfile
+path) relative to the config file's directory, and the image needs repo-root files
+(`pyproject.toml`, `uv.lock`, `backend/`) — a `fly.toml` in a subdirectory doubles the
+Dockerfile path and breaks the `COPY` context.
 
 ```bash
 # From the repo root. One-time:
-fly launch --no-deploy --copy-config --config deploy/game-server/fly.toml \
-  --dockerfile deploy/game-server/Dockerfile
-fly volumes create game_data --size 1 --region <region>
+fly launch --no-deploy --copy-config          # uses ./fly.toml
+fly volumes create game_data --size 1 --region iad
 fly secrets set GAMES_JWT_SECRET="$(openssl rand -hex 32)" \
   GAMES_GITHUB_CLIENT_ID=<your-oauth-client-id>
 
 # Deploy / redeploy:
-fly deploy --config deploy/game-server/fly.toml --dockerfile deploy/game-server/Dockerfile
+fly deploy
 ```
 
+On Windows PowerShell (no `openssl`), generate the secret with .NET's CSPRNG instead:
+`fly secrets set GAMES_JWT_SECRET=([Convert]::ToHexString([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32)))`.
+
 The `fly.toml` pins the important bits: `internal_port = 9200`, `force_https`,
-`auto_stop_machines = false`, `min/max_machines_running = 1` (single authority), a
+`auto_stop_machines = 'off'`, `min/max_machines_running = 1` (single authority), a
 `/health` check, and a `game_data` volume mounted at `/data`. Secrets are set with
 `fly secrets` — never committed. Cost is roughly a `shared-cpu-1x`/512 MB machine plus
-a 1 GB volume.
+a 1 GB volume. The one-volume "create two or more" warning from `fly volumes` is
+expected here — a single instance wants a single volume; HA comes later via the
+[scaling path](#scaling-path), not a second volume.
 
 ## Hosting options
 

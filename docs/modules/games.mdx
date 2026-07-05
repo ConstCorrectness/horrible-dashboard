@@ -169,7 +169,10 @@ rated.
 
 ### Settings
 
-- `games.serverUrl` — the central server's WebSocket URL (default `ws://localhost:9200`).
+- `games.serverUrl` — the central server's WebSocket URL. Defaults to the hosted server
+  (`wss://horrible-games.fly.dev`); `pnpm dev` overrides the node to `ws://localhost:9200`
+  (the bundled dev server) via the `GAMES_SERVER_URL` env, and you can set the value
+  per-node to point anywhere.
 - `games.devToken` — fallback identity when not signed in (the token *is* your account id).
 - `games.github.clientId` — GitHub OAuth client id (on the server host) to enable sign-in.
 - `games.policy` — `random` | `agent` | `manual`.

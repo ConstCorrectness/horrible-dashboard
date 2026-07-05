@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from typing import Any, Callable
 
 from websockets.asyncio.client import connect as ws_connect
@@ -25,7 +26,13 @@ from backend.modules.settings.routes import get_value
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SERVER_URL = "ws://localhost:9200"
+# Shipped default: the hosted central game server, so a fresh/packaged node connects
+# out of the box. Local dev overrides it via the GAMES_SERVER_URL env (scripts/dev.mjs
+# sets ws://localhost:9200 to use the bundled server), and a user can override per-node
+# with the games.serverUrl setting.
+DEFAULT_SERVER_URL = (
+    os.environ.get("GAMES_SERVER_URL") or "wss://horrible-games.fly.dev"
+)
 
 
 def _dev_token() -> str:
