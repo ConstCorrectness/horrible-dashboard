@@ -180,6 +180,11 @@ class ModuleRegistry {
   private layoutControllerImpl: LayoutController | null = null;
   private services = new Map<string, unknown>();
   private changeListeners = new Set<() => void>();
+  // Companion reveals requested before (or independent of) the group shell being
+  // mounted. `revealCompanion` buffers the id here and notifies live shells; a shell
+  // drains its companions on mount via `claimReveal` (see PaneGroupShell).
+  private pendingReveals = new Set<string>();
+  private revealListeners = new Set<(companionId: string) => void>();
 
   /** Idempotent: re-registering the same module id is a no-op (StrictMode-safe). */
   register(manifest: ModuleManifest): void {
@@ -255,6 +260,36 @@ class ModuleRegistry {
       (g) =>
         g.primary === panelId || g.companions.some((c: PanelGroupCompanion) => c.id === panelId),
     );
+  }
+
+  /**
+   * Open a companion pane **inside its group's shell**, opening the group's primary
+   * first so the shell exists. Unlike `openPanel(companionId)` — which would render
+   * the companion as a bare standalone pane — this reveals it within the group's
+   * companion strip. If no shell is mounted yet, the request is buffered and drained
+   * when the shell mounts. Used e.g. to pop the Game Board when a match starts.
+   */
+  revealCompanion(companionId: string): void {
+    const group = this.getGroupFor(companionId);
+    if (group && group.primary !== companionId) {
+      // Ensure the group shell is present (opening the primary is idempotent-focus).
+      this.openPanel(group.primary);
+    }
+    this.pendingReveals.add(companionId);
+    this.revealListeners.forEach((l) => l(companionId));
+  }
+
+  /** Subscribe to companion-reveal requests. Returns an unsubscribe. */
+  onRevealCompanion(listener: (companionId: string) => void): () => void {
+    this.revealListeners.add(listener);
+    return () => {
+      this.revealListeners.delete(listener);
+    };
+  }
+
+  /** A group shell claims a buffered reveal for one of its companions (once). */
+  claimReveal(companionId: string): boolean {
+    return this.pendingReveals.delete(companionId);
   }
 
   /**

@@ -28,6 +28,16 @@ So the server is the referee, and identity moves to **server accounts** (OAuth i
 source of truth; a node's Ed25519 key can still be bound to an account for fabric
 continuity, but it is no longer the identity).
 
+**Sessions vs. accounts.** The account is *who you are*; a **session** is *one
+connection*. The hub keys its live-connection map and every table seat by a
+per-connection **session id**, not the account id, and only carries the account along
+for the lobby display and the ladder. This is what lets the **same account play from two
+devices** — each `/game-ws` socket is a distinct player that can take its own seat. The
+referee routes moves by session id and records results by account id; a game where both
+seats resolve to the same account (you vs. yourself across two machines) is logged but
+not ELO-rated. See `backend/games_server/hub.py` and the games module's
+[Playing across two computers](../modules/games.mdx#playing-across-two-computers).
+
 ## Three tiers + one shared engine
 
 ```mermaid
@@ -54,6 +64,15 @@ The **engine** (`backend/games_engine/`) is OpenSpiel-shaped so one interface sp
 perfect-information board games and imperfect-information poker. The server imports it
 authoritatively; a node may import it for local rendering but is never trusted over
 the server.
+
+Two contract extensions carry the **agentic-task duels** (RAG race, future
+data-analysis sprints and bugfix duels): `current_players()` lets a game put
+*several* seats on the clock at once (the referee tracks a pending set with an
+independent per-seat timer instead of one seat-to-move), and `apply_action`'s
+`payload` parameter carries an **open action**'s free-form content (answers, a
+patch) — the referee still validates the enumerated action id; the game validates
+and grades the payload server-side. `GameSpec.move_timeout_s` gives such games a
+minutes-scale clock without touching the board-game default.
 
 ### The `GameState` contract
 

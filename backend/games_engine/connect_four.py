@@ -50,7 +50,7 @@ class ConnectFour(GameState):
             if self.grid[ROWS - 1][c] is None  # column not full
         ]
 
-    def apply_action(self, player: int, action_id: str) -> None:
+    def apply_action(self, player: int, action_id: str, payload: Any = None) -> None:
         if player != self.current_player():
             raise ValueError("not this player's turn")
         try:

@@ -9,7 +9,14 @@
  */
 import { useSyncExternalStore } from 'react';
 
+import { registry } from '../../registry';
 import { sendChannel, subscribeChannel } from '../../ws';
+
+/** Reveal the Game Board companion inside the Games group shell (opening the group
+ * if needed). Called when a match becomes live so the board pops automatically. */
+export function revealBoard(): void {
+  registry.revealCompanion('games.board');
+}
 
 export interface TableInfo {
   id: string;
@@ -46,6 +53,33 @@ export interface ChallengeReport {
   categories: Record<string, { passed: number; total: number }>;
 }
 
+export interface TownResident {
+  account_id: string;
+  name: string;
+  avatar: string;
+  place: string;
+  asleep: boolean;
+}
+
+export interface TownEvent {
+  tick: number;
+  type: string;
+  name: string;
+  avatar: string;
+  place: string;
+  text: string;
+}
+
+/** The fish tank: AgentTown's spectator state, fed by `town_joined`/`town_state`. */
+export interface TownState {
+  joined: boolean;
+  tick: number;
+  phase: string;
+  places: string[];
+  residents: TownResident[];
+  events: TownEvent[];
+}
+
 export interface GamesState {
   connected: boolean;
   accountId: string | null;
@@ -58,7 +92,17 @@ export interface GamesState {
   thinkingSeat: number | null;
   challengeRunning: boolean;
   challengeReport: ChallengeReport | null;
+  town: TownState;
 }
+
+const initialTown: TownState = {
+  joined: false,
+  tick: 0,
+  phase: 'morning',
+  places: [],
+  residents: [],
+  events: [],
+};
 
 const initial: GamesState = {
   connected: false,
@@ -72,10 +116,33 @@ const initial: GamesState = {
   thinkingSeat: null,
   challengeRunning: false,
   challengeReport: null,
+  town: initialTown,
 };
 
 let state: GamesState = initial;
 const listeners = new Set<() => void>();
+// The tick whose events are already in the ticker (a join snapshot and that
+// tick's broadcast can both carry them — append each tick's batch only once).
+let lastEventTick = -1;
+const EVENT_TICKER_LIMIT = 60;
+
+function townUpdate(d: Record<string, unknown>, joined: boolean): TownState {
+  const tick = Number(d.tick ?? state.town.tick);
+  const incoming = (d.events as TownEvent[] | undefined) ?? [];
+  let events = state.town.events;
+  if (tick > lastEventTick && incoming.length > 0) {
+    events = [...events, ...incoming].slice(-EVENT_TICKER_LIMIT);
+  }
+  if (tick > lastEventTick) lastEventTick = tick;
+  return {
+    joined,
+    tick,
+    phase: String(d.phase ?? state.town.phase),
+    places: (d.places as string[] | undefined) ?? state.town.places,
+    residents: (d.residents as TownResident[] | undefined) ?? state.town.residents,
+    events,
+  };
+}
 
 function set(patch: Partial<GamesState>): void {
   state = { ...state, ...patch };
@@ -96,8 +163,14 @@ subscribeChannel('games', (msg) => {
         connected: Boolean(d.connected),
         accountId: (d.account_id as string) ?? null,
         selfPlay: Boolean(d.self_play),
-        ...(d.connected ? {} : { board: null, yourTurn: null, over: null }),
+        ...(d.connected ? {} : { board: null, yourTurn: null, over: null, town: initialTown }),
       });
+      break;
+    case 'town_joined':
+      set({ town: townUpdate(d, true) });
+      break;
+    case 'town_state':
+      set({ town: townUpdate(d, state.town.joined) });
       break;
     case 'tables':
       set({ tables: (d.tables as TableInfo[]) ?? [] });
@@ -105,17 +178,23 @@ subscribeChannel('games', (msg) => {
     case 'table':
       set({ tables: upsertTable(d.table as TableInfo) });
       break;
-    case 'your_turn':
+    case 'your_turn': {
+      const wasLive = state.board !== null || state.yourTurn !== null;
       set({ yourTurn: d as unknown as YourTurn, thinkingSeat: Number(d.seat) });
+      if (!wasLive) revealBoard(); // a match just went live — pop the board
       break;
-    case 'public_state':
+    }
+    case 'public_state': {
+      const wasLive = state.board !== null || state.yourTurn !== null;
       set({
         gameId: (d.game_id as string) ?? state.gameId,
         board: (d.state as PublicState) ?? null,
         over: null,
         thinkingSeat: null,
       });
+      if (!wasLive) revealBoard(); // first state of a match — pop the board
       break;
+    }
     case 'chose':
       set({ thinkingSeat: null });
       break;
@@ -174,4 +253,21 @@ export function gamesJoinTable(tableId: string): void {
 
 export function gamesRunChallenges(gameId: string): void {
   sendChannel('games', 'run_challenges', { gameId });
+}
+
+// ---- AgentTown -------------------------------------------------------------
+
+/** Spawn (or wake) your resident. The node auto-connects to the game server. */
+export function townJoin(name: string, avatar: string): void {
+  sendChannel('games', 'town_join', { name, avatar });
+}
+
+export function townLeave(): void {
+  sendChannel('games', 'town_leave', {});
+  set({ town: { ...state.town, joined: false } });
+}
+
+/** Tap the glass: a nudge injected into your resident's next agent tick. */
+export function townWhisper(text: string): void {
+  sendChannel('games', 'town_whisper', { text });
 }

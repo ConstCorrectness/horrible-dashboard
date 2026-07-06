@@ -1,13 +1,13 @@
 """Node-side sign-in to the central game server.
 
-The node holds the JWT the game server issues after a GitHub sign-in, persisted
-server-side (`.data/games_token.json`) and **never returned to the browser** — the
-clubhouse/`google_auth.py` token pattern. The node presents it on `/game-ws`; without
-it, play falls back to the dev token.
+The node holds the JWT the game server issues after a GitHub or Google sign-in,
+persisted server-side (`.data/games_token.json`) and **never returned to the
+browser** — the clubhouse/`google_auth.py` token pattern. The node presents it on
+`/game-ws`; without it, play falls back to the dev token.
 
-The GitHub device flow itself runs on the game server (it has the client id); the node
-just proxies start/poll so the browser talks to one origin (no CORS), and captures the
-issued token when it arrives.
+The device flows themselves run on the game server (it has the client ids/secrets);
+the node just proxies start/poll so the browser talks to one origin (no CORS), and
+captures the issued token when it arrives.
 """
 
 from __future__ import annotations
@@ -69,19 +69,19 @@ def _unreachable_error() -> dict[str, str]:
     }
 
 
-async def github_start() -> dict[str, Any]:
+async def _auth_start(provider: str) -> dict[str, Any]:
     import httpx
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            res = await client.post(f"{_http_base()}/auth/github/start")
+            res = await client.post(f"{_http_base()}/auth/{provider}/start")
             res.raise_for_status()
             return res.json()
     except httpx.HTTPError:
         return _unreachable_error()
 
 
-async def github_poll(device_code: str) -> dict[str, Any]:
+async def _auth_poll(provider: str, device_code: str) -> dict[str, Any]:
     """Proxy one poll to the server. On success, persist the token server-side and
     return only the account (never the raw token) to the browser."""
     import httpx
@@ -89,7 +89,8 @@ async def github_poll(device_code: str) -> dict[str, Any]:
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             res = await client.post(
-                f"{_http_base()}/auth/github/poll", json={"device_code": device_code}
+                f"{_http_base()}/auth/{provider}/poll",
+                json={"device_code": device_code},
             )
             res.raise_for_status()
             data = res.json()
@@ -101,6 +102,22 @@ async def github_poll(device_code: str) -> dict[str, Any]:
         path.write_text(json.dumps(data), encoding="utf-8")
         return {"signed_in": True, "account": data.get("account")}
     return data  # {pending: true} or {error: ...}
+
+
+async def github_start() -> dict[str, Any]:
+    return await _auth_start("github")
+
+
+async def github_poll(device_code: str) -> dict[str, Any]:
+    return await _auth_poll("github", device_code)
+
+
+async def google_start() -> dict[str, Any]:
+    return await _auth_start("google")
+
+
+async def google_poll(device_code: str) -> dict[str, Any]:
+    return await _auth_poll("google", device_code)
 
 
 async def leaderboard(game_id: str) -> dict[str, Any]:

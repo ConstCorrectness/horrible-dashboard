@@ -83,32 +83,46 @@ export function signOut(): Promise<{ ok: boolean }> {
   return apiPost('/games/signout', {});
 }
 
+/** OAuth providers the game server can sign a player in with (both device flow). */
+export type SignInProvider = 'github' | 'google';
+
+const PROVIDER_FALLBACK_URL: Record<SignInProvider, string> = {
+  github: 'https://github.com/login/device',
+  google: 'https://www.google.com/device',
+};
+
 /**
- * Run the GitHub device flow: start it, surface the code via `onCode`, then poll
- * until the node captures the token (or it errors/times out). Resolves to the signed-in
- * display name.
+ * Run a provider's device flow: start it, surface the code via `onCode`, then poll
+ * until the node captures the token (or it errors/times out). Resolves to the
+ * signed-in display name. The node normalizes both providers to one wire shape.
  */
-export async function signInWithGitHub(
+export async function signInWith(
+  provider: SignInProvider,
   onCode: (code: string, url: string) => void,
 ): Promise<string> {
-  const start = await apiPost<DeviceStart>('/games/auth/github/start', {});
+  const start = await apiPost<DeviceStart>(`/games/auth/${provider}/start`, {});
   if (start.error || !start.device_code) {
     throw new Error(
-      start.error || 'sign-in unavailable — configure games.github.clientId on the server',
+      start.error || `sign-in unavailable — configure games.${provider}.clientId on the server`,
     );
   }
-  onCode(start.user_code ?? '', start.verification_uri ?? 'https://github.com/login/device');
+  onCode(start.user_code ?? '', start.verification_uri ?? PROVIDER_FALLBACK_URL[provider]);
   const intervalMs = Math.max((start.interval ?? 5) * 1000, 2000);
-  const deadline = Date.now() + 5 * 60 * 1000; // GitHub codes last ~15m; cap our wait at 5m
+  const deadline = Date.now() + 5 * 60 * 1000; // device codes last ~15m; cap our wait at 5m
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, intervalMs));
     const poll = await apiPost<{
       signed_in?: boolean;
       account?: { display_name?: string };
       error?: string;
-    }>('/games/auth/github/poll', { device_code: start.device_code });
+    }>(`/games/auth/${provider}/poll`, { device_code: start.device_code });
     if (poll.signed_in) return poll.account?.display_name ?? 'signed in';
     if (poll.error && poll.error !== 'authorization_pending') throw new Error(poll.error);
   }
   throw new Error('sign-in timed out');
+}
+
+/** Back-compat alias: the original GitHub-only entry point. */
+export function signInWithGitHub(onCode: (code: string, url: string) => void): Promise<string> {
+  return signInWith('github', onCode);
 }

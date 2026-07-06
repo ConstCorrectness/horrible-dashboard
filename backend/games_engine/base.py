@@ -45,6 +45,10 @@ class GameSpec:
     min_players: int
     max_players: int
     factory: Callable[..., "GameState"]
+    # Per-move clock override (seconds). Board games are fine with the referee's
+    # default; agentic-task duels (e.g. a RAG race turn = answer a whole question
+    # set) need minutes. None = use the referee's default.
+    move_timeout_s: float | None = None
 
     def new(self, **kwargs: Any) -> "GameState":
         return self.factory(**kwargs)
@@ -66,13 +70,27 @@ class GameState:
         """A seat index (0-based), or `CHANCE` / `TERMINAL`."""
         raise NotImplementedError
 
+    def current_players(self) -> list[int]:
+        """Every seat that may act *right now*. Alternating games get the default
+        (the single `current_player`); **simultaneous** games (sealed bids, duels
+        where both seats work the same problem under one clock) override this and
+        the referee prompts every listed seat at once."""
+        seat = self.current_player()
+        return [] if seat in (CHANCE, TERMINAL) else [seat]
+
     def legal_actions(self, player: int) -> list[Action]:
         """The moves `player` may legally make right now (empty if not their turn)."""
         raise NotImplementedError
 
-    def apply_action(self, player: int, action_id: str) -> None:
+    def apply_action(self, player: int, action_id: str, payload: Any = None) -> None:
         """Apply `player`'s chosen action. Raise `ValueError` if illegal — the
-        server catches that and treats it as a rejected move."""
+        server catches that and treats it as a rejected move.
+
+        `payload` carries free-form data for **open actions** (an action whose
+        `params` declare a `payload` kind, e.g. a RAG race's submitted answers or a
+        bugfix duel's patch): the *choice* is still an enumerated legal action the
+        referee validates, but its content is game-validated data, not an id.
+        Enumerated-only games ignore it."""
         raise NotImplementedError
 
     def resolve_chance(self, rng: random.Random) -> None:

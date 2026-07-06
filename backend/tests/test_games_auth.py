@@ -1,4 +1,4 @@
-"""Game-server identity: JWT sessions, dev-token fallback, GitHub account creation."""
+"""Game-server identity: JWT sessions, dev-token fallback, GitHub/Google accounts."""
 
 from __future__ import annotations
 
@@ -53,3 +53,20 @@ def test_finish_github_creates_account_and_signs_jwt() -> None:
     assert claims["sub"] == "github:99"
     # The account is now persisted for the leaderboard.
     assert store.get_account("github:99")["display_name"] == "octocat"
+
+
+def test_finish_google_creates_account_and_signs_jwt() -> None:
+    out = auth._finish_google(
+        {"id": "108", "email": "mildred.bakes@gmail.com", "name": "Mildred"}
+    )
+    assert out["account"] == {"id": "google:108", "display_name": "Mildred"}
+    claims = auth.verify_jwt(out["token"])
+    assert claims["sub"] == "google:108"
+    assert store.get_account("google:108")["display_name"] == "Mildred"
+
+
+def test_finish_google_falls_back_to_email_local_part() -> None:
+    out = auth._finish_google({"id": "109", "email": "bosun.salt@gmail.com"})
+    assert out["account"]["display_name"] == "bosun.salt"
+    # Two different Gmail accounts are two distinct players.
+    assert out["account"]["id"] != auth._finish_google({"id": "108"})["account"]["id"]

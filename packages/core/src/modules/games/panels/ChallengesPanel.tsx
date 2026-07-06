@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 
+import { claimChallengeFocus, onChallengeFocus } from '../challenge-focus';
 import { gamesRunChallenges, useGames } from '../game-ws';
 import {
   fetchChallengeLeaderboard,
@@ -22,6 +23,14 @@ export function ChallengesPanel() {
 
   useEffect(() => {
     fetchGamesCatalog().then(setGames);
+  }, []);
+
+  // A lobby card's 🎯 shortcut pre-selects that game's scenario set — claim any
+  // buffered request on mount, then follow live ones while open.
+  useEffect(() => {
+    const focused = claimChallengeFocus();
+    if (focused) setGameId(focused);
+    return onChallengeFocus(setGameId);
   }, []);
 
   const loadBoard = useCallback(() => {

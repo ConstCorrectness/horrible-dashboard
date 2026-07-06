@@ -1,9 +1,11 @@
-import { registry, type ModuleManifest } from '../../registry';
+import { registry, type ModuleManifest, type PanelGroupDecl } from '../../registry';
+import './games.css';
 import { ChallengesPanel } from './panels/ChallengesPanel';
 import { GameBoardPanel } from './panels/GameBoardPanel';
 import { LeaderboardPanel } from './panels/LeaderboardPanel';
 import { LoadoutPanel } from './panels/LoadoutPanel';
 import { LobbyPanel } from './panels/LobbyPanel';
+import { TownPanel } from './panels/TownPanel';
 
 /**
  * Games module: watch your agent play turn-based games against another user's
@@ -49,6 +51,31 @@ export const gamesModule: ModuleManifest = {
       defaultPlacement: 'right',
       singleton: true,
     },
+    {
+      id: 'games.town',
+      title: 'AgentTown',
+      component: TownPanel,
+      defaultPlacement: 'center',
+      singleton: true,
+    },
+  ],
+  // Games, Game Board, Agent Harness, Ladder, and Challenges are one **panel group**:
+  // the lobby ("Games") is the hub, the rest are companions that dock inside its
+  // shell (see docs/architecture/panel-groups.mdx). The Game Board is revealed
+  // automatically when a match starts (game-ws `revealBoard`).
+  panelGroups: [
+    {
+      id: 'games.arcade',
+      label: 'Games',
+      primary: 'games.lobby',
+      companions: [
+        { id: 'games.board', label: 'Game Board', icon: '▦' },
+        { id: 'games.loadout', label: 'Agent Harness', icon: '🛠' },
+        { id: 'games.leaderboard', label: 'Ladder', icon: '🏆' },
+        { id: 'games.challenges', label: 'Challenges', icon: '🎯' },
+        { id: 'games.town', label: 'AgentTown', icon: '🏘' },
+      ],
+    } satisfies PanelGroupDecl,
   ],
   commands: [
     {
@@ -59,22 +86,27 @@ export const gamesModule: ModuleManifest = {
     {
       id: 'games.openBoard',
       title: 'Games: Open board',
-      run: () => registry.openPanel('games.board'),
+      run: () => registry.revealCompanion('games.board'),
     },
     {
       id: 'games.openLoadout',
       title: 'Games: Edit agent harness',
-      run: () => registry.openPanel('games.loadout'),
+      run: () => registry.revealCompanion('games.loadout'),
     },
     {
       id: 'games.openLeaderboard',
       title: 'Games: Open ladder',
-      run: () => registry.openPanel('games.leaderboard'),
+      run: () => registry.revealCompanion('games.leaderboard'),
     },
     {
       id: 'games.openChallenges',
       title: 'Games: Open challenge track',
-      run: () => registry.openPanel('games.challenges'),
+      run: () => registry.revealCompanion('games.challenges'),
+    },
+    {
+      id: 'games.openTown',
+      title: 'Games: Visit AgentTown',
+      run: () => registry.revealCompanion('games.town'),
     },
   ],
   settings: [
@@ -98,6 +130,22 @@ export const gamesModule: ModuleManifest = {
       title: 'GitHub OAuth client id',
       description:
         'Set on the game-server host to enable "Sign in with GitHub" (device flow; no secret needed).',
+      type: 'string',
+      default: '',
+    },
+    {
+      key: 'games.google.clientId',
+      title: 'Google OAuth client id',
+      description:
+        'Set on the game-server host to enable "Sign in with Google" (device flow; client type "TVs and Limited Input devices").',
+      type: 'string',
+      default: '',
+    },
+    {
+      key: 'games.google.clientSecret',
+      title: 'Google OAuth client secret',
+      description:
+        "Google's device flow requires the client secret at the token poll (unlike GitHub). On a hosted server prefer the GAMES_GOOGLE_CLIENT_SECRET env secret.",
       type: 'string',
       default: '',
     },

@@ -30,7 +30,14 @@ export function TicTacToeBoard({ board }: { board: PublicState }) {
             color: c === 'X' ? 'var(--accent, #6ea8fe)' : 'var(--text)',
           }}
         >
-          {c ?? ''}
+          {/* Keyed by mark so a newly-placed piece remounts and pops in. */}
+          {c ? (
+            <span key={`${i}-${c}`} className="games-mark-pop">
+              {c}
+            </span>
+          ) : (
+            ''
+          )}
         </div>
       ))}
     </div>

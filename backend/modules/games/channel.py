@@ -37,6 +37,14 @@ async def handle_games_message(conn: Any, msg: dict[str, Any]) -> None:
         await games_client.leave_table(str(data.get("tableId") or ""))
     elif event == "run_challenges":
         await games_client.run_challenges(str(data.get("gameId") or "tictactoe"))
+    elif event == "town_join":
+        await games_client.town_join(
+            str(data.get("name") or ""), str(data.get("avatar") or "")
+        )
+    elif event == "town_leave":
+        await games_client.town_leave()
+    elif event == "town_whisper":
+        games_client.town_whisper(str(data.get("text") or ""))
     else:
         logger.debug("games: ignoring unknown event %r", event)
 

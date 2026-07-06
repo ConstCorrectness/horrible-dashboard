@@ -34,10 +34,26 @@ export function ConnectFourBoard({ board }: { board: PublicState }) {
               width: 44,
               height: 44,
               borderRadius: '50%',
-              background: cell ? DISC[cell] : 'var(--bg, #0d1117)',
+              background: 'var(--bg, #0d1117)',
               boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.4)',
+              overflow: 'hidden',
             }}
-          />
+          >
+            {/* Keyed by disc so a newly-dropped piece remounts and falls in. */}
+            {cell && (
+              <div
+                key={`${r}-${c}-${cell}`}
+                className="games-disc-drop"
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  borderRadius: '50%',
+                  background: DISC[cell],
+                  boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.4)',
+                }}
+              />
+            )}
+          </div>
         )),
       )}
     </div>

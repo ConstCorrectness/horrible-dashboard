@@ -181,6 +181,9 @@ def record_result(
         if len(seats) != 2:
             return  # ELO is 2-player for now; multi-player rating is a later phase.
         a, b = seats[0], seats[1]
+        if a == b:
+            return  # same account on both seats (two devices self-playing): don't
+            # rate an account against itself — the result log above still captures it.
         ra = _get_rating_row(conn, a, game_id)
         rb = _get_rating_row(conn, b, game_id)
         sa = _score(returns.get(0, 0.0))

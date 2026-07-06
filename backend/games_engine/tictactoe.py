@@ -54,7 +54,7 @@ class TicTacToe(GameState):
             if self.board[i] is None
         ]
 
-    def apply_action(self, player: int, action_id: str) -> None:
+    def apply_action(self, player: int, action_id: str, payload: Any = None) -> None:
         if player != self.current_player():
             raise ValueError("not this player's turn")
         try:

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { registry } from '../../../registry';
+import { requestChallenges } from '../challenge-focus';
 import {
   gamesConnect,
   gamesCreateTable,
@@ -12,17 +13,19 @@ import {
 import {
   fetchGamesCatalog,
   fetchStatus,
-  signInWithGitHub,
+  signInWith,
   signOut,
   type GameCatalogEntry,
+  type SignInProvider,
 } from '../games-api';
 
-/** Sign-in status + GitHub device-flow sign-in. Identity lives on the node (the JWT
- * is held server-side); this just reflects and toggles it. */
+/** Sign-in status + device-flow sign-in (GitHub or Google — two different Google
+ * accounts are two distinct players, handy for testing across machines). Identity
+ * lives on the node (the JWT is held server-side); this just reflects and toggles it. */
 function SignIn() {
   const [name, setName] = useState<string | null>(null);
   const [prompt, setPrompt] = useState<{ code: string; url: string } | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<SignInProvider | null>(null);
   const [err, setErr] = useState('');
 
   const refresh = useCallback(() => {
@@ -32,16 +35,16 @@ function SignIn() {
   }, []);
   useEffect(() => refresh(), [refresh]);
 
-  const signIn = async () => {
-    setBusy(true);
+  const signIn = async (provider: SignInProvider) => {
+    setBusy(provider);
     setErr('');
     try {
-      const display = await signInWithGitHub((code, url) => setPrompt({ code, url }));
+      const display = await signInWith(provider, (code, url) => setPrompt({ code, url }));
       setName(display);
     } catch (e) {
       setErr(String(e instanceof Error ? e.message : e));
     } finally {
-      setBusy(false);
+      setBusy(null);
       setPrompt(null);
     }
   };
@@ -61,8 +64,11 @@ function SignIn() {
   return (
     <div style={{ fontSize: '0.78rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-        <button type="button" onClick={signIn} disabled={busy}>
-          {busy ? 'Signing in…' : 'Sign in with GitHub'}
+        <button type="button" onClick={() => void signIn('github')} disabled={busy !== null}>
+          {busy === 'github' ? 'Signing in…' : 'Sign in with GitHub'}
+        </button>
+        <button type="button" onClick={() => void signIn('google')} disabled={busy !== null}>
+          {busy === 'google' ? 'Signing in…' : 'Sign in with Google'}
         </button>
         <span style={{ color: 'var(--text-dim)' }}>or play with the dev token</span>
       </div>
@@ -79,11 +85,19 @@ function SignIn() {
   );
 }
 
+// Icon per catalog game on the lobby cards; anything unrecognized gets the die.
+const GAME_ICONS: Record<string, string> = {
+  tictactoe: '❌',
+  connect_four: '🔴',
+  holdem: '🃏',
+  rag_race: '📚',
+};
+
 /**
- * The games lobby: connect this node to the central server, start or join a table,
- * and open the board to watch. In phase 1 auth is a dev token (settings
- * `games.devToken`); OAuth login lands in a later phase. "Self-play" seats a
- * sparring partner from this same node so a match runs with a single user.
+ * The games lobby: connect this node to the central server, start or join a table
+ * from a game card (▶ Play hosts a table; 🎯 opens that game's challenge track),
+ * and watch the board — it reveals itself when the match starts. "Self-play" seats
+ * a sparring partner from this same node so a match runs with a single user.
  */
 export function LobbyPanel() {
   const { connected, accountId, selfPlay, tables } = useGames();
@@ -98,7 +112,7 @@ export function LobbyPanel() {
   }, [connected]);
 
   const startMatch = (gameId: string) => {
-    registry.openPanel('games.board');
+    registry.revealCompanion('games.board');
     gamesCreateTable(gameId);
   };
 
@@ -135,37 +149,64 @@ export function LobbyPanel() {
             </button>
           </>
         )}
+        {/* The town auto-connects the node, so it's reachable from either state. */}
+        <button
+          type="button"
+          style={{ marginLeft: 'auto' }}
+          title="AgentTown — spawn your agent in the social fish tank"
+          onClick={() => registry.revealCompanion('games.town')}
+        >
+          🏘 AgentTown
+        </button>
       </div>
 
       {connected && (
         <>
           <div>
             <div style={{ color: 'var(--text-dim)', marginBottom: '0.3rem' }}>New match</div>
-            <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+            <div className="games-cards">
               {games.map((g) => (
-                <button key={g.id} type="button" onClick={() => startMatch(g.id)}>
-                  {g.name}
-                </button>
+                <div key={g.id} className="games-card">
+                  <span className="games-card-icon">{GAME_ICONS[g.id] ?? '🎲'}</span>
+                  <span className="games-card-name">{g.name}</span>
+                  <div className="games-card-actions">
+                    <button
+                      type="button"
+                      className="games-play-btn"
+                      onClick={() => startMatch(g.id)}
+                    >
+                      ▶ Play
+                    </button>
+                    <button
+                      type="button"
+                      className="games-chip-btn"
+                      title={`${g.name} challenges — grade your harness off-table`}
+                      onClick={() => requestChallenges(g.id)}
+                    >
+                      🎯
+                    </button>
+                  </div>
+                </div>
               ))}
             </div>
             <div style={{ display: 'flex', gap: '0.6rem', marginTop: '0.4rem' }}>
               <button
                 type="button"
-                onClick={() => registry.openPanel('games.loadout')}
+                onClick={() => registry.revealCompanion('games.loadout')}
                 style={{ fontSize: '0.72rem' }}
               >
                 Edit agent harness →
               </button>
               <button
                 type="button"
-                onClick={() => registry.openPanel('games.leaderboard')}
+                onClick={() => registry.revealCompanion('games.leaderboard')}
                 style={{ fontSize: '0.72rem' }}
               >
                 Ladder →
               </button>
               <button
                 type="button"
-                onClick={() => registry.openPanel('games.challenges')}
+                onClick={() => registry.revealCompanion('games.challenges')}
                 style={{ fontSize: '0.72rem' }}
               >
                 Challenges →
@@ -207,7 +248,7 @@ export function LobbyPanel() {
                       <button
                         type="button"
                         onClick={() => {
-                          registry.openPanel('games.board');
+                          registry.revealCompanion('games.board');
                           gamesJoinTable(t.id);
                         }}
                       >

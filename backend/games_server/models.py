@@ -44,6 +44,16 @@ ACTION = "action"
 CHALLENGE_START = "challenge_start"  # ask for a game's challenge scenarios
 CHALLENGE_ANSWERS = "challenge_answers"  # submit chosen actions for grading
 
+# node -> server (AgentTown: the persistent social world, not a table)
+TOWN_JOIN = "town_join"  # spawn/wake your resident (name + avatar ride along)
+TOWN_LEAVE = "town_leave"  # despawn your resident
+TOWN_ACT = "town_act"  # queue this tick's action: stay/move/say/emote
+
+# server -> node (AgentTown)
+TOWN_JOINED = "town_joined"  # join ack: your resident + the town snapshot
+TOWN_STATE = "town_state"  # per-tick broadcast: residents, events, phase
+TOWN_TICK = "town_tick"  # your resident's observation — act before next tick
+
 # server -> node
 AUTHED = "authed"
 TABLES = "tables"
@@ -76,4 +86,11 @@ class ActionMsg(BaseModel):
     action_id: str
     amount: float | None = Field(
         default=None, description="raise size for betting games"
+    )
+    payload: Any = Field(
+        default=None,
+        description=(
+            "free-form content for open actions (duel answers, patches); the game "
+            "validates its shape server-side"
+        ),
     )

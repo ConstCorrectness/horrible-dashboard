@@ -9,7 +9,7 @@
  * See docs/architecture/panel-groups.mdx.
  */
 import { registry, type PanelGroupDecl, type PanelGroupCompanion } from '@horrible/core';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 interface Props {
   group: PanelGroupDecl;
@@ -88,6 +88,32 @@ export function PaneGroupShell({ group }: Props) {
       return { ...prev, right: id };
     });
   };
+
+  // Force a companion open (idempotent) and make it the active tab in its dock —
+  // used by programmatic reveals (registry.revealCompanion), e.g. the Game Board
+  // popping when a match starts. A no-op re-activate if it's already open.
+  const openCompanion = (id: string) => {
+    const existing = openStatesRef.current[id];
+    if (existing) {
+      setActiveByPosition((prev) => ({ ...prev, [existing.position]: id }));
+      return;
+    }
+    setOpenStates((prev) => (id in prev ? prev : { ...prev, [id]: { position: 'right' } }));
+    setActiveByPosition((prev) => ({ ...prev, right: id }));
+  };
+
+  // Reveal companions requested via registry.revealCompanion — both those buffered
+  // before this shell mounted and any that arrive while it's open.
+  useEffect(() => {
+    const reveal = (id: string) => {
+      if (group.companions.some((c) => c.id === id) && registry.claimReveal(id)) {
+        openCompanion(id);
+      }
+    };
+    for (const c of group.companions) reveal(c.id);
+    return registry.onRevealCompanion(reveal);
+    // openCompanion reads live state through refs; only the group identity matters here.
+  }, [group]);
 
   const cyclePosition = (id: string) => {
     const current = openStatesRef.current[id];

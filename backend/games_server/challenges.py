@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from backend.games_engine.connect_four import COLS, ROWS, ConnectFour
+from backend.games_engine.holdem import Holdem
 from backend.games_engine.tictactoe import TicTacToe
 
 # 'X' = seat 0, 'O' = seat 1, '.' = empty.
@@ -236,9 +237,109 @@ _C4_CHALLENGES: list[Challenge] = [
     ),
 ]
 
+
+def _hd(
+    id: str,
+    category: str,
+    description: str,
+    *,
+    seat: int,
+    hole: list[str],
+    board: list[str],
+    street: str,
+    stacks: list[int],
+    bets: list[int],
+    committed: list[int],
+    solution: list[str],
+) -> Challenge:
+    """Build a Hold'em challenge from an explicit betting spot. The engine derives
+    the observation + legal actions, so the shapes exactly match a live hand. The
+    opponent's hole cards are irrelevant (never observed) — a placeholder is fine."""
+    st = Holdem()
+    st.pending_deal = None
+    st.street = street
+    st.board = list(board)
+    # Placeholder opponent cards: hidden from every observation before showdown.
+    st.hole = [["Xx", "Xx"], ["Xx", "Xx"]]
+    st.hole[seat] = list(hole)
+    st.stacks = list(stacks)
+    st.bets = list(bets)
+    st.committed = list(committed)
+    st.to_act = seat
+    st.last_raise = max(bets) - min(bets) if max(bets) > min(bets) else 2
+    return Challenge(
+        id=id,
+        game_id="holdem",
+        category=category,
+        description=description,
+        observation=st.observation(seat),
+        legal_actions=[a.to_wire() for a in st.legal_actions(seat)],
+        solution=solution,
+    )
+
+
+# Hold'em scenarios. Spots are chosen so one line is *objectively* right:
+# 'discipline' = fold trash facing a shove, 'value' = never fold the nuts,
+# 'aggression' = bet the nuts rather than check it back.
+_HD_CHALLENGES: list[Challenge] = [
+    _hd(
+        "hd-fold-junk",
+        "discipline",
+        "Big blind with 7-2 offsuit: the button shoves all-in preflop — fold.",
+        seat=1,
+        hole=["7s", "2d"],
+        board=[],
+        street="preflop",
+        stacks=[0, 98],
+        bets=[100, 2],
+        committed=[100, 2],
+        solution=["fold"],
+    ),
+    _hd(
+        "hd-fold-junk-2",
+        "discipline",
+        "Big blind with 8-3 offsuit: the button shoves all-in preflop — fold.",
+        seat=1,
+        hole=["8d", "3c"],
+        board=[],
+        street="preflop",
+        stacks=[0, 98],
+        bets=[100, 2],
+        committed=[100, 2],
+        solution=["fold"],
+    ),
+    _hd(
+        "hd-call-nuts",
+        "value",
+        "You rivered a royal flush and the opponent shoves — never fold the nuts.",
+        seat=1,
+        hole=["Js", "Ts"],
+        board=["As", "Ks", "Qs", "2d", "7c"],
+        street="river",
+        stacks=[0, 40],
+        bets=[50, 0],
+        committed=[60, 10],
+        solution=["call"],
+    ),
+    _hd(
+        "hd-bet-nuts",
+        "aggression",
+        "You rivered a royal flush and it checks to you — bet for value, any size.",
+        seat=0,
+        hole=["Jh", "Th"],
+        board=["Ah", "Kh", "Qh", "2c", "2d"],
+        street="river",
+        stacks=[80, 80],
+        bets=[0, 0],
+        committed=[20, 20],
+        solution=["raise_min", "raise_pot", "all_in"],
+    ),
+]
+
 _CHALLENGES: dict[str, list[Challenge]] = {
     "tictactoe": _TTT_CHALLENGES,
     "connect_four": _C4_CHALLENGES,
+    "holdem": _HD_CHALLENGES,
 }
 
 

@@ -38,6 +38,8 @@ and `store.py`):
 | --- | --- | --- |
 | `GAMES_JWT_SECRET` | **Yes** in prod | HMAC key that signs session JWTs. If unset the server writes a random secret into `HORRIBLE_DATA_DIR` — on an ephemeral FS that regenerates on every restart and **logs everyone out**. Set it explicitly (`openssl rand -hex 32`). |
 | `GAMES_GITHUB_CLIENT_ID` | For sign-in | GitHub OAuth app **client id** (device flow — no client secret needed). Without it, "Sign in with GitHub" returns a friendly *"not configured"* error and only the dev token works. Also settable as the `games.github.clientId` setting. |
+| `GAMES_GOOGLE_CLIENT_ID` | For Google sign-in | Google OAuth **client id** — create a client of type **"TVs and Limited Input devices"** in Google Cloud Console (that's the device-flow client type; add your accounts as test users while the consent screen is in Testing). Also settable as `games.google.clientId`. |
+| `GAMES_GOOGLE_CLIENT_SECRET` | For Google sign-in | The matching **client secret** — Google's device flow (unlike GitHub's) requires it at the token poll. Google treats TV-client secrets as non-confidential, but keep it in a host secret anyway. Also settable as `games.google.clientSecret`. |
 | `GAMES_ALLOW_DEV_AUTH` | Recommended `0` | The dev token treats `token == account_id` (no auth). Fine locally; set to `0` in prod to require real sign-in. |
 | `HORRIBLE_DATA_DIR` | **Yes** | Where the SQLite db + JWT secret live. Point at the mounted persistent volume. |
 
@@ -66,7 +68,9 @@ Dockerfile path and breaks the `COPY` context.
 fly launch --no-deploy --copy-config          # uses ./fly.toml
 fly volumes create game_data --size 1 --region iad
 fly secrets set GAMES_JWT_SECRET="$(openssl rand -hex 32)" \
-  GAMES_GITHUB_CLIENT_ID=<your-oauth-client-id>
+  GAMES_GITHUB_CLIENT_ID=<your-oauth-client-id> \
+  GAMES_GOOGLE_CLIENT_ID=<your-google-client-id> \
+  GAMES_GOOGLE_CLIENT_SECRET=<your-google-client-secret>
 
 # Deploy / redeploy:
 fly deploy

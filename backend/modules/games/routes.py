@@ -125,7 +125,7 @@ async def test_tool_route(body: TestToolRequest) -> TestToolResponse:
     return TestToolResponse(ok=True, result=result)
 
 
-# ---- sign-in (GitHub device flow, proxied to the game server) --------------
+# ---- sign-in (GitHub/Google device flows, proxied to the game server) ------
 
 
 @router.post("/auth/github/start")
@@ -136,6 +136,16 @@ async def github_start_route() -> dict[str, Any]:
 @router.post("/auth/github/poll")
 async def github_poll_route(body: DevicePollRequest) -> dict[str, Any]:
     return await server_auth.github_poll(body.device_code)
+
+
+@router.post("/auth/google/start")
+async def google_start_route() -> dict[str, Any]:
+    return await server_auth.google_start()
+
+
+@router.post("/auth/google/poll")
+async def google_poll_route(body: DevicePollRequest) -> dict[str, Any]:
+    return await server_auth.google_poll(body.device_code)
 
 
 @router.post("/signout")

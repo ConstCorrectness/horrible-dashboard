@@ -104,6 +104,30 @@ def test_out_of_turn_and_illegal_moves_rejected() -> None:
     asyncio.run(go())
 
 
+def test_same_account_two_devices_can_play() -> None:
+    """Two connections authenticated with the *same* token (one account signed in on
+    two computers) are two distinct players: they take both seats and the game starts.
+    Regression for the account-keyed hub that let the second device evict the first."""
+
+    async def go() -> None:
+        hub = GameHub(move_timeout_s=0)
+        # Same token → same account, but two separate connections/sessions.
+        a_conn, a = await _auth(hub, "solo")
+        b_conn, b = await _auth(hub, "solo")
+        assert a.session_id != b.session_id
+        await hub.handle(a, {"type": models.CREATE_TABLE, "game_id": "tictactoe"})
+        table_id = a_conn.last(models.TABLE)["table"]["id"]
+        await hub.handle(b, {"type": models.JOIN_TABLE, "table_id": table_id})
+        # Both seats filled → the game started and seat 0 (device A) is prompted.
+        assert a_conn.last(models.YOUR_TURN) is not None
+        assert a_conn.last(models.YOUR_TURN)["seat"] == 0
+        # The lobby still advertises the account id in both seats.
+        table = a_conn.last(models.TABLE)["table"]
+        assert table["seats"] == ["solo", "solo"]
+
+    asyncio.run(go())
+
+
 def test_game_plays_to_a_win() -> None:
     async def go() -> None:
         hub = GameHub(move_timeout_s=0)

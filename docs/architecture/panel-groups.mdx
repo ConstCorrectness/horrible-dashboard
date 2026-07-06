@@ -48,6 +48,21 @@ widget IDs are suppressed from the auto-generated `widget.open:*` commands so us
 can't accidentally open a companion detached from its group. Companions are only
 reachable via the toggle strip of their primary.
 
+## Revealing a companion programmatically
+
+Besides the toggle strip, code can open a companion **inside its shell** with
+`registry.revealCompanion(companionId)`. It opens the group's primary first (so the
+shell exists), then reveals the companion — unlike `registry.openPanel(companionId)`,
+which would open the companion as a bare standalone pane. If no shell is mounted yet,
+the request is **buffered** and drained when the shell mounts, so a reveal fired during
+boot or from a background event isn't lost.
+
+This is how the games module pops the **Game Board** (`games.board`) the moment a match
+goes live — `game-ws.ts` calls `revealBoard()` → `revealCompanion('games.board')` on the
+first `public_state`/`your_turn`, and the lobby's *Start*/*Join* buttons use the same
+call. `PaneGroupShell` subscribes via `registry.onRevealCompanion` and claims buffered
+reveals for its own companions with `registry.claimReveal` on mount.
+
 ## Declaring a group
 
 Add `panelGroups` to the module manifest:
@@ -80,6 +95,7 @@ The `icon` field appears in the toggle button alongside the label.
 | `commons.hub` | `commons.directory` | requests, profile |
 | `flow.studio` | `flow.library` | canvas (`flow.editor`) |
 | `observability.monitor` | `observability.io` | inspector (`observability.logs`) |
+| `games.arcade` | `games.lobby` | board, harness (`games.loadout`), ladder, challenges |
 
 ## How it works
 

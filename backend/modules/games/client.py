@@ -21,7 +21,8 @@ from websockets.asyncio.client import connect as ws_connect
 from websockets.exceptions import ConnectionClosed
 
 from backend.games_server import models
-from backend.modules.games.policy import Policy, make_policy
+from backend.modules.games.policy import AgentPolicy, Policy, make_policy
+from backend.modules.games.town_policy import TownPolicy
 from backend.modules.settings.routes import get_value
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,8 @@ class _PlayerConn:
         self.account_id: str | None = None
         self.authed = asyncio.Event()
         self.last_turn: dict[str, Any] | None = None
+        # The AgentTown resident's mind (created on first use; whispers land here).
+        self._town_policy: TownPolicy | None = None
 
     async def start(self) -> None:
         self._ws = await ws_connect(f"{self._url}/game-ws")
@@ -123,12 +126,17 @@ class _PlayerConn:
             self.last_turn = None  # our turn (if any) is resolved
         elif mtype == models.CHALLENGE_SCENARIOS:
             await self._run_challenge_scenarios(msg)
+        elif mtype == models.TOWN_TICK:
+            # Detached: agent mode makes a model call that can take seconds, and
+            # awaiting it here would stall the read loop (and every other event).
+            asyncio.create_task(self._town_act(msg))
         # Relay every server event to the browser (board render, thinking, etc.).
         await _maybe_await(self._on_event(msg))
 
-    async def submit(self, action_id: str) -> dict[str, Any]:
+    async def submit(self, action_id: str, payload: Any = None) -> dict[str, Any]:
         """Manual move path: submit `action_id` for our pending turn (used by the
-        `game.chooseAction` agent tool). Returns an error dict if it's not our turn."""
+        `game.chooseAction` agent tool). `payload` carries an open action's content
+        (duel answers). Returns an error dict if it's not our turn."""
         turn = self.last_turn
         if turn is None:
             return {"error": "no pending turn"}
@@ -140,6 +148,7 @@ class _PlayerConn:
                 "type": models.ACTION,
                 "game_id": turn.get("game_id"),
                 "action_id": action_id,
+                **({"payload": payload} if payload is not None else {}),
             }
         )
         self.last_turn = None
@@ -177,12 +186,27 @@ class _PlayerConn:
         if not legal:
             return
         observation = msg.get("observation") or {}
-        action_id = await self._policy.choose(observation, legal, msg.get("game_id"))
+
+        # Open actions (duels): the turn wants *content*, not a pick — run the
+        # built-in baseline solver so auto-play always finishes the race. Harness
+        # skill drives through the manual path (`game.chooseAction` + payload).
+        from backend.modules.games.duel_solver import find_open_action, solve_answers
+
+        open_action = find_open_action(legal)
+        payload: Any = None
+        if open_action is not None:
+            action_id = str(open_action.get("id"))
+            payload = solve_answers(observation)
+        else:
+            action_id = await self._policy.choose(
+                observation, legal, msg.get("game_id")
+            )
         await self._send(
             {
                 "type": models.ACTION,
                 "game_id": msg.get("game_id"),
                 "action_id": action_id,
+                **({"payload": payload} if payload is not None else {}),
             }
         )
         # Surface the choice to the UI as a first-class event.
@@ -197,6 +221,29 @@ class _PlayerConn:
                 }
             )
         )
+
+    # ---- AgentTown ----------------------------------------------------------
+
+    def ensure_town_policy(self) -> TownPolicy:
+        if self._town_policy is None:
+            self._town_policy = TownPolicy()
+        return self._town_policy
+
+    async def _town_act(self, msg: dict[str, Any]) -> None:
+        """Decide and send this tick's town action (runs as a detached task)."""
+        try:
+            policy = self.ensure_town_policy()
+            agent_mode = isinstance(self._policy, AgentPolicy)
+            action = await policy.decide(msg, agent_mode)
+            await self._send({"type": models.TOWN_ACT, **action})
+        except Exception:
+            logger.debug("town act failed", exc_info=True)
+
+    async def town_join(self, name: str, avatar: str) -> None:
+        await self._send({"type": models.TOWN_JOIN, "name": name, "avatar": avatar})
+
+    async def town_leave(self) -> None:
+        await self._send({"type": models.TOWN_LEAVE})
 
     async def close(self) -> None:
         if self._task is not None:
@@ -306,16 +353,41 @@ class GameServerClient:
         if self._primary:
             await self._primary.run_challenges(game_id)
 
+    # ---- AgentTown (rides the primary connection) ---------------------------
+
+    async def town_join(self, name: str = "", avatar: str = "") -> dict[str, Any]:
+        """Spawn (or wake) this account's resident. Auto-connects the node first —
+        visiting the town shouldn't require a separate Connect step."""
+        if not self.connected:
+            await self.connect(False)
+        assert self._primary is not None
+        await self._primary.town_join(name, avatar)
+        return {"ok": True}
+
+    async def town_leave(self) -> dict[str, Any]:
+        if self._primary:
+            await self._primary.town_leave()
+        return {"ok": True}
+
+    def town_whisper(self, text: str) -> dict[str, Any]:
+        """Tap the glass: queue a nudge for the resident's next agent tick."""
+        if self._primary is None:
+            return {"error": "not connected"}
+        self._primary.ensure_town_policy().whisper(text)
+        return {"ok": True}
+
     # ---- manual play (agent-tool path) ------------------------------------
 
     def current_turn(self) -> dict[str, Any] | None:
         """The primary seat's pending turn (observation + legal actions), if any."""
         return self._primary.last_turn if self._primary else None
 
-    async def submit_action(self, action_id: str) -> dict[str, Any]:
+    async def submit_action(
+        self, action_id: str, payload: Any = None
+    ) -> dict[str, Any]:
         if not self._primary:
             return {"error": "not connected to a game server"}
-        return await self._primary.submit(action_id)
+        return await self._primary.submit(action_id, payload=payload)
 
     async def _await_open_table(self, game_id: str, timeout: float = 5.0) -> str | None:
         """Resolve the id of the open table the primary just created by watching the

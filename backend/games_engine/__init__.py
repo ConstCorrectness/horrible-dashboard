@@ -32,6 +32,8 @@ from backend.games_engine.base import (
 
 # Importing a game module registers it via `register_game` as a side effect.
 from backend.games_engine import connect_four  # noqa: F401  (registration side effect)
+from backend.games_engine import holdem  # noqa: F401  (registration side effect)
+from backend.games_engine import rag_race  # noqa: F401  (registration side effect)
 from backend.games_engine import tictactoe  # noqa: F401  (registration side effect)
 
 __all__ = [

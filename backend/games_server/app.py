@@ -27,12 +27,15 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
     store.init_db()  # accounts + ratings + results
+    hub.town.start_loop()  # AgentTown's world clock (tick cadence from env)
     yield
+    hub.town.stop_loop()
 
 
 app = FastAPI(title="horrible-dashboard game server", lifespan=_lifespan)
 
-# One lobby shared by every connection to this process.
+# One lobby shared by every connection to this process. (AgentTown's tick cadence
+# is env-tunable via TOWN_TICK_SECONDS — see town.py.)
 hub = GameHub()
 
 
@@ -89,6 +92,25 @@ async def github_poll(body: _DevicePoll) -> dict[str, Any]:
         return await auth.github_device_poll(body.device_code)
     except Exception as exc:  # network / provider error — report, don't crash
         logger.warning("github poll failed: %s", exc)
+        return {"error": str(exc)}
+
+
+@app.post("/auth/google/start")
+async def google_start() -> dict[str, Any]:
+    """Begin Google device-flow sign-in (code entered at google.com/device)."""
+    try:
+        return await auth.google_device_start()
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+
+@app.post("/auth/google/poll")
+async def google_poll(body: _DevicePoll) -> dict[str, Any]:
+    """Poll once for the token. `{pending: true}` until authorized, then `{token, account}`."""
+    try:
+        return await auth.google_device_poll(body.device_code)
+    except Exception as exc:  # network / provider error — report, don't crash
+        logger.warning("google poll failed: %s", exc)
         return {"error": str(exc)}
 
 

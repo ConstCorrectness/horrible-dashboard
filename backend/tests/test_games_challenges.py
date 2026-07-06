@@ -138,6 +138,35 @@ def test_c4_solutions_are_semantically_correct() -> None:
             raise AssertionError(f"unclassified category {ch.category!r} in {ch.id}")
 
 
+# ---- hold'em challenge set ---------------------------------------------------
+
+
+def test_holdem_scenarios_shape_and_hidden_solutions() -> None:
+    scenarios = challenges.scenarios_for("holdem")
+    assert scenarios, "hold'em should have challenge scenarios"
+    for sc in scenarios:
+        assert "solution" not in sc
+        obs = sc["observation"]
+        assert obs["game"] == "holdem"
+        # A hold'em scenario carries the seat's own hole cards but never reveals any.
+        assert len(obs["hole"]) == 2
+        assert obs["revealed"] == [None, None]
+
+
+def test_holdem_every_solution_is_legal() -> None:
+    for ch in challenges._HD_CHALLENGES:
+        legal = {a["id"] for a in ch.legal_actions}
+        assert set(ch.solution) <= legal, ch.id
+
+
+def test_holdem_grade_perfect_covers_every_category() -> None:
+    perfect = {c.id: c.solution[0] for c in challenges._HD_CHALLENGES}
+    report = challenges.grade("holdem", perfect)
+    assert report["correct"] == report["total"] == len(challenges._HD_CHALLENGES)
+    assert set(report["categories"]) == {"discipline", "value", "aggression"}
+    assert report["covered"] == report["category_count"]
+
+
 # ---- hub exchange ----------------------------------------------------------
 
 

@@ -32,7 +32,9 @@ async def _choose_action(args: dict[str, Any]) -> Any:
     action_id = str(args.get("action_id") or "")
     if not action_id:
         return {"error": "action_id is required"}
-    return await games_client.submit_action(action_id)
+    # Open actions (duels) carry their content here — e.g. a RAG race's
+    # {question_id: answer} dict. Enumerated actions leave it unset.
+    return await games_client.submit_action(action_id, payload=args.get("payload"))
 
 
 _TOOLS = [
@@ -51,10 +53,20 @@ _TOOLS = [
         name="game.chooseAction",
         description=(
             "Play your move by choosing one legal action by its id (from "
-            "game.getObservation). The server re-validates the choice."
+            "game.getObservation). The server re-validates the choice. If the "
+            "action declares a payload kind in its params (duel turns, e.g. a RAG "
+            "race's 'submit'), pass the content as `payload` — for a RAG race, a "
+            "{question_id: answer} object."
         ),
         parameters={
             "action_id": {"type": "string", "description": "id of a legal action"},
+            "payload": {
+                "type": "object",
+                "description": (
+                    "content for an open action (e.g. duel answers keyed by "
+                    "question id); omit for normal enumerated moves"
+                ),
+            },
         },
         required=["action_id"],
         handler=_choose_action,

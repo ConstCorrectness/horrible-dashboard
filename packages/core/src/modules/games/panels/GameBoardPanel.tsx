@@ -1,12 +1,27 @@
 import { useGames } from '../game-ws';
 import { ConnectFourBoard } from './ConnectFourBoard';
+import { PokerBoard } from './PokerBoard';
+import { RagRaceBoard } from './RagRaceBoard';
 import { TicTacToeBoard } from './TicTacToeBoard';
 
 // Per-game seat labels (seat 0, seat 1). Falls back to "Seat N" for other games.
 const SEAT_LABELS: Record<string, [string, string]> = {
   tictactoe: ['X', 'O'],
   connect_four: ['Red', 'Yellow'],
+  holdem: ['Button', 'Big Blind'],
+  rag_race: ['Player 1', 'Player 2'],
 };
+
+/** Animated ellipsis for the "thinking" state (see games.css). */
+function ThinkingDots() {
+  return (
+    <span className="games-think-dots">
+      <span>.</span>
+      <span>.</span>
+      <span>.</span>
+    </span>
+  );
+}
 
 /** The live board. Dispatches to a per-game renderer by `board.game`. Spectator
  * view — you watch your agent play. */
@@ -24,17 +39,25 @@ export function GameBoardPanel() {
   const seat = (n: number | null | undefined): string =>
     n === null || n === undefined ? '—' : (SEAT_LABELS[board.game]?.[n] ?? `Seat ${n}`);
 
-  const banner = over
-    ? over.winner === null
-      ? 'Draw'
-      : `${seat(over.winner)} wins`
-    : thinkingSeat !== null
-      ? `${seat(thinkingSeat)} is thinking…`
-      : `Turn: ${seat(board.turn)}`;
+  const banner = over ? (
+    over.winner === null ? (
+      '🤝 Draw'
+    ) : (
+      `🏆 ${seat(over.winner)} wins!`
+    )
+  ) : thinkingSeat !== null ? (
+    <>
+      {seat(thinkingSeat)} is thinking
+      <ThinkingDots />
+    </>
+  ) : (
+    `Turn: ${seat(board.turn)}`
+  );
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       <div
+        className={over ? 'games-winner-banner' : undefined}
         style={{
           padding: '0.35rem 0.6rem',
           borderBottom: '1px solid var(--border)',
@@ -50,6 +73,10 @@ export function GameBoardPanel() {
           <TicTacToeBoard board={board} />
         ) : board.game === 'connect_four' ? (
           <ConnectFourBoard board={board} />
+        ) : board.game === 'holdem' ? (
+          <PokerBoard board={board} />
+        ) : board.game === 'rag_race' ? (
+          <RagRaceBoard board={board} />
         ) : (
           <pre style={{ padding: '0.5rem', fontSize: '0.75rem' }}>
             {JSON.stringify(board, null, 2)}

@@ -1,7 +1,14 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 
 import { apiGet, apiPost, apiPut } from '../../../api';
+import { registry } from '../../../registry';
+import type { EditorService } from '../../editor/service';
 import { fetchGamesCatalog } from '../games-api';
+
+/** The editor's buffer surface, looked up lazily (the editor module registers it
+ * at load). Undefined only if the editor module never loaded — the harness panel
+ * then simply hides its "edit in editor" affordances. */
+const editor = (): EditorService | undefined => registry.getService<EditorService>('editor');
 
 const labelStyle: CSSProperties = {
   display: 'block',
@@ -61,11 +68,19 @@ export function LoadoutPanel() {
   );
   const [results, setResults] = useState<Record<number, string>>({});
   const [status, setStatus] = useState('');
+  // Tool code opened as an editor buffer, keyed by `${gameId}:${tool name}` so the
+  // link survives list reorders (delete/add) but not renames.
+  const [editorUris, setEditorUris] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    // Catalog games + the shared `default` fallback harness.
+    // Catalog games + the AgentTown persona (the town isn't a table game, but its
+    // resident's personality is this loadout's context) + the `default` fallback.
     fetchGamesCatalog().then((catalog) =>
-      setGames([...catalog, { id: 'default', name: 'default' }]),
+      setGames([
+        ...catalog,
+        { id: 'town', name: 'AgentTown persona' },
+        { id: 'default', name: 'default' },
+      ]),
     );
   }, []);
 
@@ -94,6 +109,35 @@ export function LoadoutPanel() {
       setStatus('saved ✓');
     } catch (e) {
       setStatus(String(e));
+    }
+  };
+
+  // Open a tool's code as a real Python buffer in the editor module (syntax
+  // highlighting, LSP), then pull the edited content back into the loadout.
+  const editInEditor = async (i: number) => {
+    const svc = editor();
+    if (!svc) return;
+    const t = loadout.tools[i];
+    const uri = await svc.openBufferFromContent({
+      content: t.code,
+      language: 'python',
+      title: `harness · ${gameId} · ${t.name}`,
+    });
+    setEditorUris((prev) => ({ ...prev, [`${gameId}:${t.name}`]: uri }));
+  };
+
+  const pullFromEditor = async (i: number) => {
+    const svc = editor();
+    if (!svc) return;
+    const t = loadout.tools[i];
+    const uri = editorUris[`${gameId}:${t.name}`];
+    if (!uri) return;
+    const content = await svc.getBufferContent(uri);
+    if (content !== null) {
+      updateTool(i, { code: content });
+      setResults({ ...results, [i]: 'pulled from editor — Save to persist' });
+    } else {
+      setResults({ ...results, [i]: 'editor buffer is gone' });
     }
   };
 
@@ -226,6 +270,18 @@ export function LoadoutPanel() {
             <button type="button" onClick={() => test(i)}>
               Test
             </button>
+            {editor() && (
+              <>
+                <button type="button" onClick={() => void editInEditor(i)}>
+                  Edit in editor ↗
+                </button>
+                {editorUris[`${gameId}:${t.name}`] && (
+                  <button type="button" onClick={() => void pullFromEditor(i)}>
+                    ↙ Pull
+                  </button>
+                )}
+              </>
+            )}
             <code style={{ color: 'var(--text-dim)', fontSize: '0.72rem' }}>
               {results[i] ?? ''}
             </code>
