@@ -116,8 +116,8 @@ def _github_client_id() -> str:
     from backend.modules.settings.routes import get_value
 
     return str(
-        get_value("games.github.clientId", "")
-        or os.environ.get("GAMES_GITHUB_CLIENT_ID", "")
+        os.environ.get("GAMES_GITHUB_CLIENT_ID", "")
+        or get_value("games.github.clientId", "")
     )
 
 
@@ -191,8 +191,8 @@ def _google_client_id() -> str:
     from backend.modules.settings.routes import get_value
 
     return str(
-        get_value("games.google.clientId", "")
-        or os.environ.get("GAMES_GOOGLE_CLIENT_ID", "")
+        os.environ.get("GAMES_GOOGLE_CLIENT_ID", "")
+        or get_value("games.google.clientId", "")
     )
 
 
@@ -200,8 +200,8 @@ def _google_client_secret() -> str:
     from backend.modules.settings.routes import get_value
 
     return str(
-        get_value("games.google.clientSecret", "")
-        or os.environ.get("GAMES_GOOGLE_CLIENT_SECRET", "")
+        os.environ.get("GAMES_GOOGLE_CLIENT_SECRET", "")
+        or get_value("games.google.clientSecret", "")
     )
 
 
