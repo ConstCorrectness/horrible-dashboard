@@ -160,7 +160,9 @@ export function openSession(projectId: string, notebookPath = 'main.ipynb'): Ses
     store = new SessionStore(projectId, notebookPath);
     stores.set(key, store);
   }
-  openNotebook(projectId, notebookPath);
+  if (projectId) {
+    openNotebook(projectId, notebookPath);
+  }
   return store;
 }
 

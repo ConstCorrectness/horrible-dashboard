@@ -514,12 +514,18 @@ class TrainingKernelManager:
                         self._create, project_id, nb_rel, key
                     )
                     self.sessions[key] = session
+        except UnknownProjectError as exc:
+            logger.warning("kernel open failed for %s: %s", key, exc)
+            payload: dict[str, Any] = {
+                "sessionKey": key,
+                "message": str(exc),
+                "code": "unknown_project",
+            }
+            await conn.send_json(_evt("error", payload))
+            return
         except Exception as exc:  # noqa: BLE001 — surfaced to the pane
             logger.exception("kernel open failed for %s", key)
             payload: dict[str, Any] = {"sessionKey": key, "message": str(exc)}
-            if isinstance(exc, UnknownProjectError):
-                # Lets the pane self-heal (close the dead pane) rather than string-match.
-                payload["code"] = "unknown_project"
             await conn.send_json(_evt("error", payload))
             return
         session.subscribers.add(conn)
