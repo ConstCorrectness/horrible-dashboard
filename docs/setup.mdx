@@ -48,6 +48,7 @@ backend, so API panels work out of the box), _and_ the central [game
 server](modules/games.mdx) on **:9200** so the games module works with no extra steps.
 Backend health check: `GET http://localhost:8000/api/health`.
 
+- **Local environment variables (`.env`).** `pnpm dev` automatically loads a `.env` file at the repository root if one is present, allowing you to configure local environment variables (such as `GAMES_GOOGLE_CLIENT_ID` or custom port overrides) for the development processes.
 - `pnpm dev:web` — UI only, when a backend is already running.
 - `pnpm dev:lan` — bind both servers to `0.0.0.0` so other machines can reach this
   node (needed for the [peer fabric](architecture/distributed.mdx) / collaboration).

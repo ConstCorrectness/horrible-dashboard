@@ -279,17 +279,21 @@ A node authenticates to the server with a token on `/game-ws`:
   flow** — no client secret, no callback server, so it works headless/under Tauri.
   The server verifies the GitHub profile, upserts an account (`github:<id>`), and
   issues a signed **JWT** the node holds server-side (`.data/games_token.json`, never
-  handed to the browser). Configure `games.github.clientId` on the server host.
+  handed to the browser). Configure `games.github.clientId` on the server host (or
+  override via the `GAMES_GITHUB_CLIENT_ID` env variable, which takes priority).
 - **Google sign-in** (*Sign in with Google*) — the same device flow (code entered at
   google.com/device), accounts keyed `google:<sub>`, so **two different Gmail
   accounts are two distinct players** (handy for testing across your own machines).
   Google requires an OAuth client of type **"TVs and Limited Input devices"** and,
   unlike GitHub, its token poll needs the **client secret** — configure
-  `games.google.clientId` + `games.google.clientSecret` on the server host (env:
-  `GAMES_GOOGLE_CLIENT_ID` / `GAMES_GOOGLE_CLIENT_SECRET`).
+  `games.google.clientId` + `games.google.clientSecret` on the server host (or
+  override via env `GAMES_GOOGLE_CLIENT_ID` / `GAMES_GOOGLE_CLIENT_SECRET`, which
+  take priority).
 - **Dev token** (fallback) — when not signed in, the token *is* the account id, so
   local play and tests need no OAuth. Disable it with `GAMES_ALLOW_DEV_AUTH=0` to
   require real sign-in.
+
+If a cached JWT token is rejected by the game server during connection authentication, the node's client automatically signs out (deleting `.data/games_token.json`) to clear the stale token and prevent infinite loop failures. Connection and authentication errors from the game server are surfaced as toast notifications in the UI.
 
 Sign in **while pointed at the server you'll play on**: the JWT is signed by that
 server's secret, so a token issued by your local dev server won't verify on the
@@ -385,10 +389,10 @@ All five are the `games.arcade` [panel group](../architecture/panel-groups.mdx):
   (the bundled dev server) via the `GAMES_SERVER_URL` env, and you can set the value
   per-node to point anywhere.
 - `games.devToken` — fallback identity when not signed in (the token *is* your account id).
-- `games.github.clientId` — GitHub OAuth client id (on the server host) to enable sign-in.
+- `games.github.clientId` — GitHub OAuth client id (on the server host) to enable sign-in. Can be overridden via the `GAMES_GITHUB_CLIENT_ID` env variable (preferred for hosted servers).
 - `games.google.clientId` / `games.google.clientSecret` — Google OAuth device-flow
-  credentials (client type "TVs and Limited Input devices"; on a hosted server prefer
-  the `GAMES_GOOGLE_CLIENT_ID`/`GAMES_GOOGLE_CLIENT_SECRET` env secrets).
+  credentials (client type "TVs and Limited Input devices"). Can be overridden via the
+  `GAMES_GOOGLE_CLIENT_ID` and `GAMES_GOOGLE_CLIENT_SECRET` env variables (preferred for hosted servers).
 - `games.policy` — `random` | `agent` | `manual`.
 
 ### Backend surface
