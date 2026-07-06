@@ -346,3 +346,358 @@
 .games-town-event-new {
   animation: games-town-fade 0.35s ease-out;
 }
+
+/* ---- AgentTown Visualizer Map (Animal Crossing Cozy Anime Style) ---- */
+
+.games-town-view-toggle {
+  display: flex;
+  gap: 2px;
+  background: #fffdf5;
+  padding: 2px;
+  border-radius: 8px;
+  border: 2px solid #604a36;
+  box-shadow: 0 2px 0 #4d3a29;
+}
+
+.games-town-toggle-btn {
+  padding: 0.25rem 0.6rem;
+  font-size: 0.72rem;
+  border-radius: 5px;
+  border: none;
+  background: transparent;
+  color: #8c7355;
+  cursor: pointer;
+  font-weight: 700;
+  transition:
+    background-color 0.12s ease,
+    color 0.12s ease;
+}
+
+.games-town-toggle-btn:hover {
+  color: #604a36;
+}
+
+.games-town-toggle-btn.active {
+  background: #604a36;
+  color: #fffdf5 !important;
+}
+
+/* The tile map: a canvas-drawn world with an HTML overlay for the residents. */
+.games-town-canvas-wrap {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 25 / 19; /* the tile grid's shape (COLS / ROWS) */
+  flex-shrink: 0;
+  border: 3px solid #604a36;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow:
+    0 6px 16px rgba(0, 0, 0, 0.15),
+    inset 0 0 20px rgba(0, 0, 0, 0.05);
+}
+
+.games-town-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.games-town-canvas-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.games-town-canvas-overlay .games-town-visual-resident {
+  pointer-events: auto;
+}
+
+/* Time overlay layer (Cozy sunrise golden, sunny day, sunset red, night navy) */
+.games-town-time-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  transition: background-color 4s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 3;
+}
+
+.games-town-time-overlay.morning {
+  background-color: rgba(255, 170, 70, 0.12); /* Warm morning glow */
+}
+
+.games-town-time-overlay.afternoon {
+  background-color: rgba(0, 0, 0, 0); /* Bright afternoon */
+}
+
+.games-town-time-overlay.evening {
+  background-color: rgba(230, 90, 40, 0.16); /* Warm cozy sunset */
+}
+
+.games-town-time-overlay.night {
+  background-color: rgba(12, 18, 48, 0.35); /* Cozy twilight night */
+  box-shadow: inset 0 0 80px rgba(0, 0, 0, 0.4);
+}
+
+/* Villager Residents */
+.games-town-visual-resident {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  z-index: 10;
+  transition:
+    left 2.6s cubic-bezier(0.25, 0.8, 0.25, 1),
+    top 2.6s cubic-bezier(0.25, 0.8, 0.25, 1);
+  cursor: pointer;
+  /* Bouncy Idle Animation */
+  animation: town-villager-idle 3s ease-in-out infinite;
+}
+
+@keyframes town-villager-idle {
+  0%,
+  100% {
+    transform: translate(-50%, -50%) scale(1) rotate(0deg);
+  }
+  50% {
+    transform: translate(-50%, -53%) scale(1.04) rotate(1.5deg);
+  }
+}
+
+.games-town-visual-avatar-wrapper {
+  position: relative;
+  width: 2.4rem;
+  height: 2.4rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fdfaf2;
+  border: 3px solid #604a36;
+  border-radius: 50%;
+  box-shadow:
+    0 3px 0 #4d3a29,
+    0 6px 12px rgba(0, 0, 0, 0.15);
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.games-town-visual-resident:hover .games-town-visual-avatar-wrapper {
+  transform: scale(1.15) translateY(-2px);
+  box-shadow:
+    0 5px 0 #4d3a29,
+    0 8px 16px rgba(0, 0, 0, 0.2);
+}
+
+/* User Target Arrow (Animal Crossing indicator style) */
+.games-town-visual-user-arrow {
+  position: absolute;
+  bottom: 125%;
+  font-size: 0.65rem;
+  color: #ff595e; /* Red arrow */
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  animation: user-arrow-bounce 1s ease-in-out infinite;
+  z-index: 12;
+}
+
+@keyframes user-arrow-bounce {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+.games-town-visual-avatar {
+  font-size: 1.4rem;
+  line-height: 1;
+  user-select: none;
+}
+
+.games-town-visual-sleep-icon {
+  position: absolute;
+  top: -5px;
+  right: -6px;
+  font-size: 0.8rem;
+  line-height: 1;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  animation: zzz-float-anim 2.5s ease-in-out infinite;
+}
+
+@keyframes zzz-float-anim {
+  0% {
+    transform: translate(0, 0) scale(0.7);
+    opacity: 0;
+  }
+  40% {
+    transform: translate(5px, -7px) scale(1.1);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(9px, -14px) scale(0.7);
+    opacity: 0;
+  }
+}
+
+.games-town-visual-resident--asleep {
+  opacity: 0.65;
+}
+
+.games-town-visual-name {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #604a36;
+  background: #fffdf5;
+  border: 2px solid #604a36;
+  border-radius: 6px;
+  padding: 1px 6px;
+  margin-top: 0.3rem;
+  white-space: nowrap;
+  max-width: 85px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  transition:
+    border-color 0.2s ease,
+    color 0.2s ease;
+}
+
+.games-town-visual-resident:hover .games-town-visual-name {
+  border-color: #4d3a29;
+}
+
+.games-town-visual-resident--user .games-town-visual-name {
+  color: #ff595e;
+}
+
+/* Dialog Box style speech bubbles */
+.games-town-bubble {
+  position: absolute;
+  bottom: 135%;
+  background: #fffdf5;
+  color: #4a3728;
+  padding: 0.5rem 0.75rem;
+  border: 3px solid #604a36;
+  border-radius: 14px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  min-width: 100px;
+  max-width: 180px;
+  box-shadow:
+    0 4px 0 #4d3a29,
+    0 8px 16px rgba(0, 0, 0, 0.15);
+  z-index: 20;
+  pointer-events: none;
+  word-wrap: break-word;
+  text-align: left;
+  line-height: 1.35;
+  animation: bubble-pop-in 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+  transform-origin: bottom center;
+}
+
+/* Double-triangle speech bubble outline pointer */
+.games-town-bubble::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border-width: 7px;
+  border-style: solid;
+  border-color: #604a36 transparent transparent transparent;
+}
+
+.games-town-bubble::before {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%) translateY(-3px);
+  border-width: 7px;
+  border-style: solid;
+  border-color: #fffdf5 transparent transparent transparent;
+  z-index: 21;
+}
+
+/* Speech bubble Emote variation - happy warm yellow dialogue box */
+.games-town-bubble--emote {
+  background: #ffd166;
+}
+
+.games-town-bubble--emote::before {
+  border-color: #ffd166 transparent transparent transparent;
+}
+
+@keyframes bubble-pop-in {
+  0% {
+    transform: scale(0.5) translateY(12px);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(1) translateY(0);
+    opacity: 1;
+  }
+}
+
+/* Dynamic RPG Hover Tooltip */
+.games-town-resident-tooltip {
+  position: absolute;
+  bottom: 125%;
+  left: 50%;
+  transform: translateX(-50%) translateY(10px);
+  background: #fffdf5;
+  color: #4a3728;
+  border: 3px solid #604a36;
+  border-radius: 12px;
+  padding: 8px 12px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  box-shadow:
+    0 4px 0 #4d3a29,
+    0 8px 16px rgba(0, 0, 0, 0.15);
+  z-index: 30;
+  pointer-events: none;
+  opacity: 0;
+  transition:
+    opacity 0.25s ease,
+    transform 0.25s ease;
+  white-space: nowrap;
+  line-height: 1.4;
+  text-align: left;
+}
+
+.games-town-visual-resident:hover .games-town-resident-tooltip {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.games-town-resident-tooltip .tooltip-name {
+  font-size: 0.8rem;
+  font-weight: 800;
+  border-bottom: 2px dashed #604a36;
+  padding-bottom: 4px;
+  margin-bottom: 4px;
+  color: #604a36;
+}
+
+.games-town-resident-tooltip .tooltip-job {
+  font-weight: 800;
+  color: #e76f51;
+  margin-bottom: 2px;
+}
+
+.games-town-resident-tooltip .tooltip-stat {
+  margin-bottom: 1px;
+}
+
+.games-town-resident-tooltip .tooltip-inventory {
+  font-size: 0.65rem;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px dashed #d1c8b3;
+  color: #7d634c;
+}

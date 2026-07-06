@@ -60,6 +60,25 @@ export interface TownResident {
   avatar: string;
   place: string;
   asleep: boolean;
+  x?: number;
+  z?: number;
+  energy?: number;
+  strength?: number;
+  wealth?: number;
+  house_owned?: boolean;
+  house_id?: string | null;
+  job?: string;
+  job_site?: string;
+  inventory?: Record<string, number>;
+}
+
+/** A cottage lot on the residential lane; `owner` is set once it's bought. */
+export interface TownHouse {
+  id: string;
+  x: number;
+  z: number;
+  owner: string | null;
+  owner_id: string | null;
 }
 
 export interface TownEvent {
@@ -78,6 +97,7 @@ export interface TownState {
   phase: string;
   places: string[];
   residents: TownResident[];
+  houses: TownHouse[];
   events: TownEvent[];
 }
 
@@ -102,6 +122,7 @@ const initialTown: TownState = {
   phase: 'morning',
   places: [],
   residents: [],
+  houses: [],
   events: [],
 };
 
@@ -141,6 +162,7 @@ function townUpdate(d: Record<string, unknown>, joined: boolean): TownState {
     phase: String(d.phase ?? state.town.phase),
     places: (d.places as string[] | undefined) ?? state.town.places,
     residents: (d.residents as TownResident[] | undefined) ?? state.town.residents,
+    houses: (d.houses as TownHouse[] | undefined) ?? state.town.houses,
     events,
   };
 }

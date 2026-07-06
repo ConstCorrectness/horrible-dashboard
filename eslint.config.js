@@ -7,7 +7,8 @@ export default tseslint.config(
       '**/dist/**',
       '**/node_modules/**',
       '**/src-tauri/**',
-      '.venv/**',
+      '**/.venv/**',
+      '.claude/**', // agent worktrees (each with its own venv/node_modules) live here
       'website/build/**',
       'website/.docusaurus/**',
     ],

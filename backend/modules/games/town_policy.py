@@ -1,11 +1,14 @@
 """The node-side mind of an AgentTown resident.
 
 The server owns the world; **this** owns the fish. Each `town_tick` observation
-lands here and one action goes back (`stay`/`move`/`say`/`emote`):
+lands here and one action goes back (`stay`/`move`/`say`/`emote`, plus the
+Sims-flavoured `work`/`workout`/`buy`/`sell`/`eat`/`rest`/`buy_house`):
 
 - **Routine mode** (no model, `games.policy` = random/manual, or any failure) —
-  the canned life that keeps the tank alive: mostly linger, wander sometimes,
-  greet whoever's around, doze through the night phase. The skill floor.
+  a canned little life that keeps the tank alive: commute to the job site in
+  the morning, market off surplus goods, save up for a cottage, hit the gym,
+  socialize at the tavern in the evening, and head home to sleep at night.
+  The skill floor.
 - **Agent mode** (`games.policy = agent`) — one chat call per tick: the resident's
   **persona** (the loadout `context` for game key `"town"` — edit it in the Agent
   Harness panel), a **goldfish memory** of recent local events, and any pending
@@ -29,6 +32,22 @@ logger = logging.getLogger(__name__)
 
 _ACT_TOOL_NAME = "town.act"
 MEMORY_SIZE = 12
+
+# Must mirror ACTIONS in backend/games_server/town.py (node and server are
+# deliberately decoupled; the server rejects anything it doesn't know).
+_ACTIONS = (
+    "stay",
+    "move",
+    "say",
+    "emote",
+    "work",
+    "workout",
+    "buy",
+    "sell",
+    "eat",
+    "rest",
+    "buy_house",
+)
 
 _GREETINGS = (
     "Lovely {phase} at the {place}, {name}!",
@@ -94,15 +113,84 @@ class TownPolicy:
     # ---- the routine (skill floor) -------------------------------------------
 
     def _routine(self, tick: dict[str, Any]) -> dict[str, Any]:
+        """A needs-and-schedule daily loop, Sims style: sleep at night, eat or
+        nap when drained, commute to the job site, market the surplus, save up
+        for a cottage, train in the afternoon, socialize in the evening."""
         you = tick.get("you") or {}
         place = str(you.get("place") or "fountain")
         phase = str(tick.get("phase") or "morning")
-        places = [p for p in (tick.get("places") or []) if p != place]
+        places = tick.get("places") or []
+
+        energy = float(you.get("energy", 100.0))
+        wealth = float(you.get("wealth", 0.0))
+        strength = float(you.get("strength", 0.0))
+        house_owned = bool(you.get("house_owned", False))
+        job_site = str(you.get("job_site") or "workplace")
+        inventory = you.get("inventory") or {}
+        bread = int(inventory.get("bread", 0) or 0)
+        carrying = sum(int(v or 0) for v in inventory.values())
+
+        def go(dest: str) -> dict[str, Any]:
+            self._greeted.clear()  # new place, fresh hellos
+            return {"action": "move", "place": dest}
+
+        # Night: head home and sleep (a bench under the stars, lacking a house).
+        if phase == "night":
+            if place != "residential_zone":
+                return go("residential_zone")
+            if energy < 90:
+                return {"action": "rest"}
+            return {"action": "emote", "text": "dozes off under the stars"}
+
+        # Running on empty: eat if the pantry allows, else nap where you are.
+        if energy < 25:
+            if bread > 0:
+                return {"action": "eat"}
+            if house_owned and place != "residential_zone":
+                return go("residential_zone")
+            return {"action": "rest"}
+
+        # Broke: commute to the job site and work.
+        if wealth < 10:
+            if place != job_site:
+                return go(job_site)
+            return {"action": "work"}
+
+        # Enough savings and no deed yet: claim a cottage on the lane.
+        if not house_owned and wealth >= 30:
+            if place != "residential_zone":
+                return go("residential_zone")
+            return {"action": "buy_house"}
+
+        # Carrying a surplus: market day at the bakery.
+        if carrying >= 2:
+            if place != "bakery":
+                return go("bakery")
+            return {"action": "sell"}
+
+        # Morning shift: usually go earn a living.
+        if phase == "morning" and energy >= 40 and self._rng.random() < 0.6:
+            if place != job_site:
+                return go(job_site)
+            return {"action": "work"}
+
+        # Afternoon: hit the gym while fresh.
+        if (
+            phase == "afternoon"
+            and energy >= 50
+            and strength < 60
+            and self._rng.random() < 0.35
+        ):
+            if place != "gym":
+                return go("gym")
+            return {"action": "workout"}
+
+        # Evening: tavern social hour.
+        if phase == "evening" and place != "tavern" and self._rng.random() < 0.5:
+            return go("tavern")
+
         occupants = list(tick.get("occupants") or [])
 
-        # Doze through the night like a sensible fish.
-        if phase == "night":
-            return {"action": "emote", "text": "dozes off under the stars"}
         # Greet a neighbor we haven't greeted yet.
         strangers = [o for o in occupants if str(o.get("name")) not in self._greeted]
         if strangers and self._rng.random() < 0.6:
@@ -115,7 +203,9 @@ class TownPolicy:
         roll = self._rng.random()
         if roll < 0.25 and places:
             self._greeted.clear()  # new place, fresh hellos
-            return {"action": "move", "place": self._rng.choice(places)}
+            other_places = [p for p in places if p != place]
+            if other_places:
+                return {"action": "move", "place": self._rng.choice(other_places)}
         if roll < 0.45:
             return {"action": "emote", "text": self._rng.choice(_EMOTES)}
         return {"action": "stay"}
@@ -128,13 +218,31 @@ class TownPolicy:
         persona = (get_loadout("town").context or "").strip()
         you = tick.get("you") or {}
         whisper, self._whisper = self._whisper, None  # a nudge is spent on use
+        inventory = you.get("inventory") or {}
 
         system = (
-            f"You are {you.get('name')}, a resident of AgentTown — a small town "
-            "with a fountain, bakery, tavern, library, and docks. You live one "
-            "slow tick at a time; each tick you take exactly one action by "
-            f"calling {_ACT_TOOL_NAME}. Stay in character, keep sayings short "
-            "and social, and let your personality show.\n\n"
+            f"You are {you.get('name')}, a resident of AgentTown — a small Sims-like "
+            "town: Fountain (plaza), Bakery (market: buy/sell), Library, Docks, "
+            "Tavern (evenings), Residential Zone (cottages & sleeping), Gym, and "
+            "Workplace (offices).\n\n"
+            f"Your job: {you.get('job', 'Resident')} — you can only `work` at the "
+            f"{you.get('job_site', 'workplace')}.\n"
+            f"Stats: Energy={you.get('energy')}/100, "
+            f"Strength={you.get('strength')}/100, Coins={you.get('wealth')}, "
+            f"House={you.get('house_id') or 'none (a cottage costs 30 coins)'}\n"
+            f"Inventory: {json.dumps(inventory)}\n\n"
+            f"Actions you can take via {_ACT_TOOL_NAME}:\n"
+            "- stay: linger in place\n"
+            "- move (place): walk to another location\n"
+            "- say (text) / emote (text): converse or act\n"
+            "- work: earn 10 coins + produce goods (at your job site, -15 energy)\n"
+            "- workout: gain strength (at the gym, -10 energy)\n"
+            "- buy: buy bread for 5 coins (at the bakery)\n"
+            "- sell: sell one inventory item for 4 coins (at the bakery)\n"
+            "- eat: eat a bread from your inventory (+25 energy, anywhere)\n"
+            "- rest: sleep (+50 energy in your own house, +20 anywhere else)\n"
+            "- buy_house: claim a free cottage lot (in the residential_zone, "
+            "30 coins) — then you rest and sleep at home\n\n"
             f"Your personality:\n{persona or 'An easygoing, curious townsfolk.'}"
         )
         user_parts = [f"Observation:\n{json.dumps(tick)}"]
@@ -184,7 +292,7 @@ def _act_tool(places: list[str]) -> dict[str, Any]:
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["stay", "move", "say", "emote"],
+                        "enum": list(_ACTIONS),
                     },
                     "place": {
                         "type": "string",
@@ -204,7 +312,7 @@ def _act_tool(places: list[str]) -> dict[str, Any]:
 
 def _validate(args: dict[str, Any], places: list[str]) -> dict[str, Any] | None:
     action = str(args.get("action") or "")
-    if action not in ("stay", "move", "say", "emote"):
+    if action not in _ACTIONS:
         return None
     out: dict[str, Any] = {"action": action}
     if action == "move":

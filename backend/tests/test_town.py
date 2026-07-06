@@ -9,7 +9,7 @@ from typing import Any
 
 from backend.games_server import models
 from backend.games_server.hub import GameHub
-from backend.games_server.town import PLACES, SAY_MAX_CHARS, SPAWN
+from backend.games_server.town import ACTIONS, PLACES, SAY_MAX_CHARS, SPAWN
 from backend.modules.games.town_policy import TownPolicy
 
 
@@ -158,7 +158,101 @@ def test_phases_cycle_with_ticks() -> None:
     asyncio.run(go())
 
 
+def test_work_only_at_the_job_site() -> None:
+    async def go() -> None:
+        hub = GameHub(move_timeout_s=0)
+        _, alice = await _resident(hub, "alice", name="Mildred", avatar="🐙")
+        fish = hub.town._residents["alice"]
+        assert fish.job == "Fisherman"
+        # Working at the fountain does nothing but an apologetic emote.
+        await hub.handle(alice, _act("work"))
+        await hub.town.tick()
+        assert fish.wealth == 15.0
+        assert any("can't work here" in e["text"] for e in hub.town._last_tick_events())
+        # At the docks the same action pays and lands a fish.
+        await hub.handle(alice, _act("move", place="docks"))
+        await hub.town.tick()
+        await hub.handle(alice, _act("work"))
+        await hub.town.tick()
+        assert fish.wealth == 25.0
+        assert fish.inventory["fish"] == 1
+
+    asyncio.run(go())
+
+
+def test_buy_house_claims_a_lot_and_home_is_where_you_sleep() -> None:
+    async def go() -> None:
+        hub = GameHub(move_timeout_s=0)
+        conn, alice = await _resident(hub, "alice", name="Mildred")
+        fish = hub.town._residents["alice"]
+        fish.wealth = 50.0
+        # Buying requires standing in the residential lane.
+        await hub.handle(alice, _act("buy_house"))
+        await hub.town.tick()
+        assert fish.house_id is None
+        await hub.handle(alice, _act("move", place="residential_zone"))
+        await hub.town.tick()
+        await hub.handle(alice, _act("buy_house"))
+        await hub.town.tick()
+        assert fish.house_id == "lot1"
+        assert fish.wealth == 20.0
+        # The deed shows up in the spectator snapshot for the map.
+        houses = conn.last(models.TOWN_STATE)["houses"]
+        assert houses[0] == {
+            "id": "lot1",
+            "x": 8.0,
+            "z": 28.0,
+            "owner": "Mildred",
+            "owner_id": "alice",
+        }
+        # Resting at home beats a park bench (+50 vs +20).
+        fish.energy = 30.0
+        await hub.handle(alice, _act("rest"))
+        await hub.town.tick()
+        assert fish.energy == 78.0  # 30 - 2 decay + 50 in your own bed
+        # A disconnected homeowner sleeps *at home*, and leaving frees the lot.
+        await hub.disconnect(alice)
+        assert fish.asleep and (fish.x, fish.z) == (8.0, 28.0)
+
+    asyncio.run(go())
+
+
+def test_eat_consumes_bread_for_energy() -> None:
+    async def go() -> None:
+        hub = GameHub(move_timeout_s=0)
+        _, alice = await _resident(hub, "alice", name="Mildred")
+        fish = hub.town._residents["alice"]
+        fish.energy, fish.inventory["bread"] = 50.0, 1
+        await hub.handle(alice, _act("eat"))
+        await hub.town.tick()
+        assert fish.energy == 73.0  # 50 - 2 decay + 25 from the loaf
+        assert fish.inventory["bread"] == 0
+        # No food, no snack — just a hungry rumble.
+        await hub.handle(alice, _act("eat"))
+        await hub.town.tick()
+        assert fish.energy == 71.0
+
+    asyncio.run(go())
+
+
 # ---- the resident's mind ------------------------------------------------------
+
+
+def _you(**kw: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "name": "Mildred",
+        "place": "fountain",
+        "energy": 80.0,
+        "strength": 10.0,
+        "wealth": 15.0,
+        "house_owned": False,
+        "house_id": None,
+        "job": "Clerk",
+        "job_site": "workplace",
+        "inventory": {"bread": 0, "fish": 0, "books": 0},
+    }
+    base.update(kw)
+    return base
 
 
 def _tick_msg(**kw: Any) -> dict[str, Any]:
@@ -166,7 +260,7 @@ def _tick_msg(**kw: Any) -> dict[str, Any]:
         "tick": 3,
         "phase": "morning",
         "places": list(PLACES),
-        "you": {"name": "Mildred", "place": "fountain"},
+        "you": _you(),
         "occupants": [{"name": "Bosun", "avatar": "🦜"}],
         "events": [],
     }
@@ -179,7 +273,7 @@ def test_routine_actions_are_always_valid() -> None:
         policy = TownPolicy(rng=random.Random(7))
         for i in range(40):
             action = await policy.decide(_tick_msg(tick=i), agent_mode=False)
-            assert action["action"] in ("stay", "move", "say", "emote")
+            assert action["action"] in ACTIONS
             if action["action"] == "move":
                 assert action["place"] in PLACES
             if action["action"] in ("say", "emote"):
@@ -188,11 +282,45 @@ def test_routine_actions_are_always_valid() -> None:
     asyncio.run(go())
 
 
-def test_routine_dozes_at_night() -> None:
+def test_routine_heads_home_at_night() -> None:
     async def go() -> None:
         policy = TownPolicy(rng=random.Random(7))
+        # Out on the town at night → walk home to the residential lane.
         action = await policy.decide(_tick_msg(phase="night"), agent_mode=False)
+        assert action == {"action": "move", "place": "residential_zone"}
+        # Home and tired → sleep; home and fully rested → doze contentedly.
+        tired = _tick_msg(
+            phase="night", you=_you(place="residential_zone", energy=50.0)
+        )
+        assert (await policy.decide(tired, agent_mode=False))["action"] == "rest"
+        rested = _tick_msg(
+            phase="night", you=_you(place="residential_zone", energy=100.0)
+        )
+        action = await policy.decide(rested, agent_mode=False)
         assert action["action"] == "emote" and "dozes" in action["text"]
+
+    asyncio.run(go())
+
+
+def test_routine_needs_drive_the_day() -> None:
+    async def go() -> None:
+        policy = TownPolicy(rng=random.Random(7))
+        # Starving with bread in the pantry → eat it.
+        hungry = _tick_msg(you=_you(energy=10.0, inventory={"bread": 2}))
+        assert (await policy.decide(hungry, agent_mode=False))["action"] == "eat"
+        # Broke → commute to *this job's* site, then work there.
+        broke = _tick_msg(you=_you(wealth=2.0, job="Fisherman", job_site="docks"))
+        assert await policy.decide(broke, agent_mode=False) == {
+            "action": "move",
+            "place": "docks",
+        }
+        at_work = _tick_msg(
+            you=_you(wealth=2.0, place="docks", job="Fisherman", job_site="docks")
+        )
+        assert (await policy.decide(at_work, agent_mode=False))["action"] == "work"
+        # Flush and homeless → head to the lane and buy a cottage.
+        rich = _tick_msg(you=_you(wealth=45.0, place="residential_zone"))
+        assert (await policy.decide(rich, agent_mode=False))["action"] == "buy_house"
 
     asyncio.run(go())
 

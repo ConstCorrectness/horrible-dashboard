@@ -2,6 +2,7 @@ import { useState } from 'react';
 
 import { registry } from '../../../registry';
 import { townJoin, townLeave, townWhisper, useGames, type TownEvent } from '../game-ws';
+import { TownMapCanvas } from './TownMapCanvas';
 
 const AVATARS = ['🐠', '🐙', '🦀', '🦜', '🐢', '🦊', '🐸', '🦉'];
 const PHASE_ICON: Record<string, string> = {
@@ -10,8 +11,16 @@ const PHASE_ICON: Record<string, string> = {
   evening: '🌆',
   night: '🌙',
 };
-// Shown before the first town_state arrives (the server list rides in with it).
-const DEFAULT_PLACES = ['fountain', 'bakery', 'tavern', 'library', 'docks'];
+const DEFAULT_PLACES = [
+  'fountain',
+  'bakery',
+  'tavern',
+  'library',
+  'docks',
+  'residential_zone',
+  'gym',
+  'workplace',
+];
 
 function eventText(e: TownEvent): string {
   switch (e.type) {
@@ -41,10 +50,11 @@ function eventText(e: TownEvent): string {
  * whisper box taps the glass — a one-shot nudge into your agent's next tick.
  */
 export function TownPanel() {
-  const { town } = useGames();
+  const { town, accountId } = useGames();
   const [name, setName] = useState('');
   const [avatar, setAvatar] = useState(AVATARS[0]);
   const [whisper, setWhisper] = useState('');
+  const [viewMode, setViewMode] = useState<'map' | 'grid'>('map');
 
   const places = town.places.length > 0 ? town.places : DEFAULT_PLACES;
 
@@ -105,46 +115,79 @@ export function TownPanel() {
         )}
       </div>
 
-      <div style={{ color: 'var(--text-dim)', fontSize: '0.72rem' }}>
-        Your resident thinks for itself — personality lives in the harness.{' '}
-        <button
-          type="button"
-          style={{ fontSize: '0.72rem' }}
-          onClick={() => registry.revealCompanion('games.loadout')}
-        >
-          Edit persona (AgentTown persona) →
-        </button>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '0.4rem',
+        }}
+      >
+        <div style={{ color: 'var(--text-dim)', fontSize: '0.72rem' }}>
+          Your resident thinks for itself — personality lives in the harness.{' '}
+          <button
+            type="button"
+            style={{ fontSize: '0.72rem', padding: '0.1rem 0.3rem' }}
+            onClick={() => registry.revealCompanion('games.loadout')}
+          >
+            Edit persona →
+          </button>
+        </div>
+
+        {/* View Mode Toggle */}
+        <div className="games-town-view-toggle">
+          <button
+            type="button"
+            className={`games-town-toggle-btn ${viewMode === 'map' ? 'active' : ''}`}
+            onClick={() => setViewMode('map')}
+          >
+            🗺 Map
+          </button>
+          <button
+            type="button"
+            className={`games-town-toggle-btn ${viewMode === 'grid' ? 'active' : ''}`}
+            onClick={() => setViewMode('grid')}
+          >
+            ▦ Grid
+          </button>
+        </div>
       </div>
 
-      {/* The tank: place boxes with resident chips */}
-      <div className="games-town-map">
-        {places.map((place) => {
-          const here = town.residents.filter((r) => r.place === place);
-          return (
-            <div key={place} className="games-town-place">
-              <div className="games-town-place-name">{place}</div>
-              <div className="games-town-place-residents">
-                {here.length === 0 ? (
-                  <span style={{ color: 'var(--text-dim)', fontSize: '0.7rem' }}>—</span>
-                ) : (
-                  here.map((r) => (
-                    <span
-                      key={r.account_id}
-                      className="games-town-resident"
-                      title={`${r.name}${r.asleep ? ' (asleep)' : ''}`}
-                      style={r.asleep ? { opacity: 0.45 } : undefined}
-                    >
-                      <span className="games-town-avatar">{r.avatar}</span>
-                      <span>{r.name}</span>
-                      {r.asleep && <span>💤</span>}
-                    </span>
-                  ))
-                )}
+      {/* The main simulation display */}
+      {viewMode === 'map' ? (
+        <TownMapCanvas town={town} accountId={accountId} />
+      ) : (
+        /* The tank: place boxes with resident chips (Grid View) */
+        <div className="games-town-map">
+          {places.map((place) => {
+            const here = town.residents.filter((r) => r.place === place);
+            return (
+              <div key={place} className="games-town-place">
+                <div className="games-town-place-name">{place}</div>
+                <div className="games-town-place-residents">
+                  {here.length === 0 ? (
+                    <span style={{ color: 'var(--text-dim)', fontSize: '0.7rem' }}>—</span>
+                  ) : (
+                    here.map((r) => (
+                      <span
+                        key={r.account_id}
+                        className="games-town-resident"
+                        title={`${r.name}${r.asleep ? ' (asleep)' : ''}`}
+                        style={r.asleep ? { opacity: 0.45 } : undefined}
+                      >
+                        <span className="games-town-avatar">{r.avatar}</span>
+                        <span>{r.name}</span>
+                        {r.asleep && <span>💤</span>}
+                      </span>
+                    ))
+                  )}
+                </div>
               </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Tap the glass */}
       {town.joined && (
