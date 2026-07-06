@@ -1,4 +1,14 @@
 import { spawn, spawnSync } from 'child_process';
+import { existsSync } from 'fs';
+
+// Load .env file if it exists so we inherit any local credentials/config (e.g. GAMES_GOOGLE_CLIENT_ID)
+if (existsSync('.env')) {
+  try {
+    process.loadEnvFile('.env');
+  } catch (e) {
+    console.warn('⚠️ Failed to load .env file:', e);
+  }
+}
 
 // Full-stack dev: one `pnpm dev` brings up the FastAPI backend, the Vite UI, and
 // (unless opted out) the central game server.

@@ -213,20 +213,33 @@ async def google_device_start() -> dict[str, Any]:
     client_id = _google_client_id()
     if not client_id:
         raise ValueError("games.google.clientId is not configured")
-    async with httpx.AsyncClient(timeout=15.0) as client:
-        res = await client.post(
-            GOOGLE_DEVICE_CODE_URL,
-            data={"client_id": client_id, "scope": "email profile"},
-            headers={"Accept": "application/json"},
-        )
-        res.raise_for_status()
-        data = res.json()
-        # Normalize to the GitHub shape the node/browser already speak.
-        data.setdefault(
-            "verification_uri",
-            data.get("verification_url") or "https://www.google.com/device",
-        )
-        return data  # device_code, user_code, verification_uri, interval, expires_in
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.post(
+                GOOGLE_DEVICE_CODE_URL,
+                data={"client_id": client_id, "scope": "email profile"},
+                headers={"Accept": "application/json"},
+            )
+            res.raise_for_status()
+            data = res.json()
+    except httpx.HTTPError as exc:
+        if exc.response is not None:
+            try:
+                err_data = exc.response.json()
+                if "error_description" in err_data:
+                    raise ValueError(f"Google API error: {err_data['error_description']}")
+                elif "error" in err_data:
+                    raise ValueError(f"Google API error: {err_data['error']}")
+            except (ValueError, json.JSONDecodeError):
+                pass
+        raise ValueError(f"Failed to communicate with Google: {exc}")
+
+    # Normalize to the GitHub shape the node/browser already speak.
+    data.setdefault(
+        "verification_uri",
+        data.get("verification_url") or "https://www.google.com/device",
+    )
+    return data  # device_code, user_code, verification_uri, interval, expires_in
 
 
 async def google_device_poll(device_code: str) -> dict[str, Any]:
@@ -254,14 +267,17 @@ async def google_device_poll(device_code: str) -> dict[str, Any]:
             return {"pending": True}
         if "access_token" not in data:
             return {"pending": True, "error": data.get("error")}
-        profile = await client.get(
-            GOOGLE_USERINFO_URL,
-            headers={
-                "Authorization": f"Bearer {data['access_token']}",
-                "Accept": "application/json",
-            },
-        )
-        profile.raise_for_status()
+        try:
+            profile = await client.get(
+                GOOGLE_USERINFO_URL,
+                headers={
+                    "Authorization": f"Bearer {data['access_token']}",
+                    "Accept": "application/json",
+                },
+            )
+            profile.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise ValueError(f"Failed to fetch Google profile: {exc}")
         return _finish_google(profile.json())
 
 

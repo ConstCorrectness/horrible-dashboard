@@ -77,8 +77,20 @@ async def _auth_start(provider: str) -> dict[str, Any]:
             res = await client.post(f"{_http_base()}/auth/{provider}/start")
             res.raise_for_status()
             return res.json()
-    except httpx.HTTPError:
+    except (httpx.ConnectError, httpx.ConnectTimeout):
         return _unreachable_error()
+    except httpx.HTTPStatusError as exc:
+        try:
+            err_data = exc.response.json()
+            if "error" in err_data:
+                return {"error": err_data["error"]}
+            if "detail" in err_data:
+                return {"error": f"Game server error: {err_data['detail']}"}
+        except Exception:
+            pass
+        return {"error": f"Game server returned error status {exc.response.status_code}"}
+    except httpx.HTTPError as exc:
+        return {"error": f"Failed to communicate with game server: {exc}"}
 
 
 async def _auth_poll(provider: str, device_code: str) -> dict[str, Any]:
@@ -94,8 +106,20 @@ async def _auth_poll(provider: str, device_code: str) -> dict[str, Any]:
             )
             res.raise_for_status()
             data = res.json()
-    except httpx.HTTPError:
+    except (httpx.ConnectError, httpx.ConnectTimeout):
         return _unreachable_error()
+    except httpx.HTTPStatusError as exc:
+        try:
+            err_data = exc.response.json()
+            if "error" in err_data:
+                return {"error": err_data["error"]}
+            if "detail" in err_data:
+                return {"error": f"Game server error: {err_data['detail']}"}
+        except Exception:
+            pass
+        return {"error": f"Game server returned error status {exc.response.status_code}"}
+    except httpx.HTTPError as exc:
+        return {"error": f"Failed to communicate with game server: {exc}"}
     if data.get("token"):
         path = _token_path()
         path.parent.mkdir(parents=True, exist_ok=True)
