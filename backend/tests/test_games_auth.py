@@ -70,3 +70,74 @@ def test_finish_google_falls_back_to_email_local_part() -> None:
     assert out["account"]["display_name"] == "bosun.salt"
     # Two different Gmail accounts are two distinct players.
     assert out["account"]["id"] != auth._finish_google({"id": "108"})["account"]["id"]
+
+
+class MockWS:
+    def __init__(self, messages_to_send=None):
+        self.messages_to_send = messages_to_send or []
+        self.sent_messages = []
+        self.closed = False
+
+    async def send(self, msg):
+        self.sent_messages.append(msg)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self.messages_to_send:
+            raise StopAsyncIteration
+        return self.messages_to_send.pop(0)
+
+    async def close(self):
+        self.closed = True
+
+
+def test_player_conn_handles_auth_error(monkeypatch) -> None:
+    import asyncio
+    import json
+    import pytest
+    from backend.modules.games.client import _PlayerConn
+
+    async def go() -> None:
+        mock_ws = MockWS([json.dumps({"type": "error", "code": "auth", "message": "invalid token"})])
+
+        async def mock_ws_connect(url):
+            return mock_ws
+
+        monkeypatch.setattr("backend.modules.games.client.ws_connect", mock_ws_connect)
+
+        conn = _PlayerConn("ws://dummy", "invalid-token", None, lambda _msg: None)
+        
+        with pytest.raises(ValueError) as excinfo:
+            await conn.start()
+        
+        assert "Game server authentication failed" in str(excinfo.value)
+        assert "invalid token" in str(excinfo.value)
+        assert mock_ws.closed
+
+    asyncio.run(go())
+
+
+def test_player_conn_handles_conn_close(monkeypatch) -> None:
+    import asyncio
+    import pytest
+    from backend.modules.games.client import _PlayerConn
+
+    async def go() -> None:
+        mock_ws = MockWS([])  # closes immediately
+
+        async def mock_ws_connect(url):
+            return mock_ws
+
+        monkeypatch.setattr("backend.modules.games.client.ws_connect", mock_ws_connect)
+
+        conn = _PlayerConn("ws://dummy", "some-token", None, lambda _msg: None)
+        
+        with pytest.raises(ValueError) as excinfo:
+            await conn.start()
+        
+        assert "Connection closed before authentication completed" in str(excinfo.value)
+        assert mock_ws.closed
+
+    asyncio.run(go())

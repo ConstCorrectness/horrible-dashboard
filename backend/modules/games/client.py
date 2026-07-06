@@ -71,6 +71,7 @@ class _PlayerConn:
         self._task: asyncio.Task[None] | None = None
         self.account_id: str | None = None
         self.authed = asyncio.Event()
+        self.auth_error: str | None = None
         self.last_turn: dict[str, Any] | None = None
         # The AgentTown resident's mind (created on first use; whispers land here).
         self._town_policy: TownPolicy | None = None
@@ -80,6 +81,15 @@ class _PlayerConn:
         await self._send({"type": models.AUTH, "token": self._token})
         self._task = asyncio.create_task(self._read_loop())
         await asyncio.wait_for(self.authed.wait(), timeout=10.0)
+        if self.auth_error:
+            if self._task and not self._task.done():
+                self._task.cancel()
+            if self._ws:
+                try:
+                    await self._ws.close()
+                except Exception:
+                    pass
+            raise ValueError(f"Game server authentication failed: {self.auth_error}")
 
     async def _send(self, msg: dict[str, Any]) -> None:
         await self._ws.send(json.dumps(msg))
@@ -112,11 +122,23 @@ class _PlayerConn:
             pass
         except Exception:
             logger.exception("games player read loop error")
+        finally:
+            if not self.authed.is_set():
+                if not self.auth_error:
+                    self.auth_error = (
+                        "Connection closed before authentication completed"
+                    )
+                self.authed.set()
 
     async def _dispatch(self, msg: dict[str, Any]) -> None:
         mtype = msg.get("type")
         if mtype == models.AUTHED:
             self.account_id = str(msg.get("account_id") or "")
+            self.authed.set()
+        elif mtype == models.ERROR and not self.authed.is_set():
+            self.auth_error = (
+                msg.get("message") or msg.get("code") or "Authentication failed"
+            )
             self.authed.set()
         elif mtype == models.YOUR_TURN:
             self.last_turn = msg
@@ -293,7 +315,18 @@ class GameServerClient:
         primary_policy = None if policy_name == "manual" else make_policy(policy_name)
         if self._primary is None:
             self._primary = _PlayerConn(url, token, primary_policy, self._relay)
-            await self._primary.start()
+            try:
+                await self._primary.start()
+            except Exception as e:
+                self._primary = None
+                from backend.modules.games.server_auth import get_token, sign_out
+
+                if get_token() == token:
+                    logger.warning(
+                        "Stored game server token was rejected. Signing out."
+                    )
+                    sign_out()
+                raise e
         self._self_play = self_play
         if self_play and self._sparring is None:
             # Sparring partner always auto-plays (random) so the demo runs itself; it

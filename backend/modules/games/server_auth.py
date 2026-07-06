@@ -88,7 +88,9 @@ async def _auth_start(provider: str) -> dict[str, Any]:
                 return {"error": f"Game server error: {err_data['detail']}"}
         except Exception:
             pass
-        return {"error": f"Game server returned error status {exc.response.status_code}"}
+        return {
+            "error": f"Game server returned error status {exc.response.status_code}"
+        }
     except httpx.HTTPError as exc:
         return {"error": f"Failed to communicate with game server: {exc}"}
 
@@ -117,7 +119,9 @@ async def _auth_poll(provider: str, device_code: str) -> dict[str, Any]:
                 return {"error": f"Game server error: {err_data['detail']}"}
         except Exception:
             pass
-        return {"error": f"Game server returned error status {exc.response.status_code}"}
+        return {
+            "error": f"Game server returned error status {exc.response.status_code}"
+        }
     except httpx.HTTPError as exc:
         return {"error": f"Failed to communicate with game server: {exc}"}
     if data.get("token"):

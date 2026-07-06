@@ -1,4 +1,3 @@
-import os
 from backend.modules.settings.routes import get_value
 from backend.modules.games.client import DEFAULT_SERVER_URL
 from backend.modules.games.server_auth import _http_base

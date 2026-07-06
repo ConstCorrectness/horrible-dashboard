@@ -227,7 +227,9 @@ async def google_device_start() -> dict[str, Any]:
             try:
                 err_data = exc.response.json()
                 if "error_description" in err_data:
-                    raise ValueError(f"Google API error: {err_data['error_description']}")
+                    raise ValueError(
+                        f"Google API error: {err_data['error_description']}"
+                    )
                 elif "error" in err_data:
                     raise ValueError(f"Google API error: {err_data['error']}")
             except (ValueError, json.JSONDecodeError):

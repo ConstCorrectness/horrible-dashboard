@@ -10,6 +10,7 @@
 import { useSyncExternalStore } from 'react';
 
 import { registry } from '../../registry';
+import { toastsStore } from '../../toasts';
 import { sendChannel, subscribeChannel } from '../../ws';
 
 /** Reveal the Game Board companion inside the Games group shell (opening the group
@@ -158,6 +159,9 @@ function upsertTable(table: TableInfo): TableInfo[] {
 subscribeChannel('games', (msg) => {
   const d = (msg.data ?? {}) as Record<string, unknown>;
   switch (msg.event) {
+    case 'error':
+      toastsStore.add('error', 'Games', (d.message as string) ?? 'Games error');
+      break;
     case 'authed':
       set({
         connected: Boolean(d.connected),
