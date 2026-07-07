@@ -11,6 +11,8 @@ export interface VisualizerInstance {
     hasError: boolean;
     errorMsg: string | null;
     codeLength: number;
+    /** The current source script — so an agent can read it, edit it, and re-render. */
+    code: string;
   };
   /** Export the current script to the editor as a new buffer; returns its URI. */
   exportToEditor: (prefer: 'note' | 'file') => Promise<string | null>;

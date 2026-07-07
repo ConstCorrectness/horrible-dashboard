@@ -15,19 +15,50 @@ export const visualizerModule: ModuleManifest = {
         {
           name: 'visualizer.render_js',
           description:
-            'Render a JavaScript drawing/animation using HTML5 2D Canvas, Three.js, or Babylon.js. ' +
-            'The script may EITHER return lifecycle hooks { init(canvas, THREE, BABYLON), tick(timeMs, canvas), cleanup() } ' +
-            'OR be a standalone script: a `canvas`, `THREE`, and `BABYLON` are in scope, and a renderer created with ' +
-            '`new THREE.WebGLRenderer()` automatically targets that canvas (no need to append it to the page).',
+            'Render a JavaScript drawing/animation with HTML5 2D Canvas, Three.js, or Babylon.js. ' +
+            'One tool for all three JS engines — pick with `mode`. ' +
+            'Your `code` is a function body that MUST end by `return`ing a lifecycle object ' +
+            '{ init, tick, cleanup }. Declare all state in outer-scope `let`s, assign them in `init`, ' +
+            'and read them in `tick` (which receives only `(timeMs, canvas)` — do NOT stash state on ' +
+            "`canvas` or rely on init's return value). `init(canvas, THREE, BABYLON)` builds the scene " +
+            'once; `tick(timeMs, canvas)` draws ONE frame (the host calls it every animation frame); ' +
+            '`cleanup()` disposes. ' +
+            "DON'T: create your own canvas, call `requestAnimationFrame` yourself, use `window.onload`, " +
+            'or append anything to the page — the host owns the render loop and the canvas. ' +
+            'Copy this shape exactly (three mode; swap geometry/material for other shapes/colors): ' +
+            '```\nlet scene, camera, renderer, mesh;\nreturn {\n' +
+            '  init(canvas, THREE) {\n' +
+            '    scene = new THREE.Scene();\n' +
+            '    camera = new THREE.PerspectiveCamera(75, canvas.clientWidth / canvas.clientHeight, 0.1, 1000);\n' +
+            '    camera.position.z = 5;\n' +
+            '    renderer = new THREE.WebGLRenderer({ canvas, alpha: true });\n' +
+            '    renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);\n' +
+            '    mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 32), new THREE.MeshBasicMaterial({ color: 0xff0000 }));\n' +
+            '    scene.add(mesh);\n' +
+            '  },\n' +
+            '  tick(timeMs) { mesh.rotation.y = timeMs * 0.001; renderer.render(scene, camera); },\n' +
+            '  cleanup() { renderer.dispose(); },\n' +
+            '};\n```\n' +
+            'For other modes keep the same skeleton, changing only the drawing API: ' +
+            "canvas → draw with `canvas.getContext('2d')` inside tick (no THREE). " +
+            'babylon → `new BABYLON.Engine(canvas, true)` + `BABYLON.MeshBuilder` in init; `scene.render()` in tick. ' +
+            'To change something already on screen, first read the loaded script with `visualizer.get_state` ' +
+            'and return it with your minimal edit applied — do not rewrite from scratch.',
           params: {
             type: 'object',
             properties: {
               mode: {
                 type: 'string',
                 enum: ['canvas', 'three', 'babylon'],
-                description: 'The rendering engine mode.',
+                description:
+                  'The rendering engine: canvas (2D), three (Three.js), or babylon (Babylon.js).',
               },
-              code: { type: 'string', description: 'The raw JavaScript code.' },
+              code: {
+                type: 'string',
+                description:
+                  'JavaScript that returns the { init, tick, cleanup } lifecycle object described above. ' +
+                  'When editing an existing visualization, pass the current script from get_state with minimal changes.',
+              },
             },
             required: ['mode', 'code'],
           },
@@ -52,7 +83,12 @@ export const visualizerModule: ModuleManifest = {
         {
           name: 'visualizer.run_pygame',
           description:
-            'Run a Python Pygame animation script on the backend and stream the frames to the visualizer panel.',
+            'Run a Python Pygame animation script on the backend and stream the frames to the ' +
+            'visualizer panel. Structure: `pygame.init()`, set a modest display size, then a ' +
+            '`while running:` loop that fills the screen, draws, and calls `pygame.display.flip()` ' +
+            'each iteration (flip triggers the frame capture + websocket push). To modify what is ' +
+            'on screen, read the loaded script with visualizer.get_state and apply a minimal edit ' +
+            'rather than rewriting.',
           params: {
             type: 'object',
             properties: {
@@ -94,7 +130,12 @@ export const visualizerModule: ModuleManifest = {
         {
           name: 'visualizer.get_state',
           description:
-            'Retrieve the current visualizer rendering status, active mode, and error details.',
+            'Retrieve the current visualizer state: the active mode, rendering status, error ' +
+            'details, AND the full current source `code`. To modify what is on screen (e.g. ' +
+            '"make the sphere red"), call this first to read the current code, apply a MINIMAL ' +
+            'edit that preserves the existing structure (keep its { init, tick, cleanup } hooks), ' +
+            'then call visualizer.render_js (or run_pygame) with the edited script. Do not rewrite ' +
+            'from scratch, and do not ask the user for code that is already loaded.',
           params: { type: 'object', properties: {} },
           handler: () => {
             const active = getActiveVisualizer();

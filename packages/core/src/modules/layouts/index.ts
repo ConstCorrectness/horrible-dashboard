@@ -50,6 +50,27 @@ export const layoutsModule: ModuleManifest = {
         },
       ],
     },
+    {
+      // Harness-engineering cockpit: author your agent's strategy + Python tools on
+      // the left, watch it compete top-right, launch/join matches bottom-right. The
+      // Agent Harness (games.loadout) and Game Board (games.board) are arcade-group
+      // companions but seed here as standalone panes (a companion renders its bare
+      // component when opened directly); games.lobby seeds as the arcade shell.
+      id: 'harness',
+      name: 'Coding Harnesses',
+      icon: '🛠',
+      panes: [
+        { id: 'games.loadout' },
+        {
+          id: 'games.board',
+          position: { referencePanel: 'games.loadout', direction: 'right' },
+        },
+        {
+          id: 'games.lobby',
+          position: { referencePanel: 'games.board', direction: 'below' },
+        },
+      ],
+    },
   ],
   commands: [
     {

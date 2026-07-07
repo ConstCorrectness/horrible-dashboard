@@ -65,8 +65,23 @@ tank is its own hub, not a companion of the arena (see below).
 The **Game Board opens automatically when a match goes live** — when you start or join
 a table, and whenever the server sends the first `public_state`/`your_turn` for a game
 (so the board also pops on the *other* player's node the moment a match begins). This
-is driven by `revealBoard()` in `game-ws.ts`, which calls
-`registry.revealCompanion('games.board')`.
+is driven by `revealBoard()` in `game-ws.ts`: if a **standalone** Game Board pane is
+already open (as in the **Coding Harnesses** workspace, below) it focuses that pane;
+otherwise it calls `registry.revealCompanion('games.board')` to dock the board inside the
+arcade shell — so the board never appears twice.
+
+### Coding Harnesses workspace
+
+Harness engineering is the actual skill of the module, so besides the arcade shell there
+is a dedicated **Coding Harnesses** workflow layout (`harness`, 🛠 in the shell rail,
+`layouts` module): **Agent Harness** (`games.loadout`) as the main authoring pane on the
+left, **Game Board** (`games.board`) top-right, and **Games** lobby (`games.lobby`)
+bottom-right. `games.loadout` and `games.board` are arcade-group companions, but a
+companion renders its bare component when a layout preset opens it directly (see
+[panel-groups](../architecture/panel-groups.mdx)), so here they stand alone as full panes
+while still keeping their `t`/`b` toggles inside the arcade. The lobby seeds as the arcade
+shell (for starting matches); the board's live match view lands in the standalone board
+pane via the `revealBoard()` focus path above.
 
 The lobby is **gamified**: each catalog game renders as a card with a **▶ Play**
 button (hosts a table) and a **🎯 challenges shortcut** that reveals the Challenges
@@ -127,10 +142,11 @@ v1: it's your own code on your own machine, no different from editing the app. A
 that fails to compile is simply not advertised; a tool that raises returns an error to
 the model rather than crashing the turn.
 
-Edit harnesses in the **Agent Harness** panel (`games.openLoadout`): pick a game, write
-the context, add tools, and **Test** each tool against a sample observation before a
-match. Loadouts persist server-side (`.data/games_loadouts.json`), keyed by game with a
-`default` fallback.
+Edit harnesses in the **Agent Harness** panel (`games.openLoadout`, which opens it as its
+own standalone pane; the arcade's `t` toggle instead docks it inside the lobby shell):
+pick a game, write the context, add tools, and **Test** each tool against a sample
+observation before a match. Loadouts persist server-side (`.data/games_loadouts.json`),
+keyed by game with a `default` fallback.
 
 Tool code can also be edited in the **editor module**: when the editor is loaded, each
 tool gets an **Edit in editor ↗** button that opens its body as a real Python buffer

@@ -25,7 +25,10 @@ export const gitModule: ModuleManifest = {
     {
       id: 'git.openProvenance',
       title: 'Git: Open provenance (blame + history)',
-      run: () => registry.openPanel('git.provenance'),
+      // Provenance is blame+history of the active buffer, so it lives as a companion
+      // of the Code Workbench (editor.buffer) rather than a detached pane — reveal it
+      // inside the editor group. See docs/architecture/panel-groups.mdx.
+      run: () => registry.revealCompanion('git.provenance'),
     },
   ],
 };

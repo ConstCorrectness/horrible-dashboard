@@ -303,8 +303,14 @@ class ModuleRegistry {
   revealCompanion(companionId: string): void {
     const group = this.getGroupFor(companionId);
     if (group && group.primary !== companionId) {
-      // Ensure the group shell is present (opening the primary is idempotent-focus).
-      this.openPanel(group.primary);
+      // Ensure a group shell is present. For a singleton primary `openPanel` is
+      // idempotent-focus; for a **non-singleton** primary (e.g. editor.buffer, one
+      // pane per file) it would spawn a fresh blank pane every call, so focus an
+      // already-open primary instance instead and only open one when none exists.
+      const controller = this.layoutControllerImpl;
+      const existing = controller?.listOpenPanes().find((p) => p.id === group.primary);
+      if (existing) controller!.focusPane(existing.instanceId);
+      else this.openPanel(group.primary);
     }
     this.pendingReveals.add(companionId);
     this.revealListeners.forEach((l) => l(companionId));

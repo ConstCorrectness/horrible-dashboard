@@ -35,12 +35,15 @@ export const codeModule: ModuleManifest = {
     {
       id: 'code.openOutline',
       title: 'Code: Open symbol outline',
-      run: () => registry.openPanel('code.outline'),
+      // Outline/Search follow the editor cursor via the shared code locus, so they
+      // reveal as companions inside the Code Workbench (editor.buffer) rather than as
+      // detached panes. See docs/architecture/panel-groups.mdx.
+      run: () => registry.revealCompanion('code.outline'),
     },
     {
       id: 'code.openSearch',
       title: 'Code: Open symbol search pane',
-      run: () => registry.openPanel('code.search'),
+      run: () => registry.revealCompanion('code.search'),
     },
     {
       id: 'code.findSymbol',

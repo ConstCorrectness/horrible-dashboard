@@ -213,6 +213,9 @@ export function VisualizerWidget() {
       hasError: error !== null,
       errorMsg: error,
       editorCodeLength: resolved.code.length,
+      // The actual source, so the agent can read what's on screen and edit it in
+      // place (read → modify → re-render) instead of asking the user for the code.
+      code: resolved.code,
       targetUri: resolved.uri ?? 'none',
     };
   });
@@ -242,6 +245,7 @@ export function VisualizerWidget() {
           hasError: error !== null,
           errorMsg: error,
           codeLength: resolved.code.length,
+          code: resolved.code,
         };
       },
       exportToEditor: (prefer) => exportToEditor(prefer),

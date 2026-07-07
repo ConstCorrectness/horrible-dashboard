@@ -100,7 +100,12 @@ export const gamesModule: ModuleManifest = {
     {
       id: 'games.openLoadout',
       title: 'Games: Edit agent harness',
-      run: () => registry.revealCompanion('games.loadout'),
+      // Opens the harness as its own standalone pane (a companion renders its bare
+      // component when opened directly) rather than docking it in the arcade shell —
+      // the harness is a first-class authoring surface (see the Coding Harnesses
+      // workspace). The in-arcade `t` toggle and the Lobby/Town "edit harness" buttons
+      // still reveal it inside their shell.
+      run: () => registry.openPanel('games.loadout'),
     },
     {
       id: 'games.openLeaderboard',

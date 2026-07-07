@@ -126,11 +126,36 @@ The visualizer registers tools with the agent orchestrator to allow agents to ge
 
 | Tool Name | Description | Parameters | Side Effect |
 | --- | --- | --- | --- |
-| `visualizer.render_js` | Compiles and executes a 2D Canvas, Three.js, or Babylon.js script in the browser. | `code` (str) | Yes |
+| `visualizer.render_js` | Compiles and executes a 2D Canvas, Three.js, or Babylon.js script in the browser. | `mode` (`canvas`\|`three`\|`babylon`), `code` (str) | Yes |
 | `visualizer.run_pygame` | Runs a Pygame script on the backend, streaming frames to the canvas. | `code` (str) | Yes |
 | `visualizer.clear` | Stops any running animation (JS loop or Python subprocess) and clears the canvas. | None | Yes |
-| `visualizer.get_state` | Retrieves the active mode and script source currently loaded in the widget. | None | No |
+| `visualizer.get_state` | Retrieves the active mode, rendering status, error details, and the **full current source `code`**. | None | No |
 | `visualizer.export_to_editor` | Exports the current script to the editor as a new buffer and links the visualizer to it. | `target` (`note`\|`file`, default `note`) | Yes |
+
+To **modify what's already on screen** ("make the sphere red"), the agent reads the
+loaded script with `visualizer.get_state`, applies a **minimal edit that preserves the
+existing structure**, then re-renders with `visualizer.render_js` / `run_pygame`. The
+current `code` is also surfaced in the pane's agent-context snapshot (`get_pane_context`),
+so the standard "what's on screen" path sees it too. Before this, `get_state` and the
+snapshot exposed only a `codeLength`, so the agent couldn't read the source and would
+(correctly, given the tools) ask the user to paste the code.
+
+### One JS tool, not one per engine
+
+`render_js` covers Canvas 2D, Three.js, **and** Babylon.js, discriminated by `mode` —
+there is deliberately **no** separate tool per framework. The split that matters is
+**runtime**, not framework: the three JS engines share one browser execution contract, so
+they share one tool; Pygame runs in a backend subprocess, so it gets its own
+(`run_pygame`). More near-duplicate tools would only worsen tool selection for small local
+models without addressing code quality.
+
+The three JS engines share a **lifecycle contract** (see the `TEMPLATES` in
+`packages/core/src/modules/visualizer/widgets.tsx`): the script must `return { init(canvas,
+THREE, BABYLON), tick(timeMs, canvas), cleanup() }`. `init` builds the scene once against
+the host-provided `canvas`, `tick` draws one frame (the host drives the loop), `cleanup`
+disposes. The `render_js` tool description encodes this contract and the per-mode drawing
+API so the agent generates correct code (use the given `canvas`; never `window.onload` or a
+self-driven `requestAnimationFrame`; wrap geometry + material in a `Mesh`).
 
 ## Browser vs Desktop
 

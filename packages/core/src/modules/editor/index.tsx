@@ -8,7 +8,7 @@
  * tools (C4), and the recent-notes dashboard widget (C5). See docs/modules/editor.md.
  */
 import { getLocus, subscribeLocus } from '../../locus';
-import { registry, type ModuleManifest } from '../../registry';
+import { registry, type ModuleManifest, type PanelGroupDecl } from '../../registry';
 import { editorAgentTools } from './agentTools';
 import { BufferView } from './BufferView';
 import { IndexedPackages } from './IndexedPackages';
@@ -103,6 +103,27 @@ export const editorModule: ModuleManifest = {
       component: RecentNotesWidget,
       defaultPlacement: 'left',
     },
+  ],
+  // The code IDE cluster: the buffer is the hub, and the panes that only mean
+  // something *relative to the active buffer* dock to it as companions rather than
+  // spawning standalone. Outline and Symbol Search follow the editor cursor via the
+  // shared code locus; Provenance is blame+history of the active file; Recent notes
+  // indexes the editor's own buffers. Files and Terminal are deliberately NOT here —
+  // they're co-equal tools composed by the `scripting` layout preset, not satellites.
+  // Companions live in the code/git modules; group resolution is global (registry).
+  // See docs/architecture/panel-groups.mdx.
+  panelGroups: [
+    {
+      id: 'editor.workbench',
+      label: 'Code Workbench',
+      primary: 'editor.buffer',
+      companions: [
+        { id: 'code.outline', label: 'Outline', icon: '≡', key: 'o' },
+        { id: 'code.search', label: 'Symbol Search', icon: '⌕', key: 's' },
+        { id: 'git.provenance', label: 'Provenance', icon: '⎇', key: 'g' },
+        { id: 'editor.recentNotes', label: 'Recent notes', icon: '🗒', key: 'r' },
+      ],
+    } satisfies PanelGroupDecl,
   ],
   commands: [
     { id: 'editor.newNote', title: 'Editor: New note', run: newNote },

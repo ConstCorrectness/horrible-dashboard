@@ -57,6 +57,12 @@ widget IDs are suppressed from the auto-generated `widget.open:*` commands so us
 can't accidentally open a companion detached from its group. Companions are only
 reachable via the toggle strip of their primary.
 
+That auto-suppression only covers `widget.open:*` entries — a companion that is a
+**panel** with its own explicit open command (e.g. `code.openOutline`,
+`git.openProvenance`) isn't caught by it. Those commands instead call
+`registry.revealCompanion(id)` rather than `openPanel(id)`, so they still open the
+companion *inside its group's shell* rather than as a detached pane.
+
 ## Revealing a companion programmatically
 
 Besides the toggle strip, code can open a companion **inside its shell** with
@@ -163,6 +169,26 @@ The `icon` field appears in the toggle button alongside the label.
 | `observability.monitor` | `observability.io` | inspector (`observability.logs`) |
 | `games.arcade` | `games.lobby` | board (`b`), harness (`games.loadout`, `t`), ladder (`l`), challenges (`c`) |
 | `games.town` | `games.town` | _(none yet — AgentTown as its own hub)_ |
+| `editor.workbench` | `editor.buffer` | outline (`code.outline`, `o`), symbol search (`code.search`, `s`), provenance (`git.provenance`, `g`), recent notes (`editor.recentNotes`, `r`) |
+
+The `editor.workbench` group is **cross-module** — declared on the editor module but
+its companions live in the `code` and `git` modules — which is fine because group
+resolution is global (`registry.panelGroups`). Its members are the panes that only
+mean something *relative to the active buffer*: outline and symbol search follow the
+editor cursor via the shared code locus, provenance is blame+history of the active
+file, and recent notes indexes the editor's own buffers. Files and Terminal are
+deliberately **not** companions — they're co-equal tools composed by the `scripting`
+[layout preset](layout-shell.mdx), not satellites of one buffer.
+
+### Non-singleton primary
+
+`editor.buffer` is the first group primary that is **non-singleton** (one pane per open
+buffer). Each buffer pane renders its own `PaneGroupShell`, so every editor gets its own
+companion strip and region toggles — the Blender "per-editor sidebar" model. `PanelHost`
+renders the shell inside the pane's `PaneParamsContext`, so the buffer's `BufferView`
+still receives its `source` param through the shell. `registry.revealCompanion` focuses
+an already-open primary instance (via the layout controller) instead of blindly calling
+`openPanel`, so revealing a companion never spawns a stray blank buffer.
 
 ## How it works
 

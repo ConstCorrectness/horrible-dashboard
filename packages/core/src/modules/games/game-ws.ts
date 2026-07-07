@@ -13,9 +13,17 @@ import { registry } from '../../registry';
 import { toastsStore } from '../../toasts';
 import { sendChannel, subscribeChannel } from '../../ws';
 
-/** Reveal the Game Board companion inside the Games group shell (opening the group
- * if needed). Called when a match becomes live so the board pops automatically. */
+/** Pop the Game Board when a match becomes live. If a **standalone** Game Board pane
+ * is already open (e.g. the "Coding Harnesses" workspace seeds one), focus that pane
+ * so we don't render a second board inside the arcade shell; otherwise reveal the
+ * board as a companion of the Games group (opening the group if needed). */
 export function revealBoard(): void {
+  const lc = registry.layoutController;
+  const standalone = lc?.listOpenPanes().find((p) => p.id === 'games.board');
+  if (standalone) {
+    lc!.focusPane(standalone.instanceId);
+    return;
+  }
   registry.revealCompanion('games.board');
 }
 
