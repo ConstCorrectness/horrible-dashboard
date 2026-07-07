@@ -118,6 +118,13 @@ layout shell and how it behaves in the browser vs the desktop app:
 - [Editor](modules/editor.mdx)
 - [Terminal](modules/terminal.mdx)
 - [File explorer](modules/file-explorer.mdx)
+- [Code intelligence](modules/code.mdx) — an app-owned tree-sitter index, a shared
+  code-locus bus (the emacs `point`), a symbol Outline, and name + semantic
+  cross-repo search that emit loci so every coding pane cross-jumps.
+- [Git](modules/git.mdx) — provenance-first source control: `git.commit` stamps the
+  active agent conversation onto commits, so blame attributes each line to the
+  session that wrote it (click through to the conversation), plus an agent-commit
+  history/diff review.
 - [Database](modules/database.mdx)
 - [Library](modules/library.mdx) — **Web + notes slice implemented.** Ingest blog
   URLs and notes into the vector store as sources + chunks, watch them ingest live,

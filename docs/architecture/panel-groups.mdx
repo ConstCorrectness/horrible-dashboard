@@ -95,7 +95,7 @@ How it wires up (all in `registry`, no per-module boilerplate):
   (`{ key, command, scope: group.primary }`). Scoping to the primary's view id is what
   makes it contextual: the binding is only live while that group's shell is focused
   (clicking anywhere in the shell sets the active scope to the primary — see
-  `Workspace` `markActive` and [layout-shell](layout-shell.md)).
+  `Workspace` `markActive` and [layout-shell](layout-shell.mdx)).
 - `registry.toggleCompanion(id)` emits to the mounted shell, which subscribes via
   `registry.onToggleCompanion` and flips the companion (same code path as clicking its
   strip button). This mirrors the `revealCompanion`/`onRevealCompanion` bus, but toggle

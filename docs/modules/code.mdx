@@ -5,9 +5,10 @@ tree-sitter symbol index, surfaced as a **Symbol Outline** pane, and the shared
 **code locus** that wires the outline, the editor, `dash.code`, and the agent to one
 notion of "what code am I looking at."
 
-This is Slice 1 of the coding-panes work — the spine everything else stands on.
-Semantic search + a cross-repo find palette, and a git provenance pane, build on it
-later.
+It's the spine the coding panes stand on: the tree-sitter index, locus bus, and
+Outline (Slice 1) plus semantic `code.search` and the cross-repo find palette
+(Slice 2, below). The [git provenance pane](git.mdx) is a separate module that also
+follows the locus.
 
 ## The code locus — the emacs `point`, for code
 
