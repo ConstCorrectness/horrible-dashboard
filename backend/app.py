@@ -23,6 +23,9 @@ from backend.modules.agent import router as agent_router
 from backend.modules.agent.orchestrator import handle_agent_message
 from backend.modules.chat import router as chat_router
 from backend.modules.clubhouse import router as clubhouse_router
+from backend.modules.code import handle_code_message, push_code_events
+from backend.modules.code import router as code_router
+from backend.modules.git import router as git_router
 from backend.modules.files import router as files_router
 from backend.modules.files.watcher import push_file_events
 from backend.modules.flow import handle_flow_message
@@ -133,6 +136,8 @@ app.include_router(network_router, prefix="/api")
 app.include_router(training_router, prefix="/api")
 app.include_router(lsp_router, prefix="/api")
 app.include_router(games_router, prefix="/api")
+app.include_router(code_router, prefix="/api")
+app.include_router(git_router, prefix="/api")
 
 # Register the training module's backend agent tools into the sdk registry (the
 # training module is a first-party consumer of the same registry backend plugins
@@ -188,6 +193,8 @@ async def ws(websocket: WebSocket) -> None:
     files_task = asyncio.create_task(push_file_events(conn))
     # Fan library ingestion status (queued→…→ready/failed) to this browser.
     library_task = asyncio.create_task(push_library_events(conn))
+    # Fan code-locus updates (dash/agent-set, and cross-window sync) to this browser.
+    code_task = asyncio.create_task(push_code_events(conn))
     # Fan peer/presence events from the process-global hub out to this browser.
     network_unsub = subscribe_conn(conn)
     # Fan lobby (directory/rooms) events out to this browser.
@@ -223,6 +230,8 @@ async def ws(websocket: WebSocket) -> None:
                 await handle_collab_message(conn, msg)
             elif channel == "games":
                 await handle_games_message(conn, msg)
+            elif channel == "code":
+                await handle_code_message(conn, msg)
             elif channel == "lobby":
                 await handle_lobby_message(conn, msg)
             elif channel == "commons":
@@ -242,6 +251,7 @@ async def ws(websocket: WebSocket) -> None:
         telemetry_task.cancel()
         files_task.cancel()
         library_task.cancel()
+        code_task.cancel()
         network_unsub()  # type: ignore[operator]
         lobby_unsub()  # type: ignore[operator]
         commons_unsub()  # type: ignore[operator]

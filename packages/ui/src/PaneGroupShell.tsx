@@ -8,7 +8,13 @@
  *
  * See docs/architecture/panel-groups.mdx.
  */
-import { registry, type PanelGroupDecl, type PanelGroupCompanion } from '@horrible/core';
+import {
+  getActiveScope,
+  isEditableTarget,
+  registry,
+  type PanelGroupDecl,
+  type PanelGroupCompanion,
+} from '@horrible/core';
 import { useEffect, useRef, useState } from 'react';
 
 interface Props {
@@ -44,6 +50,35 @@ const DOCK_ICON: Record<DockPosition, string> = {
   left: '←',
 };
 
+// Collapse a dock region toward its edge (Blender-style toolbar/sidebar hide) and
+// the glyph on the thin rail that expands it back.
+const COLLAPSE_ICON: Record<DockPosition, string> = {
+  right: '»',
+  bottom: '⤓',
+  left: '«',
+};
+const EXPAND_ICON: Record<DockPosition, string> = {
+  right: '«',
+  bottom: '⤒',
+  left: '»',
+};
+const REGION_LABEL: Record<DockPosition, string> = {
+  right: 'right subpane',
+  bottom: 'bottom subpane',
+  left: 'left subpane',
+};
+
+// Keyboard toggles for the three dock regions (Blender toolbar/sidebar region
+// keys). A contiguous bracket cluster rather than Blender's literal T/N — those
+// letters collide with per-companion toggle keys (`key`), whereas `[ ] \` are
+// reserved and never shadow a module's companion letters or hijack typing.
+const REGION_KEY: Record<DockPosition, string> = {
+  left: '[',
+  right: ']',
+  bottom: '\\',
+};
+const KEY_BY_CHAR: Record<string, DockPosition> = { '[': 'left', ']': 'right', '\\': 'bottom' };
+
 function resolveComponent(id: string) {
   return (
     (registry.panels.find((p) => p.id === id) ?? registry.widgets.find((w) => w.id === id))
@@ -62,9 +97,24 @@ export function PaneGroupShell({ group }: Props) {
   // Size belongs to the dock (position), not the tab — so switching the active
   // companion within a dock keeps the width/height the user set.
   const [sizeByPosition, setSizeByPosition] = useState<Record<DockPosition, number>>(DEFAULT_SIZE);
+  // Whether each dock region is collapsed (hidden to a thin rail) — the Blender
+  // toolbar/sidebar region toggle. Independent of which companions are open there:
+  // collapsing hides the whole side without forgetting its companions, and
+  // expanding restores them exactly. A region with no open companions has no dock,
+  // so its toggle simply doesn't appear.
+  const [collapsedByPosition, setCollapsedByPosition] = useState<
+    Partial<Record<DockPosition, boolean>>
+  >({});
   // Ref so resize drag closures always read current state without re-subscribing.
   const openStatesRef = useRef(openStates);
   openStatesRef.current = openStates;
+
+  const toggleRegionCollapsed = (position: DockPosition) =>
+    setCollapsedByPosition((prev) => ({ ...prev, [position]: !prev[position] }));
+  // Reveal a region when a companion lands there — a freshly opened/moved companion
+  // in a collapsed dock would otherwise be invisible.
+  const expandRegion = (position: DockPosition) =>
+    setCollapsedByPosition((prev) => (prev[position] ? { ...prev, [position]: false } : prev));
 
   const toggle = (id: string) => {
     const wasOpen = id in openStatesRef.current;
@@ -87,6 +137,7 @@ export function PaneGroupShell({ group }: Props) {
       }
       return { ...prev, right: id };
     });
+    if (!wasOpen) expandRegion('right'); // opening lands it at right — make sure it shows
   };
 
   // Force a companion open (idempotent) and make it the active tab in its dock —
@@ -96,10 +147,12 @@ export function PaneGroupShell({ group }: Props) {
     const existing = openStatesRef.current[id];
     if (existing) {
       setActiveByPosition((prev) => ({ ...prev, [existing.position]: id }));
+      expandRegion(existing.position);
       return;
     }
     setOpenStates((prev) => (id in prev ? prev : { ...prev, [id]: { position: 'right' } }));
     setActiveByPosition((prev) => ({ ...prev, right: id }));
+    expandRegion('right');
   };
 
   // Reveal companions requested via registry.revealCompanion — both those buffered
@@ -113,6 +166,35 @@ export function PaneGroupShell({ group }: Props) {
     for (const c of group.companions) reveal(c.id);
     return registry.onRevealCompanion(reveal);
     // openCompanion reads live state through refs; only the group identity matters here.
+  }, [group]);
+
+  // Keyboard toggles (Blender T/N style): a scoped keybinding fires a
+  // `panelGroup.toggle:<id>` command → registry.toggleCompanion → here. Flip the
+  // companion if it belongs to this group. `toggle` reads live state via refs.
+  useEffect(() => {
+    return registry.onToggleCompanion((id) => {
+      if (group.companions.some((c) => c.id === id)) toggle(id);
+    });
+  }, [group]);
+
+  // Region collapse keys (`[` left, `]` right, `\` bottom) — the Blender
+  // toolbar/sidebar region toggle, from the keyboard. Only fires while this group's
+  // pane is the active scope, never while typing, and only for a region that
+  // actually has a dock (an empty side has nothing to toggle).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      if (getActiveScope() !== group.primary) return;
+      if (isEditableTarget(e.target)) return;
+      const pos = KEY_BY_CHAR[e.key];
+      if (!pos) return;
+      const hasDock = Object.values(openStatesRef.current).some((s) => s.position === pos);
+      if (!hasDock) return;
+      e.preventDefault();
+      toggleRegionCollapsed(pos);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
   }, [group]);
 
   const cyclePosition = (id: string) => {
@@ -132,6 +214,7 @@ export function PaneGroupShell({ group }: Props) {
       next[newPos] = id;
       return next;
     });
+    expandRegion(newPos); // don't drop a companion into a collapsed dock
   };
 
   const startResize = (e: React.MouseEvent, position: DockPosition) => {
@@ -184,11 +267,33 @@ export function PaneGroupShell({ group }: Props) {
     entries: { companion: PanelGroupCompanion; state: CompanionViewState }[],
   ) => {
     if (entries.length === 0) return null;
+    const isVertical = position === 'left' || position === 'right';
+
+    // Collapsed: render a thin rail on the edge (Blender's hidden toolbar/sidebar)
+    // that expands the region back on click. The companions stay open underneath.
+    if (collapsedByPosition[position]) {
+      return (
+        <button
+          key={position}
+          className={`pane-group-rail pane-group-rail--${position}`}
+          title={`Show ${REGION_LABEL[position]} (${REGION_KEY[position]})`}
+          aria-label={`Show ${REGION_LABEL[position]}`}
+          onClick={() => toggleRegionCollapsed(position)}
+        >
+          <span className="pane-group-rail-glyph">{EXPAND_ICON[position]}</span>
+          {entries.map(({ companion: c }) => (
+            <span key={c.id} className="pane-group-rail-tab">
+              {c.icon ?? c.label[0]}
+            </span>
+          ))}
+        </button>
+      );
+    }
+
     const activeId = activeByPosition[position] ?? entries[0].companion.id;
     const active = entries.find((e) => e.companion.id === activeId) ?? entries[0];
     const Comp = resolveComponent(active.companion.id);
     const size = sizeByPosition[position];
-    const isVertical = position === 'left' || position === 'right';
     const style = isVertical ? { width: size } : { height: size };
     const nextPos = NEXT_POSITION[position];
 
@@ -224,6 +329,14 @@ export function PaneGroupShell({ group }: Props) {
             onClick={() => cyclePosition(activeId)}
           >
             {DOCK_ICON[nextPos]}
+          </button>
+          <button
+            className="pane-group-companion-btn"
+            title={`Collapse ${REGION_LABEL[position]} (${REGION_KEY[position]})`}
+            aria-label={`Collapse ${REGION_LABEL[position]}`}
+            onClick={() => toggleRegionCollapsed(position)}
+          >
+            {COLLAPSE_ICON[position]}
           </button>
           <button
             className="pane-group-companion-btn"
@@ -263,21 +376,24 @@ export function PaneGroupShell({ group }: Props) {
 
   return (
     <div className="pane-group-shell">
-      {/* Companion toggle strip */}
-      <div className="pane-group-toggles" aria-label={`${group.label} companions`}>
-        {group.companions.map((c) => (
-          <button
-            key={c.id}
-            className={`pane-group-toggle${c.id in openStates ? ' active' : ''}`}
-            aria-pressed={c.id in openStates}
-            title={c.label}
-            onClick={() => toggle(c.id)}
-          >
-            {c.icon ? <span className="pane-group-toggle-icon">{c.icon}</span> : null}
-            <span className="pane-group-toggle-label">{c.label}</span>
-          </button>
-        ))}
-      </div>
+      {/* Companion toggle strip — omitted for a companion-less group (e.g. AgentTown),
+          which is just a primary in a group shell with room to grow companions later. */}
+      {group.companions.length > 0 && (
+        <div className="pane-group-toggles" aria-label={`${group.label} companions`}>
+          {group.companions.map((c) => (
+            <button
+              key={c.id}
+              className={`pane-group-toggle${c.id in openStates ? ' active' : ''}`}
+              aria-pressed={c.id in openStates}
+              title={c.label}
+              onClick={() => toggle(c.id)}
+            >
+              {c.icon ? <span className="pane-group-toggle-icon">{c.icon}</span> : null}
+              <span className="pane-group-toggle-label">{c.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Content: middle row (left | primary | right) + optional bottom row */}
       <div className="pane-group-body">

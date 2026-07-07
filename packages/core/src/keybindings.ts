@@ -35,6 +35,18 @@ export function getActiveScope(): string | null {
   return activeScope;
 }
 
+/**
+ * Is the event target a text-entry element? Plain-letter (no-modifier) shortcuts
+ * must defer to typing when one of these is focused. Shared by the global keydown
+ * dispatch and any component that binds bare keys (e.g. the pane-group shell).
+ */
+export function isEditableTarget(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el || !el.tagName) return false;
+  const tag = el.tagName.toLowerCase();
+  return tag === 'input' || tag === 'textarea' || tag === 'select' || el.isContentEditable;
+}
+
 /** Does a keyboard event match a `mod+x` / `x` key spec? (`mod` = ctrl or cmd). */
 export function matchesKeySpec(e: KeyboardEvent, key: string): boolean {
   const wantsMod = key.startsWith('mod+');

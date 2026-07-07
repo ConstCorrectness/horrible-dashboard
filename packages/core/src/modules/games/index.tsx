@@ -59,22 +59,31 @@ export const gamesModule: ModuleManifest = {
       singleton: true,
     },
   ],
-  // Games, Game Board, Agent Harness, Ladder, and Challenges are one **panel group**:
-  // the lobby ("Games") is the hub, the rest are companions that dock inside its
-  // shell (see docs/architecture/panel-groups.mdx). The Game Board is revealed
-  // automatically when a match starts (game-ws `revealBoard`).
+  // Two **panel groups** (see docs/architecture/panel-groups.mdx):
+  //  - `games.arcade`: the competitive harness/arena. The lobby ("Games") is the hub;
+  //    Board, Agent Harness, Ladder, and Challenges are companions that dock inside its
+  //    shell and each carry a Blender-style toggle key (t/b/l/c). The Game Board is
+  //    revealed automatically when a match starts (game-ws `revealBoard`).
+  //  - `games.town`: AgentTown — the social fish tank, a separate hub from the arena.
+  //    Its own primary with no companions yet (room to grow: resident list, event log,
+  //    whisper box).
   panelGroups: [
     {
       id: 'games.arcade',
       label: 'Games',
       primary: 'games.lobby',
       companions: [
-        { id: 'games.board', label: 'Game Board', icon: '▦' },
-        { id: 'games.loadout', label: 'Agent Harness', icon: '🛠' },
-        { id: 'games.leaderboard', label: 'Ladder', icon: '🏆' },
-        { id: 'games.challenges', label: 'Challenges', icon: '🎯' },
-        { id: 'games.town', label: 'AgentTown', icon: '🏘' },
+        { id: 'games.board', label: 'Game Board', icon: '▦', key: 'b' },
+        { id: 'games.loadout', label: 'Agent Harness', icon: '🛠', key: 't' },
+        { id: 'games.leaderboard', label: 'Ladder', icon: '🏆', key: 'l' },
+        { id: 'games.challenges', label: 'Challenges', icon: '🎯', key: 'c' },
       ],
+    } satisfies PanelGroupDecl,
+    {
+      id: 'games.town',
+      label: 'AgentTown',
+      primary: 'games.town',
+      companions: [],
     } satisfies PanelGroupDecl,
   ],
   commands: [
@@ -106,7 +115,7 @@ export const gamesModule: ModuleManifest = {
     {
       id: 'games.openTown',
       title: 'Games: Visit AgentTown',
-      run: () => registry.revealCompanion('games.town'),
+      run: () => registry.openPanel('games.town'),
     },
   ],
   settings: [

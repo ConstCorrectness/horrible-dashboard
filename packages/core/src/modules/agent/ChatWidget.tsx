@@ -28,6 +28,7 @@ import {
   type ChatSessionMeta,
 } from './sessions';
 import { matchSlash, runSlash } from './slash';
+import { claimPendingChatSession, onOpenChatSession } from './openSession';
 import { listRoots, listDir } from '../files/api';
 import { registry, type OpenPaneInfo } from '../../registry';
 
@@ -233,6 +234,15 @@ export function ChatWidget() {
     }
   };
 
+  // Open a specific conversation when the git provenance pane (or anything) requests it
+  // via openChatSession — claiming a request buffered before this widget mounted.
+  useEffect(() => {
+    const pending = claimPendingChatSession();
+    if (pending) void switchSession(pending);
+    return onOpenChatSession((id) => void switchSession(id));
+    // switchSession reads live refs; only the once-on-mount wiring matters here.
+  }, []);
+
   const removeSession = async (id: string) => {
     try {
       const list = await deleteSession(id);
@@ -271,7 +281,9 @@ export function ChatWidget() {
 
   const getFilteredItems = () => {
     if (showSuggestions === 'files') {
-      return workspaceFiles.filter((f) => f.toLowerCase().includes(searchQuery.toLowerCase())).slice(0, 10);
+      return workspaceFiles
+        .filter((f) => f.toLowerCase().includes(searchQuery.toLowerCase()))
+        .slice(0, 10);
     }
     if (showSuggestions === 'panes') {
       const openPanes = registry.layoutController?.listOpenPanes() ?? [];
@@ -525,11 +537,7 @@ export function ChatWidget() {
 
               return (
                 <li key={path}>
-                  <button
-                    type="button"
-                    style={itemStyle}
-                    onClick={() => selectSuggestion(path)}
-                  >
+                  <button type="button" style={itemStyle} onClick={() => selectSuggestion(path)}>
                     <span className="agent-slash-name">@{name}</span>
                     <span className="agent-slash-desc">{dir}</span>
                   </button>
@@ -539,11 +547,7 @@ export function ChatWidget() {
               const pane = item as OpenPaneInfo;
               return (
                 <li key={pane.instanceId}>
-                  <button
-                    type="button"
-                    style={itemStyle}
-                    onClick={() => selectSuggestion(pane)}
-                  >
+                  <button type="button" style={itemStyle} onClick={() => selectSuggestion(pane)}>
                     <span className="agent-slash-name">pane:{pane.title}</span>
                     <span className="agent-slash-desc">({pane.instanceId})</span>
                   </button>

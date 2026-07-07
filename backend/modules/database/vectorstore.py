@@ -136,6 +136,16 @@ def delete_document(doc_id: str) -> bool:
         return cursor.rowcount > 0
 
 
+def delete_collection(collection: str) -> int:
+    """Delete every document in a collection (used for a full reindex). Returns the
+    number of rows removed."""
+    with get_db_conn() as conn:
+        cursor = conn.execute(
+            "DELETE FROM documents WHERE collection = ?", (collection,)
+        )
+        return cursor.rowcount
+
+
 def search_documents(
     collection: str, query_embedding: list[float], limit: int
 ) -> list[dict[str, Any]]:

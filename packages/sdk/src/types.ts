@@ -222,6 +222,12 @@ export interface PanelGroupCompanion {
    * character of `label` when omitted.
    */
   icon?: string;
+  /**
+   * Blender-style toggle key (e.g. `t`, `n`). Scoped to the group's primary pane —
+   * pressing it while the group's pane is focused toggles this companion's region.
+   * Plain letters only (no `mod+`); ignored while a text field is focused.
+   */
+  key?: string;
 }
 
 /**

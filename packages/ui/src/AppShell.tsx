@@ -3,8 +3,10 @@ import { createPortal } from 'react-dom';
 import {
   dialogs,
   getActiveScope,
+  isEditableTarget,
   registry,
   resolveKeybinding,
+  SymbolSearchModal,
   toastsStore,
   useWorkspaces,
   type OpenPaneOptions,
@@ -118,6 +120,10 @@ export function AppShell({ appTitle }: { appTitle: string }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Plain-letter bindings (Blender-style companion toggles) must not hijack
+      // typing. Ignore no-modifier keydowns originating in a text field; `mod+`
+      // shortcuts still work (they carry ctrl/meta).
+      if (!e.ctrlKey && !e.metaKey && isEditableTarget(e.target)) return;
       const command = resolveKeybinding(e, getActiveScope(), registry.keybindings);
       if (command) {
         e.preventDefault();
@@ -194,6 +200,7 @@ export function AppShell({ appTitle }: { appTitle: string }) {
         )}
       </div>
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+      <SymbolSearchModal />
       <ApprovalPrompts />
       <Toasts />
       <Dialogs />

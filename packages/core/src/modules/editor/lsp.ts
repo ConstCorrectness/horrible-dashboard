@@ -138,9 +138,50 @@ function markupText(doc: MarkupContent | undefined): string {
   return typeof doc === 'string' ? doc : (doc.value ?? '');
 }
 
-/** Escape the HTML-significant characters so text can't inject markup. */
+// Named HTML entities that turn up in LSP docstrings (servers convert RST/plain
+// docstrings to markdown, aligning columns with `&nbsp;` and escaping `<`/`>`/`&`).
+// We decode these to their characters so they don't render literally as `&nbsp;`.
+const NAMED_ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  nbsp: ' ',
+  hellip: '…',
+  mdash: '—',
+  ndash: '–',
+  lsquo: '‘',
+  rsquo: '’',
+  ldquo: '“',
+  rdquo: '”',
+  times: '×',
+  copy: '©',
+};
+
+/** Decode named + numeric (`&#123;` / `&#x1F;`) HTML entities to their characters.
+ * Only well-formed `&name;`/`&#num;` refs are touched; a bare `&` is left as-is.
+ * Runs *before* `escapeHtml`, so a decoded `<`/`>`/`&` is re-escaped to visible
+ * text — decoding never opens an injection hole. */
+function decodeEntities(s: string): string {
+  if (!s.includes('&')) return s;
+  return s.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);/g, (m, body: string) => {
+    if (body[0] === '#') {
+      const cp =
+        body[1] === 'x' || body[1] === 'X'
+          ? parseInt(body.slice(2), 16)
+          : parseInt(body.slice(1), 10);
+      return Number.isFinite(cp) && cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : m;
+    }
+    return NAMED_ENTITIES[body] ?? m;
+  });
+}
+
+/** Escape the HTML-significant characters so text can't inject markup. Any HTML
+ * entities the source already carries are decoded first (see `decodeEntities`) —
+ * decode-then-escape renders them as their characters, safely. */
 function escapeHtml(s: string): string {
-  return s
+  return decodeEntities(s)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')

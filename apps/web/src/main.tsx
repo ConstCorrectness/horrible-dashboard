@@ -4,12 +4,14 @@ import {
   agentModule,
   BROWSER_CAPABILITIES,
   clubhouseModule,
+  codeModule,
   commonsModule,
   dashboardModule,
   editorModule,
   filesModule,
   flowModule,
   gamesModule,
+  gitModule,
   initAgentManifestSync,
   initAgentRelay,
   initApprovalListener,
@@ -60,6 +62,8 @@ async function boot(): Promise<void> {
   registry.register(settingsModule);
   registry.register(editorModule);
   registry.register(filesModule);
+  registry.register(codeModule);
+  registry.register(gitModule);
   registry.register(terminalModule);
   registry.register(replModule);
   registry.register(databaseModule);

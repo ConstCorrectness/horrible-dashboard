@@ -91,6 +91,8 @@ export { trainingModule } from './modules/training';
 export { visualizerModule } from './modules/visualizer';
 export { flowModule } from './modules/flow';
 export { gamesModule } from './modules/games';
+export { codeModule, SymbolSearchModal } from './modules/code';
+export { gitModule } from './modules/git';
 export {
   editorModule,
   getActiveBufferSource,
@@ -175,13 +177,24 @@ export {
   type SerializedTool,
   type VllmStatus,
 } from './modules/agent';
+export { openChatSession } from './modules/agent/openSession';
 export {
   clearActiveScope,
   getActiveScope,
+  isEditableTarget,
   matchesKeySpec,
   resolveKeybinding,
   setActiveScope,
 } from './keybindings';
+export {
+  getLocus,
+  setLocus,
+  subscribeLocus,
+  useLocus,
+  type Locus,
+  type LocusPosition,
+  type LocusRange,
+} from './locus';
 export { toastsStore, type Toast } from './toasts';
 export {
   dialogs,

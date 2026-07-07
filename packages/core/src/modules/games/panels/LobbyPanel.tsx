@@ -154,7 +154,7 @@ export function LobbyPanel() {
           type="button"
           style={{ marginLeft: 'auto' }}
           title="AgentTown — spawn your agent in the social fish tank"
-          onClick={() => registry.revealCompanion('games.town')}
+          onClick={() => registry.openPanel('games.town')}
         >
           🏘 AgentTown
         </button>

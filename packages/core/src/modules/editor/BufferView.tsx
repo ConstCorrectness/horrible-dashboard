@@ -26,6 +26,7 @@ import {
   useAgentContext,
 } from '../../agent-context';
 import { ApiError } from '../../api';
+import { getLocus, setLocus, subscribeLocus } from '../../locus';
 import { registry } from '../../registry';
 import { usePaneParams } from '../../panes';
 import { useSetting } from '../../settings';
@@ -103,6 +104,18 @@ export function BufferView() {
   const langHint = typeof params.language === 'string' ? params.language : null;
   const instanceId = useContext(PaneInstanceContext);
 
+  // The workspace file path this buffer edits (locus is keyed by path), or null for
+  // note/scratch buffers that have no place in the code tree. Refs so the mount-time
+  // CodeMirror listener always reads the live value.
+  const filePath = source && source.startsWith(FILE_URI) ? source.slice(FILE_URI.length) : null;
+  const filePathRef = useRef(filePath);
+  filePathRef.current = filePath;
+  const lastLocusLineRef = useRef<number | null>(null);
+  // Scroll+select the current locus if it targets this file. A stable ref so both the
+  // locus subscription and the load effect (once content has arrived) call the latest;
+  // it reads everything live, so calling a slightly stale reference is fine.
+  const applyLocusRef = useRef<() => void>(() => {});
+
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const langRef = useRef(new Compartment());
@@ -157,6 +170,19 @@ export function BufferView() {
               if (source) setActiveBufferSource(source);
               if (instanceId) setActiveContextInstance(instanceId);
             }
+            // Publish the cursor to the code-locus bus (so the outline follows) — on
+            // focus, and when the cursor changes line. Throttled to line granularity;
+            // only workspace files have a locus path.
+            const path = filePathRef.current;
+            if (path && (u.selectionSet || (u.focusChanged && u.view.hasFocus))) {
+              const head = u.state.selection.main.head;
+              const line = u.state.doc.lineAt(head);
+              if (lastLocusLineRef.current !== line.number || u.focusChanged) {
+                lastLocusLineRef.current = line.number;
+                const pos = { line: line.number, column: head - line.from + 1 };
+                setLocus({ path, range: { start: pos, end: pos } }, 'editor');
+              }
+            }
           }),
         ],
       }),
@@ -193,6 +219,9 @@ export function BufferView() {
         });
         setDirty(false);
         setStatus(null);
+        // Content is now in the doc — re-apply any pending locus so a jump that opened
+        // this file (its scroll fired against an empty doc) lands on the right line.
+        applyLocusRef.current();
       })
       .catch((err: unknown) => {
         if (!cancelled) setStatus(err instanceof Error ? err.message : String(err));
@@ -208,6 +237,31 @@ export function BufferView() {
     if (!instanceId) return;
     return () => clearActiveContextInstance(instanceId);
   }, [instanceId]);
+
+  // Follow the code locus: when another pane (outline, dash, agent — anything but
+  // this editor) points the locus at this file, scroll to and select the range. The
+  // `source !== 'editor'` guard is the echo break — we ignore loci we published.
+  applyLocusRef.current = () => {
+    const view = viewRef.current;
+    const path = filePathRef.current;
+    const loc = getLocus();
+    if (!view || !path || loc.source === 'editor' || loc.path !== path || !loc.range) return;
+    const doc = view.state.doc;
+    const startLine = Math.min(Math.max(loc.range.start.line, 1), doc.lines);
+    const endLine = Math.min(Math.max(loc.range.end.line, 1), doc.lines);
+    const from = doc.line(startLine).from;
+    const to = doc.line(endLine).to;
+    lastLocusLineRef.current = startLine; // don't echo this jump back as our own move
+    view.dispatch({
+      selection: { anchor: from, head: to },
+      effects: EditorView.scrollIntoView(from, { y: 'center' }),
+    });
+  };
+  useEffect(() => {
+    const apply = () => applyLocusRef.current();
+    apply(); // apply whatever the locus already is when this buffer (re)mounts
+    return subscribeLocus(apply);
+  }, [source]);
 
   const save = async () => {
     const view = viewRef.current;

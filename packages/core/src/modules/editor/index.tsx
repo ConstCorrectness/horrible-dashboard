@@ -7,6 +7,7 @@
  * + mod+s keybinding routed through the shell keybinding service (C3), agent
  * tools (C4), and the recent-notes dashboard widget (C5). See docs/modules/editor.md.
  */
+import { getLocus, subscribeLocus } from '../../locus';
 import { registry, type ModuleManifest } from '../../registry';
 import { editorAgentTools } from './agentTools';
 import { BufferView } from './BufferView';
@@ -152,6 +153,16 @@ export const editorModule: ModuleManifest = {
 // Expose the editor's buffer surface to other modules (e.g. the visualizer) via
 // the registry, so they don't deep-import editor internals.
 registerEditorService();
+
+// Cross-file locus follow: when the code locus points at a file that isn't open in
+// any buffer (e.g. dash.code.set_locus, or the agent walking symbols.find results),
+// open it. Already-open files are handled per-buffer — BufferView scrolls in place.
+subscribeLocus(() => {
+  const loc = getLocus();
+  if (!loc.path || loc.source === 'editor') return;
+  const uri = `workspace-file:${loc.path}`;
+  if (!listBufferUris().includes(uri)) openBuffer(uri);
+});
 
 export { loadSource, saveSource, sourceTitle, type LoadedSource } from './sources';
 export type { EditorService, BufferLanguage, OpenBufferRequest } from './service';

@@ -38,6 +38,15 @@ primary to resize — sized to the active tab) and a **position cycle button**
 docking; moving it out of a multi-tab dock leaves the others tabbed at the old
 position and either joins or starts a dock at the new one.
 
+Each dock also has a **region collapse toggle** (`« » ⤓` in the header) that hides
+the whole dock to a thin **rail** on its edge — the Blender toolbar/sidebar (`T`/`N`)
+region toggle, one per side (left / right / bottom subpane). Collapsing is orthogonal
+to opening: it hides the region **without forgetting** which companions are docked
+there (their open state and sizes are preserved), and clicking the rail — which shows
+the tucked-away companions' icons — expands it back. Opening, revealing, or cycling a
+companion **into** a collapsed dock auto-expands it, so a companion can never land
+somewhere invisible.
+
 The entire shell is **one dockview pane**: it can be split, floated, moved, or
 maximized as a single unit in the workspace. Companions are not independent panes.
 
@@ -62,6 +71,63 @@ goes live — `game-ws.ts` calls `revealBoard()` → `revealCompanion('games.boa
 first `public_state`/`your_turn`, and the lobby's *Start*/*Join* buttons use the same
 call. `PaneGroupShell` subscribes via `registry.onRevealCompanion` and claims buffered
 reveals for its own companions with `registry.claimReveal` on mount.
+
+## Keyboard toggles (Blender T/N style)
+
+Blender toggles an editor's docked regions from the keyboard — `T` for the toolbar,
+`N` for the sidebar — **contextually**, for whichever editor has the cursor. Panel
+groups do the same: give a companion a `key` and pressing it toggles that companion's
+region while the group's pane is focused.
+
+```ts
+companions: [
+  { id: 'games.loadout', label: 'Agent Harness', icon: '🛠', key: 't' },
+  { id: 'games.board',   label: 'Game Board',    icon: '▦', key: 'b' },
+],
+```
+
+How it wires up (all in `registry`, no per-module boilerplate):
+
+- The `commands` getter auto-generates a `panelGroup.toggle:<companionId>` command per
+  keyed companion (`run: () => registry.toggleCompanion(id)`), alongside the
+  `widget.open:*` openers. It also surfaces the toggle in the command palette.
+- The `keybindings` getter auto-generates a **focus-scoped** binding
+  (`{ key, command, scope: group.primary }`). Scoping to the primary's view id is what
+  makes it contextual: the binding is only live while that group's shell is focused
+  (clicking anywhere in the shell sets the active scope to the primary — see
+  `Workspace` `markActive` and [layout-shell](layout-shell.md)).
+- `registry.toggleCompanion(id)` emits to the mounted shell, which subscribes via
+  `registry.onToggleCompanion` and flips the companion (same code path as clicking its
+  strip button). This mirrors the `revealCompanion`/`onRevealCompanion` bus, but toggle
+  is open/close rather than open-only, so it isn't buffered — the key is only active
+  when the shell already exists.
+
+Keys are **plain letters** (no `mod+`). `AppShell`'s global keydown handler ignores
+no-modifier keydowns that originate in a text field (`input`/`textarea`/`select`/
+`contenteditable`, via the shared `isEditableTarget`), so typing in a pane never
+triggers a toggle; `mod+` shortcuts are unaffected. Different groups can reuse the same
+letters — each binding is scoped to its own primary, so `t` in the games arcade and `t`
+in another group never collide.
+
+### Region toggle keys
+
+The three **dock regions** have their own keys — the Blender toolbar/sidebar region
+toggle from the keyboard:
+
+| Key | Region |
+|---|---|
+| `[` | left subpane |
+| `]` | right subpane |
+| `\` | bottom subpane |
+
+These are handled by `PaneGroupShell` directly (a `window` keydown gated on
+`getActiveScope() === group.primary` + `isEditableTarget`), not the registry, because
+they're a **generic shell affordance** shared by every group rather than a per-module
+binding. A contiguous bracket cluster is used rather than Blender's literal `T`/`N`:
+those letters are claimed by per-companion `key`s (e.g. `t` = Agent Harness), so
+reserving `[ ] \` keeps the two axes — *which companion is open* vs *which region is
+collapsed* — from colliding. The key only acts on a region that has a dock (an empty
+side has nothing to toggle), and the collapse button / rail tooltips show it.
 
 ## Declaring a group
 
@@ -95,7 +161,8 @@ The `icon` field appears in the toggle button alongside the label.
 | `commons.hub` | `commons.directory` | requests, profile |
 | `flow.studio` | `flow.library` | canvas (`flow.editor`) |
 | `observability.monitor` | `observability.io` | inspector (`observability.logs`) |
-| `games.arcade` | `games.lobby` | board, harness (`games.loadout`), ladder, challenges |
+| `games.arcade` | `games.lobby` | board (`b`), harness (`games.loadout`, `t`), ladder (`l`), challenges (`c`) |
+| `games.town` | `games.town` | _(none yet — AgentTown as its own hub)_ |
 
 ## How it works
 
@@ -127,7 +194,10 @@ The `icon` field appears in the toggle button alongside the label.
   position (the dock's `sizeByPosition` entry is independent of which
   companion is docked there); the resize handle is a 4 px border that fires
   `mousemove` on `window` to update `sizeByPosition` without dockview
-  intercepting the drag.
+  intercepting the drag. A `collapsedByPosition: Partial<Record<DockPosition,
+  bool>>` holds the region collapse toggles — when set, `renderPositionGroup`
+  draws the thin rail instead of the dock; the open/reveal/cycle paths call
+  `expandRegion(pos)` so a companion never lands in a collapsed dock.
 - Companion panels opened **standalone** via a direct command still render their
   raw component — the shell only activates when the primary is opened.
 
@@ -146,6 +216,7 @@ interface PanelGroupCompanion {
   id: string;
   label: string;
   icon?: string;   // shown in the toggle button
+  key?: string;    // Blender-style toggle key (e.g. 't'); see "Keyboard toggles" below
 }
 
 interface PanelGroupDecl {

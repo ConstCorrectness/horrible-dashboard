@@ -185,6 +185,11 @@ class ModuleRegistry {
   // drains its companions on mount via `claimReveal` (see PaneGroupShell).
   private pendingReveals = new Set<string>();
   private revealListeners = new Set<(companionId: string) => void>();
+  // Companion **toggle** requests (Blender-style keyboard toggles). Unlike a
+  // reveal (open-only), a toggle flips the companion open/closed. The open state
+  // lives in the group shell, so a keybinding command can't reach it directly —
+  // it emits here and the mounted shell subscribes via `onToggleCompanion`.
+  private toggleListeners = new Set<(companionId: string) => void>();
 
   /** Idempotent: re-registering the same module id is a no-op (StrictMode-safe). */
   register(manifest: ModuleManifest): void {
@@ -218,7 +223,19 @@ class ModuleRegistry {
         title: `Open widget: ${w.title}`,
         run: () => this.openPanel(w.id),
       }));
-    return [...declared, ...widgetOpeners];
+    // A toggle command per companion that declares a `key` — backs the
+    // auto-generated scoped keybinding (see the `keybindings` getter) and also
+    // surfaces the toggle in the palette.
+    const companionTogglers: CommandDecl[] = this.panelGroups.flatMap((g) =>
+      g.companions
+        .filter((c) => c.key)
+        .map((c) => ({
+          id: `panelGroup.toggle:${c.id}`,
+          title: `Toggle ${c.label}`,
+          run: () => this.toggleCompanion(c.id),
+        })),
+    );
+    return [...declared, ...widgetOpeners, ...companionTogglers];
   }
 
   get panels(): PanelDecl[] {
@@ -235,7 +252,21 @@ class ModuleRegistry {
   }
 
   get keybindings(): KeybindingDecl[] {
-    return [...this.modules.values()].flatMap((m) => m.keybindings ?? []);
+    const declared = [...this.modules.values()].flatMap((m) => m.keybindings ?? []);
+    // Blender-style companion toggles: a scoped binding per keyed companion,
+    // scoped to its group's primary view id so it's only live while that group's
+    // pane is focused (clicking anywhere in the shell sets the active scope to the
+    // primary — see Workspace `markActive`).
+    const companionToggles: KeybindingDecl[] = this.panelGroups.flatMap((g) =>
+      g.companions
+        .filter((c) => c.key)
+        .map((c) => ({
+          key: c.key as string,
+          command: `panelGroup.toggle:${c.id}`,
+          scope: g.primary,
+        })),
+    );
+    return [...declared, ...companionToggles];
   }
 
   get settings(): SettingDecl[] {
@@ -290,6 +321,26 @@ class ModuleRegistry {
   /** A group shell claims a buffered reveal for one of its companions (once). */
   claimReveal(companionId: string): boolean {
     return this.pendingReveals.delete(companionId);
+  }
+
+  /**
+   * Toggle a companion open/closed **inside its group's shell** — the keyboard
+   * equivalent of clicking its strip button (Blender-style region toggle). Unlike
+   * `revealCompanion` (open-only), this flips the current state. Requires the
+   * group's shell to be mounted (the companion's key is only active while the
+   * group's pane is focused, which implies the shell exists), so there's no
+   * buffering — a live shell claims it via `onToggleCompanion`.
+   */
+  toggleCompanion(companionId: string): void {
+    this.toggleListeners.forEach((l) => l(companionId));
+  }
+
+  /** Subscribe to companion-toggle requests. Returns an unsubscribe. */
+  onToggleCompanion(listener: (companionId: string) => void): () => void {
+    this.toggleListeners.add(listener);
+    return () => {
+      this.toggleListeners.delete(listener);
+    };
   }
 
   /**

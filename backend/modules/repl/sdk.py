@@ -183,6 +183,103 @@ class _Settings:
         return _read()
 
 
+class _Code:
+    """Read the code index and drive the shared **code locus** (the 'what code am I
+    looking at' cursor: path + optional line/symbol) from Python. Backend-local: no
+    browser round-trip. Setting the locus makes every attached browser follow it."""
+
+    def locus(self) -> dict[str, Any]:
+        """The current code locus (path + optional range/symbol), or `{}` if none."""
+        from backend.modules.code import current_locus
+
+        return current_locus()
+
+    def set_locus(
+        self, path: str, line: int | None = None, symbol: str | None = None
+    ) -> dict[str, Any]:
+        """Point the locus at `path` (optionally a 1-based `line`/`symbol`); browsers
+        open and scroll to it."""
+        locus: dict[str, Any] = {"path": path}
+        if line is not None:
+            pos = {"line": line, "column": 1}
+            locus["range"] = {"start": pos, "end": pos}
+        if symbol is not None:
+            locus["symbol"] = symbol
+        from backend.modules.code import set_locus_from_backend
+
+        return set_locus_from_backend(locus)
+
+    def symbols(self, path: str) -> list[dict[str, Any]]:
+        """The definitions (outline) in a file — functions, classes, methods, …."""
+        from pathlib import Path
+
+        from backend.modules.code import code_index
+
+        return [s.model_dump() for s in code_index.document_symbols(Path(path))]
+
+    def find(self, query: str, limit: int = 50) -> list[dict[str, Any]]:
+        """Fuzzy symbol search across the workspace roots (exact-name / structural)."""
+        from backend.modules.code import code_index
+        from backend.modules.files.routes import _roots
+
+        return [h.model_dump() for h in code_index.find_symbols(query, _roots(), limit)]
+
+    def search(self, query: str, limit: int = 10) -> dict[str, Any]:
+        """Semantic search: find definitions by meaning (embeddings). Returns
+        `{building: True}` with no results until the index is built — run
+        `dash.code.reindex()` first if so."""
+        import asyncio
+
+        from backend.modules.code import semantic_index
+        from backend.modules.files.routes import _roots
+
+        return asyncio.run(semantic_index.search(query, _roots(), limit))
+
+    def reindex(self) -> dict[str, Any]:
+        """Rebuild the semantic index over the workspace roots (blocks until done)."""
+        import asyncio
+
+        from backend.modules.code import semantic_index
+        from backend.modules.files.routes import _roots
+
+        return asyncio.run(semantic_index.reindex(_roots()))
+
+
+class _Git:
+    """Read git provenance and author commits from Python. Backend-local. `commit`
+    stamps the active chat session as a trailer, so `blame` can attribute lines back to
+    the conversation that wrote them."""
+
+    def _hint(self) -> Any:
+        from pathlib import Path
+
+        from backend.modules.files.routes import _roots
+
+        roots = _roots()
+        return roots[0] if roots else Path(".")
+
+    def blame(self, path: str) -> dict[str, Any]:
+        """Per-line authorship for a file, each line tagged with the session that wrote
+        its commit (if any)."""
+        from pathlib import Path
+
+        from backend.modules.git import service
+
+        return service.blame(Path(path)).model_dump()
+
+    def log(self, limit: int = 20) -> dict[str, Any]:
+        """Recent commits; a `session_id` marks a commit agent-authored."""
+        from backend.modules.git import service
+
+        return service.log(self._hint(), limit).model_dump()
+
+    def commit(self, message: str, paths: list[str] | None = None) -> dict[str, Any]:
+        """Stage + commit, stamping the active chat session as provenance trailers."""
+        from backend.modules.git import service
+
+        return service.commit(self._hint(), message, paths).model_dump()
+
+
 class Dash:
     """The dashboard handle. Drives workspace layouts, manages and rearranges panes,
     reads live pane state and I/O telemetry, and reads/writes settings. `call` is the
@@ -195,6 +292,8 @@ class Dash:
         self.layout = _Layout(call)
         self.io = _Io()
         self.settings = _Settings()
+        self.code = _Code()
+        self.git = _Git()
 
     def context(self, instance_id: str) -> Any:
         """Read an active pane instance's current state/selection snapshot (instanceId from
