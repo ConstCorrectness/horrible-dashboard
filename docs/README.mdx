@@ -129,6 +129,12 @@ layout shell and how it behaves in the browser vs the desktop app:
 - [Library](modules/library.mdx) — **Web + notes slice implemented.** Ingest blog
   URLs and notes into the vector store as sources + chunks, watch them ingest live,
   and semantic-search them for RAG.
+- [Notebook](modules/notebook.mdx) — **Phases 0–3 implemented.** A domain-neutral reactive
+  `.ipynb` notebook (JupyterLab cells + a marimo-style reactive dataflow mode with cascade
+  re-execution and stale-variable deletion) with **interactive ipywidgets** (native
+  controls), **custom `anywidget` (`_esm`/`_css`) views**, **widget reattach-resync**, and
+  **agent tools** on the shared `notebook_core` kernel engine; the opt-in widget→reactive
+  bridge is the deferred tail.
 - [Visualizer](modules/visualizer.mdx)
 - [Flow canvas](modules/flow-canvas.mdx) — **Phase 0/1 implemented.** A node-graph
   canvas (n8n-style) for composing runnable multi-agent orchestrations over the

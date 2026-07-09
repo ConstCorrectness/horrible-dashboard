@@ -6,6 +6,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+# CellModel/NotebookModel are domain-neutral and live in the shared core; re-export
+# them here so training callers keep importing from `training.models` unchanged.
+from backend.notebook_core.models import CellModel as CellModel
+from backend.notebook_core.models import NotebookModel as NotebookModel
+
 EnvironmentKind = Literal["competition", "dataset", "env"]
 
 
@@ -40,22 +45,6 @@ class ProjectModel(BaseModel):
     venv_ready: bool = False
     data_ready: bool = False
     created_at: str = ""
-
-
-class CellModel(BaseModel):
-    """One notebook cell, mirroring nbformat (outputs stay raw nbformat dicts)."""
-
-    id: str
-    cell_type: Literal["code", "markdown"]
-    source: str
-    outputs: list[dict[str, Any]] = Field(default_factory=list)
-    execution_count: int | None = None
-
-
-class NotebookModel(BaseModel):
-    path: str  # relative to the project root
-    cells: list[CellModel]
-    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class SearchResponse(BaseModel):

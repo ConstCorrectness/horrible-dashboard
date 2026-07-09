@@ -53,6 +53,8 @@ from backend.modules.network import router as network_router
 from backend.modules.network.hub import peer_hub
 from backend.modules.network.setup import start_network, stop_network
 from backend.modules.network.transport.direct import ServerPeerLink
+from backend.modules.notebook import handle_notebook_message, notebook_manager
+from backend.modules.notebook import router as notebook_router
 from backend.modules.notes import router as notes_router
 from backend.modules.plugins import router as plugins_router
 from backend.modules.repl import ReplManager
@@ -94,6 +96,7 @@ async def lifespan(app: FastAPI):
         # Kernels are child processes; leaving them behind on reload/shutdown
         # would strand orphaned ipykernels.
         await training_kernels.shutdown_all()
+        await notebook_manager.shutdown_all()
         await stop_network()
 
 
@@ -126,6 +129,7 @@ app.include_router(database_router, prefix="/api")
 app.include_router(library_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(files_router, prefix="/api")
+app.include_router(notebook_router, prefix="/api")
 app.include_router(notes_router, prefix="/api")
 app.include_router(clubhouse_router, prefix="/api")
 app.include_router(telemetry_router, prefix="/api")
@@ -224,6 +228,8 @@ async def ws(websocket: WebSocket) -> None:
                 await visualizer_manager.handle(conn, msg)
             elif channel == "training":
                 await handle_training_message(conn, msg)
+            elif channel == "notebook":
+                await handle_notebook_message(conn, msg)
             elif channel == "network":
                 await handle_network_message(conn, msg)
             elif channel == "collab":
@@ -257,6 +263,7 @@ async def ws(websocket: WebSocket) -> None:
         commons_unsub()  # type: ignore[operator]
         training_unsub()
         training_kernels.detach(conn)
+        notebook_manager.detach(conn)
         collab_manager.drop(conn)
         chat_manager.drop(conn)
         drop_games_conn(conn)

@@ -92,7 +92,12 @@ under a kernel, a script runner, or manim.
 
 `training.notebook` is a **native cell UI** (CodeMirror cells, non-singleton, opened
 with params `{projectId, notebook}`) speaking the Jupyter kernel protocol — no iframed
-JupyterLab. The backend side (`kernels.py`) runs one `KernelSession` per open notebook:
+JupyterLab. The kernel engine itself is **domain-neutral and shared**: it lives in
+`backend/notebook_core/` (`KernelSession`, nbformat IO, the manager's ws event handling)
+and is also consumed by the generic [notebook module](./notebook.mdx). `training/kernels.py`
+subclasses it with the training specifics — sessions keyed `{projectId}:{path}`, spawned
+from the project venv, with the stdout sentinel scan. The backend side runs one
+`TrainingKernelSession` per open notebook:
 
 - The kernel spawns from the **project venv's python** (`-m ipykernel_launcher`) via
   `jupyter_client`'s sync API on daemon threads (event-loop-agnostic: works under

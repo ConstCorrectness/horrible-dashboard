@@ -8,6 +8,8 @@ export default tseslint.config(
       '**/node_modules/**',
       '**/src-tauri/**',
       '**/.venv/**',
+      '.data/**', // runtime data dir (e.g. the notebook module's managed kernel venv)
+      '.data-*/**', // sibling data dirs (e.g. .data-peer2/ for the peer fabric)
       '.claude/**', // agent worktrees (each with its own venv/node_modules) live here
       'website/build/**',
       'website/.docusaurus/**',

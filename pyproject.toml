@@ -36,6 +36,12 @@ webrtc = ["aiortc>=1.9"]
 
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]
+# A hung test (stuck subprocess/kernel/socket) must fail with a stack dump rather
+# than block the whole session forever. `thread` method is the Windows-compatible
+# one (signal/SIGALRM is POSIX-only). Generous default fits the real-kernel tests
+# (which legitimately wait up to ~90s); override per-test with @pytest.mark.timeout.
+timeout = 180
+timeout_method = "thread"
 
 [dependency-groups]
 dev = [
@@ -44,5 +50,6 @@ dev = [
     "ipykernel>=6",
     "pygame>=2.6.1",
     "pytest>=9.0.3",
+    "pytest-timeout>=2.4.0",
     "ruff>=0.15.16",
 ]
