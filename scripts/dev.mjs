@@ -34,10 +34,16 @@ const useShell = process.platform === 'win32';
 const startGameServer =
   !process.argv.includes('--no-gameserver') && !process.env.HORRIBLE_DEV_NO_GAMESERVER;
 
+// Backend port. Overridable because Windows sometimes reserves 8000 inside a
+// Hyper-V dynamic port exclusion range (bind fails with WinError 10013) — set
+// HORRIBLE_DEV_BACKEND_PORT (e.g. in .env) to sidestep it. The Vite proxy reads
+// the same variable, inherited from this process.
+const backendPort = process.env.HORRIBLE_DEV_BACKEND_PORT || '8000';
+
 // The ports this run owns. Used to self-heal a prior interrupted run and to backstop
 // our own shutdown. 9200 is only ours when we start the bundled game server — never
 // kill a game server the user runs themselves.
-const ownedPorts = [5173, 8000, ...(startGameServer ? [9200] : [])];
+const ownedPorts = [5173, Number(backendPort), ...(startGameServer ? [9200] : [])];
 
 // On Windows, `uv run`/pnpm wrap uvicorn/vite in a shell and `uvicorn --reload`
 // respawns workers, so an interrupted run can orphan a worker that keeps a port
@@ -82,7 +88,7 @@ const backend = spawn(
     '--host',
     host,
     '--port',
-    '8000',
+    backendPort,
   ],
   {
     stdio: 'inherit',
@@ -94,11 +100,12 @@ const backend = spawn(
   },
 );
 
-// Start the Vite frontend (its config reads HORRIBLE_DEV_HOST for the listen host).
+// Start the Vite frontend (its config reads HORRIBLE_DEV_HOST for the listen host
+// and HORRIBLE_DEV_BACKEND_PORT for the /api and /ws proxy target).
 const frontend = spawn('pnpm', ['--filter', '@horrible/web', 'dev'], {
   stdio: 'inherit',
   shell: useShell,
-  env: { ...process.env, HORRIBLE_DEV_HOST: host },
+  env: { ...process.env, HORRIBLE_DEV_HOST: host, HORRIBLE_DEV_BACKEND_PORT: backendPort },
 });
 
 const gameserver = startGameServer

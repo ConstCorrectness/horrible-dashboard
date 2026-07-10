@@ -1,4 +1,4 @@
-import { registry, type ModuleManifest, type PanelGroupDecl } from '../../registry';
+import { registry, type ModuleManifest } from '../../registry';
 import { telemetryStore } from '../../telemetry';
 import { ObservabilityPanel, ObservabilityWidget } from './view';
 
@@ -10,20 +10,13 @@ import { ObservabilityPanel, ObservabilityWidget } from './view';
 export const observabilityModule: ModuleManifest = {
   id: 'observability',
   title: 'Observability',
-  panelGroups: [
-    {
-      id: 'observability.monitor',
-      label: 'Observability',
-      primary: 'observability.io',
-      companions: [{ id: 'observability.logs', label: 'Inspector', icon: '⊡' }],
-    } satisfies PanelGroupDecl,
-  ],
   panels: [
     {
       id: 'observability.logs',
       title: 'Observability',
       component: ObservabilityPanel,
-      defaultPlacement: 'bottom',
+      role: 'widget',
+      icon: '⊡',
       singleton: true,
     },
   ],
@@ -32,6 +25,11 @@ export const observabilityModule: ModuleManifest = {
       id: 'observability.io',
       title: 'Data flow',
       component: ObservabilityWidget,
+      role: 'tool',
+      icon: '◉',
+      defaultDock: 'bottom',
+      // The fuller inspector rides along as a bottom region strip.
+      regions: [{ id: 'observability.logs', label: 'Inspector', icon: '⊡', position: 'bottom' }],
       // The agent reads the I/O snapshot via getAgentContext (see view.tsx); this
       // is its one write action. Gated like any side effect.
       agentTools: [

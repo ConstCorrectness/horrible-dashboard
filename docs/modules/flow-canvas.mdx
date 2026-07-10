@@ -161,7 +161,7 @@ channel is execution *telemetry* for the canvas.
   cycle (the `Avatar3D`-in-core precedent).
 - **Panels:**
   - `flow.editor` — the canvas, **multi-instance** (a Panel keyed by `flowId` param,
-    so you can open several flows at once), `defaultPlacement: center`. With no param
+    so you can open several flows at once), role `document`. With no param
     it loads the active flow (creating a first one if none).
   - `flow.library` — list of saved flows; create/open/delete (left dock, singleton).
   - `flow.runs` — run history + per-node I/O inspector (Phase 2).
@@ -206,19 +206,18 @@ channel is execution *telemetry* for the canvas.
 
 ## Contributions to the layout shell
 
-- **Panels:** `flow.editor` (center, multi-instance — one pane per open flow keyed
-  by `flowId` param; falls back to the active flow when opened with no param),
-  `flow.library` (left, singleton). `flow.runs` is Phase 2.
-- **Panel group:** `flow.studio` — `flow.library` is the primary (the entry point
-  that appears in the command palette). Opening Flows renders a `PaneGroupShell`
-  with a **`⬡ Canvas`** toggle in the strip; clicking it opens `flow.editor` as a
-  resizable companion pane showing the active flow. The companion falls back to
-  the active flow via `getFlows().active` (same logic the standalone editor uses
-  when opened with no param). See [panel groups](../architecture/panel-groups.mdx).
+- **Panels:** `flow.editor` (document, multi-instance — one pane per open flow
+  keyed by `flowId` param; falls back to the active flow when opened with no
+  param), `flow.library` (tool, left dock, singleton). `flow.runs` is Phase 2.
+- **Regions:** the canvas is the document and hosts the library as its **left
+  [region strip](../architecture/panel-groups.mdx)** (`f` while the canvas is
+  focused) — inverted from the old grouping where the library was the hub, to
+  match how every node editor centers the canvas (Blender's shader editor,
+  ComfyUI).
 - **Commands:** `flow.new` (create + open a new flow), `flow.openLibrary` (open
   the library). (Run/stop live on the canvas toolbar; agent flow-CRUD tools are Phase 3.)
-- **Layout preset:** an **Orchestration** workflow layout (library · canvas) on the
-  shell rail.
+- **Frame preset:** an **Orchestration** workspace (library dock · canvas) in the
+  workspace tab strip.
 
 ## Backend surface
 

@@ -18,9 +18,9 @@ backend surface — workspace layouts persist through
 
 ## Contributions to the layout shell
 
-- **Widgets:** `dashboard.welcome` (intro card, `defaultPlacement: left`) and
+- **Widgets:** `dashboard.welcome` (intro card) and
   `dashboard.backendStatus` (polls `/api/health` every 10s,
-  `defaultPlacement: right`). Other modules contribute more widgets
+  role `widget`). Other modules contribute more widgets
   (`clubhouse.account`, `observability.io`).
 - **Commands:** `dashboard.open` — selects the Dashboard workspace tab
   (`registry.switchWorkspace('dashboard')`).
@@ -33,7 +33,7 @@ arrangement.
 ## The widget contract
 
 A **widget** is a registry contribution (`id`, `title`, React component, optional
-`requiredCapabilities`, optional `defaultPlacement`). Widgets are opened as
+`requiredCapabilities`, `role`, optional `icon`). Widgets are opened as
 **panes** in the workspace — dockable, resizable, floatable like panels (one
 level, no separate board). Every widget is openable from the command palette
 (synthesized `widget.open:<id>` → "Open widget: &lt;title&gt;") and from the

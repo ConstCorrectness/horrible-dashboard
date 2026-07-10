@@ -7,7 +7,7 @@ import { apiDelete, apiGet, apiPost, apiPut } from './api';
  */
 export type SerializedLayout = Record<string, unknown>;
 
-/** One named dockview layout. */
+/** One named workspace layout (frame blob). */
 export interface Workspace {
   id: string;
   name: string;

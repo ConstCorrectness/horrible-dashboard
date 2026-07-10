@@ -1,4 +1,4 @@
-import { registry, type ModuleManifest, type PanelGroupDecl } from '../../registry';
+import { registry, type ModuleManifest } from '../../registry';
 import { AgentRelayPanel } from './AgentRelayPanel';
 import { LobbyPanel } from './LobbyPanel';
 import { PeerChatPanel } from './PeerChatPanel';
@@ -21,45 +21,45 @@ export const networkModule: ModuleManifest = {
       id: 'network.peers',
       title: 'Peers',
       component: PeersWidget,
-      defaultPlacement: 'right',
+      role: 'tool',
+      icon: '⇄',
+      defaultDock: 'right',
+      // The peer-fabric satellites as regions on the Peers tool.
+      regions: [
+        { id: 'network.chat', label: 'Peer Chat', icon: '✉', position: 'bottom' },
+        { id: 'network.monitor', label: 'Peer Monitor', icon: '◈', position: 'bottom' },
+        { id: 'network.lobby', label: 'Lobby', icon: '⊞', position: 'bottom' },
+        { id: 'network.relay', label: 'Agent Relay', icon: '⇌', position: 'bottom' },
+      ],
     },
     {
       id: 'network.lobby',
       title: 'Lobby',
       component: LobbyPanel,
-      defaultPlacement: 'right',
+      role: 'widget',
+      icon: '⊞',
     },
     {
       id: 'network.monitor',
       title: 'Peer Monitor',
       component: PeerMonitor,
-      defaultPlacement: 'bottom',
+      role: 'widget',
+      icon: '◈',
     },
     {
       id: 'network.chat',
       title: 'Peer Chat',
       component: PeerChatPanel,
-      defaultPlacement: 'right',
+      role: 'widget',
+      icon: '✉',
     },
     {
       id: 'network.relay',
       title: 'Agent Relay',
       component: AgentRelayPanel,
-      defaultPlacement: 'right',
+      role: 'widget',
+      icon: '⇌',
     },
-  ],
-  panelGroups: [
-    {
-      id: 'network.fabric',
-      label: 'Peer Fabric',
-      primary: 'network.peers',
-      companions: [
-        { id: 'network.chat', label: 'Peer Chat', icon: '✉' },
-        { id: 'network.monitor', label: 'Peer Monitor', icon: '◈' },
-        { id: 'network.lobby', label: 'Lobby', icon: '⊞' },
-        { id: 'network.relay', label: 'Agent Relay', icon: '⇌' },
-      ],
-    } satisfies PanelGroupDecl,
   ],
   commands: [
     {

@@ -5,7 +5,8 @@
  * editor cursor and drives it — so this module never reaches into the editor.
  * See docs/modules/code.mdx.
  */
-import { registry, type ModuleManifest } from '../../registry';
+import { revealRegionView } from '../../layout/controller';
+import { type ModuleManifest } from '../../registry';
 import { codeAgentTools } from './agentTools';
 import { OutlinePane } from './OutlinePane';
 import { symbolSearchModal } from './searchModal';
@@ -19,7 +20,9 @@ export const codeModule: ModuleManifest = {
       id: 'code.outline',
       title: 'Outline',
       component: OutlinePane,
-      defaultPlacement: 'left',
+      role: 'tool',
+      icon: '≡',
+      defaultDock: 'right',
       singleton: true,
       agentTools: codeAgentTools,
     },
@@ -27,7 +30,9 @@ export const codeModule: ModuleManifest = {
       id: 'code.search',
       title: 'Symbol Search',
       component: SymbolSearch,
-      defaultPlacement: 'right',
+      role: 'tool',
+      icon: '⌕',
+      defaultDock: 'right',
       singleton: true,
     },
   ],
@@ -38,12 +43,12 @@ export const codeModule: ModuleManifest = {
       // Outline/Search follow the editor cursor via the shared code locus, so they
       // reveal as companions inside the Code Workbench (editor.buffer) rather than as
       // detached panes. See docs/architecture/panel-groups.mdx.
-      run: () => registry.revealCompanion('code.outline'),
+      run: () => revealRegionView('code.outline'),
     },
     {
       id: 'code.openSearch',
       title: 'Code: Open symbol search pane',
-      run: () => registry.revealCompanion('code.search'),
+      run: () => revealRegionView('code.search'),
     },
     {
       id: 'code.findSymbol',

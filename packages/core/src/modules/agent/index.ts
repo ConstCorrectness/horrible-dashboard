@@ -15,7 +15,9 @@ export const agentModule: ModuleManifest = {
       id: 'agent.chat',
       title: 'Agent',
       component: ChatWidget,
-      defaultPlacement: 'right',
+      role: 'tool',
+      icon: '🤖',
+      defaultDock: 'right',
       agentTools: [
         {
           name: 'agent.setHyperparameters',

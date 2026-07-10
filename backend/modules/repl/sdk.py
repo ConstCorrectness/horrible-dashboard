@@ -29,33 +29,33 @@ class RelayCall(Protocol):
 
 
 class _Panes:
-    """Open, close, and inspect active panes (layout slots hosting views) in the active workspace."""
+    """Open, close, and inspect open panes (role-routed: documents tab into center
+    areas, widgets take their own area, tools go to their dock)."""
 
     def __init__(self, call: RelayCall) -> None:
         self._call = call
 
     def available(self) -> Any:
-        """Every view (panel + widget) that can be opened into a pane, with id, title, and
-        groupId (its panel group's primary view id, if it belongs to one — see `group()`)."""
+        """Every view that can be opened, with id, title, role (document/widget/tool),
+        default dock (tools), and the region views it hosts."""
         return self._call("list_available_panes", {})
 
     def open_list(self) -> Any:
-        """Active pane instances currently open in the active workspace (view id, instanceId,
-        groupId, …)."""
+        """Pane instances currently open in the active workspace (view id, instanceId,
+        role, location: center area / dock / floating)."""
         return self._call("list_open_panes", {})
 
     def open(self, view_id: str) -> Any:
-        """Open a view (panel or widget) in a new or focused pane by its view ID (from `available()`)."""
+        """Open a view by its view ID (from `available()`), routed by its role."""
         return self._call("open_pane", {"id": view_id})
 
     def close(self, instance_id: str) -> Any:
-        """Close an active pane instance by its instance ID (from `open_list()`)."""
+        """Close an open pane instance by its instance ID (from `open_list()`)."""
         return self._call("close_pane", {"id": instance_id})
 
-    def group(self, view_id: str) -> Any:
-        """The panel group `view_id` belongs to (primary hub + companion views toggled
-        from its companion strip), or `{"groupId": None}` if it isn't grouped."""
-        return self._call("get_pane_group", {"id": view_id})
+    def focus(self, instance_id: str) -> Any:
+        """Bring a pane forward (tab / dock slot / floating card)."""
+        return self._call("focus_pane", {"instanceId": instance_id})
 
 
 class _Workspaces:
@@ -78,53 +78,103 @@ class _Workspaces:
 
 
 class _Layout:
-    """Rearrange open panes — split, move, float, and maximize — the same verbs the
-    agent's layout control uses. Pane targets are **instance ids** (from
-    `dash.panes.open_list()`)."""
+    """Arrange the frame — split/join/resize center areas, move panes, toggle
+    regions and docks, fullscreen, float — the same verbs the agent's layout
+    control uses. Pane targets are **instance ids** (from `dash.panes.open_list()`);
+    area ids come from `describe()`."""
 
     def __init__(self, call: RelayCall) -> None:
         self._call = call
 
+    def describe(self) -> Any:
+        """The whole frame: center split tree (areas, tabs, regions), docks,
+        floating panes, fullscreen/focused area."""
+        return self._call("get_layout", {})
+
     def split(
         self, instance_id: str, direction: str, view_id: str | None = None
     ) -> Any:
-        """Split a pane (`left`/`right`/`up`/`down`); `view_id` to open a different
-        view in the new region, else the pane's own view is duplicated."""
+        """Split the area holding a pane (`left`/`right`/`above`/`below`, or the
+        `vertical`/`horizontal` aliases); `view_id` to open a different view in the
+        new area, else the pane's own view is duplicated."""
         args: dict[str, Any] = {"instanceId": instance_id, "direction": direction}
         if view_id is not None:
-            args["paneId"] = view_id
-        return self._call("split_pane", args)
+            args["viewId"] = view_id
+        return self._call("split_area", args)
 
-    def move(self, instance_id: str, reference: str, direction: str) -> Any:
-        """Move a pane next to `reference` (`left`/`right`/`above`/`below`/`within`)."""
+    def join(self, instance_id: str, direction: str) -> Any:
+        """Absorb the neighboring area (`left`/`right`/`up`/`down`) into this
+        pane's area; document tabs are adopted when both sides hold documents."""
         return self._call(
-            "move_pane",
-            {"instanceId": instance_id, "reference": reference, "direction": direction},
+            "join_area", {"instanceId": instance_id, "direction": direction}
         )
+
+    def move(
+        self,
+        instance_id: str,
+        area_id: str | None = None,
+        direction: str | None = None,
+    ) -> Any:
+        """Move a center pane into `area_id` (from `describe()`), or toward
+        `direction` (`left`/`right`/`up`/`down`)."""
+        args: dict[str, Any] = {"instanceId": instance_id}
+        if area_id is not None:
+            args["areaId"] = area_id
+        if direction is not None:
+            args["direction"] = direction
+        return self._call("move_pane", args)
 
     def resize(
         self, instance_id: str, width: int | None = None, height: int | None = None
     ) -> Any:
-        """Resize a pane (pixels)."""
+        """Resize the area holding a pane (pixels)."""
         return self._call(
-            "resize_pane", {"instanceId": instance_id, "width": width, "height": height}
+            "resize_area", {"instanceId": instance_id, "width": width, "height": height}
         )
 
+    def fullscreen(self, instance_id: str | None = None, on: bool = True) -> Any:
+        """Expand a pane's area to fill the frame, or restore with `on=False`."""
+        args: dict[str, Any] = {"on": on}
+        if instance_id is not None:
+            args["instanceId"] = instance_id
+        return self._call("fullscreen_area", args)
+
+    def toggle_region(
+        self, instance_id: str, position: str, open: bool | None = None
+    ) -> Any:
+        """Toggle a pane's region strip (`left`/`right`/`bottom`); `open` forces a state."""
+        args: dict[str, Any] = {"instanceId": instance_id, "position": position}
+        if open is not None:
+            args["open"] = open
+        return self._call("toggle_region", args)
+
+    def set_region_view(self, instance_id: str, view_id: str) -> Any:
+        """Show a specific region view on its host pane (opens the strip)."""
+        return self._call(
+            "set_region_view", {"instanceId": instance_id, "viewId": view_id}
+        )
+
+    def open_tool(self, view_id: str, dock: str | None = None) -> Any:
+        """Open (or focus) a role:'tool' view in a dock (defaults to its own side)."""
+        args: dict[str, Any] = {"id": view_id}
+        if dock is not None:
+            args["dock"] = dock
+        return self._call("open_tool_in_dock", args)
+
+    def toggle_dock(self, dock: str, visible: bool | None = None) -> Any:
+        """Show/hide a dock (`left`/`right`/`bottom`); `visible` forces a state."""
+        args: dict[str, Any] = {"dock": dock}
+        if visible is not None:
+            args["visible"] = visible
+        return self._call("toggle_dock", args)
+
     def float(self, instance_id: str) -> Any:
-        """Pop a pane out into a floating window."""
+        """Pop a pane out into a floating card over the center grid."""
         return self._call("float_pane", {"instanceId": instance_id})
 
     def dock(self, instance_id: str) -> Any:
-        """Dock a floating pane back into the grid."""
+        """Put a floating pane back into the center grid."""
         return self._call("dock_pane", {"instanceId": instance_id})
-
-    def maximize(self, instance_id: str) -> Any:
-        """Maximize a pane within its group."""
-        return self._call("maximize_pane", {"instanceId": instance_id})
-
-    def restore(self, instance_id: str) -> Any:
-        """Restore a maximized pane."""
-        return self._call("restore_pane", {"instanceId": instance_id})
 
 
 class _Io:

@@ -9,5 +9,5 @@ export {
 } from '@horrible/core';
 export { CommandPalette } from './CommandPalette';
 export { HomeView } from './HomeView';
-export { Workspace, openWorkspacePanel } from './Workspace';
+export { Frame } from './layout/Frame';
 export { Toasts } from './Toasts';

@@ -212,17 +212,39 @@ def test_dash_layout_relays_split() -> None:
     dash, calls = _capturing_dash()
     dash.layout.split("editor.buffer#1", "right")
     assert calls == [
-        ("split_pane", {"instanceId": "editor.buffer#1", "direction": "right"})
+        ("split_area", {"instanceId": "editor.buffer#1", "direction": "right"})
     ]
 
 
 def test_dash_layout_split_with_view_id() -> None:
     dash, calls = _capturing_dash()
-    dash.layout.split("a#1", "down", "terminal.instance")
+    dash.layout.split("a#1", "below", "scratch.note")
     assert calls[0] == (
-        "split_pane",
-        {"instanceId": "a#1", "direction": "down", "paneId": "terminal.instance"},
+        "split_area",
+        {"instanceId": "a#1", "direction": "below", "viewId": "scratch.note"},
     )
+
+
+def test_dash_layout_region_and_dock_verbs() -> None:
+    dash, calls = _capturing_dash()
+    dash.layout.toggle_region("editor.buffer#1", "right", open=True)
+    dash.layout.set_region_view("editor.buffer#1", "git.provenance")
+    dash.layout.open_tool("files.tree")
+    dash.layout.toggle_dock("bottom", visible=False)
+    dash.layout.fullscreen("games.lobby#2")
+    assert calls == [
+        (
+            "toggle_region",
+            {"instanceId": "editor.buffer#1", "position": "right", "open": True},
+        ),
+        (
+            "set_region_view",
+            {"instanceId": "editor.buffer#1", "viewId": "git.provenance"},
+        ),
+        ("open_tool_in_dock", {"id": "files.tree"}),
+        ("toggle_dock", {"dock": "bottom", "visible": False}),
+        ("fullscreen_area", {"on": True, "instanceId": "games.lobby#2"}),
+    ]
 
 
 def test_dash_io_reads_and_filters_recorder() -> None:

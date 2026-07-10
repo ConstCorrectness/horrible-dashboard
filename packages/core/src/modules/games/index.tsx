@@ -1,4 +1,5 @@
-import { registry, type ModuleManifest, type PanelGroupDecl } from '../../registry';
+import { revealRegionView } from '../../layout/controller';
+import { registry, type ModuleManifest } from '../../registry';
 import './games.css';
 import { ChallengesPanel } from './panels/ChallengesPanel';
 import { GameBoardPanel } from './panels/GameBoardPanel';
@@ -20,71 +21,68 @@ export const gamesModule: ModuleManifest = {
       id: 'games.lobby',
       title: 'Games',
       component: LobbyPanel,
-      defaultPlacement: 'center',
+      role: 'document',
+      icon: '🕹',
+      // The arcade cockpit as regions: harness/ladder/challenges on the right
+      // strip, the live board on the bottom strip (revealed when a match starts).
+      regions: [
+        { id: 'games.loadout', label: 'Agent Harness', icon: '🛠', key: 'h', position: 'right' },
+        { id: 'games.leaderboard', label: 'Ladder', icon: '🏆', key: 'l', position: 'right' },
+        { id: 'games.challenges', label: 'Challenges', icon: '🎯', key: 'c', position: 'right' },
+        {
+          id: 'games.board',
+          label: 'Game Board',
+          icon: '▦',
+          key: 'v',
+          position: 'bottom',
+          defaultSize: 340,
+        },
+      ],
       singleton: true,
     },
     {
       id: 'games.board',
       title: 'Game Board',
       component: GameBoardPanel,
-      defaultPlacement: 'center',
+      role: 'document',
+      icon: '▦',
       singleton: true,
     },
     {
       id: 'games.loadout',
       title: 'Agent Harness',
       component: LoadoutPanel,
-      defaultPlacement: 'center',
+      role: 'tool',
+      icon: '🛠',
+      defaultDock: 'left',
       singleton: true,
     },
     {
       id: 'games.leaderboard',
       title: 'Ladder',
       component: LeaderboardPanel,
-      defaultPlacement: 'right',
+      role: 'tool',
+      icon: '🏆',
+      defaultDock: 'right',
       singleton: true,
     },
     {
       id: 'games.challenges',
       title: 'Challenges',
       component: ChallengesPanel,
-      defaultPlacement: 'right',
+      role: 'tool',
+      icon: '🎯',
+      defaultDock: 'right',
       singleton: true,
     },
     {
       id: 'games.town',
       title: 'AgentTown',
       component: TownPanel,
-      defaultPlacement: 'center',
+      role: 'document',
+      icon: '🏘',
       singleton: true,
     },
-  ],
-  // Two **panel groups** (see docs/architecture/panel-groups.mdx):
-  //  - `games.arcade`: the competitive harness/arena. The lobby ("Games") is the hub;
-  //    Board, Agent Harness, Ladder, and Challenges are companions that dock inside its
-  //    shell and each carry a Blender-style toggle key (t/b/l/c). The Game Board is
-  //    revealed automatically when a match starts (game-ws `revealBoard`).
-  //  - `games.town`: AgentTown — the social fish tank, a separate hub from the arena.
-  //    Its own primary with no companions yet (room to grow: resident list, event log,
-  //    whisper box).
-  panelGroups: [
-    {
-      id: 'games.arcade',
-      label: 'Games',
-      primary: 'games.lobby',
-      companions: [
-        { id: 'games.board', label: 'Game Board', icon: '▦', key: 'b' },
-        { id: 'games.loadout', label: 'Agent Harness', icon: '🛠', key: 't' },
-        { id: 'games.leaderboard', label: 'Ladder', icon: '🏆', key: 'l' },
-        { id: 'games.challenges', label: 'Challenges', icon: '🎯', key: 'c' },
-      ],
-    } satisfies PanelGroupDecl,
-    {
-      id: 'games.town',
-      label: 'AgentTown',
-      primary: 'games.town',
-      companions: [],
-    } satisfies PanelGroupDecl,
   ],
   commands: [
     {
@@ -95,7 +93,7 @@ export const gamesModule: ModuleManifest = {
     {
       id: 'games.openBoard',
       title: 'Games: Open board',
-      run: () => registry.revealCompanion('games.board'),
+      run: () => revealRegionView('games.board'),
     },
     {
       id: 'games.openLoadout',
@@ -110,12 +108,12 @@ export const gamesModule: ModuleManifest = {
     {
       id: 'games.openLeaderboard',
       title: 'Games: Open ladder',
-      run: () => registry.revealCompanion('games.leaderboard'),
+      run: () => revealRegionView('games.leaderboard'),
     },
     {
       id: 'games.openChallenges',
       title: 'Games: Open challenge track',
-      run: () => registry.revealCompanion('games.challenges'),
+      run: () => revealRegionView('games.challenges'),
     },
     {
       id: 'games.openTown',

@@ -2,7 +2,7 @@
  * Shared store for the file explorer. Holds the whole tree model — workspace
  * roots, per-directory expansion, the loaded-children cache, multi-selection, and
  * the inline-rename target — so the view is a thin consumer and the state survives
- * a dockview remount (inactive panes unmount). The live file-watch `files` channel
+ * a pane remount (inactive tabs unmount). The live file-watch `files` channel
  * (initFilesWatch) re-lists expanded directories on disk changes. See
  * docs/modules/file-explorer.md.
  */

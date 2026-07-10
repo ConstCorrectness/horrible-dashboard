@@ -64,17 +64,19 @@ Open, close, and inspect panes (panels and widgets) in the **active workspace**.
 
 | Method | Relayed tool | Returns |
 | --- | --- | --- |
-| `dash.panes.available()` | `list_available_panes` | `{'panels': [{'id', 'title', 'groupId'}], 'widgets': [{'id', 'title', 'groupId'}]}` — everything openable |
-| `dash.panes.open_list()` | `list_open_panes` | `{'panes': [{'id', 'instanceId', 'title', 'hasContext', 'groupId'}]}` — what's open now |
-| `dash.panes.open(pane_id)` | `open_pane` | `{'ok': True, 'opened': pane_id}` |
-| `dash.panes.close(pane_id)` | `close_pane` | `{'closed': bool}` (`False` if no such open pane) |
-| `dash.panes.group(pane_id)` | `get_pane_group` | `{'groupId', 'label', 'companions'}`, or `{'groupId': None}` if ungrouped |
+| `dash.panes.available()` | `list_available_panes` | `{'views': [{'id', 'title', 'role', 'defaultDock'?, 'regions'?}]}` — everything openable |
+| `dash.panes.open_list()` | `list_open_panes` | `{'panes': [{'id', 'instanceId', 'title', 'role', 'hasContext', 'location'}]}` — what's open now |
+| `dash.panes.open(view_id)` | `open_pane` | `{'ok': True, 'opened': view_id}` — role-routed (documents tab, widgets take an area, tools dock) |
+| `dash.panes.close(instance_id)` | `close_pane` | `{'closed': bool}` (`False` if no such open pane) |
+| `dash.panes.focus(instance_id)` | `focus_pane` | `{'focused': bool}` |
 
-- `id` is the **pane type** id (e.g. `settings.home`); `instanceId` identifies a
+- `id` is the **view** id (e.g. `settings.home`); `instanceId` identifies a
   **live instance** (e.g. `repl.console#1`) and is what `dash.context` takes.
+- `role` is the view's frame role (`document`/`tool`/`widget`); `location` says
+  where the instance lives (`{'kind': 'area', 'areaId'}`, `{'kind': 'dock',
+  'dock'}`, or `{'kind': 'floating'}`).
 - `hasContext` is `True` when that instance exposes a readable state snapshot.
-- `groupId` is the primary view id of the [panel group](panel-groups.mdx) `id`
-  belongs to (e.g. `network.peers`), or absent/`None` if it isn't grouped.
+- `regions` lists the [region views](panel-groups.mdx) the view hosts.
 - `open` of an unknown id is a no-op on the UI but still returns `{'ok': True}`;
   always discover ids with `available()` first.
 
@@ -90,16 +92,23 @@ List, create, and switch the named workspace tabs.
 
 ### `dash.layout`
 
-Rearrange open panes — the same layout verbs the agent drives. Targets are
-**instance ids** (from `dash.panes.open_list()`).
+Arrange the frame — the same layout verbs the agent drives. Targets are
+**instance ids** (from `dash.panes.open_list()`); area ids come from
+`dash.layout.describe()`.
 
 | Method | Relayed tool | Notes |
 | --- | --- | --- |
-| `dash.layout.split(instance_id, direction, view_id=None)` | `split_pane` | `direction` `left`/`right`/`up`/`down`; `view_id` opens a different view in the new region, else duplicates the pane |
-| `dash.layout.move(instance_id, reference, direction)` | `move_pane` | `direction` `left`/`right`/`above`/`below`/`within` |
-| `dash.layout.resize(instance_id, width=None, height=None)` | `resize_pane` | pixels |
-| `dash.layout.float(instance_id)` / `dock(instance_id)` | `float_pane` / `dock_pane` | pop out to a floating window / dock back |
-| `dash.layout.maximize(instance_id)` / `restore(instance_id)` | `maximize_pane` / `restore_pane` | within the group |
+| `dash.layout.describe()` | `get_layout` | the whole frame: center split tree (areas, tabs, regions), docks, floating, fullscreen/focus |
+| `dash.layout.split(instance_id, direction, view_id=None)` | `split_area` | `direction` `left`/`right`/`above`/`below` (or `vertical`/`horizontal`); `view_id` opens a different view in the new area, else duplicates |
+| `dash.layout.join(instance_id, direction)` | `join_area` | absorb the aligned neighbor (`left`/`right`/`up`/`down`); document tabs are adopted |
+| `dash.layout.move(instance_id, area_id=None, direction=None)` | `move_pane` | into an exact area, or toward a neighbor |
+| `dash.layout.resize(instance_id, width=None, height=None)` | `resize_area` | pixels |
+| `dash.layout.fullscreen(instance_id=None, on=True)` | `fullscreen_area` | expand an area to fill the frame / restore |
+| `dash.layout.toggle_region(instance_id, position, open=None)` | `toggle_region` | flip a pane's `left`/`right`/`bottom` region strip |
+| `dash.layout.set_region_view(instance_id, view_id)` | `set_region_view` | show a specific region view on its host pane |
+| `dash.layout.open_tool(view_id, dock=None)` | `open_tool_in_dock` | open/focus a tool in a dock |
+| `dash.layout.toggle_dock(dock, visible=None)` | `toggle_dock` | show/hide a dock |
+| `dash.layout.float(instance_id)` / `dock(instance_id)` | `float_pane` / `dock_pane` | pop out to a floating card / put back |
 
 ### `dash.io` (backend-local)
 

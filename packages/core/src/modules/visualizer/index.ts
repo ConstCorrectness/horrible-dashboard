@@ -10,7 +10,8 @@ export const visualizerModule: ModuleManifest = {
       id: 'visualizer.pane',
       title: 'Visualizer',
       component: VisualizerWidget,
-      defaultPlacement: 'center',
+      role: 'document',
+      icon: '🎞',
       agentTools: [
         {
           name: 'visualizer.render_js',

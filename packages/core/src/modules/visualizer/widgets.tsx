@@ -475,7 +475,7 @@ export function VisualizerWidget() {
 
     let cancelled = false;
     // Initial run: prefer the live mounted content, but if the target buffer's tab
-    // is unmounted (dockview drops inactive panes), fall back to its persisted bytes
+    // is unmounted (the frame drops inactive tabs), fall back to its persisted bytes
     // so the visualization still renders.
     const runInitial = async () => {
       const uri = resolveTargetUri();

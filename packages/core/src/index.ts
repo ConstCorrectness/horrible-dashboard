@@ -31,6 +31,50 @@ export {
   type WorkspacesState,
 } from './workspace';
 export { onSocketOpen, sendChannel, subscribeChannel, type WsMessage } from './ws';
+// The frame layout engine (packages/ui renders it; modules go through the
+// registry / controller, never the store directly).
+export { layoutStore } from './layout/store';
+export type { LayoutAction } from './layout/actions';
+export { findArea, firstArea, MIN_FRACTION } from './layout/model';
+export type {
+  AreaNode,
+  DockState,
+  FloatingPane,
+  FrameState,
+  LayoutNode,
+  LayoutStoreState,
+  LocatedPane,
+  NavDirection,
+  PaneLocation,
+  PaneState,
+  RegionState,
+  SplitNode,
+} from './layout/types';
+export type { FramePreset, PresetNode } from './layout/presets';
+export {
+  collapseRegion,
+  focusAreaDirection,
+  focusInstance,
+  fullscreenArea,
+  fullscreenFocusedArea,
+  installFrameController,
+  joinAreaDirection,
+  movePaneDirection,
+  openPane as openFramePane,
+  openToolInDock,
+  regionsFor,
+  resizeAreaPx,
+  resolveView,
+  revealRegionView,
+  roleOf,
+  setCenterMeasurer,
+  setRegionView,
+  splitAreaBy,
+  toggleDock,
+  toggleRegion,
+  toggleRegionView,
+} from './layout/controller';
+export * as framePersistence from './layout/persistence';
 export {
   useWorkspaces,
   workspaceStore,
@@ -61,18 +105,18 @@ export {
   type AgentContextSnapshot,
   type AgentToolDecl,
   type CommandDecl,
+  type DockSide,
   type JSONSchema,
   type KeybindingDecl,
+  type PaneRole,
+  type RegionPosition,
+  type RegionViewDecl,
   type LayoutController,
-  type LayoutPreset,
   type ModuleManifest,
   type OpenPaneInfo,
   type OpenPaneOptions,
   type PaneDirection,
-  type PanePlacement,
   type PanelDecl,
-  type PanelGroupCompanion,
-  type PanelGroupDecl,
   type SplitDirection,
   type SettingDecl,
   type SettingType,
@@ -179,6 +223,7 @@ export {
   type VllmStatus,
 } from './modules/agent';
 export { openChatSession } from './modules/agent/openSession';
+export { executeTool } from './modules/agent/tool-exec';
 export {
   clearActiveScope,
   getActiveScope,

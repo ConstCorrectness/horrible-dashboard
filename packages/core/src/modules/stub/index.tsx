@@ -58,6 +58,8 @@ export const stubModule: ModuleManifest = {
       id: 'stub.panel',
       title: 'Agent stub',
       component: StubWidget,
+      role: 'widget',
+      icon: '🧪',
       agentTools: [
         {
           name: 'stub.getValue',

@@ -47,12 +47,42 @@ export function isEditableTarget(target: EventTarget | null): boolean {
   return tag === 'input' || tag === 'textarea' || tag === 'select' || el.isContentEditable;
 }
 
-/** Does a keyboard event match a `mod+x` / `x` key spec? (`mod` = ctrl or cmd). */
+/** `e.key` aliases so specs can say `alt+left` / `ctrl+space` naturally. */
+const KEY_ALIASES: Record<string, string> = {
+  left: 'arrowleft',
+  right: 'arrowright',
+  up: 'arrowup',
+  down: 'arrowdown',
+  space: ' ',
+  esc: 'escape',
+};
+
+/**
+ * Does a keyboard event match a key spec? Specs are `+`-separated modifier
+ * tokens (`mod` = ctrl or cmd, `ctrl`, `meta`, `alt`, `shift`) followed by the
+ * key (`mod+k`, `alt+shift+left`, `ctrl+space`, plain `t`). Modifiers match
+ * EXACTLY: a spec that doesn't name `alt` rejects an alt-chord, so `mod+b` and
+ * `mod+alt+b` bind independently.
+ */
 export function matchesKeySpec(e: KeyboardEvent, key: string): boolean {
-  const wantsMod = key.startsWith('mod+');
-  const plain = wantsMod ? key.slice(4) : key;
-  const hasMod = e.ctrlKey || e.metaKey;
-  return wantsMod === hasMod && e.key.toLowerCase() === plain.toLowerCase();
+  const tokens = key.toLowerCase().split('+');
+  const plain = tokens.pop() ?? '';
+  const wants = new Set(tokens);
+  const wantsMod = wants.has('mod');
+  const wantsCtrl = wants.has('ctrl');
+  const wantsMeta = wants.has('meta');
+
+  if (wantsMod) {
+    if (!e.ctrlKey && !e.metaKey) return false;
+  } else {
+    if (e.ctrlKey !== wantsCtrl) return false;
+    if (e.metaKey !== wantsMeta) return false;
+  }
+  if (e.altKey !== wants.has('alt')) return false;
+  if (e.shiftKey !== wants.has('shift')) return false;
+
+  const expected = KEY_ALIASES[plain] ?? plain;
+  return e.key.toLowerCase() === expected;
 }
 
 /**

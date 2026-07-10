@@ -94,16 +94,15 @@ replaces its row in place rather than duplicating it.
 
 ## Contributions to the layout shell
 
-- **Panel group:** `observability.monitor` — `observability.io` is the primary
-  (the entry point that appears in the command palette and in the tab-strip
-  picker). Opening Data flow renders a `PaneGroupShell` with an **`⊡ Inspector`**
-  toggle in the strip; clicking it opens `observability.logs` as a resizable
-  companion pane. See [panel groups](../architecture/panel-groups.mdx).
-- **Widgets:** `observability.io` ("Data flow") — compact summary (call/error
-  counts + last few, expandable the same way), opened as a pane. Part of the
-  seeded Dashboard workspace; also addable to any workspace from the palette
-  ("Open widget: Data flow") or the tab-strip picker.
-- **Panels:** `observability.logs` (singleton, `defaultPlacement: bottom`) — a
+- **Regions:** `observability.io` hosts `observability.logs` as its bottom
+  [region strip](../architecture/panel-groups.mdx) — the **`⊡ Inspector`**
+  toggle in the pane's region controls opens the full Wireshark-style view
+  without leaving the tool.
+- **Widgets/tools:** `observability.io` ("Data flow", role `tool`, bottom dock)
+  — compact summary (call/error counts + last few, expandable the same way).
+  Part of the seeded Dashboard workspace's bottom dock (hidden by default);
+  openable anywhere from the palette or the activity rail.
+- **Panels:** `observability.logs` (singleton, role `widget`) — a
   Wireshark-style **master-detail**: a packet-list table (time, source badge,
   method, target, status, ms, size) over an **inspector** for the selected row.
   The inspector shows General metadata, then request/response headers and bodies

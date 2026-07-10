@@ -14,7 +14,7 @@ to modules.
 flowchart TB
     subgraph Shell["Layout shell (packages/ui)"]
         direction LR
-        WS["Workspace<br/>dock · split · tabs"]
+        WS["Frame<br/>tabs · rail · docks · areas"]
         CP["Command palette"]
         SB["Status bar"]
         KB["Keybinding service"]
@@ -57,21 +57,26 @@ The shell has two top-level **views** (switched by the shell's own
   mascot — a cute glowing orb with eyes that face the viewer, whose glow doubles
   as the agent status light. three is dynamically imported so the workspace view
   never loads it.
-- **`workspace`** — a **dockable window manager**: module panes (panels _and_
-  widgets) open as windows that can be tabbed, split, resized, and floated.
-  Several **workflow layouts** (Blender-style workspaces) exist — predefined
-  presets like **Dashboard**, **Scripting**, and **Coding Harnesses** plus any custom ones — switchable
-  from the shell rail; each layout's arrangement persists. Built on dockview,
-  wrapped so the registry stays the public API. See
-  [windowing.md](windowing.mdx) for the model, pane types vs instances, layout
+- **`workspace`** — the **frame**: a hybrid VS Code/Blender layout engine.
+  Documents tab into a Blender-style center grid of splittable **areas**, tools
+  live in three fixed **docks** behind a VS Code-style **activity rail**, and
+  widgets take areas of their own. Several **workflow workspaces** exist —
+  predefined frame presets like **Dashboard**, **Scripting**, and **Coding
+  Harnesses** plus any custom ones; each persists its complete frame (docks +
+  center + regions + floating). A custom engine — no third-party docking
+  library — wrapped so the registry stays the public API. See
+  [windowing.mdx](windowing.mdx) for the model, roles, pane types vs instances,
   presets, and persistence.
 
-A persistent **icon rail** (logo/home on top, one icon per **workflow layout** +
-a `＋` to add a custom one, command palette at the bottom) is the only chrome
-shared by both views — it is the workspace switcher (Blender-style), not a pane
-launcher. Clicking a layout switches to the workspace view and activates it;
-individual panes are opened from the command palette instead. The Workspace stays
-mounted across view switches so its layout survives a trip home.
+A persistent **workspace tab strip** across the top (home/logo at its left, one
+tab per workspace preset + a `＋` for custom ones) is the only chrome shared by
+both views — the single workspace switcher (Blender-style). Clicking a tab
+enters the workspace view and activates that workspace. Inside the workspace
+view, the frame adds the **activity rail** (one glyph per tool view; click opens
+it in its dock, click again hides the dock; command palette at the bottom).
+Individual panes are opened from the palette, the rail (tools), or each area's
+type switcher. The Frame stays mounted across view switches so its layout
+survives a trip home.
 
 Branding: source art lives in `assets/` (`logo.svg`, `banner.svg`) —
 `pnpm build:icons` regenerates the web favicon (`apps/web/public/favicon.ico`,
@@ -111,13 +116,32 @@ everywhere. Two optional fields make bindings focus-aware:
   shortcuts that must never be shadowed.
 
 The shell tracks the **active scope** — the focused pane's view id — in
-`packages/core/src/keybindings.ts`: the workspace pane host calls `setActiveScope`
+`packages/core/src/keybindings.ts`: the frame's pane host calls `setActiveScope`
 on focus/pointer-down and `clearActiveScope` on unmount. The pure
 `resolveKeybinding(event, scope, bindings)` picks the command with precedence
 **override-global → focused-scope → plain-global**, so most globals are
 overridable by the focused pane but an `override` global always wins — the "may or
 may not override" rule. (CodeMirror/xterm keep their own internal keymaps; this
 service is for registry command bindings.)
+
+Key specs are `+`-separated modifier tokens plus the key — `mod+k`,
+`alt+shift+left`, `ctrl+space`, plain `t` — and modifiers match **exactly**
+(`mod+b` and `mod+alt+b` bind independently). `mod` is ctrl or cmd.
+
+### Default frame keybindings
+
+| Key | Action |
+| --- | --- |
+| `t` / `n` / `b` | toggle the focused pane's left / right / bottom **region** strip |
+| declared letters (`o`, `s`, `g`, …) | reveal that region view on the focused pane |
+| `ctrl+space` (Esc exits) | fullscreen the focused area |
+| `alt+arrows` | move focus between areas |
+| `alt+shift+arrows` | move the active pane to the neighboring area |
+| `mod+alt+arrows` | split the focused area in that direction |
+| `mod+alt+j` | join the focused area with a neighbor |
+| `mod+b` / `mod+alt+b` / `mod+j` | toggle the left / right / bottom dock |
+| `mod+1..9` | switch workspace by position |
+| `mod+k` | command palette (override-global) |
 
 ## Platform capability service
 
@@ -131,8 +155,16 @@ gracefully:
 | `shell.revealInOS`     | no                                 | yes                              |
 | `notifications.system` | Web Notifications (tab-scoped)     | OS notifications                 |
 | `window.multi`         | no (single tab, pop-out = new tab) | yes (panel pop-out to OS window) |
+| `window.perWorkspace`  | no                                 | planned (phase-2 native shell): a workspace per OS window |
+| `window.fullscreen`    | no (in-window fullscreen-area only) | planned (phase-2 native shell)  |
+| `chrome.workspaceTabs` | no (the frame renders its own tab strip) | planned (phase-2 native shell): tabs in the native titlebar |
 | `shortcuts.global`     | no                                 | yes (summon window, quick chat)  |
 | `tray`                 | no                                 | yes                              |
+
+The three `window.*`/`chrome.*` **phase-2** rows are the contract for the
+planned native shell (workspace-per-OS-window, native chrome hosting the
+workspace tab strip, OS fullscreen). They exist in the `Capability` union today
+so the frame can branch on them, but no shell grants them yet.
 
 ## Backend connection
 

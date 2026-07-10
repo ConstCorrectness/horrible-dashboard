@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 
+import { revealRegionView } from '../../../layout/controller';
 import { registry } from '../../../registry';
 import { requestChallenges } from '../challenge-focus';
 import {
@@ -112,7 +113,7 @@ export function LobbyPanel() {
   }, [connected]);
 
   const startMatch = (gameId: string) => {
-    registry.revealCompanion('games.board');
+    revealRegionView('games.board');
     gamesCreateTable(gameId);
   };
 
@@ -192,21 +193,21 @@ export function LobbyPanel() {
             <div style={{ display: 'flex', gap: '0.6rem', marginTop: '0.4rem' }}>
               <button
                 type="button"
-                onClick={() => registry.revealCompanion('games.loadout')}
+                onClick={() => revealRegionView('games.loadout')}
                 style={{ fontSize: '0.72rem' }}
               >
                 Edit agent harness →
               </button>
               <button
                 type="button"
-                onClick={() => registry.revealCompanion('games.leaderboard')}
+                onClick={() => revealRegionView('games.leaderboard')}
                 style={{ fontSize: '0.72rem' }}
               >
                 Ladder →
               </button>
               <button
                 type="button"
-                onClick={() => registry.revealCompanion('games.challenges')}
+                onClick={() => revealRegionView('games.challenges')}
                 style={{ fontSize: '0.72rem' }}
               >
                 Challenges →
@@ -248,7 +249,7 @@ export function LobbyPanel() {
                       <button
                         type="button"
                         onClick={() => {
-                          registry.revealCompanion('games.board');
+                          revealRegionView('games.board');
                           gamesJoinTable(t.id);
                         }}
                       >

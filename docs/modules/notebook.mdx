@@ -117,7 +117,7 @@ those unknown models show a compact fallback.
 
 ### Reattach-resync
 
-Kernels are process-global, and dockview unmounts inactive panes — so a pane can reopen a
+Kernels are process-global, and the frame unmounts inactive tabs — so a pane can reopen a
 notebook whose kernel already holds live widgets. The backend is the source of truth for
 comm state (it sees every `comm_open` and folds each `update` patch into a per-comm
 snapshot), so the `opened` payload carries a `comms` snapshot and the frontend seeds its
@@ -154,7 +154,7 @@ dict), `cells_changed` `{notebook}`, `mode` `{mode}`, `graph`
 - **Panels** — `notebook.browser` (singleton, left: file catalog + create) and
   `notebook.editor` (non-singleton, center: the cell UI, params `{path}`).
 - **Commands** — `notebook.open` (open the catalog).
-- **Panel group** — `notebook.workbench` (primary `notebook.editor`, companion browser).
+- **Regions** — `notebook.editor` hosts the notebook browser as a left region strip (`k`); the browser is also a left-dock tool.
 - **Layout preset** — `notebook`.
 - **Settings** — `notebook.root`, `notebook.python`, `notebook.python.version`.
 

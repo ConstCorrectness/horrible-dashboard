@@ -182,7 +182,7 @@ A new `LAYOUT_TOOLS` entry needs three edits kept in lockstep: the `_tool(...)`
 schema in `orchestrator.py`, a `case` in `executeTool` (`tool-exec.ts`), and — if
 it drives the docking engine — a method on the `LayoutController` seam
 (`registry.ts`, installed by `Workspace.tsx`). Argument **aliasing** belongs at the
-`tool-exec.ts` boundary, not in the engine: `split_pane` accepts
+`tool-exec.ts` boundary, not in the engine: `split_area` accepts
 `vertical`/`horizontal` there and resolves them to a concrete side before calling
 `LayoutController.splitPane`, so the model gets the simpler vocabulary while the
 seam and the UI grip stay four-way.

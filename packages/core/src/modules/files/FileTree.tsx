@@ -1,7 +1,7 @@
 /**
  * The workspace file tree (panel `files.tree`, left dock) — a VS Code-style
  * explorer. State lives in the shared store (roots, expansion, children cache,
- * multi-selection, inline rename) so it survives a dockview remount; this view
+ * multi-selection, inline rename) so it survives a pane remount; this view
  * renders the store's flattened row list and drives interactions: click/ctrl/shift
  * multi-select, keyboard nav, F2 inline rename, and a right-click context menu.
  * Disk changes arrive live over the `files` watch channel. See

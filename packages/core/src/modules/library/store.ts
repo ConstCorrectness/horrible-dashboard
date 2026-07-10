@@ -3,7 +3,7 @@
  * transient search results. Ingestion status arrives live on the `library` `/ws`
  * channel (see the backend broadcaster) and is upserted by source id, so the list
  * animates queued → … → ready without polling. State lives here (not in the
- * component) so it survives a dockview remount. See docs/modules/library.mdx.
+ * component) so it survives a pane remount. See docs/modules/library.mdx.
  */
 import { subscribeChannel, type WsMessage } from '../../ws';
 import {

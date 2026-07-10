@@ -113,29 +113,37 @@ def _looks_like_unemitted_tool_call(content: str, tools: list[dict[str, Any]]) -
 
 
 SYSTEM_PROMPT = (
-    "You are the orchestrator for horrible-dashboard, a dockable dashboard app. "
-    "You arrange the user's screen by opening/closing panes, by splitting, "
-    "resizing, moving, floating and maximizing them, and by managing workspaces, "
-    "using the provided tools.\n"
+    "You are the orchestrator for horrible-dashboard, an app whose screen is a "
+    "'frame': a center grid of AREAS (Blender-style splits), three tool DOCKS "
+    "(left/right/bottom), and per-pane REGION strips. You arrange the screen by "
+    "opening/closing panes, splitting/joining/resizing areas, toggling regions "
+    "and docks, and managing workspaces, using the provided tools.\n"
     "Rules:\n"
-    "- The screen layout is composed of 'panes' (layout containers) hosting 'views' "
-    "(registered panels or widgets, e.g. Marketplace, Settings, Data flow, Backend status). "
-    "To open/show/add a view, FIRST call list_available_panes to find the view whose title "
-    "matches, THEN call open_pane with that view ID. Do NOT treat it as a workspace.\n"
-    "- To arrange active panes (split/resize/move/float/maximize), FIRST call list_open_panes "
-    "to get each active pane's live instanceId. Geometry tools take the instanceId, NOT the "
-    "view ID. split_pane also needs a view ID (paneId parameter, from list_available_panes) "
-    "for the view content to show in the new split pane.\n"
-    "- If the user refers to a pane via a title, file name, or instance ID (e.g., 'pane:main.py' or 'pane:editor.buffer#1'), "
-    "match it against the title or instanceId of the open panes returned by list_open_panes to find the "
-    "correct active instanceId to target.\n"
-    "- If the user refers to a file via an absolute or relative path prefixed with '@' (e.g., '@absolute_path'), "
-    "use that path directly with files/editor tools.\n"
+    "- Views have a ROLE: 'document' views open as tabs in center areas, "
+    "'widget' views take a center area of their own, and 'tool' views live only "
+    "in the docks (use open_tool_in_dock for tools; open_pane routes any view "
+    "correctly). FIRST call list_available_panes to find the view whose title "
+    "matches, THEN open it by ID. Do NOT treat a view as a workspace.\n"
+    "- To arrange the screen (split_area/join_area/resize_area/move_pane/"
+    "fullscreen_area/float_pane), FIRST call get_layout (the whole frame: areas, "
+    "docks, regions, floating) or list_open_panes to get live instanceIds. "
+    "Geometry tools take an instanceId (or areaId from get_layout), NOT a view ID.\n"
+    "- REGIONS are toggleable side strips inside a pane (e.g. the editor's "
+    "Outline on its right strip). Use toggle_region {instanceId, position} and "
+    "set_region_view {instanceId, viewId}; a view's regions are listed by "
+    "list_available_panes.\n"
+    "- If the user refers to a pane via a title, file name, or instance ID (e.g., "
+    "'pane:main.py' or 'pane:editor.buffer#1'), match it against list_open_panes "
+    "to find the correct instanceId to target.\n"
+    "- If the user refers to a file via an absolute or relative path prefixed "
+    "with '@' (e.g., '@absolute_path'), use that path directly with files/editor "
+    "tools.\n"
     "- Only use list_workspaces / create_workspace / switch_workspace when the "
     "user explicitly talks about workspaces or tabs.\n"
-    "- Ids are not guessable; always discover them with a list_* tool first.\n"
+    "- Ids are not guessable; always discover them with get_layout or a list_* "
+    "tool first.\n"
     "- When the user asks ABOUT what's on screen, the layout, or a view's "
-    "contents, call list_open_panes first, then get_pane_context on the relevant "
+    "contents, call get_layout first, then get_pane_context on the relevant "
     "pane(s), and answer from what they return — do not guess.\n"
     "- To change code in an open editor buffer (format, rewrite, fix), use "
     "editor.proposeEdit (NOT editor.applyEdit) so the user reviews the diff and "
@@ -169,29 +177,31 @@ def _tool(
     }
 
 
-# App-level layout verbs. Generic over ids (no enums) — the model discovers valid
-# ids through the read tools, keeping the catalog frontend-owned.
+# App-level layout verbs. Generic over ids (no enums beyond directions/positions)
+# — the model discovers valid ids through the read tools, keeping the catalog
+# frontend-owned. Vocabulary: center AREAS host documents/widgets, DOCKS host
+# tools, REGIONS are per-pane strips.
 LAYOUT_TOOLS: list[dict[str, Any]] = [
     _tool(
         "list_available_panes",
-        "List every view (panel or widget definition) that can be opened, with id, title, "
-        "and groupId (the primary view ID of its panel group, if it belongs to one — see "
-        "get_pane_group). Call this to find a valid view ID before opening a pane.",
+        "List every view that can be opened, with id, title, role "
+        "('document' = tabs in a center area, 'widget' = its own center area, "
+        "'tool' = lives in a dock), its default dock (tools), and any region "
+        "views it hosts. Call this to find a valid view ID before opening.",
     ),
     _tool("list_workspaces", "List the named workspaces and which one is active."),
     _tool(
         "list_open_panes",
-        "List the panes currently active in the active workspace, with each pane's "
-        "view ID, live instanceId, title, groupId (if it belongs to a panel group), and "
-        "whether it exposes agent-readable context. Use the instanceId with get_pane_context.",
+        "List the panes currently open in the active workspace, with each pane's "
+        "view ID, live instanceId, title, role, location (center area / dock / "
+        "floating), and whether it exposes agent-readable context.",
     ),
     _tool(
-        "get_pane_group",
-        "Look up the panel group a view belongs to (a primary hub view plus companion "
-        "views toggled from its companion strip, e.g. Peers + Chat + Monitor in the "
-        "network module). Returns groupId: null if the view isn't grouped.",
-        {"id": {"type": "string", "description": "View ID from list_available_panes"}},
-        ["id"],
+        "get_layout",
+        "Read the whole frame: the center split tree (areas with their document "
+        "tabs and region strips), the three docks and their tools, floating "
+        "panes, and which area is fullscreen/focused. The orientation read — "
+        "call it before arranging anything.",
     ),
     _tool(
         "get_pane_context",
@@ -203,8 +213,9 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
     ),
     _tool(
         "open_pane",
-        "Open a view (panel or widget) in a pane in the active workspace. Some panes "
-        "take params — e.g. the training notebook needs "
+        "Open a view in the active workspace, routed by its role (documents tab "
+        "into a center area, widgets take their own area, tools go to their "
+        "dock). Some panes take params — e.g. the training notebook needs "
         "`params: {projectId, notebook}` to know which project to open.",
         {
             "id": {
@@ -220,7 +231,7 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
     ),
     _tool(
         "close_pane",
-        "Close an active pane by its instanceId or view ID.",
+        "Close an open pane by its instanceId or view ID.",
         {
             "id": {
                 "type": "string",
@@ -228,6 +239,142 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
             }
         },
         ["id"],
+    ),
+    _tool(
+        "focus_pane",
+        "Bring an open pane forward (activate its tab / dock slot / floating "
+        "card). instanceId from list_open_panes.",
+        {"instanceId": {"type": "string"}},
+        ["instanceId"],
+    ),
+    _tool(
+        "split_area",
+        "Split the center area holding a pane. 'left'/'right' put the new area "
+        "beside it ('vertical' alias), 'above'/'below' stack it ('horizontal' "
+        "alias). viewId is OPTIONAL — omit it to duplicate the area's own view "
+        "into the new area; pass a view ID to put a different view there.",
+        {
+            "instanceId": {
+                "type": "string",
+                "description": "Pane instance (or areaId from get_layout) to split",
+            },
+            "direction": {
+                "type": "string",
+                "enum": ["vertical", "horizontal", "left", "right", "above", "below"],
+                "description": "vertical=side by side, horizontal=stacked",
+            },
+            "viewId": {
+                "type": "string",
+                "description": "Optional view for the new area; omit to duplicate",
+            },
+        },
+        ["instanceId", "direction"],
+    ),
+    _tool(
+        "join_area",
+        "Join the neighboring area in a direction into this one (the neighbor "
+        "disappears; document tabs are adopted when both hold documents). Only "
+        "aligned neighbors can join.",
+        {
+            "instanceId": {
+                "type": "string",
+                "description": "Pane instance (or areaId) that absorbs its neighbor",
+            },
+            "direction": {"type": "string", "enum": ["left", "right", "up", "down"]},
+        },
+        ["instanceId", "direction"],
+    ),
+    _tool(
+        "resize_area",
+        "Resize the center area holding a pane. Sizes are in pixels; pass width "
+        "and/or height.",
+        {
+            "instanceId": {"type": "string"},
+            "width": {"type": "number", "description": "Target width in pixels"},
+            "height": {"type": "number", "description": "Target height in pixels"},
+        },
+        ["instanceId"],
+    ),
+    _tool(
+        "move_pane",
+        "Move a center pane into another area: pass areaId (from get_layout) for "
+        "an exact target, or direction to move it to the neighboring area. "
+        "Documents stack as tabs; widgets need an empty target area.",
+        {
+            "instanceId": {"type": "string", "description": "Pane to move"},
+            "areaId": {
+                "type": "string",
+                "description": "Target area (from get_layout)",
+            },
+            "direction": {"type": "string", "enum": ["left", "right", "up", "down"]},
+        },
+        ["instanceId"],
+    ),
+    _tool(
+        "fullscreen_area",
+        "Temporarily expand the area holding a pane to fill the whole frame "
+        "(on: true, the default), or restore the layout (on: false — instanceId "
+        "optional when restoring).",
+        {
+            "instanceId": {"type": "string"},
+            "on": {"type": "boolean", "description": "false restores the layout"},
+        },
+        [],
+    ),
+    _tool(
+        "toggle_region",
+        "Toggle a pane's region strip (the Blender-style side panel inside its "
+        "area, e.g. the editor's Outline strip). Pass open to force a state.",
+        {
+            "instanceId": {"type": "string", "description": "Host pane instance"},
+            "position": {"type": "string", "enum": ["left", "right", "bottom"]},
+            "open": {"type": "boolean", "description": "Force open (true) or closed"},
+        },
+        ["instanceId", "position"],
+    ),
+    _tool(
+        "set_region_view",
+        "Open a specific region view on its host pane and make it the visible "
+        "one in its strip (e.g. show git.provenance on an editor buffer). The "
+        "host view's region views are listed by list_available_panes.",
+        {
+            "instanceId": {"type": "string", "description": "Host pane instance"},
+            "viewId": {"type": "string", "description": "Region view to show"},
+        },
+        ["instanceId", "viewId"],
+    ),
+    _tool(
+        "open_tool_in_dock",
+        "Open (or focus) a role:'tool' view in a dock. Omit dock to use the "
+        "tool's default side.",
+        {
+            "id": {"type": "string", "description": "Tool view ID"},
+            "dock": {"type": "string", "enum": ["left", "right", "bottom"]},
+        },
+        ["id"],
+    ),
+    _tool(
+        "toggle_dock",
+        "Show or hide a dock (its tools stay loaded). Pass visible to force a state.",
+        {
+            "dock": {"type": "string", "enum": ["left", "right", "bottom"]},
+            "visible": {"type": "boolean"},
+        },
+        ["dock"],
+    ),
+    _tool(
+        "float_pane",
+        "Pop an open pane out into a floating card over the center grid. "
+        "instanceId from list_open_panes.",
+        {"instanceId": {"type": "string"}},
+        ["instanceId"],
+    ),
+    _tool(
+        "dock_pane",
+        "Put a floating pane back into the center grid. instanceId from "
+        "list_open_panes.",
+        {"instanceId": {"type": "string"}},
+        ["instanceId"],
     ),
     _tool(
         "create_workspace",
@@ -240,80 +387,6 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
         "Switch to a workspace by its id (from list_workspaces).",
         {"id": {"type": "string"}},
         ["id"],
-    ),
-    _tool(
-        "split_pane",
-        "Split an active pane. 'left'/'right' give a vertical split (panes side by "
-        "side), 'above'/'below' a horizontal one (panes stacked); the orientation "
-        "aliases 'vertical'/'horizontal' are also accepted. Use instanceId from "
-        "list_open_panes. paneId (a view ID from list_available_panes) is OPTIONAL — "
-        "omit it to duplicate the pane's own view into the new region (the usual "
-        "'just split this pane'); pass it only to put a different view there.",
-        {
-            "instanceId": {
-                "type": "string",
-                "description": "Live pane instance to split",
-            },
-            "direction": {
-                "type": "string",
-                "enum": ["vertical", "horizontal", "left", "right", "above", "below"],
-                "description": "vertical=side by side, horizontal=stacked",
-            },
-            "paneId": {
-                "type": "string",
-                "description": "Optional view ID for the new region; omit to duplicate the split pane's view",
-            },
-        },
-        ["instanceId", "direction"],
-    ),
-    _tool(
-        "resize_pane",
-        "Resize the region holding an open pane. Sizes are in pixels; pass width "
-        "and/or height. Use instanceId from list_open_panes.",
-        {
-            "instanceId": {"type": "string"},
-            "width": {"type": "number", "description": "Target width in pixels"},
-            "height": {"type": "number", "description": "Target height in pixels"},
-        },
-        ["instanceId"],
-    ),
-    _tool(
-        "move_pane",
-        "Move an open pane next to another open pane ('within' merges it into the "
-        "reference's tab group). Both ids are instanceIds from list_open_panes.",
-        {
-            "instanceId": {"type": "string", "description": "Pane to move"},
-            "reference": {"type": "string", "description": "Pane to move next to"},
-            "direction": {
-                "type": "string",
-                "enum": ["left", "right", "above", "below", "within"],
-            },
-        },
-        ["instanceId", "reference", "direction"],
-    ),
-    _tool(
-        "float_pane",
-        "Pop an open pane out into a floating window. instanceId from list_open_panes.",
-        {"instanceId": {"type": "string"}},
-        ["instanceId"],
-    ),
-    _tool(
-        "dock_pane",
-        "Dock a floating pane back into the layout. instanceId from list_open_panes.",
-        {"instanceId": {"type": "string"}},
-        ["instanceId"],
-    ),
-    _tool(
-        "maximize_pane",
-        "Maximize an open pane to fill the workspace. instanceId from list_open_panes.",
-        {"instanceId": {"type": "string"}},
-        ["instanceId"],
-    ),
-    _tool(
-        "restore_pane",
-        "Restore a maximized pane back to the normal layout.",
-        {"instanceId": {"type": "string"}},
-        ["instanceId"],
     ),
 ]
 

@@ -15,7 +15,9 @@ export const replModule: ModuleManifest = {
       id: 'repl.console',
       title: 'Python REPL',
       component: ReplPane,
-      defaultPlacement: 'bottom',
+      role: 'tool',
+      icon: '🐍',
+      defaultDock: 'bottom',
       // Not a singleton: each open is its own kernel/namespace.
     },
   ],

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-import { registry } from '../../../registry';
+import { revealRegionView } from '../../../layout/controller';
 import { townJoin, townLeave, townWhisper, useGames, type TownEvent } from '../game-ws';
 import { TownMapCanvas } from './TownMapCanvas';
 
@@ -129,7 +129,7 @@ export function TownPanel() {
           <button
             type="button"
             style={{ fontSize: '0.72rem', padding: '0.1rem 0.3rem' }}
-            onClick={() => registry.revealCompanion('games.loadout')}
+            onClick={() => revealRegionView('games.loadout')}
           >
             Edit persona →
           </button>

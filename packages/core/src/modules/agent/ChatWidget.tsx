@@ -164,7 +164,7 @@ export function ChatWidget() {
       .catch(() => setStatus('backend-down'));
   }, []);
 
-  // Restore the active session's transcript on mount (also runs after a dockview
+  // Restore the active session's transcript on mount (also runs after a pane
   // remount, so switching tabs no longer loses the conversation).
   useEffect(() => {
     let cancelled = false;

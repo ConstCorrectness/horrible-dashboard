@@ -47,7 +47,9 @@ export const terminalModule: ModuleManifest = {
       id: 'terminal.instance',
       title: 'Terminal',
       component: TerminalPane,
-      defaultPlacement: 'bottom',
+      role: 'tool',
+      icon: '❯',
+      defaultDock: 'bottom',
       agentTools: terminalAgentTools,
       // Not a singleton: each open is its own PTY.
     },

@@ -37,11 +37,10 @@ import { definePlugin } from '@horribledashboard/sdk';
 export default definePlugin({
   setup(host) {
     return {
-      widgets: [{ id: 'my-plugin.thing', title: 'Thing', component: Thing }],
+      widgets: [{ id: 'my-plugin.thing', title: 'Thing', component: Thing, role: 'widget' }],
       commands: [{ id: 'my-plugin.doIt', title: 'My Plugin: Do it', run: () => {} }],
       settings: [{ key: 'my-plugin.size', title: 'Size', type: 'number', default: 5 }],
       // panels?, keybindings? — same shapes built-in modules use
-      // panelGroups? — cluster related panels/widgets into a toggle-strip group
     };
   },
 });
@@ -66,18 +65,19 @@ export default definePlugin({
   - `host.openPanel(panelId)` / `host.runCommand(commandId)`.
 
 Declaration types (`CommandDecl`, `PanelDecl`, `WidgetDecl`, `KeybindingDecl`,
-`SettingDecl`, `SettingType`, `Capability`, `CollabDecl`, `PanelGroupDecl`,
-`WsMessage`) live in the SDK and are re-exported by `@horrible/core`, so plugins
-and built-in modules share one contract. A `KeybindingDecl` can be **focus-scoped**: set `scope` to a pane
+`SettingDecl`, `SettingType`, `Capability`, `CollabDecl`, `RegionViewDecl`,
+`PaneRole`, `WsMessage`) live in the SDK and are re-exported by
+`@horrible/core`, so plugins and built-in modules share one contract. A `KeybindingDecl` can be **focus-scoped**: set `scope` to a pane
 view id so the binding is active only while that pane is focused (shadowing plain
 globals), or `override: true` on a global so it can't be shadowed — see
 [keybinding scopes](layout-shell.mdx#keybinding-scopes).
 
-A plugin's **widgets are dockable panes**, just like a built-in module's: they
-open into the workspace (tabbed/split/floating), so a `WidgetDecl` takes an
-optional `defaultPlacement` (`left|center|right|bottom`) hinting where it docks.
-There is no separate widget board — see
-[windowing.md](windowing.mdx).
+A plugin's panes are first-class frame panes, just like a built-in module's.
+Every `PanelDecl`/`WidgetDecl` declares a **`role`** — `document` (tabs into a
+center area), `widget` (a center area of its own), or `tool` (lives in a dock;
+`defaultDock` picks the side) — plus an optional `icon` and `regions`
+([per-pane strips](panel-groups.mdx)). There is no separate widget board — see
+[windowing.mdx](windowing.mdx).
 
 A pane can also opt into the **distributed peer fabric** declaratively via the
 optional `collab` field (`CollabDecl`) on `PanelDecl`/`WidgetDecl`: it names the
@@ -88,13 +88,14 @@ shared room the pane syncs through, and the pane consumes it with the
 
 ## Versioning
 
-`SDK_API_VERSION` (currently `1`) is bumped on **breaking** contract changes
+`SDK_API_VERSION` (currently `2`) is bumped on **breaking** contract changes
 only. A plugin package declares the version it was built against (`sdkVersion`
 in its manifest); the loader skips plugins whose version doesn't match and
 surfaces the mismatch in the marketplace panel. Additive optional fields (like
-the `settings` contribution in SDK `0.2.0`, `WidgetDecl.defaultPlacement` in
-`0.3.0`, and the `collab` pane field in `0.4.0`) do **not** bump it, so existing
-plugins keep loading.
+the `settings` contribution in SDK `0.2.0` and the `collab` pane field) do
+**not** bump it. Version `2` (SDK `0.4.0`) is the frame-engine contract: pane
+`role` became required, `defaultPlacement` and panel groups were removed, and
+views may declare `regions`.
 
 ## Package format
 

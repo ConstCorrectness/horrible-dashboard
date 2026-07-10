@@ -38,7 +38,8 @@ export const libraryModule: ModuleManifest = {
       id: 'library.panel',
       title: 'Library',
       component: LibraryPanel,
-      defaultPlacement: 'center',
+      role: 'document',
+      icon: '📚',
       agentTools: [
         {
           name: 'library.search',

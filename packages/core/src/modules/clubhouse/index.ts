@@ -11,7 +11,8 @@ export const clubhouseModule: ModuleManifest = {
       id: 'clubhouse.account',
       title: 'Clubhouse',
       component: ClubhouseWidget,
-      defaultPlacement: 'center',
+      role: 'widget',
+      icon: '🎙',
       singleton: true,
       agentTools: [
         {
@@ -47,5 +48,3 @@ export const clubhouseModule: ModuleManifest = {
 
 export * from './api';
 export * from './useClubhouseVoice';
-
-

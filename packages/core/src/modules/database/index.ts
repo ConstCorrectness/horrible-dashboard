@@ -41,7 +41,8 @@ export const databaseModule: ModuleManifest = {
       id: 'database.console',
       title: 'Database Console',
       component: DatabaseConsole,
-      defaultPlacement: 'center',
+      role: 'document',
+      icon: '🛢',
       agentTools: [
         {
           name: 'database.listConnections',

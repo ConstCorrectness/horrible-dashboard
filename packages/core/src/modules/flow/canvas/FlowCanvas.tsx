@@ -1,7 +1,7 @@
 /**
  * The flow canvas: a thin wrapper around `@xyflow/react` (React Flow). This is the
  * ONLY file that imports the node-graph engine, so the node model stays the API and
- * the engine is swappable — mirroring how dockview is wrapped in packages/ui's
+ * the engine is swappable — mirroring how the frame engine is wrapped in packages/ui's
  * Workspace. It lives in packages/core (not ui) because a core module panel consumes
  * it, and ui already imports core (a ui-hosted wrapper would be a core→ui cycle —
  * the Avatar3D-in-core precedent). See docs/modules/flow-canvas.md.

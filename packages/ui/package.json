@@ -10,8 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@horrible/core": "workspace:*",
-    "dockview": "^6.6.1"
+    "@horrible/core": "workspace:*"
   },
   "peerDependencies": {
     "react": "^19.0.0",

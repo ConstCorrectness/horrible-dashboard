@@ -3,199 +3,159 @@ sidebar_position: 2
 sidebar_label: Windowing
 ---
 
-# Windowing: the dockable workspace
+# Windowing: the frame
 
-The `workspace` view (see [layout-shell.md](layout-shell.mdx)) is a dockable window
-manager: module panes open as **windows** that can be tabbed, split, resized, and
-floated. This replaced the earlier single-panel switcher.
+The `workspace` view (see [layout-shell.mdx](layout-shell.mdx)) is the **frame** —
+a custom layout engine that hybridizes VS Code and Blender:
+
+- a **workspace tab strip** across the top (Blender-style, the single switcher);
+- a VS Code-style **activity rail** plus three fixed **tool docks**
+  (left/right/bottom);
+- a Blender-style **center grid** of recursively split **areas**;
+- per-pane **region strips** (the successor of panel groups — see
+  [panel-groups.mdx](panel-groups.mdx));
+- an in-window **floating layer** and a **fullscreen-area** mode.
 
 ## Decisions
 
-- **Engine: [dockview](https://dockview.dev), wrapped.** dockview (MIT, React +
-  TS) provides tabs, resizable splits, floating groups, and layout
-  serialization. It lives behind `packages/ui/src/Workspace.tsx` so the **module
-  registry stays the public API** — modules never import dockview. We could swap
-  the engine without touching modules.
-- **One level: widgets and panels are views.** A pane is a layout container that hosts a **View** (either a module *panel* (`PanelDecl`) or a *widget* (`WidgetDecl`)). Both have `id`/`title`/`component`, so `PanelHost` resolves a view ID against `registry.panels` then `registry.widgets` and renders either. There is no separate "widget board"; a widget docks, resizes, and floats in a pane exactly like a panel. (Earlier the dashboard had a fixed inner grid of widgets — that two-level model is gone.)
-- **Workflow layouts (Blender-style).** A workspace is a named, savable layout; you switch between them from the **shell rail** (the single switcher — there is no separate tab strip). The rail lists **predefined workflow layouts** — `LayoutPreset`s contributed via the module registry — e.g. **Dashboard** (a layout of common widget-panes) and **Scripting** (files · editor · REPL + terminal). A preset is the *seed* for a stable-id workspace: first activation lays out its panes (creating active pane instances for the preset's views), then the user's rearrangements persist per layout (a `layout.reset` command restores the preset). Custom workspaces (the rail's `＋`) are just presetless layouts.
+- **Custom engine, no dockview.** The engine is ~a dozen small React components
+  over a pure data layer; the old dockview wrapper (tab strips on every group,
+  root-relative splits, a hand-rolled mini-dock nested inside panes) is gone.
+  Modules never import the engine — the **module registry stays the public API**.
+- **Two layers.** `packages/core/src/layout/` is the React-free source of truth:
+  `types.ts` (data model), `model.ts` (pure tree ops), `store.ts` (one reducer
+  store), `serialize.ts` (versioned schema), `controller.ts` (role routing,
+  regions, the `LayoutController` seam), `persistence.ts` (autosave/switch),
+  `presets.ts` (frame seeds) — all unit-tested (`pnpm --filter @horrible/core
+  test`). `packages/ui/src/layout/` renders it: `Frame`, `WorkspaceTabs`,
+  `ActivityRail`, `Dock`, `CenterGrid`, `Area`, `AreaHeader`, `Region`,
+  `PaneHost`, `CornerGrip`, `FloatingLayer`, `Sash`.
+- **Three pane roles, strict zones.** Every view (panel or widget declaration)
+  declares `role: 'document' | 'tool' | 'widget'`:
+  - **document** — lives in center areas; documents **stack as tabs** (editor
+    buffers, notebooks, the SQL console, scratch, the games lobby/board…);
+  - **tool** — lives **only in the docks**, one visible per dock (file explorer,
+    outline, terminal, REPL, agent chat, observability…); `defaultDock` picks
+    its side;
+  - **widget** — takes a center **area of its own**, no tab strip (dashboard
+    widgets, clubhouse, commons…).
+
+  Tools never open in the center; documents and widgets never dock. `openPanel`
+  routes by role, so callers don't care.
+- **Workspaces are full frames (Blender model).** A workspace persists
+  *everything*: the center tree, dock visibility/sizes/contents, floating panes,
+  region state, focus, fullscreen. Switching workspaces switches the whole
+  picture. `FramePreset`s (contributed via `ModuleManifest.frames`) seed
+  stable-id workspaces on first activation — **Dashboard**, **Scripting**,
+  **Coding Harnesses**, plus module-contributed ones (Training, Notebook,
+  Orchestration); `layout.reset` restores the preset.
 
 ## Model
 
-A single workspace's layout is a serializable tree owned by the engine:
-
 ```mermaid
 flowchart TD
-    WS["Workspace (one named tab)"] --> Split["Split — row/column, resizable"]
-    WS --> Float["FloatingLayer"]
-    Split --> TG["TabGroup → [pane, pane, …]"]
-    Split --> Split2["Split (nested …)"]
-    Float --> FW["FloatingWindow → pane instance"]
+    F["FrameState (one workspace)"] --> C["center: LayoutNode"]
+    F --> DL["docks.left/right/bottom: DockState"]
+    F --> FL["floating: FloatingPane[]"]
+    C --> S["SplitNode — row/column, fractional sizes"]
+    S --> A["AreaNode — tabs: PaneState[], activeTab"]
+    S --> S2["SplitNode (nested …)"]
+    A --> P["PaneState — instanceId, viewId, params, regions"]
+    P --> R["RegionState per position — open/size/collapsed/views/activeView"]
 ```
 
-- **Split** — a resizable row/column of children (drag the divider).
-- **TabGroup** — stacked panes sharing one rectangle (drag tabs to reorder, to
-  another group, or out to split/float).
-- **Pane instance** — an active container slot running a panel _or_ widget view.
-- **FloatingLayer** — windows not docked into the grid; move/resize freely.
+- **SplitNode** — a row/column of children with fractional sizes (drag the sash).
+- **AreaNode** — a leaf rectangle. Invariant: its tabs are all documents (tab
+  strip), exactly one widget (no strip), or empty (view picker).
+- **PaneState** — one live pane instance (`${viewId}#${n}`); carries its params
+  and its **persisted per-instance region strips**.
+- **DockState** — a fixed tool dock: visible flag, px size, stacked tools, one
+  active.
+- **FloatingPane** — an in-window card over the center grid (fractional rect).
 
-## View Types vs Pane Instances
+View types vs pane instances work as before: widgets are singleton-by-view-id,
+panels honor their `singleton` flag, and multi-instance panes get `#n` suffixes.
+A caller-supplied `instanceId` (e.g. `editor.buffer:<source>`) focuses the
+existing instance instead of duplicating.
 
-A `PanelDecl`/`WidgetDecl` in the registry represents a **View type** (e.g. `editor.buffer`). The workspace layout creates active **Pane instances** (e.g. `editor.buffer#1`, `terminal.new#2`) to host these views:
+## Interaction
 
-- **Widgets** are **singleton by view ID** — only one Pane instance running that widget view is allowed per workspace; opening it again focuses the existing pane.
-- **Panels** honor their `singleton` flag: `singleton: true` (e.g. `settings.home`) focuses the existing pane; omitted/false (e.g. `scratch.note`) creates a new Pane instance each open (`scratch.note#2`, …) — supporting N simultaneous editor/terminal buffers.
+- **Corner grip** (bottom-right of every area): drag **into** the area to split
+  it (dominant axis picks the orientation, the new area appears on the side you
+  drag toward); drag **out past the area's edge** to join — the neighbor on that
+  side is absorbed (its document tabs are adopted when both sides hold
+  documents). A live overlay previews split (accent) vs join (red).
+- **Area header** (Blender-style, collapsible per-area for chrome-less
+  dashboards): a view **type switcher** (role-filtered dropdown), the document
+  tab row, region toggle buttons, and the area menu
+  (split/join/fullscreen/float/hide-header/close).
+- **Keyboard-first** (see the table in [layout-shell.mdx](layout-shell.mdx)):
+  `alt+arrows` move focus between areas, `alt+shift+arrows` move the active
+  pane, `mod+alt+arrows` split, `mod+alt+j` join, `ctrl+space` fullscreens the
+  focused area (Esc exits), `mod+b`/`mod+alt+b`/`mod+j` toggle the docks,
+  `mod+1..9` switch workspaces, and `t`/`n`/`b` toggle the focused pane's region
+  strips.
+- **No pointer tab drag-docking** (deliberate v1 choice): panes move between
+  areas via keyboard, the area menu, and the agent's `move_pane`.
 
-`defaultPlacement` (`left|center|right|bottom`) on either view decl hints where a freshly opened pane docks; once the user rearranges, the persisted layout wins.
+## The controller: one set of verbs, three callers
 
-**Same-direction opens tab, they don't keep splitting.** The first pane opened
-for a given direction splits a new group off the grid; every subsequent pane
-with that same `defaultPlacement` (or explicit split direction) tabs onto that
-existing group instead of splitting again — VS Code–style, so opening several
-`left`-placed panels stacks them as tabs in one sidebar group rather than
-tiling new columns. `Workspace.tsx`'s `findGroupForDirection` resolves the
-target group per dockview instance: a per-open cache first (recorded whenever
-a pane is placed with an explicit direction, including preset-seeded panes),
-falling back to scanning existing groups for a pane whose declared
-`defaultPlacement` matches. Explicit user/agent splits (the split grip,
-`splitPane`) are unaffected — this only governs automatic placement on open.
+All mutations are dispatches into the layout store, exposed two ways from
+`core/layout/controller.ts`:
 
-**Changing a pane's view:** each tab carries a **▾ switcher** (a custom
-`defaultTabComponent`, `packages/ui/src/PaneTab.tsx`, wrapping dockview's
-`DockviewDefaultTab`) listing every registry view. Picking one calls
-`LayoutController.changePaneType(instanceId, viewId)`, which swaps the view content
-**in place** — same pane instance id, so geometry and autosave are untouched.
-`PanelHost` re-renders the new view by tracking `panelId` (view ID) from
-`api.onDidParametersChange`. The menu is portaled to `document.body` and positioned
-from the tab's viewport rect; since the view catalog grows long, its `max-height` is
-capped to the space available below the tab (and it **flips above** the tab when
-there's more room there) so the full list always fits on-screen and scrolls within
-that height. A sticky **filter input** at the top narrows the list by title/id
-substring (the command-palette match) and is keyboard-drivable — it auto-focuses on
-open, ↑/↓ move the highlight, Enter picks it, Escape closes.
+- the **`LayoutController` seam** (`registry.setLayoutController`) for the
+  engine-agnostic basics (open/close/focus/list, workspace CRUD, float,
+  `changePaneType`), and
+- **plain controller exports** for the frame verbs — `splitAreaBy`,
+  `joinAreaDirection`, `focusAreaDirection`, `movePaneTo`, `resizeAreaPx`,
+  `fullscreenArea`, `toggleRegion`, `setRegionView`, `revealRegionView`,
+  `openToolInDock`, `toggleDock`.
 
-## How panes reach the workspace
-
-1. A command calls `registry.openPanel(id)` (works for panel _or_ widget ids).
-   Every panel and widget is openable from the command palette — panels via their
-   module command, and every widget via a synthesized `widget.open:<id>` command
-   ("Open widget: &lt;title&gt;"). (The rail switches whole layouts; it no longer
-   opens individual panes.)
-2. The shell switches to the `workspace` view and signals `Workspace` which pane
-   to open (a bumped `pendingOpen` nonce, so repeats re-fire).
-3. `Workspace` renders every pane through one host (`PanelHost`) that resolves
-   `params.panelId` from the registry — so the serialized layout stores only ids
-   and restore just re-resolves them.
-
-## Workflow layouts, the rail & switching
-
-The **shell rail** (in `AppShell.tsx`) is the workspace switcher. It renders every
-`registry.layouts` preset (always, even before first open) plus any custom
-workspace, highlighting the active one. The active id + workspace list come from a
-small observable, `workspace-store` (`packages/core`), that `Workspace` publishes
-on every change — so the rail (in `packages/ui`) stays in sync without owning the
-state.
-
-A rail click calls `registry.switchWorkspace(id)` — the existing
-`setWorkspaceSwitcher` seam (AppShell enters the workspace view, then signals via a
-`pendingWorkspace` nonce, mirroring `pendingOpen`). `Workspace.switchTo` flushes
-the current layout (`saveWorkspace`), then `loadInto`:
-
-- a saved layout **with panes** → `api.fromJSON(layout)`;
-- otherwise → seed from the matching `LayoutPreset` (via `seedPreset`, which
-  replays `preset.panes` through `addPane`), or a blank dock for a presetless
-  custom workspace.
-
-All guarded by `swappingRef` so the programmatic swap doesn't trip autosave.
-Activating a preset that has **no workspace yet** creates one with the preset's
-**stable id** (`saveWorkspace(preset.id, …)`) then seeds it — so the rail (and the
-agent's `switch_workspace`) can open a never-touched layout. `layout.reset`
-re-seeds the active layout from its preset; `workspace.new`/`workspace.delete`
-manage custom layouts (a preset resets rather than deletes).
-
-On first run (no workspaces) the frontend seeds the **default preset** (Dashboard)
-under its stable id so the app always opens onto something.
-
-## The geometry seam: one set of operations, two callers
-
-Splitting, resizing, moving, floating and maximizing panes are **semantic
-operations on `LayoutController`** (`packages/core/src/registry.ts`), implemented
-once in `Workspace.tsx` against the live dockview api:
-
-| Method | dockview primitive |
-| --- | --- |
-| `splitPane(instanceId, direction, viewId)` | `addPanel({ position: { referencePanel, direction } })` |
-| `resizePane(instanceId, {width?, height?})` | `panel.api.setSize(...)` |
-| `movePane(instanceId, reference, direction)` | `panel.api.moveTo({ group, position })` |
-| `setPaneFloating(instanceId, floating)` | `addFloatingGroup` / `moveTo` back to a grid group |
-| `maximizePane(instanceId, maximized)` | `panel.api.maximize()` / `exitMaximized()` |
-
-This is deliberately the **only** place these operations live, because two
-callers drive them:
-
-- the **agent**, via the `split_pane`/`resize_pane`/`move_pane`/`float_pane`/
-  `dock_pane`/`maximize_pane`/`restore_pane` tools (relayed through
-  `tool-exec.ts`), and
-- the **user**, via direct manipulation — the **Blender-style split grip**
-  (`packages/ui/src/SplitHandle.tsx`), a grab tab in each pane's bottom-right
-  corner (rendered by `PanelHost`, hidden until the pane is hovered). Dragging it
-  picks the orientation from the dominant axis and the new region appears on the
-  side you drag toward (drag left → new pane on the left, down → below); a live
-  overlay previews the split, and on release it calls `splitPane`, duplicating the
-  pane's content into the new region. Resizing and re-docking use dockview's
-  native sashes and tab-drag (already Blender-like), so the custom layer only adds
-  the split gesture the engine lacks.
-
-So "the agent splits a pane" and "the user drags a split" are the same code path.
-Because each method mutates the dockview tree, the existing `onDidLayoutChange`
-autosave persists the result for free — no separate save path. Geometry verbs are
-layout-only, so the orchestrator leaves them **ungated** (like `open_pane`).
-
-## Agent-driven layout
-
-The agent orchestrator can arrange the workspace too (open/close panes, the
-geometry verbs above, create and switch workspaces). The mutations it needs beyond
-the existing `openPanel`/`switchWorkspace` seams go through
-`registry.layoutController` (`setLayoutController`), which `Workspace` installs over
-its dockview api. So the agent stays decoupled from the engine, same as every
-module. See [../modules/agent-chat.md](../modules/agent-chat.mdx).
+The **user's gestures**, the **keybinding commands**, and the **agent's layout
+tools** (`split_area`, `join_area`, `move_pane`, `fullscreen_area`,
+`toggle_region`, `open_tool_in_dock`, `get_layout`, … relayed through
+`tool-exec.ts`) all converge on these same functions — one code path, and every
+mutation rides the store's autosave. Layout verbs stay **ungated**. See
+[agent-tools.mdx](agent-tools.mdx).
 
 ## Persistence
 
-`Workspace` serializes the active dockview layout on change (debounced ~600ms) to
-`PUT /api/workspaces/{id}`, and restores on mount from `GET /api/workspaces`. The
-backend (`backend/modules/workspace/`) stores the collection
-(`{ active, workspaces: [{ id, name, layout }] }`) but treats each `layout`
-**opaquely** — it never interprets the engine's JSON shape (`SerializedLayout` in
-`packages/core/src/workspace.ts` is `Record<string, unknown>`). Authoring the
-preset arrangements is the frontend's job (engine-shaped); the backend just stores
-the resulting blobs.
+The store holds `{ workspaceId, frame }` as **one atom**; the debounced (~600ms)
+autosave reads both from the same snapshot at fire time, so a workspace switch
+(which flushes first, then atomically loads the next frame) can never write a
+layout under the wrong id — this retired the old engine's race-guard refs.
+
+Layouts serialize as a **versioned envelope**
+`{ schema: 'horrible.frame', version: 1, frame }` to
+`PUT /api/workspaces/{id}`; the backend (`backend/modules/workspace/`) still
+stores each `layout` **opaquely**. `deserialize` validates defensively, prunes
+panes whose views no longer exist (e.g. an uninstalled plugin), and returns
+`null` for anything that isn't a frame blob — pre-frame legacy layouts are
+discarded by design and reseed from their preset.
 
 ## Browser vs desktop
 
-The floating layer is where the `window.multi` capability will matter: in the
-**browser** a floating window is an in-document pane (implemented today); on
-**desktop (Tauri)** the same action can pop a pane out to a _real OS window_. The
-seam is `Workspace` + the capability service; the OS-window path is not built yet.
+The engine is web-only and shared verbatim by the browser and the desktop shell
+(no per-platform fork). The floating layer and fullscreen mode are in-window
+today; the phase-2 native shell claims the OS-level versions through new
+capabilities — `window.perWorkspace` (a workspace per OS window),
+`chrome.workspaceTabs` (the tab strip in the native titlebar), and
+`window.fullscreen` — declared in the SDK now, implemented by no shell yet. See
+the capability table in [layout-shell.mdx](layout-shell.mdx).
 
 ## Dev affordance
 
-In dev builds (`import.meta.env.DEV`), `Workspace` exposes the live dockview API
-as `window.__horribleWorkspace` for console/preview experimentation
-(`addPanel`, `toJSON`, …). It is not set in production builds.
+In dev builds the Frame exposes `window.__horribleFrame = { store, registry,
+exec }` — `exec(name, args)` runs any relayed layout tool exactly as the agent
+would (`await __horribleFrame.exec('get_layout', {})`). Not set in production.
 
 ## Status
 
-Implemented: widgets-as-views; workflow-layout presets (`registry.layouts`) with
-the rail as the single switcher; lazy stable-id seeding, per-layout
-persistence/restore, and `layout.reset`; custom workspace create/delete; splits,
-tab groups, floating windows; the view-singleton/multi-instance distinction; the
-**`LayoutController` geometry seam** (split/resize/move/float/maximize), the
-**agent geometry tools** that drive it, and the **Blender-style split grip**
-(`SplitHandle`) that drives the same seam from direct manipulation; the per-tab
-**▾ pane-view switcher** (`changePaneType`). Built-in presets: **Dashboard**,
-**Scripting**, and **Coding Harnesses**. `scratch.note` is the reference non-singleton panel. Not yet: a
-pane-view picker for the split target (it duplicates the current pane today),
-edge-drag-to-split (native sashes cover
-resize), real OS windows on desktop, per-instance pane state (scratch instances
-share one store), multiple instances of the same widget in one workspace, and
-workspace reorder/import-export.
+Implemented: the full frame (tab strip, activity rail, three docks, center area
+grid, floating layer, fullscreen-area), three roles with strict zones,
+engine-native **persisted regions**, corner-drag split/join, the keyboard-first
+command set, role-routed opening, frame presets for all built-in workflows, the
+versioned serialization schema, and the rewritten agent layout tools. Not yet:
+pointer tab drag-docking (deliberate), OS windows / native chrome (phase 2 —
+capability contract only), region view cycling on repeat-press, and workspace
+reorder/import-export.

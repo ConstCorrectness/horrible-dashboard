@@ -95,21 +95,21 @@ interface CommandDecl {
 
 ### `PanelDecl`
 
-A panel is a dockable window that opens in the workspace's dockview layout.
+A panel is a view that opens as a pane in the workspace frame.
 
 ```ts
 interface PanelDecl {
   id: string;
   title: string;
   component: ComponentType;
-  defaultPlacement: 'left' | 'center' | 'right' | 'bottom';
+  role: 'document' | 'tool' | 'widget';
   singleton?: boolean;
 }
 ```
 
 | Field | Requirement |
 |-------|-------------|
-| `defaultPlacement` | Where the panel opens if no saved layout exists |
+| `role` | How the pane participates in the frame (document/tool/widget zones) |
 | `singleton` | `true` — only one instance exists; re-opening focuses it. `false`/omitted — each open creates a new instance (e.g. editor buffers) |
 
 **Do:** set `singleton: true` for settings or overview panels that don't make sense duplicated.  

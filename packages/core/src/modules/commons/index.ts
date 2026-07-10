@@ -1,4 +1,4 @@
-import { registry, type ModuleManifest, type PanelGroupDecl } from '../../registry';
+import { registry, type ModuleManifest } from '../../registry';
 import { CommonsDirectory } from './CommonsDirectory';
 import { CommonsProfileEditor } from './CommonsProfileEditor';
 import { CommonsRequests } from './CommonsRequests';
@@ -18,31 +18,27 @@ export const commonsModule: ModuleManifest = {
       id: 'commons.directory',
       title: 'Commons',
       component: CommonsDirectory,
-      defaultPlacement: 'right',
+      role: 'widget',
+      icon: '🌐',
+      regions: [
+        { id: 'commons.requests', label: 'Requests', icon: '↙', position: 'right' },
+        { id: 'commons.profile', label: 'Profile', icon: '◉', position: 'right' },
+      ],
     },
     {
       id: 'commons.requests',
       title: 'Commons Requests',
       component: CommonsRequests,
-      defaultPlacement: 'right',
+      role: 'widget',
+      icon: '↙',
     },
     {
       id: 'commons.profile',
       title: 'Commons Profile',
       component: CommonsProfileEditor,
-      defaultPlacement: 'right',
+      role: 'widget',
+      icon: '◉',
     },
-  ],
-  panelGroups: [
-    {
-      id: 'commons.hub',
-      label: 'Agent Commons',
-      primary: 'commons.directory',
-      companions: [
-        { id: 'commons.requests', label: 'Requests', icon: '↙' },
-        { id: 'commons.profile', label: 'Profile', icon: '◉' },
-      ],
-    } satisfies PanelGroupDecl,
   ],
   commands: [
     {

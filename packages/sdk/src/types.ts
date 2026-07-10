@@ -6,12 +6,18 @@
  */
 import type { ComponentType } from 'react';
 
-/** Platform capabilities — see docs/architecture/layout-shell.md for the table. */
+/** Platform capabilities — see docs/architecture/layout-shell.mdx for the table.
+ * The `window.*`/`chrome.*` entries are the contract for the phase-2 native
+ * shell (workspace-per-OS-window, native chrome hosting the workspace tabs,
+ * OS fullscreen); nothing implements them yet. */
 export type Capability =
   | 'fs.nativeDialogs'
   | 'shell.revealInOS'
   | 'notifications.system'
   | 'window.multi'
+  | 'window.perWorkspace'
+  | 'window.fullscreen'
+  | 'chrome.workspaceTabs'
   | 'shortcuts.global'
   | 'tray';
 
@@ -114,7 +120,18 @@ export interface PanelDecl {
   id: string;
   title: string;
   component: ComponentType;
-  defaultPlacement: 'left' | 'center' | 'right' | 'bottom';
+  /**
+   * How this pane participates in the frame layout: `document` panes tab into
+   * center areas, `widget` panes take a center area of their own, `tool` panes
+   * live in the docks. See docs/architecture/windowing.mdx.
+   */
+  role: PaneRole;
+  /** Region strips (Blender N/T-panel style) this view hosts inside its area. */
+  regions?: RegionViewDecl[];
+  /** Glyph for the activity rail / area-header type switcher. */
+  icon?: string;
+  /** For role `tool`: which dock it opens in by default. Defaults to `left`. */
+  defaultDock?: DockSide;
   /**
    * When true, only one Pane instance running this view can exist in a workspace —
    * opening it again focuses the existing one. When false/omitted, each open
@@ -138,11 +155,17 @@ export interface WidgetDecl {
   component: ComponentType;
   requiredCapabilities?: Capability[];
   /**
-   * Hint for where the widget docks when opened as a pane in the workspace
-   * (`left|center|right|bottom`). Once the user rearranges, the persisted
-   * workspace layout wins. Defaults to `center` when omitted.
+   * How this pane participates in the frame layout: `document` panes tab into
+   * center areas, `widget` panes take a center area of their own, `tool` panes
+   * live in the docks. See docs/architecture/windowing.mdx.
    */
-  defaultPlacement?: 'left' | 'center' | 'right' | 'bottom';
+  role: PaneRole;
+  /** Region strips (Blender N/T-panel style) this view hosts inside its area. */
+  regions?: RegionViewDecl[];
+  /** Glyph for the activity rail / area-header type switcher. */
+  icon?: string;
+  /** For role `tool`: which dock it opens in by default. Defaults to `left`. */
+  defaultDock?: DockSide;
   /** Actions/state-reads this widget exposes to the agent orchestrator. */
   agentTools?: AgentToolDecl[];
   /** When set, this pane is network-aware: it syncs over the `collab` channel. */
@@ -211,37 +234,45 @@ export interface WsMessage {
   data?: unknown;
 }
 
-/** One member entry in a panel group's companion list. */
-export interface PanelGroupCompanion {
-  /** Panel or widget id (e.g. `network.chat`). */
-  id: string;
-  /** Tooltip / aria-label shown on the toggle button. */
-  label: string;
-  /**
-   * Single glyph rendered inside the toggle button. Falls back to the first
-   * character of `label` when omitted.
-   */
-  icon?: string;
-  /**
-   * Blender-style toggle key (e.g. `t`, `n`). Scoped to the group's primary pane —
-   * pressing it while the group's pane is focused toggles this companion's region.
-   * Plain letters only (no `mod+`); ignored while a text field is focused.
-   */
-  key?: string;
-}
+/**
+ * How a pane participates in the frame layout. `document` panes live in center
+ * areas and stack as tabs; `tool` panes live in the shell docks (left/right/
+ * bottom), one visible per dock; `widget` panes live in center areas one-per-area
+ * with no tab strip. Zones are strict: tools never open in the center, documents
+ * and widgets never dock. See docs/architecture/windowing.mdx.
+ */
+export type PaneRole = 'document' | 'tool' | 'widget';
+
+/** Positions a region strip can occupy inside its host pane's area. */
+export type RegionPosition = 'left' | 'right' | 'bottom';
+
+/** The shell's fixed tool docks. */
+export type DockSide = 'left' | 'right' | 'bottom';
 
 /**
- * A logical cluster of related panels/widgets. The primary panel is the "hub"
- * entry point; companions are secondary panels that can be toggled open or closed
- * from a strip on any group member's edge. See docs/architecture/panel-groups.mdx.
+ * One view stacked in a host pane's **region** — a toggleable, resizable strip
+ * (Blender N/T-panel style) rendered inside the host's area and persisted
+ * per pane instance. Successor of the panel-group companion. Universal position
+ * keys (`t`/`n`/`b` = left/right/bottom) toggle the strip; the declared `key`
+ * picks this view within its position. See docs/architecture/panel-groups.mdx.
  */
-export interface PanelGroupDecl {
-  /** Stable id, e.g. `network.fabric`. */
+export interface RegionViewDecl {
+  /** View id of any registered panel/widget (e.g. `code.outline`). */
   id: string;
-  /** Display label for the group (used in the companion strip header tooltip). */
+  /** Tooltip / aria-label shown on the region tab. */
   label: string;
-  /** View id of the primary (hub) panel or widget, e.g. `network.peers`. */
-  primary: string;
-  /** Companion panels/widgets in the order they appear in the strip. */
-  companions: PanelGroupCompanion[];
+  /** Single glyph for the region tab; falls back to `label`'s first character. */
+  icon?: string;
+  /**
+   * Pick/cycle letter within the region position, scoped to the host pane's
+   * focus. Plain letters only; must not be `t`, `n`, or `b` (reserved for the
+   * universal position toggles) — violations are dropped with a console warning.
+   */
+  key?: string;
+  /** Which strip this view stacks into. Defaults to `right`. */
+  position?: RegionPosition;
+  /** Open the strip with this view active when the host pane is first created. */
+  defaultOpen?: boolean;
+  /** Initial strip size in px (width for left/right, height for bottom). */
+  defaultSize?: number;
 }

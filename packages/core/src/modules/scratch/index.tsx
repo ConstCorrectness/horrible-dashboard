@@ -73,7 +73,8 @@ export const scratchModule: ModuleManifest = {
       id: 'scratch.note',
       title: 'Scratch',
       component: ScratchPanel,
-      defaultPlacement: 'center',
+      role: 'document',
+      icon: '✏',
       // Not a singleton: every open creates a new window.
       // Network-aware: declares the shared collab room it syncs through, so the
       // shell knows this pane participates in the peer fabric.

@@ -54,6 +54,8 @@ export default definePlugin({
           id: 'hello-widget.greeting',
           title: 'Hello Widget',
           component: makeGreetingWidget(host),
+          role: 'widget',
+          icon: '👋',
         },
       ],
       commands: [

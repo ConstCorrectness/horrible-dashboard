@@ -13,7 +13,7 @@ Recall the three layers (see [windowing](windowing.mdx)):
 
 - **View type** — a `PanelDecl` (multi-instance) or `WidgetDecl` (singleton) in the
   registry.
-- **Pane instance** — a live container slot in the dockview tree hosting a View.
+- **Pane instance** — a live container slot in the frame's layout tree hosting a View.
 - **Window** — how a pane is arranged by the engine (tabbed / split / floated).
 
 The ideas split by which layer they touch.
@@ -33,7 +33,7 @@ flag on the View decl plus a lifecycle hook in `PanelHost`:
   and a `PanelHost` subscription to the host's lifecycle.
 - **Ambient / backdrop panes** — render *behind* the dock as a living backdrop (the
   home avatar, but as a workspace layer). Zero interaction; pure atmosphere/status.
-  A new layer in `Workspace.tsx` below the dockview root.
+  A new layer in `Frame.tsx` below the center grid.
 
 ## New *Window* behaviors (engine layer)
 
@@ -61,7 +61,7 @@ one seam:
 | --- | --- | --- | --- |
 | Ephemeral / Glance | registry | decl flag + `PanelHost` timer/blur | low |
 | Companion | registry | instance binding + lifecycle sub | medium |
-| Ambient backdrop | engine | new layer under dockview root | low |
+| Ambient backdrop | engine | new layer under the center grid | low |
 | PiP | engine | new `LayoutController` verb | medium |
 | Carousel group | engine | custom group renderer | medium |
 | Peek / magnetic | engine | new `LayoutController` verb + CSS | medium |

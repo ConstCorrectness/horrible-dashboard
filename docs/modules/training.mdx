@@ -214,7 +214,7 @@ project (`open_pane("training.notebook", {params: {projectId, notebook}})`).
 
 **Flow**: keyword-preload `training` → `search_environments` → `create_project` (approval
 gate, specifier `provider:ref`) → `fetch_data` → `open_pane(training.notebook, params)` →
-`split_pane` for the metrics pane → `notebook.insert_cell`/`run_cell` to build the
+`split_area` for the metrics pane → `notebook.insert_cell`/`run_cell` to build the
 starter. Verified end to end against a live Ollama model: the ask reaches
 `training.create_project`, the gate fires with the right specifier, and on approval the
 project + scaffolded notebook land on disk.
@@ -253,7 +253,7 @@ events, plus `metrics` / `model_graph` / `model_stats` / `frame` / `run_output` 
 | Widget `training.rollout` | live gym/render frame stream with fps readout |
 | Widget `training.manim` | manim render viewer (progress log + mp4 player) |
 | Widget `training.peers` | peer training ads: advertise offer/seek, match-highlighted peer list, open-chat handoff |
-| Panel group `training.workbench` | notebook primary + metrics/architecture/rollout/manim/peers/projects companions |
+| Regions on `training.notebook` | metrics/architecture/rollout/manim/peers on the right strip, projects on the left |
 | Layout preset `training` (🧠) | projects · notebook · metrics workspace |
 | Commands | `training.open`, `training.openMetrics`, `training.openModelGraph`, `training.openRollout`, `training.openManim`, `training.openPeers` |
 | Project row actions | open notebook, ⇪ push to Kaggle, ⇪ push to Colab, delete |

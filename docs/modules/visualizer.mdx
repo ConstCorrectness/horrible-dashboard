@@ -105,7 +105,7 @@ editor internals. The service exposes `openBufferFromContent`, `getBufferContent
 - **Mode ⇄ language bridge** (`visualizer/bridge.ts`): engines map to a language for export
   (`canvas|three|babylon → javascript`, `pygame → python`); the reverse is ambiguous, so import
   preserves the current JS engine and otherwise defaults (`three` for JS, `pygame` for Python).
-- **Unmounted tabs.** dockview drops inactive panes, so the link reads through the service's
+- **Unmounted tabs.** the frame drops inactive tabs, so the link reads through the service's
   `getBufferContent` (which falls back to the persisted bytes) on the initial run; the 500ms
   hot-reload poll uses the synchronous live-only `peekBufferContent`.
 

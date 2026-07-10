@@ -2,17 +2,22 @@
 // the exact same contract; re-exported here so existing imports keep working.
 import type { ComponentType } from 'react';
 
+import { regionCommandHandler } from './layout/region-bus';
+import type { FramePreset } from './layout/presets';
+
 import type {
   AgentCommandDecl,
   AgentContextSnapshot,
   AgentToolDecl,
   CollabDecl,
   CommandDecl,
+  DockSide,
   JSONSchema,
   KeybindingDecl,
+  PaneRole,
   PanelDecl,
-  PanelGroupCompanion,
-  PanelGroupDecl,
+  RegionPosition,
+  RegionViewDecl,
   SettingDecl,
   SettingType,
   UseAgentContext,
@@ -25,11 +30,13 @@ export type {
   AgentToolDecl,
   CollabDecl,
   CommandDecl,
+  DockSide,
   JSONSchema,
   KeybindingDecl,
+  PaneRole,
   PanelDecl,
-  PanelGroupCompanion,
-  PanelGroupDecl,
+  RegionPosition,
+  RegionViewDecl,
   SettingDecl,
   SettingType,
   UseAgentContext,
@@ -47,35 +54,15 @@ export interface SettingsSectionDecl {
   component: ComponentType;
 }
 
-/** Where a pane is placed relative to a reference pane when seeding a layout. */
+/** Where a pane is placed relative to a reference pane. */
 export type PaneDirection = 'left' | 'right' | 'above' | 'below' | 'within';
 
 /**
- * Directions a pane can be **split** toward. Excludes `within` (which adds a tab
- * to the same group rather than splitting). `left`/`right` produce a vertical
- * split, `above`/`below` a horizontal one.
+ * Directions an area can be **split** toward. Excludes `within` (which adds a tab
+ * to the same area rather than splitting). `left`/`right` produce a `row` split,
+ * `above`/`below` a `column` one.
  */
 export type SplitDirection = 'left' | 'right' | 'above' | 'below';
-
-/** One pane in a layout preset: a pane id, optionally positioned next to another. */
-export interface PanePlacement {
-  id: string;
-  position?: { referencePanel: string; direction: PaneDirection };
-}
-
-/**
- * A predefined **workflow layout** (Blender-style workspace) shown in the shell
- * rail. The preset is the *seed* for a stable-id workspace: first activation lays
- * out `panes`, after which the user's rearrangements persist like any workspace
- * (a `layout.reset` restores the preset). Built-in only for now.
- */
-export interface LayoutPreset {
-  id: string;
-  name: string;
-  /** Short rail glyph (emoji/letter); falls back to the name's first character. */
-  icon?: string;
-  panes: PanePlacement[];
-}
 
 export interface ModuleManifest {
   id: string;
@@ -83,15 +70,11 @@ export interface ModuleManifest {
   commands?: CommandDecl[];
   panels?: PanelDecl[];
   widgets?: WidgetDecl[];
-  layouts?: LayoutPreset[];
+  /** Predefined full-frame workspaces (center tree + docks). */
+  frames?: FramePreset[];
   keybindings?: KeybindingDecl[];
   settings?: SettingDecl[];
   settingsSections?: SettingsSectionDecl[];
-  /**
-   * Logical panel clusters: a primary (hub) panel plus companions that can be
-   * toggled from any group member's companion strip. See docs/architecture/panel-groups.mdx.
-   */
-  panelGroups?: PanelGroupDecl[];
 }
 
 /** Top-level shell surfaces. `home` is the first-open view; `workspace` hosts panels. */
@@ -125,8 +108,10 @@ export interface OpenPaneOptions {
 }
 
 /**
- * Workspace mutations the agent orchestrator and layout controllers drive.
- * Installed by the Workspace component to decouple UI logic from the docking engine.
+ * Workspace mutations the agent relay and shell chrome drive, decoupled from the
+ * engine. Implemented by the frame controller (core/layout/controller.ts,
+ * installed by the Frame on mount); richer frame verbs (areas, regions, docks)
+ * are plain controller exports rather than part of this seam.
  */
 export interface LayoutController {
   /** Close a pane. Accepts either a View ID or a Pane Instance ID. */
@@ -145,27 +130,8 @@ export interface LayoutController {
   renameWorkspace(id: string, name: string): Promise<void>;
   /** Delete a specific workspace. */
   deleteWorkspace(id: string): Promise<void>;
-
-  // --- Geometry: the shared operations the agent's tools AND the user's
-  // Blender-style gestures both drive. Every mutation triggers the dockview
-  // autosave (onDidLayoutChange), so the new layout persists like any other. ---
-
-  /**
-   * Split the pane `instanceId`, opening `viewId` in a new region beside it
-   * (`left`/`right` → vertical split, `above`/`below` → horizontal). `viewId` is
-   * optional — omit it to duplicate the split pane's own view into the new region.
-   * Returns the new pane's instance id, or null if the source id (or a given
-   * viewId) is unknown.
-   */
-  splitPane(instanceId: string, direction: SplitDirection, viewId?: string): string | null;
-  /** Resize the group holding a pane (pixels; omit a dimension to leave it). */
-  resizePane(instanceId: string, size: { width?: number; height?: number }): boolean;
-  /** Move a pane beside another pane, or into its tab group with `within`. */
-  movePane(instanceId: string, referenceInstanceId: string, direction: PaneDirection): boolean;
-  /** Pop a pane out to a floating window (`true`) or dock it back (`false`). */
+  /** Pop a pane out to a floating card (`true`) or dock it back (`false`). */
   setPaneFloating(instanceId: string, floating: boolean): boolean;
-  /** Maximize a pane to fill the workspace (`true`) or restore the layout (`false`). */
-  maximizePane(instanceId: string, maximized: boolean): boolean;
   /**
    * Swap an open pane's view content in place (preserves geometry and instanceId).
    * Returns false if either the pane instance or the target `viewId` is unknown.
@@ -180,16 +146,6 @@ class ModuleRegistry {
   private layoutControllerImpl: LayoutController | null = null;
   private services = new Map<string, unknown>();
   private changeListeners = new Set<() => void>();
-  // Companion reveals requested before (or independent of) the group shell being
-  // mounted. `revealCompanion` buffers the id here and notifies live shells; a shell
-  // drains its companions on mount via `claimReveal` (see PaneGroupShell).
-  private pendingReveals = new Set<string>();
-  private revealListeners = new Set<(companionId: string) => void>();
-  // Companion **toggle** requests (Blender-style keyboard toggles). Unlike a
-  // reveal (open-only), a toggle flips the companion open/closed. The open state
-  // lives in the group shell, so a keybinding command can't reach it directly —
-  // it emits here and the mounted shell subscribes via `onToggleCompanion`.
-  private toggleListeners = new Set<(companionId: string) => void>();
 
   /** Idempotent: re-registering the same module id is a no-op (StrictMode-safe). */
   register(manifest: ModuleManifest): void {
@@ -212,30 +168,48 @@ class ModuleRegistry {
 
   get commands(): CommandDecl[] {
     const declared = [...this.modules.values()].flatMap((m) => m.commands ?? []);
-    // Companions are only reachable via their group's primary shell — suppress
-    // their standalone "Open widget" entries so the palette only surfaces the
-    // primary (which carries the whole group with it).
-    const companionIds = new Set(this.panelGroups.flatMap((g) => g.companions.map((c) => c.id)));
-    const widgetOpeners: CommandDecl[] = this.widgets
-      .filter((w) => !companionIds.has(w.id))
-      .map((w) => ({
-        id: `widget.open:${w.id}`,
-        title: `Open widget: ${w.title}`,
-        run: () => this.openPanel(w.id),
-      }));
-    // A toggle command per companion that declares a `key` — backs the
-    // auto-generated scoped keybinding (see the `keybindings` getter) and also
-    // surfaces the toggle in the palette.
-    const companionTogglers: CommandDecl[] = this.panelGroups.flatMap((g) =>
-      g.companions
-        .filter((c) => c.key)
-        .map((c) => ({
-          id: `panelGroup.toggle:${c.id}`,
-          title: `Toggle ${c.label}`,
-          run: () => this.toggleCompanion(c.id),
-        })),
-    );
-    return [...declared, ...widgetOpeners, ...companionTogglers];
+    return [...declared, ...this.frameSynthesizedCommands()];
+  }
+
+  /** Every view (panel or widget) declaration, panels first. */
+  private get allViews(): Array<PanelDecl | WidgetDecl> {
+    return [...this.panels, ...this.widgets];
+  }
+
+  /**
+   * Frame-engine synthesis: role-aware openers plus the region commands behind
+   * the universal `t`/`n`/`b` toggles and per-view pick letters. The handlers
+   * route through the region command bus (installed by the frame controller) so
+   * the registry never imports the controller.
+   */
+  private frameSynthesizedCommands(): CommandDecl[] {
+    const openers: CommandDecl[] = this.allViews.map((v) => ({
+      id: `pane.open:${v.id}`,
+      title: `Open: ${v.title}`,
+      run: () => this.openPanel(v.id),
+    }));
+    const toggles: CommandDecl[] = [];
+    const picks = new Map<string, CommandDecl>();
+    for (const view of this.allViews) {
+      if (!view.regions?.length) continue;
+      const positions = new Set(view.regions.map((r) => r.position ?? 'right'));
+      for (const position of positions) {
+        toggles.push({
+          id: `region.toggle:${position}:${view.id}`,
+          title: `${view.title}: Toggle ${position} region`,
+          run: () => regionCommandHandler()?.togglePosition(view.id, position),
+        });
+      }
+      for (const r of view.regions) {
+        if (picks.has(r.id)) continue;
+        picks.set(r.id, {
+          id: `region.pick:${r.id}`,
+          title: `Toggle ${r.label}`,
+          run: () => regionCommandHandler()?.pickView(r.id),
+        });
+      }
+    }
+    return [...openers, ...toggles, ...picks.values()];
   }
 
   get panels(): PanelDecl[] {
@@ -246,27 +220,48 @@ class ModuleRegistry {
     return [...this.modules.values()].flatMap((m) => m.widgets ?? []);
   }
 
-  /** Predefined workflow layouts contributed by modules, in registration order. */
-  get layouts(): LayoutPreset[] {
-    return [...this.modules.values()].flatMap((m) => m.layouts ?? []);
+  /** Predefined full-frame workspaces, in module registration order. */
+  get framePresets(): FramePreset[] {
+    return [...this.modules.values()].flatMap((m) => m.frames ?? []);
   }
 
   get keybindings(): KeybindingDecl[] {
     const declared = [...this.modules.values()].flatMap((m) => m.keybindings ?? []);
-    // Blender-style companion toggles: a scoped binding per keyed companion,
-    // scoped to its group's primary view id so it's only live while that group's
-    // pane is focused (clicking anywhere in the shell sets the active scope to the
-    // primary — see Workspace `markActive`).
-    const companionToggles: KeybindingDecl[] = this.panelGroups.flatMap((g) =>
-      g.companions
-        .filter((c) => c.key)
-        .map((c) => ({
-          key: c.key as string,
-          command: `panelGroup.toggle:${c.id}`,
-          scope: g.primary,
-        })),
-    );
-    return [...declared, ...companionToggles];
+    return [...declared, ...this.frameSynthesizedKeybindings()];
+  }
+
+  /**
+   * Frame-engine bindings, all scoped to the host view so they're only live
+   * while one of its panes is focused: the universal position toggles
+   * (`t`/`n`/`b` = left/right/bottom region) plus each region view's declared
+   * pick letter. Letters colliding with the reserved position keys are dropped
+   * with a warning (validated here, at the single synthesis point).
+   */
+  private frameSynthesizedKeybindings(): KeybindingDecl[] {
+    const POSITION_KEYS = { left: 't', right: 'n', bottom: 'b' } as const;
+    const out: KeybindingDecl[] = [];
+    for (const view of this.allViews) {
+      if (!view.regions?.length) continue;
+      const positions = new Set(view.regions.map((r) => r.position ?? 'right'));
+      for (const position of positions) {
+        out.push({
+          key: POSITION_KEYS[position],
+          command: `region.toggle:${position}:${view.id}`,
+          scope: view.id,
+        });
+      }
+      for (const r of view.regions) {
+        if (!r.key) continue;
+        if (r.key === 't' || r.key === 'n' || r.key === 'b') {
+          console.warn(
+            `[registry] region view ${r.id} on ${view.id} declares reserved key "${r.key}" (t/n/b are the universal position toggles) — dropped`,
+          );
+          continue;
+        }
+        out.push({ key: r.key, command: `region.pick:${r.id}`, scope: view.id });
+      }
+    }
+    return out;
   }
 
   get settings(): SettingDecl[] {
@@ -275,78 +270,6 @@ class ModuleRegistry {
 
   get settingsSections(): SettingsSectionDecl[] {
     return [...this.modules.values()].flatMap((m) => m.settingsSections ?? []);
-  }
-
-  /** All declared panel groups, in module registration order. */
-  get panelGroups(): PanelGroupDecl[] {
-    return [...this.modules.values()].flatMap((m) => m.panelGroups ?? []);
-  }
-
-  /**
-   * Returns the group that contains `panelId` (either as primary or companion),
-   * or undefined if the panel does not belong to any group.
-   */
-  getGroupFor(panelId: string): PanelGroupDecl | undefined {
-    return this.panelGroups.find(
-      (g) =>
-        g.primary === panelId || g.companions.some((c: PanelGroupCompanion) => c.id === panelId),
-    );
-  }
-
-  /**
-   * Open a companion pane **inside its group's shell**, opening the group's primary
-   * first so the shell exists. Unlike `openPanel(companionId)` — which would render
-   * the companion as a bare standalone pane — this reveals it within the group's
-   * companion strip. If no shell is mounted yet, the request is buffered and drained
-   * when the shell mounts. Used e.g. to pop the Game Board when a match starts.
-   */
-  revealCompanion(companionId: string): void {
-    const group = this.getGroupFor(companionId);
-    if (group && group.primary !== companionId) {
-      // Ensure a group shell is present. For a singleton primary `openPanel` is
-      // idempotent-focus; for a **non-singleton** primary (e.g. editor.buffer, one
-      // pane per file) it would spawn a fresh blank pane every call, so focus an
-      // already-open primary instance instead and only open one when none exists.
-      const controller = this.layoutControllerImpl;
-      const existing = controller?.listOpenPanes().find((p) => p.id === group.primary);
-      if (existing) controller!.focusPane(existing.instanceId);
-      else this.openPanel(group.primary);
-    }
-    this.pendingReveals.add(companionId);
-    this.revealListeners.forEach((l) => l(companionId));
-  }
-
-  /** Subscribe to companion-reveal requests. Returns an unsubscribe. */
-  onRevealCompanion(listener: (companionId: string) => void): () => void {
-    this.revealListeners.add(listener);
-    return () => {
-      this.revealListeners.delete(listener);
-    };
-  }
-
-  /** A group shell claims a buffered reveal for one of its companions (once). */
-  claimReveal(companionId: string): boolean {
-    return this.pendingReveals.delete(companionId);
-  }
-
-  /**
-   * Toggle a companion open/closed **inside its group's shell** — the keyboard
-   * equivalent of clicking its strip button (Blender-style region toggle). Unlike
-   * `revealCompanion` (open-only), this flips the current state. Requires the
-   * group's shell to be mounted (the companion's key is only active while the
-   * group's pane is focused, which implies the shell exists), so there's no
-   * buffering — a live shell claims it via `onToggleCompanion`.
-   */
-  toggleCompanion(companionId: string): void {
-    this.toggleListeners.forEach((l) => l(companionId));
-  }
-
-  /** Subscribe to companion-toggle requests. Returns an unsubscribe. */
-  onToggleCompanion(listener: (companionId: string) => void): () => void {
-    this.toggleListeners.add(listener);
-    return () => {
-      this.toggleListeners.delete(listener);
-    };
   }
 
   /**

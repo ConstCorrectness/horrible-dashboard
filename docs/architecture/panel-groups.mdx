@@ -1,257 +1,95 @@
-# Panel Groups
+# Regions
 
-Panel groups cluster related panels/widgets into one dockview pane — a **group
-shell** — so they feel like a single coherent feature with clear visual boundaries
-rather than N independent panels scattered in the workspace.
+Regions are toggleable, resizable **strips inside a pane's area** — Blender's
+N/T-panel idea applied to every view. They replaced **panel groups**: instead of
+a hand-rolled mini-dock rendered inside one pane (the old `PaneGroupShell`),
+regions are **engine-native and persisted** — part of the pane's state in the
+layout store, saved with the workspace, restored exactly as left.
 
 ## Concept
 
-A **panel group** has one **primary** panel (the hub entry point) and one or more
-**companions** (secondary panels). When the primary is opened, `PanelHost`
-renders a `PaneGroupShell` instead of the bare component.
-
-The shell has two zones:
-
-- A **toggle strip** across the top: one button per companion. Clicking a button
-  shows or hides that companion (independent toggles, like VS Code's sidebar
-  toggles). All companions are **hidden by default**.
-- A **content row** below: the primary always fills the left area; companions dock
-  at one of three positions (right/bottom/left). **One dock per position** —
-  opening a second companion at a position it already shares tabs onto that same
-  dock instead of splitting the shell again, so N open companions at one position
-  never costs more than one split.
-
-```
-┌───────────────────────────────────────────────────────────────┐
-│ [Peer Chat ✉]  [Peer Monitor ◈]  [Lobby ⊞]  [Agent Relay ⇌]  │ ← toggle strip
-├─────────────────────────────────┬─────────────────────────────┤
-│                                 │ PEER CHAT  LOBBY  → ↓ ←  ✕ │ ← both open at "right", one dock
-│   Primary (Peers)               ├─────────────────────────────┤
-│   always visible                │  active tab's content here… │
-│                                 │                             │
-└─────────────────────────────────┴─────────────────────────────┘
-```
-
-Each dock has a **resize handle** (drag the 4 px border between the dock and
-primary to resize — sized to the active tab) and a **position cycle button**
-(`→ ↓ ←`) that moves the active companion through right → bottom → left → right
-docking; moving it out of a multi-tab dock leaves the others tabbed at the old
-position and either joins or starts a dock at the new one.
-
-Each dock also has a **region collapse toggle** (`« » ⤓` in the header) that hides
-the whole dock to a thin **rail** on its edge — the Blender toolbar/sidebar (`T`/`N`)
-region toggle, one per side (left / right / bottom subpane). Collapsing is orthogonal
-to opening: it hides the region **without forgetting** which companions are docked
-there (their open state and sizes are preserved), and clicking the rail — which shows
-the tucked-away companions' icons — expands it back. Opening, revealing, or cycling a
-companion **into** a collapsed dock auto-expands it, so a companion can never land
-somewhere invisible.
-
-The entire shell is **one dockview pane**: it can be split, floated, moved, or
-maximized as a single unit in the workspace. Companions are not independent panes.
-
-## Palette visibility
-
-Only the **primary** appears in the command palette ("Open widget: Peers"). Companion
-widget IDs are suppressed from the auto-generated `widget.open:*` commands so users
-can't accidentally open a companion detached from its group. Companions are only
-reachable via the toggle strip of their primary.
-
-That auto-suppression only covers `widget.open:*` entries — a companion that is a
-**panel** with its own explicit open command (e.g. `code.openOutline`,
-`git.openProvenance`) isn't caught by it. Those commands instead call
-`registry.revealCompanion(id)` rather than `openPanel(id)`, so they still open the
-companion *inside its group's shell* rather than as a detached pane.
-
-## Revealing a companion programmatically
-
-Besides the toggle strip, code can open a companion **inside its shell** with
-`registry.revealCompanion(companionId)`. It opens the group's primary first (so the
-shell exists), then reveals the companion — unlike `registry.openPanel(companionId)`,
-which would open the companion as a bare standalone pane. If no shell is mounted yet,
-the request is **buffered** and drained when the shell mounts, so a reveal fired during
-boot or from a background event isn't lost.
-
-This is how the games module pops the **Game Board** (`games.board`) the moment a match
-goes live — `game-ws.ts` calls `revealBoard()` → `revealCompanion('games.board')` on the
-first `public_state`/`your_turn`, and the lobby's *Start*/*Join* buttons use the same
-call. `PaneGroupShell` subscribes via `registry.onRevealCompanion` and claims buffered
-reveals for its own companions with `registry.claimReveal` on mount.
-
-## Keyboard toggles (Blender T/N style)
-
-Blender toggles an editor's docked regions from the keyboard — `T` for the toolbar,
-`N` for the sidebar — **contextually**, for whichever editor has the cursor. Panel
-groups do the same: give a companion a `key` and pressing it toggles that companion's
-region while the group's pane is focused.
+A view declares the region views it hosts in its manifest (`regions` on a
+`PanelDecl`/`WidgetDecl`):
 
 ```ts
-companions: [
-  { id: 'games.loadout', label: 'Agent Harness', icon: '🛠', key: 't' },
-  { id: 'games.board',   label: 'Game Board',    icon: '▦', key: 'b' },
-],
-```
-
-How it wires up (all in `registry`, no per-module boilerplate):
-
-- The `commands` getter auto-generates a `panelGroup.toggle:<companionId>` command per
-  keyed companion (`run: () => registry.toggleCompanion(id)`), alongside the
-  `widget.open:*` openers. It also surfaces the toggle in the command palette.
-- The `keybindings` getter auto-generates a **focus-scoped** binding
-  (`{ key, command, scope: group.primary }`). Scoping to the primary's view id is what
-  makes it contextual: the binding is only live while that group's shell is focused
-  (clicking anywhere in the shell sets the active scope to the primary — see
-  `Workspace` `markActive` and [layout-shell](layout-shell.mdx)).
-- `registry.toggleCompanion(id)` emits to the mounted shell, which subscribes via
-  `registry.onToggleCompanion` and flips the companion (same code path as clicking its
-  strip button). This mirrors the `revealCompanion`/`onRevealCompanion` bus, but toggle
-  is open/close rather than open-only, so it isn't buffered — the key is only active
-  when the shell already exists.
-
-Keys are **plain letters** (no `mod+`). `AppShell`'s global keydown handler ignores
-no-modifier keydowns that originate in a text field (`input`/`textarea`/`select`/
-`contenteditable`, via the shared `isEditableTarget`), so typing in a pane never
-triggers a toggle; `mod+` shortcuts are unaffected. Different groups can reuse the same
-letters — each binding is scoped to its own primary, so `t` in the games arcade and `t`
-in another group never collide.
-
-### Region toggle keys
-
-The three **dock regions** have their own keys — the Blender toolbar/sidebar region
-toggle from the keyboard:
-
-| Key | Region |
-|---|---|
-| `[` | left subpane |
-| `]` | right subpane |
-| `\` | bottom subpane |
-
-These are handled by `PaneGroupShell` directly (a `window` keydown gated on
-`getActiveScope() === group.primary` + `isEditableTarget`), not the registry, because
-they're a **generic shell affordance** shared by every group rather than a per-module
-binding. A contiguous bracket cluster is used rather than Blender's literal `T`/`N`:
-those letters are claimed by per-companion `key`s (e.g. `t` = Agent Harness), so
-reserving `[ ] \` keeps the two axes — *which companion is open* vs *which region is
-collapsed* — from colliding. The key only acts on a region that has a dock (an empty
-side has nothing to toggle), and the collapse button / rail tooltips show it.
-
-## Declaring a group
-
-Add `panelGroups` to the module manifest:
-
-```ts
-import type { PanelGroupDecl } from '@horrible/core';
-
-panelGroups: [
-  {
-    id: 'network.fabric',
-    label: 'Peer Fabric',
-    primary: 'network.peers',       // only this id appears in the palette
-    companions: [
-      { id: 'network.chat',    label: 'Peer Chat',    icon: '✉' },
-      { id: 'network.monitor', label: 'Peer Monitor', icon: '◈' },
-      { id: 'network.lobby',   label: 'Lobby',        icon: '⊞' },
-      { id: 'network.relay',   label: 'Agent Relay',  icon: '⇌' },
-    ],
-  } satisfies PanelGroupDecl,
-],
-```
-
-The `icon` field appears in the toggle button alongside the label.
-
-## Built-in groups
-
-| Group id | Primary | Companions |
-|---|---|---|
-| `network.fabric` | `network.peers` | chat, monitor, lobby, relay |
-| `commons.hub` | `commons.directory` | requests, profile |
-| `flow.studio` | `flow.library` | canvas (`flow.editor`) |
-| `observability.monitor` | `observability.io` | inspector (`observability.logs`) |
-| `games.arcade` | `games.lobby` | board (`b`), harness (`games.loadout`, `t`), ladder (`l`), challenges (`c`) |
-| `games.town` | `games.town` | _(none yet — AgentTown as its own hub)_ |
-| `editor.workbench` | `editor.buffer` | outline (`code.outline`, `o`), symbol search (`code.search`, `s`), provenance (`git.provenance`, `g`), recent notes (`editor.recentNotes`, `r`) |
-
-The `editor.workbench` group is **cross-module** — declared on the editor module but
-its companions live in the `code` and `git` modules — which is fine because group
-resolution is global (`registry.panelGroups`). Its members are the panes that only
-mean something *relative to the active buffer*: outline and symbol search follow the
-editor cursor via the shared code locus, provenance is blame+history of the active
-file, and recent notes indexes the editor's own buffers. Files and Terminal are
-deliberately **not** companions — they're co-equal tools composed by the `scripting`
-[layout preset](layout-shell.mdx), not satellites of one buffer.
-
-### Non-singleton primary
-
-`editor.buffer` is the first group primary that is **non-singleton** (one pane per open
-buffer). Each buffer pane renders its own `PaneGroupShell`, so every editor gets its own
-companion strip and region toggles — the Blender "per-editor sidebar" model. `PanelHost`
-renders the shell inside the pane's `PaneParamsContext`, so the buffer's `BufferView`
-still receives its `source` param through the shell. `registry.revealCompanion` focuses
-an already-open primary instance (via the layout controller) instead of blindly calling
-`openPanel`, so revealing a companion never spawns a stray blank buffer.
-
-## How it works
-
-- `registry.getGroupFor(panelId)` returns the `PanelGroupDecl` for any group
-  member, or `undefined` for unaffiliated panels.
-- `registry.commands` suppresses `widget.open:*` entries for any widget id that
-  appears in a group's `companions` list.
-- Group membership is also relayed to the agent and the `dash` REPL: `getGroupFor`
-  backs a `groupId` field on `list_available_panes`/`list_open_panes` and a
-  dedicated `get_pane_group` tool (`packages/core/src/modules/agent/tool-exec.ts`,
-  `dash.panes.group()` — see [python-sdk.mdx](python-sdk.mdx)), so scripted and
-  agent-driven layout logic can discover and reason about groups the same way the
-  companion strip UI does.
-- `PanelHost` in `packages/ui/src/Workspace.tsx` calls `getGroupFor`. If the
-  view is the group primary, it renders `<PaneGroupShell group={...} />` inside
-  `.ws-panel` (with the shell-specific zero-padding modifier).
-- `PaneGroupShell` (`packages/ui/src/PaneGroupShell.tsx`) holds local
-  `useState<Record<string, CompanionViewState>>` tracking which companions are
-  open and each one's current position (`'right' | 'bottom' | 'left'`); a
-  separate `activeByPosition: Partial<Record<DockPosition, string>>` tracks
-  which open companion is the visible tab within each position's shared dock;
-  and `sizeByPosition: Record<DockPosition, number>` owns the pixel size **per
-  dock**, not per companion — so switching the active tab within a dock keeps
-  its width/height instead of resetting to whichever tab's own size. Toggling
-  adds/removes an `openStates` entry and updates `activeByPosition` (closing
-  the active tab falls back to another companion still open at that position,
-  if any). The position-cycle button moves only the active companion to the
-  next position, reassigning `activeByPosition` for both the old and new
-  position (the dock's `sizeByPosition` entry is independent of which
-  companion is docked there); the resize handle is a 4 px border that fires
-  `mousemove` on `window` to update `sizeByPosition` without dockview
-  intercepting the drag. A `collapsedByPosition: Partial<Record<DockPosition,
-  bool>>` holds the region collapse toggles — when set, `renderPositionGroup`
-  draws the thin rail instead of the dock; the open/reveal/cycle paths call
-  `expandRegion(pos)` so a companion never lands in a collapsed dock.
-- Companion panels opened **standalone** via a direct command still render their
-  raw component — the shell only activates when the primary is opened.
-
-## Future: decoupling companions
-
-In a future advanced-settings option, individual companions can be "decoupled" from
-their primary so they appear as independent panes in the workspace and in the palette.
-This is intentionally not the default — the grouped UX is strongly preferred.
-
-## Types
-
-```ts
-// packages/sdk/src/types.ts (re-exported from @horrible/core)
-
-interface PanelGroupCompanion {
-  id: string;
-  label: string;
-  icon?: string;   // shown in the toggle button
-  key?: string;    // Blender-style toggle key (e.g. 't'); see "Keyboard toggles" below
-}
-
-interface PanelGroupDecl {
-  id: string;
-  label: string;
-  primary: string;
-  companions: PanelGroupCompanion[];
+{
+  id: 'editor.buffer',
+  role: 'document',
+  regions: [
+    { id: 'code.outline',       label: 'Outline',       icon: '≡', key: 'o', position: 'right' },
+    { id: 'code.search',        label: 'Symbol Search', icon: '⌕', key: 's', position: 'right' },
+    { id: 'git.provenance',     label: 'Provenance',    icon: '⎇', key: 'g', position: 'right' },
+    { id: 'editor.recentNotes', label: 'Recent notes',  icon: '🗒', key: 'r', position: 'left'  },
+  ],
 }
 ```
 
-`PanelGroupDecl` is part of the public SDK (`@horribledashboard/sdk`) so
-third-party plugins can declare groups too.
+- Each **position** (`left`/`right`/`bottom`) is one strip; multiple views at
+  the same position **stack as tabs** within it.
+- A region view is any registered panel/widget id — cross-module is fine (the
+  editor hosts views from the `code` and `git` modules).
+- Region state is **per pane instance**: every editor buffer keeps its own
+  strip sizes, open flags, and active views, persisted with the layout.
+- A strip can also **collapse** to a thin rail (Blender's tucked toolbar)
+  without forgetting its contents.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ ✎ ▾  main.py │ notes.md              ◧ ◨ ⬓  ☰ │  ← area header
+├──────────┬──────────────────────────┬───────────────────────┤
+│ Recent   │                          │ ≡ Outline ⌕ Search ⎇ │  ← right strip tabs
+│ notes    │   editor.buffer          ├───────────────────────┤
+│ (left    │   (the pane)             │  active region view   │
+│  strip)  │                          │                       │
+└──────────┴──────────────────────────┴───────────────────────┘
+```
+
+## Keyboard model
+
+Two layers, both synthesized by the registry (no per-module boilerplate) and
+scoped to the host view's focus:
+
+1. **Universal position keys** — `t` toggles the **left** strip, `n` the
+   **right**, `b` the **bottom** (Blender muscle memory), identical across every
+   view. Reserved: a declared `key` of `t`/`n`/`b` is dropped with a warning.
+2. **Declared pick letters** — each region view's `key` reveals that view in its
+   strip (pressing it again while it's the visible one closes the strip). E.g.
+   in an editor buffer: `o` Outline, `s` Symbol Search, `g` Provenance.
+
+## Programmatic reveals
+
+`revealRegionView(viewId)` / `toggleRegionView(viewId)`
+(`core/layout/controller.ts`) replace the old reveal/toggle companion buses:
+they find the host view, open a host pane if none exists (focusing an existing
+instance for non-singleton hosts like `editor.buffer`), and flip the strip —
+plain store actions, no mounted-shell handshake or buffering. The Game Board
+still pops automatically when a match goes live (`game-ws.ts` `revealBoard`).
+
+The agent drives the same thing with `toggle_region` / `set_region_view`; the
+REPL with `dash.layout.toggle_region()` / `set_region_view()`.
+
+## Built-in region hosts
+
+| Host view | Regions (key) |
+| --- | --- |
+| `editor.buffer` (document) | right: Outline `o`, Symbol Search `s`, Provenance `g`; left: Recent notes `r` |
+| `games.lobby` (document) | right: Agent Harness `h`, Ladder `l`, Challenges `c`; bottom: Game Board `v` |
+| `training.notebook` (document) | right: Metrics `m`, Architecture `a`, Rollout `u`, Manim, Peers; left: Projects `p` |
+| `notebook.editor` (document) | left: Notebooks `k` |
+| `flow.editor` (document) | left: Flows `f` |
+| `network.peers` (tool) | bottom: Peer Chat, Peer Monitor, Lobby, Agent Relay |
+| `commons.directory` (widget) | right: Requests, Profile |
+| `observability.io` (tool) | bottom: Inspector |
+
+A view being someone's region view doesn't stop it opening standalone (e.g. the
+Agent Harness is also a left-dock tool; the Game Board is also a document).
+
+## Compared to panel groups
+
+The old system kept companion state in unmounted React state (lost on reload),
+used three separate open/close mechanisms (reveal bus, toggle bus, bracket-key
+handler), and re-implemented tabs/resize/collapse inside a dockview pane.
+Regions delete all of that: one store, one controller, persisted, and the
+strips render through the same `PaneHost` as everything else (each region view
+gets a synthetic instance id `${hostInstance}:${position}:${viewId}`, so e.g.
+per-buffer outlines keep distinct agent-context keys).

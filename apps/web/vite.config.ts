@@ -11,8 +11,13 @@ export default defineConfig({
     port: Number(process.env.PORT) || 5173,
     strictPort: true,
     proxy: {
-      '/api': 'http://127.0.0.1:8000',
-      '/ws': { target: 'ws://127.0.0.1:8000', ws: true },
+      // Backend port matches scripts/dev.mjs (HORRIBLE_DEV_BACKEND_PORT sidesteps
+      // Windows' Hyper-V port-exclusion ranges when they swallow 8000).
+      '/api': `http://127.0.0.1:${process.env.HORRIBLE_DEV_BACKEND_PORT || '8000'}`,
+      '/ws': {
+        target: `ws://127.0.0.1:${process.env.HORRIBLE_DEV_BACKEND_PORT || '8000'}`,
+        ws: true,
+      },
     },
   },
 });

@@ -41,7 +41,9 @@ export const notebookModule: ModuleManifest = {
       id: 'notebook.browser',
       title: 'Notebooks',
       component: NotebookBrowser,
-      defaultPlacement: 'left',
+      role: 'tool',
+      icon: '📓',
+      defaultDock: 'left',
       singleton: true,
     },
     {
@@ -49,7 +51,11 @@ export const notebookModule: ModuleManifest = {
       id: 'notebook.editor',
       title: 'Notebook',
       component: NotebookEditor,
-      defaultPlacement: 'center',
+      role: 'document',
+      icon: '📓',
+      regions: [
+        { id: 'notebook.browser', label: 'Notebooks', icon: '📓', key: 'k', position: 'left' },
+      ],
       // Full cell CRUD + execute + mode for the agent (group `notebook`).
       agentTools: notebookAgentTools,
     },
@@ -61,20 +67,16 @@ export const notebookModule: ModuleManifest = {
       run: () => registry.openPanel('notebook.browser'),
     },
   ],
-  panelGroups: [
-    {
-      id: 'notebook.workbench',
-      label: 'Notebook',
-      primary: 'notebook.editor',
-      companions: [{ id: 'notebook.browser', label: 'Notebooks', icon: '📓' }],
-    },
-  ],
-  layouts: [
+  frames: [
     {
       id: 'notebook',
       name: 'Notebook',
       icon: '📓',
-      panes: [{ id: 'notebook.browser' }],
+      frame: {
+        // Empty document area: pick a notebook from the browser in the left dock.
+        center: { tabs: [] },
+        docks: { left: { tools: ['notebook.browser'], size: 280 } },
+      },
     },
   ],
 };

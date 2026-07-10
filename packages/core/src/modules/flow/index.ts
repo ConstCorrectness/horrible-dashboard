@@ -6,7 +6,7 @@
  */
 import './canvas/flow.css';
 
-import { registry, type ModuleManifest, type PanelGroupDecl } from '../../registry';
+import { registry, type ModuleManifest } from '../../registry';
 import { FlowEditorPanel } from './panels/FlowEditorPanel';
 import { FlowLibraryPanel, openFlow } from './panels/FlowLibraryPanel';
 import { createFlow } from './flows';
@@ -14,27 +14,25 @@ import { createFlow } from './flows';
 export const flowModule: ModuleManifest = {
   id: 'flow',
   title: 'Flow',
-  panelGroups: [
-    {
-      id: 'flow.studio',
-      label: 'Flow Studio',
-      primary: 'flow.library',
-      companions: [{ id: 'flow.editor', label: 'Canvas', icon: '⬡' }],
-    } satisfies PanelGroupDecl,
-  ],
   panels: [
     {
+      // The canvas is the document (inverted from the old flow.studio group,
+      // where the library was the primary): every node editor centers the canvas.
       id: 'flow.editor',
       title: 'Flow',
       component: FlowEditorPanel,
-      defaultPlacement: 'center',
+      role: 'document',
+      icon: '⬡',
+      regions: [{ id: 'flow.library', label: 'Flows', icon: '🗂', key: 'f', position: 'left' }],
       // Multi-instance: one editor pane per open flow (keyed by flowId param).
     },
     {
       id: 'flow.library',
       title: 'Flows',
       component: FlowLibraryPanel,
-      defaultPlacement: 'left',
+      role: 'tool',
+      icon: '🗂',
+      defaultDock: 'left',
       singleton: true,
     },
   ],
@@ -53,15 +51,15 @@ export const flowModule: ModuleManifest = {
       run: () => registry.openPanel('flow.library'),
     },
   ],
-  layouts: [
+  frames: [
     {
       id: 'orchestration',
       name: 'Orchestration',
       icon: '🕸',
-      panes: [
-        { id: 'flow.library' },
-        { id: 'flow.editor', position: { referencePanel: 'flow.library', direction: 'right' } },
-      ],
+      frame: {
+        center: { pane: 'flow.editor' },
+        docks: { left: { tools: ['flow.library'], size: 280 } },
+      },
     },
   ],
 };

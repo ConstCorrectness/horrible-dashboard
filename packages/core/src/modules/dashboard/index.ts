@@ -21,13 +21,15 @@ export const dashboardModule: ModuleManifest = {
       id: 'dashboard.welcome',
       title: 'Welcome',
       component: WelcomeWidget,
-      defaultPlacement: 'left',
+      role: 'widget',
+      icon: '👋',
     },
     {
       id: 'dashboard.backendStatus',
       title: 'Backend status',
       component: BackendStatusWidget,
-      defaultPlacement: 'right',
+      role: 'widget',
+      icon: '🛰',
     },
   ],
 };

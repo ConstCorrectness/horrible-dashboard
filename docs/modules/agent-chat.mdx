@@ -49,7 +49,7 @@ module (`backend/modules/chat/`) that mirrors the workspace store: file-backed J
 at `$HORRIBLE_DATA_DIR/chat-sessions.json`, CRUD under `/api/chat/sessions` (list
 returns metadata only; `GET /{id}` returns the full transcript; `PUT /{id}` is a
 partial upsert of `title`/`messages`; plus `/active` and `DELETE`). The chat widget
-loads the active session on mount (so a dockview remount restores the conversation),
+loads the active session on mount (so a pane remount restores the conversation),
 lazily creates a session titled from the first prompt, and **auto-saves each
 completed turn**. The session bar (a `<select>` + new/delete) switches between them.
 Frontend client: `packages/core/src/modules/agent/sessions.ts`.
@@ -307,7 +307,8 @@ writes it back with `editor.proposeEdit(uri=…)` — no `list_open_panes` +
 Unsaved scratch buffers (no uri) are excluded.
 
 The frontend executes each relayed `tool_call` against the registry and the
-`registry.layoutController` seam (installed by `Workspace.tsx`), then replies. This
+`registry.layoutController` seam and the frame controller (installed by
+`Frame.tsx`), then replies. This
 runs in an **always-on relay handler** (`initAgentRelay` in
 `packages/core/src/modules/agent/orchestrator-client.ts`, registered at boot) rather
 than inside a chat turn — so the same relay serves chat turns **and**
@@ -317,28 +318,28 @@ lives in `packages/core/src/modules/agent/tool-exec.ts` (`executeTool`) — the
 **shared relay surface** the [Python REPL](./repl.mdx)'s `dash` SDK drives too, so
 they all stay in lockstep.
 
-**`LAYOUT_TOOLS`** (app-level verbs; the model discovers ids via the read tools,
-so the catalog stays frontend-owned). Read/open: `list_available_panes`,
-`list_workspaces`, `list_open_panes`, `get_pane_context(instanceId)`,
-`open_pane(id)`, `close_pane(id)`, `create_workspace(name)`,
-`switch_workspace(id)`. **Geometry** (Blender-style arranging of already-open
-panes, all keyed by live `instanceId`): `split_pane(instanceId, direction,
-paneId)`, `resize_pane(instanceId, width?, height?)`, `move_pane(instanceId,
-reference, direction)`, `float_pane`/`dock_pane(instanceId)`,
-`maximize_pane`/`restore_pane(instanceId)`. `split_pane`'s `direction` takes the
-model-friendly orientations **`vertical`** (panes side by side) and
-**`horizontal`** (panes stacked) as well as the four concrete sides
-(`left`/`right`/`above`/`below`); the orientations are resolved to a side
-(`vertical`→`right`, `horizontal`→`below`) in `tool-exec.ts`, so the
-`LayoutController` and the UI corner-grip stay four-way.
-`list_open_panes` reports each open pane's type id, live `instanceId`, title, and
-whether it exposes agent context; `get_pane_context` pulls one instance's snapshot
-(see [agent tools & permissions](../architecture/agent-tools.mdx)).
+**`LAYOUT_TOOLS`** (app-level verbs over the frame — center **areas**, tool
+**docks**, per-pane **regions**; the model discovers ids via the read tools, so
+the catalog stays frontend-owned). Reads: `list_available_panes` (views with
+role + regions), `list_open_panes` (instances with location), **`get_layout`**
+(the whole frame — the orientation read), `list_workspaces`,
+`get_pane_context(instanceId)`. Panes: `open_pane(id)` (role-routed),
+`close_pane(id)`, `focus_pane(instanceId)`, `move_pane(instanceId, areaId? |
+direction?)`, `float_pane`/`dock_pane(instanceId)`. Areas:
+`split_area(instanceId, direction, viewId?)`, `join_area(instanceId,
+direction)`, `resize_area(instanceId, width?, height?)`,
+`fullscreen_area(instanceId?, on?)`. Regions & docks: `toggle_region(instanceId,
+position, open?)`, `set_region_view(instanceId, viewId)`,
+`open_tool_in_dock(id, dock?)`, `toggle_dock(dock, visible?)`. Workspaces:
+`create_workspace(name)`, `switch_workspace(id)`. `split_area`'s `direction`
+takes the model-friendly orientations **`vertical`** (areas side by side) and
+**`horizontal`** (stacked) as well as the four concrete sides
+(`left`/`right`/`above`/`below`), resolved in `tool-exec.ts`.
 
-The geometry verbs are **layout-only and ungated** (like `open_pane`), and they
-execute through the same `LayoutController` seam the user's drag gestures use —
-one set of operations, two callers (see
-[windowing](../architecture/windowing.mdx)). Each mutation triggers the dockview
+The layout verbs are **layout-only and ungated** (like `open_pane`), and they
+execute through the same frame-controller functions the user's gestures and
+keybindings use — one set of operations, three callers (see
+[windowing](../architecture/windowing.mdx)). Each mutation triggers the store's
 autosave, so an agent split persists exactly like a user drag.
 
 The `/ws` handler (`backend/app.py`) is now a bidirectional router: one inbound

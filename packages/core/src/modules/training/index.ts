@@ -105,7 +105,9 @@ export const trainingModule: ModuleManifest = {
       id: 'training.projects',
       title: 'Training Projects',
       component: ProjectsPane,
-      defaultPlacement: 'left',
+      role: 'tool',
+      icon: '🗂',
+      defaultDock: 'left',
       singleton: true,
     },
     {
@@ -113,7 +115,23 @@ export const trainingModule: ModuleManifest = {
       id: 'training.notebook',
       title: 'Notebook',
       component: NotebookPane,
-      defaultPlacement: 'center',
+      role: 'document',
+      icon: '🧠',
+      // The training workbench as regions on the notebook itself.
+      regions: [
+        { id: 'training.metrics', label: 'Metrics', icon: '📈', key: 'm', position: 'right' },
+        {
+          id: 'training.modelgraph',
+          label: 'Architecture',
+          icon: '🕸',
+          key: 'a',
+          position: 'right',
+        },
+        { id: 'training.rollout', label: 'Rollout', icon: '🎮', key: 'u', position: 'right' },
+        { id: 'training.manim', label: 'Manim', icon: '🎬', position: 'right' },
+        { id: 'training.peers', label: 'Peers', icon: '🤝', position: 'right' },
+        { id: 'training.projects', label: 'Projects', icon: '🗂', key: 'p', position: 'left' },
+      ],
       // Full cell CRUD + execute for the agent (group `notebook`).
       agentTools: notebookAgentTools,
     },
@@ -123,31 +141,36 @@ export const trainingModule: ModuleManifest = {
       id: 'training.metrics',
       title: 'Training Metrics',
       component: MetricsPane,
-      defaultPlacement: 'right',
+      role: 'widget',
+      icon: '📈',
     },
     {
       id: 'training.modelgraph',
       title: 'Model Architecture',
       component: ModelGraphPane,
-      defaultPlacement: 'right',
+      role: 'widget',
+      icon: '🕸',
     },
     {
       id: 'training.rollout',
       title: 'Rollout Stream',
       component: RolloutPane,
-      defaultPlacement: 'right',
+      role: 'widget',
+      icon: '🎮',
     },
     {
       id: 'training.manim',
       title: 'Manim Renders',
       component: ManimPane,
-      defaultPlacement: 'right',
+      role: 'widget',
+      icon: '🎬',
     },
     {
       id: 'training.peers',
       title: 'Training Peers',
       component: TrainingPeersPane,
-      defaultPlacement: 'right',
+      role: 'widget',
+      icon: '🤝',
     },
   ],
   commands: [
@@ -182,37 +205,19 @@ export const trainingModule: ModuleManifest = {
       run: () => registry.openPanel('training.peers'),
     },
   ],
-  panelGroups: [
-    {
-      id: 'training.workbench',
-      label: 'Training',
-      primary: 'training.notebook',
-      companions: [
-        { id: 'training.metrics', label: 'Metrics', icon: '📈' },
-        { id: 'training.modelgraph', label: 'Architecture', icon: '🕸' },
-        { id: 'training.rollout', label: 'Rollout', icon: '🎮' },
-        { id: 'training.manim', label: 'Manim', icon: '🎬' },
-        { id: 'training.peers', label: 'Peers', icon: '🤝' },
-        { id: 'training.projects', label: 'Projects', icon: '🗂' },
-      ],
-    },
-  ],
-  layouts: [
+  frames: [
     {
       id: 'training',
       name: 'Training',
       icon: '🧠',
-      panes: [
-        { id: 'training.projects' },
-        {
-          id: 'training.notebook',
-          position: { referencePanel: 'training.projects', direction: 'right' },
+      frame: {
+        center: {
+          split: 'row',
+          sizes: [0.65, 0.35],
+          children: [{ tabs: [] }, { pane: 'training.metrics' }],
         },
-        {
-          id: 'training.metrics',
-          position: { referencePanel: 'training.notebook', direction: 'right' },
-        },
-      ],
+        docks: { left: { tools: ['training.projects'], size: 280 } },
+      },
     },
   ],
 };

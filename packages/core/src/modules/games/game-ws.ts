@@ -3,20 +3,21 @@
  * (lobby tables, your_turn, public_state, game_over) here, and panels drive the
  * node's connection back through it.
  *
- * State lives in a module-level store (not per-component) because dockview unmounts
+ * State lives in a module-level store (not per-component) because the frame unmounts
  * inactive tab panes — the lobby and the board must survive tab switches and keep
  * receiving live updates. Panels read it with `useGames()`.
  */
 import { useSyncExternalStore } from 'react';
 
+import { revealRegionView } from '../../layout/controller';
 import { registry } from '../../registry';
 import { toastsStore } from '../../toasts';
 import { sendChannel, subscribeChannel } from '../../ws';
 
 /** Pop the Game Board when a match becomes live. If a **standalone** Game Board pane
  * is already open (e.g. the "Coding Harnesses" workspace seeds one), focus that pane
- * so we don't render a second board inside the arcade shell; otherwise reveal the
- * board as a companion of the Games group (opening the group if needed). */
+ * so we don't render a second board inside the lobby; otherwise reveal the board
+ * as the lobby's bottom region (opening the lobby if needed). */
 export function revealBoard(): void {
   const lc = registry.layoutController;
   const standalone = lc?.listOpenPanes().find((p) => p.id === 'games.board');
@@ -24,7 +25,7 @@ export function revealBoard(): void {
     lc!.focusPane(standalone.instanceId);
     return;
   }
-  registry.revealCompanion('games.board');
+  revealRegionView('games.board');
 }
 
 export interface TableInfo {

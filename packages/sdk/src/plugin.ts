@@ -9,7 +9,6 @@ import type {
   CommandDecl,
   KeybindingDecl,
   PanelDecl,
-  PanelGroupDecl,
   SettingDecl,
   WidgetDecl,
   WsMessage,
@@ -19,8 +18,10 @@ import type {
  * Bumped on breaking changes to the plugin contract. A plugin package declares
  * the version it was built against in `horrible-plugin.json` (`sdkVersion`);
  * the loader skips plugins whose version doesn't match.
+ * v2: pane `role` is required; `defaultPlacement` and panel groups are gone —
+ * views declare `regions` (per-pane strips) instead.
  */
-export const SDK_API_VERSION = 1;
+export const SDK_API_VERSION = 2;
 
 /** The `horrible-plugin.json` package manifest, as served by the backend. */
 export interface PluginPackageManifest {
@@ -90,8 +91,6 @@ export interface PluginContributions {
   panels?: PanelDecl[];
   widgets?: WidgetDecl[];
   keybindings?: KeybindingDecl[];
-  /** Cluster related panels/widgets into a toggle-strip group (see PanelGroupDecl). */
-  panelGroups?: PanelGroupDecl[];
   /** User-configurable settings shown on the settings page (keys namespaced). */
   settings?: SettingDecl[];
 }

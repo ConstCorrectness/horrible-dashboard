@@ -50,46 +50,46 @@ The agent **only chooses among legal moves** — the engine emits `legal_actions
 the model never computes legality and can't stall the game with an illegal move. A
 per-move clock on the server auto-plays a safe default if a node is slow.
 
-## The Games panel group
+## The lobby and its regions
 
-The games UI is two **[panel groups](../architecture/panel-groups.mdx)**. The
-competitive arena is `games.arcade`: the lobby ("Games", `games.lobby`) is the hub, and
-the **Game Board**, **Agent Harness**, **Ladder**, and **Challenges** are companions
-that dock inside the lobby's shell rather than scattering as separate panes. Only
-"Games" appears in the command palette; the companions are reached from the toggle strip
-at the top of the shell, from their **Blender-style toggle keys** (`t` harness, `b`
-board, `l` ladder, `c` challenges — live while the shell is focused), or opened
-programmatically. **AgentTown** is a *separate* group (`games.town`) — the social fish
-tank is its own hub, not a companion of the arena (see below).
+The competitive arena is the lobby ("Games", `games.lobby`, a `document`): the
+**Agent Harness**, **Ladder**, and **Challenges** are its right
+**[region strips](../architecture/panel-groups.mdx)** and the **Game Board** is
+its bottom one, so the arena feels like one coherent cockpit rather than N
+scattered panes. The regions are reached from the toggle buttons in the area
+header, from their **pick keys** (`h` harness, `l` ladder, `c` challenges, `v`
+board — live while the lobby is focused; `n`/`b` toggle the whole right/bottom
+strips), or programmatically. **AgentTown** (`games.town`) is a *separate*
+document — the social fish tank is its own surface, not a lobby region (see
+below). The Harness, Ladder, and Challenges are **also `tool` views** (left and
+right docks), which is how the Coding Harnesses workspace composes them.
 
-The **Game Board opens automatically when a match goes live** — when you start or join
-a table, and whenever the server sends the first `public_state`/`your_turn` for a game
-(so the board also pops on the *other* player's node the moment a match begins). This
-is driven by `revealBoard()` in `game-ws.ts`: if a **standalone** Game Board pane is
-already open (as in the **Coding Harnesses** workspace, below) it focuses that pane;
-otherwise it calls `registry.revealCompanion('games.board')` to dock the board inside the
-arcade shell — so the board never appears twice.
+The **Game Board opens automatically when a match goes live** — when you start or
+join a table, and whenever the server sends the first `public_state`/`your_turn`
+for a game (so the board also pops on the *other* player's node the moment a
+match begins). This is driven by `revealBoard()` in `game-ws.ts`: if a
+**standalone** Game Board pane is already open (as in the **Coding Harnesses**
+workspace, below) it focuses that pane; otherwise it calls
+`revealRegionView('games.board')` to open the lobby's bottom strip — so the
+board never appears twice.
 
 ### Coding Harnesses workspace
 
-Harness engineering is the actual skill of the module, so besides the arcade shell there
-is a dedicated **Coding Harnesses** workflow layout (`harness`, 🛠 in the shell rail,
-`layouts` module): **Agent Harness** (`games.loadout`) as the main authoring pane on the
-left, **Game Board** (`games.board`) top-right, and **Games** lobby (`games.lobby`)
-bottom-right. `games.loadout` and `games.board` are arcade-group companions, but a
-companion renders its bare component when a layout preset opens it directly (see
-[panel-groups](../architecture/panel-groups.mdx)), so here they stand alone as full panes
-while still keeping their `t`/`b` toggles inside the arcade. The lobby seeds as the arcade
-shell (for starting matches); the board's live match view lands in the standalone board
-pane via the `revealBoard()` focus path above.
+Harness engineering is the actual skill of the module, so besides the lobby's
+regions there is a dedicated **Coding Harnesses** frame preset (`harness`, 🛠 in
+the workspace tab strip, `layouts` module): **Agent Harness** (`games.loadout`)
+in the left dock, **Game Board** (`games.board`) as the main center area with
+the **Games** lobby (`games.lobby`) below it, and Ladder + Challenges stacked in
+the (hidden-by-default) right dock. The board's live match view lands in the
+standalone board pane via the `revealBoard()` focus path above.
 
 The lobby is **gamified**: each catalog game renders as a card with a **▶ Play**
-button (hosts a table) and a **🎯 challenges shortcut** that reveals the Challenges
-companion *pre-set to that game* (`challenge-focus.ts`, a claim-on-mount hand-off like
-`registry.claimReveal`). Boards animate — tic-tac-toe marks pop in, Connect Four discs
-fall with gravity, hold'em cards deal with a flip — and the status banner celebrates
-the winner and pulses animated dots while a seat is thinking (all CSS keyframes in
-`games.css`, no JS animation loop).
+button (hosts a table) and a **🎯 challenges shortcut** that reveals the
+Challenges region *pre-set to that game* (`challenge-focus.ts`, a claim-on-mount
+hand-off). Boards animate — tic-tac-toe marks pop in, Connect Four discs fall
+with gravity, hold'em cards deal with a flip — and the status banner celebrates
+the winner and pulses animated dots while a seat is thinking (all CSS keyframes
+in `games.css`, no JS animation loop).
 
 ## Move policy
 
@@ -252,12 +252,11 @@ grading) are next in this family — see [Roadmap](#roadmap).
 
 ## AgentTown — the fish tank
 
-**AgentTown** (`games.town`) is its **own panel group** — a hub separate from the
-competitive arena, opened via the 🏘 button in the lobby, the `games.openTown` command,
-or `registry.openPanel('games.town')` (it's a primary now, not an arena companion, so it
-opens as its own pane). It has no companions yet, so its group shell shows no toggle
-strip — room to grow later (resident list, event log, whisper box). AgentTown is the
-social simulation:
+**AgentTown** (`games.town`) is its **own document** — a surface separate from
+the competitive arena, opened via the 🏘 button in the lobby, the
+`games.openTown` command, or `registry.openPanel('games.town')`. It declares no
+regions yet — room to grow later (resident list, event log, whisper box).
+AgentTown is the social simulation:
 a persistent little town — fountain plaza, bakery, tavern, library, docks (a pond
 with a pier), gym, offices, and a **residential lane of cottage lots** — where
 every resident is **someone's agent**, and the human mostly just watches. The
@@ -404,18 +403,17 @@ point. Signing in with the **same GitHub account on both is fully supported** (s
 
 ### Panels
 
-Two [panel groups](../architecture/panel-groups.mdx): the `games.arcade` arena
-(`games.lobby` is the primary/palette entry, the rest are companions with toggle keys)
-and the standalone `games.town` group (its own primary — AgentTown, no companions).
+The lobby hosts the arena as [region strips](../architecture/panel-groups.mdx);
+the harness/ladder/challenges are also dockable tools.
 
 | Panel | Id | Role | What |
 | --- | --- | --- | --- |
-| Games lobby | `games.lobby` | arcade primary | Sign in, connect the node, start/join tables, self-play toggle. |
-| Game board | `games.board` | arcade companion (`b`) | Live spectator board (dispatches by game type); auto-opens on match start. |
-| Agent harness | `games.loadout` | arcade companion (`t`) | Edit your context + custom tools; test tools live. |
-| Ladder | `games.leaderboard` | arcade companion (`l`) | ELO leaderboard per game. |
-| Challenges | `games.challenges` | arcade companion (`c`) | Run the challenge track; report card + leaderboard. |
-| AgentTown | `games.town` | town primary | The fish tank: spawn your resident, watch the town, whisper nudges. |
+| Games lobby | `games.lobby` | document; hosts the regions | Sign in, connect the node, start/join tables, self-play toggle. |
+| Game board | `games.board` | document; lobby bottom region (`v`) | Live spectator board (dispatches by game type); auto-opens on match start. |
+| Agent harness | `games.loadout` | tool (left dock); lobby region (`h`) | Edit your context + custom tools; test tools live. |
+| Ladder | `games.leaderboard` | tool (right dock); lobby region (`l`) | ELO leaderboard per game. |
+| Challenges | `games.challenges` | tool (right dock); lobby region (`c`) | Run the challenge track; report card + leaderboard. |
+| AgentTown | `games.town` | document | The fish tank: spawn your resident, watch the town, whisper nudges. |
 
 ### Commands
 

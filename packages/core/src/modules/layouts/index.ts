@@ -1,10 +1,11 @@
 /**
- * Workflow layouts: the predefined Blender-style workspaces shown in the shell
- * rail. Each preset seeds a stable-id workspace (`dashboard`, `scripting`, …) on
- * first activation; the user's rearrangements then persist per layout, and
- * `layout.reset` restores the preset. These cross-cutting presets span several
- * modules' panes, so they live here rather than in any one feature module. See
- * docs/architecture/windowing.md.
+ * Workflow presets: the predefined Blender-style workspaces shown in the top
+ * tab strip. Each preset seeds a stable-id workspace (`dashboard`, `scripting`,
+ * …) as a **complete frame** (center area tree + docks) on first activation;
+ * the user's rearrangements then persist per workspace, and `layout.reset`
+ * restores the preset. These cross-cutting presets span several modules' panes,
+ * so they live here rather than in any one feature module. See
+ * docs/architecture/windowing.mdx.
  */
 import { dialogs } from '../../dialogs';
 import { toastsStore } from '../../toasts';
@@ -13,63 +14,63 @@ import { registry, type ModuleManifest } from '../../registry';
 export const layoutsModule: ModuleManifest = {
   id: 'layouts',
   title: 'Layouts',
-  layouts: [
+  frames: [
     {
       id: 'dashboard',
       name: 'Dashboard',
       icon: '▦',
-      panes: [
-        { id: 'dashboard.welcome' },
-        {
-          id: 'dashboard.backendStatus',
-          position: { referencePanel: 'dashboard.welcome', direction: 'right' },
+      frame: {
+        center: {
+          split: 'row',
+          sizes: [0.55, 0.45],
+          children: [
+            { pane: 'dashboard.welcome', headerCollapsed: true },
+            {
+              split: 'column',
+              children: [
+                { pane: 'dashboard.backendStatus', headerCollapsed: true },
+                { pane: 'clubhouse.account', headerCollapsed: true },
+              ],
+            },
+          ],
         },
-        {
-          id: 'observability.io',
-          position: { referencePanel: 'dashboard.welcome', direction: 'below' },
+        docks: {
+          bottom: { tools: ['observability.io'], visible: false },
         },
-      ],
+      },
     },
     {
       id: 'scripting',
       name: 'Scripting',
       icon: '⌨',
-      panes: [
-        { id: 'files.tree' },
-        {
-          id: 'editor.buffer',
-          position: { referencePanel: 'files.tree', direction: 'right' },
+      frame: {
+        center: { pane: 'editor.buffer' },
+        docks: {
+          left: { tools: ['files.tree'], size: 260 },
+          right: { tools: ['agent.chat'], visible: false },
+          bottom: { tools: ['terminal.instance', 'repl.console'], activeTool: 'terminal.instance' },
         },
-        {
-          id: 'repl.console',
-          position: { referencePanel: 'editor.buffer', direction: 'below' },
-        },
-        {
-          id: 'terminal.instance',
-          position: { referencePanel: 'repl.console', direction: 'within' },
-        },
-      ],
+      },
     },
     {
-      // Harness-engineering cockpit: author your agent's strategy + Python tools on
-      // the left, watch it compete top-right, launch/join matches bottom-right. The
-      // Agent Harness (games.loadout) and Game Board (games.board) are arcade-group
-      // companions but seed here as standalone panes (a companion renders its bare
-      // component when opened directly); games.lobby seeds as the arcade shell.
       id: 'harness',
       name: 'Coding Harnesses',
       icon: '🛠',
-      panes: [
-        { id: 'games.loadout' },
-        {
-          id: 'games.board',
-          position: { referencePanel: 'games.loadout', direction: 'right' },
+      frame: {
+        center: {
+          split: 'column',
+          sizes: [0.65, 0.35],
+          children: [{ pane: 'games.board' }, { pane: 'games.lobby' }],
         },
-        {
-          id: 'games.lobby',
-          position: { referencePanel: 'games.board', direction: 'below' },
+        docks: {
+          left: { tools: ['games.loadout'], size: 320 },
+          right: {
+            tools: ['games.leaderboard', 'games.challenges'],
+            activeTool: 'games.leaderboard',
+            visible: false,
+          },
         },
-      ],
+      },
     },
   ],
   commands: [
