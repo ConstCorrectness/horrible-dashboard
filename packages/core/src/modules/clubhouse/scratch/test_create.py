@@ -15,65 +15,13 @@ async def main():
 
     # Let's test create_channel with different payloads
     payloads = [
-        # Original
-        {
-            "topic": "Test Room 1",
-            "is_private": False,
-            "is_social_mode": False,
-            "club_id": None,
-            "user_ids": [],
-            "event_id": None,
-        },
-        # Adding privacy_level as string
-        {
-            "topic": "Test Room 2",
-            "is_private": False,
-            "is_social_mode": False,
-            "privacy_level": "public",
-            "club_id": None,
-            "user_ids": [],
-            "event_id": None,
-        },
-        # Adding privacy_level as integer 1
-        {
-            "topic": "Test Room 3",
-            "is_private": False,
-            "is_social_mode": False,
-            "privacy_level": 1,
-            "club_id": None,
-            "user_ids": [],
-            "event_id": None,
-        },
-        # Adding privacy_level as integer 2
-        {
-            "topic": "Test Room 4",
-            "is_private": False,
-            "is_social_mode": False,
-            "privacy_level": 2,
-            "club_id": None,
-            "user_ids": [],
-            "event_id": None,
-        },
-        # Let's try "privacy" field
-        {
-            "topic": "Test Room 5",
-            "is_private": False,
-            "is_social_mode": False,
-            "privacy": "public",
-            "club_id": None,
-            "user_ids": [],
-            "event_id": None,
-        },
-        # Let's try privacy: 1
-        {
-            "topic": "Test Room 6",
-            "is_private": False,
-            "is_social_mode": False,
-            "privacy": 1,
-            "club_id": None,
-            "user_ids": [],
-            "event_id": None,
-        },
+        {"topic": "T1", "privacy_level": "house", "club_id": None, "user_ids": [], "event_id": None},
+        {"topic": "T2", "privacy_level": "mutuals", "club_id": None, "user_ids": [], "event_id": None},
+        {"topic": "T3", "privacy_level": "club", "club_id": None, "user_ids": [], "event_id": None},
+        {"topic": "T4", "privacy_level": "members", "club_id": None, "user_ids": [], "event_id": None},
+        {"topic": "T5", "privacy_level": "invite", "club_id": None, "user_ids": [], "event_id": None},
+        {"topic": "T6", "privacy_level": "invited", "club_id": None, "user_ids": [], "event_id": None},
+        {"topic": "T7", "privacy_level": "open", "club_id": None, "user_ids": [], "event_id": None},
     ]
 
     for idx, p in enumerate(payloads, start=1):

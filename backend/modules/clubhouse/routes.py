@@ -98,7 +98,9 @@ async def _run_helper(
 ) -> dict[str, Any]:
     bin_path = _get_helper_path()
     cmd = [str(bin_path), action, phone_number]
-    if extra_arg:
+    if action == "start":
+        cmd.append("")
+    elif extra_arg:
         cmd.append(extra_arg)
 
     cmd.append(_device_id())
@@ -571,12 +573,10 @@ async def create_channel(body: CreateChannelRequest) -> dict[str, Any]:
     auth = _require_auth()
 
     # Map visibility settings to the new privacy_level field required by Clubhouse API:
-    # 1 = Open (Public), 2 = Social, 3 = Closed (Private)
-    privacy_level_val = 1
-    if body.is_private:
-        privacy_level_val = 3
-    elif body.is_social_mode:
-        privacy_level_val = 2
+    # "public" = Open (Public), "house" = Social / Closed (Private)
+    privacy_level_val = "public"
+    if body.is_private or body.is_social_mode:
+        privacy_level_val = "house"
 
     res = await _ch_authed_post(
         "/create_channel",
