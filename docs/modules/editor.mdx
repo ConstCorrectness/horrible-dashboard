@@ -246,7 +246,7 @@ open buffers update through their controller, and closed files are loaded, edite
 and saved.
 
 The buffer — not the file on disk — is the source of truth while open, so the
-**document-sync lifecycle** matters:
+**document-sync lifecycle** matters. To optimize WebSocket traffic, document updates (`didChange`) are debounced by 300ms. However, to prevent position mismatch errors, any LSP request (hover, completion, definition, rename, references, grounding) will synchronously **flush pending changes** to the server beforehand. Furthermore, to avoid race conditions when the server is spawning, `didOpen` fetches the document's content dynamically at the moment of initialization rather than caching a stale version.
 
 ```mermaid
 sequenceDiagram
@@ -254,13 +254,20 @@ sequenceDiagram
     participant BE as Backend LspManager
     participant LS as Language server (stdio)
     CM->>BE: open(uri) · /ws lsp
+    Note over CM,BE: Text is resolved dynamically on initialization
     BE->>LS: textDocument/didOpen {text}
     loop while editing
-        CM->>BE: change(uri, edits)
-        BE->>LS: textDocument/didChange
+        Note over CM: Edits debounced by 300ms
+        alt User typed / LSP request triggered
+            CM->>BE: Flush pending changes immediately
+            BE->>LS: textDocument/didChange
+        else Idle for 300ms
+            CM->>BE: change(uri, edits)
+            BE->>LS: textDocument/didChange
+        end
         LS-->>BE: publishDiagnostics
         BE-->>CM: diagnostics → CM6 linter
-        CM->>BE: completion / hover / definition
+        CM->>BE: completion / hover / definition (with trigger context)
         BE->>LS: textDocument/*
         LS-->>CM: results → CM6 autocomplete / tooltip
     end
@@ -269,10 +276,11 @@ sequenceDiagram
 
 `workspace-file:` URIs map directly to real paths the server roots on; `note:` and
 `osfile:` get no LSP (only `workspace-file:` buffers with a known language do). Sync
-is **full-text `didChange`** (debounced) for now — simple and correct; incremental is
+is **full-text `didChange`** (debounced 300ms or flushed on demand) — simple and correct; incremental is
 a later optimization. LSP capabilities map onto CodeMirror:
 completion → autocomplete source, `publishDiagnostics` → linter, hover → tooltip,
 definition → a jump that opens a `workspace-file:` buffer and reveals it in the tree.
+Additionally, autocomplete requests include a completion context containing the trigger kind and trigger character (e.g. `.`) to help the language server filter candidates accurately.
 
 ### Range edits replace full-content edits
 
