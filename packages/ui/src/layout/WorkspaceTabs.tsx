@@ -6,7 +6,17 @@
  */
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { dialogs, framePersistence, registry, toastsStore, useWorkspaces } from '@horrible/core';
+import {
+  dialogs,
+  framePersistence,
+  hasCapability,
+  registry,
+  toastsStore,
+  useWorkspaces,
+  windowControl,
+} from '@horrible/core';
+
+import { WindowControls } from './WindowChrome';
 
 // The strip renders from AppShell before the Frame ever mounts (home view), so
 // it needs the frame styles itself; Vite dedupes the double import.
@@ -23,6 +33,19 @@ interface Menu {
 export function WorkspaceTabs() {
   const { workspaces, activeId } = useWorkspaces();
   const [menu, setMenu] = useState<Menu | null>(null);
+  // When a native shell grants `chrome.workspaceTabs`, this strip IS the
+  // (undecorated) window's titlebar: `data-tauri-drag-region` on the empty strip
+  // space moves the window and maximizes on double-click (handled natively by
+  // the webview), and it hosts the min/max/close controls. Interactive children
+  // (tabs, buttons) aren't drag regions, so their clicks still land.
+  const nativeChrome = hasCapability('chrome.workspaceTabs');
+  // window.perWorkspace: a workspace can be popped out into its own OS window.
+  const nativeWindows = hasCapability('window.perWorkspace');
+
+  const openInWindow = (id: string) => {
+    setMenu(null);
+    void windowControl()?.openWorkspaceWindow(id);
+  };
 
   useEffect(() => {
     if (!menu) return;
@@ -75,7 +98,11 @@ export function WorkspaceTabs() {
   };
 
   return (
-    <header className="frame-tabs" role="tablist" aria-label="Workspaces">
+    <header
+      className={`frame-tabs${nativeChrome ? ' frame-tabs--native' : ''}`}
+      role="tablist"
+      aria-label="Workspaces"
+    >
       <button
         className="frame-tabs-home"
         title="Home"
@@ -83,37 +110,43 @@ export function WorkspaceTabs() {
       >
         <img src="/logo.svg" alt="Home" />
       </button>
-      {entries.map((entry) => (
-        <button
-          key={entry.id}
-          role="tab"
-          aria-selected={entry.id === activeId}
-          className={`frame-tab${entry.id === activeId ? ' active' : ''}`}
-          // Through the registry so the shell enters the workspace view first;
-          // the Frame picks the switch up as a pending workspace.
-          onClick={() => registry.switchWorkspace(entry.id)}
-          onContextMenu={(e) => {
-            e.preventDefault();
-            setMenu({
-              x: e.clientX,
-              y: e.clientY,
-              workspaceId: entry.id,
-              workspaceName: entry.label,
-              isPreset: presetIds.has(entry.id),
-            });
-          }}
-        >
-          {entry.glyph ? <span className="frame-tab-glyph">{entry.glyph}</span> : null}
-          <span className="frame-tab-label">{entry.label}</span>
-        </button>
-      ))}
-      <button
-        className="frame-tab frame-tab--new"
-        title="New workspace"
-        onClick={() => void registry.runCommand('workspace.new')}
+      <div
+        className="frame-tabs-scroll"
+        {...(nativeChrome ? { 'data-tauri-drag-region': '' } : {})}
       >
-        ＋
-      </button>
+        {entries.map((entry) => (
+          <button
+            key={entry.id}
+            role="tab"
+            aria-selected={entry.id === activeId}
+            className={`frame-tab${entry.id === activeId ? ' active' : ''}`}
+            // Through the registry so the shell enters the workspace view first;
+            // the Frame picks the switch up as a pending workspace.
+            onClick={() => registry.switchWorkspace(entry.id)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setMenu({
+                x: e.clientX,
+                y: e.clientY,
+                workspaceId: entry.id,
+                workspaceName: entry.label,
+                isPreset: presetIds.has(entry.id),
+              });
+            }}
+          >
+            {entry.glyph ? <span className="frame-tab-glyph">{entry.glyph}</span> : null}
+            <span className="frame-tab-label">{entry.label}</span>
+          </button>
+        ))}
+        <button
+          className="frame-tab frame-tab--new"
+          title="New workspace"
+          onClick={() => void registry.runCommand('workspace.new')}
+        >
+          ＋
+        </button>
+      </div>
+      {nativeChrome && <WindowControls />}
       {menu &&
         createPortal(
           <div
@@ -121,6 +154,11 @@ export function WorkspaceTabs() {
             style={{ left: menu.x, top: menu.y }}
             onMouseDown={(e) => e.stopPropagation()}
           >
+            {nativeWindows && (
+              <button className="frame-menu-item" onClick={() => openInWindow(menu.workspaceId)}>
+                Open in new window
+              </button>
+            )}
             <button
               className="frame-menu-item"
               onClick={() => void rename(menu.workspaceId, menu.workspaceName)}

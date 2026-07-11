@@ -136,12 +136,18 @@ discarded by design and reseed from their preset.
 ## Browser vs desktop
 
 The engine is web-only and shared verbatim by the browser and the desktop shell
-(no per-platform fork). The floating layer and fullscreen mode are in-window
-today; the phase-2 native shell claims the OS-level versions through new
-capabilities — `window.perWorkspace` (a workspace per OS window),
-`chrome.workspaceTabs` (the tab strip in the native titlebar), and
-`window.fullscreen` — declared in the SDK now, implemented by no shell yet. See
-the capability table in [layout-shell.mdx](layout-shell.mdx).
+(no per-platform fork). The floating layer and the frame's `area.fullscreen`
+mode are in-window; the phase-2 native shell claims the OS-level versions
+through new capabilities, all via the `WindowControl` seam. Shipped (phase 2
+complete): **`window.fullscreen`** — on desktop `F11` (`shell.toggleFullscreen`)
+toggles native OS-window fullscreen, orthogonal to the in-window
+`area.fullscreen` (`ctrl+space`); **`chrome.workspaceTabs`** — the desktop window
+is undecorated and the workspace tab strip is its titlebar (drag, double-click
+maximize, min/maximize/close controls, and edge-resize grips for the borderless
+frame); and **`window.perWorkspace`** — a workspace tab's **Open in new window**
+spawns a second OS window (`ws-<id>`, loaded with `?workspace=<id>`) that boots
+straight into that workspace, all windows sharing one backend. See the capability
+table in [layout-shell.mdx](layout-shell.mdx).
 
 ## Dev affordance
 
@@ -155,7 +161,9 @@ Implemented: the full frame (tab strip, activity rail, three docks, center area
 grid, floating layer, fullscreen-area), three roles with strict zones,
 engine-native **persisted regions**, corner-drag split/join, the keyboard-first
 command set, role-routed opening, frame presets for all built-in workflows, the
-versioned serialization schema, and the rewritten agent layout tools. Not yet:
-pointer tab drag-docking (deliberate), OS windows / native chrome (phase 2 —
-capability contract only), region view cycling on repeat-press, and workspace
-reorder/import-export.
+versioned serialization schema, the rewritten agent layout tools, and the full
+phase-2 native shell — all three capabilities (`window.fullscreen` native
+OS-window fullscreen; `chrome.workspaceTabs` undecorated window with the tab
+strip as its titlebar; `window.perWorkspace` a workspace in its own OS window).
+Not yet: pointer tab drag-docking (deliberate), region view cycling on
+repeat-press, and workspace reorder/import-export.

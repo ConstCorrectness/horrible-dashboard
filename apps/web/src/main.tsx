@@ -7,6 +7,7 @@ import {
   codeModule,
   commonsModule,
   dashboardModule,
+  DESKTOP_CAPABILITIES,
   editorModule,
   filesModule,
   flowModule,
@@ -30,6 +31,7 @@ import {
   registry,
   replModule,
   scratchModule,
+  setWindowControl,
   settingsModule,
   stubModule,
   terminalModule,
@@ -41,6 +43,7 @@ import {
 import { AppShell } from '@horrible/ui';
 
 import { isTauri, resolveBackendOrigin } from './tauriBackend';
+import { createTauriWindowControl } from './tauriWindow';
 
 // Browser layout entry: browser capability set, built-in module registration,
 // then installed plugins — awaited so restored layouts find plugin panels and
@@ -52,7 +55,15 @@ async function boot(): Promise<void> {
     initBackendOrigin(await resolveBackendOrigin());
   }
 
-  initCapabilities(BROWSER_CAPABILITIES);
+  // Same frontend, two layouts: under Tauri claim the desktop capability set
+  // (native dialogs, window control, tray…) and wire the native window control;
+  // the browser gets the browser set and leaves the seam null.
+  if (isTauri()) {
+    initCapabilities(DESKTOP_CAPABILITIES);
+    setWindowControl(createTauriWindowControl());
+  } else {
+    initCapabilities(BROWSER_CAPABILITIES);
+  }
   registry.register(dashboardModule);
   registry.register(layoutsModule);
   registry.register(agentModule);
@@ -100,9 +111,14 @@ async function boot(): Promise<void> {
   const root = document.getElementById('root');
   if (!root) throw new Error('Missing #root element');
 
+  // A per-workspace OS window (window.perWorkspace) boots with `?workspace=<id>`
+  // and opens straight into that workspace instead of the home view.
+  const initialWorkspaceId =
+    new URLSearchParams(window.location.search).get('workspace') ?? undefined;
+
   createRoot(root).render(
     <StrictMode>
-      <AppShell appTitle="horrible-dashboard" />
+      <AppShell appTitle="horrible-dashboard" initialWorkspaceId={initialWorkspaceId} />
     </StrictMode>,
   );
 }

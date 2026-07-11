@@ -134,7 +134,8 @@ Key specs are `+`-separated modifier tokens plus the key — `mod+k`,
 | --- | --- |
 | `t` / `n` / `b` | toggle the focused pane's left / right / bottom **region** strip |
 | declared letters (`o`, `s`, `g`, …) | reveal that region view on the focused pane |
-| `ctrl+space` (Esc exits) | fullscreen the focused area |
+| `ctrl+space` (Esc exits) | fullscreen the focused area (in-window) |
+| `f11` (desktop only) | toggle native OS-window fullscreen (`window.fullscreen`) |
 | `alt+arrows` | move focus between areas |
 | `alt+shift+arrows` | move the active pane to the neighboring area |
 | `mod+alt+arrows` | split the focused area in that direction |
@@ -155,16 +156,52 @@ gracefully:
 | `shell.revealInOS`     | no                                 | yes                              |
 | `notifications.system` | Web Notifications (tab-scoped)     | OS notifications                 |
 | `window.multi`         | no (single tab, pop-out = new tab) | yes (panel pop-out to OS window) |
-| `window.perWorkspace`  | no                                 | planned (phase-2 native shell): a workspace per OS window |
-| `window.fullscreen`    | no (in-window fullscreen-area only) | planned (phase-2 native shell)  |
-| `chrome.workspaceTabs` | no (the frame renders its own tab strip) | planned (phase-2 native shell): tabs in the native titlebar |
+| `window.perWorkspace`  | no                                 | **yes** (open a workspace in its own OS window) |
+| `window.fullscreen`    | no (in-window fullscreen-area only) | **yes** (F11 toggles native OS-window fullscreen) |
+| `chrome.workspaceTabs` | no (the frame renders its own tab strip) | **yes** (undecorated window; the tab strip is the titlebar) |
 | `shortcuts.global`     | no                                 | yes (summon window, quick chat)  |
 | `tray`                 | no                                 | yes                              |
 
-The three `window.*`/`chrome.*` **phase-2** rows are the contract for the
-planned native shell (workspace-per-OS-window, native chrome hosting the
-workspace tab strip, OS fullscreen). They exist in the `Capability` union today
-so the frame can branch on them, but no shell grants them yet.
+The `window.*`/`chrome.*` **phase-2** rows are the contract for the native
+shell (workspace-per-OS-window, native chrome hosting the workspace tab strip,
+OS fullscreen). They exist in the `Capability` union so the frame can branch on
+them. The Tauri shell grants these through `DESKTOP_CAPABILITIES`, and the
+desktop entry wires a `WindowControl` seam (`packages/core/src/window.ts`) to
+the shell's `window_*` commands (`apps/desktop/src-tauri/src/window.rs`).
+Shipped so far:
+
+- **`window.fullscreen`** — `F11` (command `shell.toggleFullscreen`) toggles
+  native OS-window fullscreen, distinct from the frame's in-window
+  `area.fullscreen` (`ctrl+space`).
+- **`chrome.workspaceTabs`** — the desktop window is **undecorated**
+  (`decorations: false`) and the workspace tab strip is its titlebar: the strip's
+  empty space is a native `data-tauri-drag-region` (moves the window, maximizes
+  on double-click, handled in the webview), it hosts the min/maximize/close
+  controls (`WindowControls`), and invisible edge grips (`WindowResizeHandles`)
+  drive OS edge-resize since the frame has no native borders.
+- **`window.perWorkspace`** — a workspace tab's context menu gains **Open in new
+  window**, which opens (or focuses) a second OS window via `window_open_workspace`.
+  The new window is labelled `ws-<id>` and loads the same frontend with
+  `?workspace=<id>`; `main.tsx` reads that param and boots `AppShell` straight into
+  that workspace (skipping home). All windows share one backend and persist their
+  own workspace server-side, so no per-platform fork. The `ws-*` capability glob
+  grants secondary windows the same titlebar permissions as `main`. (v1 caveat:
+  opening the *same* workspace in two windows is last-write-wins on autosave, and
+  the server "active" flag tracks the most recently switched workspace in any
+  window.)
+
+Phase 2 is complete; all three native-shell capabilities ship.
+
+The `window_*` custom commands are ACL-gated like any command here: each needs a
+permission in `apps/desktop/src-tauri/permissions/` listed in
+`capabilities/default.json` (the `data-tauri-drag-region` additionally needs the
+core `window:allow-start-dragging` / `window:allow-internal-toggle-maximize`
+permissions). Wiring a new native capability follows this same path: grant it in
+`DESKTOP_CAPABILITIES`, add the Tauri command(s) + their permission, extend the
+relevant host seam,
+and gate the feature on `hasCapability(...)` so the browser degrades cleanly.
+The desktop build claims `DESKTOP_CAPABILITIES` (vs the browser's
+`BROWSER_CAPABILITIES`) via the `isTauri()` branch in `apps/web/src/main.tsx`.
 
 ## Backend connection
 

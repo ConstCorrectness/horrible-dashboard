@@ -36,7 +36,26 @@
   background: var(--bg);
   border-bottom: 1px solid var(--border);
   flex: none;
+}
+/* Scroll region holding the tabs; the empty area is the titlebar drag region
+   under `chrome.workspaceTabs` (see WindowChrome.tsx). */
+.frame-tabs-scroll {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
   overflow-x: auto;
+}
+/* Native-titlebar mode: the strip reaches the top-right corner for the window
+   controls, and its empty space is a drag surface (default cursor, no select). */
+.frame-tabs--native {
+  padding-right: 0;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.frame-tabs--native .frame-tabs-scroll {
+  overflow-x: hidden;
 }
 .frame-tab {
   display: inline-flex;
@@ -63,6 +82,104 @@
 }
 .frame-tab--new {
   padding: 5px 9px;
+}
+
+/* ----------------------------------------------- native window controls */
+/* Minimize / maximize / close for the undecorated window (chrome.workspaceTabs). */
+.win-controls {
+  display: flex;
+  align-items: stretch;
+  flex: none;
+  margin-left: 4px;
+  align-self: stretch;
+}
+.win-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 0;
+}
+.win-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.win-btn--close:hover {
+  background: #e81123;
+  color: #fff;
+}
+
+/* Invisible edge/corner grips that start an OS resize-drag on the undecorated
+   window. Fixed to the viewport edges, above content but out of the way. */
+.win-resize {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 40;
+}
+.win-resize-h {
+  position: absolute;
+  pointer-events: auto;
+}
+.win-resize-h--n {
+  top: 0;
+  left: 6px;
+  right: 6px;
+  height: 4px;
+  cursor: ns-resize;
+}
+.win-resize-h--s {
+  bottom: 0;
+  left: 6px;
+  right: 6px;
+  height: 4px;
+  cursor: ns-resize;
+}
+.win-resize-h--e {
+  top: 6px;
+  bottom: 6px;
+  right: 0;
+  width: 4px;
+  cursor: ew-resize;
+}
+.win-resize-h--w {
+  top: 6px;
+  bottom: 6px;
+  left: 0;
+  width: 4px;
+  cursor: ew-resize;
+}
+.win-resize-h--nw {
+  top: 0;
+  left: 0;
+  width: 6px;
+  height: 6px;
+  cursor: nwse-resize;
+}
+.win-resize-h--ne {
+  top: 0;
+  right: 0;
+  width: 6px;
+  height: 6px;
+  cursor: nesw-resize;
+}
+.win-resize-h--sw {
+  bottom: 0;
+  left: 0;
+  width: 6px;
+  height: 6px;
+  cursor: nesw-resize;
+}
+.win-resize-h--se {
+  bottom: 0;
+  right: 0;
+  width: 6px;
+  height: 6px;
+  cursor: nwse-resize;
 }
 
 /* --------------------------------------------------------------------- main */

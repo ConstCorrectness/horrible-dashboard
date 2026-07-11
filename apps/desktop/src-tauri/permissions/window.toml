@@ -1,0 +1,57 @@
+# Permissions for the native-shell window commands (see src/window.rs). Custom
+# app commands are ACL-gated here just like `backend_status`; each needs an
+# `allow-*` permission listed in capabilities/default.json.
+
+[[permission]]
+identifier = "allow-window-is-fullscreen"
+description = "Enables the window_is_fullscreen custom command"
+[permission.commands]
+allow = ["window_is_fullscreen"]
+
+[[permission]]
+identifier = "allow-window-set-fullscreen"
+description = "Enables the window_set_fullscreen custom command"
+[permission.commands]
+allow = ["window_set_fullscreen"]
+
+[[permission]]
+identifier = "allow-window-toggle-fullscreen"
+description = "Enables the window_toggle_fullscreen custom command"
+[permission.commands]
+allow = ["window_toggle_fullscreen"]
+
+[[permission]]
+identifier = "allow-window-minimize"
+description = "Enables the window_minimize custom command"
+[permission.commands]
+allow = ["window_minimize"]
+
+[[permission]]
+identifier = "allow-window-is-maximized"
+description = "Enables the window_is_maximized custom command"
+[permission.commands]
+allow = ["window_is_maximized"]
+
+[[permission]]
+identifier = "allow-window-toggle-maximize"
+description = "Enables the window_toggle_maximize custom command"
+[permission.commands]
+allow = ["window_toggle_maximize"]
+
+[[permission]]
+identifier = "allow-window-close"
+description = "Enables the window_close custom command"
+[permission.commands]
+allow = ["window_close"]
+
+[[permission]]
+identifier = "allow-window-start-resize-dragging"
+description = "Enables the window_start_resize_dragging custom command"
+[permission.commands]
+allow = ["window_start_resize_dragging"]
+
+[[permission]]
+identifier = "allow-window-open-workspace"
+description = "Enables the window_open_workspace custom command"
+[permission.commands]
+allow = ["window_open_workspace"]

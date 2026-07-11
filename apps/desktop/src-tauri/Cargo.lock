@@ -1225,6 +1225,7 @@ dependencies = [
  "serde_json",
  "tauri",
  "tauri-build",
+ "tauri-runtime",
 ]
 
 [[package]]

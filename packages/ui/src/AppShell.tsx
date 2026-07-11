@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   getActiveScope,
+  hasCapability,
   isEditableTarget,
   registry,
   resolveKeybinding,
   SymbolSearchModal,
+  toastsStore,
+  windowControl,
   type OpenPaneOptions,
   type ShellView,
 } from '@horrible/core';
@@ -15,6 +18,7 @@ import { Dialogs } from './Dialogs';
 import { Toasts } from './Toasts';
 import { HomeView } from './HomeView';
 import { Frame } from './layout/Frame';
+import { WindowResizeHandles } from './layout/WindowChrome';
 import { WorkspaceTabs } from './layout/WorkspaceTabs';
 import './styles.css';
 
@@ -24,8 +28,15 @@ import './styles.css';
  * rail, docks, center area grid). Global chrome (palette, toasts, dialogs,
  * keybinding dispatch) lives here. See docs/architecture/layout-shell.mdx.
  */
-export function AppShell({ appTitle }: { appTitle: string }) {
-  const [view, setView] = useState<ShellView>('home');
+export function AppShell({
+  appTitle,
+  initialWorkspaceId,
+}: {
+  appTitle: string;
+  /** When set (a per-workspace OS window), boot into this workspace, not home. */
+  initialWorkspaceId?: string;
+}) {
+  const [view, setView] = useState<ShellView>(initialWorkspaceId ? 'workspace' : 'home');
   const [paletteOpen, setPaletteOpen] = useState(false);
 
   // Bumped each time a panel should open, so the Frame reacts even to repeats.
@@ -46,6 +57,11 @@ export function AppShell({ appTitle }: { appTitle: string }) {
   }, [appTitle]);
 
   useEffect(() => {
+    // OS-window fullscreen is a phase-2 native-shell capability (F11); distinct
+    // from the frame's in-window `area.fullscreen` (ctrl+space). Only register
+    // it where a native shell grants the capability, so the browser keeps its
+    // own native F11 and the palette stays clean.
+    const nativeFullscreen = hasCapability('window.fullscreen');
     registry.register({
       id: 'shell',
       title: 'Shell',
@@ -57,8 +73,30 @@ export function AppShell({ appTitle }: { appTitle: string }) {
         },
         { id: 'shell.home', title: 'Go home', run: () => setView('home') },
         { id: 'shell.workspace', title: 'Go to workspace', run: () => setView('workspace') },
+        ...(nativeFullscreen
+          ? [
+              {
+                id: 'shell.toggleFullscreen',
+                title: 'Window: Toggle fullscreen',
+                run: async () => {
+                  const on = await windowControl()?.toggleFullscreen();
+                  if (on !== undefined) {
+                    toastsStore.add(
+                      'info',
+                      on ? 'Fullscreen' : 'Windowed',
+                      on ? 'Press F11 to exit.' : 'Press F11 for fullscreen.',
+                      1500,
+                    );
+                  }
+                },
+              },
+            ]
+          : []),
       ],
-      keybindings: [{ key: 'mod+k', command: 'shell.commandPalette' }],
+      keybindings: [
+        { key: 'mod+k', command: 'shell.commandPalette' },
+        ...(nativeFullscreen ? [{ key: 'f11', command: 'shell.toggleFullscreen' }] : []),
+      ],
     });
     // Opening any panel switches to the workspace and tells it which to open.
     registry.setPanelOpener((panelId, opts) => {
@@ -70,6 +108,11 @@ export function AppShell({ appTitle }: { appTitle: string }) {
       setView('workspace');
       setPendingWorkspace({ workspaceId, nonce: nonce.current++ });
     });
+    // Per-workspace OS window: open straight into the requested workspace once
+    // the frame is mounted (it replays this pending switch after hydration).
+    if (initialWorkspaceId) {
+      setPendingWorkspace({ workspaceId: initialWorkspaceId, nonce: nonce.current++ });
+    }
   }, []);
 
   useEffect(() => {
@@ -97,6 +140,7 @@ export function AppShell({ appTitle }: { appTitle: string }) {
 
   return (
     <div className="shell shell--frame">
+      {hasCapability('chrome.workspaceTabs') && <WindowResizeHandles />}
       <WorkspaceTabs />
       <div className="shell-content">
         <div hidden={view !== 'home'} className="shell-view">

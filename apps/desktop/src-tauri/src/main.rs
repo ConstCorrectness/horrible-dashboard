@@ -3,6 +3,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod backend;
+mod window;
 
 use std::sync::Arc;
 
@@ -22,7 +23,18 @@ fn main() {
 
     tauri::Builder::default()
         .manage(supervisor)
-        .invoke_handler(tauri::generate_handler![backend::backend_status])
+        .invoke_handler(tauri::generate_handler![
+            backend::backend_status,
+            window::window_is_fullscreen,
+            window::window_set_fullscreen,
+            window::window_toggle_fullscreen,
+            window::window_minimize,
+            window::window_is_maximized,
+            window::window_toggle_maximize,
+            window::window_close,
+            window::window_start_resize_dragging,
+            window::window_open_workspace
+        ])
         .build(tauri::generate_context!())
         .expect("error while building horrible-dashboard")
         .run(|app, event| {

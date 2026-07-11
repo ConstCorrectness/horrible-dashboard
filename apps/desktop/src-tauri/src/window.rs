@@ -1,0 +1,135 @@
+//! Native OS-window controls exposed to the frontend (phase-2 native shell).
+//!
+//! Two capabilities ride these commands:
+//! - `window.fullscreen` — borderless OS-window fullscreen, distinct from the
+//!   frame's in-window "fullscreen-area" mode (a pane filling the page).
+//! - `chrome.workspaceTabs` — the workspace tab strip is the window's own
+//!   titlebar (the window is undecorated), so the frontend drives edge-resize
+//!   and minimize/maximize/close itself. (Move-drag + double-click-maximize use
+//!   the webview's native `data-tauri-drag-region`, not a command here.)
+//! - `window.perWorkspace` — a workspace can open in its own OS window
+//!   (`window_open_workspace`): a new undecorated `WebviewWindow` labelled
+//!   `ws-<id>`, loading the same frontend with `?workspace=<id>` so it boots
+//!   straight into that workspace. Re-opening focuses the existing window.
+//!
+//! The frontend gates each behind its capability and drives them through the
+//! core `WindowControl` seam; the shell stays a thin pass-through to tao's
+//! window API.
+
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Window};
+use tauri_runtime::ResizeDirection;
+
+/// Whether the calling window is currently OS-fullscreen.
+#[tauri::command]
+pub fn window_is_fullscreen(window: WebviewWindow) -> Result<bool, String> {
+    window.is_fullscreen().map_err(|e| e.to_string())
+}
+
+/// Set the calling window's OS-fullscreen state; returns the value applied.
+#[tauri::command]
+pub fn window_set_fullscreen(window: WebviewWindow, value: bool) -> Result<bool, String> {
+    window.set_fullscreen(value).map_err(|e| e.to_string())?;
+    Ok(value)
+}
+
+/// Flip the calling window's OS-fullscreen state; returns the new state.
+/// Done in one command so the read/write can't race a concurrent toggle.
+#[tauri::command]
+pub fn window_toggle_fullscreen(window: WebviewWindow) -> Result<bool, String> {
+    let next = !window.is_fullscreen().map_err(|e| e.to_string())?;
+    window.set_fullscreen(next).map_err(|e| e.to_string())?;
+    Ok(next)
+}
+
+// --- chrome.workspaceTabs: custom titlebar drives the window itself ---------
+
+/// Minimize the calling window (titlebar minimize button).
+#[tauri::command]
+pub fn window_minimize(window: WebviewWindow) -> Result<(), String> {
+    window.minimize().map_err(|e| e.to_string())
+}
+
+/// Whether the calling window is currently maximized (for the restore icon).
+#[tauri::command]
+pub fn window_is_maximized(window: WebviewWindow) -> Result<bool, String> {
+    window.is_maximized().map_err(|e| e.to_string())
+}
+
+/// Toggle maximize/restore; returns the new maximized state. Backs both the
+/// titlebar maximize button and a titlebar double-click.
+#[tauri::command]
+pub fn window_toggle_maximize(window: WebviewWindow) -> Result<bool, String> {
+    let maximized = window.is_maximized().map_err(|e| e.to_string())?;
+    if maximized {
+        window.unmaximize().map_err(|e| e.to_string())?;
+    } else {
+        window.maximize().map_err(|e| e.to_string())?;
+    }
+    Ok(!maximized)
+}
+
+/// Close the calling window (titlebar close button) — exits the app.
+#[tauri::command]
+pub fn window_close(window: WebviewWindow) -> Result<(), String> {
+    window.close().map_err(|e| e.to_string())
+}
+
+/// Begin an OS resize-drag from a window edge/corner. `direction` is one of
+/// east/west/north/south/north-east/north-west/south-east/south-west — the
+/// undecorated window has no native resize borders, so the frontend supplies
+/// invisible edge handles that call this.
+#[tauri::command]
+pub fn window_start_resize_dragging(window: Window, direction: String) -> Result<(), String> {
+    let dir = match direction.as_str() {
+        "east" => ResizeDirection::East,
+        "west" => ResizeDirection::West,
+        "north" => ResizeDirection::North,
+        "south" => ResizeDirection::South,
+        "north-east" => ResizeDirection::NorthEast,
+        "north-west" => ResizeDirection::NorthWest,
+        "south-east" => ResizeDirection::SouthEast,
+        "south-west" => ResizeDirection::SouthWest,
+        other => return Err(format!("unknown resize direction: {other}")),
+    };
+    window.start_resize_dragging(dir).map_err(|e| e.to_string())
+}
+
+// --- window.perWorkspace: a workspace in its own OS window --------------------
+
+/// Unique, label-safe window id for a workspace. Tauri labels allow only
+/// `[a-zA-Z0-9-/:_]`, so any other character in the workspace id collapses to
+/// `_` (workspace ids are URL-safe slugs/uuids in practice, so this is a guard).
+fn workspace_window_label(workspace_id: &str) -> String {
+    let safe: String = workspace_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("ws-{safe}")
+}
+
+/// Open a workspace in its own OS window (or focus it if already open). The new
+/// window loads the same frontend with `?workspace=<id>` so it boots straight
+/// into that workspace; it's undecorated to match the custom titlebar, and the
+/// `ws-*` capability glob grants it the same window permissions as `main`.
+#[tauri::command]
+pub fn window_open_workspace(app: AppHandle, workspace_id: String) -> Result<(), String> {
+    let label = workspace_window_label(&workspace_id);
+    if let Some(existing) = app.get_webview_window(&label) {
+        return existing.set_focus().map_err(|e| e.to_string());
+    }
+    let url = WebviewUrl::App(format!("index.html?workspace={workspace_id}").into());
+    WebviewWindowBuilder::new(&app, &label, url)
+        .title("horrible-dashboard")
+        .inner_size(1280.0, 800.0)
+        .min_inner_size(640.0, 480.0)
+        .decorations(false)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}

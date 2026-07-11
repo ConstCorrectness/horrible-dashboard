@@ -9,5 +9,8 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
+# For `ResizeDirection` (the custom titlebar's edge-resize); the `tauri` crate
+# takes this type in `Window::start_resize_dragging` but doesn't re-export it.
+tauri-runtime = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

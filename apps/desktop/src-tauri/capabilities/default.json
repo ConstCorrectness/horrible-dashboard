@@ -2,9 +2,20 @@
   "$schema": "gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default capability for the main window",
-  "windows": ["main"],
+  "windows": ["main", "ws-*"],
   "permissions": [
     "core:default",
-    "allow-backend-status"
+    "allow-backend-status",
+    "allow-window-is-fullscreen",
+    "allow-window-set-fullscreen",
+    "allow-window-toggle-fullscreen",
+    "allow-window-minimize",
+    "allow-window-is-maximized",
+    "allow-window-toggle-maximize",
+    "allow-window-close",
+    "allow-window-start-resize-dragging",
+    "allow-window-open-workspace",
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize"
   ]
 }

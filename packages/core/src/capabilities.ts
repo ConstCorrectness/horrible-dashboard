@@ -11,6 +11,9 @@ export const DESKTOP_CAPABILITIES: Capability[] = [
   'shell.revealInOS',
   'notifications.system',
   'window.multi',
+  'window.fullscreen',
+  'window.perWorkspace',
+  'chrome.workspaceTabs',
   'shortcuts.global',
   'tray',
 ];
