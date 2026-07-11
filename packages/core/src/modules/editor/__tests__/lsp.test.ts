@@ -4,17 +4,19 @@ import { EditorState } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { lspExtension } from '../lsp';
 import { getLspClient } from '../lsp-registry';
-// @ts-ignore
-import { sendChannel, subscribeChannel, _getSent, _clearSent, _triggerMessage } from '../../../ws';
+// @ts-expect-error — these test-only mock helpers aren't part of the real ws module's types.
+import { _getSent, _clearSent, _triggerMessage } from '../../../ws';
+
+type MockMsg = { channel: string; event: string; data?: unknown };
 
 vi.mock('../../../ws', () => {
-  const listeners: Record<string, ((msg: any) => void)[]> = {};
-  const sent: { channel: string; event: string; data?: any }[] = [];
+  const listeners: Record<string, ((msg: MockMsg) => void)[]> = {};
+  const sent: MockMsg[] = [];
   return {
-    sendChannel: vi.fn((channel: string, event: string, data?: any) => {
+    sendChannel: vi.fn((channel: string, event: string, data?: unknown) => {
       sent.push({ channel, event, data });
     }),
-    subscribeChannel: vi.fn((channel: string, handler: (msg: any) => void) => {
+    subscribeChannel: vi.fn((channel: string, handler: (msg: MockMsg) => void) => {
       if (!listeners[channel]) listeners[channel] = [];
       listeners[channel].push(handler);
       return () => {
@@ -26,7 +28,7 @@ vi.mock('../../../ws', () => {
     _clearSent: () => {
       sent.length = 0;
     },
-    _triggerMessage: (channel: string, event: string, data: any) => {
+    _triggerMessage: (channel: string, event: string, data: unknown) => {
       const handlerList = listeners[channel] || [];
       for (const h of handlerList) {
         h({ channel, event, data });
@@ -69,7 +71,9 @@ describe('LSP IntelliSense client', () => {
       }),
     );
 
-    const sessionId = sentMessages.find((m) => m.event === 'start')?.data.sessionId;
+    const sessionId = sentMessages.find(
+      (m: { event: string; data?: { sessionId?: string } }) => m.event === 'start',
+    )?.data?.sessionId;
     expect(sessionId).toBeDefined();
 
     // Simulate backend sending 'started' event
@@ -151,8 +155,9 @@ describe('LSP IntelliSense client', () => {
 
     // Call hover lookup (which should flush changes first)
     // We expect request() to flush changes synchronously and send didChange with version 2
-    // before the hover request.
-    void client?.hover(0);
+    // before the hover request. getLspClient() is typed as the narrow agent-facing
+    // LspBufferClient; the live registry object is the full LspClient with hover().
+    void (client as unknown as { hover(pos: number): Promise<unknown> } | undefined)?.hover(0);
 
     expect(_getSent()[0]).toEqual(
       expect.objectContaining({
