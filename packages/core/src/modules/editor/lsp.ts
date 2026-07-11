@@ -103,6 +103,7 @@ interface LspClient extends LspBufferClient {
   dead: boolean;
   /** Characters that auto-open the completion list (from the server's capabilities). */
   triggerChars: string[];
+  flushChanges(): void;
   complete(context: CompletionContext): Promise<CompletionResult | null>;
   hover(pos: number): Promise<Tooltip | null>;
   definition(pos: number): Promise<void>;
@@ -520,10 +521,16 @@ class LspSession {
   }
 
   /** Register a document and open it on the server (queued until initialize completes). */
-  openDocument(uri: string, languageId: string, text: string, doc: SessionDoc): void {
+  openDocument(
+    uri: string,
+    languageId: string,
+    textOrFn: string | (() => string),
+    doc: SessionDoc,
+  ): void {
     this.docs.set(uri, doc);
     const open = (): void => {
       if (this.dead) return;
+      const text = typeof textOrFn === 'function' ? textOrFn() : textOrFn;
       this.rpc({
         jsonrpc: '2.0',
         method: 'textDocument/didOpen',
@@ -792,7 +799,7 @@ export function lspExtension(opts: LspOptions): Extension {
           interpreter,
         );
         this.session = session;
-        session.openDocument(uri, opts.languageId, this.view.state.doc.toString(), {
+        session.openDocument(uri, opts.languageId, () => this.view.state.doc.toString(), {
           onDiagnostics: (raw) => this.applyDiagnostics(raw),
         });
       }
@@ -815,8 +822,17 @@ export function lspExtension(opts: LspOptions): Extension {
         return this.session?.ready() ?? false;
       }
 
+      flushChanges(): void {
+        if (this.changeTimer !== undefined) {
+          window.clearTimeout(this.changeTimer);
+          this.changeTimer = undefined;
+          this.sendChange();
+        }
+      }
+
       /** A JSON-RPC request over the shared session, scoped to this document by `uri`. */
       request(method: string, params: Record<string, unknown>, timeoutMs = 4000): Promise<unknown> {
+        this.flushChanges();
         return this.session
           ? this.session.request(method, params, timeoutMs)
           : Promise.reject(new Error('lsp session not connected'));
@@ -848,6 +864,7 @@ export function lspExtension(opts: LspOptions): Extension {
       }
 
       async rename(target: LspTarget, newName: string): Promise<RenameOutcome> {
+        this.flushChanges();
         if (!this.ready()) return { ok: false, error: 'language server not ready' };
         const position = this.resolveTarget(target);
         if (!position) return { ok: false, error: 'could not locate the symbol to rename' };
@@ -908,6 +925,7 @@ export function lspExtension(opts: LspOptions): Extension {
       async references(
         target: LspTarget,
       ): Promise<{ ok: boolean; error?: string; references?: AgentReference[] }> {
+        this.flushChanges();
         if (!this.ready()) return { ok: false, error: 'language server not ready' };
         const position = this.resolveTarget(target);
         if (!position) return { ok: false, error: 'could not locate the symbol' };
@@ -935,6 +953,7 @@ export function lspExtension(opts: LspOptions): Extension {
       /** Completion candidates + hover at an offset, to ground the ghost-text
        * prompt (the LLM picks from symbols the server says are in scope). */
       async grounding(offset: number): Promise<LspGrounding | null> {
+        this.flushChanges();
         if (!this.ready()) return null;
         const position = positionAt(this.view.state.doc, offset);
         const [comp, hov] = await Promise.allSettled([
@@ -960,7 +979,18 @@ export function lspExtension(opts: LspOptions): Extension {
         const doc = this.view.state.doc;
         const line = doc.lineAt(context.pos);
         const position = { line: line.number - 1, character: context.pos - line.from };
-        const items = await this.completionItems(position);
+        let completionContext: { triggerKind: number; triggerCharacter?: string } | undefined = undefined;
+        if (context.explicit) {
+          completionContext = { triggerKind: 1 };
+        } else {
+          const charBefore = doc.sliceString(context.pos - 1, context.pos);
+          if (this.triggerChars.includes(charBefore)) {
+            completionContext = { triggerKind: 2, triggerCharacter: charBefore };
+          } else {
+            completionContext = { triggerKind: 1 };
+          }
+        }
+        const items = await this.completionItems(position, completionContext);
         if (!items.length) return null;
         const options: Completion[] = items.slice(0, 200).map((it) => {
           // Shared metadata; the doc pane is resolved lazily when the item is focused.
@@ -1011,8 +1041,12 @@ export function lspExtension(opts: LspOptions): Extension {
 
       /** Completion items at a position, cached for the current document version so a
        * re-opened dropdown at the same spot doesn't re-hit the server. */
-      async completionItems(position: LspPosition): Promise<LspCompletionItem[]> {
-        const key = `${this.version}:${position.line}:${position.character}`;
+      async completionItems(
+        position: LspPosition,
+        completionContext?: { triggerKind: number; triggerCharacter?: string },
+      ): Promise<LspCompletionItem[]> {
+        this.flushChanges();
+        const key = `${this.version}:${position.line}:${position.character}:${completionContext?.triggerCharacter ?? ''}`;
         const cached = this.completionCache.get(key);
         if (cached) return cached;
         let result: unknown;
@@ -1020,6 +1054,7 @@ export function lspExtension(opts: LspOptions): Extension {
           result = await this.request('textDocument/completion', {
             textDocument: { uri },
             position,
+            context: completionContext,
           });
         } catch {
           return []; // timed out / errored — no completions
@@ -1072,6 +1107,7 @@ export function lspExtension(opts: LspOptions): Extension {
       }
 
       async hover(pos: number): Promise<Tooltip | null> {
+        this.flushChanges();
         const key = `${this.version}:${pos}`;
         let text = this.hoverCache.get(key);
         if (text === undefined) {
@@ -1102,6 +1138,7 @@ export function lspExtension(opts: LspOptions): Extension {
       }
 
       async definition(pos: number): Promise<void> {
+        this.flushChanges();
         let result: unknown;
         try {
           result = await this.request('textDocument/definition', {
