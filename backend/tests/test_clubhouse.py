@@ -369,7 +369,7 @@ def test_create_channel(client, tmp_path, monkeypatch) -> None:
             "topic": "Testing Create Room",
             "is_private": False,
             "is_social_mode": False,
-            "privacy_level": 1,
+            "privacy_level": "public",
             "club_id": None,
             "user_ids": [],
             "event_id": None,
