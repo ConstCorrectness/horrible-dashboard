@@ -19,7 +19,7 @@ import { Toasts } from './Toasts';
 import { HomeView } from './HomeView';
 import { Frame } from './layout/Frame';
 import { WindowResizeHandles } from './layout/WindowChrome';
-import { WorkspaceTabs } from './layout/WorkspaceTabs';
+import { DetachedTitlebar, WorkspaceTabs } from './layout/WorkspaceTabs';
 import './styles.css';
 
 /**
@@ -138,16 +138,23 @@ export function AppShell({
     if (view === 'workspace') setWorkspaceMounted(true);
   }, [view]);
 
+  // A per-workspace OS window is "detached": it drops the workspace-switcher
+  // strip and home view, showing only a slim titlebar over that one workspace's
+  // frame (rail + docks + center).
+  const detached = !!initialWorkspaceId;
+
   return (
-    <div className="shell shell--frame">
+    <div className={`shell shell--frame${detached ? ' shell--detached' : ''}`}>
       {hasCapability('chrome.workspaceTabs') && <WindowResizeHandles />}
-      <WorkspaceTabs />
+      {detached ? <DetachedTitlebar /> : <WorkspaceTabs />}
       <div className="shell-content">
-        <div hidden={view !== 'home'} className="shell-view">
-          <HomeView />
-        </div>
-        {workspaceMounted && (
-          <div hidden={view !== 'workspace'} className="shell-view">
+        {!detached && (
+          <div hidden={view !== 'home'} className="shell-view">
+            <HomeView />
+          </div>
+        )}
+        {(detached || workspaceMounted) && (
+          <div hidden={!detached && view !== 'workspace'} className="shell-view">
             <Frame pendingOpen={pendingOpen} pendingWorkspace={pendingWorkspace} />
           </div>
         )}

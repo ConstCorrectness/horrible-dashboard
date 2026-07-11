@@ -181,14 +181,22 @@ Shipped so far:
   drive OS edge-resize since the frame has no native borders.
 - **`window.perWorkspace`** — a workspace tab's context menu gains **Open in new
   window**, which opens (or focuses) a second OS window via `window_open_workspace`.
-  The new window is labelled `ws-<id>` and loads the same frontend with
-  `?workspace=<id>`; `main.tsx` reads that param and boots `AppShell` straight into
-  that workspace (skipping home). All windows share one backend and persist their
-  own workspace server-side, so no per-platform fork. The `ws-*` capability glob
-  grants secondary windows the same titlebar permissions as `main`. (v1 caveat:
-  opening the *same* workspace in two windows is last-write-wins on autosave, and
-  the server "active" flag tracks the most recently switched workspace in any
-  window.)
+  The new window is labelled `ws-<id>` and opens **detached**: `AppShell` drops the
+  workspace-switcher strip and home view for a slim draggable titlebar
+  (`DetachedTitlebar` — workspace name + window controls) over that one workspace's
+  frame (rail + docks + center), Blender detached-area style. Its target workspace
+  arrives via a Tauri **initialization-script** global
+  (`window.__HORRIBLE_WORKSPACE__`) that `main.tsx` reads to boot straight into it
+  (the `?workspace=` query is a browser-testing fallback). Two things the command
+  gets right the hard way: it's **`async`** (a sync command runs on the main thread,
+  where `WebviewWindowBuilder::build()` deadlocks the whole app), and in dev it
+  loads **`build.devUrl` via `WebviewUrl::External`** (a runtime-created
+  `WebviewUrl::App` resolves to the production asset protocol, which has no built
+  `dist` → a blank webview). All windows share one backend and persist their own
+  workspace server-side, so no per-platform fork; the `ws-*` capability glob grants
+  secondary windows the same titlebar permissions as `main`. (v1 caveat: opening
+  the *same* workspace in two windows is last-write-wins on autosave, and the
+  server "active" flag tracks the most recently switched workspace in any window.)
 
 Phase 2 is complete; all three native-shell capabilities ship.
 

@@ -145,9 +145,11 @@ toggles native OS-window fullscreen, orthogonal to the in-window
 is undecorated and the workspace tab strip is its titlebar (drag, double-click
 maximize, min/maximize/close controls, and edge-resize grips for the borderless
 frame); and **`window.perWorkspace`** — a workspace tab's **Open in new window**
-spawns a second OS window (`ws-<id>`, loaded with `?workspace=<id>`) that boots
-straight into that workspace, all windows sharing one backend. See the capability
-table in [layout-shell.mdx](layout-shell.mdx).
+spawns a second OS window (`ws-<id>`) that opens **detached** (a slim titlebar over
+just that workspace's frame, no switcher strip) and boots straight into the
+workspace via an initialization-script global (`window.__HORRIBLE_WORKSPACE__`),
+all windows sharing one backend. See the capability table in
+[layout-shell.mdx](layout-shell.mdx).
 
 ## Dev affordance
 

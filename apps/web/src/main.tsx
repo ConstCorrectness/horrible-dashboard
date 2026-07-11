@@ -111,10 +111,14 @@ async function boot(): Promise<void> {
   const root = document.getElementById('root');
   if (!root) throw new Error('Missing #root element');
 
-  // A per-workspace OS window (window.perWorkspace) boots with `?workspace=<id>`
-  // and opens straight into that workspace instead of the home view.
+  // A per-workspace OS window (window.perWorkspace) opens straight into a target
+  // workspace instead of home. The desktop shell injects the id as a global via
+  // an initialization script (window_open_workspace); the `?workspace=` query is
+  // a fallback for browser/dev testing.
   const initialWorkspaceId =
-    new URLSearchParams(window.location.search).get('workspace') ?? undefined;
+    (window as { __HORRIBLE_WORKSPACE__?: string }).__HORRIBLE_WORKSPACE__ ??
+    new URLSearchParams(window.location.search).get('workspace') ??
+    undefined;
 
   createRoot(root).render(
     <StrictMode>
@@ -123,4 +127,14 @@ async function boot(): Promise<void> {
   );
 }
 
-void boot();
+// Surface a boot failure as visible text rather than a blank white window.
+void boot().catch((err: unknown) => {
+  console.error('[boot] failed', err);
+  const root = document.getElementById('root');
+  if (root) {
+    const detail = err instanceof Error ? (err.stack ?? err.message) : String(err);
+    root.innerHTML =
+      '<pre style="padding:16px;color:#f88;white-space:pre-wrap;font:13px/1.5 monospace">' +
+      `Boot failed:\n${detail.replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' })[c] ?? c)}</pre>`;
+  }
+});

@@ -183,3 +183,29 @@ export function WorkspaceTabs() {
     </header>
   );
 }
+
+/**
+ * The titlebar for a **detached** per-workspace OS window (`window.perWorkspace`):
+ * the full workspace-switcher strip is stripped down to a slim, draggable bar
+ * showing just the workspace name plus the min/maximize/close controls — the
+ * window is dedicated to one workspace, so there's nothing to switch. Keeps the
+ * frame below (rail + docks + center) intact, Blender detached-area style.
+ */
+export function DetachedTitlebar() {
+  const { workspaces, activeId } = useWorkspaces();
+  const nativeChrome = hasCapability('chrome.workspaceTabs');
+  const name = workspaces.find((w) => w.id === activeId)?.name ?? 'Workspace';
+  const dragProps = nativeChrome ? { 'data-tauri-drag-region': '' } : {};
+  return (
+    <header
+      className={`frame-tabs frame-tabs--detached${nativeChrome ? ' frame-tabs--native' : ''}`}
+    >
+      <div className="frame-tabs-scroll" {...dragProps}>
+        <span className="detached-title" {...dragProps}>
+          {name}
+        </span>
+      </div>
+      {nativeChrome && <WindowControls />}
+    </header>
+  );
+}

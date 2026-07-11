@@ -84,6 +84,21 @@
   padding: 5px 9px;
 }
 
+/* Detached per-workspace window: slim titlebar, just the workspace name. */
+.frame-tabs--detached {
+  padding: 0 0 0 4px;
+  align-items: center;
+  min-height: 30px;
+}
+.detached-title {
+  align-self: center;
+  padding: 0 10px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
 /* ----------------------------------------------- native window controls */
 /* Minimize / maximize / close for the undecorated window (chrome.workspaceTabs). */
 .win-controls {

@@ -113,22 +113,44 @@ fn workspace_window_label(workspace_id: &str) -> String {
     format!("ws-{safe}")
 }
 
-/// Open a workspace in its own OS window (or focus it if already open). The new
-/// window loads the same frontend with `?workspace=<id>` so it boots straight
-/// into that workspace; it's undecorated to match the custom titlebar, and the
-/// `ws-*` capability glob grants it the same window permissions as `main`.
+/// Open a workspace in its own OS window (or focus it if already open). It
+/// receives its target workspace via an **initialization script** global
+/// (`window.__HORRIBLE_WORKSPACE__`), which the frontend reads at boot, and is
+/// undecorated to match the custom titlebar; the `ws-*` capability glob grants it
+/// the same window permissions as `main`.
+///
+/// Its URL comes from config: under `tauri dev` a runtime-created
+/// `WebviewUrl::App("index.html")` resolves to the *production* asset protocol
+/// (no built `dist` → blank webview), so in dev we load `build.devUrl` directly
+/// via `WebviewUrl::External`; packaged builds (no `devUrl`) use the bundled
+/// assets. We read the URL from `app.config()` — a cheap, lock-free read —
+/// rather than a live window's `.url()`, which round-trips to the main thread.
+///
+/// The command is **async** on purpose: sync commands run on the main thread,
+/// where `build()` (which needs the main thread to create the webview) deadlocks
+/// the whole app. Async runs it on a worker thread, so `build()` can dispatch to
+/// a free main thread and complete.
 #[tauri::command]
-pub fn window_open_workspace(app: AppHandle, workspace_id: String) -> Result<(), String> {
+pub async fn window_open_workspace(app: AppHandle, workspace_id: String) -> Result<(), String> {
     let label = workspace_window_label(&workspace_id);
     if let Some(existing) = app.get_webview_window(&label) {
         return existing.set_focus().map_err(|e| e.to_string());
     }
-    let url = WebviewUrl::App(format!("index.html?workspace={workspace_id}").into());
-    WebviewWindowBuilder::new(&app, &label, url)
+    let target = match app.config().build.dev_url.clone() {
+        Some(dev_url) => WebviewUrl::External(dev_url),
+        None => WebviewUrl::App("index.html".into()),
+    };
+    // serde_json quotes/escapes the id, so the script is injection-safe.
+    let init = format!(
+        "window.__HORRIBLE_WORKSPACE__ = {};",
+        serde_json::to_string(&workspace_id).map_err(|e| e.to_string())?
+    );
+    WebviewWindowBuilder::new(&app, &label, target)
         .title("horrible-dashboard")
         .inner_size(1280.0, 800.0)
         .min_inner_size(640.0, 480.0)
         .decorations(false)
+        .initialization_script(&init)
         .build()
         .map_err(|e| e.to_string())?;
     Ok(())
