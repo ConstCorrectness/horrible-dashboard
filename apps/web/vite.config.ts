@@ -1,5 +1,17 @@
 import react from '@vitejs/plugin-react';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
+
+// Load workspace root .env if running directly without scripts/dev.mjs wrapper
+const rootEnv = resolve(__dirname, '../../.env');
+if (existsSync(rootEnv)) {
+  try {
+    process.loadEnvFile(rootEnv);
+  } catch (e) {
+    console.warn('⚠️ Failed to load root .env file:', e);
+  }
+}
 
 export default defineConfig({
   plugins: [react()],

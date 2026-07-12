@@ -107,6 +107,34 @@ pub fn start(supervisor: Arc<BackendSupervisor>) {
     std::thread::spawn(move || run(supervisor));
 }
 
+fn load_env_file(root: &Path) {
+    let env_path = root.join(".env");
+    if env_path.is_file() {
+        if let Ok(file) = std::fs::File::open(env_path) {
+            let reader = std::io::BufReader::new(file);
+            for line in reader.lines().map_while(Result::ok) {
+                let trimmed = line.trim();
+                if trimmed.is_empty() || trimmed.starts_with('#') {
+                    continue;
+                }
+                if let Some((key, val)) = trimmed.split_once('=') {
+                    let key = key.trim();
+                    let val = val.trim();
+                    // Strip optional quotes around value
+                    let val = if (val.starts_with('"') && val.ends_with('"'))
+                        || (val.starts_with('\'') && val.ends_with('\''))
+                    {
+                        &val[1..val.len() - 1]
+                    } else {
+                        val
+                    };
+                    std::env::set_var(key, val);
+                }
+            }
+        }
+    }
+}
+
 fn run(sup: Arc<BackendSupervisor>) {
     let Some(root) = find_repo_root() else {
         sup.set_status(
@@ -120,14 +148,22 @@ fn run(sup: Arc<BackendSupervisor>) {
         return;
     };
 
+    // Load .env file if it exists at the repo root so we get configured ports/vars
+    load_env_file(&root);
+
+    let target_port: u16 = std::env::var("HORRIBLE_DEV_BACKEND_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_PORT);
+
     // Dev coexistence: an already-running backend (scripts/dev-backend.ps1)
     // wins; don't spawn a duplicate.
-    if port_listening(DEFAULT_PORT) {
-        sup.set_status("ready", Some(origin_for(DEFAULT_PORT)), None);
+    if port_listening(target_port) {
+        sup.set_status("ready", Some(origin_for(target_port)), None);
         return;
     }
 
-    let port = match pick_port() {
+    let port = match pick_port(target_port) {
         Ok(port) => port,
         Err(err) => {
             sup.set_status("failed", None, Some(format!("no free port: {err}")));
@@ -252,11 +288,11 @@ fn port_listening(port: u16) -> bool {
     TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
 }
 
-/// Prefer the default port (browser tabs / curl keep working); else ephemeral.
-fn pick_port() -> std::io::Result<u16> {
-    if let Ok(listener) = TcpListener::bind((Ipv4Addr::LOCALHOST, DEFAULT_PORT)) {
+/// Prefer the configured default port (browser tabs / curl keep working); else ephemeral.
+fn pick_port(target_port: u16) -> std::io::Result<u16> {
+    if let Ok(listener) = TcpListener::bind((Ipv4Addr::LOCALHOST, target_port)) {
         drop(listener);
-        return Ok(DEFAULT_PORT);
+        return Ok(target_port);
     }
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
     let port = listener.local_addr()?.port();
