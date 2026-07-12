@@ -397,8 +397,10 @@
   flex-direction: column;
 }
 .frame-cell {
+  display: flex; /* bound the child via flex, not fragile % height */
   min-width: 0;
   min-height: 0;
+  overflow: hidden; /* a tall pane can't grow the cell / stretch siblings */
   flex-shrink: 1;
 }
 .frame-sash {
