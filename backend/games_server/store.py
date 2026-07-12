@@ -82,6 +82,24 @@ def init_db() -> None:
                 updated_at REAL NOT NULL,
                 PRIMARY KEY (account_id, game_id)
             );
+            -- The Plaza (human social layer): gamified profiles + friendships.
+            CREATE TABLE IF NOT EXISTS player_profiles (
+                account_id TEXT PRIMARY KEY,
+                avatar     TEXT NOT NULL DEFAULT '🙂',
+                bio        TEXT NOT NULL DEFAULT '',
+                xp         INTEGER NOT NULL DEFAULT 0,
+                updated_at REAL NOT NULL
+            );
+            -- One row per friendship, stored canonically (account_a < account_b).
+            -- `requested_by` is the side that asked; `status` is pending|accepted.
+            CREATE TABLE IF NOT EXISTS friendships (
+                account_a    TEXT NOT NULL,
+                account_b    TEXT NOT NULL,
+                status       TEXT NOT NULL,
+                requested_by TEXT NOT NULL,
+                updated_at   REAL NOT NULL,
+                PRIMARY KEY (account_a, account_b)
+            );
             """
         )
 
@@ -178,6 +196,12 @@ def record_result(
                 json.dumps({"seats": seats, "returns": returns}),
             ),
         )
+        # Everyone who played earns XP toward their Plaza level (win 20 / draw 10 /
+        # loss 5), so the social profile grows just by showing up and competing.
+        for idx, account_id in enumerate(seats):
+            payoff = returns.get(idx, 0.0)
+            gained = 20 if payoff > 0 else 5 if payoff < 0 else 10
+            _add_xp(conn, account_id, gained)
         if len(seats) != 2:
             return  # ELO is 2-player for now; multi-player rating is a later phase.
         a, b = seats[0], seats[1]
@@ -290,3 +314,218 @@ def leaderboard(game_id: str, limit: int = 50) -> list[dict[str, Any]]:
         }
         for row in rows
     ]
+
+
+# ---- Plaza: gamified profiles ---------------------------------------------
+
+# Cumulative XP thresholds; your level is the number of thresholds you've passed.
+# The curve steepens so early levels come fast (sign-in + a couple of games) and
+# later ones are a grind — the usual gamified shape.
+LEVEL_THRESHOLDS = (0, 30, 90, 200, 400, 700, 1150, 1800, 2700, 4000, 6000)
+
+
+def level_for_xp(xp: int) -> int:
+    """1-based level for a total XP: level N once you've crossed threshold N-1."""
+    level = 1
+    for threshold in LEVEL_THRESHOLDS[1:]:
+        if xp >= threshold:
+            level += 1
+        else:
+            break
+    return level
+
+
+def _next_threshold(level: int) -> int | None:
+    """XP needed to reach the next level (None once past the last threshold)."""
+    return LEVEL_THRESHOLDS[level] if level < len(LEVEL_THRESHOLDS) else None
+
+
+def _profile_view(account_id: str, avatar: str, bio: str, xp: int) -> dict[str, Any]:
+    level = level_for_xp(xp)
+    return {
+        "account_id": account_id,
+        "avatar": avatar,
+        "bio": bio,
+        "xp": xp,
+        "level": level,
+        "level_floor": LEVEL_THRESHOLDS[level - 1],
+        "next_level_xp": _next_threshold(level),
+    }
+
+
+def get_profile(account_id: str) -> dict[str, Any]:
+    """A player's gamified profile (avatar, bio, xp, derived level). Returns sane
+    defaults for an account that has never touched the Plaza."""
+    init_db()
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT avatar, bio, xp FROM player_profiles WHERE account_id = ?",
+            (account_id,),
+        ).fetchone()
+    if row is None:
+        return _profile_view(account_id, "🙂", "", 0)
+    return _profile_view(account_id, row["avatar"], row["bio"], row["xp"])
+
+
+def upsert_profile(
+    account_id: str, *, avatar: str | None = None, bio: str | None = None
+) -> dict[str, Any]:
+    """Create or patch a profile's avatar/bio (XP is only earned via `add_xp`)."""
+    init_db()
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT avatar, bio, xp FROM player_profiles WHERE account_id = ?",
+            (account_id,),
+        ).fetchone()
+        cur_avatar = row["avatar"] if row else "🙂"
+        cur_bio = row["bio"] if row else ""
+        cur_xp = row["xp"] if row else 0
+        new_avatar = avatar if avatar is not None else cur_avatar
+        new_bio = bio if bio is not None else cur_bio
+        conn.execute(
+            """
+            INSERT INTO player_profiles (account_id, avatar, bio, xp, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(account_id) DO UPDATE SET
+                avatar = excluded.avatar, bio = excluded.bio,
+                updated_at = excluded.updated_at
+            """,
+            (account_id, new_avatar, new_bio, cur_xp, time.time()),
+        )
+    return _profile_view(account_id, new_avatar, new_bio, cur_xp)
+
+
+def _add_xp(conn: sqlite3.Connection, account_id: str, amount: int) -> None:
+    """Grant XP inside an open transaction (used by `record_result`)."""
+    conn.execute(
+        """
+        INSERT INTO player_profiles (account_id, avatar, bio, xp, updated_at)
+        VALUES (?, '🙂', '', ?, ?)
+        ON CONFLICT(account_id) DO UPDATE SET
+            xp = xp + excluded.xp, updated_at = excluded.updated_at
+        """,
+        (account_id, amount, time.time()),
+    )
+
+
+def add_xp(account_id: str, amount: int) -> dict[str, Any]:
+    """Grant XP and return the updated profile."""
+    init_db()
+    with get_conn() as conn:
+        _add_xp(conn, account_id, amount)
+    return get_profile(account_id)
+
+
+# ---- Plaza: friendships ----------------------------------------------------
+
+
+def _pair(a: str, b: str) -> tuple[str, str]:
+    """Canonical (account_a, account_b) ordering so each friendship is one row."""
+    return (a, b) if a <= b else (b, a)
+
+
+def request_friend(requester: str, target: str) -> str:
+    """Ask to friend `target`. If they'd already asked you, this accepts (mutual
+    intent → friends). Returns the resulting status ('pending' or 'accepted')."""
+    if requester == target:
+        return "self"
+    init_db()
+    a, b = _pair(requester, target)
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT status, requested_by FROM friendships WHERE account_a = ? AND account_b = ?",
+            (a, b),
+        ).fetchone()
+        if row is not None:
+            if row["status"] == "accepted":
+                return "accepted"
+            # A pending request the *other* side opened → this reply accepts it.
+            if row["requested_by"] != requester:
+                conn.execute(
+                    "UPDATE friendships SET status = 'accepted', updated_at = ? WHERE account_a = ? AND account_b = ?",
+                    (time.time(), a, b),
+                )
+                return "accepted"
+            return "pending"
+        conn.execute(
+            "INSERT INTO friendships (account_a, account_b, status, requested_by, updated_at) VALUES (?, ?, 'pending', ?, ?)",
+            (a, b, requester, time.time()),
+        )
+    return "pending"
+
+
+def accept_friend(account_id: str, other: str) -> bool:
+    """Accept an incoming pending request. Only the addressee (not the requester)
+    can accept. Returns True if a pending request became a friendship."""
+    init_db()
+    a, b = _pair(account_id, other)
+    with get_conn() as conn:
+        cur = conn.execute(
+            """
+            UPDATE friendships SET status = 'accepted', updated_at = ?
+            WHERE account_a = ? AND account_b = ?
+              AND status = 'pending' AND requested_by = ?
+            """,
+            (time.time(), a, b, other),
+        )
+        return cur.rowcount > 0
+
+
+def remove_friend(account_id: str, other: str) -> None:
+    """Remove a friend or decline/cancel a pending request (either side may)."""
+    init_db()
+    a, b = _pair(account_id, other)
+    with get_conn() as conn:
+        conn.execute(
+            "DELETE FROM friendships WHERE account_a = ? AND account_b = ?", (a, b)
+        )
+
+
+def _friend_row_view(conn: sqlite3.Connection, other_id: str) -> dict[str, Any]:
+    row = conn.execute(
+        """
+        SELECT COALESCE(a.display_name, ?) AS display_name,
+               COALESCE(p.avatar, '🙂') AS avatar,
+               COALESCE(p.xp, 0) AS xp
+        FROM (SELECT ? AS id) x
+        LEFT JOIN accounts a ON a.id = x.id
+        LEFT JOIN player_profiles p ON p.account_id = x.id
+        """,
+        (other_id, other_id),
+    ).fetchone()
+    return {
+        "account_id": other_id,
+        "display_name": row["display_name"],
+        "avatar": row["avatar"],
+        "level": level_for_xp(row["xp"]),
+    }
+
+
+def list_friends(account_id: str) -> list[dict[str, Any]]:
+    """Accepted friends of `account_id` (both directions), with avatar + level."""
+    init_db()
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT CASE WHEN account_a = ? THEN account_b ELSE account_a END AS other
+            FROM friendships
+            WHERE (account_a = ? OR account_b = ?) AND status = 'accepted'
+            """,
+            (account_id, account_id, account_id),
+        ).fetchall()
+        return [_friend_row_view(conn, r["other"]) for r in rows]
+
+
+def list_pending(account_id: str) -> list[dict[str, Any]]:
+    """Incoming pending requests (someone else asked to friend `account_id`)."""
+    init_db()
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT requested_by FROM friendships
+            WHERE (account_a = ? OR account_b = ?)
+              AND status = 'pending' AND requested_by != ?
+            """,
+            (account_id, account_id, account_id),
+        ).fetchall()
+        return [_friend_row_view(conn, r["requested_by"]) for r in rows]

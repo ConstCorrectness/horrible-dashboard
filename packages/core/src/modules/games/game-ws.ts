@@ -110,6 +110,89 @@ export interface TownState {
   events: TownEvent[];
 }
 
+// ---- The Plaza (human social layer) ----------------------------------------
+
+/** A real user standing in a room (the Habbo-style floor renders these). */
+export interface SocialOccupant {
+  account_id: string;
+  name: string;
+  avatar: string;
+  x: number;
+  y: number;
+}
+
+/** A speech (or emote) bubble that popped over someone's avatar. */
+export interface SocialBubble {
+  id: string;
+  account_id: string;
+  name: string;
+  avatar: string;
+  text: string;
+  emote: boolean;
+  x: number;
+  y: number;
+  ts: number;
+}
+
+/** A room in the lobby (declutters the main plaza). */
+export interface RoomInfo {
+  id: string;
+  name: string;
+  icon: string;
+}
+
+/** One entry in the global "who's online" roster. */
+export interface RosterEntry {
+  account_id: string;
+  name: string;
+  avatar: string;
+  room: string;
+  activity: string;
+  level: number;
+}
+
+/** A friend / friend-request row. `online` is set on accepted friends. */
+export interface FriendEntry {
+  account_id: string;
+  display_name: string;
+  avatar: string;
+  level: number;
+  online?: boolean;
+}
+
+/** Your gamified profile (avatar + XP + derived level). */
+export interface Profile {
+  account_id: string;
+  avatar: string;
+  bio: string;
+  xp: number;
+  level: number;
+  level_floor: number;
+  next_level_xp: number | null;
+}
+
+/** An incoming game challenge from another user (host already opened the table). */
+export interface SocialInvite {
+  table_id: string;
+  game_id: string;
+  game_name: string;
+  from_id: string;
+  from_name: string;
+}
+
+export interface SocialState {
+  joined: boolean;
+  room: string;
+  rooms: RoomInfo[];
+  occupants: SocialOccupant[];
+  bubbles: SocialBubble[];
+  roster: RosterEntry[];
+  friends: FriendEntry[];
+  pending: FriendEntry[];
+  profile: Profile | null;
+  invite: SocialInvite | null;
+}
+
 export interface GamesState {
   connected: boolean;
   accountId: string | null;
@@ -123,6 +206,7 @@ export interface GamesState {
   challengeRunning: boolean;
   challengeReport: ChallengeReport | null;
   town: TownState;
+  social: SocialState;
 }
 
 const initialTown: TownState = {
@@ -133,6 +217,19 @@ const initialTown: TownState = {
   residents: [],
   houses: [],
   events: [],
+};
+
+const initialSocial: SocialState = {
+  joined: false,
+  room: 'plaza',
+  rooms: [],
+  occupants: [],
+  bubbles: [],
+  roster: [],
+  friends: [],
+  pending: [],
+  profile: null,
+  invite: null,
 };
 
 const initial: GamesState = {
@@ -148,6 +245,7 @@ const initial: GamesState = {
   challengeRunning: false,
   challengeReport: null,
   town: initialTown,
+  social: initialSocial,
 };
 
 let state: GamesState = initial;
@@ -198,8 +296,55 @@ subscribeChannel('games', (msg) => {
         connected: Boolean(d.connected),
         accountId: (d.account_id as string) ?? null,
         selfPlay: Boolean(d.self_play),
-        ...(d.connected ? {} : { board: null, yourTurn: null, over: null, town: initialTown }),
+        ...(d.connected
+          ? {}
+          : { board: null, yourTurn: null, over: null, town: initialTown, social: initialSocial }),
       });
+      break;
+    case 'social_joined':
+      set({
+        social: {
+          ...state.social,
+          joined: true,
+          room: String(d.room ?? state.social.room),
+          rooms: (d.rooms as RoomInfo[] | undefined) ?? state.social.rooms,
+          occupants: (d.occupants as SocialOccupant[] | undefined) ?? [],
+          bubbles: (d.bubbles as SocialBubble[] | undefined) ?? [],
+        },
+      });
+      break;
+    case 'social_state':
+      set({
+        social: {
+          ...state.social,
+          room: String(d.room ?? state.social.room),
+          occupants: (d.occupants as SocialOccupant[] | undefined) ?? state.social.occupants,
+          bubbles: (d.bubbles as SocialBubble[] | undefined) ?? state.social.bubbles,
+        },
+      });
+      break;
+    case 'social_roster':
+      set({ social: { ...state.social, roster: (d.online as RosterEntry[]) ?? [] } });
+      break;
+    case 'social_invited':
+      set({ social: { ...state.social, invite: d as unknown as SocialInvite } });
+      toastsStore.add(
+        'info',
+        'Games',
+        `${(d.from_name as string) ?? 'Someone'} challenged you to ${(d.game_name as string) ?? 'a game'}`,
+      );
+      break;
+    case 'friends':
+      set({
+        social: {
+          ...state.social,
+          friends: (d.friends as FriendEntry[]) ?? [],
+          pending: (d.pending as FriendEntry[]) ?? [],
+        },
+      });
+      break;
+    case 'profile':
+      set({ social: { ...state.social, profile: d as unknown as Profile } });
       break;
     case 'town_joined':
       set({ town: townUpdate(d, true) });
@@ -305,4 +450,63 @@ export function townLeave(): void {
 /** Tap the glass: a nudge injected into your resident's next agent tick. */
 export function townWhisper(text: string): void {
   sendChannel('games', 'town_whisper', { text });
+}
+
+// ---- The Plaza (human social layer) ----------------------------------------
+
+/** Enter the Plaza. The node auto-connects to the game server. */
+export function socialJoin(name: string, avatar: string): void {
+  sendChannel('games', 'social_join', { name, avatar });
+}
+
+export function socialLeave(): void {
+  sendChannel('games', 'social_leave', {});
+  set({ social: { ...state.social, joined: false } });
+}
+
+/** Walk your avatar to (x, y) in the current room (0..100 floor coordinates). */
+export function socialMove(x: number, y: number): void {
+  sendChannel('games', 'social_move', { x, y });
+}
+
+export function socialRoom(room: string): void {
+  sendChannel('games', 'social_room', { room });
+}
+
+export function socialSay(text: string, emote = false): void {
+  sendChannel('games', 'social_say', { text, emote });
+}
+
+/** Challenge a user to a game — hosts a table and pings their node to join. */
+export function socialInvite(accountId: string, gameId: string): void {
+  sendChannel('games', 'social_invite', { account_id: accountId, gameId });
+}
+
+export function friendRequest(accountId: string): void {
+  sendChannel('games', 'friend_request', { account_id: accountId });
+}
+
+export function friendAccept(accountId: string): void {
+  sendChannel('games', 'friend_accept', { account_id: accountId });
+}
+
+export function friendRemove(accountId: string): void {
+  sendChannel('games', 'friend_remove', { account_id: accountId });
+}
+
+export function friendList(): void {
+  sendChannel('games', 'friend_list', {});
+}
+
+export function profileGet(): void {
+  sendChannel('games', 'profile_get', {});
+}
+
+export function profileSet(avatar?: string, bio?: string): void {
+  sendChannel('games', 'profile_set', { avatar, bio });
+}
+
+/** Clear the incoming-invite banner (after joining or dismissing it). */
+export function dismissInvite(): void {
+  set({ social: { ...state.social, invite: null } });
 }

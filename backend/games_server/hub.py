@@ -17,7 +17,28 @@ from typing import Any, Protocol
 from backend.games_engine.base import get_game
 from backend.games_server import models
 from backend.games_server.referee import DEFAULT_MOVE_TIMEOUT_S, Referee
+from backend.games_server.social import SocialHub
 from backend.games_server.town import TownHub
+
+# The Plaza (human social layer) + friends + profile message types the hub routes
+# straight to the SocialHub. SOCIAL_INVITE is the exception — it hosts a table, so
+# the hub handles it itself (see `_social_invite`).
+_SOCIAL_TYPES = frozenset(
+    {
+        models.SOCIAL_JOIN,
+        models.SOCIAL_LEAVE,
+        models.SOCIAL_MOVE,
+        models.SOCIAL_ROOM,
+        models.SOCIAL_SAY,
+        models.SOCIAL_EMOTE,
+        models.FRIEND_REQUEST,
+        models.FRIEND_ACCEPT,
+        models.FRIEND_REMOVE,
+        models.FRIEND_LIST,
+        models.PROFILE_GET,
+        models.PROFILE_SET,
+    }
+)
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +112,8 @@ class GameHub:
         # AgentTown: the persistent social world (identity is per-account there —
         # one resident per account; see town.py). The app lifespan starts its clock.
         self.town = TownHub()
+        # The Plaza: the human social layer — presence, rooms, friends (see social.py).
+        self.social = SocialHub()
 
     # ---- connection lifecycle ---------------------------------------------
 
@@ -102,6 +125,8 @@ class GameHub:
             del self._sessions[session.session_id]
         # The town keeps the fish: its resident falls asleep instead of vanishing.
         self.town.on_disconnect(session)
+        # The Plaza just drops the presence — a human who left has left.
+        self.social.on_disconnect(session)
 
     # ---- dispatch ----------------------------------------------------------
 
@@ -115,6 +140,12 @@ class GameHub:
             return
         if mtype in (models.TOWN_JOIN, models.TOWN_LEAVE, models.TOWN_ACT):
             await self.town.handle(session, msg)
+            return
+        if mtype in _SOCIAL_TYPES:
+            await self.social.handle(session, msg)
+            return
+        if mtype == models.SOCIAL_INVITE:
+            await self._social_invite(session, msg)
             return
         if mtype == models.LIST_TABLES:
             await self._send_tables(session)
@@ -178,6 +209,50 @@ class GameHub:
         self._tables[table.id] = table
         await self._seat(session, table)
 
+    async def _social_invite(self, session: Session, msg: dict[str, Any]) -> None:
+        """Challenge another user (from the Plaza roster/friends) to a game: host a
+        table seated by the inviter, then push a `social_invited` to every online
+        session of the target so their node can join it with one click."""
+        assert session.account_id is not None
+        game_id = str(msg.get("game_id") or "")
+        target = str(msg.get("account_id") or "")
+        try:
+            spec = get_game(game_id)
+        except KeyError:
+            await session.conn.send_json(
+                models.error("bad_game", f"unknown game {game_id!r}")
+            )
+            return
+        table = _Table(uuid.uuid4().hex[:8], game_id, spec.max_players)
+        self._tables[table.id] = table
+        await self._seat(session, table)
+        invite = {
+            "type": models.SOCIAL_INVITED,
+            "table_id": table.id,
+            "game_id": game_id,
+            "game_name": spec.name,
+            "from_id": session.account_id,
+            "from_name": session.display_name or session.account_id,
+        }
+        for other in self._sessions.values():
+            if other.account_id == target and other is not session:
+                await other.conn.send_json(invite)
+
+    def _game_name(self, game_id: str) -> str:
+        try:
+            return get_game(game_id).name
+        except KeyError:
+            return game_id
+
+    def _set_activity(self, account_id: str, text: str) -> None:
+        """Update a player's Plaza roster status (fire-and-forget; safe from both
+        sync and async call sites)."""
+        try:
+            loop = __import__("asyncio").get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(self.social.set_activity(account_id, text))
+
     async def _join_table(self, session: Session, msg: dict[str, Any]) -> None:
         table = self._tables.get(str(msg.get("table_id") or ""))
         if table is None:
@@ -200,6 +275,9 @@ class GameHub:
             return
         table.seats[idx] = session.session_id
         table.account_of[session.session_id] = session.account_id
+        self._set_activity(
+            session.account_id, f"At a {self._game_name(table.game_id)} table"
+        )
         await self._broadcast_table(table)
         if all(s is not None for s in table.seats):
             await self._start_table(table)
@@ -219,6 +297,9 @@ class GameHub:
         # (`accounts`) — parallel lists, one entry per filled seat in seat order.
         seats = [s for s in table.seats if s is not None]
         accounts = [table.account_of[s] for s in seats]
+        match_status = f"In a {self._game_name(table.game_id)} match"
+        for account_id in accounts:
+            self._set_activity(account_id, match_status)
         # A game may need a longer move clock than the hub default (duel turns run
         # minutes, not seconds). The hub's 0 stays a master "clock off" switch.
         timeout = self._move_timeout_s
@@ -254,6 +335,10 @@ class GameHub:
             store.record_result(game_id, table_id, seats, returns, winner)
         except Exception:
             logger.exception("failed to record game result")
+        # Back to the lobby in the Plaza roster (seats here are account ids). This
+        # also nudges each player's profile to refresh (XP just changed).
+        for account_id in seats:
+            self._set_activity(account_id, "In the lobby")
 
     async def _action(self, session: Session, msg: dict[str, Any]) -> None:
         assert session.account_id is not None

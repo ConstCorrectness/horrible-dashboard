@@ -267,6 +267,53 @@ class _PlayerConn:
     async def town_leave(self) -> None:
         await self._send({"type": models.TOWN_LEAVE})
 
+    # ---- The Plaza (human social layer) -------------------------------------
+
+    async def social_join(self, name: str, avatar: str) -> None:
+        await self._send({"type": models.SOCIAL_JOIN, "name": name, "avatar": avatar})
+
+    async def social_leave(self) -> None:
+        await self._send({"type": models.SOCIAL_LEAVE})
+
+    async def social_move(self, x: float, y: float) -> None:
+        await self._send({"type": models.SOCIAL_MOVE, "x": x, "y": y})
+
+    async def social_room(self, room: str) -> None:
+        await self._send({"type": models.SOCIAL_ROOM, "room": room})
+
+    async def social_say(self, text: str, emote: bool = False) -> None:
+        await self._send(
+            {"type": models.SOCIAL_EMOTE if emote else models.SOCIAL_SAY, "text": text}
+        )
+
+    async def social_invite(self, account_id: str, game_id: str) -> None:
+        await self._send(
+            {"type": models.SOCIAL_INVITE, "account_id": account_id, "game_id": game_id}
+        )
+
+    async def friend_action(self, kind: str, account_id: str) -> None:
+        """`kind` is one of request/accept/remove — the matching FRIEND_* message."""
+        mtype = {
+            "request": models.FRIEND_REQUEST,
+            "accept": models.FRIEND_ACCEPT,
+            "remove": models.FRIEND_REMOVE,
+        }[kind]
+        await self._send({"type": mtype, "account_id": account_id})
+
+    async def friend_list(self) -> None:
+        await self._send({"type": models.FRIEND_LIST})
+
+    async def profile_get(self) -> None:
+        await self._send({"type": models.PROFILE_GET})
+
+    async def profile_set(self, avatar: str | None, bio: str | None) -> None:
+        msg: dict[str, Any] = {"type": models.PROFILE_SET}
+        if avatar is not None:
+            msg["avatar"] = avatar
+        if bio is not None:
+            msg["bio"] = bio
+        await self._send(msg)
+
     async def close(self) -> None:
         if self._task is not None:
             self._task.cancel()
@@ -407,6 +454,63 @@ class GameServerClient:
         if self._primary is None:
             return {"error": "not connected"}
         self._primary.ensure_town_policy().whisper(text)
+        return {"ok": True}
+
+    # ---- The Plaza (human social layer, rides the primary connection) -------
+
+    async def _ensure_primary(self) -> _PlayerConn:
+        """The Plaza should be reachable without a separate Connect step, so joining
+        auto-connects the node first (like the town)."""
+        if not self.connected:
+            await self.connect(False)
+        assert self._primary is not None
+        return self._primary
+
+    async def social_join(self, name: str = "", avatar: str = "") -> dict[str, Any]:
+        await (await self._ensure_primary()).social_join(name, avatar)
+        return {"ok": True}
+
+    async def social_leave(self) -> dict[str, Any]:
+        if self._primary:
+            await self._primary.social_leave()
+        return {"ok": True}
+
+    async def social_move(self, x: float, y: float) -> dict[str, Any]:
+        if self._primary:
+            await self._primary.social_move(x, y)
+        return {"ok": True}
+
+    async def social_room(self, room: str) -> dict[str, Any]:
+        if self._primary:
+            await self._primary.social_room(room)
+        return {"ok": True}
+
+    async def social_say(self, text: str, emote: bool = False) -> dict[str, Any]:
+        if self._primary:
+            await self._primary.social_say(text, emote)
+        return {"ok": True}
+
+    async def social_invite(self, account_id: str, game_id: str) -> dict[str, Any]:
+        await (await self._ensure_primary()).social_invite(account_id, game_id)
+        return {"ok": True}
+
+    async def friend_action(self, kind: str, account_id: str) -> dict[str, Any]:
+        await (await self._ensure_primary()).friend_action(kind, account_id)
+        return {"ok": True}
+
+    async def friend_list(self) -> dict[str, Any]:
+        if self._primary:
+            await self._primary.friend_list()
+        return {"ok": True}
+
+    async def profile_get(self) -> dict[str, Any]:
+        await (await self._ensure_primary()).profile_get()
+        return {"ok": True}
+
+    async def profile_set(
+        self, avatar: str | None = None, bio: str | None = None
+    ) -> dict[str, Any]:
+        await (await self._ensure_primary()).profile_set(avatar, bio)
         return {"ok": True}
 
     # ---- manual play (agent-tool path) ------------------------------------

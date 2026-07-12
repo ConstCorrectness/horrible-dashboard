@@ -6,6 +6,8 @@ import { GameBoardPanel } from './panels/GameBoardPanel';
 import { LeaderboardPanel } from './panels/LeaderboardPanel';
 import { LoadoutPanel } from './panels/LoadoutPanel';
 import { LobbyPanel } from './panels/LobbyPanel';
+import { PlazaPanel } from './panels/PlazaPanel';
+import { RosterPanel } from './panels/RosterPanel';
 import { TownPanel } from './panels/TownPanel';
 
 /**
@@ -26,6 +28,7 @@ export const gamesModule: ModuleManifest = {
       // The arcade cockpit as regions: harness/ladder/challenges on the right
       // strip, the live board on the bottom strip (revealed when a match starts).
       regions: [
+        { id: 'games.roster', label: 'Players', icon: '🧑‍🤝‍🧑', key: 'r', position: 'right' },
         { id: 'games.loadout', label: 'Agent Harness', icon: '🛠', key: 'h', position: 'right' },
         { id: 'games.leaderboard', label: 'Ladder', icon: '🏆', key: 'l', position: 'right' },
         { id: 'games.challenges', label: 'Challenges', icon: '🎯', key: 'c', position: 'right' },
@@ -83,6 +86,23 @@ export const gamesModule: ModuleManifest = {
       icon: '🏘',
       singleton: true,
     },
+    {
+      id: 'games.plaza',
+      title: 'The Plaza',
+      component: PlazaPanel,
+      role: 'document',
+      icon: '🏛',
+      singleton: true,
+    },
+    {
+      id: 'games.roster',
+      title: 'Players',
+      component: RosterPanel,
+      role: 'tool',
+      icon: '🧑‍🤝‍🧑',
+      defaultDock: 'right',
+      singleton: true,
+    },
   ],
   commands: [
     {
@@ -119,6 +139,16 @@ export const gamesModule: ModuleManifest = {
       id: 'games.openTown',
       title: 'Games: Visit AgentTown',
       run: () => registry.openPanel('games.town'),
+    },
+    {
+      id: 'games.openPlaza',
+      title: 'Games: Enter the Plaza',
+      run: () => registry.openPanel('games.plaza'),
+    },
+    {
+      id: 'games.openRoster',
+      title: 'Games: Open players roster',
+      run: () => revealRegionView('games.roster'),
     },
   ],
   settings: [

@@ -46,6 +46,37 @@ async def handle_games_message(conn: Any, msg: dict[str, Any]) -> None:
             await games_client.town_leave()
         elif event == "town_whisper":
             games_client.town_whisper(str(data.get("text") or ""))
+        # ---- The Plaza (human social layer) ----
+        elif event == "social_join":
+            await games_client.social_join(
+                str(data.get("name") or ""), str(data.get("avatar") or "")
+            )
+        elif event == "social_leave":
+            await games_client.social_leave()
+        elif event == "social_move":
+            await games_client.social_move(
+                float(data.get("x", 0.0)), float(data.get("y", 0.0))
+            )
+        elif event == "social_room":
+            await games_client.social_room(str(data.get("room") or ""))
+        elif event == "social_say":
+            await games_client.social_say(
+                str(data.get("text") or ""), bool(data.get("emote"))
+            )
+        elif event == "social_invite":
+            await games_client.social_invite(
+                str(data.get("account_id") or ""), str(data.get("gameId") or "")
+            )
+        elif event in ("friend_request", "friend_accept", "friend_remove"):
+            await games_client.friend_action(
+                event.removeprefix("friend_"), str(data.get("account_id") or "")
+            )
+        elif event == "friend_list":
+            await games_client.friend_list()
+        elif event == "profile_get":
+            await games_client.profile_get()
+        elif event == "profile_set":
+            await games_client.profile_set(data.get("avatar"), data.get("bio"))
         else:
             logger.debug("games: ignoring unknown event %r", event)
     except Exception as e:

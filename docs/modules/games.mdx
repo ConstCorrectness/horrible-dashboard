@@ -318,6 +318,54 @@ per-tick single actions are the v1 rate limits. Fast-follows: vector-store memor
 a public resident bio card, relationships/reputation scoring, and the town
 newspaper (a resident whose job is journalist).
 
+## The Plaza — the human social layer
+
+Where AgentTown is a fish tank of *agents* you watch, **The Plaza** (`games.plaza`,
+a `document`, opened via the 🏛 button in the lobby or `games.openPlaza`) is where
+the **real users** hang out — the answer to "signing in is dull and there's no way
+to find someone to play." It's a **Habbo-style lobby**: you enter as an avatar,
+walk around a room by clicking the floor, talk in **speech bubbles**, hop between
+**rooms** to declutter, and **challenge** anyone straight to a game.
+
+Unlike the town's slow tick loop, the Plaza is **event-driven** — a move or a line
+of chat broadcasts to the room immediately (`backend/games_server/social.py`).
+Two broadcasts carry everything:
+
+- **`social_state`** — one *room's* live state (occupants + recent speech bubbles),
+  sent to that room's occupants whenever it changes. Movement rebroadcasts only the
+  room, so wandering stays quiet globally.
+- **`social_roster`** — the *global* who's-online list (name, avatar, room, and a
+  live **activity** like "In a Tic-Tac-Toe match"), sent to everyone when someone
+  joins, leaves, switches rooms, or changes activity. The hub sets a player's
+  activity when they sit at, start, or finish a table, so the roster shows who's
+  free to play.
+
+**Rooms** (`ROOMS` in `social.py`) declutter the main lobby: **Central Plaza**
+(the default landing room), **Arcade**, **The Lounge**, and **Tournament Arena**.
+The catalog is advertised to the client, so the room switcher stays data-driven.
+
+The **Players** panel (`games.roster`, a `tool` in the right dock and the lobby's
+`r` region) is the social directory that makes active players easy to find:
+
+- **Who's online** — the live roster with each player's room, activity, and
+  **level**; one click adds a friend (🤝) or challenges them (⚔️).
+- **Friends** — persistent friendships (SQLite, keyed by account), online friends
+  first. A friend request the other side already sent **auto-accepts** (mutual
+  intent → friends). Incoming requests show as an accept/decline list.
+- **Gamified profile** — your **level and XP bar**. Every finished game grants XP
+  (win 20 / draw 10 / loss 5), so your social profile grows just by competing; the
+  level also badges your name in the roster and the lobby sign-in.
+
+**Challenging** a player (from the roster or a room's occupant list) hosts a table
+seated by you and pushes a **`social_invited`** to that player's node, which shows
+a *"X challenged you to Y"* banner with a one-click **Join** — direct matchmaking
+without the old "host a table and hope someone hits refresh" dance.
+
+Like the town, identity is per-account (one presence per account, the most recent
+connection controls it) and joining auto-connects the node — no separate Connect
+step. Say-length caps and per-account presence are the v1 rate limits; presence is
+dropped on disconnect (a human who left has left, no sleep-in-place).
+
 ## Identity & ladder
 
 A node authenticates to the server with a token on `/game-ws`:
@@ -414,6 +462,8 @@ the harness/ladder/challenges are also dockable tools.
 | Ladder | `games.leaderboard` | tool (right dock); lobby region (`l`) | ELO leaderboard per game. |
 | Challenges | `games.challenges` | tool (right dock); lobby region (`c`) | Run the challenge track; report card + leaderboard. |
 | AgentTown | `games.town` | document | The fish tank: spawn your resident, watch the town, whisper nudges. |
+| The Plaza | `games.plaza` | document | The human social lobby: avatar rooms, click-to-move, speech bubbles, direct challenges. |
+| Players | `games.roster` | tool (right dock); lobby region (`r`) | Who's online, friends, incoming requests, and your gamified level/XP. |
 
 ### Commands
 
@@ -423,6 +473,8 @@ the harness/ladder/challenges are also dockable tools.
 - `games.openLeaderboard` — open the ladder.
 - `games.openChallenges` — open the challenge track.
 - `games.openTown` — visit AgentTown.
+- `games.openPlaza` — enter the Plaza (human social lobby).
+- `games.openRoster` — open the players roster / friends.
 
 ### Agent tools (group `games`)
 
@@ -456,10 +508,17 @@ the harness/ladder/challenges are also dockable tools.
   (`tictactoe`, `connect_four`, `holdem` with its best-5-of-7 hand evaluator).
 - Node client `backend/modules/games/client.py` — connection + auto-play + relay.
 - Harness `backend/modules/games/loadout.py` — loadout store + tool runtime.
-- Game server `backend/games_server/` — referee, `auth.py` (JWT + OAuth), `store.py` (ladder).
-  The hub (`hub.py`) keys sessions/seats by a **per-connection session id**, not the
-  account, so one account can play from two devices; the referee routes by session id and
-  records results by account id.
+- Game server `backend/games_server/` — referee, `auth.py` (JWT + OAuth), `store.py`
+  (ladder + `player_profiles`/`friendships`), `social.py` (the Plaza: presence, rooms,
+  bubbles, roster, invites). The hub (`hub.py`) keys sessions/seats by a **per-connection
+  session id**, not the account, so one account can play from two devices; the referee
+  routes by session id and records results by account id.
+- `/game-ws` Plaza messages — node→server: `social_join`/`social_leave`/`social_move`/
+  `social_room`/`social_say`/`social_emote`/`social_invite`, `friend_request`/
+  `friend_accept`/`friend_remove`/`friend_list`, `profile_get`/`profile_set`;
+  server→node: `social_joined`/`social_state`/`social_roster`/`social_invited`,
+  `friends`, `profile`. The node bridges these to the browser over the `/ws` `games`
+  channel unchanged.
 
 ## Running it
 
@@ -506,6 +565,7 @@ the one the shell supervises.
 | 4 (done, heads-up) | **No-Limit Hold'em**: imperfect info, chance nodes, discrete betting, poker table board, challenge set (`discipline`/`value`/`aggression`). In-engine hand evaluator (no `pokerkit`); heads-up, one hand per table. Multi-way tables + multi-hand sessions are future work. |
 | 5a (done) | **Duels + RAG race**: simultaneous seats (`current_players`), open `payload` actions, per-game move clocks, baseline solver, race board with report card. |
 | 5a′ (done, v1) | **AgentTown**: persistent tick-loop world, per-account residents, node-side persona/routine minds, whisper, sleep-on-disconnect, fish-tank panel. Fast-follows: vector memory, reputation, the town newspaper. |
+| 5a″ (done, v1) | **The Plaza**: human social layer — event-driven avatar rooms (click-to-move, speech bubbles, room switcher), the who's-online roster with live activity, persistent friends + requests, gamified profiles (XP/level), and direct challenge invites. Fast-follows: room-scoped voice/DMs, richer avatar cosmetics tied to level, party/tournament rooms. |
 | 5b | **Data-analysis sprint**: hidden ground truth, dataset in the observation, answer-value grading (no sandbox needed). |
 | 5c | **Bugfix duel**: hidden test suites, patch payloads, sandboxed server-side grading — competitive SWE-bench. |
 | 6 | Breadth: rotating/private duel datasets, procedural problem generators, more games spanning the agentic gamut. |

@@ -24,6 +24,7 @@ import {
  * accounts are two distinct players, handy for testing across machines). Identity
  * lives on the node (the JWT is held server-side); this just reflects and toggles it. */
 function SignIn() {
+  const { social } = useGames();
   const [name, setName] = useState<string | null>(null);
   const [prompt, setPrompt] = useState<{ code: string; url: string } | null>(null);
   const [busy, setBusy] = useState<SignInProvider | null>(null);
@@ -53,6 +54,11 @@ function SignIn() {
   if (name) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.78rem' }}>
+        {social.profile && (
+          <span className="games-level-badge" title={`${social.profile.xp} XP`}>
+            {social.profile.avatar} Lv {social.profile.level}
+          </span>
+        )}
         <span style={{ color: 'var(--text-dim)' }}>
           Signed in as <strong>{name}</strong>
         </span>
@@ -150,10 +156,17 @@ export function LobbyPanel() {
             </button>
           </>
         )}
-        {/* The town auto-connects the node, so it's reachable from either state. */}
+        {/* The Plaza + town auto-connect the node, so they're reachable either way. */}
         <button
           type="button"
           style={{ marginLeft: 'auto' }}
+          title="The Plaza — hang out with real players, chat, and challenge them"
+          onClick={() => registry.openPanel('games.plaza')}
+        >
+          🏛 The Plaza
+        </button>
+        <button
+          type="button"
           title="AgentTown — spawn your agent in the social fish tank"
           onClick={() => registry.openPanel('games.town')}
         >
