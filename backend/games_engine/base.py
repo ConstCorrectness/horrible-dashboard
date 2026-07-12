@@ -16,6 +16,7 @@ from typing import Any, Callable
 # Sentinels for `current_player()`. Real seats are non-negative ints (0, 1, …).
 CHANCE = -1  # a random event only the server resolves (deal/shuffle)
 TERMINAL = -2  # the game is over; see returns()
+WORK = -3  # server-side work (grading submissions); see run_work()
 
 
 @dataclass(frozen=True)
@@ -96,6 +97,15 @@ class GameState:
     def resolve_chance(self, rng: random.Random) -> None:
         """Resolve the pending chance event (shuffle/deal) using the server's RNG.
         Only called when `current_player() == CHANCE`. No-op by default."""
+        raise NotImplementedError
+
+    def run_work(self) -> None:
+        """Perform pending **server-side work** (grading submissions, simulating a
+        round). Only called when `current_player() == WORK`; the referee runs it
+        off the event loop (`asyncio.to_thread`), so blocking here is fine — the
+        table's lock is held, nothing else may act. Must make progress: after
+        returning, `current_player()` must no longer be WORK (or eventually stop
+        being WORK) or the referee would spin."""
         raise NotImplementedError
 
     # ---- views -------------------------------------------------------------

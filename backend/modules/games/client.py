@@ -61,20 +61,61 @@ class _PlayerConn:
         token: str,
         policy: Policy | None,
         on_event: Callable[[dict[str, Any]], Any],
+        *,
+        log_matches: bool = True,
     ) -> None:
         self._url = url
         self._token = token
         # policy None => manual: don't auto-play; the agent tool / UI drives instead.
         self._policy = policy
         self._on_event = on_event
+        # The primary seat keeps the local match log (loadout attribution); the
+        # sparring seat doesn't — it would double-count self-play games.
+        self._log_matches = log_matches
+        self._my_seat: int | None = None
+        self._match: dict[str, Any] | None = None
         self._ws: Any = None
         self._task: asyncio.Task[None] | None = None
         self.account_id: str | None = None
+        # Server capabilities advertised on AUTHED — how a node (and the panels it
+        # relays to) feature-detects what the connected server supports, so a newer
+        # node degrades gracefully against the live deployed server.
+        self.caps: list[str] = []
         self.authed = asyncio.Event()
         self.auth_error: str | None = None
         self.last_turn: dict[str, Any] | None = None
+        self._play_task: asyncio.Task[None] | None = None
+        # Reasoning steps behind the move being decided right now (one pending turn
+        # per connection). Relayed live per-step, uploaded to the server per-move.
+        self._trace_buffer: list[dict[str, Any]] = []
+        # Plaza-arcade held keys for the fighter (set from the browser each frame).
+        self._arcade_keys: list[str] = []
+        # Compiled `fighter.bot` loadout tool for ranked fighter mode (lazy).
+        self._fighter_bot: Any = None
         # The AgentTown resident's mind (created on first use; whispers land here).
         self._town_policy: TownPolicy | None = None
+
+    def set_policy(self, policy: Policy | None) -> None:
+        self._policy = policy
+
+    def trace_step(self, step: dict[str, Any]) -> None:
+        """Trace sink for this seat's policy: buffer the step for the post-move
+        replay upload and relay it live to the browser. Only the primary seat gets
+        this sink — an opponent's live reasoning never reaches this browser."""
+        turn = self.last_turn
+        if turn is None:
+            return
+        self._trace_buffer.append(step)
+        event = {
+            "type": "agent_trace",
+            "game_id": turn.get("game_id"),
+            "table_id": turn.get("table_id"),
+            "seat": turn.get("seat"),
+            "idx": len(self._trace_buffer) - 1,
+            "step": step,
+        }
+        # Called synchronously from inside the policy loop; relay without blocking it.
+        asyncio.get_running_loop().create_task(_maybe_await(self._on_event(event)))
 
     async def start(self) -> None:
         self._ws = await ws_connect(f"{self._url}/game-ws")
@@ -98,8 +139,13 @@ class _PlayerConn:
     async def list_tables(self) -> None:
         await self._send({"type": models.LIST_TABLES})
 
-    async def create_table(self, game_id: str) -> None:
-        await self._send({"type": models.CREATE_TABLE, "game_id": game_id})
+    async def create_table(
+        self, game_id: str, ruleset: dict[str, Any] | None = None
+    ) -> None:
+        msg: dict[str, Any] = {"type": models.CREATE_TABLE, "game_id": game_id}
+        if ruleset:
+            msg["ruleset"] = ruleset
+        await self._send(msg)
 
     async def join_table(self, table_id: str) -> None:
         await self._send({"type": models.JOIN_TABLE, "table_id": table_id})
@@ -109,6 +155,53 @@ class _PlayerConn:
 
     async def run_challenges(self, game_id: str) -> None:
         await self._send({"type": models.CHALLENGE_START, "game_id": game_id})
+
+    async def queue_join(
+        self, game_id: str, difficulty: str = "standard", placement: bool = False
+    ) -> None:
+        await self._send(
+            {
+                "type": models.QUEUE_JOIN,
+                "game_id": game_id,
+                "difficulty": difficulty,
+                "placement": placement,
+            }
+        )
+
+    async def queue_leave(self) -> None:
+        await self._send({"type": models.QUEUE_LEAVE})
+
+    async def challenge_offer(
+        self, to_account_id: str, ruleset: dict[str, Any]
+    ) -> None:
+        await self._send(
+            {
+                "type": models.CHALLENGE_OFFER,
+                "to_account_id": to_account_id,
+                "ruleset": ruleset,
+            }
+        )
+
+    async def challenge_respond(
+        self, offer_id: str, response: str, ruleset: dict[str, Any] | None = None
+    ) -> None:
+        await self._send(
+            {
+                "type": models.CHALLENGE_RESPOND,
+                "offer_id": offer_id,
+                "response": response,
+                **({"ruleset": ruleset} if ruleset else {}),
+            }
+        )
+
+    async def rematch_offer(self, table_id: str) -> None:
+        await self._send({"type": models.REMATCH_OFFER, "table_id": table_id})
+
+    async def watch_table(self, table_id: str) -> None:
+        await self._send({"type": models.WATCH_TABLE, "table_id": table_id})
+
+    async def unwatch_table(self, table_id: str) -> None:
+        await self._send({"type": models.UNWATCH_TABLE, "table_id": table_id})
 
     async def _read_loop(self) -> None:
         try:
@@ -134,20 +227,54 @@ class _PlayerConn:
         mtype = msg.get("type")
         if mtype == models.AUTHED:
             self.account_id = str(msg.get("account_id") or "")
+            self.caps = [str(c) for c in (msg.get("caps") or [])]
             self.authed.set()
         elif mtype == models.ERROR and not self.authed.is_set():
             self.auth_error = (
                 msg.get("message") or msg.get("code") or "Authentication failed"
             )
             self.authed.set()
+        elif mtype == models.MATCH_INFO:
+            self._match = msg
+            self._my_seat = None
+            # Declare what plays at this seat (harness version + model) so the
+            # replay records it — detached; a failure never blocks the match.
+            asyncio.create_task(self._declare_loadout_meta(msg))
+        elif mtype == models.GAME_OVER:
+            self.last_turn = None  # our turn (if any) is resolved
+            self._record_match(msg)
+        elif mtype == models.RATING_UPDATE and self._log_matches:
+            try:
+                from backend.modules.games import match_log
+
+                match_log.attach_rating(
+                    str(msg.get("game_id") or ""),
+                    float(msg.get("delta") or 0.0),
+                    float(msg.get("rating") or 0.0),
+                    msg.get("tier"),
+                )
+            except Exception:
+                logger.debug("match log rating attach failed", exc_info=True)
         elif mtype == models.YOUR_TURN:
             self.last_turn = msg
+            self._my_seat = int(msg.get("seat") or 0)
             if self._policy is not None:
-                await self._play(msg)
-        elif mtype in (models.GAME_OVER, models.PUBLIC_STATE):
-            self.last_turn = None  # our turn (if any) is resolved
+                # Detached: an agent turn is a model call that can take seconds, and
+                # awaiting it here would stall the read loop (and every other event,
+                # including the public_state/game_over that would supersede this turn).
+                self._play_task = asyncio.create_task(self._play(msg))
+        # NOTE: public_state does NOT clear last_turn — in a simultaneous game the
+        # opponent's submit broadcasts state while we're still on the clock, and
+        # clearing would make the detached _play drop our own move as stale. The
+        # turn resolves on game_over, on our own send, or on a re-prompt.
         elif mtype == models.CHALLENGE_SCENARIOS:
             await self._run_challenge_scenarios(msg)
+        elif mtype == models.CHALLENGE_UPDATE and msg.get("status") == "accepted":
+            # Our offer was accepted: the acceptor is already seated at the fresh
+            # table — join it so the match starts without another click.
+            table_id = str(msg.get("table_id") or "")
+            if table_id:
+                await self.join_table(table_id)
         elif mtype == models.TOWN_TICK:
             # Detached: agent mode makes a model call that can take seconds, and
             # awaiting it here would stall the read loop (and every other event).
@@ -175,6 +302,181 @@ class _PlayerConn:
         )
         self.last_turn = None
         return {"ok": True, "action_id": action_id}
+
+    def _loadout_attribution(self, game_id: str) -> tuple[str | None, str | None]:
+        """(active loadout version, model label) for `game_id` — what we declare to
+        the server and stamp into the local match log."""
+        try:
+            from backend.modules.games import loadout as loadout_mod
+            from backend.modules.games import model_config
+
+            version = loadout_mod.active_version_id(game_id)
+            config = model_config.parse_model(loadout_mod.get_loadout(game_id).model)
+            return version, model_config.model_label(config)
+        except Exception:
+            logger.debug("loadout attribution failed", exc_info=True)
+            return None, None
+
+    async def _declare_loadout_meta(self, match: dict[str, Any]) -> None:
+        try:
+            game_id = str(match.get("game_id") or "")
+            version, label = self._loadout_attribution(game_id)
+            if version is None and label is None:
+                return
+            await self._send(
+                {
+                    "type": models.LOADOUT_META,
+                    "table_id": match.get("table_id"),
+                    "version": version,
+                    "model_label": label,
+                }
+            )
+        except Exception:
+            logger.debug("loadout_meta send failed", exc_info=True)
+
+    def _record_match(self, over: dict[str, Any]) -> None:
+        if not self._log_matches:
+            return
+        try:
+            from backend.modules.games import match_log
+
+            game_id = str(over.get("game_id") or "")
+            version, label = self._loadout_attribution(game_id)
+            match_log.append_entry(
+                game_id=game_id,
+                table_id=str(over.get("table_id") or ""),
+                seat=self._my_seat,
+                winner=over.get("winner"),
+                loadout_version=version,
+                model_label=label,
+                replay_id=(self._match or {}).get("replay_id"),
+            )
+        except Exception:
+            logger.debug("match log append failed", exc_info=True)
+
+    # ---- the fighter (fast per-tick paths) ----------------------------------
+
+    # Held-key → action priority (attacks beat movement beat block).
+    _ARCADE_MAP: list[tuple[str, str]] = [
+        ("k", "special"),
+        ("j", "heavy"),
+        ("u", "light"),
+        ("w", "jump"),
+        ("s", "crouch_block"),
+        ("a", "left"),
+        ("d", "right"),
+    ]
+
+    def set_arcade_keys(self, keys: list[str]) -> None:
+        self._arcade_keys = [str(k).lower() for k in keys]
+
+    def _arcade_action(self, legal_ids: set[str]) -> str:
+        for key, action in self._ARCADE_MAP:
+            if key in self._arcade_keys and action in legal_ids:
+                return action
+        return "idle"
+
+    async def _play_fighter(
+        self,
+        msg: dict[str, Any],
+        observation: dict[str, Any],
+        legal: list[dict[str, Any]],
+    ) -> None:
+        legal_ids = {str(a.get("id")) for a in legal}
+        if self._arcade_keys or self._policy is None:
+            # Arcade seat (human at the keyboard) — map held keys, default idle.
+            action_id = self._arcade_action(legal_ids)
+        else:
+            action_id = self._fighter_bot_action(observation, legal_ids)
+        if self.last_turn is not msg:
+            return
+        await self._send(
+            {
+                "type": models.ACTION,
+                "game_id": "fighter",
+                "action_id": action_id if action_id in legal_ids else "idle",
+            }
+        )
+        if self.last_turn is msg:
+            self.last_turn = None
+
+    def _fighter_bot_action(
+        self, observation: dict[str, Any], legal_ids: set[str]
+    ) -> str:
+        """Ranked fighter: run the compiled `fighter.bot` loadout tool (a pure
+        function, no model) to pick this tick's action. Any failure → idle."""
+        try:
+            if self._fighter_bot is None:
+                from backend.modules.games.loadout import HarnessRuntime, get_loadout
+
+                runtime = HarnessRuntime(get_loadout("fighter"))
+                self._fighter_bot = runtime if runtime.has("fighter.bot") else False
+            if not self._fighter_bot:
+                return "idle"
+            # HarnessRuntime.call is async only to await async tools; the fighter
+            # bot is sync, so call the compiled fn directly for speed.
+            fn = self._fighter_bot._compiled.get("fighter.bot")
+            result = fn({}, observation) if fn else None
+            action = result if isinstance(result, str) else (result or {}).get("action")
+            return str(action) if str(action) in legal_ids else "idle"
+        except Exception:
+            logger.debug("fighter.bot failed; idling", exc_info=True)
+            return "idle"
+
+    async def _solve_task(
+        self, msg: dict[str, Any], observation: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Drive a code-task open action (bug hunt) with the TaskAgent, using the
+        loadout's model. Returns None to fall back to the baseline (no model, or
+        the agent errored) so a table never hangs. Traces flow to the same sink."""
+        from backend.modules.agent.routes import _load_config
+        from backend.modules.games import model_client, model_config
+        from backend.modules.games.loadout import get_loadout
+        from backend.modules.games.task_agent import TaskAgent
+
+        game_id = str(msg.get("game_id") or "")
+        import httpx
+
+        loadout_model = model_config.parse_model(get_loadout(game_id).model)
+        try:
+            if loadout_model is not None:
+                headers = model_client.headers_for(loadout_model)
+
+                async with httpx.AsyncClient(timeout=120.0, headers=headers) as client:
+
+                    async def chat(
+                        messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+                    ) -> Any:
+                        return await model_client.chat(
+                            client, loadout_model, messages, tools
+                        )
+
+                    agent = TaskAgent(
+                        chat_fn=chat, game_id=game_id, trace=self.trace_step
+                    )
+                    return await agent.run(observation)
+
+            config = _load_config()
+            if config is None:
+                return None  # no model available — baseline handles it
+            from backend.modules.agent import providers as P
+
+            info = P.provider_for(config.provider)
+            endpoint = config.endpoint or info.default_endpoint
+            async with httpx.AsyncClient(timeout=120.0) as client:
+
+                async def chat2(
+                    messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+                ) -> Any:
+                    return await P.chat(
+                        client, info, endpoint, config.model, messages, tools
+                    )
+
+                agent = TaskAgent(chat_fn=chat2, game_id=game_id, trace=self.trace_step)
+                return await agent.run(observation)
+        except Exception:
+            logger.debug("task agent failed; falling back to baseline", exc_info=True)
+            return None
 
     async def _run_challenge_scenarios(self, msg: dict[str, Any]) -> None:
         """Run our harness/policy over each scenario and submit the chosen actions.
@@ -209,19 +511,51 @@ class _PlayerConn:
             return
         observation = msg.get("observation") or {}
 
-        # Open actions (duels): the turn wants *content*, not a pick — run the
-        # built-in baseline solver so auto-play always finishes the race. Harness
+        # The fighter ticks ~once a second and must answer *fast* — no model call
+        # per frame. Arcade (human) play maps held keys; ranked play runs the
+        # compiled `fighter.bot` loadout tool directly. Either way, answer inline.
+        if msg.get("game_id") == "fighter":
+            await self._play_fighter(msg, observation, legal)
+            return
+
+        self._trace_buffer = []
+
+        # Open actions (duels, code games): the turn wants *content*, not a pick —
+        # run the built-in baseline solver so auto-play always finishes. Harness
         # skill drives through the manual path (`game.chooseAction` + payload).
-        from backend.modules.games.duel_solver import find_open_action, solve_answers
+        from backend.games_engine.baseline import find_open_action, solve_open_action
 
         open_action = find_open_action(legal)
         payload: Any = None
         if open_action is not None:
             action_id = str(open_action.get("id"))
-            payload = solve_answers(observation)
+            kind = str((open_action.get("params") or {}).get("payload") or "")
+            # A "files" open action (bug hunt) is a long-horizon coding session, not
+            # a single move — drive it with the TaskAgent when we have a real model.
+            if kind == "files":
+                payload = await self._solve_task(msg, observation)
+            if payload is None:
+                payload = solve_open_action(open_action, observation)
         else:
             action_id = await self._policy.choose(
                 observation, legal, msg.get("game_id")
+            )
+        # Since we run detached, the turn may have been superseded while the policy
+        # thought (server timeout auto-played, game ended): drop a stale answer.
+        if self.last_turn is not msg:
+            return
+        # Upload the reasoning *before* the move: the action may end the game, and
+        # the replay is frozen the moment the referee finishes.
+        if self._trace_buffer:
+            await self._send(
+                {
+                    "type": models.MOVE_TRACE,
+                    "game_id": msg.get("game_id"),
+                    "table_id": msg.get("table_id"),
+                    "seat": msg.get("seat"),
+                    "action_id": action_id,
+                    "steps": self._trace_buffer[:50],
+                }
             )
         await self._send(
             {
@@ -231,6 +565,8 @@ class _PlayerConn:
                 **({"payload": payload} if payload is not None else {}),
             }
         )
+        if self.last_turn is msg:
+            self.last_turn = None  # resolved by our own send
         # Surface the choice to the UI as a first-class event.
         await _maybe_await(
             self._on_event(
@@ -306,15 +642,21 @@ class _PlayerConn:
     async def profile_get(self) -> None:
         await self._send({"type": models.PROFILE_GET})
 
-    async def profile_set(self, avatar: str | None, bio: str | None) -> None:
+    async def profile_set(
+        self, avatar: str | None, bio: str | None, handle: str | None = None
+    ) -> None:
         msg: dict[str, Any] = {"type": models.PROFILE_SET}
         if avatar is not None:
             msg["avatar"] = avatar
         if bio is not None:
             msg["bio"] = bio
+        if handle is not None:
+            msg["handle"] = handle
         await self._send(msg)
 
     async def close(self) -> None:
+        if self._play_task is not None and not self._play_task.done():
+            self._play_task.cancel()
         if self._task is not None:
             self._task.cancel()
         if self._ws is not None:
@@ -358,10 +700,15 @@ class GameServerClient:
 
     async def connect(self, self_play: bool = False) -> dict[str, Any]:
         url, token, policy_name = _settings()
-        # `manual` => the primary seat is driven by the agent tool / UI, not auto-play.
-        primary_policy = None if policy_name == "manual" else make_policy(policy_name)
         if self._primary is None:
-            self._primary = _PlayerConn(url, token, primary_policy, self._relay)
+            # `manual` => the primary seat is driven by the agent tool / UI, not
+            # auto-play. The policy's trace sink is the conn itself (live reasoning
+            # relay + replay upload), so the conn is built first.
+            self._primary = _PlayerConn(url, token, None, self._relay)
+            if policy_name != "manual":
+                self._primary.set_policy(
+                    make_policy(policy_name, trace=self._primary.trace_step)
+                )
             try:
                 await self._primary.start()
             except Exception as e:
@@ -391,6 +738,7 @@ class GameServerClient:
             "connected": True,
             "account_id": self._primary.account_id,
             "self_play": self_play,
+            "caps": self._primary.caps,
         }
         await self._relay(status)
         return status
@@ -409,10 +757,12 @@ class GameServerClient:
         if self._primary:
             await self._primary.list_tables()
 
-    async def create_table(self, game_id: str) -> None:
+    async def create_table(
+        self, game_id: str, ruleset: dict[str, Any] | None = None
+    ) -> None:
         if not self._primary:
             return
-        await self._primary.create_table(game_id)
+        await self._primary.create_table(game_id, ruleset)
         if self._self_play and self._sparring is not None:
             # Wait for the table to exist, then seat the sparring partner into it.
             table_id = await self._await_open_table(game_id)
@@ -432,6 +782,45 @@ class GameServerClient:
         back over the `games` channel as a `challenge_report`."""
         if self._primary:
             await self._primary.run_challenges(game_id)
+
+    # ---- ranked queue + negotiation (delegated to the primary seat) ---------
+
+    async def queue_join(
+        self, game_id: str, difficulty: str = "standard", placement: bool = False
+    ) -> None:
+        await (await self._ensure_primary()).queue_join(game_id, difficulty, placement)
+
+    async def queue_leave(self) -> None:
+        if self._primary:
+            await self._primary.queue_leave()
+
+    async def challenge_offer(
+        self, to_account_id: str, ruleset: dict[str, Any]
+    ) -> None:
+        await (await self._ensure_primary()).challenge_offer(to_account_id, ruleset)
+
+    async def challenge_respond(
+        self, offer_id: str, response: str, ruleset: dict[str, Any] | None = None
+    ) -> None:
+        if self._primary:
+            await self._primary.challenge_respond(offer_id, response, ruleset)
+
+    async def rematch_offer(self, table_id: str) -> None:
+        if self._primary:
+            await self._primary.rematch_offer(table_id)
+
+    async def watch_table(self, table_id: str) -> None:
+        await (await self._ensure_primary()).watch_table(table_id)
+
+    async def unwatch_table(self, table_id: str) -> None:
+        if self._primary:
+            await self._primary.unwatch_table(table_id)
+
+    def set_arcade_keys(self, keys: list[str]) -> None:
+        """Held keys for the fighter arcade — set on the primary seat (the human's
+        seat). Answered instantly on each of that seat's ticks."""
+        if self._primary:
+            self._primary.set_arcade_keys(keys)
 
     # ---- AgentTown (rides the primary connection) ---------------------------
 
@@ -508,9 +897,12 @@ class GameServerClient:
         return {"ok": True}
 
     async def profile_set(
-        self, avatar: str | None = None, bio: str | None = None
+        self,
+        avatar: str | None = None,
+        bio: str | None = None,
+        handle: str | None = None,
     ) -> dict[str, Any]:
-        await (await self._ensure_primary()).profile_set(avatar, bio)
+        await (await self._ensure_primary()).profile_set(avatar, bio, handle)
         return {"ok": True}
 
     # ---- manual play (agent-tool path) ------------------------------------

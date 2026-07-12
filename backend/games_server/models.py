@@ -13,6 +13,57 @@ from pydantic import BaseModel, Field
 
 TableStatus = Literal["open", "playing", "done"]
 
+# Capabilities this server advertises on AUTHED. Nodes (and the panels they relay
+# to) feature-detect against this list instead of assuming the deployed server is
+# as new as they are — the server always deploys first, older nodes just see caps
+# they don't know and ignore them. Grows as features land; never remove an entry
+# a shipped node relies on.
+SERVER_CAPS: list[str] = [
+    "match_info",  # broadcasts seat identities (SeatProfile) at match start
+    "trace",  # accepts move_trace uploads into the match replay
+    "replays",  # persists replays + serves them over /replays HTTP
+    "tiers",  # placement matches + tier names on ladder/profiles, rating_update pushes
+    "series",  # best-of-N tables (Ruleset.best_of) with series_state/series_over
+    "negotiation",  # challenge_offer/respond handshake + rematch_offer
+    "queue",  # ranked matchmaking queue with practice-bot backfill
+    "models",  # accepts loadout_meta declarations (model label into replays/badges)
+    "work",  # server-side grading (WORK nodes): code golf, test duel, bug hunt
+    "task_bank",  # per-match tasks neither player has seen (bug hunt)
+    "spectate",  # watch_table: live public_state stream for non-participants
+    "fighter",  # the 2D fighter game (tick protocol + arcade mode)
+]
+
+
+class Ruleset(BaseModel):
+    """The negotiated terms a table is played under (a bare `create_table` gets the
+    defaults: rated Bo1 standard)."""
+
+    game_id: str
+    best_of: int = Field(default=1, ge=1, le=9)
+    difficulty: str = "standard"
+    move_timeout_s: float | None = None
+    # Break between series games — the harness-iteration window (0 = a short pause).
+    edit_phase_s: int = Field(default=0, ge=0, le=1800)
+    # "local" = both sides declare local-only models; enforced node-side, declared
+    # in loadout_meta, recorded in the replay for the loser to verify.
+    model_class: Literal["any", "local"] = "any"
+    rated: bool = True
+
+
+class SeatProfile(BaseModel):
+    """Who is sitting in a seat — broadcast in `match_info` so boards show a real
+    opponent (handle/avatar/rating), not a bare piece label."""
+
+    account_id: str
+    display_name: str
+    handle: str | None = None
+    avatar: str = "🙂"
+    rating: float | None = None
+    tier: str | None = None
+    level: int = 1
+    is_bot: bool = False
+    model_label: str | None = None
+
 
 class TableInfo(BaseModel):
     """A table as advertised in the lobby. `seats` holds account ids (or null for
@@ -43,6 +94,17 @@ LEAVE_TABLE = "leave_table"
 ACTION = "action"
 CHALLENGE_START = "challenge_start"  # ask for a game's challenge scenarios
 CHALLENGE_ANSWERS = "challenge_answers"  # submit chosen actions for grading
+MOVE_TRACE = "move_trace"  # upload the agent's reasoning steps behind one move
+LOADOUT_META = (
+    "loadout_meta"  # declare what plays this table: {table_id, version, model_label}
+)
+REMATCH_OFFER = "rematch_offer"  # offer the last opponent the same ruleset again
+CHALLENGE_OFFER = "challenge_offer"  # propose a match: {to_account_id, ruleset}
+CHALLENGE_RESPOND = "challenge_respond"  # {offer_id, response: accept|decline|counter}
+QUEUE_JOIN = "queue_join"  # enter ranked matchmaking: {game_id, difficulty, placement}
+QUEUE_LEAVE = "queue_leave"  # leave the queue
+WATCH_TABLE = "watch_table"  # spectate a table (receive its public_state stream)
+UNWATCH_TABLE = "unwatch_table"  # stop spectating
 
 # node -> server (AgentTown: the persistent social world, not a table)
 TOWN_JOIN = "town_join"  # spawn/wake your resident (name + avatar ride along)
@@ -81,6 +143,14 @@ PROFILE = "profile"  # your gamified profile
 AUTHED = "authed"
 TABLES = "tables"
 TABLE = "table"
+MATCH_INFO = "match_info"  # match started: seat profiles + the replay id
+RATING_UPDATE = "rating_update"  # your post-game rating/tier/xp movement
+SERIES_STATE = "series_state"  # between series games: wins so far + intermission
+SERIES_OVER = "series_over"  # the series is decided
+CHALLENGE_INCOMING = "challenge_incoming"  # someone offered you a match (or counter)
+CHALLENGE_UPDATE = "challenge_update"  # your offer's fate: accepted/declined/countered
+QUEUE_STATUS = "queue_status"  # periodic while queued: waiting time + search window
+MATCH_FOUND = "match_found"  # the queue paired you; the table starts itself
 YOUR_TURN = "your_turn"
 PUBLIC_STATE = "public_state"
 GAME_OVER = "game_over"

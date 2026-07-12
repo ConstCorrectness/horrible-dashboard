@@ -25,11 +25,38 @@ class ToolDefModel(BaseModel):
 
 
 class LoadoutModel(BaseModel):
-    """A player's agent harness for a game: strategy context + custom tools."""
+    """A player's agent harness for a game: strategy context + custom tools + the
+    model that drives it (None = borrow the agent module's configured model)."""
 
     game_id: str
     context: str = ""
     tools: list[ToolDefModel] = []
+    model: dict[str, Any] | None = None
+
+
+class LoadoutVersionInfo(BaseModel):
+    """One saved harness version (the progression loop's unit of iteration)."""
+
+    id: str
+    label: str
+    created_at: float
+    active: bool
+    model: dict[str, Any] | None = None
+
+
+class SaveVersionRequest(BaseModel):
+    label: str = ""
+    loadout: LoadoutModel
+
+
+class ActivateVersionRequest(BaseModel):
+    version_id: str
+
+
+class SetKeyRequest(BaseModel):
+    """Write-only: the value goes into the node's key store and never comes back."""
+
+    value: str
 
 
 class TestToolRequest(BaseModel):

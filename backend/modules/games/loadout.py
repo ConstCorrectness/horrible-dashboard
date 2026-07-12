@@ -81,20 +81,26 @@ class Loadout:
     game_id: str
     context: str = ""
     tools: list[ToolDef] = field(default_factory=list)
+    # ModelConfig-shaped dict (provider/model/endpoint/api_key_name) or None to
+    # borrow the agent module's configured model. See model_config.py.
+    model: dict[str, Any] | None = None
 
     def to_wire(self) -> dict[str, Any]:
         return {
             "game_id": self.game_id,
             "context": self.context,
             "tools": [t.to_wire() for t in self.tools],
+            "model": self.model,
         }
 
     @classmethod
     def from_wire(cls, game_id: str, d: dict[str, Any]) -> "Loadout":
+        model = d.get("model")
         return cls(
             game_id=game_id,
             context=str(d.get("context") or ""),
             tools=[ToolDef.from_wire(t) for t in (d.get("tools") or [])],
+            model=dict(model) if isinstance(model, dict) else None,
         )
 
 
@@ -122,21 +128,155 @@ def _write_all(data: dict[str, Any]) -> None:
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
-def get_loadout(game_id: str) -> Loadout:
-    """The loadout for `game_id`, falling back to the `default` loadout."""
-    data = _read_all()
+# ---- versioning --------------------------------------------------------------
+#
+# On-disk shape v2, per game: {"active": vid, "versions": {vid: {label, created_at,
+# context, tools, model}}}. The v1 shape (a bare loadout dict) upgrades in memory
+# on read and is rewritten as v2 on the first save — so a fresh checkout and a
+# years-old loadouts file both just work. Versions are the harness-progression
+# loop: play → study the replay → branch the loadout → requeue.
+
+
+def _as_v2(entry: Any) -> dict[str, Any]:
+    if isinstance(entry, dict) and "versions" in entry:
+        return entry
+    body = dict(entry) if isinstance(entry, dict) else {}
+    body.setdefault("label", "v1")
+    body.setdefault("created_at", 0.0)
+    return {"active": "v1", "versions": {"v1": body}}
+
+
+def _entry_for(data: dict[str, Any], game_id: str) -> dict[str, Any] | None:
     if game_id in data:
-        return Loadout.from_wire(game_id, data[game_id])
+        return _as_v2(data[game_id])
     if DEFAULT_KEY in data:
-        return Loadout.from_wire(game_id, data[DEFAULT_KEY])
-    return Loadout(game_id=game_id)
+        return _as_v2(data[DEFAULT_KEY])
+    return None
+
+
+def _active_body(entry: dict[str, Any]) -> dict[str, Any]:
+    versions = entry.get("versions") or {}
+    active = entry.get("active")
+    if active in versions:
+        return versions[active]
+    return next(iter(versions.values()), {})
+
+
+def get_loadout(game_id: str) -> Loadout:
+    """The **active version** of the loadout for `game_id`, falling back to the
+    `default` loadout."""
+    entry = _entry_for(_read_all(), game_id)
+    if entry is None:
+        return Loadout(game_id=game_id)
+    return Loadout.from_wire(game_id, _active_body(entry))
+
+
+def active_version_id(game_id: str) -> str | None:
+    """Which version would play right now (for match attribution)."""
+    entry = _entry_for(_read_all(), game_id)
+    if entry is None:
+        return None
+    active = entry.get("active")
+    return active if active in (entry.get("versions") or {}) else None
 
 
 def save_loadout(loadout: Loadout) -> Loadout:
+    """Overwrite the active version in place (the classic PUT path)."""
+    import time
+
     data = _read_all()
-    data[loadout.game_id] = loadout.to_wire()
+    entry = _as_v2(data.get(loadout.game_id)) if loadout.game_id in data else None
+    if entry is None:
+        entry = {"active": "v1", "versions": {}}
+        entry["versions"]["v1"] = {"label": "v1", "created_at": time.time()}
+    body = entry["versions"].setdefault(
+        entry["active"], {"label": entry["active"], "created_at": time.time()}
+    )
+    body.update(loadout.to_wire())
+    body.pop("game_id", None)
+    data[loadout.game_id] = entry
     _write_all(data)
     return loadout
+
+
+def list_versions(game_id: str) -> list[dict[str, Any]]:
+    """Version summaries for a game, newest first."""
+    entry = _entry_for(_read_all(), game_id)
+    if entry is None:
+        return []
+    versions = entry.get("versions") or {}
+    return sorted(
+        (
+            {
+                "id": vid,
+                "label": str(body.get("label") or vid),
+                "created_at": float(body.get("created_at") or 0.0),
+                "active": vid == entry.get("active"),
+                "model": body.get("model"),
+            }
+            for vid, body in versions.items()
+        ),
+        key=lambda v: v["created_at"],
+        reverse=True,
+    )
+
+
+def save_version(game_id: str, loadout: Loadout, label: str = "") -> str:
+    """Branch: save `loadout` as a NEW version of `game_id` and make it active."""
+    import time
+
+    data = _read_all()
+    entry = (
+        _as_v2(data.get(game_id)) if game_id in data else {"active": "", "versions": {}}
+    )
+    versions = entry["versions"]
+    n = 1
+    while f"v{n}" in versions:
+        n += 1
+    vid = f"v{n}"
+    body = loadout.to_wire()
+    body.pop("game_id", None)
+    body["label"] = label or vid
+    body["created_at"] = time.time()
+    versions[vid] = body
+    entry["active"] = vid
+    data[game_id] = entry
+    _write_all(data)
+    return vid
+
+
+def activate_version(game_id: str, version_id: str) -> bool:
+    data = _read_all()
+    if game_id not in data:
+        return False
+    entry = _as_v2(data[game_id])
+    if version_id not in (entry.get("versions") or {}):
+        return False
+    entry["active"] = version_id
+    data[game_id] = entry
+    _write_all(data)
+    return True
+
+
+def delete_version(game_id: str, version_id: str) -> bool:
+    """Delete a version (never the last one; deleting the active one activates the
+    newest remaining)."""
+    data = _read_all()
+    if game_id not in data:
+        return False
+    entry = _as_v2(data[game_id])
+    versions = entry.get("versions") or {}
+    if version_id not in versions or len(versions) <= 1:
+        return False
+    del versions[version_id]
+    if entry.get("active") == version_id:
+        newest = max(
+            versions, key=lambda vid: float(versions[vid].get("created_at") or 0.0)
+        )
+        entry["active"] = newest
+    data[game_id] = entry
+    _write_all(data)
+    return True
 
 
 # ---- runtime ---------------------------------------------------------------

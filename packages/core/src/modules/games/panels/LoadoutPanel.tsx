@@ -1,6 +1,6 @@
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 
-import { apiGet, apiPost, apiPut } from '../../../api';
+import { apiDelete, apiGet, apiPost, apiPut } from '../../../api';
 import { registry } from '../../../registry';
 import type { EditorService } from '../../editor/service';
 import { fetchGamesCatalog } from '../games-api';
@@ -31,11 +31,26 @@ interface ToolDef {
   parameters: Record<string, unknown>;
   required: string[];
 }
+interface ModelConfig {
+  provider: 'anthropic' | 'openai' | 'ollama';
+  model: string;
+  endpoint?: string | null;
+  api_key_name?: string | null;
+}
 interface LoadoutModel {
   game_id: string;
   context: string;
   tools: ToolDef[];
+  /** null = borrow the agent module's configured model. */
+  model: ModelConfig | null;
 }
+interface VersionInfo {
+  id: string;
+  label: string;
+  created_at: number;
+  active: boolean;
+}
+type VersionStats = Record<string, { win: number; loss: number; draw: number }>;
 
 // `default` is the fallback harness used when a game has no game-specific loadout.
 const DEFAULT_GAMES = [
@@ -59,6 +74,124 @@ function newTool(n: number): ToolDef {
   };
 }
 
+/** Which model drives this harness — part of the loadout, so part of the skill.
+ * API keys go into the node's key store write-only; only names come back. */
+function ModelSection({
+  model,
+  onChange,
+}: {
+  model: ModelConfig | null;
+  onChange: (m: ModelConfig | null) => void;
+}) {
+  const [keyNames, setKeyNames] = useState<string[]>([]);
+  const [newKeyName, setNewKeyName] = useState('');
+  const [newKeyValue, setNewKeyValue] = useState('');
+  const [note, setNote] = useState('');
+
+  const loadKeys = useCallback(() => {
+    apiGet<{ names: string[] }>('/games/keys')
+      .then((r) => setKeyNames(r.names))
+      .catch(() => setKeyNames([]));
+  }, []);
+  useEffect(() => loadKeys(), [loadKeys]);
+
+  const addKey = async () => {
+    if (!newKeyName || !newKeyValue) return;
+    await apiPut(`/games/keys/${encodeURIComponent(newKeyName)}`, { value: newKeyValue });
+    setNote(`key "${newKeyName}" stored on this node (write-only)`);
+    setNewKeyName('');
+    setNewKeyValue('');
+    loadKeys();
+  };
+
+  return (
+    <div
+      style={{
+        border: '1px solid var(--border)',
+        borderRadius: '4px',
+        padding: '0.5rem',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '0.35rem',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+        <strong>Model</strong>
+        <select
+          value={model?.provider ?? 'agent'}
+          onChange={(e) => {
+            const p = e.target.value;
+            if (p === 'agent') onChange(null);
+            else
+              onChange({
+                provider: p as ModelConfig['provider'],
+                model: model?.model ?? '',
+                endpoint: null,
+                api_key_name: model?.api_key_name ?? null,
+              });
+          }}
+        >
+          <option value="agent">agent default (node's local model)</option>
+          <option value="ollama">Ollama</option>
+          <option value="openai">OpenAI-compatible</option>
+          <option value="anthropic">Anthropic</option>
+        </select>
+        {model && (
+          <>
+            <input
+              value={model.model}
+              onChange={(e) => onChange({ ...model, model: e.target.value })}
+              placeholder={model.provider === 'anthropic' ? 'claude-sonnet-5' : 'model name'}
+              style={{ fontFamily: 'monospace', flex: '0 0 14rem' }}
+            />
+            <input
+              value={model.endpoint ?? ''}
+              onChange={(e) => onChange({ ...model, endpoint: e.target.value || null })}
+              placeholder="endpoint (default)"
+              style={{ fontFamily: 'monospace', flex: '0 0 12rem' }}
+            />
+            {model.provider !== 'ollama' && (
+              <select
+                value={model.api_key_name ?? ''}
+                onChange={(e) => onChange({ ...model, api_key_name: e.target.value || null })}
+              >
+                <option value="">no API key</option>
+                {keyNames.map((n) => (
+                  <option key={n} value={n}>
+                    🔑 {n}
+                  </option>
+                ))}
+              </select>
+            )}
+          </>
+        )}
+      </div>
+      {model && model.provider !== 'ollama' && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+          <span style={labelStyle}>Add key:</span>
+          <input
+            value={newKeyName}
+            onChange={(e) => setNewKeyName(e.target.value)}
+            placeholder="key name"
+            style={{ flex: '0 0 8rem' }}
+          />
+          <input
+            value={newKeyValue}
+            onChange={(e) => setNewKeyValue(e.target.value)}
+            placeholder="paste key (stored node-side, never shown again)"
+            type="password"
+            style={{ flex: 1, minWidth: '10rem' }}
+          />
+          <button type="button" onClick={() => void addKey()}>
+            Store
+          </button>
+          <span style={{ color: 'var(--text-dim)', fontSize: '0.72rem' }}>{note}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function LoadoutPanel() {
   const [gameId, setGameId] = useState('tictactoe');
   const [games, setGames] = useState(DEFAULT_GAMES);
@@ -71,6 +204,19 @@ export function LoadoutPanel() {
   // Tool code opened as an editor buffer, keyed by `${gameId}:${tool name}` so the
   // link survives list reorders (delete/add) but not renames.
   const [editorUris, setEditorUris] = useState<Record<string, string>>({});
+  const [versions, setVersions] = useState<VersionInfo[]>([]);
+  const [stats, setStats] = useState<VersionStats>({});
+  const [versionLabel, setVersionLabel] = useState('');
+
+  const loadVersions = useCallback(() => {
+    apiGet<{ versions: VersionInfo[]; stats: VersionStats }>(`/games/loadout/${gameId}/versions`)
+      .then((r) => {
+        setVersions(r.versions);
+        setStats(r.stats);
+      })
+      .catch(() => setVersions([]));
+  }, [gameId]);
+  useEffect(() => loadVersions(), [loadVersions]);
 
   useEffect(() => {
     // Catalog games + the AgentTown persona (the town isn't a table game, but its
@@ -107,10 +253,42 @@ export function LoadoutPanel() {
     try {
       await apiPut(`/games/loadout/${gameId}`, { ...loadout, game_id: gameId });
       setStatus('saved ✓');
+      loadVersions();
     } catch (e) {
       setStatus(String(e));
     }
   };
+
+  const saveAsVersion = async () => {
+    setStatus('branching…');
+    try {
+      const r = await apiPost<{ version_id: string }>(`/games/loadout/${gameId}/versions`, {
+        label: versionLabel,
+        loadout: { ...loadout, game_id: gameId },
+      });
+      setStatus(`saved as ${versionLabel || r.version_id} ✓`);
+      setVersionLabel('');
+      loadVersions();
+    } catch (e) {
+      setStatus(String(e));
+    }
+  };
+
+  const activate = async (versionId: string) => {
+    await apiPut(`/games/loadout/${gameId}/active`, { version_id: versionId });
+    const l = await apiGet<LoadoutModel>(`/games/loadout/${gameId}`);
+    setLoadout(l);
+    loadVersions();
+  };
+
+  const removeVersion = async (versionId: string) => {
+    await apiDelete(`/games/loadout/${gameId}/versions/${versionId}`);
+    const l = await apiGet<LoadoutModel>(`/games/loadout/${gameId}`);
+    setLoadout(l);
+    loadVersions();
+  };
+
+  const active = versions.find((v) => v.active);
 
   // Open a tool's code as a real Python buffer in the editor module (syntax
   // highlighting, LSP), then pull the edited content back into the loadout.
@@ -186,6 +364,49 @@ export function LoadoutPanel() {
         </button>
         <span style={{ color: 'var(--text-dim)' }}>{status}</span>
       </div>
+
+      {/* Version bar — the harness progression loop: play, study, branch, requeue. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+        <span style={labelStyle}>Version</span>
+        <select value={active?.id ?? ''} onChange={(e) => void activate(e.target.value)}>
+          {versions.length === 0 && <option value="">v1 (unsaved)</option>}
+          {versions.map((v) => {
+            const s = stats[v.id];
+            const record = s ? ` — ${s.win}W/${s.loss}L/${s.draw}D` : '';
+            return (
+              <option key={v.id} value={v.id}>
+                {v.label}
+                {record}
+              </option>
+            );
+          })}
+        </select>
+        <input
+          value={versionLabel}
+          onChange={(e) => setVersionLabel(e.target.value)}
+          placeholder="new version label"
+          style={{ flex: '0 0 11rem' }}
+        />
+        <button type="button" onClick={() => void saveAsVersion()} title="Branch this harness">
+          Save as new version
+        </button>
+        {active && versions.length > 1 && (
+          <button
+            type="button"
+            onClick={() => void removeVersion(active.id)}
+            title="Delete this version"
+          >
+            🗑
+          </button>
+        )}
+        {active && stats[active.id] && (
+          <span className="games-tier-chip" title="this version's record">
+            {stats[active.id].win}W · {stats[active.id].loss}L · {stats[active.id].draw}D
+          </span>
+        )}
+      </div>
+
+      <ModelSection model={loadout.model} onChange={(m) => update({ model: m })} />
 
       <label>
         <span style={labelStyle}>Strategy context (injected into the agent's system prompt)</span>

@@ -65,14 +65,27 @@ perfect-information board games and imperfect-information poker. The server impo
 authoritatively; a node may import it for local rendering but is never trusted over
 the server.
 
-Two contract extensions carry the **agentic-task duels** (RAG race, future
-data-analysis sprints and bugfix duels): `current_players()` lets a game put
-*several* seats on the clock at once (the referee tracks a pending set with an
-independent per-seat timer instead of one seat-to-move), and `apply_action`'s
-`payload` parameter carries an **open action**'s free-form content (answers, a
-patch) — the referee still validates the enumerated action id; the game validates
-and grades the payload server-side. `GameSpec.move_timeout_s` gives such games a
-minutes-scale clock without touching the board-game default.
+Two contract extensions carry the **agentic-task duels** (RAG race, code golf, test
+duel, bug hunt): `current_players()` lets a game put *several* seats on the clock at
+once (the referee tracks a pending set with an independent per-seat timer instead of
+one seat-to-move), and `apply_action`'s `payload` parameter carries an **open
+action**'s free-form content (answers, code, a whole-file fix) — the referee still
+validates the enumerated action id; the game validates and grades the payload
+server-side. `GameSpec.move_timeout_s` gives such games a minutes-scale clock without
+touching the board-game default.
+
+A third extension carries the **rigorous code games**: the `WORK` sentinel. When
+`current_player() == WORK`, the server owes computation (grading submissions,
+simulating an arena round) — the referee broadcasts a "grading…" public state, then
+runs `state.run_work()` **off the event loop** (`asyncio.to_thread`) while holding the
+table's lock (all seats have submitted; nothing else may act). The work itself is the
+**verification runner** (`games_engine/verify.py`): pytest in an isolated subprocess
+(`python -I`, empty env, temp cwd, wall-clock kill-tree, POSIX rlimits) — synchronous
+`Popen` on a thread (Windows + `--reload` breaks asyncio subprocess spawn), output
+capped, and **opt-in via `GAMES_ENABLE_CODE_EXEC=1`**. It is deliberately *not*
+container-grade; the roadmap hardening is a per-job container/machine. The arena's
+bot simulation (`games_engine/botsim.py`) runs each player bot in its own such
+subprocess. Board games and duels never touch it.
 
 ### The `GameState` contract
 
@@ -99,11 +112,33 @@ servers), distinct from the browser's `{channel, event, data}` `/ws`. A node's
 | node → server | `auth` | `{ token }` (phase 1: token = account id) |
 | node → server | `create_table` / `join_table` / `leave_table` | `{ game_id }` / `{ table_id }` |
 | node → server | `action` | `{ game_id, action_id }` |
-| server → node | `authed` / `tables` / `table` | account + lobby state |
+| node → server | `move_trace` | `{ table_id, action_id, steps }` — the agent's reasoning behind one move, sent **before** the action (the action may end the game and freeze the replay). Stored into the replay, never rebroadcast. |
+| node → server | `queue_join` / `queue_leave` | `{ game_id, difficulty, placement }` — enter/leave the ranked queue |
+| node → server | `challenge_offer` | `{ to_account_id, ruleset }` — propose a match with full terms |
+| node → server | `challenge_respond` | `{ offer_id, response: accept\|decline\|counter, ruleset? }` |
+| node → server | `rematch_offer` | `{ table_id }` — re-offer a finished table's ruleset to the opponent |
+| node → server | `loadout_meta` | `{ table_id, version, model_label }` — what plays at this seat (declaration, not proof; recorded into the replay + seat badges so the loser can scrutinize) |
+| node → server | `watch_table` / `unwatch_table` | `{ table_id }` — join/leave a table's spectator set (public_state stream only, never a seat's private observation) |
+| server → node | `authed` / `tables` / `table` | account + lobby state; `authed` carries `caps` (see below) |
+| server → node | `match_info` | `{ table_id, game_id, replay_id, seats: [SeatProfile] }` — who's in each seat (handle/avatar/rating/level/is_bot) + the id the replay will save under |
 | server → node | `your_turn` | `{ observation, legal_actions, seat, deadline_ms }` |
 | server → node | `public_state` | `{ state }` (broadcast to seated players) |
 | server → node | `game_over` | `{ returns, winner }` |
+| server → node | `rating_update` | `{ game_id, rating, delta, tier, placement_games, xp, level }` — your post-game movement |
+| server → node | `series_state` / `series_over` | best-of-N score between games / the decided series |
+| server → node | `challenge_incoming` / `challenge_update` | an offer aimed at you / your offer's fate (`accepted` carries `table_id`; the offerer's node auto-joins) |
+| server → node | `queue_status` / `match_found` | periodic wait status / the pairing (`opponent` SeatProfile, or null when a practice bot backfills) |
 | server → node | `error` | `{ code, message }` |
+
+**Capability negotiation:** `authed` includes `caps: [...]` (`models.SERVER_CAPS`) so a
+node feature-detects what the connected server supports instead of assuming versions
+match — the server always deploys first, and older nodes simply ignore caps and message
+types they don't know. Never remove a shipped cap.
+
+**Schema migrations:** `store.py` runs an ordered, additive-only `MIGRATIONS` list from
+`init_db()`, tracked in `schema_meta.version`. The live volume upgrades by replaying the
+tail of the list on boot — back up `/data/game_server.db` before deploying a version bump
+(see [game-server-hosting](game-server-hosting.mdx)).
 
 ## Defense in depth
 
@@ -131,6 +166,54 @@ callback (`store.py`): a `results` log plus per-account, per-game **ELO** rating
 (base 1200, K=32, 2-player zero-sum). `GET /leaderboard?game_id=` serves the ranking;
 the node proxies it to the **Ladder** panel. Multi-player (poker) rating is deferred —
 those results are logged but unrated.
+
+On top of raw ELO sits the **skill curve** machinery:
+
+- **Placements & tiers** — your first `PLACEMENT_GAMES` (5) rated games are placement
+  matches: the ladder masks your exact rating and shows `placement n/5`. After that
+  your **tier** (bronze 0 → silver 1100 → gold 1250 → platinum 1400 → diamond 1550 →
+  master 1700 → grandmaster 1850) renders everywhere. Every finished game pushes each
+  seat a `rating_update` (delta, tier, XP) so the UI can toast rating movement.
+- **Series** — a table's `Ruleset` (`best_of`, `difficulty`, `move_timeout_s`,
+  `edit_phase_s`, `model_class`, `rated`) governs it; best-of-N chains games on one
+  table, swapping seats between games for first-move fairness, holding `edit_phase_s`
+  open between games (the harness-iteration window — the loadout is re-read every
+  move), and persisting a `series` row when decided.
+- **Negotiation** — challenges are a real handshake: `challenge_offer` carries a full
+  ruleset; the target accepts (table hosted, offerer auto-joins), declines, or
+  **counters** with edited terms (roles flip). Rematch is the same flow seeded with
+  the finished table's ruleset. Offers live in memory with a 3-minute TTL.
+- **Matchmaking queue** — per `(game, difficulty)` buckets, ±75 rating window widening
+  +50 every 10s; a practice bot backfills after `GAMES_QUEUE_BOT_S` (45s default),
+  instantly for placement runs. `hard`/`expert` difficulties are tier-locked (gold /
+  diamond) — the skill curve made structural.
+- **Practice bots** (`bots.py`) — server-hosted accounts `bot:{game}:{tier}` with
+  **pinned** ratings (bronze 1000 / silver 1150 / gold 1300 / platinum 1450); they ride
+  the normal `/game-ws` protocol via synthetic sessions, so the referee has zero
+  special cases. Beating one moves your rating, never theirs; they're excluded from
+  the leaderboard. Per-game logic: tic-tac-toe minimax (with a tier-scaled blunder
+  rate), connect-four negamax, tight-passive hold'em, and the shared baseline solver
+  for open-action duels.
+
+## Reasoning traces & replays (done)
+
+The point of the module is engineering the agent, so the agent's thinking is
+first-class data with a strict visibility rule: **live = your own agent only; both
+sides = post-match replay.**
+
+- **Live:** the node's `AgentPolicy` emits each reasoning step (assistant turns, tool
+  calls, tool results, the commit) to a trace sink; the node relays *its own* steps to
+  the browser as `agent_trace` events (the **Agent Thoughts** pane) and uploads them
+  per-move via `move_trace`. The server stores traces into the replay and never
+  rebroadcasts them, so an opponent's live view can't see them.
+- **Replay:** the referee records every `public_state`, `action` (payload sizes only —
+  content reveals via `public_state` when the game chooses), uploaded `trace`, and the
+  `game_over` into an event log, persisted at game end (`replays` + `replay_events`
+  tables). `match_info` names the replay id up front.
+- **Access:** `GET /replays?scope=mine|public`, `GET /replays/{id}`,
+  `POST /replays/{id}/publish` (bearer = the same JWT/dev token as `/game-ws`).
+  Participants always see their replays; anyone else only after a participant
+  publishes. Not-found and not-allowed are indistinguishable on purpose.
 
 ## Challenge track (done)
 

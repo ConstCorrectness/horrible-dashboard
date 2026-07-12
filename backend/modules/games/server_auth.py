@@ -148,6 +148,66 @@ async def google_poll(device_code: str) -> dict[str, Any]:
     return await _auth_poll("google", device_code)
 
 
+def _play_token() -> str:
+    """The token this node plays under: the signed-in JWT if present, else the dev
+    token — the same resolution `client._settings` uses for `/game-ws`."""
+    if token := get_token():
+        return token
+    return str(get_value("games.devToken", "player") or "player")
+
+
+def _bearer() -> dict[str, str]:
+    return {"Authorization": f"Bearer {_play_token()}"}
+
+
+async def replays_list(
+    game_id: str | None, scope: str = "mine", limit: int = 50
+) -> dict[str, Any]:
+    """Proxy the server's replay index (`mine` needs our token; `public` doesn't)."""
+    import httpx
+
+    params: dict[str, Any] = {"scope": scope, "limit": limit}
+    if game_id:
+        params["game_id"] = game_id
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.get(
+                f"{_http_base()}/replays", params=params, headers=_bearer()
+            )
+            res.raise_for_status()
+            return res.json()
+    except httpx.HTTPError:
+        return _unreachable_error()
+
+
+async def replay_get(replay_id: str) -> dict[str, Any]:
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.get(
+                f"{_http_base()}/replays/{replay_id}", headers=_bearer()
+            )
+            res.raise_for_status()
+            return res.json()
+    except httpx.HTTPError:
+        return _unreachable_error()
+
+
+async def replay_publish(replay_id: str) -> dict[str, Any]:
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.post(
+                f"{_http_base()}/replays/{replay_id}/publish", headers=_bearer()
+            )
+            res.raise_for_status()
+            return res.json()
+    except httpx.HTTPError:
+        return _unreachable_error()
+
+
 async def leaderboard(game_id: str) -> dict[str, Any]:
     import httpx
 

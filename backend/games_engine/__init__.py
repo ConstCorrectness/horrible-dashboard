@@ -22,6 +22,7 @@ from __future__ import annotations
 from backend.games_engine.base import (
     CHANCE,
     TERMINAL,
+    WORK,
     Action,
     GameSpec,
     GameState,
@@ -31,14 +32,20 @@ from backend.games_engine.base import (
 )
 
 # Importing a game module registers it via `register_game` as a side effect.
+from backend.games_engine import arena  # noqa: F401  (registration side effect)
+from backend.games_engine import bug_hunt  # noqa: F401  (registration side effect)
+from backend.games_engine import code_golf  # noqa: F401  (registration side effect)
 from backend.games_engine import connect_four  # noqa: F401  (registration side effect)
+from backend.games_engine import fighter  # noqa: F401  (registration side effect)
 from backend.games_engine import holdem  # noqa: F401  (registration side effect)
 from backend.games_engine import rag_race  # noqa: F401  (registration side effect)
+from backend.games_engine import test_duel  # noqa: F401  (registration side effect)
 from backend.games_engine import tictactoe  # noqa: F401  (registration side effect)
 
 __all__ = [
     "CHANCE",
     "TERMINAL",
+    "WORK",
     "Action",
     "GameSpec",
     "GameState",

@@ -22,8 +22,11 @@ Three properties of `backend/games_server/` decide which hosts fit:
    must support WebSockets, allow long idle periods (a turn clock can sit ~30s between
    moves), and **never scale to zero** — a cold start drops every live match.
 3. **Persistent disk.** State lives in SQLite at `$HORRIBLE_DATA_DIR/game_server.db`
-   (accounts, ELO ratings, results, challenge scores) plus a generated JWT-secret file.
-   It needs a **persistent volume**, not an ephemeral container filesystem.
+   (accounts, ELO ratings + placements/tiers, results, series, replays, challenge
+   scores, the code-game task bank) plus a generated JWT-secret file. It needs a
+   **persistent volume**, not an ephemeral container filesystem. The schema evolves
+   through an ordered, additive-only `store.MIGRATIONS` list replayed on boot — see
+   [schema migrations & backups](#schema-migrations--backups).
 
 This rules out serverless/edge functions (no long-lived WS server), anything that
 scales to zero, and multi-replica-behind-a-load-balancer — for now. See
@@ -41,6 +44,8 @@ and `store.py`). Environment variables take priority over database settings if b
 | `GAMES_GOOGLE_CLIENT_ID` | For Google sign-in | Google OAuth **client id** — create a client of type **"TVs and Limited Input devices"** in Google Cloud Console (that's the device-flow client type; add your accounts as test users while the consent screen is in Testing). Overrides the database `games.google.clientId` setting. |
 | `GAMES_GOOGLE_CLIENT_SECRET` | For Google sign-in | The matching **client secret** — Google's device flow (unlike GitHub's) requires it at the token poll. Google treats TV-client secrets as non-confidential, but keep it in a host secret anyway. Overrides the database `games.google.clientSecret` setting. |
 | `GAMES_ALLOW_DEV_AUTH` | Recommended `0` | The dev token treats `token == account_id` (no auth). Fine locally; set to `0` in prod to require real sign-in. |
+| `GAMES_ENABLE_CODE_EXEC` | For code games | Opt-in gate for **running untrusted code** — the verification runner (code golf, test duel, bug hunt) and the arena bot simulation. Unset, those games report grading as unavailable and never execute anything. Only enable on a host you're comfortable running player-submitted Python on (isolated subprocess, but *not* container-grade yet — see the [architecture note](game-server.mdx)). |
+| `GAMES_QUEUE_BOT_S` | Optional (default `45`) | Seconds the ranked queue waits for a human before backfilling with a practice bot (instant for placement matches). |
 | `HORRIBLE_DATA_DIR` | **Yes** | Where the SQLite db + JWT secret live. Point at the mounted persistent volume. |
 
 Nodes connect by setting the `games.serverUrl` setting to your server's **`wss://`**
@@ -86,6 +91,32 @@ The `fly.toml` pins the important bits: `internal_port = 9200`, `force_https`,
 a 1 GB volume. The one-volume "create two or more" warning from `fly volumes` is
 expected here — a single instance wants a single volume; HA comes later via the
 [scaling path](#scaling-path), not a second volume.
+
+## Schema migrations & backups
+
+`store.py` owns the schema through an ordered, additive-only `MIGRATIONS` list
+tracked in a `schema_meta.version` row; `init_db()` (run at startup) replays any
+migrations past the DB's current version, each in its own transaction. New columns
+are added with a defaulted `ALTER TABLE`, new tables with `CREATE TABLE IF NOT
+EXISTS` — never a destructive change — so **deploying a newer server upgrades the
+live volume in place**. Nodes feature-detect what the server supports via the
+`caps` list on `authed`, so a server can always deploy ahead of node releases.
+
+Because a migration edits the live SQLite file, **back it up before a deploy that
+bumps the schema version**:
+
+```bash
+fly ssh console -C "sqlite3 /data/game_server.db \".backup '/data/backup.db'\""
+# then optionally pull it down:
+fly ssh sftp get /data/backup.db ./game_server.backup.db
+```
+
+To generate fresh **bug-hunt tasks** (the mutation generator), run it against the
+volume with the exec gate on — offline or on a cron, not in the request path:
+
+```bash
+fly ssh console -C "GAMES_ENABLE_CODE_EXEC=1 uv run python -m backend.games_server.task_gen --count 20"
+```
 
 ## Hosting options
 

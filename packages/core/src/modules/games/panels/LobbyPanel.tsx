@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { revealRegionView } from '../../../layout/controller';
 import { registry } from '../../../registry';
+import { useSetting } from '../../../settings';
+import { claimChallengeDraft, onChallengeDraft, type ChallengeTarget } from '../challenge-draft';
 import { requestChallenges } from '../challenge-focus';
 import {
   gamesConnect,
@@ -10,7 +12,9 @@ import {
   gamesJoinTable,
   gamesListTables,
   useGames,
+  watchTable,
 } from '../game-ws';
+import { ChallengeDraftCard, IncomingOfferCard, RankedCard } from './ChallengeCards';
 import {
   fetchGamesCatalog,
   fetchStatus,
@@ -98,6 +102,11 @@ const GAME_ICONS: Record<string, string> = {
   connect_four: '🔴',
   holdem: '🃏',
   rag_race: '📚',
+  code_golf: '⛳',
+  test_duel: '⚖️',
+  bug_hunt: '🐛',
+  arena: '🤖',
+  fighter: '🥊',
 };
 
 /**
@@ -109,10 +118,13 @@ const GAME_ICONS: Record<string, string> = {
 export function LobbyPanel() {
   const { connected, accountId, selfPlay, tables } = useGames();
   const [games, setGames] = useState<GameCatalogEntry[]>([]);
+  const [draft, setDraft] = useState<ChallengeTarget | null>(() => claimChallengeDraft());
 
   useEffect(() => {
     fetchGamesCatalog().then(setGames);
   }, []);
+
+  useEffect(() => onChallengeDraft(setDraft), []);
 
   useEffect(() => {
     if (connected) gamesListTables();
@@ -122,6 +134,8 @@ export function LobbyPanel() {
     revealRegionView('games.board');
     gamesCreateTable(gameId);
   };
+
+  const onboarded = useSetting<boolean>('games.onboarded') === true;
 
   return (
     <div
@@ -133,6 +147,25 @@ export function LobbyPanel() {
         gap: '0.6rem',
       }}
     >
+      {!onboarded && (
+        <div className="games-start-hero">
+          <div>
+            <strong>🚀 New here?</strong>{' '}
+            <span style={{ color: 'var(--text-dim)' }}>
+              Sign in, claim a handle, ship your first harness, and play a placement match — four
+              guided steps.
+            </span>
+          </div>
+          <button
+            type="button"
+            className="games-play-btn"
+            onClick={() => registry.openPanel('games.onboarding')}
+          >
+            Start here →
+          </button>
+        </div>
+      )}
+
       <SignIn />
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -174,8 +207,12 @@ export function LobbyPanel() {
         </button>
       </div>
 
+      <IncomingOfferCard games={games} />
+      {draft && <ChallengeDraftCard target={draft} games={games} onDone={() => setDraft(null)} />}
+
       {connected && (
         <>
+          <RankedCard games={games} />
           <div>
             <div style={{ color: 'var(--text-dim)', marginBottom: '0.3rem' }}>New match</div>
             <div className="games-cards">
@@ -267,6 +304,17 @@ export function LobbyPanel() {
                         }}
                       >
                         Join
+                      </button>
+                    )}
+                    {t.status === 'playing' && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          revealRegionView('games.board');
+                          watchTable(t.id);
+                        }}
+                      >
+                        👁 Watch
                       </button>
                     )}
                   </li>

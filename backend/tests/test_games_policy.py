@@ -30,6 +30,72 @@ def test_make_policy_selects_type() -> None:
     assert isinstance(make_policy("bogus"), RandomPolicy)
 
 
+class _Call:
+    def __init__(self, name: str, arguments: dict) -> None:
+        self.name = name
+        self.arguments = arguments
+        self.id = name
+
+
+class _Result:
+    def __init__(self, content: str = "", tool_calls: list[_Call] | None = None):
+        self.content = content
+        self.tool_calls = tool_calls or []
+        self.assistant_message = {"role": "assistant", "content": content}
+
+
+def test_agent_policy_emits_a_trace_of_its_reasoning() -> None:
+    """The trace sink sees every assistant step, tool result, and the commit — the
+    feed behind the live thoughts pane and the replay upload."""
+    from backend.modules.games.loadout import Loadout, ToolDef
+
+    loadout = Loadout(
+        game_id="t",
+        context="think",
+        tools=[
+            ToolDef(
+                name="scan",
+                description="",
+                code="def run(args, obs):\n    return {'seen': True}\n",
+            )
+        ],
+    )
+    turns = iter(
+        [
+            _Result("let me look", [_Call("scan", {})]),
+            _Result(
+                "taking the corner", [_Call("game.chooseAction", {"action_id": "8"})]
+            ),
+        ]
+    )
+
+    async def chat(messages, tools):
+        return next(turns)
+
+    steps: list[dict] = []
+    policy = AgentPolicy(
+        chat_fn=chat, load_loadout=lambda _g: loadout, trace=steps.append
+    )
+    chosen = asyncio.run(policy.choose({"board": []}, LEGAL, "t"))
+    assert chosen == "8"
+    kinds = [s["kind"] for s in steps]
+    assert kinds == ["assistant", "tool_result", "assistant", "chose"]
+    assert steps[1]["name"] == "scan"
+    assert steps[-1]["action_id"] == "8"
+
+
+def test_agent_policy_traces_the_fallback(monkeypatch) -> None:
+    import backend.modules.agent.routes as agent_routes
+
+    monkeypatch.setattr(agent_routes, "_load_config", lambda: None)
+    steps: list[dict] = []
+    policy = AgentPolicy(fallback=RandomPolicy(random.Random(1)), trace=steps.append)
+    chosen = asyncio.run(policy.choose({"x": 1}, LEGAL))
+    assert chosen in IDS
+    assert steps[-1]["kind"] == "fallback"
+    assert steps[-1]["action_id"] == chosen
+
+
 def test_agent_policy_falls_back_to_random_without_a_model(monkeypatch) -> None:
     # No agent config on disk -> _load_config returns None -> fallback to random.
     import backend.modules.agent.routes as agent_routes

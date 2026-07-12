@@ -24,7 +24,7 @@ import logging
 import random
 from typing import Any, Awaitable, Callable
 
-from backend.games_engine.base import CHANCE, TERMINAL, GameState
+from backend.games_engine.base import CHANCE, TERMINAL, WORK, GameState
 from backend.games_server import models
 
 logger = logging.getLogger(__name__)
@@ -33,8 +33,17 @@ logger = logging.getLogger(__name__)
 SendTo = Callable[[str, dict[str, Any]], Awaitable[None]]
 # game_id, table_id, account_ids, returns, winner -> persist to the ladder
 OnResult = Callable[[str, str, list[str], dict[int, float], "int | None"], None]
+# events, returns, winner -> persist the finished game's replay
+OnReplay = Callable[[list[dict[str, Any]], dict[int, float], "int | None"], None]
 
 DEFAULT_MOVE_TIMEOUT_S = 30.0
+
+# Replay-log bounds so a hostile or runaway node can't balloon the server's memory:
+# steps beyond the per-move cap are dropped, events beyond the total cap stop being
+# recorded (the match itself is unaffected).
+MAX_TRACE_STEPS_PER_MOVE = 50
+MAX_TRACE_STEP_CHARS = 4_000
+MAX_REPLAY_EVENTS = 2_000
 
 
 class Referee:
@@ -50,6 +59,7 @@ class Referee:
         rng: random.Random | None = None,
         move_timeout_s: float = DEFAULT_MOVE_TIMEOUT_S,
         on_result: OnResult | None = None,
+        on_replay: OnReplay | None = None,
     ) -> None:
         self.table_id = table_id
         self.game_id = game_id
@@ -62,6 +72,13 @@ class Referee:
         self._rng = rng or random.Random()
         self._move_timeout_s = move_timeout_s
         self._on_result = on_result
+        self._on_replay = on_replay
+        # The replay log: every public state, action, and uploaded reasoning trace
+        # in order. Handed to `on_replay` at game over.
+        self._events: list[dict[str, Any]] = []
+        # Spectator session ids: they receive the public_state stream (never any
+        # seat's private observation), so watching can't leak hidden state.
+        self.observers: set[str] = set()
         self._lock = asyncio.Lock()
         # Seats prompted and awaiting an action, each on its own move clock — one
         # entry for alternating games, several for simultaneous ones (duels).
@@ -100,6 +117,15 @@ class Referee:
                 return
             self._release_seat(seat)
             self.state.apply_action(seat, action_id, payload=payload)
+            # Log the move for the replay; only the payload's *size* — open-action
+            # content (duel answers, code) reveals itself via public_state when the
+            # game chooses to, not via the raw submission.
+            self._record(
+                "action",
+                seat=seat,
+                action_id=action_id,
+                payload_chars=len(str(payload)) if payload is not None else 0,
+            )
             await self._advance()
 
     async def stop(self) -> None:
@@ -107,14 +133,46 @@ class Referee:
             self.done = True
             self._cancel_all_timers()
 
+    # ---- replay log ----------------------------------------------------------
+
+    def _record(self, kind: str, **fields: Any) -> None:
+        if len(self._events) >= MAX_REPLAY_EVENTS:
+            return
+        self._events.append({"kind": kind, **fields})
+
+    def record_trace(self, seat: int, steps: list[Any], action_id: str | None) -> None:
+        """Store one seat's uploaded reasoning steps behind a move. Replay-only:
+        never rebroadcast, so an opponent's live view can't see them — both traces
+        surface together in the post-match replay."""
+        if not isinstance(steps, list) or not (0 <= seat < len(self.seats)):
+            return
+        kept = [
+            step
+            for step in steps[:MAX_TRACE_STEPS_PER_MOVE]
+            if isinstance(step, dict) and len(str(step)) <= MAX_TRACE_STEP_CHARS
+        ]
+        if kept:
+            self._record("trace", seat=seat, action_id=action_id, steps=kept)
+
     # ---- core loop ---------------------------------------------------------
 
     async def _advance(self) -> None:
-        """Resolve any chance nodes, then either finish or prompt every seat that
-        may act and isn't already on the clock."""
-        # Server-only: resolve chance with our RNG until a real player must act.
-        while self.state.current_player() == CHANCE:
-            self.state.resolve_chance(self._rng)
+        """Resolve any chance nodes and pending server-side work, then either
+        finish or prompt every seat that may act and isn't already on the clock."""
+        while True:
+            # Server-only: resolve chance with our RNG until a real player must act.
+            if self.state.current_player() == CHANCE:
+                self.state.resolve_chance(self._rng)
+                continue
+            # Server-side work (grading, simulation): broadcast the "grading…"
+            # state first so spectators see the phase, then run it OFF the event
+            # loop — the table's lock stays held (all seats have submitted;
+            # nothing else may act) but the rest of the server keeps serving.
+            if self.state.current_player() == WORK:
+                await self._broadcast_public_state()
+                await asyncio.to_thread(self.state.run_work)
+                continue
+            break
 
         if self.state.current_player() == TERMINAL:
             await self._finish()
@@ -171,6 +229,12 @@ class Referee:
                 )
             except Exception:
                 logger.exception("on_result callback failed")
+        self._record("game_over", returns=returns, winner=winner)
+        if self._on_replay is not None:
+            try:
+                self._on_replay(self._events, returns, winner)
+            except Exception:
+                logger.exception("on_replay callback failed")
         await self._broadcast({"type": models.GAME_OVER, **info.model_dump()})
 
     # ---- clock -------------------------------------------------------------
@@ -207,6 +271,7 @@ class Referee:
             )
             self._release_seat(seat)
             self.state.apply_action(seat, legal[0].id)
+            self._record("action", seat=seat, action_id=legal[0].id, timeout=True)
             await self._advance()
 
     # ---- helpers -----------------------------------------------------------
@@ -221,18 +286,23 @@ class Referee:
         return any(a.id == action_id for a in self.state.legal_actions(seat))
 
     async def _broadcast_public_state(self) -> None:
+        state = self.state.public_state()
+        self._record("public_state", state=state)
         await self._broadcast(
             {
                 "type": models.PUBLIC_STATE,
                 "game_id": self.game_id,
                 "table_id": self.table_id,
-                "state": self.state.public_state(),
+                "state": state,
             }
         )
 
     async def _broadcast(self, msg: dict[str, Any]) -> None:
-        # Seats are unique session ids, but de-dupe defensively.
-        for seat_id in dict.fromkeys(self.seats):
+        # Seats + observers, de-duped. Observers only ever get this broadcast,
+        # which carries public_state / table-level events — never a seat's private
+        # observation (those go to a single seat via `_prompt_seat`), so watching
+        # can't leak hidden state.
+        for seat_id in dict.fromkeys([*self.seats, *self.observers]):
             await self._send_to(seat_id, msg)
 
 

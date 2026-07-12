@@ -51,6 +51,18 @@ async def _move(hub: GameHub, session, cell: str) -> None:
     )
 
 
+def test_authed_advertises_server_caps() -> None:
+    """AUTHED carries the server's capability list — how a newer node feature-detects
+    against an older deployed server (and vice versa)."""
+
+    async def go() -> None:
+        hub = GameHub(move_timeout_s=0)
+        conn, _session = await _auth(hub, "alice")
+        assert conn.last(models.AUTHED)["caps"] == models.SERVER_CAPS
+
+    asyncio.run(go())
+
+
 def test_auth_required_before_lobby() -> None:
     async def go() -> None:
         hub = GameHub(move_timeout_s=0)
@@ -124,6 +136,26 @@ def test_same_account_two_devices_can_play() -> None:
         # The lobby still advertises the account id in both seats.
         table = a_conn.last(models.TABLE)["table"]
         assert table["seats"] == ["solo", "solo"]
+
+    asyncio.run(go())
+
+
+def test_spectator_receives_public_state_but_no_your_turn() -> None:
+    """A watcher joins a live table's observer set: they get the public_state
+    stream (and a snapshot on join) but never a seat's private your_turn."""
+
+    async def go() -> None:
+        hub = GameHub(move_timeout_s=0)
+        (a_conn, a), (_b_conn, _b), table_id = await _seat_two(hub)
+        watcher_conn, watcher = await _auth(hub, "carol")
+        await hub.handle(watcher, {"type": models.WATCH_TABLE, "table_id": table_id})
+        # Snapshot on join.
+        assert watcher_conn.last(models.PUBLIC_STATE) is not None
+        # A move broadcasts fresh public state to the watcher too.
+        await _move(hub, a, "0")
+        assert watcher_conn.last(models.PUBLIC_STATE)["state"]["board"][0] == "X"
+        # But the watcher is never prompted to move.
+        assert watcher_conn.last(models.YOUR_TURN) is None
 
     asyncio.run(go())
 

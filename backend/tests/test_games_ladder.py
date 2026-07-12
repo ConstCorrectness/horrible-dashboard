@@ -10,23 +10,64 @@ def _lb_by_account(game_id: str) -> dict[str, dict]:
 
 
 def test_win_moves_ratings_and_records_wl() -> None:
-    store.record_result("tictactoe", "t1", ["a", "b"], {0: 1.0, 1: -1.0}, winner=0)
-    lb = _lb_by_account("tictactoe")
-    assert lb["a"]["rating"] > store.BASE_RATING
-    assert lb["b"]["rating"] < store.BASE_RATING
-    # Zero-sum ELO: what the winner gains, the loser loses.
-    assert round(lb["a"]["rating"] - store.BASE_RATING, 6) == round(
-        store.BASE_RATING - lb["b"]["rating"], 6
+    updates = store.record_result(
+        "tictactoe", "t1", ["a", "b"], {0: 1.0, 1: -1.0}, winner=0
     )
-    assert lb["a"]["wins"] == 1 and lb["a"]["losses"] == 0
-    assert lb["b"]["losses"] == 1 and lb["b"]["wins"] == 0
+    ra = store.get_rating("a", "tictactoe")
+    rb = store.get_rating("b", "tictactoe")
+    assert ra["rating"] > store.BASE_RATING
+    assert rb["rating"] < store.BASE_RATING
+    # Zero-sum ELO: what the winner gains, the loser loses.
+    assert round(ra["rating"] - store.BASE_RATING, 6) == round(
+        store.BASE_RATING - rb["rating"], 6
+    )
+    assert ra["wins"] == 1 and ra["losses"] == 0
+    assert rb["losses"] == 1 and rb["wins"] == 0
+    # The exact rating stays masked on the public ladder during placement, and
+    # record_result reports each seat's movement for the rating_update push.
+    lb = _lb_by_account("tictactoe")
+    assert lb["a"]["rating"] is None and lb["a"]["tier"] == "placement"
+    assert {u["account_id"] for u in updates} == {"a", "b"}
+    assert next(u for u in updates if u["account_id"] == "a")["delta"] > 0
 
 
 def test_draw_between_equals_keeps_ratings() -> None:
     store.record_result("tictactoe", "t1", ["a", "b"], {0: 0.0, 1: 0.0}, winner=None)
+    ra = store.get_rating("a", "tictactoe")
+    rb = store.get_rating("b", "tictactoe")
+    assert ra["rating"] == store.BASE_RATING == rb["rating"]
+    assert ra["draws"] == 1 and rb["draws"] == 1
+
+
+def test_placement_completes_after_five_games() -> None:
+    for i in range(store.PLACEMENT_GAMES):
+        store.record_result("tictactoe", f"t{i}", ["a", "b"], {0: 1.0, 1: -1.0}, 0)
     lb = _lb_by_account("tictactoe")
-    assert lb["a"]["rating"] == store.BASE_RATING == lb["b"]["rating"]
-    assert lb["a"]["draws"] == 1 and lb["b"]["draws"] == 1
+    assert lb["a"]["tier"] != "placement"
+    assert lb["a"]["rating"] is not None
+
+
+def test_bots_are_pinned_and_off_the_ladder() -> None:
+    store.ensure_bot_account("bot:tictactoe:bronze", "Rusty", "tictactoe", 1000.0)
+    updates = store.record_result(
+        "tictactoe", "t1", ["a", "bot:tictactoe:bronze"], {0: 1.0, 1: -1.0}, 0
+    )
+    # The human's rating moved (against the pinned anchor); the bot's didn't.
+    assert store.get_rating("a", "tictactoe")["rating"] > store.BASE_RATING
+    assert store.get_rating("bot:tictactoe:bronze", "tictactoe")["rating"] == 1000.0
+    assert {u["account_id"] for u in updates} == {"a"}
+    assert all(
+        r["account_id"] != "bot:tictactoe:bronze"
+        for r in store.leaderboard("tictactoe")
+    )
+
+
+def test_unrated_game_grants_xp_but_no_rating() -> None:
+    store.record_result(
+        "tictactoe", "t1", ["a", "b"], {0: 1.0, 1: -1.0}, 0, rated=False
+    )
+    assert store.get_rating("a", "tictactoe") is None
+    assert store.get_profile("a")["xp"] > 0
 
 
 def test_leaderboard_orders_by_rating_and_uses_display_name() -> None:

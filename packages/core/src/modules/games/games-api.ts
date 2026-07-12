@@ -19,7 +19,10 @@ export interface GamesStatus {
 export interface LeaderRow {
   account_id: string;
   display_name: string;
-  rating: number;
+  /** Masked (null) while the player is still in placement matches. */
+  rating: number | null;
+  tier?: string;
+  placement_games?: number;
   wins: number;
   losses: number;
   draws: number;
@@ -81,6 +84,54 @@ export function fetchChallengeLeaderboard(
 
 export function signOut(): Promise<{ ok: boolean }> {
   return apiPost('/games/signout', {});
+}
+
+// ---- replays -----------------------------------------------------------------
+
+/** A replay summary row (no event log — fetch the replay itself for that). */
+export interface ReplaySummary {
+  id: string;
+  game_id: string;
+  table_id: string;
+  series_id: string | null;
+  created_at: number;
+  seats: string[];
+  winner: number | null;
+  returns: Record<string, number>;
+  public: boolean;
+}
+
+/** One event in a replay's log. `kind` is public_state | action | trace | game_over. */
+export interface ReplayEvent {
+  kind: string;
+  seat?: number;
+  state?: Record<string, unknown>;
+  action_id?: string;
+  timeout?: boolean;
+  steps?: { kind: string; [k: string]: unknown }[];
+  returns?: Record<string, number>;
+  winner?: number | null;
+  [k: string]: unknown;
+}
+
+export interface Replay extends ReplaySummary {
+  events: ReplayEvent[];
+}
+
+export function fetchReplays(
+  scope: 'mine' | 'public',
+  gameId?: string,
+): Promise<{ replays?: ReplaySummary[]; error?: string }> {
+  const game = gameId ? `&game_id=${encodeURIComponent(gameId)}` : '';
+  return apiGet(`/games/replays?scope=${scope}${game}`);
+}
+
+export function fetchReplay(replayId: string): Promise<{ replay?: Replay; error?: string }> {
+  return apiGet(`/games/replays/${encodeURIComponent(replayId)}`);
+}
+
+export function publishReplay(replayId: string): Promise<{ ok?: boolean; error?: string }> {
+  return apiPost(`/games/replays/${encodeURIComponent(replayId)}/publish`, {});
 }
 
 /** OAuth providers the game server can sign a player in with (both device flow). */

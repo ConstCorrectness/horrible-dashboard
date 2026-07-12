@@ -1,12 +1,18 @@
 import { revealRegionView } from '../../layout/controller';
 import { registry, type ModuleManifest } from '../../registry';
 import './games.css';
+import { AgentThoughtsPane } from './panels/AgentThoughtsPane';
 import { ChallengesPanel } from './panels/ChallengesPanel';
+import { FighterArcadePanel } from './panels/FighterArcadePanel';
+import { OnboardingPanel } from './panels/OnboardingPanel';
+import { ProfilePanel } from './panels/ProfilePanel';
 import { GameBoardPanel } from './panels/GameBoardPanel';
 import { LeaderboardPanel } from './panels/LeaderboardPanel';
 import { LoadoutPanel } from './panels/LoadoutPanel';
 import { LobbyPanel } from './panels/LobbyPanel';
 import { PlazaPanel } from './panels/PlazaPanel';
+import { ReplayBrowserPanel } from './panels/ReplayBrowserPanel';
+import { ReplayViewerPanel } from './panels/ReplayViewerPanel';
 import { RosterPanel } from './panels/RosterPanel';
 import { TownPanel } from './panels/TownPanel';
 
@@ -30,6 +36,7 @@ export const gamesModule: ModuleManifest = {
       regions: [
         { id: 'games.roster', label: 'Players', icon: '🧑‍🤝‍🧑', key: 'r', position: 'right' },
         { id: 'games.loadout', label: 'Agent Harness', icon: '🛠', key: 'h', position: 'right' },
+        { id: 'games.thoughts', label: 'Agent Thoughts', icon: '💭', key: 'a', position: 'right' },
         { id: 'games.leaderboard', label: 'Ladder', icon: '🏆', key: 'l', position: 'right' },
         { id: 'games.challenges', label: 'Challenges', icon: '🎯', key: 'c', position: 'right' },
         {
@@ -79,6 +86,55 @@ export const gamesModule: ModuleManifest = {
       singleton: true,
     },
     {
+      id: 'games.onboarding',
+      title: 'Welcome to the Arena',
+      component: OnboardingPanel,
+      role: 'document',
+      icon: '🚀',
+      singleton: true,
+    },
+    {
+      id: 'games.profile',
+      title: 'Player Profile',
+      component: ProfilePanel,
+      role: 'document',
+      icon: '🪪',
+      singleton: true,
+    },
+    {
+      id: 'games.arcade',
+      title: 'Arcade Fighter',
+      component: FighterArcadePanel,
+      role: 'document',
+      icon: '🕹',
+      singleton: true,
+    },
+    {
+      id: 'games.thoughts',
+      title: 'Agent Thoughts',
+      component: AgentThoughtsPane,
+      role: 'tool',
+      icon: '💭',
+      defaultDock: 'right',
+      singleton: true,
+    },
+    {
+      id: 'games.replay',
+      title: 'Replay',
+      component: ReplayViewerPanel,
+      role: 'document',
+      icon: '📼',
+      singleton: true,
+    },
+    {
+      id: 'games.replays',
+      title: 'Replays',
+      component: ReplayBrowserPanel,
+      role: 'document',
+      icon: '🗂',
+      singleton: true,
+    },
+    {
       id: 'games.town',
       title: 'AgentTown',
       component: TownPanel,
@@ -124,6 +180,31 @@ export const gamesModule: ModuleManifest = {
       // workspace). The in-arcade `t` toggle and the Lobby/Town "edit harness" buttons
       // still reveal it inside their shell.
       run: () => registry.openPanel('games.loadout'),
+    },
+    {
+      id: 'games.openOnboarding',
+      title: 'Games: Start onboarding',
+      run: () => registry.openPanel('games.onboarding'),
+    },
+    {
+      id: 'games.openProfile',
+      title: 'Games: Open player profile',
+      run: () => registry.openPanel('games.profile'),
+    },
+    {
+      id: 'games.openArcade',
+      title: 'Games: Open arcade fighter',
+      run: () => registry.openPanel('games.arcade'),
+    },
+    {
+      id: 'games.openThoughts',
+      title: 'Games: Open agent thoughts',
+      run: () => revealRegionView('games.thoughts'),
+    },
+    {
+      id: 'games.openReplays',
+      title: 'Games: Browse replays',
+      run: () => registry.openPanel('games.replays'),
     },
     {
       id: 'games.openLeaderboard',
@@ -190,6 +271,21 @@ export const gamesModule: ModuleManifest = {
         "Google's device flow requires the client secret at the token poll (unlike GitHub). On a hosted server prefer the GAMES_GOOGLE_CLIENT_SECRET env secret.",
       type: 'string',
       default: '',
+    },
+    {
+      key: 'games.onboarded',
+      title: 'Onboarding complete',
+      description:
+        'Set automatically when the first-run wizard finishes; clear it to see the wizard again.',
+      type: 'boolean',
+      default: false,
+    },
+    {
+      key: 'games.sound',
+      title: 'Arcade sounds',
+      description: 'Small blips on match start, moves, and results.',
+      type: 'boolean',
+      default: false,
     },
     {
       key: 'games.policy',

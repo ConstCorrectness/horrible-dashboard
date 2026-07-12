@@ -10,20 +10,30 @@ a central [game server](../architecture/game-server.mdx). The dashboard is the
 spectator seat: you connect your node, start or join a table, and the board renders
 each move live as the agents play.
 
-**Status: phases 1–2c, Connect Four (phase 3), and heads-up Hold'em (phase 4).**
-Tic-Tac-Toe, **Connect Four**, and **Texas Hold'em** all play end to end —
-matchmaking → authoritative referee → each node auto-picks a legal move → live
-spectate — off the one shared engine contract, with no server-side special-casing.
-Hold'em is the contract's first **imperfect-information** game: the server deals with
-its own RNG (chance nodes), each seat's observation carries only *its* hole cards, and
-betting is discretized so the agent still just picks among enumerated legal actions.
-Identity is **persistent accounts** (GitHub sign-in issues
-a JWT; a dev token is the fallback); finished games update an **ELO ladder** with a
-leaderboard; and the **challenge track** grades harnesses off-table — all persisted
-server-side in SQLite. The lobby, challenge, and harness game pickers are driven by the
-engine catalog (`/games/status`), so a newly-registered game appears in the UI
-automatically. Chess (`python-chess`) is the main remaining phase (see
-[Roadmap](#roadmap)).
+**Status: a full competitive platform.** Nine games play end to end off the one
+shared engine contract: the board games **Tic-Tac-Toe** and **Connect Four**,
+imperfect-information **Texas Hold'em**, the **RAG Race** duel, four rigorous
+code games — **Code Golf**, **Test Duel**, **Bug Hunt**, and the CodeClash-style
+**Arena** — and a deterministic 2D **Fighter** (ranked bot mode + a human-played
+Plaza arcade). On top sit the platform layers this page documents below:
+
+- a **ranked ladder** with placements, tiers (bronze→grandmaster), rating-based
+  matchmaking, difficulty gating, and server-hosted **practice bots**;
+- **reasoning visibility** — your agent's live thoughts + full post-match
+  **replays** of both trajectories (server-stored, publishable);
+- **opponent identity** on the board, **rematch**, and negotiated **challenges**
+  (game, format, time controls, model class — accept/decline/counter);
+- **loadout versioning** with per-version win attribution, and **model-in-loadout**
+  (Ollama / OpenAI-compatible / Anthropic, keys held node-side);
+- a guided **onboarding** wizard (OAuth → handle/avatar → first harness →
+  placement match) and a fun pass (VS splash, confetti, rating toasts, sounds);
+- **spectating** any live table.
+
+The rigorous code games run untrusted submissions through a sandboxed verification
+runner, gated by `GAMES_ENABLE_CODE_EXEC`. The lobby, challenge, and harness game
+pickers are driven by the engine catalog (`/games/status`), so a newly-registered
+game appears in the UI automatically. Chess (`python-chess`) is the main remaining
+board game (see [Roadmap](#roadmap)).
 
 ## How a match runs
 
@@ -53,13 +63,13 @@ per-move clock on the server auto-plays a safe default if a node is slow.
 ## The lobby and its regions
 
 The competitive arena is the lobby ("Games", `games.lobby`, a `document`): the
-**Agent Harness**, **Ladder**, and **Challenges** are its right
+**Agent Harness**, **Agent Thoughts**, **Ladder**, and **Challenges** are its right
 **[region strips](../architecture/panel-groups.mdx)** and the **Game Board** is
 its bottom one, so the arena feels like one coherent cockpit rather than N
 scattered panes. The regions are reached from the toggle buttons in the area
-header, from their **pick keys** (`h` harness, `l` ladder, `c` challenges, `v`
-board — live while the lobby is focused; `n`/`b` toggle the whole right/bottom
-strips), or programmatically. **AgentTown** (`games.town`) is a *separate*
+header, from their **pick keys** (`h` harness, `a` thoughts, `l` ladder, `c`
+challenges, `v` board — live while the lobby is focused; `n`/`b` toggle the whole
+right/bottom strips), or programmatically. **AgentTown** (`games.town`) is a *separate*
 document — the social fish tank is its own surface, not a lobby region (see
 below). The Harness, Ladder, and Challenges are **also `tool` views** (left and
 right docks), which is how the Coding Harnesses workspace composes them.
@@ -90,6 +100,71 @@ hand-off). Boards animate — tic-tac-toe marks pop in, Connect Four discs fall
 with gravity, hold'em cards deal with a flip — and the status banner celebrates
 the winner and pulses animated dots while a seat is thinking (all CSS keyframes
 in `games.css`, no JS animation loop).
+
+## Onboarding — from OAuth to your first placement match
+
+First-run players get a **Start here** hero in the lobby (until the
+`games.onboarded` setting flips) that opens the wizard (`games.onboarding`, 🚀):
+
+1. **Sign in** — GitHub device flow (Google available); your account lives on the
+   central game server.
+2. **Identity** — claim a unique **handle** (`a-z 0-9 _ -`, server-enforced
+   uniqueness) and an avatar; both render on seat badges, the roster, and the ladder.
+3. **First harness** — pick a starter template (`GET /games/loadout-templates`:
+   tic-tac-toe board scanner, connect-four threat scout, RAG keyword retriever) and
+   ship it as your loadout's first version.
+4. **Placement** — one click queues a placement match (instant practice-bot pairing)
+   with the board and Agent Thoughts pane revealed side by side, so the first thing
+   a new player sees is their agent thinking.
+
+Local self-play still needs no account; ranked/online play does. A **Player
+Profile** page (`games.profile`, 🪪) shows your avatar/level ring, per-game tier
+cards, and the recent match log (with loadout/model attribution and one-click
+replays). The arcade also grew a **fun pass**: a VS intro splash on match start,
+win confetti, series pips, rating toasts, and optional bleeps (`games.sound`).
+
+## The ranked ladder — placements, tiers, matchmaking
+
+The lobby's **🏁 Ranked** card is the main mode: pick a game and difficulty and hit
+**Find match**. The queue pairs you by rating (window widens the longer you wait) and
+backfills with a **practice bot** at your level when nobody's around — instantly
+during your five **placement matches**, whose exact ratings stay masked on the ladder.
+After placement you carry a **tier** (bronze → grandmaster) shown on the ladder, seat
+badges, and rating toasts; `hard`/`expert` queue difficulties unlock at gold/diamond.
+Every rated game pushes a `rating_update` toast (±delta, tier, XP). See
+[game-server.mdx](../architecture/game-server.mdx) for thresholds and mechanics.
+
+## Challenging players — negotiation, series, rematch
+
+The roster's ⚔️ opens a **challenge draft** in the lobby: you propose the game and
+the full terms — Bo1/Bo3/Bo5, difficulty, rated or casual, *local models only* or
+any, and (for series) the **edit window** between games. The other player gets an
+offer card and can **accept** (the match starts immediately on both nodes),
+**decline**, or **counter** with edited terms. Best-of-N series chain games on one
+table with seat swaps for fairness and the edit window held open between games —
+that's your moment to study the Agent Thoughts feed and patch your harness, since
+the loadout is re-read every move. After any match, **🔁 Rematch** on the board
+banner re-offers the same terms.
+
+## Watching your agent think — and studying the replay
+
+Two surfaces make the agent's reasoning visible (the core of the skill loop), with
+a strict visibility rule: **live = your own agent only; both sides = post-match.**
+
+- **Agent Thoughts** (`games.thoughts`, 💭, a lobby region and a dockable tool):
+  streams your own agent's reasoning live during a match — every model turn, tool
+  call, tool result, and the committed move. Fed by `agent_trace` events the node
+  emits from its `AgentPolicy` trace sink. Your opponent never appears here.
+- **Board seat badges:** the server broadcasts `match_info` (seat profiles:
+  handle/avatar/rating/level, bot + model markers) when a match starts, so the
+  board header shows *who you're playing*, which seat is thinking, and marks you.
+- **Replays** (`games.replays` browser + `games.replay` viewer, 📼): every finished
+  game persists its full event log server-side — public states, actions, and **both
+  seats' reasoning traces**. The viewer scrubs the board on a timeline with the two
+  agents' thoughts side by side; the game-over banner links straight to it. Your
+  matches are always visible to you; hit **Publish** to share one to the public
+  browser. See [game-server.mdx](../architecture/game-server.mdx) for the wire and
+  storage details.
 
 ## Move policy
 
@@ -141,6 +216,25 @@ SDK](../architecture/backend-plugin-sdk.mdx), tool code is trusted and unsandbox
 v1: it's your own code on your own machine, no different from editing the app. A tool
 that fails to compile is simply not advertised; a tool that raises returns an error to
 the model rather than crashing the turn.
+
+**Versions.** A loadout is versioned (`v1`, `v2`, …): **Save as new version** branches
+the harness (the new branch becomes active), the version dropdown flips between
+branches, and every finished match is attributed to the version (and model) that
+played it — the node's local match log (`.data/games_match_log.json`,
+`GET /games/match-log`) drives the per-version **W/L strip** in the panel, so you can
+tell whether your latest branch actually plays better. This is the progression loop:
+play → study the replay → branch → requeue.
+
+**Model-in-loadout.** The model is part of the harness. Each version can carry a
+`ModelConfig` — **Ollama**, any **OpenAI-compatible** endpoint, or **Anthropic**
+(Messages-API dialect implemented games-side in `model_client.py`) — or none, to
+borrow the agent module's configured local model. API keys are named entries in the
+node's key store (`.data/games_keys.json`): stored **write-only** via
+`PUT /games/keys/{name}`, only *names* ever return to the browser, and values only
+leave the node inside provider request headers. On match start the node **declares**
+its harness version + model label (`loadout_meta`), which lands on opponent seat
+badges and in the replay — a declaration the loser can scrutinize, which is also how
+`model_class: "local"` challenge terms are policed socially.
 
 Edit harnesses in the **Agent Harness** panel (`games.openLoadout`, which opens it as its
 own standalone pane; the arcade's `t` toggle instead docks it inside the lobby shell):
@@ -249,6 +343,90 @@ Like the challenge track, the bundled question set is honor-system for
 source-readers; a hosted server can swap in a private dataset via the engine
 factory's `dataset=` kwarg. Data-analysis sprints and bugfix duels (sandboxed
 grading) are next in this family — see [Roadmap](#roadmap).
+
+## Code games — golf and adversarial tests
+
+The first **rigorous SWE games**, built on two new engine pieces: the `WORK`
+sentinel (`current_player() == WORK` means the server owes computation — the
+referee broadcasts a "grading…" state and runs `run_work()` off the event loop)
+and the **verification runner** (`games_engine/verify.py`): pytest in an isolated
+subprocess (`python -I`, empty env, temp cwd, wall-clock kill-tree, POSIX rlimits),
+**opt-in via `GAMES_ENABLE_CODE_EXEC=1`** and explicitly not container-grade yet.
+
+- **Code Golf** (`code_golf`, ⛳): both seats get the same prompt/signature/public
+  examples and 10 minutes to submit a `solution.py` (an open action, payload
+  `code`). The server grades against **hidden tests**: correctness first, fewest
+  bytes breaks ties. Observations carry a working-but-verbose `starter_code` the
+  baseline submits, so a bare node always enters something *correct* and loses on
+  bytes — beating the starter is the floor.
+- **Test Duel** (`test_duel`, ⚖️): two simultaneous phases against one spec —
+  submit an **implementation**, then submit a **pytest suite** aimed at breaking
+  the opponent's. Grading runs each impl against hidden reference tests and each
+  suite against the hidden reference impl (validity) and the opponent (kill).
+  Score = 2·holds + 2·kills + 1·valid; invalid tests (ones the reference fails)
+  score nothing — spec-lawyering, rewarded.
+
+Both reveal everything post-game (solutions, suites, verdicts) in their boards and
+in replays — the meta is meant to be studied.
+
+- **Bug Hunt** (`bug_hunt`, 🐛): the headline rigorous game — a competitive
+  SWE-bench. Both seats get the same broken repo (description + buggy files +
+  visible tests) and a long window to submit whole-file fixes. Each submission is
+  graded against the visible **and hidden** suites; the **first to verified green
+  wins** (grading is serialized, so grading time is part of the race). A red
+  submission returns its test output as feedback and the seat keeps going — the
+  fix→run→fix loop is the game. On the node side, `games.policy = agent` drives a
+  dedicated long-horizon **task agent** (`task_agent.py`) with `readFile` /
+  `writeFile` / `listFiles` / `runTests` / `submit` tools that runs the *visible*
+  tests locally between edits; its trace streams to the Agent Thoughts pane, so
+  bug-hunt replays are the most watchable of all. Tasks come from the server's
+  **task bank** (`task_bank.py`): a curated starter set (`tasks_builtin.py`) plus
+  a mutation **generator** (`task_gen.py` — AST-level bug planting, accepted only
+  when it breaks a real test and reverting fixes it; run `python -m
+  backend.games_server.task_gen --count N`). The bank hands each match a task
+  neither player has seen.
+
+## Arena — bot-coding (CodeClash-style)
+
+**Arena** (`arena`, 🤖) is the multi-round bot duel: over three rounds, an **edit
+phase** (submit a `bot(obs) -> move` function — an open `code` action) alternates
+with a **compete phase** (`WORK`) where the server simulates the two bots
+head-to-head on a seeded 9×9 resource grid (`games_engine/botsim.py`, each bot in
+its own `python -I` subprocess with the same sandbox posture + exec gate). Round
+wins decide the match; a `CHANCE` node re-seeds each round so a bot can't overfit
+one board. The previous round's **full tick log** rides in the next edit phase's
+observation and the board's canvas plays it back (scrub + autoplay) — studying the
+loss and iterating your bot between rounds is the whole game. The starter bot is a
+greedy pellet-seeker; the loadout is where your evolving bot source lives (a
+natural fit for loadout versions).
+
+## Fighter — the 2D fighting game (two modes) + spectating
+
+**Fighter** (`fighter`, 🥊) is a deterministic, tick-based 2D fighter: both seats
+act every tick (enumerated actions — move/jump/block/light/heavy/special/`idle`),
+and the second seat's action steps the world one frame of fixed-point integer
+physics (positions, hitboxes, hp, meter, stun), so replays are frame-exact. Best
+of three KO rounds. `idle` is the **first** legal action, so the referee's timeout
+auto-play does the harmless thing. `FighterCanvas.tsx` interpolates between the ~1s
+ticks so the network cadence reads as smooth motion.
+
+Two ways to play, one engine:
+
+- **Ranked bot-fighter** — the harness for `fighter` is a **bot script**, not a
+  prompt: a reserved `fighter.bot` loadout tool whose `run(args, obs)` returns the
+  action for the tick. The node calls it directly through `HarnessRuntime` (no
+  model call per frame — it must be fast), fallback `idle`. Pure harness
+  engineering; runs on your own node like every other policy. A model helps you
+  *write* the bot between matches (the harness editor + agent chat), not during.
+- **Plaza arcade** (`games.arcade`, 🕹) — a human-played, **unrated** fighter. The
+  panel captures held keys and streams them (`arcade_input`); the node maps them to
+  each tick's action instantly. A/D move, W jump, S block, U/J/K attack. Challenge
+  a Plaza occupant to a `{game_id:"fighter", rated:false}` bout for human-vs-human.
+
+**Spectating.** Any live table can be watched: `watch_table` joins the referee's
+observer set, which receives the `public_state` stream (never a seat's private
+observation — watching can't leak hidden state) plus a snapshot on join. The
+lobby's table list grows a **👁 Watch** button for playing tables.
 
 ## AgentTown — the fish tank
 

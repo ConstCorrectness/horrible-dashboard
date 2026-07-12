@@ -14,7 +14,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 from backend.games_engine.base import list_games
@@ -26,9 +26,14 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
-    store.init_db()  # accounts + ratings + results
+    store.init_db()  # accounts + ratings + results + task bank
+    from backend.games_server import task_bank
+
+    task_bank.ensure_builtin()  # load the bundled bug-hunt starter set
     hub.town.start_loop()  # AgentTown's world clock (tick cadence from env)
+    hub.matchmaker.start_loop()  # ranked queue sweep
     yield
+    hub.matchmaker.stop_loop()
     hub.town.stop_loop()
 
 
@@ -69,6 +74,66 @@ def challenge_leaderboard(
     game_id: str = "tictactoe", limit: int = 50
 ) -> dict[str, object]:
     return {"game_id": game_id, "entries": store.challenge_leaderboard(game_id, limit)}
+
+
+# ---- replays ----------------------------------------------------------------
+
+
+def _viewer(authorization: str | None) -> str | None:
+    """Resolve an optional `Authorization: Bearer <token>` to an account id (JWT or
+    dev token — same resolution as `/game-ws` auth)."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return None
+    resolved = auth.resolve_token(authorization[7:].strip())
+    return resolved["account_id"] if resolved else None
+
+
+@app.get("/replays")
+def replays_index(
+    game_id: str | None = None,
+    scope: str = "public",
+    limit: int = 50,
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Replay summaries: `scope=public` is the public replay browser; `scope=mine`
+    lists the caller's own matches (participants always see theirs)."""
+    if scope == "mine":
+        viewer = _viewer(authorization)
+        if viewer is None:
+            return {"replays": [], "error": "sign in required"}
+        entries = store.list_replays(
+            game_id=game_id, account_id=viewer, limit=min(limit, 200)
+        )
+    else:
+        entries = store.list_replays(
+            game_id=game_id, public_only=True, limit=min(limit, 200)
+        )
+    return {"replays": entries}
+
+
+@app.get("/replays/{replay_id}")
+def replay_get(
+    replay_id: str, authorization: str | None = Header(default=None)
+) -> dict[str, Any]:
+    """One replay with its full event log — participants always; others only once
+    published. Not-found and not-allowed are indistinguishable on purpose."""
+    replay = store.get_replay(replay_id, viewer=_viewer(authorization))
+    if replay is None:
+        return {"error": "replay not found"}
+    return {"replay": replay}
+
+
+@app.post("/replays/{replay_id}/publish")
+def replay_publish(
+    replay_id: str, authorization: str | None = Header(default=None)
+) -> dict[str, Any]:
+    """Open a replay up to the public browser. Participants only."""
+    viewer = _viewer(authorization)
+    if viewer is None:
+        return {"error": "sign in required"}
+    if not store.publish_replay(replay_id, viewer):
+        return {"error": "replay not found"}
+    return {"ok": True}
 
 
 class _DevicePoll(BaseModel):

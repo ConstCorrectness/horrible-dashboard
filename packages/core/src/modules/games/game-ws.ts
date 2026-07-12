@@ -13,6 +13,7 @@ import { revealRegionView } from '../../layout/controller';
 import { registry } from '../../registry';
 import { toastsStore } from '../../toasts';
 import { sendChannel, subscribeChannel } from '../../ws';
+import { sfx } from './sfx';
 
 /** Pop the Game Board when a match becomes live. If a **standalone** Game Board pane
  * is already open (e.g. the "Coding Harnesses" workspace seeds one), focus that pane
@@ -50,6 +51,84 @@ export interface YourTurn {
   seat: number;
   observation: Record<string, unknown>;
   legal_actions: { id: string; label: string }[];
+}
+
+/** Who is sitting in a seat — from the server's `match_info` broadcast. */
+export interface SeatProfile {
+  account_id: string;
+  display_name: string;
+  handle: string | null;
+  avatar: string;
+  rating: number | null;
+  tier: string | null;
+  level: number;
+  is_bot: boolean;
+  model_label: string | null;
+}
+
+/** One reasoning step from *your own* agent, streamed live while it thinks. */
+export interface TraceStep {
+  kind: 'assistant' | 'tool_result' | 'chose' | 'fallback';
+  content?: string;
+  tool_calls?: { name: string; arguments: string }[];
+  name?: string;
+  result?: string;
+  action_id?: string;
+}
+
+export interface TraceEntry {
+  seat: number;
+  idx: number;
+  step: TraceStep;
+}
+
+/** The negotiated terms of a match (mirrors the server's Ruleset model). */
+export interface Ruleset {
+  game_id: string;
+  best_of: number;
+  difficulty: string;
+  move_timeout_s: number | null;
+  edit_phase_s: number;
+  model_class: 'any' | 'local';
+  rated: boolean;
+}
+
+/** An incoming challenge/rematch/counter offer awaiting your response. */
+export interface ChallengeIncoming {
+  offer_id: string;
+  kind: 'challenge' | 'rematch' | 'counter';
+  from_id: string;
+  from_name: string;
+  game_name: string;
+  ruleset: Ruleset;
+}
+
+/** Your live ranked-queue slot (null when not queued). */
+export interface QueueState {
+  gameId: string;
+  difficulty: string;
+  waitingS: number;
+  window: number;
+}
+
+/** Between-games score of a best-of-N series. */
+export interface SeriesState {
+  best_of: number;
+  game_index: number;
+  wins: number[];
+  seats: string[];
+  intermission_s: number;
+}
+
+/** Your post-game rating/XP movement (from the server's rating_update push). */
+export interface RatingUpdate {
+  game_id: string;
+  rating?: number;
+  delta?: number;
+  tier?: string;
+  placement_games?: number;
+  xp: number;
+  level: number;
 }
 
 export interface ChallengeReport {
@@ -160,11 +239,12 @@ export interface FriendEntry {
   online?: boolean;
 }
 
-/** Your gamified profile (avatar + XP + derived level). */
+/** Your gamified profile (avatar + XP + derived level + unique handle). */
 export interface Profile {
   account_id: string;
   avatar: string;
   bio: string;
+  handle?: string | null;
   xp: number;
   level: number;
   level_floor: number;
@@ -197,12 +277,27 @@ export interface GamesState {
   connected: boolean;
   accountId: string | null;
   selfPlay: boolean;
+  /** Server capabilities from AUTHED — feature-detect before showing newer UI. */
+  caps: string[];
   tables: TableInfo[];
   gameId: string | null;
   board: PublicState | null;
   yourTurn: YourTurn | null;
   over: { winner: number | null; returns: Record<string, number> } | null;
   thinkingSeat: number | null;
+  /** Seat identities for the live match (null before `match_info` arrives). */
+  matchSeats: SeatProfile[] | null;
+  /** The live match's table (rematch offers target it). */
+  tableId: string | null;
+  /** Where the live match's replay will be saved once it finishes. */
+  replayId: string | null;
+  /** Your own agent's live reasoning feed for the current match. */
+  trace: TraceEntry[];
+  /** Your ranked-queue slot, an incoming offer, the series score, last rating move. */
+  queue: QueueState | null;
+  offer: ChallengeIncoming | null;
+  series: SeriesState | null;
+  lastRating: RatingUpdate | null;
   challengeRunning: boolean;
   challengeReport: ChallengeReport | null;
   town: TownState;
@@ -236,17 +331,29 @@ const initial: GamesState = {
   connected: false,
   accountId: null,
   selfPlay: false,
+  caps: [],
   tables: [],
   gameId: null,
   board: null,
   yourTurn: null,
   over: null,
   thinkingSeat: null,
+  matchSeats: null,
+  tableId: null,
+  replayId: null,
+  trace: [],
+  queue: null,
+  offer: null,
+  series: null,
+  lastRating: null,
   challengeRunning: false,
   challengeReport: null,
   town: initialTown,
   social: initialSocial,
 };
+
+/** Keep the live reasoning feed bounded (a long match streams a lot of steps). */
+const TRACE_LIMIT = 500;
 
 let state: GamesState = initial;
 const listeners = new Set<() => void>();
@@ -296,11 +403,115 @@ subscribeChannel('games', (msg) => {
         connected: Boolean(d.connected),
         accountId: (d.account_id as string) ?? null,
         selfPlay: Boolean(d.self_play),
+        caps: (d.caps as string[] | undefined) ?? state.caps,
         ...(d.connected
           ? {}
-          : { board: null, yourTurn: null, over: null, town: initialTown, social: initialSocial }),
+          : {
+              board: null,
+              yourTurn: null,
+              over: null,
+              matchSeats: null,
+              replayId: null,
+              trace: [],
+              town: initialTown,
+              social: initialSocial,
+            }),
       });
       break;
+    case 'match_info':
+      sfx.matchStart();
+      // A match just started: remember who's in each seat and reset the feed.
+      set({
+        matchSeats: (d.seats as SeatProfile[]) ?? null,
+        tableId: (d.table_id as string) ?? null,
+        replayId: (d.replay_id as string) ?? null,
+        gameId: (d.game_id as string) ?? state.gameId,
+        trace: [],
+        over: null,
+        queue: null, // a started match consumes any queue slot
+      });
+      break;
+    case 'rating_update': {
+      const u = d as unknown as RatingUpdate;
+      set({ lastRating: u });
+      if (u.delta !== undefined && u.rating !== undefined) {
+        const sign = u.delta >= 0 ? '+' : '';
+        const tier = u.tier === 'placement' ? `placement ${u.placement_games}/5` : u.tier;
+        toastsStore.add(
+          u.delta >= 0 ? 'info' : 'warning',
+          'Ranked',
+          `${u.game_id}: ${sign}${u.delta} → ${Math.round(u.rating)} (${tier})`,
+        );
+      }
+      break;
+    }
+    case 'queue_status':
+      set({
+        queue: {
+          gameId: String(d.game_id ?? ''),
+          difficulty: String(d.difficulty ?? 'standard'),
+          waitingS: Number(d.waiting_s ?? 0),
+          window: Number(d.window ?? 0),
+        },
+      });
+      break;
+    case 'match_found': {
+      const opp = d.opponent as SeatProfile | null;
+      toastsStore.add(
+        'info',
+        'Ranked',
+        opp
+          ? `Match found: ${opp.handle ?? opp.display_name} (${opp.rating ?? '?'})`
+          : 'Match found: practice bot',
+      );
+      set({ queue: null });
+      break;
+    }
+    case 'challenge_incoming':
+      set({ offer: d as unknown as ChallengeIncoming });
+      toastsStore.add(
+        'info',
+        'Games',
+        `${(d.from_name as string) ?? 'Someone'} ${
+          d.kind === 'rematch' ? 'wants a rematch' : 'challenged you'
+        }: ${(d.game_name as string) ?? 'a game'}`,
+      );
+      break;
+    case 'challenge_update': {
+      const status = String(d.status ?? '');
+      if (status === 'declined' || status === 'countered') {
+        toastsStore.add('warning', 'Games', `Your challenge was ${status}`);
+      } else if (status === 'accepted') {
+        toastsStore.add('info', 'Games', 'Challenge accepted — starting…');
+      }
+      break;
+    }
+    case 'series_state':
+      set({ series: d as unknown as SeriesState });
+      break;
+    case 'series_over': {
+      const wins = (d.wins as number[]) ?? [];
+      const seats = (d.seats as string[]) ?? [];
+      const w = d.winner_seat as number | null;
+      toastsStore.add(
+        'info',
+        'Series',
+        w !== null && w !== undefined
+          ? `🏆 ${seats[w] ?? `seat ${w}`} takes the series ${wins.join('–')}`
+          : `Series drawn ${wins.join('–')}`,
+      );
+      set({ series: null });
+      break;
+    }
+    case 'agent_trace': {
+      const entry: TraceEntry = {
+        seat: Number(d.seat ?? -1),
+        idx: Number(d.idx ?? state.trace.length),
+        step: (d.step as TraceStep) ?? { kind: 'assistant' },
+      };
+      set({ trace: [...state.trace, entry].slice(-TRACE_LIMIT) });
+      break;
+    }
     case 'social_joined':
       set({
         social: {
@@ -376,6 +587,7 @@ subscribeChannel('games', (msg) => {
       break;
     }
     case 'chose':
+      sfx.move();
       set({ thinkingSeat: null });
       break;
     case 'challenge_scenarios':
@@ -384,16 +596,23 @@ subscribeChannel('games', (msg) => {
     case 'challenge_report':
       set({ challengeRunning: false, challengeReport: d as unknown as ChallengeReport });
       break;
-    case 'game_over':
+    case 'game_over': {
+      const winner = (d.winner as number | null) ?? null;
+      const mySeat = state.matchSeats?.findIndex((s) => s.account_id === state.accountId) ?? -1;
+      if (winner !== null && mySeat >= 0) {
+        if (winner === mySeat) sfx.win();
+        else sfx.lose();
+      }
       set({
         over: {
-          winner: (d.winner as number | null) ?? null,
+          winner,
           returns: (d.returns as Record<string, number>) ?? {},
         },
         yourTurn: null,
         thinkingSeat: null,
       });
       break;
+    }
     default:
       break;
   }
@@ -433,6 +652,67 @@ export function gamesJoinTable(tableId: string): void {
 
 export function gamesRunChallenges(gameId: string): void {
   sendChannel('games', 'run_challenges', { gameId });
+}
+
+// ---- ranked queue + negotiation ---------------------------------------------
+
+export function gamesQueueJoin(gameId: string, difficulty = 'standard', placement = false): void {
+  sendChannel('games', 'queue_join', { gameId, difficulty, placement });
+  // Optimistic slot so the Find Match button flips immediately.
+  set({ queue: { gameId, difficulty, waitingS: 0, window: 75 } });
+}
+
+export function gamesQueueLeave(): void {
+  sendChannel('games', 'queue_leave', {});
+  set({ queue: null });
+}
+
+/** Propose a match to a specific player with full negotiated terms. */
+export function challengeOffer(accountId: string, ruleset: Partial<Ruleset>): void {
+  sendChannel('games', 'challenge_offer', { account_id: accountId, ruleset });
+}
+
+/** Answer an incoming offer; `counter` sends back an edited ruleset. */
+export function challengeRespond(
+  offerId: string,
+  response: 'accept' | 'decline' | 'counter',
+  ruleset?: Partial<Ruleset>,
+): void {
+  sendChannel('games', 'challenge_respond', { offerId, response, ruleset });
+  set({ offer: null });
+}
+
+/** Offer the opponent of the just-finished table the same terms again. */
+export function rematchOffer(tableId: string): void {
+  sendChannel('games', 'rematch_offer', { tableId });
+}
+
+/** Clear the incoming-offer card without answering (it expires server-side). */
+export function dismissOffer(): void {
+  set({ offer: null });
+}
+
+// ---- spectating + arcade ----------------------------------------------------
+
+export function watchTable(tableId: string): void {
+  sendChannel('games', 'watch_table', { tableId });
+}
+
+export function unwatchTable(tableId: string): void {
+  sendChannel('games', 'unwatch_table', { tableId });
+}
+
+/** Push the current held-key set for the fighter arcade (fire on keydown/up). */
+export function arcadeInput(keys: string[]): void {
+  sendChannel('games', 'arcade_input', { keys });
+}
+
+/** Start a casual (unrated) fighter table — the Plaza arcade cabinet. */
+export function startArcadeFighter(): void {
+  sendChannel('games', 'create_table', {
+    gameId: 'fighter',
+    ruleset: { game_id: 'fighter', rated: false },
+  });
 }
 
 // ---- AgentTown -------------------------------------------------------------
@@ -502,8 +782,8 @@ export function profileGet(): void {
   sendChannel('games', 'profile_get', {});
 }
 
-export function profileSet(avatar?: string, bio?: string): void {
-  sendChannel('games', 'profile_set', { avatar, bio });
+export function profileSet(avatar?: string, bio?: string, handle?: string): void {
+  sendChannel('games', 'profile_set', { avatar, bio, handle });
 }
 
 /** Clear the incoming-invite banner (after joining or dismissing it). */

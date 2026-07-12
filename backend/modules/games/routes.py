@@ -20,9 +20,12 @@ from backend.modules.games.loadout import (
     save_loadout,
 )
 from backend.modules.games.models import (
+    ActivateVersionRequest,
     DevicePollRequest,
     GameInfo,
     GamesStatus,
+    SaveVersionRequest,
+    SetKeyRequest,
     LoadoutModel,
     TestToolRequest,
     TestToolResponse,
@@ -77,18 +80,12 @@ def _to_model(loadout: Loadout) -> LoadoutModel:
             )
             for t in loadout.tools
         ],
+        model=loadout.model,
     )
 
 
-@router.get("/loadout/{game_id}", response_model=LoadoutModel)
-def get_loadout_route(game_id: str) -> LoadoutModel:
-    """The harness for a game (falls back to the `default` loadout)."""
-    return _to_model(get_loadout(game_id))
-
-
-@router.put("/loadout/{game_id}", response_model=LoadoutModel)
-def put_loadout_route(game_id: str, body: LoadoutModel) -> LoadoutModel:
-    loadout = Loadout(
+def _from_model(game_id: str, body: LoadoutModel) -> Loadout:
+    return Loadout(
         game_id=game_id,
         context=body.context,
         tools=[
@@ -101,8 +98,107 @@ def put_loadout_route(game_id: str, body: LoadoutModel) -> LoadoutModel:
             )
             for t in body.tools
         ],
+        model=body.model,
     )
-    return _to_model(save_loadout(loadout))
+
+
+@router.get("/loadout/{game_id}", response_model=LoadoutModel)
+def get_loadout_route(game_id: str) -> LoadoutModel:
+    """The harness for a game (falls back to the `default` loadout)."""
+    return _to_model(get_loadout(game_id))
+
+
+@router.put("/loadout/{game_id}", response_model=LoadoutModel)
+def put_loadout_route(game_id: str, body: LoadoutModel) -> LoadoutModel:
+    """Overwrite the ACTIVE version of a game's harness in place."""
+    return _to_model(save_loadout(_from_model(game_id, body)))
+
+
+# ---- harness versions (the progression loop) --------------------------------
+
+
+@router.get("/loadout/{game_id}/versions")
+def list_versions_route(game_id: str) -> dict[str, Any]:
+    from backend.modules.games import loadout as loadout_mod
+    from backend.modules.games import match_log
+
+    return {
+        "versions": loadout_mod.list_versions(game_id),
+        "stats": match_log.version_stats(game_id),
+    }
+
+
+@router.post("/loadout/{game_id}/versions")
+def save_version_route(game_id: str, body: SaveVersionRequest) -> dict[str, Any]:
+    """Branch: save as a NEW version (becomes active)."""
+    from backend.modules.games import loadout as loadout_mod
+
+    vid = loadout_mod.save_version(
+        game_id, _from_model(game_id, body.loadout), body.label
+    )
+    return {"version_id": vid}
+
+
+@router.put("/loadout/{game_id}/active")
+def activate_version_route(
+    game_id: str, body: ActivateVersionRequest
+) -> dict[str, Any]:
+    from backend.modules.games import loadout as loadout_mod
+
+    ok = loadout_mod.activate_version(game_id, body.version_id)
+    return {"ok": ok}
+
+
+@router.delete("/loadout/{game_id}/versions/{version_id}")
+def delete_version_route(game_id: str, version_id: str) -> dict[str, Any]:
+    from backend.modules.games import loadout as loadout_mod
+
+    return {"ok": loadout_mod.delete_version(game_id, version_id)}
+
+
+@router.get("/loadout-templates")
+def loadout_templates_route(game_id: str | None = None) -> dict[str, Any]:
+    """Starter harnesses for the onboarding wizard's guided first-loadout step."""
+    from backend.modules.games.templates import loadout_templates
+
+    templates = loadout_templates()
+    if game_id:
+        templates = [t for t in templates if t["game_id"] == game_id]
+    return {"templates": templates}
+
+
+@router.get("/match-log")
+def match_log_route(game_id: str | None = None, limit: int = 100) -> dict[str, Any]:
+    """The node's local match history with loadout/model attribution."""
+    from backend.modules.games import match_log
+
+    return {"entries": match_log.list_entries(game_id, limit)}
+
+
+# ---- model API keys (names only ever leave the node) -------------------------
+
+
+@router.get("/keys")
+def list_keys_route() -> dict[str, Any]:
+    from backend.modules.games import model_config
+
+    return {"names": model_config.list_key_names()}
+
+
+@router.put("/keys/{name}")
+def set_key_route(name: str, body: SetKeyRequest) -> dict[str, Any]:
+    from backend.modules.games import model_config
+
+    model_config.set_key(name, body.value)
+    return {"ok": True}
+
+
+@router.delete("/keys/{name}")
+def delete_key_route(name: str) -> dict[str, Any]:
+    from backend.modules.games import model_config
+
+    model_config.delete_key(name)
+    return {"ok": True}
 
 
 @router.post("/test-tool", response_model=TestToolResponse)
@@ -152,6 +248,25 @@ async def google_poll_route(body: DevicePollRequest) -> dict[str, Any]:
 def signout_route() -> dict[str, bool]:
     server_auth.sign_out()
     return {"ok": True}
+
+
+@router.get("/replays")
+async def replays_route(
+    game_id: str | None = None, scope: str = "mine", limit: int = 50
+) -> dict[str, Any]:
+    """Replay summaries from the game server (`scope=mine` or `scope=public`)."""
+    return await server_auth.replays_list(game_id, scope=scope, limit=limit)
+
+
+@router.get("/replays/{replay_id}")
+async def replay_route(replay_id: str) -> dict[str, Any]:
+    """One replay with its full event log (both seats' reasoning, post-match)."""
+    return await server_auth.replay_get(replay_id)
+
+
+@router.post("/replays/{replay_id}/publish")
+async def replay_publish_route(replay_id: str) -> dict[str, Any]:
+    return await server_auth.replay_publish(replay_id)
 
 
 @router.get("/leaderboard")

@@ -1,17 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 
 import { registry } from '../../../registry';
+import { requestChallengeDraft } from '../challenge-draft';
 import {
   friendAccept,
   friendRemove,
   friendRequest,
   profileGet,
-  revealBoard,
-  socialInvite,
   useGames,
   type Profile,
 } from '../game-ws';
-import { fetchGamesCatalog, type GameCatalogEntry } from '../games-api';
 
 /** XP progress bar toward the next level — the gamified core of the profile. */
 function LevelBar({ profile }: { profile: Profile }) {
@@ -40,42 +38,25 @@ function LevelBar({ profile }: { profile: Profile }) {
  * Who's online + friends — the social directory that makes active players easy to
  * find. Shows your gamified level/XP, the live roster (with each player's room and
  * current activity), your friends (online first), and incoming friend requests.
- * "Challenge" hosts a table and pings that player's node to join.
+ * "Challenge" (⚔️) opens the lobby's negotiation card pre-targeted at that player:
+ * you propose the game and terms, they accept/decline/counter.
  */
 export function RosterPanel() {
   const { social, accountId } = useGames();
-  const [games, setGames] = useState<GameCatalogEntry[]>([]);
-  const [game, setGame] = useState('tictactoe');
 
   useEffect(() => {
-    fetchGamesCatalog().then((g) => {
-      setGames(g);
-      if (g[0]) setGame(g[0].id);
-    });
     profileGet();
   }, []);
 
   const roomName = (id: string) => social.rooms.find((r) => r.id === id)?.name ?? id;
   const friendIds = new Set(social.friends.map((f) => f.account_id));
-  const challenge = (id: string) => {
-    socialInvite(id, game);
-    revealBoard();
+  const challenge = (id: string, name: string) => {
+    requestChallengeDraft({ accountId: id, name });
   };
 
   return (
     <div className="games-roster">
       {social.profile && <LevelBar profile={social.profile} />}
-
-      <div className="games-roster-gamepick">
-        <span style={{ color: 'var(--text-dim)', fontSize: '0.72rem' }}>Challenge with</span>
-        <select value={game} onChange={(e) => setGame(e.target.value)}>
-          {games.map((g) => (
-            <option key={g.id} value={g.id}>
-              {g.name}
-            </option>
-          ))}
-        </select>
-      </div>
 
       {!social.joined && (
         <div className="games-roster-hint">
@@ -139,7 +120,7 @@ export function RosterPanel() {
                     <button
                       type="button"
                       className="games-chip-btn"
-                      onClick={() => challenge(f.account_id)}
+                      onClick={() => challenge(f.account_id, f.display_name)}
                     >
                       ⚔️
                     </button>
@@ -196,7 +177,7 @@ export function RosterPanel() {
                       <button
                         type="button"
                         className="games-chip-btn"
-                        onClick={() => challenge(p.account_id)}
+                        onClick={() => challenge(p.account_id, p.name)}
                         title="Challenge"
                       >
                         ⚔️

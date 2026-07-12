@@ -31,13 +31,42 @@ async def handle_games_message(conn: Any, msg: dict[str, Any]) -> None:
         elif event == "list_tables":
             await games_client.list_tables()
         elif event == "create_table":
-            await games_client.create_table(str(data.get("gameId") or ""))
+            await games_client.create_table(
+                str(data.get("gameId") or ""), data.get("ruleset")
+            )
         elif event == "join_table":
             await games_client.join_table(str(data.get("tableId") or ""))
         elif event == "leave_table":
             await games_client.leave_table(str(data.get("tableId") or ""))
         elif event == "run_challenges":
             await games_client.run_challenges(str(data.get("gameId") or "tictactoe"))
+        elif event == "queue_join":
+            await games_client.queue_join(
+                str(data.get("gameId") or ""),
+                str(data.get("difficulty") or "standard"),
+                bool(data.get("placement")),
+            )
+        elif event == "queue_leave":
+            await games_client.queue_leave()
+        elif event == "challenge_offer":
+            await games_client.challenge_offer(
+                str(data.get("account_id") or ""), dict(data.get("ruleset") or {})
+            )
+        elif event == "challenge_respond":
+            await games_client.challenge_respond(
+                str(data.get("offerId") or ""),
+                str(data.get("response") or "decline"),
+                data.get("ruleset"),
+            )
+        elif event == "rematch_offer":
+            await games_client.rematch_offer(str(data.get("tableId") or ""))
+        elif event == "watch_table":
+            await games_client.watch_table(str(data.get("tableId") or ""))
+        elif event == "unwatch_table":
+            await games_client.unwatch_table(str(data.get("tableId") or ""))
+        elif event == "arcade_input":
+            keys = data.get("keys") or []
+            games_client.set_arcade_keys([str(k) for k in keys])
         elif event == "town_join":
             await games_client.town_join(
                 str(data.get("name") or ""), str(data.get("avatar") or "")
@@ -76,7 +105,9 @@ async def handle_games_message(conn: Any, msg: dict[str, Any]) -> None:
         elif event == "profile_get":
             await games_client.profile_get()
         elif event == "profile_set":
-            await games_client.profile_set(data.get("avatar"), data.get("bio"))
+            await games_client.profile_set(
+                data.get("avatar"), data.get("bio"), data.get("handle")
+            )
         else:
             logger.debug("games: ignoring unknown event %r", event)
     except Exception as e:
