@@ -63,14 +63,17 @@ per-move clock on the server auto-plays a safe default if a node is slow.
 
 ## The Games hub
 
-The module's single entry point is the **Games hub** ("Games", `games.lobby`, a
-`document`): one pane with an internal **tab strip** — **Play** (default),
-**Ladder**, **Challenges**, **Replays**, **Players**, and **Profile** — instead
-of six separate panels you'd have to know to open. The header carries the
-**connection status chip** (see below), compact sign-in, and the Plaza/AgentTown
-shortcuts. The current tab lives in a module-level store (`hub-section.ts`), so
-it survives the frame's unmount-on-tab-switch, and `openGamesHub(section)` lets
-commands and cross-panel hand-offs land on a specific tab.
+The module's entry point is the **Games hub** ("Games", `games.lobby`, a
+`document`): the **Play** matchmaking view. The header carries the **connection
+status chip** (see below), compact sign-in, and the Plaza/AgentTown shortcuts.
+`openGamesHub()` (`hub-section.ts`) opens it.
+
+The hub used to fold **Ladder**, **Challenges**, **Replays**, **Players**, and
+**Profile** in as an internal tab strip, but that got too cluttery — they're now
+**standalone `tool` panels on the left activity rail** (`games.ladder`,
+`games.challenges`, `games.replays`, `games.players`, `games.profile`), each also
+reachable from the command palette (`games.openLeaderboard`, `games.openChallenges`,
+`games.openReplays`, `games.openRoster`, `games.openProfile`).
 
 Only the true *companions* remain **[region strips](../architecture/panel-groups.mdx)**
 on the hub: the **Agent Harness** and **Agent Thoughts** on the right, the
@@ -106,10 +109,14 @@ the **Games** hub (`games.lobby`) below it, and Agent Thoughts in the
 (hidden-by-default) right dock. The board's live match view lands in the
 standalone board pane via the `revealBoard()` focus path above.
 
-The **Play tab is gamified**: each catalog game renders as a card with a
+The **Play view is gamified**: each catalog game renders as a card with a
 **▶ Play** button (self-play table, auto-connect) and a **🎯 challenges
-shortcut** that lands on the hub's Challenges tab *pre-set to that game*
-(`challenge-focus.ts`, a claim-on-mount hand-off). Boards animate —
+shortcut** that opens the Challenges panel *pre-set to that game*
+(`challenge-focus.ts`, a claim-on-mount hand-off). The ranked hero and challenge
+offers are **[MUI](https://mui.com/material-ui/react-card/) cards** (`Card` /
+`CardHeader` / `CardContent` / `CardActions` with `Button`, `Chip`,
+`ToggleButtonGroup`), themed to the app's CSS tokens via a games-scoped
+`ThemeProvider` + `ScopedCssBaseline` (`mui-theme.tsx`, `GamesMui`). Boards animate —
 tic-tac-toe marks pop in, Connect Four discs fall with gravity, hold'em cards
 deal with a flip — and the status banner celebrates the winner and pulses
 animated dots while a seat is thinking (all CSS keyframes in `games.css`, no JS
@@ -144,9 +151,10 @@ Three inline steps (`FirstRunHero.tsx`):
 
 Every step is skippable, and a **dismiss** link hides the card for players who
 are just exploring (also setting `games.onboarded`); the
-`games.restartOnboarding` command clears the flag and reopens the Play tab.
-Local self-play still needs no account; ranked/online play does. The hub's
-**Profile** tab shows your avatar/level ring, per-game tier cards, and the
+`games.restartOnboarding` command clears the flag and reopens the hub.
+Local self-play still needs no account; ranked/online play does. The
+**Profile** panel (`games.profile`) shows your avatar/level ring, per-game tier
+cards (MUI `Card`s with a tier `Chip` and an XP `LinearProgress`), and the
 recent match log (with loadout/model attribution and one-click replays). The
 arcade also grew a **fun pass**: a VS intro splash on match start, win confetti,
 series pips, rating toasts, and optional bleeps (`games.sound`).
@@ -186,7 +194,7 @@ a strict visibility rule: **live = your own agent only; both sides = post-match.
 - **Board seat badges:** the server broadcasts `match_info` (seat profiles:
   handle/avatar/rating/level, bot + model markers) when a match starts, so the
   board header shows *who you're playing*, which seat is thinking, and marks you.
-- **Replays** (the hub's Replays tab + the `games.replay` viewer, 📼): every finished
+- **Replays** (the `games.replays` browser panel + the `games.replay` viewer, 📼): every finished
   game persists its full event log server-side — public states, actions, and **both
   seats' reasoning traces**. The viewer scrubs the board on a timeline with the two
   agents' thoughts side by side; the game-over banner links straight to it. Your
@@ -203,6 +211,7 @@ The `games.policy` setting controls how a node picks its move:
 - **`agent`** — runs a real tool-calling loop with your [agent harness](#agent-harness--the-skill-game):
   your custom tools plus `game.chooseAction`. The agent may analyze with your tools,
   then commits a legal move; any failure falls back to random.
+- **`bot`** — runs a custom Python script/bot directly on the current observation without any LLM model calls, returning either the chosen action directly or a dict of ID: action mappings (e.g. for games where multiple/simultaneous actions are needed). This is similar to Gymnasium or Kaggle competition environments.
 - **`manual`** — the node does not auto-play; the agent drives its seat through the
   `game.getObservation` / `game.chooseAction` agent tools (grouped under `games`), or
   a future in-board control does.
@@ -514,6 +523,29 @@ observer set, which receives the `public_state` stream (never a seat's private
 observation — watching can't leak hidden state) plus a snapshot on join. The
 lobby's table list grows a **👁 Watch** button for playing tables.
 
+## ViZDoom — real native Doom, server-rendered
+
+**ViZDoom** (`vizdoom_toy`, 🔫) runs the actual [ViZDoom](https://vizdoom.farama.org)
+native Doom engine on the game server (`games_engine/vizdoom_toy.py`). Each seat
+drives its **own** headless `DoomGame` instance on the bundled `defend_the_center`
+scenario — a fixed-center marine gunning down the imps closing in — so it's a
+simultaneous, tick-based **score race**: whoever has more kills when the clock runs
+out wins (`returns()` maps to the usual +1/−1, so the ELO ladder applies unchanged).
+The two marines never share a map, so it's a race, not a face-to-face deathmatch;
+real PvP netcode is a later milestone.
+
+Rendering is **server-side**: each tick the engine JPEG-encodes each instance's
+160×120 screen buffer (Pillow) and ships it as a base64 data URI in
+`observation(seat).frame` / `public_state().frames`, so `VizDoomBoard.tsx` just draws
+the two first-person viewports (`<img>`, pixelated) with an HP/AMMO/SCORE HUD — no
+client-side rendering. Actions are derived from the scenario's buttons
+(`idle`/`turn_left`/`turn_right`/`attack`, `idle` first for the timeout auto-play).
+The ranked harness is a fast `vizdoom_toy.bot` script (like `fighter.bot`); the
+`vizdoom-sweeper` loadout template ships a sweep-and-shoot starter. The engine and
+its native libs (`vizdoom`, `pillow`) install from prebuilt wheels on Windows and the
+Linux game-server image (`deploy/game-server/Dockerfile` adds `libsdl2`/`libopenal`;
+`set_window_visible(False)` renders headless, no X server).
+
 ## AgentTown — the fish tank
 
 **AgentTown** (`games.town`) is its **own document** — a surface separate from
@@ -587,9 +619,11 @@ newspaper (a resident whose job is journalist).
 Where AgentTown is a fish tank of *agents* you watch, **The Plaza** (`games.plaza`,
 a `document`, opened via the 🏛 button in the lobby or `games.openPlaza`) is where
 the **real users** hang out — the answer to "signing in is dull and there's no way
-to find someone to play." It's a **Habbo-style lobby**: you enter as an avatar,
-walk around a room by clicking the floor, talk in **speech bubbles**, hop between
-**rooms** to declutter, and **challenge** anyone straight to a game.
+to find someone to play." It's a **Habbo-style lobby**: you enter as an avatar
+under your **account username** (the OAuth-derived handle — there's no separate
+display name to pick), walk around a room by clicking the floor, talk in
+**speech bubbles**, hop between **rooms** to declutter, and **challenge** anyone
+straight to a game.
 
 Unlike the town's slow tick loop, the Plaza is **event-driven** — a move or a line
 of chat broadcasts to the room immediately (`backend/games_server/social.py`).
@@ -608,8 +642,8 @@ Two broadcasts carry everything:
 (the default landing room), **Arcade**, **The Lounge**, and **Tournament Arena**.
 The catalog is advertised to the client, so the room switcher stays data-driven.
 
-The hub's **Players** tab is the social directory that makes active players easy
-to find:
+The **Players** panel (`games.players`) is the social directory that makes active
+players easy to find:
 
 - **Who's online** — the live roster with each player's room, activity, and
   **level**; one click adds a friend (🤝) or challenges them (⚔️).

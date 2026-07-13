@@ -94,6 +94,25 @@ def run(args, obs):
 '''
 
 
+_VIZDOOM_BOT = '''\
+def run(args, obs):
+    """Return this tick's action for ViZDoom defend_the_center: idle/turn_left/
+    turn_right/attack. The frame is an opaque JPEG (no vision here — keep it fast),
+    so sweep-and-shoot off the HUD: fire while you have ammo, and rotate every few
+    ticks to bring the next imp into your sights."""
+    legal = [a["id"] for a in obs.get("legal_actions", [])]
+    hud = obs.get("hud") or {}
+    tick = int(obs.get("tick", 0))
+    if hud.get("ammo", 0) <= 0 and "turn_right" in legal:
+        return "turn_right"          # out of ammo: keep facing new targets
+    if tick % 3 == 2 and "turn_right" in legal:
+        return "turn_right"          # sweep to acquire
+    if "attack" in legal:
+        return "attack"
+    return "idle"
+'''
+
+
 _TTT_FORKS = '''\
 def run(args, obs):
     """Find fork cells: empty squares that would create TWO winning threats at
@@ -192,6 +211,26 @@ def loadout_templates() -> list[dict[str, Any]]:
                         "name": "fighter.bot",
                         "description": "Returns this tick's action for the ranked fighter (runs every frame — keep it fast, no model).",
                         "code": _FIGHTER_BOT,
+                        "parameters": {},
+                        "required": [],
+                    }
+                ],
+                "model": None,
+            },
+        },
+        {
+            "id": "vizdoom-sweeper",
+            "game_id": "vizdoom_toy",
+            "title": "Center sweeper",
+            "blurb": "A ViZDoom bot (vizdoom_toy.bot): stand your ground, sweep the arena, and gun down every imp before it reaches you.",
+            "loadout": {
+                "game_id": "vizdoom_toy",
+                "context": "",
+                "tools": [
+                    {
+                        "name": "vizdoom_toy.bot",
+                        "description": "Returns this tick's action for ranked ViZDoom (runs every frame — keep it fast, no model).",
+                        "code": _VIZDOOM_BOT,
                         "parameters": {},
                         "required": [],
                     }

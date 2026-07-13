@@ -29,11 +29,10 @@ logger = logging.getLogger(__name__)
 
 # Shipped default: the hosted central game server, so a fresh/packaged node connects
 # out of the box. Local dev overrides it via the GAMES_SERVER_URL env (scripts/dev.mjs
-# sets ws://localhost:9200 to use the bundled server), and a user can override per-node
+# sets ws://localhost:9090 to use the bundled server), and a user can override per-node
 # with the games.serverUrl setting.
-DEFAULT_SERVER_URL = (
-    os.environ.get("GAMES_SERVER_URL") or "wss://horrible-games.fly.dev"
-)
+_ENV_SERVER_URL = os.environ.get("GAMES_SERVER_URL")
+DEFAULT_SERVER_URL = _ENV_SERVER_URL or "wss://horrible-games.fly.dev"
 
 
 def _dev_token() -> str:
@@ -43,7 +42,13 @@ def _dev_token() -> str:
 def _settings() -> tuple[str, str, str]:
     """(server url, auth token, policy). The token is the signed-in JWT if we have
     one, else the dev token."""
-    url = str(get_value("games.serverUrl", DEFAULT_SERVER_URL) or DEFAULT_SERVER_URL)
+    # When GAMES_SERVER_URL is explicitly set (local dev), it always wins over the
+    # persisted setting — otherwise a saved hosted-server URL overrides the bundled
+    # local game server and locally-added games like vizdoom_toy get rejected.
+    if _ENV_SERVER_URL:
+        url = _ENV_SERVER_URL
+    else:
+        url = str(get_value("games.serverUrl", DEFAULT_SERVER_URL) or DEFAULT_SERVER_URL)
     # Imported lazily to avoid a circular import (server_auth imports this module).
     from backend.modules.games.server_auth import get_token
 
@@ -92,6 +97,8 @@ class _PlayerConn:
         self._arcade_keys: list[str] = []
         # Compiled `fighter.bot` loadout tool for ranked fighter mode (lazy).
         self._fighter_bot: Any = None
+        # Compiled `vizdoom_toy.bot` loadout tool for VizDoom Toy mode (lazy).
+        self._vizdoom_bot: Any = None
         # The AgentTown resident's mind (created on first use; whispers land here).
         self._town_policy: TownPolicy | None = None
 
@@ -423,6 +430,47 @@ class _PlayerConn:
             logger.debug("fighter.bot failed; idling", exc_info=True)
             return "idle"
 
+    def _vizdoom_bot_action(
+        self, observation: dict[str, Any], legal_ids: set[str]
+    ) -> str:
+        """Run the compiled `vizdoom_toy.bot` loadout tool (a pure function, no model) to pick this tick's action."""
+        try:
+            if self._vizdoom_bot is None:
+                from backend.modules.games.loadout import HarnessRuntime, get_loadout
+
+                runtime = HarnessRuntime(get_loadout("vizdoom_toy"))
+                self._vizdoom_bot = runtime if runtime.has("vizdoom_toy.bot") else False
+            if not self._vizdoom_bot:
+                return "idle"
+            fn = self._vizdoom_bot._compiled.get("vizdoom_toy.bot")
+            result = fn({}, observation) if fn else None
+            action = result if isinstance(result, str) else (result or {}).get("action")
+            return str(action) if str(action) in legal_ids else "idle"
+        except Exception:
+            logger.debug("vizdoom_toy.bot failed; idling", exc_info=True)
+            return "idle"
+
+    async def _play_vizdoom(
+        self,
+        msg: dict[str, Any],
+        observation: dict[str, Any],
+        legal: list[dict[str, Any]],
+    ) -> None:
+        legal_ids = {str(a.get("id")) for a in legal}
+        action_id = self._vizdoom_bot_action(observation, legal_ids)
+        if self.last_turn is not msg:
+            return
+        await self._send(
+            {
+                "type": models.ACTION,
+                "game_id": "vizdoom_toy",
+                "action_id": action_id if action_id in legal_ids else "idle",
+            }
+        )
+        if self.last_turn is msg:
+            self.last_turn = None
+
+
     async def _solve_task(
         self, msg: dict[str, Any], observation: dict[str, Any]
     ) -> dict[str, Any] | None:
@@ -509,13 +557,18 @@ class _PlayerConn:
         legal = msg.get("legal_actions") or []
         if not legal:
             return
-        observation = msg.get("observation") or {}
+        observation = dict(msg.get("observation") or {})
+        if "legal_actions" not in observation:
+            observation["legal_actions"] = legal
 
         # The fighter ticks ~once a second and must answer *fast* — no model call
         # per frame. Arcade (human) play maps held keys; ranked play runs the
         # compiled `fighter.bot` loadout tool directly. Either way, answer inline.
         if msg.get("game_id") == "fighter":
             await self._play_fighter(msg, observation, legal)
+            return
+        elif msg.get("game_id") == "vizdoom_toy":
+            await self._play_vizdoom(msg, observation, legal)
             return
 
         self._trace_buffer = []

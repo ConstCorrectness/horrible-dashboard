@@ -1,18 +1,18 @@
 /**
- * Cross-panel hand-off for the challenge track: a Play card's 🎯 shortcut lands
- * on the hub's Challenges tab *pre-set to that game*. The requested game id is
- * buffered (the section may not be mounted yet — hub tabs mount lazily)
- * and also broadcast live for an already-visible section. See docs/architecture/panel-groups.mdx.
+ * Cross-panel hand-off for the challenge track: a Play card's 🎯 shortcut opens
+ * the Challenges panel *pre-set to that game*. The requested game id is buffered
+ * (the panel may not be mounted yet) and also broadcast live for an
+ * already-visible panel. See docs/architecture/panel-groups.mdx.
  */
-import { openGamesHub } from './hub-section';
+import { registry } from '../../registry';
 
 let pending: string | null = null;
 const listeners = new Set<(gameId: string) => void>();
 
-/** Open the hub's Challenges tab focused on `gameId`'s scenario set. */
+/** Open the Challenges panel focused on `gameId`'s scenario set. */
 export function requestChallenges(gameId: string): void {
   pending = gameId;
-  openGamesHub('challenges');
+  registry.openPanel('games.challenges');
   listeners.forEach((l) => l(gameId));
 }
 

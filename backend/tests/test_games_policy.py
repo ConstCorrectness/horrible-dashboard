@@ -24,10 +24,127 @@ def test_random_policy_picks_a_legal_action() -> None:
 
 
 def test_make_policy_selects_type() -> None:
+    from backend.modules.games.policy import BotPolicy
     assert isinstance(make_policy("random"), RandomPolicy)
     assert isinstance(make_policy("agent"), AgentPolicy)
+    assert isinstance(make_policy("bot"), BotPolicy)
     # Unknown names fall back to random rather than erroring.
     assert isinstance(make_policy("bogus"), RandomPolicy)
+
+
+def test_bot_policy_executes_script() -> None:
+    from backend.modules.games.loadout import Loadout, ToolDef
+    from backend.modules.games.policy import BotPolicy
+
+    # Test running a tool named "bot"
+    loadout_with_bot = Loadout(
+        game_id="t",
+        tools=[
+            ToolDef(
+                name="bot",
+                description="",
+                code="def run(args, obs):\n    return '4'\n",
+            )
+        ],
+    )
+    steps: list[dict] = []
+    policy = BotPolicy(trace=steps.append, load_loadout=lambda _g: loadout_with_bot)
+    
+    chosen = asyncio.run(policy.choose({"board": []}, LEGAL, "t"))
+    assert chosen == "4"
+    kinds = [s["kind"] for s in steps]
+    assert kinds == ["assistant", "tool_result", "chose"]
+
+    # Test running with first tool (no tool named "bot")
+    loadout_first_tool = Loadout(
+        game_id="t",
+        tools=[
+            ToolDef(
+                name="my_strategy",
+                description="",
+                code="def run(args, obs):\n    return {'action': '8'}\n",
+            )
+        ],
+    )
+    steps = []
+    policy = BotPolicy(trace=steps.append, load_loadout=lambda _g: loadout_first_tool)
+    chosen = asyncio.run(policy.choose({"board": []}, LEGAL, "t"))
+    assert chosen == "8"
+
+    # Test bot policy robust fallback to RandomPolicy on runtime error
+    loadout_error = Loadout(
+        game_id="t",
+        tools=[
+            ToolDef(
+                name="bot",
+                description="",
+                code="def run(args, obs):\n    raise ValueError('runtime fail')\n",
+            )
+        ],
+    )
+    steps = []
+    policy = BotPolicy(trace=steps.append, load_loadout=lambda _g: loadout_error)
+    chosen = asyncio.run(policy.choose({"board": []}, LEGAL, "t"))
+    assert chosen in IDS
+    kinds = [s["kind"] for s in steps]
+    assert "fallback_reason" in kinds
+    assert "fallback" in kinds
+
+    # Test bot policy robust fallback to RandomPolicy on compilation error
+    loadout_compile_error = Loadout(
+        game_id="t",
+        tools=[
+            ToolDef(
+                name="bot",
+                description="",
+                code="def run(args, obs)\n    return '4'\n",  # syntax error
+            )
+        ],
+    )
+    steps = []
+    policy = BotPolicy(trace=steps.append, load_loadout=lambda _g: loadout_compile_error)
+    chosen = asyncio.run(policy.choose({"board": []}, LEGAL, "t"))
+    assert chosen in IDS
+    kinds = [s["kind"] for s in steps]
+    assert "fallback_reason" in kinds
+    assert "fallback" in kinds
+
+    # Test bot policy robust fallback on returning illegal action
+    loadout_illegal = Loadout(
+        game_id="t",
+        tools=[
+            ToolDef(
+                name="bot",
+                description="",
+                code="def run(args, obs):\n    return '99'\n",  # illegal action
+            )
+        ],
+    )
+    steps = []
+    policy = BotPolicy(trace=steps.append, load_loadout=lambda _g: loadout_illegal)
+    chosen = asyncio.run(policy.choose({"board": []}, LEGAL, "t"))
+    assert chosen in IDS
+    kinds = [s["kind"] for s in steps]
+    assert "fallback" in kinds
+
+    # Test that legal_actions are injected into obs passed to the bot
+    loadout_legal_check = Loadout(
+        game_id="t",
+        tools=[
+            ToolDef(
+                name="bot",
+                description="",
+                code="def run(args, obs):\n    assert 'legal_actions' in obs\n    return obs['legal_actions'][1]['id']\n",
+            )
+        ],
+    )
+    steps = []
+    policy = BotPolicy(trace=steps.append, load_loadout=lambda _g: loadout_legal_check)
+    chosen = asyncio.run(policy.choose({"board": []}, LEGAL, "t"))
+    assert chosen == "4"
+
+
+
 
 
 class _Call:

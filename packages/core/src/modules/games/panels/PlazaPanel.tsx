@@ -14,7 +14,7 @@ import {
   socialSay,
   useGames,
 } from '../game-ws';
-import { fetchGamesCatalog, type GameCatalogEntry } from '../games-api';
+import { fetchGamesCatalog, fetchStatus, type GameCatalogEntry } from '../games-api';
 import { PlazaCanvas } from './PlazaCanvas';
 
 /** Human avatars for the Plaza (distinct from AgentTown's animal residents). */
@@ -29,17 +29,22 @@ const QUICK_EMOTES = ['👋', '🎉', '😂', '❤️', '👍', '🤔'];
  */
 export function PlazaPanel() {
   const { social, accountId } = useGames();
-  const [name, setName] = useState('');
   const [avatar, setAvatar] = useState(AVATARS[0]);
   const [text, setText] = useState('');
   const [games, setGames] = useState<GameCatalogEntry[]>([]);
   const [challengeGame, setChallengeGame] = useState('tictactoe');
+  // Who you'll appear as: the signed-in account's username (GitHub/Google),
+  // resolved server-side — there is no separate display name to pick.
+  const [whoami, setWhoami] = useState<string | null>(null);
 
   useEffect(() => {
     fetchGamesCatalog().then((g) => {
       setGames(g);
       if (g[0]) setChallengeGame(g[0].id);
     });
+    fetchStatus()
+      .then((s) => setWhoami(s.signed_in ? s.display_name : null))
+      .catch(() => setWhoami(null));
   }, []);
 
   // Prefill the avatar from the saved profile once it arrives.
@@ -104,12 +109,22 @@ export function PlazaPanel() {
           className="games-plaza-join"
           onSubmit={(e) => {
             e.preventDefault();
-            socialJoin(name.trim(), avatar);
+            socialJoin(avatar);
           }}
         >
           <div style={{ color: 'var(--text-dim)', fontSize: '0.78rem' }}>
-            Step into the lobby as yourself — pick an avatar and say hi. Real people, live rooms,
-            speech bubbles.
+            {whoami ? (
+              <>
+                Step into the lobby as <strong>{whoami}</strong> — pick an avatar and say hi. Real
+                people, live rooms, speech bubbles.
+              </>
+            ) : (
+              <>
+                Step into the lobby under your account name — pick an avatar and say hi. Real
+                people, live rooms, speech bubbles. (Sign in in Games to use your GitHub/Google
+                username.)
+              </>
+            )}
           </div>
           <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center', flexWrap: 'wrap' }}>
             <div className="games-avatar-picker">
@@ -124,12 +139,6 @@ export function PlazaPanel() {
                 </button>
               ))}
             </div>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Display name (optional)"
-              style={{ width: '11rem' }}
-            />
             <button type="submit">Enter the Plaza →</button>
           </div>
         </form>

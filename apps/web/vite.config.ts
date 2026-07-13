@@ -15,6 +15,25 @@ if (existsSync(rootEnv)) {
 
 export default defineConfig({
   plugins: [react()],
+  optimizeDeps: {
+    include: [
+      '@codemirror/state',
+      '@codemirror/view',
+      '@codemirror/commands',
+      '@codemirror/language',
+      '@codemirror/autocomplete',
+      '@codemirror/search',
+      '@codemirror/lint',
+      '@codemirror/theme-one-dark',
+      '@codemirror/lang-python',
+      '@codemirror/lang-markdown',
+      '@codemirror/lang-javascript',
+      'codemirror',
+      '@mui/material',
+      '@emotion/react',
+      '@emotion/styled',
+    ],
+  },
   server: {
     // Listen host: `pnpm dev:lan` sets HORRIBLE_DEV_HOST=0.0.0.0 to expose the UI on
     // the LAN (peer-fabric collaboration); plain `pnpm dev` stays on localhost.

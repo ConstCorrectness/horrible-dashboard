@@ -27,7 +27,7 @@ const host =
 // through a shell there. (POSIX resolves them off PATH without one.)
 const useShell = process.platform === 'win32';
 
-// The central game server (:9200) comes up with the app so the games module works
+// The central game server (:9090) comes up with the app so the games module works
 // out of the box. It's a *standalone/central* service (hosted in production, not
 // per-node), so this is a dev convenience: opt out with `--no-gameserver` or
 // HORRIBLE_DEV_NO_GAMESERVER=1 if you run your own / point at the hosted one.
@@ -41,9 +41,9 @@ const startGameServer =
 const backendPort = process.env.HORRIBLE_DEV_BACKEND_PORT || '8000';
 
 // The ports this run owns. Used to self-heal a prior interrupted run and to backstop
-// our own shutdown. 9200 is only ours when we start the bundled game server — never
+// our own shutdown. 9090 is only ours when we start the bundled game server — never
 // kill a game server the user runs themselves.
-const ownedPorts = [5173, Number(backendPort), ...(startGameServer ? [9200] : [])];
+const ownedPorts = [5173, Number(backendPort), ...(startGameServer ? [9090] : [])];
 
 // On Windows, `uv run`/pnpm wrap uvicorn/vite in a shell and `uvicorn --reload`
 // respawns workers, so an interrupted run can orphan a worker that keeps a port
@@ -95,7 +95,7 @@ const backend = spawn(
     shell: useShell,
     env: {
       ...process.env,
-      GAMES_SERVER_URL: process.env.GAMES_SERVER_URL || 'ws://localhost:9200',
+      GAMES_SERVER_URL: process.env.GAMES_SERVER_URL || 'ws://localhost:9090',
     },
   },
 );
@@ -123,9 +123,13 @@ const gameserver = startGameServer
         '--host',
         host,
         '--port',
-        '9200',
+        '9090',
       ],
-      { stdio: 'inherit', shell: useShell },
+      {
+        stdio: 'inherit',
+        shell: useShell,
+        env: { ...process.env, GAMES_ENABLE_CODE_EXEC: '1' },
+      },
     )
   : null;
 
@@ -154,12 +158,12 @@ function cleanup() {
 // If a *core* server dies, tear the other down so we don't leave a half-stack up.
 backend.on('exit', cleanup);
 frontend.on('exit', cleanup);
-// The game server is non-core: if it dies (commonly because :9200 is already in use
+// The game server is non-core: if it dies (commonly because :9090 is already in use
 // from a game server you started yourself), warn but keep the rest of the stack up.
 gameserver?.on('exit', (code) => {
   if (!cleanedUp) {
     console.warn(
-      `⚠️  game server (:9200) exited (code ${code}); the games module won't work ` +
+      `⚠️  game server (:9090) exited (code ${code}); the games module won't work ` +
         'until one is running. The rest of the app is unaffected.',
     );
   }

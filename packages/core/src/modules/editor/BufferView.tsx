@@ -8,8 +8,8 @@
  * shell keybinding service. See docs/modules/editor.md.
  */
 import { useContext, useEffect, useRef, useState } from 'react';
-import { basicSetup, EditorView } from 'codemirror';
-import { keymap } from '@codemirror/view';
+import { basicSetup } from 'codemirror';
+import { EditorView, keymap } from '@codemirror/view';
 import { Compartment, EditorState, Prec } from '@codemirror/state';
 import { indentWithTab } from '@codemirror/commands';
 import { acceptCompletion } from '@codemirror/autocomplete';

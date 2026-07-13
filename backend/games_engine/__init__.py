@@ -39,8 +39,10 @@ from backend.games_engine import connect_four  # noqa: F401  (registration side 
 from backend.games_engine import fighter  # noqa: F401  (registration side effect)
 from backend.games_engine import holdem  # noqa: F401  (registration side effect)
 from backend.games_engine import rag_race  # noqa: F401  (registration side effect)
+from backend.games_engine import tabular_fe  # noqa: F401  (registration side effect)
 from backend.games_engine import test_duel  # noqa: F401  (registration side effect)
 from backend.games_engine import tictactoe  # noqa: F401  (registration side effect)
+from backend.games_engine import vizdoom_toy  # noqa: F401  (registration side effect)
 
 __all__ = [
     "CHANCE",

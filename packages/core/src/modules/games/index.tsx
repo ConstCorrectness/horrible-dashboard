@@ -4,20 +4,25 @@ import { setSetting } from '../../settings';
 import './games.css';
 import { openGamesHub } from './hub-section';
 import { AgentThoughtsPane } from './panels/AgentThoughtsPane';
+import { ChallengesPanel } from './panels/ChallengesPanel';
 import { FighterArcadePanel } from './panels/FighterArcadePanel';
 import { GameBoardPanel } from './panels/GameBoardPanel';
+import { LeaderboardPanel } from './panels/LeaderboardPanel';
 import { LoadoutPanel } from './panels/LoadoutPanel';
 import { LobbyPanel } from './panels/LobbyPanel';
 import { PlazaPanel } from './panels/PlazaPanel';
+import { ProfilePanel } from './panels/ProfilePanel';
+import { ReplayBrowserPanel } from './panels/ReplayBrowserPanel';
 import { ReplayViewerPanel } from './panels/ReplayViewerPanel';
+import { RosterPanel } from './panels/RosterPanel';
 import { TownPanel } from './panels/TownPanel';
 
 /**
  * Games module: watch your agent play turn-based games against another user's
  * agent, refereed by the central game server. The **Games hub** (`games.lobby`)
- * is the single entry point — Play/Ladder/Challenges/Replays/Players/Profile as
- * internal tabs, connection implicit. The board renders the live game.
- * See docs/modules/games.mdx.
+ * is the Play/matchmaking entry point; Ladder, Challenges, Replays, Players, and
+ * Profile are standalone tool panels on the left activity rail (they used to be
+ * hub tabs). The board renders the live game. See docs/modules/games.mdx.
  */
 export const gamesModule: ModuleManifest = {
   id: 'games',
@@ -31,7 +36,8 @@ export const gamesModule: ModuleManifest = {
       icon: '🕹',
       // Companion regions: the harness + live thoughts on the right strip, the
       // live board on the bottom strip (revealed when a match starts). Ladder,
-      // Challenges, Replays, Players, and Profile are hub *tabs*, not regions.
+      // Challenges, Replays, Players, and Profile are standalone tool panels on
+      // the activity rail (see below), not regions or tabs.
       regions: [
         { id: 'games.loadout', label: 'Agent Harness', icon: '🛠', key: 'h', position: 'right' },
         { id: 'games.thoughts', label: 'Agent Thoughts', icon: '💭', key: 'a', position: 'right' },
@@ -60,6 +66,52 @@ export const gamesModule: ModuleManifest = {
       component: LoadoutPanel,
       role: 'tool',
       icon: '🛠',
+      defaultDock: 'left',
+      singleton: true,
+    },
+    // The former hub tabs, now standalone tool panels on the activity rail.
+    {
+      id: 'games.ladder',
+      title: 'Ladder',
+      component: LeaderboardPanel,
+      role: 'tool',
+      icon: '🏆',
+      defaultDock: 'left',
+      singleton: true,
+    },
+    {
+      id: 'games.challenges',
+      title: 'Challenges',
+      component: ChallengesPanel,
+      role: 'tool',
+      icon: '🎯',
+      defaultDock: 'left',
+      singleton: true,
+    },
+    {
+      id: 'games.replays',
+      title: 'Replays',
+      component: ReplayBrowserPanel,
+      role: 'tool',
+      icon: '📼',
+      defaultDock: 'left',
+      singleton: true,
+    },
+    {
+      id: 'games.players',
+      title: 'Players',
+      component: RosterPanel,
+      role: 'tool',
+      icon: '👥',
+      defaultDock: 'left',
+      singleton: true,
+    },
+    {
+      id: 'games.profile',
+      title: 'Profile',
+      component: ProfilePanel,
+      role: 'tool',
+      icon: '🪪',
       defaultDock: 'left',
       singleton: true,
     },
@@ -131,13 +183,13 @@ export const gamesModule: ModuleManifest = {
       title: 'Games: Restart onboarding',
       run: () => {
         void setSetting('games.onboarded', false);
-        openGamesHub('play');
+        openGamesHub();
       },
     },
     {
       id: 'games.openProfile',
       title: 'Games: Open player profile',
-      run: () => openGamesHub('profile'),
+      run: () => registry.openPanel('games.profile'),
     },
     {
       id: 'games.openArcade',
@@ -152,17 +204,17 @@ export const gamesModule: ModuleManifest = {
     {
       id: 'games.openReplays',
       title: 'Games: Browse replays',
-      run: () => openGamesHub('replays'),
+      run: () => registry.openPanel('games.replays'),
     },
     {
       id: 'games.openLeaderboard',
       title: 'Games: Open ladder',
-      run: () => openGamesHub('ladder'),
+      run: () => registry.openPanel('games.ladder'),
     },
     {
       id: 'games.openChallenges',
       title: 'Games: Open challenge track',
-      run: () => openGamesHub('challenges'),
+      run: () => registry.openPanel('games.challenges'),
     },
     {
       id: 'games.openTown',
@@ -177,7 +229,7 @@ export const gamesModule: ModuleManifest = {
     {
       id: 'games.openRoster',
       title: 'Games: Open players',
-      run: () => openGamesHub('players'),
+      run: () => registry.openPanel('games.players'),
     },
   ],
   settings: [
@@ -239,10 +291,10 @@ export const gamesModule: ModuleManifest = {
       key: 'games.policy',
       title: 'Move policy',
       description:
-        'How this node picks moves: random, agent (local model), or manual (agent tool / UI).',
+        'How this node picks moves: random, agent (local model), bot (custom Python script), or manual (agent tool / UI).',
       type: 'enum',
       default: 'random',
-      enumValues: ['random', 'agent', 'manual'],
+      enumValues: ['random', 'agent', 'manual', 'bot'],
     },
   ],
 };

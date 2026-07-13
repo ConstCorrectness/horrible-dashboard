@@ -4,6 +4,7 @@ import { apiDelete, apiGet, apiPost, apiPut } from '../../../api';
 import { registry } from '../../../registry';
 import type { EditorService } from '../../editor/service';
 import { fetchGamesCatalog } from '../games-api';
+import { CodeEditor } from './CodeEditor';
 import { DryRunSection } from './DryRunSection';
 
 /** The editor's buffer surface, looked up lazily (the editor module registers it
@@ -65,11 +66,138 @@ const STARTER_CODE = `def run(args, obs):
     return {"note": "describe what this tool computes"}
 `;
 
-function newTool(n: number): ToolDef {
+function newTool(n: number, gameId: string): ToolDef {
+  let code = STARTER_CODE;
+  if (gameId === 'tictactoe') {
+    code = `def run(args, obs):
+    # Tic-tac-toe bot. obs["board"] is a list of 9 cells (None, "X", "O").
+    # Return a cell index string "0"-"8".
+    import random
+    legals = [str(a["id"]) for a in obs.get("legal_actions", [])]
+    return random.choice(legals) if legals else "4"
+`;
+  } else if (gameId === 'connect_four') {
+    code = `def run(args, obs):
+    # Connect Four bot. Return column index string "0"-"6".
+    import random
+    legals = [str(a["id"]) for a in obs.get("legal_actions", [])]
+    return random.choice(legals) if legals else "3"
+`;
+  } else if (gameId === 'holdem') {
+    code = `def run(args, obs):
+    # Texas Hold'em bot. Return action string (e.g. "check", "call", "fold").
+    import random
+    legals = [str(a["id"]) for a in obs.get("legal_actions", [])]
+    return random.choice(legals) if legals else "check"
+`;
+  } else if (gameId === 'arena') {
+    code = `def run(args, obs):
+    # Arena bot. Return direction string: "up", "down", "left", "right", "stay".
+    import random
+    legals = [str(a["id"]) for a in obs.get("legal_actions", [])]
+    return random.choice(legals) if legals else "stay"
+`;
+  } else if (gameId === 'fighter') {
+    code = `def run(args, obs):
+    # Fighter 2D bot. Return action string: "left", "right", "jump", "block", "light", "heavy", "special", "idle".
+    import random
+    legals = [str(a["id"]) for a in obs.get("legal_actions", [])]
+    return random.choice(legals) if legals else "idle"
+`;
+  } else if (gameId === 'bug_hunt') {
+    code = `def run(args, obs):
+    # Bug Hunt bot. Return a patch dictionary mapping filepath to new contents.
+    # e.g., return {"math_utils.py": "def add(a, b):\\n    return a + b"}
+    return {}
+`;
+  } else if (gameId === 'code_golf') {
+    code = `def run(args, obs):
+    # Code Golf bot. Return Python source code to solve the challenge.
+    return "def solve():\\n    pass"
+`;
+  } else if (gameId === 'test_duel') {
+    code = `def run(args, obs):
+    # Test Duel bot. Return implementation or test code string depending on obs["phase"].
+    return "def pow(b, e):\\n    return b ** e"
+`;
+  } else if (gameId === 'town') {
+    code = `def run(args, obs):
+    # AgentTown resident decision bot. Return action dictionary.
+    # e.g., return {"action": "move", "place": "gym"}
+    import random
+    places = obs.get("places", [])
+    if places:
+        return {"action": "move", "place": random.choice(places)}
+    return {"action": "rest"}
+`;
+  } else if (gameId === 'tabular_fe') {
+    code = `def run(args, obs):
+    # Tabular Feature Engineering bot. Return the python solution.py source code.
+    # It must contain a transform(df) function that takes a DataFrame and returns a cleaned, numeric-only DataFrame.
+    # Look at obs["data_samples"] to understand the schema.
+    return """import pandas as pd
+import numpy as np
+
+def transform(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    # Impute missing values
+    if 'distance' in df.columns:
+        df['distance'] = df['distance'].fillna(600.0)
+    if 'fuel_density' in df.columns:
+        df['fuel_density'] = df['fuel_density'].fillna(0.8)
+        
+    # Map categoricals to numeric integers
+    exp_map = {'rookie': 0, 'veteran': 1, 'elite': 2}
+    if 'crew_experience' in df.columns:
+        df['crew_experience'] = df['crew_experience'].map(exp_map).fillna(0)
+        
+    ship_map = {'light_freighter': 0, 'heavy_cruiser': 1, 'mining_barge': 2}
+    if 'ship_class' in df.columns:
+        df['ship_class'] = df['ship_class'].map(ship_map).fillna(0)
+        
+    # Encode anomaly type (new column encoding)
+    anom_map = {'none': 0, 'gravitational': 1, 'magnetic': 2, 'solar_flare': 3}
+    if 'anomaly_type' in df.columns:
+        df['anomaly_type'] = df['anomaly_type'].map(anom_map).fillna(0)
+        
+    # Drop target if present
+    if 'target' in df.columns:
+        df = df.drop(columns=['target'])
+        
+    return df
+"""
+`;
+  } else if (gameId === 'vizdoom_toy') {
+    code = `def run(args, obs):
+    # ViZDoom bot (defend_the_center). Return an action id:
+    # "idle", "turn_left", "turn_right", or "attack".
+    # The frame is an opaque JPEG (obs["frame"]) — a fast bot can't "see" it, so
+    # play off the HUD + tick: sweep the arena and gun down the imps.
+    legals = [str(a["id"]) for a in obs.get("legal_actions", [])]
+    hud = obs.get("hud", {})
+    tick = int(obs.get("tick", 0))
+
+    # Out of ammo? keep turning to face the next target.
+    if hud.get("ammo", 0) <= 0 and "turn_right" in legals:
+        return "turn_right"
+    # Sweep to acquire every few ticks, otherwise fire.
+    if tick % 3 == 2 and "turn_right" in legals:
+        return "turn_right"
+    return "attack" if "attack" in legals else "idle"
+`;
+  } else {
+    code = `def run(args, obs):
+    # Default bot. Return a legal action ID.
+    import random
+    legals = [str(a["id"]) for a in obs.get("legal_actions", [])]
+    return random.choice(legals) if legals else "idle"
+`;
+  }
+
   return {
     name: `helper_${n}`,
     description: 'What this tool computes, so the agent knows when to call it.',
-    code: STARTER_CODE,
+    code: code,
     parameters: {},
     required: [],
   };
@@ -234,6 +362,330 @@ function HarnessExplainer() {
           <strong>The model.</strong> Each harness can bring its own model (part of the skill — the
           ladder records it), or borrow the agent module's configured model (&quot;agent
           default&quot;).
+        </div>
+      </div>
+    </details>
+  );
+}
+
+const GAME_SPECS: Record<
+  string,
+  {
+    title: string;
+    description: string;
+    obsExample: string;
+    returnsExample: string;
+  }
+> = {
+  tictactoe: {
+    title: 'Tic-Tac-Toe',
+    description:
+      'A 3x3 board game where players alternate turns to place X or O. Three in a row wins.',
+    obsExample: `{
+  "board": [null, "X", "O", null, null, null, null, null, null], // 9 cells top-left to bottom-right
+  "game": "tictactoe",
+  "seat": 0, // 0 or 1
+  "legal_actions": [{"id": "0"}, {"id": "3"}, {"id": "4"}, {"id": "5"}, {"id": "6"}, {"id": "7"}, {"id": "8"}]
+}`,
+    returnsExample: `A string "0" to "8" representing the index of the cell to claim.
+Example: return "4" (to mark the center cell)`,
+  },
+  connect_four: {
+    title: 'Connect Four',
+    description:
+      'Drop discs into column slots. Get four of your discs in a row (vertical, horizontal, diagonal) to win.',
+    obsExample: `{
+  "board": [
+    [null, null, null, null, null, null], // col 0 cells (bottom to top)
+    ["X", null, null, null, null, null],  // col 1 cells
+    [null, null, null, null, null, null],
+    [null, null, null, null, null, null],
+    [null, null, null, null, null, null],
+    [null, null, null, null, null, null],
+    [null, null, null, null, null, null]
+  ],
+  "game": "connect_four",
+  "seat": 0,
+  "legal_actions": [{"id": "0"}, {"id": "1"}, {"id": "2"}, {"id": "3"}, {"id": "4"}, {"id": "5"}, {"id": "6"}]
+}`,
+    returnsExample: `A string "0" to "6" representing the column index to drop your disc into.
+Example: return "3"`,
+  },
+  holdem: {
+    title: "Texas Hold'em",
+    description:
+      "Heads-up No-Limit Texas Hold'em. Stacks of 100, blinds 1/2. The goal is to maximize your chip returns.",
+    obsExample: `{
+  "me": {
+    "hand": ["Ah", "Ks"], // rank: A, K, Q, J, Ten, 9-2. suit: h, s, d, c
+    "chips": 80,
+    "bet": 20
+  },
+  "opponent": {
+    "chips": 90,
+    "bet": 10
+  },
+  "community": ["Qc", "Jh", "9d"], // flop cards (empty pre-flop)
+  "pot": 30,
+  "street": "flop", // preflop, flop, turn, river
+  "game": "holdem",
+  "seat": 0,
+  "legal_actions": [{"id": "fold"}, {"id": "call"}, {"id": "raise_min"}]
+}`,
+    returnsExample: `One of the legal action IDs (refer to 'legal_actions' list in obs):
+- "fold": concede the pot
+- "check": pass action
+- "call": match the opponent's bet
+- "raise_min", "raise_pot", "all_in": raise by corresponding amounts
+
+Example: return "call"`,
+  },
+  rag_race: {
+    title: 'RAG Race',
+    description:
+      'Simultaneous duel. Scan a set of fictional documents inside the observation and submit answers for questions.',
+    obsExample: `{
+  "corpus": [
+    "The Snark was a Boojum, which lived in the forest of Gloom.",
+    "Elmo found the red ruby at noon under the oak tree."
+  ],
+  "questions": [
+    {"id": "q1", "text": "What was the Snark?"},
+    {"id": "q2", "text": "When did Elmo find the ruby?"}
+  ],
+  "game": "rag_race",
+  "legal_actions": [{"id": "submit"}]
+}`,
+    returnsExample: `A dictionary mapping question IDs to string answers.
+Example:
+return {
+  "q1": "a Boojum",
+  "q2": "noon"
+}`,
+  },
+  arena: {
+    title: 'Arena Bot Grid Duel',
+    description:
+      'Grid resource race. Alternate turns or move simultaneously to collect pellets and tag your opponent.',
+    obsExample: `{
+  "me": [3, 4], // x, y position
+  "opponent": [5, 4],
+  "opponent_prev": [5, 5],
+  "pellets": [[1, 2], [7, 8], [3, 4]], // pellet coordinates
+  "grid": 9, // grid dimension (9x9)
+  "my_score": 5,
+  "opponent_score": 3,
+  "game": "arena",
+  "legal_actions": [{"id": "up"}, {"id": "down"}, {"id": "left"}, {"id": "right"}, {"id": "stay"}]
+}`,
+    returnsExample: `A string representing the direction to move:
+"up", "down", "left", "right", or "stay".
+
+Example: return "up"`,
+  },
+  fighter: {
+    title: 'Fighter 2D Battle',
+    description: 'Tick-based 2D fighting game. Predict, block, and strike your opponent.',
+    obsExample: `{
+  "me": {
+    "x": 2.5,
+    "y": 0.0,
+    "hp": 90,
+    "meter": 25,
+    "stun": 0
+  },
+  "opponent": {
+    "x": 4.0,
+    "y": 0.0,
+    "hp": 100,
+    "meter": 10,
+    "stun": 0
+  },
+  "game": "fighter",
+  "legal_actions": [{"id": "left"}, {"id": "right"}, {"id": "jump"}, {"id": "block"}, {"id": "light"}, {"id": "heavy"}, {"id": "special"}, {"id": "idle"}]
+}`,
+    returnsExample: `A string representing the tick action:
+"left", "right", "jump", "block", "light", "heavy", "special", or "idle".
+
+Example: return "light"`,
+  },
+  bug_hunt: {
+    title: 'Bug Hunt (SWE-bench)',
+    description: 'Locate code defects in a python workspace and submit a working fix.',
+    obsExample: `{
+  "workspace": "/tmp/bug_hunt_workspace",
+  "issues": ["Test failing: test_math.py::test_addition"],
+  "game": "bug_hunt",
+  "legal_actions": [{"id": "submit"}]
+}`,
+    returnsExample: `A dictionary containing your proposed file modifications/patches.
+Normally driven by the TaskAgent tool loops.`,
+  },
+  code_golf: {
+    title: 'Code Golf',
+    description:
+      'Simultaneous coding duel. Solve the requested challenge using the minimum code size in bytes.',
+    obsExample: `{
+  "problem": "Write a function 'add(a, b)' returning the sum.",
+  "signature": "def add(a, b):",
+  "game": "code_golf",
+  "legal_actions": [{"id": "submit"}]
+}`,
+    returnsExample: `A string containing the full Python script/function.
+Example: return "def add(a,b):\\n return a+b"`,
+  },
+  test_duel: {
+    title: 'Test Duel',
+    description:
+      "Simultaneous coding duel. Submit a valid implementation, then write tests to break the opponent's code.",
+    obsExample: `{
+  "specification": "Create an exponentiation function 'pow(base, exp)'.",
+  "phase": "implement", // or "test"
+  "game": "test_duel",
+  "legal_actions": [{"id": "submit"}]
+}`,
+    returnsExample: `A string of implementation or test suite code.
+Example: return "def pow(b, e):\\n return b ** e"`,
+  },
+  town: {
+    title: 'AgentTown Sim',
+    description:
+      'Sims-style social agent simulation. Manage energy, wealth, resting, working, and social interactions.',
+    obsExample: `{
+  "you": {
+    "name": "BakerBob",
+    "energy": 75,
+    "wealth": 15,
+    "job": "Baker",
+    "job_site": "bakery",
+    "place": "bakery"
+  },
+  "places": ["fountain", "bakery", "gym", "tavern", "residential_zone"],
+  "occupants": [{"name": "FisherBob", "place": "bakery"}],
+  "phase": "afternoon",
+  "legal_actions": [{"id": "act"}]
+}`,
+    returnsExample: `A dictionary action with an action keyword and parameters:
+- To move: {"action": "move", "place": "gym"}
+- To work/workout/rest/eat: {"action": "work"} | {"action": "rest"}
+- To speak: {"action": "say", "text": "Hello!"}
+
+Example: return {"action": "move", "place": "gym"}`,
+  },
+  tabular_fe: {
+    title: 'Tabular Feature Engineering',
+    description:
+      'Simultaneous coding duel. Write a transform(df) function that cleans, encodes, and transforms a dataset to maximize predictive performance (ROC-AUC) of a model trained on the features.',
+    obsExample: `{
+  "task_name": "Space Mining Expedition Success",
+  "description": "Predict whether a deep space asteroid-mining expedition will succeed...",
+  "metric": "roc_auc",
+  "data_samples": [
+    {
+      "distance": 320.5,
+      "fuel_density": 1.2,
+      "crew_experience": "rookie",
+      "ship_class": "light_freighter",
+      "anomaly_type": "none",
+      "target": 0
+    }
+  ],
+  "starter_code": "def transform(df): ...",
+  "game": "tabular_fe",
+  "legal_actions": [{"id": "submit"}]
+}`,
+    returnsExample: `A string containing the full Python script/function.
+Example:
+return """import pandas as pd
+import numpy as np
+
+def transform(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    # clean, encode, and return numeric-only DataFrame
+    return df
+"""`,
+  },
+  vizdoom_toy: {
+    title: 'ViZDoom',
+    description:
+      'Real native-Doom score race (defend_the_center): each seat holds the center of its own arena and guns down the imps closing in. Higher score (kills) when the clock runs out wins. The two marines never share a map — it is a race, not a face-to-face duel.',
+    obsExample: `{
+  "game": "vizdoom_toy",
+  "seat": 0,
+  "frame": "data:image/jpeg;base64,...", // your 160x120 first-person view (opaque to a fast bot)
+  "hud": {"health": 100, "ammo": 26, "score": 3},
+  "tick": 42,
+  "max_ticks": 200,
+  "legal_actions": [{"id": "idle"}, {"id": "turn_left"}, {"id": "turn_right"}, {"id": "attack"}]
+}`,
+    returnsExample: `One of the legal action IDs (refer to 'legal_actions' list in obs):
+- "turn_left": rotate left
+- "turn_right": rotate right
+- "attack": fire your weapon
+- "idle": do nothing
+
+Example: return "attack"`,
+  },
+};
+
+function GameReference({ gameId }: { gameId: string }) {
+  const spec = GAME_SPECS[gameId] || GAME_SPECS['tictactoe'];
+
+  return (
+    <details className="games-spec-help" style={{ fontSize: '0.8rem' }}>
+      <summary style={{ cursor: 'pointer', color: 'var(--accent, #6ea8fe)' }}>
+        🎮 View Game Spec Reference ({spec.title})
+      </summary>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '0.5rem',
+          padding: '0.5rem 0 0.2rem 1rem',
+          color: 'var(--text-dim)',
+        }}
+      >
+        <div>
+          <strong>Objective:</strong> {spec.description}
+        </div>
+        <div>
+          <strong>
+            Observation (<code>obs</code>) object structure:
+          </strong>
+          <pre
+            style={{
+              margin: '0.25rem 0',
+              padding: '0.4rem',
+              backgroundColor: 'var(--panel-2, rgba(255, 255, 255, 0.04))',
+              border: '1px solid var(--border, #33343a)',
+              borderRadius: '4px',
+              fontFamily: 'var(--font-mono, monospace)',
+              fontSize: '0.72rem',
+              overflowX: 'auto',
+              maxHeight: '12rem',
+              color: 'var(--text)',
+            }}
+          >
+            {spec.obsExample}
+          </pre>
+        </div>
+        <div>
+          <strong>What your bot should return:</strong>
+          <pre
+            style={{
+              margin: '0.25rem 0',
+              padding: '0.4rem',
+              backgroundColor: 'var(--panel-2, rgba(255, 255, 255, 0.04))',
+              border: '1px solid var(--border, #33343a)',
+              borderRadius: '4px',
+              fontFamily: 'var(--font-mono, monospace)',
+              fontSize: '0.72rem',
+              whiteSpace: 'pre-wrap',
+              color: 'var(--text)',
+            }}
+          >
+            {spec.returnsExample}
+          </pre>
         </div>
       </div>
     </details>
@@ -413,6 +865,11 @@ export function LoadoutPanel() {
         setStatus('');
       })
       .catch((e) => setStatus(String(e)));
+
+    const spec = GAME_SPECS[gameId];
+    if (spec) {
+      setSampleObs(spec.obsExample);
+    }
   }, [gameId]);
 
   if (!loadout) {
@@ -420,8 +877,23 @@ export function LoadoutPanel() {
   }
 
   const update = (patch: Partial<LoadoutModel>) => setLoadout({ ...loadout, ...patch });
-  const updateTool = (i: number, patch: Partial<ToolDef>) =>
+  const updateTool = (i: number, patch: Partial<ToolDef>) => {
+    const oldName = loadout.tools[i]?.name;
+    const newName = patch.name;
+    if (newName !== undefined && oldName !== undefined && oldName !== newName) {
+      const oldKey = `${gameId}:${oldName}`;
+      const newKey = `${gameId}:${newName}`;
+      if (editorUris[oldKey]) {
+        setEditorUris((prev) => {
+          const next = { ...prev };
+          next[newKey] = next[oldKey];
+          delete next[oldKey];
+          return next;
+        });
+      }
+    }
     update({ tools: loadout.tools.map((t, j) => (j === i ? { ...t, ...patch } : t)) });
+  };
 
   const save = async () => {
     setStatus('saving…');
@@ -559,15 +1031,16 @@ export function LoadoutPanel() {
       </div>
 
       <HarnessExplainer />
+      <GameReference gameId={gameId} />
 
       <label>
         <span style={labelStyle}>Strategy context (injected into the agent's system prompt)</span>
-        <textarea
+        <CodeEditor
           value={loadout.context}
-          onChange={(e) => update({ context: e.target.value })}
-          spellCheck={false}
+          onChange={(val) => update({ context: val })}
+          language="markdown"
           placeholder="e.g. Prefer the center, then corners. Block the opponent's two-in-a-row."
-          style={{ width: '100%', minHeight: '3rem', fontFamily: 'inherit' }}
+          minHeight="3.5rem"
         />
       </label>
 
@@ -576,7 +1049,7 @@ export function LoadoutPanel() {
         <button
           type="button"
           onClick={() => {
-            update({ tools: [...loadout.tools, newTool(loadout.tools.length + 1)] });
+            update({ tools: [...loadout.tools, newTool(loadout.tools.length + 1, gameId)] });
             setOpenTools((prev) => [...prev, true]);
           }}
         >
@@ -651,16 +1124,11 @@ export function LoadoutPanel() {
               {!nameError && diagnostic && (
                 <div style={{ color: '#e5534b', fontSize: '0.72rem' }}>⚠ {diagnostic}</div>
               )}
-              <textarea
+              <CodeEditor
                 value={t.code}
-                onChange={(e) => updateTool(i, { code: e.target.value })}
-                spellCheck={false}
-                style={{
-                  width: '100%',
-                  minHeight: '6rem',
-                  fontFamily: 'monospace',
-                  fontSize: '0.75rem',
-                }}
+                onChange={(val) => updateTool(i, { code: val })}
+                language="python"
+                minHeight="6rem"
               />
               <ParamsEditor tool={t} onChange={(patch) => updateTool(i, patch)} />
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -754,16 +1222,11 @@ export function LoadoutPanel() {
 
           <div>
             <span style={labelStyle}>Sample observation (JSON) — for testing tools</span>
-            <textarea
+            <CodeEditor
               value={sampleObs}
-              onChange={(e) => setSampleObs(e.target.value)}
-              spellCheck={false}
-              style={{
-                width: '100%',
-                minHeight: '2.2rem',
-                fontFamily: 'monospace',
-                fontSize: '0.75rem',
-              }}
+              onChange={(val) => setSampleObs(val)}
+              language="json"
+              minHeight="2.5rem"
             />
           </div>
         </div>

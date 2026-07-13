@@ -261,7 +261,11 @@ class GameHub:
         await session.conn.send_json(
             {
                 "type": models.TABLES,
-                "tables": [t.info().model_dump() for t in self._tables.values()],
+                "tables": [
+                    t.info().model_dump()
+                    for t in self._tables.values()
+                    if t.status != "done"
+                ],
             }
         )
 

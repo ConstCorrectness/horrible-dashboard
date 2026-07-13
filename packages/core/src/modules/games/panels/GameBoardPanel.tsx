@@ -22,6 +22,7 @@ import { PokerBoard } from './PokerBoard';
 import { RagRaceBoard } from './RagRaceBoard';
 import { TestDuelBoard } from './TestDuelBoard';
 import { TicTacToeBoard } from './TicTacToeBoard';
+import { VizDoomBoard } from './VizDoomBoard';
 
 // Per-game seat labels (seat 0, seat 1). Falls back to "Seat N" for other games.
 const SEAT_LABELS: Record<string, [string, string]> = {
@@ -34,6 +35,7 @@ const SEAT_LABELS: Record<string, [string, string]> = {
   bug_hunt: ['Player 1', 'Player 2'],
   arena: ['Blue', 'Orange'],
   fighter: ['Blue', 'Orange'],
+  vizdoom_toy: ['Marine 0', 'Marine 1'],
 };
 
 /** Animated ellipsis for the "thinking" state (see games.css). */
@@ -67,6 +69,8 @@ export function BoardRenderer({ board }: { board: PublicState }) {
     <ArenaBoard board={board} />
   ) : board.game === 'fighter' ? (
     <FighterCanvas board={board} />
+  ) : board.game === 'vizdoom_toy' ? (
+    <VizDoomBoard board={board} />
   ) : (
     <pre style={{ padding: '0.5rem', fontSize: '0.75rem' }}>{JSON.stringify(board, null, 2)}</pre>
   );

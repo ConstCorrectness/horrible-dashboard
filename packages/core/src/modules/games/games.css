@@ -7,72 +7,53 @@
 
 .games-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: 0.5rem;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.5rem;
 }
 
-.games-card {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 0.6rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  background: var(--surface, #1c1c1c);
-  transition:
-    transform 0.15s ease,
-    box-shadow 0.15s ease,
-    border-color 0.15s ease;
-}
-
-.games-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
-  border-color: var(--accent, #6ea8fe);
-}
-
-.games-card-icon {
-  font-size: 1.5rem;
-  line-height: 1;
-}
-
-.games-card-name {
-  font-weight: 700;
-}
-
-.games-card-actions {
-  display: flex;
-  gap: 0.35rem;
-  margin-top: auto;
-}
+/* The per-game rating cards are now MUI <Card>s (see ProfilePanel.tsx); the
+ * `.games-cards` grid above is still their responsive container. */
 
 .games-play-btn {
   flex: 1;
-  background: var(--accent, #6ea8fe);
-  color: #0b0e14;
+  background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%);
+  color: #030712;
   border: none;
-  border-radius: 6px;
-  padding: 0.3rem 0.5rem;
-  font-weight: 700;
+  border-radius: 8px;
+  padding: 0.35rem 0.6rem;
+  font-weight: 800;
+  font-size: 0.78rem;
   cursor: pointer;
+  box-shadow: 0 2px 6px rgba(59, 130, 246, 0.25);
   transition:
-    filter 0.12s ease,
-    transform 0.12s ease;
+    filter 0.15s ease,
+    transform 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .games-play-btn:hover {
-  filter: brightness(1.15);
-  transform: scale(1.03);
+  filter: brightness(1.1);
+  transform: scale(1.02);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+}
+
+.games-play-btn:active {
+  transform: scale(0.98);
 }
 
 .games-chip-btn {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text);
-  padding: 0.3rem 0.45rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  color: #94a3b8;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.8rem;
   cursor: pointer;
-  transition: border-color 0.12s ease;
+  transition:
+    border-color 0.15s ease,
+    color 0.15s ease,
+    background-color 0.15s ease;
 }
 
 .games-chip-btn:hover {
@@ -1131,39 +1112,89 @@
 
 .games-ranked-card {
   display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0.7rem;
-  border: 1px solid var(--accent, #6ea8fe);
-  border-radius: 10px;
-  background: color-mix(in srgb, var(--accent, #6ea8fe) 8%, transparent);
-  flex-wrap: wrap;
-}
-
-.games-ranked-title {
-  font-weight: 800;
-  letter-spacing: 0.02em;
-}
-
-.games-offer-card {
-  display: flex;
   flex-direction: column;
-  gap: 0.45rem;
-  padding: 0.55rem 0.7rem;
-  border: 1px solid #d4a72c;
-  border-radius: 10px;
-  background: color-mix(in srgb, #d4a72c 8%, transparent);
+  gap: 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid rgba(168, 85, 247, 0.4);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.12) 0%, rgba(168, 85, 247, 0.12) 100%);
+  backdrop-filter: blur(8px);
+  box-shadow:
+    0 4px 20px rgba(0, 0, 0, 0.2),
+    inset 0 0 12px rgba(168, 85, 247, 0.05);
+  transition: all 0.3s ease;
 }
 
-.games-offer-head {
-  font-size: 0.85rem;
+.games-ranked-card.active-queue {
+  border-color: rgba(168, 85, 247, 0.75);
+  box-shadow:
+    0 0 16px rgba(168, 85, 247, 0.25),
+    inset 0 0 16px rgba(168, 85, 247, 0.1);
+  animation: ranked-pulse-border 2s ease-in-out infinite;
 }
 
-.games-offer-actions {
-  display: flex;
-  gap: 0.4rem;
-  flex-wrap: wrap;
+@keyframes ranked-pulse-border {
+  0%,
+  100% {
+    border-color: rgba(168, 85, 247, 0.5);
+  }
+  50% {
+    border-color: rgba(168, 85, 247, 0.9);
+  }
 }
+
+.games-cancel-queue-btn {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  padding: 0.3rem 0.6rem;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.games-cancel-queue-btn:hover {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: rgba(239, 68, 68, 0.5);
+  transform: translateY(-1px);
+}
+
+.games-radar-scan {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 2px solid rgba(168, 85, 247, 0.5);
+  background: rgba(168, 85, 247, 0.08);
+  overflow: hidden;
+  box-shadow: 0 0 8px rgba(168, 85, 247, 0.3);
+  flex-shrink: 0;
+}
+
+.games-radar-line {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 16px;
+  height: 2px;
+  background: linear-gradient(90deg, rgba(168, 85, 247, 1), rgba(168, 85, 247, 0));
+  transform-origin: left center;
+  animation: radar-sweep 1.8s linear infinite;
+}
+
+@keyframes radar-sweep {
+  0% {
+    transform: translate(-50%, -50%) rotate(0deg);
+  }
+  100% {
+    transform: translate(-50%, -50%) rotate(360deg);
+  }
+}
+
+/* The ranked hero + challenge offers are now MUI <Card>s (see ChallengeCards.tsx).
+ * `.games-ranked-card` below is still used for the active-queue radar variant. */
 
 .games-ruleset-editor {
   display: flex;
@@ -1353,18 +1384,35 @@
 }
 
 @keyframes games-vs-slam-left {
-  from { transform: translateX(-120%); opacity: 0; }
-  to { transform: none; opacity: 1; }
+  from {
+    transform: translateX(-120%);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
 }
 
 @keyframes games-vs-slam-right {
-  from { transform: translateX(120%); opacity: 0; }
-  to { transform: none; opacity: 1; }
+  from {
+    transform: translateX(120%);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
 }
 
 @keyframes games-vs-fade {
-  0%, 75% { opacity: 1; }
-  100% { opacity: 0; }
+  0%,
+  75% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
 }
 
 .games-confetti {
@@ -1394,32 +1442,6 @@
 }
 
 /* ---- the Games hub (tab strip + connection chip) ---------------------------- */
-
-.games-hub-tabs {
-  display: flex;
-  gap: 0.25rem;
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 0.35rem;
-}
-
-.games-hub-tab {
-  border: 1px solid transparent;
-  background: transparent;
-  border-radius: 6px;
-  padding: 0.25rem 0.6rem;
-  cursor: pointer;
-  color: var(--text-dim);
-}
-
-.games-hub-tab:hover {
-  border-color: var(--border);
-}
-
-.games-hub-tab.active {
-  color: inherit;
-  font-weight: 700;
-  border-color: var(--accent, #6ea8fe);
-}
 
 .games-conn-chip {
   display: inline-flex;
@@ -1478,4 +1500,358 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 18rem;
+}
+
+/* ---- play-cs.com style Server Browser & Host controls ---- */
+
+.games-host-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 0.75rem;
+  background: rgba(15, 17, 23, 0.45);
+  padding: 0.5rem;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.games-host-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 700;
+  transition: all 0.15s ease;
+}
+
+.games-host-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  border-color: rgba(96, 165, 250, 0.2);
+}
+
+.games-host-btn.active {
+  background: rgba(96, 165, 250, 0.12);
+  border-color: #60a5fa;
+  color: #60a5fa;
+  box-shadow: 0 0 8px rgba(96, 165, 250, 0.2);
+}
+
+.games-host-icon {
+  font-size: 1rem;
+}
+
+.games-host-deploy-btn {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: #022c22;
+  border: none;
+  border-radius: 8px;
+  padding: 0.45rem 1.1rem;
+  font-weight: 800;
+  font-size: 0.78rem;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(16, 185, 129, 0.2);
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.games-host-deploy-btn:hover {
+  filter: brightness(1.15);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.35);
+}
+
+.games-server-browser {
+  width: 100%;
+  margin-top: 0.8rem;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  background: rgba(15, 17, 23, 0.3);
+  overflow: hidden;
+}
+
+.games-server-header {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr 1fr;
+  padding: 0.55rem 0.8rem;
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.games-server-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr 1fr;
+  padding: 0.7rem 0.8rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  font-size: 0.8rem;
+  align-items: center;
+  transition: background-color 0.15s ease;
+}
+
+.games-server-row:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.games-server-row:last-child {
+  border-bottom: none;
+}
+
+.games-server-mode {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 700;
+  color: #f1f5f9;
+}
+
+.games-server-mode-icon {
+  font-size: 1.1rem;
+}
+
+.games-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  width: fit-content;
+}
+
+.games-status-badge.open {
+  background: rgba(16, 185, 129, 0.1);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.games-status-badge.playing {
+  background: rgba(245, 158, 11, 0.1);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.2);
+}
+
+.games-server-occupancy {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.games-occupancy-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.games-occupancy-dot.filled {
+  background: #38bdf8;
+  box-shadow: 0 0 6px rgba(56, 189, 248, 0.5);
+  border-color: #38bdf8;
+}
+
+.games-server-ping {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 12px;
+  width: 20px;
+}
+
+.games-ping-bar {
+  width: 3px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 1px;
+}
+
+.games-ping-bar:nth-child(1) {
+  height: 4px;
+}
+.games-ping-bar:nth-child(2) {
+  height: 7px;
+}
+.games-ping-bar:nth-child(3) {
+  height: 10px;
+}
+.games-ping-bar:nth-child(4) {
+  height: 13px;
+}
+
+.games-ping-bar.active {
+  background: #10b981;
+}
+
+.games-join-btn {
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 2px 4px rgba(37, 99, 235, 0.2);
+  transition: all 0.15s ease;
+  width: fit-content;
+}
+
+.games-join-btn:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(37, 99, 235, 0.3);
+}
+
+.games-watch-btn {
+  background: rgba(255, 255, 255, 0.04);
+  color: #94a3b8;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.72rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  width: fit-content;
+}
+
+.games-watch-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #f1f5f9;
+  border-color: rgba(255, 255, 255, 0.15);
+  transform: translateY(-1px);
+}
+
+/* ---- ViZDoom board (server-streamed frames) ---- */
+
+.vzd-board {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0.5rem 0;
+  align-items: center;
+}
+
+.vzd-viewports {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  width: 100%;
+  max-width: 720px;
+}
+
+.vzd-viewport {
+  position: relative;
+  border: 2px solid var(--border, #33343a);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #090a0f;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  transition:
+    box-shadow 0.2s ease,
+    opacity 0.2s ease;
+}
+
+.vzd-viewport.vzd-won {
+  box-shadow:
+    0 0 0 2px #facc15,
+    0 8px 32px rgba(250, 204, 21, 0.25);
+}
+
+.vzd-viewport.vzd-lost {
+  opacity: 0.55;
+}
+
+.vzd-frame {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  image-rendering: pixelated;
+  object-fit: cover;
+}
+
+.vzd-frame-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim, #8a909c);
+  font-size: 0.8rem;
+  font-family: var(--font-mono, monospace);
+}
+
+.vzd-hud {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.45rem;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.68rem;
+  font-weight: 700;
+  background: linear-gradient(180deg, rgba(9, 10, 15, 0.82), rgba(9, 10, 15, 0));
+  pointer-events: none;
+}
+
+.vzd-hud-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vzd-hud-stats {
+  display: flex;
+  gap: 0.5rem;
+  color: #e2e8f0;
+  white-space: nowrap;
+}
+
+.vzd-hud-stats .vzd-hp-low {
+  color: #f87171;
+}
+
+.vzd-hud-score {
+  color: #facc15;
+}
+
+.vzd-badge {
+  position: absolute;
+  bottom: 0.4rem;
+  right: 0.4rem;
+  z-index: 2;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.vzd-badge-won {
+  background: #facc15;
+  color: #1a1206;
+}
+
+.vzd-clock {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.72rem;
+  color: var(--text-dim, #8a909c);
 }

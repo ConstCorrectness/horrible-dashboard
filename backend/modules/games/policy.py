@@ -303,5 +303,127 @@ def _prose_id(content: str, ids: list[str]) -> str | None:
     return text if text in ids else None
 
 
+class BotPolicy:
+    """Runs a Python script/bot defined as a tool in the harness.
+
+    If the harness has a tool named 'bot' (or if we look for the first tool),
+    we compile and call it, passing the current observation.
+
+    The bot tool can return:
+    - a single string or integer (the chosen action id)
+    - a dictionary or list, which we serialize to JSON if needed
+    """
+
+    def __init__(
+        self,
+        trace: TraceFn | None = None,
+        load_loadout: LoadoutFn | None = None,
+        fallback: Policy | None = None,
+    ) -> None:
+        self._trace = trace
+        self._load_loadout = load_loadout or get_loadout
+        self._fallback = fallback or RandomPolicy()
+
+    def _emit(self, kind: str, **fields: Any) -> None:
+        if self._trace is None:
+            return
+        try:
+            self._trace({"kind": kind, **fields})
+        except Exception:
+            pass
+
+    async def choose(
+        self,
+        observation: dict[str, Any],
+        legal_actions: list[dict[str, Any]],
+        game_id: str | None = None,
+    ) -> str:
+        ids = _ids(legal_actions)
+        try:
+            chosen = await self._run(observation, legal_actions, ids, game_id)
+        except Exception as exc:
+            logger.debug("BotPolicy failed; using fallback", exc_info=True)
+            self._emit("fallback_reason", error=str(exc))
+            chosen = None
+
+        if chosen in ids:
+            return chosen
+
+        fallback = await self._fallback.choose(observation, legal_actions, game_id)
+        self._emit("fallback", action_id=fallback)
+        return fallback
+
+    async def _run(
+        self,
+        observation: dict[str, Any],
+        legal_actions: list[dict[str, Any]],
+        ids: list[str],
+        game_id: str | None,
+    ) -> str | None:
+        key = game_id or str(observation.get("game") or "default")
+        loadout = self._load_loadout(key)
+        from backend.modules.games.loadout import HarnessRuntime
+        runtime = HarnessRuntime(loadout)
+
+        bot_tool = None
+
+        for t in loadout.tools:
+            if t.name == "bot":
+                bot_tool = t
+                break
+
+        if bot_tool is None and loadout.tools:
+            bot_tool = loadout.tools[0]
+
+        if bot_tool is None:
+            raise ValueError(f"No custom tools defined in the harness for '{key}' to run as a bot.")
+
+        if not runtime.has(bot_tool.name):
+            err = runtime.compile_error(bot_tool.name) or "failed to compile"
+            raise ValueError(f"Bot script {bot_tool.name!r} compiler error: {err}")
+
+        self._emit(
+            "assistant",
+            content=f"Running bot script '{bot_tool.name}'...",
+            tool_calls=[]
+        )
+
+        obs_copy = dict(observation)
+        if "legal_actions" not in obs_copy:
+            obs_copy["legal_actions"] = legal_actions
+
+        res = await runtime.call(bot_tool.name, {}, obs_copy)
+
+        if isinstance(res, dict) and "error" in res:
+            self._emit("tool_result", name=bot_tool.name, result=res)
+            raise ValueError(f"Bot script {bot_tool.name!r} failed: {res['error']}")
+
+        self._emit("tool_result", name=bot_tool.name, result=_clip(res))
+
+        if isinstance(res, (dict, list)):
+            if isinstance(res, dict) and "action" in res:
+                action_val = res["action"]
+            elif isinstance(res, dict) and "action_id" in res:
+                action_val = res["action_id"]
+            else:
+                action_val = res
+
+            if isinstance(action_val, (dict, list)):
+                action_id = json.dumps(action_val)
+            else:
+                action_id = str(action_val)
+        else:
+            action_id = str(res)
+
+        self._emit("chose", action_id=action_id)
+        return action_id
+
+
 def make_policy(name: str, trace: TraceFn | None = None) -> Policy:
-    return AgentPolicy(trace=trace) if name == "agent" else RandomPolicy()
+    if name == "agent":
+        return AgentPolicy(trace=trace)
+    elif name == "bot":
+        return BotPolicy(trace=trace)
+    else:
+        return RandomPolicy()
+

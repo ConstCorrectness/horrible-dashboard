@@ -3,14 +3,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { registry } from '../../../registry';
 import { useGames } from '../game-ws';
 import { fetchStatus, signInWith, signOut, type SignInProvider } from '../games-api';
-import { setHubSection, useHubSection, type HubSection } from '../hub-section';
-import { ChallengesPanel } from './ChallengesPanel';
 import { ConnectionChip } from './ConnectionChip';
-import { LeaderboardPanel } from './LeaderboardPanel';
 import { PlaySection } from './PlaySection';
-import { ProfilePanel } from './ProfilePanel';
-import { ReplayBrowserPanel } from './ReplayBrowserPanel';
-import { RosterPanel } from './RosterPanel';
 
 /** Sign-in status + device-flow sign-in (GitHub or Google — two different Google
  * accounts are two distinct players, handy for testing across machines). Identity
@@ -81,24 +75,14 @@ function SignIn() {
   );
 }
 
-const SECTIONS: [HubSection, string][] = [
-  ['play', 'Play'],
-  ['ladder', 'Ladder'],
-  ['challenges', 'Challenges'],
-  ['replays', 'Replays'],
-  ['players', 'Players'],
-  ['profile', 'Profile'],
-];
-
 /**
- * The Games hub — the module's single entry point. One pane, internal tabs:
- * Play (matchmaking) plus Ladder / Challenges / Replays / Players / Profile
- * folded in as sections. Connection is implicit (see matchmaking.ts); the only
- * connection UI left is the status chip.
+ * The Games hub — the module's Play entry point (matchmaking). Ladder,
+ * Challenges, Replays, Players, and Profile used to be internal tabs here but
+ * were too cluttery; they're now standalone panels on the left activity rail
+ * (and the command palette). Connection is implicit (see matchmaking.ts); the
+ * only connection UI left is the status chip.
  */
 export function LobbyPanel() {
-  const section = useHubSection();
-
   return (
     <div
       style={{
@@ -132,25 +116,7 @@ export function LobbyPanel() {
         </button>
       </div>
 
-      <div className="games-hub-tabs">
-        {SECTIONS.map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            className={section === id ? 'games-hub-tab active' : 'games-hub-tab'}
-            onClick={() => setHubSection(id)}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {section === 'play' && <PlaySection />}
-      {section === 'ladder' && <LeaderboardPanel />}
-      {section === 'challenges' && <ChallengesPanel />}
-      {section === 'replays' && <ReplayBrowserPanel />}
-      {section === 'players' && <RosterPanel />}
-      {section === 'profile' && <ProfilePanel />}
+      <PlaySection />
     </div>
   );
 }

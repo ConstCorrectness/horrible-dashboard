@@ -1,35 +1,12 @@
 /**
- * Which section of the Games hub is showing. Module-level (like arena-view.ts)
- * so the hub reopens on the same tab after the frame unmounts it, and so
- * commands / cross-panel handoffs can land on a specific section before the
- * pane has even mounted.
+ * Opening the Games hub. The hub is now a single **Play** view — Ladder,
+ * Challenges, Replays, Players, and Profile are standalone panels reachable from
+ * the left activity rail and the command palette (see index.tsx), not internal
+ * tabs, so there's no longer a "which section" store here.
  */
-import { useSyncExternalStore } from 'react';
-
 import { registry } from '../../registry';
 
-export type HubSection = 'play' | 'ladder' | 'challenges' | 'replays' | 'players' | 'profile';
-
-let section: HubSection = 'play';
-const listeners = new Set<() => void>();
-
-export function setHubSection(next: HubSection): void {
-  section = next;
-  for (const l of listeners) l();
-}
-
-export function useHubSection(): HubSection {
-  return useSyncExternalStore(
-    (cb) => {
-      listeners.add(cb);
-      return () => listeners.delete(cb);
-    },
-    () => section,
-  );
-}
-
-/** Open (or focus) the Games hub, optionally landing on a section. */
-export function openGamesHub(target?: HubSection): void {
-  if (target) setHubSection(target);
+/** Open (or focus) the Games hub (the Play view). */
+export function openGamesHub(): void {
   registry.openPanel('games.lobby');
 }

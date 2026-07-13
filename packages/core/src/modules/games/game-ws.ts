@@ -845,9 +845,11 @@ export function townWhisper(text: string): void {
 
 // ---- The Plaza (human social layer) ----------------------------------------
 
-/** Enter the Plaza. The node auto-connects to the game server. */
-export function socialJoin(name: string, avatar: string): void {
-  sendChannel('games', 'social_join', { name, avatar });
+/** Enter the Plaza. The node auto-connects to the game server. No display name
+ * is sent: the server derives it from the signed-in account (the GitHub/Google
+ * username), falling back to the account id — see games_server/social.py. */
+export function socialJoin(avatar: string): void {
+  sendChannel('games', 'social_join', { name: '', avatar });
 }
 
 export function socialLeave(): void {

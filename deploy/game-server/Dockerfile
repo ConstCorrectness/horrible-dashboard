@@ -16,6 +16,14 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 WORKDIR /app
 
+# Native runtime libs for ViZDoom (the vizdoom_toy game engine). The manylinux wheel
+# is prebuilt — no compiler/cmake/Xvfb needed — but bookworm-slim is minimal, so the
+# engine's shared deps (SDL2 for the renderer, OpenAL for the audio it dlopens even
+# though we render headless) must be present or `import vizdoom` fails at table start.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libsdl2-2.0-0 libopenal1 \
+    && rm -rf /var/lib/apt/lists/*
+
 # Layer 1 — dependencies only, from the lockfile. Cached until pyproject/uv.lock change.
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project

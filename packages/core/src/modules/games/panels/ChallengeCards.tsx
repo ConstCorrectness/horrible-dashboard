@@ -1,5 +1,15 @@
 import { useState } from 'react';
 
+import Card from '@mui/material/Card';
+import CardHeader from '@mui/material/CardHeader';
+import CardContent from '@mui/material/CardContent';
+import CardActions from '@mui/material/CardActions';
+import Button from '@mui/material/Button';
+import Chip from '@mui/material/Chip';
+import Typography from '@mui/material/Typography';
+import ToggleButton from '@mui/material/ToggleButton';
+import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
+
 import {
   challengeOffer,
   challengeRespond,
@@ -11,6 +21,7 @@ import {
 import { findRankedMatch } from '../matchmaking';
 import { type ChallengeTarget } from '../challenge-draft';
 import { type GameCatalogEntry } from '../games-api';
+import { GamesMui } from '../mui-theme';
 
 const DEFAULT_TERMS: Omit<Ruleset, 'game_id'> = {
   best_of: 1,
@@ -19,6 +30,20 @@ const DEFAULT_TERMS: Omit<Ruleset, 'game_id'> = {
   edit_phase_s: 0,
   model_class: 'any',
   rated: true,
+};
+
+// Icon per catalog game — shared across the ranked picker and headers.
+const GAME_ICONS: Record<string, string> = {
+  tictactoe: '❌',
+  connect_four: '🔴',
+  holdem: '🃏',
+  rag_race: '📚',
+  code_golf: '⛳',
+  test_duel: '⚖️',
+  bug_hunt: '🐛',
+  arena: '🤖',
+  fighter: '🥊',
+  vizdoom_toy: '🔫',
 };
 
 /** The negotiable terms of a battle — shared by the draft form and the counter. */
@@ -135,45 +160,70 @@ export function IncomingOfferCard({ games }: { games: GameCatalogEntry[] }) {
         : 'challenges you';
 
   return (
-    <div className="games-offer-card">
-      <div className="games-offer-head">
-        ⚔️ <strong>{offer.from_name}</strong> {kindLabel}: <strong>{offer.game_name}</strong>
-        <span style={{ color: 'var(--text-dim)' }}> — {summarize(offer.ruleset)}</span>
-      </div>
-      {countering && (
-        <RulesetEditor value={terms ?? offer.ruleset} onChange={setTerms} games={games} gameFixed />
-      )}
-      <div className="games-offer-actions">
-        {!countering ? (
-          <>
-            <button type="button" onClick={() => challengeRespond(offer.offer_id, 'accept')}>
-              ✅ Accept
-            </button>
-            <button type="button" onClick={() => setCountering(true)}>
-              ✏️ Counter
-            </button>
-            <button type="button" onClick={() => challengeRespond(offer.offer_id, 'decline')}>
-              ✖ Decline
-            </button>
-          </>
-        ) : (
-          <>
-            <button
-              type="button"
-              onClick={() => challengeRespond(offer.offer_id, 'counter', terms ?? offer.ruleset)}
-            >
-              Send counter
-            </button>
-            <button type="button" onClick={() => setCountering(false)}>
-              Back
-            </button>
-          </>
+    <GamesMui>
+      <Card sx={{ mb: 1 }}>
+        <CardHeader
+          avatar={<span style={{ fontSize: '1.4rem' }}>⚔️</span>}
+          title={
+            <span>
+              <strong>{offer.from_name}</strong> {kindLabel}: <strong>{offer.game_name}</strong>
+            </span>
+          }
+          subheader={summarize(offer.ruleset)}
+          sx={{ pb: 0.5 }}
+        />
+        {countering && (
+          <CardContent sx={{ py: 0.5 }}>
+            <RulesetEditor
+              value={terms ?? offer.ruleset}
+              onChange={setTerms}
+              games={games}
+              gameFixed
+            />
+          </CardContent>
         )}
-        <button type="button" onClick={() => dismissOffer()} title="Ignore (expires on its own)">
-          Dismiss
-        </button>
-      </div>
-    </div>
+        <CardActions>
+          {!countering ? (
+            <>
+              <Button
+                variant="contained"
+                color="success"
+                onClick={() => challengeRespond(offer.offer_id, 'accept')}
+              >
+                ✅ Accept
+              </Button>
+              <Button variant="outlined" onClick={() => setCountering(true)}>
+                ✏️ Counter
+              </Button>
+              <Button color="inherit" onClick={() => challengeRespond(offer.offer_id, 'decline')}>
+                ✖ Decline
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button
+                variant="contained"
+                onClick={() => challengeRespond(offer.offer_id, 'counter', terms ?? offer.ruleset)}
+              >
+                Send counter
+              </Button>
+              <Button color="inherit" onClick={() => setCountering(false)}>
+                Back
+              </Button>
+            </>
+          )}
+          <Button
+            color="inherit"
+            size="small"
+            sx={{ ml: 'auto' }}
+            onClick={() => dismissOffer()}
+            title="Ignore (expires on its own)"
+          >
+            Dismiss
+          </Button>
+        </CardActions>
+      </Card>
+    </GamesMui>
   );
 }
 
@@ -192,26 +242,36 @@ export function ChallengeDraftCard({
     ...DEFAULT_TERMS,
   });
   return (
-    <div className="games-offer-card">
-      <div className="games-offer-head">
-        ⚔️ Challenge <strong>{target.name}</strong>
-      </div>
-      <RulesetEditor value={terms} onChange={setTerms} games={games} />
-      <div className="games-offer-actions">
-        <button
-          type="button"
-          onClick={() => {
-            challengeOffer(target.accountId, terms);
-            onDone();
-          }}
-        >
-          Send challenge
-        </button>
-        <button type="button" onClick={onDone}>
-          Cancel
-        </button>
-      </div>
-    </div>
+    <GamesMui>
+      <Card sx={{ mb: 1 }}>
+        <CardHeader
+          avatar={<span style={{ fontSize: '1.4rem' }}>⚔️</span>}
+          title={
+            <span>
+              Challenge <strong>{target.name}</strong>
+            </span>
+          }
+          sx={{ pb: 0.5 }}
+        />
+        <CardContent sx={{ py: 0.5 }}>
+          <RulesetEditor value={terms} onChange={setTerms} games={games} />
+        </CardContent>
+        <CardActions>
+          <Button
+            variant="contained"
+            onClick={() => {
+              challengeOffer(target.accountId, terms);
+              onDone();
+            }}
+          >
+            Send challenge
+          </Button>
+          <Button color="inherit" onClick={onDone}>
+            Cancel
+          </Button>
+        </CardActions>
+      </Card>
+    </GamesMui>
   );
 }
 
@@ -223,46 +283,88 @@ export function RankedCard({ games }: { games: GameCatalogEntry[] }) {
 
   if (queue) {
     return (
-      <div className="games-ranked-card">
-        <span className="games-ranked-title">🏁 Ranked</span>
-        <span>
-          Searching {queue.gameId} ({queue.difficulty})… {queue.waitingS}s
-          <span style={{ color: 'var(--text-dim)' }}> · window ±{Math.round(queue.window)}</span>
-        </span>
-        <button type="button" onClick={() => gamesQueueLeave()}>
-          Cancel
-        </button>
-      </div>
+      <GamesMui>
+        <Card className="games-ranked-card active-queue" variant="elevation" sx={{ mb: 1 }}>
+          <div className="games-radar-scan">
+            <div className="games-radar-line" />
+          </div>
+          <div style={{ flex: 1 }}>
+            <Typography component="span" sx={{ color: '#c084fc', fontWeight: 800 }}>
+              🏁 Ranked Matchmaking
+            </Typography>
+            <div style={{ fontSize: '0.8rem', marginTop: '0.15rem' }}>
+              Searching {queue.gameId} ({queue.difficulty})… <strong>{queue.waitingS}s</strong>
+            </div>
+            <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.1rem' }}>
+              Window: ±{Math.round(queue.window)} MMR
+            </div>
+          </div>
+          <Button variant="outlined" color="error" onClick={() => gamesQueueLeave()}>
+            Leave Queue
+          </Button>
+        </Card>
+      </GamesMui>
     );
   }
   return (
-    <div className="games-ranked-card">
-      <span className="games-ranked-title">🏁 Ranked</span>
-      <select value={gameId} onChange={(e) => setGameId(e.target.value)}>
-        {games.map((g) => (
-          <option key={g.id} value={g.id}>
-            {g.name}
-          </option>
-        ))}
-      </select>
-      <select value={difficulty} onChange={(e) => setDifficulty(e.target.value)}>
-        <option value="standard">standard</option>
-        <option value="hard">hard 🔒gold</option>
-        <option value="expert">expert 🔒diamond</option>
-      </select>
-      <button
-        type="button"
-        className="games-play-btn"
-        onClick={() => void findRankedMatch(gameId, difficulty)}
-      >
-        Find match
-      </button>
-      {lastRating?.tier && (
-        <span className="games-tier-chip" title={`after your last ${lastRating.game_id} game`}>
-          {lastRating.tier}
-          {lastRating.rating ? ` · ${Math.round(lastRating.rating)}` : ''}
-        </span>
-      )}
-    </div>
+    <GamesMui>
+      <Card sx={{ mb: 1 }}>
+        <CardHeader
+          title={<Typography sx={{ fontWeight: 800 }}>🏁 Ranked</Typography>}
+          action={
+            lastRating?.tier ? (
+              <Chip
+                color="primary"
+                variant="outlined"
+                label={`${lastRating.tier}${lastRating.rating ? ` · ${Math.round(lastRating.rating)}` : ''}`}
+                title={`after your last ${lastRating.game_id} game`}
+              />
+            ) : undefined
+          }
+          sx={{ pb: 0.5 }}
+        />
+        <CardContent sx={{ py: 0.5 }}>
+          <ToggleButtonGroup
+            exclusive
+            value={gameId}
+            onChange={(_e, v) => v && setGameId(v)}
+            sx={{ flexWrap: 'wrap', gap: 0.5, mb: 1 }}
+            size="small"
+          >
+            {games.map((g) => (
+              <ToggleButton key={g.id} value={g.id} sx={{ textTransform: 'none', gap: 0.5 }}>
+                <span>{GAME_ICONS[g.id] ?? '🎲'}</span>
+                {g.name}
+              </ToggleButton>
+            ))}
+          </ToggleButtonGroup>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+            <ToggleButtonGroup
+              exclusive
+              value={difficulty}
+              onChange={(_e, v) => v && setDifficulty(v)}
+              size="small"
+            >
+              <ToggleButton value="standard" sx={{ textTransform: 'none' }}>
+                ⚔️ Standard
+              </ToggleButton>
+              <ToggleButton value="hard" sx={{ textTransform: 'none' }}>
+                🔒 Hard
+              </ToggleButton>
+              <ToggleButton value="expert" sx={{ textTransform: 'none' }}>
+                💎 Expert
+              </ToggleButton>
+            </ToggleButtonGroup>
+            <Button
+              variant="contained"
+              sx={{ ml: 'auto' }}
+              onClick={() => void findRankedMatch(gameId, difficulty)}
+            >
+              Find match
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </GamesMui>
   );
 }

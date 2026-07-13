@@ -13,10 +13,10 @@ export interface ChallengeTarget {
 let pending: ChallengeTarget | null = null;
 const listeners = new Set<(target: ChallengeTarget) => void>();
 
-/** Open the hub's Play tab with a challenge draft aimed at `target`. */
+/** Open the hub (Play) with a challenge draft aimed at `target`. */
 export function requestChallengeDraft(target: ChallengeTarget): void {
   pending = target;
-  openGamesHub('play');
+  openGamesHub();
   listeners.forEach((l) => l(target));
 }
 
