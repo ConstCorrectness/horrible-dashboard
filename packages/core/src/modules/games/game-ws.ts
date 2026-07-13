@@ -782,8 +782,10 @@ export function profileGet(): void {
   sendChannel('games', 'profile_get', {});
 }
 
-export function profileSet(avatar?: string, bio?: string, handle?: string): void {
-  sendChannel('games', 'profile_set', { avatar, bio, handle });
+// Handle is derived from the OAuth username server-side and locked, so it isn't
+// settable here — only avatar and bio.
+export function profileSet(avatar?: string, bio?: string): void {
+  sendChannel('games', 'profile_set', { avatar, bio });
 }
 
 /** Clear the incoming-invite banner (after joining or dismissing it). */

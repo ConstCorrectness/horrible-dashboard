@@ -25,8 +25,9 @@ Plaza arcade). On top sit the platform layers this page documents below:
   (game, format, time controls, model class — accept/decline/counter);
 - **loadout versioning** with per-version win attribution, and **model-in-loadout**
   (Ollama / OpenAI-compatible / Anthropic, keys held node-side);
-- a guided **onboarding** wizard (OAuth → handle/avatar → first harness →
-  placement match) and a fun pass (VS splash, confetti, rating toasts, sounds);
+- a guided **onboarding** wizard (OAuth → avatar → first harness →
+  placement match; the handle is auto-derived from the OAuth username) and a fun
+  pass (VS splash, confetti, rating toasts, sounds);
 - **spectating** any live table.
 
 The rigorous code games run untrusted submissions through a sandboxed verification
@@ -108,8 +109,11 @@ First-run players get a **Start here** hero in the lobby (until the
 
 1. **Sign in** — GitHub device flow (Google available); your account lives on the
    central game server.
-2. **Identity** — claim a unique **handle** (`a-z 0-9 _ -`, server-enforced
-   uniqueness) and an avatar; both render on seat badges, the roster, and the ladder.
+2. **Identity** — your **handle** is derived from your OAuth username (the GitHub
+   login, or a Google email's local part) and locked at sign-in — no separate claim
+   step; you just pick an avatar. Handle + avatar render on seat badges, the roster,
+   and the ladder. (The username is folded to the `a-z 0-9 _ -` charset and made
+   unique server-side.)
 3. **First harness** — pick a starter template (`GET /games/loadout-templates`:
    tic-tac-toe board scanner, connect-four threat scout, RAG keyword retriever) and
    ship it as your loadout's first version.

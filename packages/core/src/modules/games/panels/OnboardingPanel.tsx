@@ -32,7 +32,6 @@ export function OnboardingPanel() {
   const [prompt, setPrompt] = useState<{ code: string; url: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
-  const [handle, setHandle] = useState('');
   const [avatar, setAvatar] = useState('🤖');
   const [templates, setTemplates] = useState<Template[]>([]);
   const [picked, setPicked] = useState<Template | null>(null);
@@ -79,7 +78,7 @@ export function OnboardingPanel() {
     if (!connected) gamesConnect(false);
     // Give the connection a beat, then set profile (the node auto-connects too).
     setTimeout(() => {
-      profileSet(avatar, undefined, handle || undefined);
+      profileSet(avatar);
       profileGet();
     }, 600);
     setStep('loadout');
@@ -169,17 +168,8 @@ export function OnboardingPanel() {
       {step === 'identity' && (
         <div className="games-onboard-card">
           <p>
-            Signed in as <strong>{name}</strong>. Pick how the arena sees you:
+            Signed in as <strong>{name}</strong> — that's your arena handle. Pick an avatar:
           </p>
-          <label>
-            handle{' '}
-            <input
-              value={handle}
-              onChange={(e) => setHandle(e.target.value.toLowerCase())}
-              placeholder="3-20 chars: a-z 0-9 _ -"
-              style={{ fontFamily: 'monospace' }}
-            />
-          </label>
           <div className="games-onboard-avatars">
             {AVATARS.map((a) => (
               <button

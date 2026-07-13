@@ -152,7 +152,7 @@ export function LobbyPanel() {
           <div>
             <strong>🚀 New here?</strong>{' '}
             <span style={{ color: 'var(--text-dim)' }}>
-              Sign in, claim a handle, ship your first harness, and play a placement match — four
+              Sign in, pick an avatar, ship your first harness, and play a placement match — four
               guided steps.
             </span>
           </div>

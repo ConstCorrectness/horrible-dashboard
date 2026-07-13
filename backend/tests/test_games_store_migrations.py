@@ -63,7 +63,36 @@ def test_v0_db_upgrades_in_place_preserving_rows() -> None:
         row = c.execute("SELECT * FROM accounts WHERE id = 'github:1'").fetchone()
         assert row["display_name"] == "Alice"
         assert row["is_bot"] == 0  # new column backfilled with its default
+        # The one-time handle backfill derives a handle from the display name.
+        assert row["handle"] == "alice"
         assert c.execute("SELECT COUNT(*) FROM results").fetchone()[0] == 1
+
+
+def test_handle_backfill_resolves_collisions_and_skips_bots() -> None:
+    # Fully migrated schema, then handleless accounts inserted straight (bypassing
+    # the sign-in path): two whose usernames fold to the same base, plus a bot.
+    store.init_db()
+    with store.get_conn() as conn:
+        conn.executemany(
+            "INSERT INTO accounts "
+            "(id, provider, subject, display_name, created_at, handle, is_bot) "
+            "VALUES (?, ?, ?, ?, ?, NULL, ?)",
+            [
+                ("github:1", "github", "1", "Mildred", 1.0, 0),
+                ("google:2", "google", "2", "mildred", 2.0, 0),
+                ("bot:ada", "bot", "ada", "Ada Bot", 3.0, 1),
+            ],
+        )
+        store._m6_backfill_handles(conn)
+        rows = {
+            r["id"]: r["handle"]
+            for r in conn.execute("SELECT id, handle FROM accounts").fetchall()
+        }
+    # Oldest-first: github:1 claims "mildred", google:2 gets the numeric suffix.
+    assert rows["github:1"] == "mildred"
+    assert rows["google:2"] == "mildred2"
+    # Bots keep their NULL handle (they fall back to display_name in the UI).
+    assert rows["bot:ada"] is None
 
 
 def test_init_db_is_idempotent() -> None:

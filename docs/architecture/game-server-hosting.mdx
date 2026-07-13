@@ -99,8 +99,11 @@ tracked in a `schema_meta.version` row; `init_db()` (run at startup) replays any
 migrations past the DB's current version, each in its own transaction. New columns
 are added with a defaulted `ALTER TABLE`, new tables with `CREATE TABLE IF NOT
 EXISTS` — never a destructive change — so **deploying a newer server upgrades the
-live volume in place**. Nodes feature-detect what the server supports via the
-`caps` list on `authed`, so a server can always deploy ahead of node releases.
+live volume in place**. A migration may also backfill data (e.g. `_m6` derives a
+locked **handle** from each pre-existing account's OAuth username, oldest-first with
+numeric-suffix collision resolution, skipping bots). Nodes feature-detect what the
+server supports via the `caps` list on `authed`, so a server can always deploy ahead
+of node releases.
 
 Because a migration edits the live SQLite file, **back it up before a deploy that
 bumps the schema version**:

@@ -195,12 +195,43 @@ def _m5_task_bank(conn: sqlite3.Connection) -> None:
     )
 
 
+def _m6_backfill_handles(conn: sqlite3.Connection) -> None:
+    """One-time backfill: give every human account that predates auto-handles a
+    handle derived from its OAuth username. Only `display_name` is persisted (no
+    stored email), and for GitHub that column *is* the login; for Google it's the
+    profile name (or already the email local part), so we fold `display_name` into
+    the handle charset. Oldest-first for stable numbering; collisions get a numeric
+    suffix. Bots keep their NULL handle (they fall back to display_name in the UI)."""
+    rows = conn.execute(
+        "SELECT id, display_name FROM accounts "
+        "WHERE handle IS NULL AND is_bot = 0 ORDER BY created_at, id"
+    ).fetchall()
+    taken = {
+        r["handle"]
+        for r in conn.execute(
+            "SELECT handle FROM accounts WHERE handle IS NOT NULL"
+        ).fetchall()
+    }
+    for row in rows:
+        base = _sanitize_handle(str(row["display_name"] or row["id"]))
+        candidate, n = base, 2
+        while candidate in taken:
+            suffix = str(n)
+            candidate = f"{base[: 20 - len(suffix)]}{suffix}"
+            n += 1
+        conn.execute(
+            "UPDATE accounts SET handle = ? WHERE id = ?", (candidate, row["id"])
+        )
+        taken.add(candidate)
+
+
 MIGRATIONS: list[Any] = [
     _m1_identity_and_series,
     _m2_replays,
     _m3_ladder,
     _m4_unique_handles,
     _m5_task_bank,
+    _m6_backfill_handles,
 ]
 
 
@@ -334,6 +365,39 @@ def set_handle(account_id: str, handle: str) -> str:
         except sqlite3.IntegrityError:
             return "taken"
     return "ok"
+
+
+def _sanitize_handle(raw: str) -> str:
+    """Fold a raw OAuth username (GitHub login / Google email local part) into the
+    handle charset: lowercase, non-`[a-z0-9_-]` runs become a single `-`, trimmed,
+    then padded/truncated to the 3-20 length HANDLE_RE requires."""
+    import re
+
+    base = re.sub(r"[^a-z0-9_-]+", "-", raw.strip().lower()).strip("-_")
+    if len(base) < 3:
+        base = (base + "-player")[:20] if base else "player"
+    return base[:20]
+
+
+def ensure_handle(account_id: str, preferred: str) -> str:
+    """Lock in an auto-derived handle from the account's OAuth username.
+
+    Idempotent and stable: if the account already has a handle, it's returned
+    unchanged (handles are locked once set). Otherwise `preferred` is sanitized and
+    claimed; on a collision (two providers can share a username, e.g. Google email
+    local parts) a numeric suffix is appended until one is free.
+    """
+    account = get_account(account_id)
+    if account and account.get("handle"):
+        return str(account["handle"])
+    base = _sanitize_handle(preferred)
+    candidate = base
+    for n in range(2, 1000):
+        if set_handle(account_id, candidate) == "ok":
+            return candidate
+        suffix = str(n)
+        candidate = f"{base[: 20 - len(suffix)]}{suffix}"
+    return base
 
 
 # ---- ratings ---------------------------------------------------------------

@@ -53,6 +53,8 @@ def test_finish_github_creates_account_and_signs_jwt() -> None:
     assert claims["sub"] == "github:99"
     # The account is now persisted for the leaderboard.
     assert store.get_account("github:99")["display_name"] == "octocat"
+    # The handle is auto-derived and locked from the GitHub login.
+    assert store.get_account("github:99")["handle"] == "octocat"
 
 
 def test_finish_google_creates_account_and_signs_jwt() -> None:
@@ -63,6 +65,8 @@ def test_finish_google_creates_account_and_signs_jwt() -> None:
     claims = auth.verify_jwt(out["token"])
     assert claims["sub"] == "google:108"
     assert store.get_account("google:108")["display_name"] == "Mildred"
+    # Handle comes from the email's local part, not the display name.
+    assert store.get_account("google:108")["handle"] == "mildred-bakes"
 
 
 def test_finish_google_falls_back_to_email_local_part() -> None:
@@ -70,6 +74,24 @@ def test_finish_google_falls_back_to_email_local_part() -> None:
     assert out["account"]["display_name"] == "bosun.salt"
     # Two different Gmail accounts are two distinct players.
     assert out["account"]["id"] != auth._finish_google({"id": "108"})["account"]["id"]
+
+
+def test_ensure_handle_is_locked_after_first_sign_in() -> None:
+    # A GitHub user renaming their login doesn't rewrite an already-locked handle.
+    auth._finish_github({"id": 500, "login": "first_name"})
+    auth._finish_github({"id": 500, "login": "renamed"})
+    assert store.get_account("github:500")["handle"] == "first_name"
+
+
+def test_ensure_handle_resolves_collisions() -> None:
+    # Two Google accounts with the same email local part get distinct handles.
+    auth._finish_google({"id": "600", "email": "sam@gmail.com"})
+    auth._finish_google({"id": "601", "email": "sam@example.com"})
+    handles = {
+        store.get_account("google:600")["handle"],
+        store.get_account("google:601")["handle"],
+    }
+    assert handles == {"sam", "sam2"}
 
 
 class MockWS:
@@ -100,7 +122,9 @@ def test_player_conn_handles_auth_error(monkeypatch) -> None:
     from backend.modules.games.client import _PlayerConn
 
     async def go() -> None:
-        mock_ws = MockWS([json.dumps({"type": "error", "code": "auth", "message": "invalid token"})])
+        mock_ws = MockWS(
+            [json.dumps({"type": "error", "code": "auth", "message": "invalid token"})]
+        )
 
         async def mock_ws_connect(url):
             return mock_ws
@@ -108,10 +132,10 @@ def test_player_conn_handles_auth_error(monkeypatch) -> None:
         monkeypatch.setattr("backend.modules.games.client.ws_connect", mock_ws_connect)
 
         conn = _PlayerConn("ws://dummy", "invalid-token", None, lambda _msg: None)
-        
+
         with pytest.raises(ValueError) as excinfo:
             await conn.start()
-        
+
         assert "Game server authentication failed" in str(excinfo.value)
         assert "invalid token" in str(excinfo.value)
         assert mock_ws.closed
@@ -133,10 +157,10 @@ def test_player_conn_handles_conn_close(monkeypatch) -> None:
         monkeypatch.setattr("backend.modules.games.client.ws_connect", mock_ws_connect)
 
         conn = _PlayerConn("ws://dummy", "some-token", None, lambda _msg: None)
-        
+
         with pytest.raises(ValueError) as excinfo:
             await conn.start()
-        
+
         assert "Connection closed before authentication completed" in str(excinfo.value)
         assert mock_ws.closed
 

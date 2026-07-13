@@ -174,8 +174,11 @@ async def github_device_poll(device_code: str) -> dict[str, Any]:
 def _finish_github(profile: dict[str, Any]) -> dict[str, Any]:
     """Turn a GitHub profile into an account + our JWT (pure, so it's unit-testable)."""
     subject = str(profile.get("id"))
-    display_name = str(profile.get("login") or profile.get("name") or f"gh-{subject}")
+    login = str(profile.get("login") or "")
+    display_name = login or str(profile.get("name") or f"gh-{subject}")
     account_id = store.upsert_account("github", subject, display_name)
+    # The GitHub login *is* the handle — it's globally unique, so no collision dance.
+    store.ensure_handle(account_id, login or display_name)
     token = issue_jwt(account_id, display_name)
     return {"token": token, "account": {"id": account_id, "display_name": display_name}}
 
@@ -289,9 +292,11 @@ def _finish_google(profile: dict[str, Any]) -> dict[str, Any]:
     Gmail accounts read naturally on the ladder."""
     subject = str(profile.get("id"))
     email = str(profile.get("email") or "")
-    display_name = str(
-        profile.get("name") or (email.split("@")[0] if email else "") or f"g-{subject}"
-    )
+    local_part = email.split("@")[0] if email else ""
+    display_name = str(profile.get("name") or local_part or f"g-{subject}")
     account_id = store.upsert_account("google", subject, display_name)
+    # Google has no username, so the handle is the email's local part (before @);
+    # these aren't globally unique, so ensure_handle resolves collisions.
+    store.ensure_handle(account_id, local_part or display_name)
     token = issue_jwt(account_id, display_name)
     return {"token": token, "account": {"id": account_id, "display_name": display_name}}

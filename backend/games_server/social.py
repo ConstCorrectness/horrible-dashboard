@@ -327,20 +327,8 @@ class SocialHub:
             avatar=str(msg["avatar"])[:8] if msg.get("avatar") else None,
             bio=str(msg["bio"])[:280] if msg.get("bio") is not None else None,
         )
-        if msg.get("handle"):
-            result = store.set_handle(session.account_id, str(msg["handle"]))
-            if result != "ok":
-                await self._send(
-                    session,
-                    models.error(
-                        "handle",
-                        (
-                            "that handle is taken"
-                            if result == "taken"
-                            else "handles are 3-20 chars: a-z 0-9 _ -"
-                        ),
-                    ),
-                )
+        # Handle is derived from the OAuth username at sign-in and locked — a client
+        # `handle` field (if any) is ignored here, not claimed.
         presence = self._presence.get(session.account_id)
         if presence is not None and msg.get("avatar"):
             presence.avatar = str(msg["avatar"])[:8]
