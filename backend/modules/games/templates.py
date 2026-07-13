@@ -94,6 +94,88 @@ def run(args, obs):
 '''
 
 
+_TTT_FORKS = '''\
+def run(args, obs):
+    """Find fork cells: empty squares that would create TWO winning threats at
+    once — mine to play, the opponent's to deny."""
+    board = obs.get("board") or [None] * 9
+    lines = [(0,1,2),(3,4,5),(6,7,8),(0,3,6),(1,4,7),(2,5,8),(0,4,8),(2,4,6)]
+    me = "X" if board.count("X") == board.count("O") else "O"
+    them = "O" if me == "X" else "X"
+
+    def threats(mark, cell):
+        count = 0
+        for line in lines:
+            if cell not in line:
+                continue
+            cells = [mark if i == cell else board[i] for i in line]
+            if cells.count(mark) == 2 and cells.count(None) == 1:
+                count += 1
+        return count
+
+    empty = [i for i in range(9) if board[i] is None]
+    return {
+        "my_forks": [i for i in empty if threats(me, i) >= 2],
+        "their_forks": [i for i in empty if threats(them, i) >= 2],
+    }
+'''
+
+_HOLDEM_POT_ODDS = '''\
+def run(args, obs):
+    """Pot odds for calling `to_call` chips: the equity needed to break even."""
+    to_call = float(args.get("to_call") or 0)
+    pot = float(obs.get("pot") or 0)
+    if to_call <= 0:
+        return {"break_even_equity": 0.0, "note": "nothing to call - checking is free"}
+    return {
+        "break_even_equity": round(to_call / (pot + to_call), 3),
+        "pot_after_call": pot + to_call,
+        "note": "worth calling only if your equity beats break_even_equity",
+    }
+'''
+
+_HOLDEM_STRENGTH = '''\
+def run(args, obs):
+    """A rough read of my hand: preflop hole-card score (4-40), postflop the
+    made-hand category from my hole cards + the board. Heuristic, not a solver."""
+    from collections import Counter
+    ranks = "23456789TJQKA"
+    hole = obs.get("hole") or []
+    board = obs.get("board") or []
+    vals = sorted((ranks.index(c[0]) + 2 for c in hole), reverse=True)
+    suited = len(hole) == 2 and hole[0][1] == hole[1][1]
+    if not board:
+        score = vals[0] + vals[1]
+        if vals[0] == vals[1]:
+            score += 12
+        if suited:
+            score += 3
+        if 1 <= vals[0] - vals[1] <= 2:
+            score += 2
+        return {"street": "preflop", "score_4_to_40": score,
+                "pocket_pair": vals[0] == vals[1], "suited": suited}
+    cards = hole + board
+    counts = Counter(c[0] for c in cards).most_common()
+    top = counts[0][1]
+    second = counts[1][1] if len(counts) > 1 else 0
+    flush = max(Counter(c[1] for c in cards).values()) >= 5
+    uniq = sorted({ranks.index(c[0]) + 2 for c in cards})
+    if 14 in uniq:
+        uniq = [1] + uniq  # the wheel: ace plays low too
+    straight = any(all(v + k in uniq for k in range(5)) for v in uniq)
+    if top == 4: category = "four of a kind"
+    elif top == 3 and second >= 2: category = "full house"
+    elif flush: category = "flush"
+    elif straight: category = "straight"
+    elif top == 3: category = "three of a kind"
+    elif top == 2 and second == 2: category = "two pair"
+    elif top == 2: category = "pair"
+    else: category = "high card"
+    return {"street": obs.get("street"), "category": category,
+            "board_cards": len(board)}
+'''
+
+
 def loadout_templates() -> list[dict[str, Any]]:
     """Template descriptors: `{id, game_id, title, blurb, loadout}` (wire shape)."""
     return [
@@ -160,6 +242,77 @@ def loadout_templates() -> list[dict[str, Any]]:
                         "parameters": {},
                         "required": [],
                     }
+                ],
+                "model": None,
+            },
+        },
+        {
+            "id": "ttt-tactician",
+            "game_id": "tictactoe",
+            "title": "Tactician — scanner + fork finder",
+            "blurb": "TWO tools working together: the scanner for wins/blocks, a fork finder for double threats — your context tells the model which to trust first.",
+            "loadout": {
+                "game_id": "tictactoe",
+                "context": (
+                    "Call board_scanner first. If win_at is a number, choose that "
+                    "cell. Else if block_at is a number, choose that. Otherwise "
+                    "call fork_finder: play any cell in my_forks; else block a "
+                    "cell in their_forks. Failing all that, prefer the center "
+                    "(4), then corners (0, 2, 6, 8)."
+                ),
+                "tools": [
+                    {
+                        "name": "board_scanner",
+                        "description": "Returns win_at (your winning cell) and block_at (the opponent's threat) for the current board.",
+                        "code": _TTT_SCANNER,
+                        "parameters": {},
+                        "required": [],
+                    },
+                    {
+                        "name": "fork_finder",
+                        "description": "Returns my_forks (cells creating two threats at once) and their_forks (fork cells to deny the opponent).",
+                        "code": _TTT_FORKS,
+                        "parameters": {},
+                        "required": [],
+                    },
+                ],
+                "model": None,
+            },
+        },
+        {
+            "id": "holdem-calculator",
+            "game_id": "holdem",
+            "title": "Pot odds + hand strength",
+            "blurb": "Two hold'em tools — one takes model-supplied arguments (pot_odds needs to_call), one reads the observation. Shows how `parameters` work.",
+            "loadout": {
+                "game_id": "holdem",
+                "context": (
+                    "Call hand_strength first. If the observation shows to_call > "
+                    "0, call pot_odds with that exact to_call amount. Raise with "
+                    "two pair or better (or a preflop score of 20+); call when "
+                    "your hand clearly beats break_even_equity; otherwise fold. "
+                    "With no bet to face, check weak hands and bet strong ones."
+                ),
+                "tools": [
+                    {
+                        "name": "hand_strength",
+                        "description": "Rates my hand: preflop hole-card score, postflop the made-hand category from hole + board.",
+                        "code": _HOLDEM_STRENGTH,
+                        "parameters": {},
+                        "required": [],
+                    },
+                    {
+                        "name": "pot_odds",
+                        "description": "Break-even equity for calling a bet. Pass the to_call amount from the observation.",
+                        "code": _HOLDEM_POT_ODDS,
+                        "parameters": {
+                            "to_call": {
+                                "type": "number",
+                                "description": "the chips you must put in to call (obs.to_call)",
+                            }
+                        },
+                        "required": ["to_call"],
+                    },
                 ],
                 "model": None,
             },

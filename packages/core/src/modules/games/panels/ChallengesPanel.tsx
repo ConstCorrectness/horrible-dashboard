@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { claimChallengeFocus, onChallengeFocus } from '../challenge-focus';
-import { gamesRunChallenges, useGames } from '../game-ws';
+import { toastsStore } from '../../../toasts';
+import { ensureConnected, gamesRunChallenges, useGames } from '../game-ws';
 import {
   fetchChallengeLeaderboard,
   fetchGamesCatalog,
@@ -16,7 +17,7 @@ import {
  * game's challenge set to run from the catalog.
  */
 export function ChallengesPanel() {
-  const { connected, challengeRunning, challengeReport } = useGames();
+  const { challengeRunning, challengeReport } = useGames();
   const [games, setGames] = useState<GameCatalogEntry[]>([]);
   const [gameId, setGameId] = useState('tictactoe');
   const [board, setBoard] = useState<ChallengeRow[]>([]);
@@ -68,17 +69,16 @@ export function ChallengesPanel() {
         </select>
         <button
           type="button"
-          disabled={!connected || challengeRunning}
-          onClick={() => gamesRunChallenges(gameId)}
-          title={connected ? '' : 'Connect in the lobby first'}
+          disabled={challengeRunning}
+          onClick={() =>
+            void ensureConnected(false)
+              .then(() => gamesRunChallenges(gameId))
+              .catch((e: Error) => toastsStore.add('error', 'Games', e.message))
+          }
         >
           {challengeRunning ? 'Running…' : 'Run my harness'}
         </button>
       </div>
-
-      {!connected && (
-        <div style={{ color: 'var(--text-dim)' }}>Connect in the lobby to run challenges.</div>
-      )}
 
       {challengeReport && (
         <div

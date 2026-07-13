@@ -1392,3 +1392,90 @@
     opacity: 0.2;
   }
 }
+
+/* ---- the Games hub (tab strip + connection chip) ---------------------------- */
+
+.games-hub-tabs {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.35rem;
+}
+
+.games-hub-tab {
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 6px;
+  padding: 0.25rem 0.6rem;
+  cursor: pointer;
+  color: var(--text-dim);
+}
+
+.games-hub-tab:hover {
+  border-color: var(--border);
+}
+
+.games-hub-tab.active {
+  color: inherit;
+  font-weight: 700;
+  border-color: var(--accent, #6ea8fe);
+}
+
+.games-conn-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+}
+
+.games-conn-menu {
+  position: relative;
+}
+
+.games-conn-menu > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 0 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.games-conn-menu[open] > .games-conn-menu-body {
+  position: absolute;
+  z-index: 30;
+  top: 1.4rem;
+  left: 0;
+  background: var(--bg, #111);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 14rem;
+}
+
+/* ---- harness editor folds (tool cards + advanced) --------------------------- */
+
+.games-tool-card > summary,
+.games-advanced > summary,
+.games-dryrun-trace > summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.2rem;
+}
+
+.games-tool-card > summary .games-tool-status {
+  margin-left: auto;
+  font-size: 0.72rem;
+}
+
+.games-tool-summary-desc {
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 18rem;
+}

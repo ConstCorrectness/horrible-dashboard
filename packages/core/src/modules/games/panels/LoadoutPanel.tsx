@@ -4,6 +4,7 @@ import { apiDelete, apiGet, apiPost, apiPut } from '../../../api';
 import { registry } from '../../../registry';
 import type { EditorService } from '../../editor/service';
 import { fetchGamesCatalog } from '../games-api';
+import { DryRunSection } from './DryRunSection';
 
 /** The editor's buffer surface, looked up lazily (the editor module registers it
  * at load). Undefined only if the editor module never loaded — the harness panel
@@ -72,6 +73,171 @@ function newTool(n: number): ToolDef {
     parameters: {},
     required: [],
   };
+}
+
+// Mirrors backend/modules/games/loadout.py `tool_name_error` — same rule, checked
+// live in the editor so a bad name is flagged before Save.
+const TOOL_NAME_RE = /^[A-Za-z_][A-Za-z0-9_.-]*$/;
+
+function toolNameError(name: string, taken: string[]): string | null {
+  if (!name) return 'tool name is empty';
+  if (!TOOL_NAME_RE.test(name))
+    return 'must start with a letter or _ and use only letters, digits, _ . -';
+  if (name.startsWith('game.')) return 'the game.* namespace is reserved for built-in tools';
+  if (taken.includes(name)) return `duplicate tool name "${name}"`;
+  return null;
+}
+
+const PARAM_TYPES = ['string', 'number', 'boolean', 'object', 'array'];
+
+/** Row editor for a tool's `parameters`/`required` — the argument schema the
+ * MODEL fills in when calling the tool (`args` in `run(args, obs)`). Edits patch
+ * only `type`/`description` so hand-authored extras (e.g. `enum`) survive. */
+function ParamsEditor({
+  tool,
+  onChange,
+}: {
+  tool: ToolDef;
+  onChange: (patch: Partial<ToolDef>) => void;
+}) {
+  const entries = Object.entries(tool.parameters) as [string, Record<string, unknown>][];
+
+  const rename = (oldName: string, newName: string) => {
+    const parameters: Record<string, unknown> = {};
+    for (const [k, v] of entries) parameters[k === oldName ? newName : k] = v;
+    onChange({
+      parameters,
+      required: tool.required.map((r) => (r === oldName ? newName : r)),
+    });
+  };
+
+  const patchParam = (name: string, patch: Record<string, unknown>) => {
+    const current = (tool.parameters[name] ?? {}) as Record<string, unknown>;
+    onChange({ parameters: { ...tool.parameters, [name]: { ...current, ...patch } } });
+  };
+
+  const remove = (name: string) => {
+    const parameters = { ...tool.parameters };
+    delete parameters[name];
+    onChange({ parameters, required: tool.required.filter((r) => r !== name) });
+  };
+
+  const setRequired = (name: string, on: boolean) => {
+    const rest = tool.required.filter((r) => r !== name);
+    onChange({ required: on ? [...rest, name] : rest });
+  };
+
+  const add = () => {
+    let n = entries.length + 1;
+    while (`arg_${n}` in tool.parameters) n += 1;
+    patchParam(`arg_${n}`, { type: 'string', description: '' });
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+        <span style={labelStyle}>Arguments the model passes (args)</span>
+        <button type="button" onClick={add} style={{ fontSize: '0.72rem' }}>
+          + arg
+        </button>
+        {entries.length === 0 && (
+          <span style={{ color: 'var(--text-dim)', fontSize: '0.72rem' }}>
+            none — the model calls this tool bare
+          </span>
+        )}
+      </div>
+      {entries.map(([name, spec], i) => (
+        <div key={i} style={{ display: 'flex', gap: '0.3rem', alignItems: 'center' }}>
+          <input
+            value={name}
+            onChange={(e) => rename(name, e.target.value)}
+            placeholder="arg name"
+            style={{ fontFamily: 'monospace', flex: '0 0 8rem' }}
+          />
+          <select
+            value={String(spec.type ?? 'string')}
+            onChange={(e) => patchParam(name, { type: e.target.value })}
+          >
+            {PARAM_TYPES.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+          <input
+            value={String(spec.description ?? '')}
+            onChange={(e) => patchParam(name, { description: e.target.value })}
+            placeholder="what the model should pass here"
+            style={{ flex: 1 }}
+          />
+          <label
+            style={{ display: 'flex', alignItems: 'center', gap: '0.2rem', fontSize: '0.72rem' }}
+          >
+            <input
+              type="checkbox"
+              checked={tool.required.includes(name)}
+              onChange={(e) => setRequired(name, e.target.checked)}
+            />
+            required
+          </label>
+          <button type="button" onClick={() => remove(name)}>
+            ✕
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Static explainer: how the loadout actually drives a turn. Content mirrors
+ * backend/modules/games/policy.py — update both if the loop changes. */
+function HarnessExplainer() {
+  return (
+    <details className="games-harness-help" style={{ fontSize: '0.8rem' }}>
+      <summary style={{ cursor: 'pointer' }}>ℹ️ How the harness works</summary>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '0.35rem',
+          padding: '0.4rem 0 0.2rem 1rem',
+          color: 'var(--text-dim)',
+        }}
+      >
+        <div>
+          <strong>The loop.</strong> On your agent's turn the server sends an observation and the
+          legal actions. Your <em>strategy context</em> goes into the model's system prompt, and
+          every tool below is offered to it. The model may call your tools for up to{' '}
+          <strong>6 rounds</strong> to analyze the position, then must commit a move with the
+          built-in <code>game.chooseAction</code>. In a real match any failure quietly falls back to
+          a random legal move — the Dry run below shows the failure instead.
+        </div>
+        <div>
+          <strong>Multiple tools are encouraged.</strong> Every tool is advertised on every round
+          and the model picks which (if any) to call — it can chain them, e.g. a scanner first, then
+          a fork finder. The model won't know your intended order: teach it in the context
+          (&quot;call X first, then Y&quot;).
+        </div>
+        <div>
+          <strong>The contract.</strong> Each tool is Python defining <code>run(args, obs)</code>:{' '}
+          <code>args</code> = the arguments the model passed, <code>obs</code> = this seat's
+          observation. Return anything JSON-serializable; raising shows the model{' '}
+          <code>{'{"error": ...}'}</code>. A tool that doesn't compile is simply absent in a match —
+          Save reports it here.
+        </div>
+        <div>
+          <strong>Arguments.</strong> The &quot;args&quot; rows declare what the model fills in when
+          calling (name, type, description; <em>required</em> makes it mandatory). No rows = the
+          tool is called bare and should read everything from <code>obs</code>.
+        </div>
+        <div>
+          <strong>The model.</strong> Each harness can bring its own model (part of the skill — the
+          ladder records it), or borrow the agent module's configured model (&quot;agent
+          default&quot;).
+        </div>
+      </div>
+    </details>
+  );
 }
 
 /** Which model drives this harness — part of the loadout, so part of the skill.
@@ -207,6 +373,13 @@ export function LoadoutPanel() {
   const [versions, setVersions] = useState<VersionInfo[]>([]);
   const [stats, setStats] = useState<VersionStats>({});
   const [versionLabel, setVersionLabel] = useState('');
+  // Per-tool problems from the last Save (`/games/loadout/validate`): a broken
+  // tool is silently absent in a live match, so surface it here instead.
+  const [diagnostics, setDiagnostics] = useState<Record<string, string>>({});
+  // Which tool cards are expanded (index-aligned with loadout.tools; adjusted on
+  // add/delete). Loaded tools start collapsed; new tools open; a Save that finds
+  // problems force-opens the offenders.
+  const [openTools, setOpenTools] = useState<boolean[]>([]);
 
   const loadVersions = useCallback(() => {
     apiGet<{ versions: VersionInfo[]; stats: VersionStats }>(`/games/loadout/${gameId}/versions`)
@@ -232,9 +405,11 @@ export function LoadoutPanel() {
 
   useEffect(() => {
     setStatus('loading…');
+    setDiagnostics({});
     apiGet<LoadoutModel>(`/games/loadout/${gameId}`)
       .then((l) => {
         setLoadout(l);
+        setOpenTools(l.tools.map(() => false));
         setStatus('');
       })
       .catch((e) => setStatus(String(e)));
@@ -252,7 +427,25 @@ export function LoadoutPanel() {
     setStatus('saving…');
     try {
       await apiPut(`/games/loadout/${gameId}`, { ...loadout, game_id: gameId });
-      setStatus('saved ✓');
+      // Save never blocks on problems (WIP harnesses are normal; matches degrade
+      // gracefully), but the diagnostics land next to each tool.
+      let suffix = '';
+      try {
+        const v = await apiPost<{
+          ok: boolean;
+          tools: { name: string; ok: boolean; error: string | null }[];
+        }>('/games/loadout/validate', { ...loadout, game_id: gameId });
+        const bad: Record<string, string> = {};
+        for (const t of v.tools) if (!t.ok && t.error) bad[t.name] = t.error;
+        setDiagnostics(bad);
+        // A collapsed card hides its problem — force the offenders open.
+        setOpenTools((prev) => loadout.tools.map((t, i) => prev[i] || t.name in bad));
+        const n = Object.keys(bad).length;
+        if (n > 0) suffix = ` — ${n} tool${n > 1 ? 's have' : ' has'} problems`;
+      } catch {
+        setDiagnostics({});
+      }
+      setStatus(`saved ✓${suffix}`);
       loadVersions();
     } catch (e) {
       setStatus(String(e));
@@ -365,48 +558,7 @@ export function LoadoutPanel() {
         <span style={{ color: 'var(--text-dim)' }}>{status}</span>
       </div>
 
-      {/* Version bar — the harness progression loop: play, study, branch, requeue. */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
-        <span style={labelStyle}>Version</span>
-        <select value={active?.id ?? ''} onChange={(e) => void activate(e.target.value)}>
-          {versions.length === 0 && <option value="">v1 (unsaved)</option>}
-          {versions.map((v) => {
-            const s = stats[v.id];
-            const record = s ? ` — ${s.win}W/${s.loss}L/${s.draw}D` : '';
-            return (
-              <option key={v.id} value={v.id}>
-                {v.label}
-                {record}
-              </option>
-            );
-          })}
-        </select>
-        <input
-          value={versionLabel}
-          onChange={(e) => setVersionLabel(e.target.value)}
-          placeholder="new version label"
-          style={{ flex: '0 0 11rem' }}
-        />
-        <button type="button" onClick={() => void saveAsVersion()} title="Branch this harness">
-          Save as new version
-        </button>
-        {active && versions.length > 1 && (
-          <button
-            type="button"
-            onClick={() => void removeVersion(active.id)}
-            title="Delete this version"
-          >
-            🗑
-          </button>
-        )}
-        {active && stats[active.id] && (
-          <span className="games-tier-chip" title="this version's record">
-            {stats[active.id].win}W · {stats[active.id].loss}L · {stats[active.id].draw}D
-          </span>
-        )}
-      </div>
-
-      <ModelSection model={loadout.model} onChange={(m) => update({ model: m })} />
+      <HarnessExplainer />
 
       <label>
         <span style={labelStyle}>Strategy context (injected into the agent's system prompt)</span>
@@ -419,96 +571,203 @@ export function LoadoutPanel() {
         />
       </label>
 
-      <div>
-        <span style={labelStyle}>Sample observation (JSON) — for testing tools</span>
-        <textarea
-          value={sampleObs}
-          onChange={(e) => setSampleObs(e.target.value)}
-          spellCheck={false}
-          style={{
-            width: '100%',
-            minHeight: '2.2rem',
-            fontFamily: 'monospace',
-            fontSize: '0.75rem',
-          }}
-        />
-      </div>
-
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <strong>Custom tools</strong>
         <button
           type="button"
-          onClick={() => update({ tools: [...loadout.tools, newTool(loadout.tools.length + 1)] })}
+          onClick={() => {
+            update({ tools: [...loadout.tools, newTool(loadout.tools.length + 1)] });
+            setOpenTools((prev) => [...prev, true]);
+          }}
         >
           + Add tool
         </button>
       </div>
 
-      {loadout.tools.map((t, i) => (
-        <div
-          key={i}
-          style={{
-            border: '1px solid var(--border)',
-            borderRadius: '4px',
-            padding: '0.5rem',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '0.35rem',
-          }}
-        >
-          <div style={{ display: 'flex', gap: '0.4rem' }}>
-            <input
-              value={t.name}
-              onChange={(e) => updateTool(i, { name: e.target.value })}
-              placeholder="tool_name"
-              style={{ fontFamily: 'monospace', flex: '0 0 12rem' }}
-            />
-            <input
-              value={t.description}
-              onChange={(e) => updateTool(i, { description: e.target.value })}
-              placeholder="description"
-              style={{ flex: 1 }}
-            />
-            <button
-              type="button"
-              onClick={() => update({ tools: loadout.tools.filter((_, j) => j !== i) })}
-            >
-              ✕
-            </button>
-          </div>
-          <textarea
-            value={t.code}
-            onChange={(e) => updateTool(i, { code: e.target.value })}
-            spellCheck={false}
-            style={{
-              width: '100%',
-              minHeight: '6rem',
-              fontFamily: 'monospace',
-              fontSize: '0.75rem',
+      {loadout.tools.map((t, i) => {
+        const nameError = toolNameError(
+          t.name,
+          loadout.tools.slice(0, i).map((x) => x.name),
+        );
+        const diagnostic = diagnostics[t.name];
+        const problem = nameError ?? diagnostic;
+        return (
+          <details
+            key={i}
+            className="games-tool-card"
+            open={openTools[i] ?? false}
+            onToggle={(e) => {
+              const open = (e.target as HTMLDetailsElement).open;
+              setOpenTools((prev) => prev.map((o, j) => (j === i ? open : o)));
             }}
-          />
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <button type="button" onClick={() => test(i)}>
-              Test
-            </button>
-            {editor() && (
-              <>
-                <button type="button" onClick={() => void editInEditor(i)}>
-                  Edit in editor ↗
+            style={{
+              border: '1px solid var(--border)',
+              borderRadius: '4px',
+              padding: '0.15rem 0.5rem 0.35rem',
+            }}
+          >
+            <summary>
+              <code>{t.name || '(unnamed tool)'}</code>
+              {t.description && <span className="games-tool-summary-desc">{t.description}</span>}
+              <span
+                className="games-tool-status"
+                title={problem ?? 'no problems found at the last save'}
+                style={problem ? { color: '#e5534b' } : { color: 'var(--text-dim)' }}
+              >
+                {problem ? '⚠' : '✓'}
+              </span>
+            </summary>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+              <div style={{ display: 'flex', gap: '0.4rem' }}>
+                <input
+                  value={t.name}
+                  onChange={(e) => updateTool(i, { name: e.target.value })}
+                  placeholder="tool_name"
+                  style={{
+                    fontFamily: 'monospace',
+                    flex: '0 0 12rem',
+                    ...(nameError ? { border: '1px solid #e5534b' } : {}),
+                  }}
+                />
+                <input
+                  value={t.description}
+                  onChange={(e) => updateTool(i, { description: e.target.value })}
+                  placeholder="description"
+                  style={{ flex: 1 }}
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    update({ tools: loadout.tools.filter((_, j) => j !== i) });
+                    setOpenTools((prev) => prev.filter((_, j) => j !== i));
+                  }}
+                >
+                  ✕
                 </button>
-                {editorUris[`${gameId}:${t.name}`] && (
-                  <button type="button" onClick={() => void pullFromEditor(i)}>
-                    ↙ Pull
-                  </button>
+              </div>
+              {nameError && (
+                <div style={{ color: '#e5534b', fontSize: '0.72rem' }}>⚠ {nameError}</div>
+              )}
+              {!nameError && diagnostic && (
+                <div style={{ color: '#e5534b', fontSize: '0.72rem' }}>⚠ {diagnostic}</div>
+              )}
+              <textarea
+                value={t.code}
+                onChange={(e) => updateTool(i, { code: e.target.value })}
+                spellCheck={false}
+                style={{
+                  width: '100%',
+                  minHeight: '6rem',
+                  fontFamily: 'monospace',
+                  fontSize: '0.75rem',
+                }}
+              />
+              <ParamsEditor tool={t} onChange={(patch) => updateTool(i, patch)} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <button type="button" onClick={() => test(i)}>
+                  Test
+                </button>
+                {editor() && (
+                  <>
+                    <button type="button" onClick={() => void editInEditor(i)}>
+                      Edit in editor ↗
+                    </button>
+                    {editorUris[`${gameId}:${t.name}`] && (
+                      <button type="button" onClick={() => void pullFromEditor(i)}>
+                        ↙ Pull
+                      </button>
+                    )}
+                  </>
                 )}
-              </>
+                <code style={{ color: 'var(--text-dim)', fontSize: '0.72rem' }}>
+                  {results[i] ?? ''}
+                </code>
+              </div>
+            </div>
+          </details>
+        );
+      })}
+
+      <DryRunSection
+        gameId={gameId}
+        loadout={loadout}
+        engineGames={games.filter((g) => g.id !== 'town' && g.id !== 'default')}
+      />
+
+      {/* Everything that isn't day-to-day authoring lives behind one fold. */}
+      <details className="games-advanced">
+        <summary>
+          Advanced —{' '}
+          <span style={{ color: 'var(--text-dim)' }}>
+            model:{' '}
+            {loadout.model?.model
+              ? `${loadout.model.provider} · ${loadout.model.model}`
+              : 'agent default'}{' '}
+            · version: {active?.label ?? 'v1 (unsaved)'}
+          </span>
+        </summary>
+        <div
+          style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', paddingTop: '0.4rem' }}
+        >
+          {/* Version bar — the harness progression loop: play, study, branch, requeue. */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+            <span style={labelStyle}>Version</span>
+            <select value={active?.id ?? ''} onChange={(e) => void activate(e.target.value)}>
+              {versions.length === 0 && <option value="">v1 (unsaved)</option>}
+              {versions.map((v) => {
+                const s = stats[v.id];
+                const record = s ? ` — ${s.win}W/${s.loss}L/${s.draw}D` : '';
+                return (
+                  <option key={v.id} value={v.id}>
+                    {v.label}
+                    {record}
+                  </option>
+                );
+              })}
+            </select>
+            <input
+              value={versionLabel}
+              onChange={(e) => setVersionLabel(e.target.value)}
+              placeholder="new version label"
+              style={{ flex: '0 0 11rem' }}
+            />
+            <button type="button" onClick={() => void saveAsVersion()} title="Branch this harness">
+              Save as new version
+            </button>
+            {active && versions.length > 1 && (
+              <button
+                type="button"
+                onClick={() => void removeVersion(active.id)}
+                title="Delete this version"
+              >
+                🗑
+              </button>
             )}
-            <code style={{ color: 'var(--text-dim)', fontSize: '0.72rem' }}>
-              {results[i] ?? ''}
-            </code>
+            {active && stats[active.id] && (
+              <span className="games-tier-chip" title="this version's record">
+                {stats[active.id].win}W · {stats[active.id].loss}L · {stats[active.id].draw}D
+              </span>
+            )}
+          </div>
+
+          <ModelSection model={loadout.model} onChange={(m) => update({ model: m })} />
+
+          <div>
+            <span style={labelStyle}>Sample observation (JSON) — for testing tools</span>
+            <textarea
+              value={sampleObs}
+              onChange={(e) => setSampleObs(e.target.value)}
+              spellCheck={false}
+              style={{
+                width: '100%',
+                minHeight: '2.2rem',
+                fontFamily: 'monospace',
+                fontSize: '0.75rem',
+              }}
+            />
           </div>
         </div>
-      ))}
+      </details>
     </div>
   );
 }

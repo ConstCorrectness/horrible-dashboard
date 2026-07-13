@@ -18,10 +18,13 @@ from backend.modules.games.loadout import (
     ToolDef,
     get_loadout,
     save_loadout,
+    tool_name_error,
 )
 from backend.modules.games.models import (
     ActivateVersionRequest,
     DevicePollRequest,
+    DryRunRequest,
+    DryRunResponse,
     GameInfo,
     GamesStatus,
     SaveVersionRequest,
@@ -30,6 +33,8 @@ from backend.modules.games.models import (
     TestToolRequest,
     TestToolResponse,
     ToolDefModel,
+    ToolDiagnostic,
+    ValidateLoadoutResponse,
 )
 from backend.modules.settings.routes import get_value
 
@@ -100,6 +105,23 @@ def _from_model(game_id: str, body: LoadoutModel) -> Loadout:
         ],
         model=body.model,
     )
+
+
+# Registered BEFORE the /loadout/{game_id} routes: FastAPI matches in order, and
+# the literal "validate" segment must not be swallowed as a game id.
+@router.post("/loadout/validate", response_model=ValidateLoadoutResponse)
+def validate_loadout_route(body: LoadoutModel) -> ValidateLoadoutResponse:
+    """Per-tool diagnostics (name rule + compilation) for the harness editor —
+    a broken tool is silently absent in a live match, so surface it here."""
+    loadout = _from_model(body.game_id or "_validate", body)
+    runtime = HarnessRuntime(loadout)
+    taken: set[str] = set()
+    diags: list[ToolDiagnostic] = []
+    for tool in loadout.tools:
+        err = tool_name_error(tool.name, taken) or runtime.compile_error(tool.name)
+        taken.add(tool.name)
+        diags.append(ToolDiagnostic(name=tool.name, ok=err is None, error=err))
+    return ValidateLoadoutResponse(ok=all(d.ok for d in diags), tools=diags)
 
 
 @router.get("/loadout/{game_id}", response_model=LoadoutModel)
@@ -219,6 +241,23 @@ async def test_tool_route(body: TestToolRequest) -> TestToolResponse:
     if isinstance(result, dict) and "error" in result and len(result) == 1:
         return TestToolResponse(ok=False, error=str(result["error"]))
     return TestToolResponse(ok=True, result=result)
+
+
+@router.post("/dry-run", response_model=DryRunResponse)
+async def dry_run_route(body: DryRunRequest) -> DryRunResponse:
+    """Run the WHOLE harness (context + all tools + the real model) once against
+    a sample engine position — the editor's full-loop tester. One-shot: the loop
+    is bounded (MAX_HARNESS_ROUNDS), so the finished trace comes back in the
+    response."""
+    from backend.modules.games import dryrun
+
+    try:
+        return await dryrun.run_dry(
+            _from_model(body.game_id, body.loadout), body.game_id, body.seed
+        )
+    except KeyError as exc:
+        reason = str(exc.args[0]) if exc.args else f"unknown game {body.game_id!r}"
+        return DryRunResponse(ok=False, error=reason)
 
 
 # ---- sign-in (GitHub/Google device flows, proxied to the game server) ------

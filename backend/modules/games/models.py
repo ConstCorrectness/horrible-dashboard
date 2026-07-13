@@ -73,6 +73,52 @@ class TestToolResponse(BaseModel):
     error: str | None = None
 
 
+class ToolDiagnostic(BaseModel):
+    """Whether one tool of a loadout is usable: name rule + compilation."""
+
+    name: str
+    ok: bool
+    error: str | None = None
+
+
+class ValidateLoadoutResponse(BaseModel):
+    ok: bool  # every tool ok
+    tools: list[ToolDiagnostic] = []
+
+
+class DryRunRequest(BaseModel):
+    """Run the FULL agent loop (context + all tools + real model) against a
+    sample observation for a game — no match, no random fallback."""
+
+    game_id: str  # must be an engine game (the sample-observation source)
+    loadout: LoadoutModel  # the panel's current draft (unsaved edits included)
+    seed: int = 0
+
+
+class DryRunStep(BaseModel):
+    """One traced reasoning step (same kinds AgentPolicy emits live)."""
+
+    kind: str  # assistant | tool_result | chose
+    t_ms: float
+    content: str | None = None
+    tool_calls: list[dict[str, Any]] = []
+    name: str | None = None
+    result: str | None = None
+    action_id: str | None = None
+
+
+class DryRunResponse(BaseModel):
+    ok: bool
+    error: str | None = None
+    observation: dict[str, Any] = {}
+    legal_actions: list[dict[str, Any]] = []
+    compile_errors: dict[str, str] = {}
+    steps: list[DryRunStep] = []
+    chosen: str | None = None
+    rounds_used: int = 0
+    total_ms: float = 0.0
+
+
 class GamesStatus(BaseModel):
     """Whether this node is connected to a game server, and as whom."""
 

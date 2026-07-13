@@ -13,6 +13,7 @@ import { revealRegionView } from '../../layout/controller';
 import { registry } from '../../registry';
 import { toastsStore } from '../../toasts';
 import { sendChannel, subscribeChannel } from '../../ws';
+import { resetArenaView } from './arena-view';
 import { sfx } from './sfx';
 
 /** Pop the Game Board when a match becomes live. If a **standalone** Game Board pane
@@ -275,6 +276,9 @@ export interface SocialState {
 
 export interface GamesState {
   connected: boolean;
+  /** True while `ensureConnected` is waiting on the server's `authed` ack — the
+   * board and the hub's status chip render a "connecting…" state from this. */
+  connecting: boolean;
   accountId: string | null;
   selfPlay: boolean;
   /** Server capabilities from AUTHED — feature-detect before showing newer UI. */
@@ -291,6 +295,10 @@ export interface GamesState {
   tableId: string | null;
   /** Where the live match's replay will be saved once it finishes. */
   replayId: string | null;
+  /** Wall-clock ms when `match_info` arrived. View chrome that must fire once
+   * per match (the VS splash) derives from this instead of a mount effect, so a
+   * tab-switch remount doesn't replay it. */
+  matchStartedAt: number | null;
   /** Your own agent's live reasoning feed for the current match. */
   trace: TraceEntry[];
   /** Your ranked-queue slot, an incoming offer, the series score, last rating move. */
@@ -329,6 +337,7 @@ const initialSocial: SocialState = {
 
 const initial: GamesState = {
   connected: false,
+  connecting: false,
   accountId: null,
   selfPlay: false,
   caps: [],
@@ -341,6 +350,7 @@ const initial: GamesState = {
   matchSeats: null,
   tableId: null,
   replayId: null,
+  matchStartedAt: null,
   trace: [],
   queue: null,
   offer: null,
@@ -391,41 +401,83 @@ function upsertTable(table: TableInfo): TableInfo[] {
   return [...rest, table];
 }
 
+// Server error codes that are agent-protocol churn, not something the watching
+// human can act on: a move landing after the referee's clock already resolved the
+// turn (tick games, self-play relaying both seats) is *expected* and the server
+// handles it by ignoring the move. Toasting these nags the spectator.
+const SILENT_ERROR_CODES = new Set(['not_your_turn']);
+// Collapse identical error toasts arriving in a burst (e.g. one per tick).
+let lastErrorToast = { text: '', at: 0 };
+
 // One subscription for the whole app, set up on first import of this module.
 subscribeChannel('games', (msg) => {
   const d = (msg.data ?? {}) as Record<string, unknown>;
   switch (msg.event) {
-    case 'error':
-      toastsStore.add('error', 'Games', (d.message as string) ?? 'Games error');
+    case 'error': {
+      const text = (d.message as string) ?? 'Games error';
+      if (SILENT_ERROR_CODES.has(String(d.code ?? ''))) {
+        console.debug('[games] suppressed server error:', d.code, text);
+        break;
+      }
+      const now = Date.now();
+      if (text === lastErrorToast.text && now - lastErrorToast.at < 10_000) break;
+      lastErrorToast = { text, at: now };
+      toastsStore.add('error', 'Games', text);
       break;
-    case 'authed':
+    }
+    case 'authed': {
+      const nowConnected = Boolean(d.connected);
+      const nowSelfPlay = Boolean(d.self_play);
       set({
-        connected: Boolean(d.connected),
+        connected: nowConnected,
         accountId: (d.account_id as string) ?? null,
-        selfPlay: Boolean(d.self_play),
+        selfPlay: nowSelfPlay,
         caps: (d.caps as string[] | undefined) ?? state.caps,
-        ...(d.connected
-          ? {}
+        ...(nowConnected
+          ? { connecting: false }
           : {
               board: null,
               yourTurn: null,
               over: null,
               matchSeats: null,
               replayId: null,
+              matchStartedAt: null,
               trace: [],
               town: initialTown,
               social: initialSocial,
             }),
       });
+      if (nowConnected) {
+        settleWaiters((w) =>
+          w.selfPlay === nowSelfPlay
+            ? w.resolve()
+            : w.reject(new Error('reconnected in a different mode')),
+        );
+      } else if (pendingReconnect !== null) {
+        // Disconnect ack of a mode switch — fire the second half now.
+        const mode = pendingReconnect;
+        pendingReconnect = null;
+        gamesConnect(mode);
+      } else if (connectWaiters.length === 0) {
+        set({ connecting: false });
+      }
+      // NOTE: a `connected:false` while waiters are pending is NOT treated as
+      // failure — the node emits transient falses while tearing down a stale
+      // connection mid-connect, and auth against a cold server can take a
+      // couple of seconds. Real failures reach the user through the channel's
+      // `error` event (toast); the waiters fall to their own timeout.
       break;
+    }
     case 'match_info':
       sfx.matchStart();
       // A match just started: remember who's in each seat and reset the feed.
+      resetArenaView();
       set({
         matchSeats: (d.seats as SeatProfile[]) ?? null,
         tableId: (d.table_id as string) ?? null,
         replayId: (d.replay_id as string) ?? null,
         gameId: (d.game_id as string) ?? state.gameId,
+        matchStartedAt: Date.now(),
         trace: [],
         over: null,
         queue: null, // a started match consumes any queue slot
@@ -636,6 +688,65 @@ export function gamesConnect(selfPlay: boolean): void {
 
 export function gamesDisconnect(): void {
   sendChannel('games', 'disconnect', {});
+}
+
+// ---- implicit connection ------------------------------------------------------
+//
+// The UI never shows Connect buttons: play/queue/join flows call
+// `ensureConnected(mode)` and the node connects itself (the Plaza and AgentTown
+// already work this way). Waiters resolve on the server's `authed` ack.
+
+interface ConnectWaiter {
+  selfPlay: boolean;
+  resolve: () => void;
+  reject: (e: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+let connectWaiters: ConnectWaiter[] = [];
+// Wrong-mode switch: reconnect with this mode once the disconnect is acked, so
+// the disconnect → connect pair is serialized through the server instead of
+// racing two sends.
+let pendingReconnect: boolean | null = null;
+
+function settleWaiters(fn: (w: ConnectWaiter) => void): void {
+  const waiters = connectWaiters;
+  connectWaiters = [];
+  for (const w of waiters) {
+    clearTimeout(w.timer);
+    fn(w);
+  }
+}
+
+/** Resolve once the node is connected in the requested mode, connecting (or
+ * mode-switching) as needed. Rejects on timeout or a failed/dropped connect. */
+export function ensureConnected(selfPlay: boolean, timeoutMs = 10_000): Promise<void> {
+  if (state.connected && state.selfPlay === selfPlay && !state.connecting) {
+    return Promise.resolve();
+  }
+  const promise = new Promise<void>((resolve, reject) => {
+    const waiter: ConnectWaiter = {
+      selfPlay,
+      resolve,
+      reject,
+      timer: setTimeout(() => {
+        connectWaiters = connectWaiters.filter((w) => w !== waiter);
+        if (connectWaiters.length === 0) set({ connecting: false });
+        reject(new Error('game server connection timed out'));
+      }, timeoutMs),
+    };
+    connectWaiters.push(waiter);
+  });
+  if (!state.connecting) {
+    set({ connecting: true });
+    if (state.connected) {
+      // Connected in the wrong mode: reconnect after the disconnect ack.
+      pendingReconnect = selfPlay;
+      gamesDisconnect();
+    } else {
+      gamesConnect(selfPlay);
+    }
+  }
+  return promise;
 }
 
 export function gamesListTables(): void {

@@ -3,7 +3,7 @@
  * profile page) opens the lobby with a challenge draft pre-targeted at a player.
  * Same claim-on-mount + live-broadcast pattern as challenge-focus.ts.
  */
-import { registry } from '../../registry';
+import { openGamesHub } from './hub-section';
 
 export interface ChallengeTarget {
   accountId: string;
@@ -13,10 +13,10 @@ export interface ChallengeTarget {
 let pending: ChallengeTarget | null = null;
 const listeners = new Set<(target: ChallengeTarget) => void>();
 
-/** Open the lobby with a challenge draft aimed at `target`. */
+/** Open the hub's Play tab with a challenge draft aimed at `target`. */
 export function requestChallengeDraft(target: ChallengeTarget): void {
   pending = target;
-  registry.openPanel('games.lobby');
+  openGamesHub('play');
   listeners.forEach((l) => l(target));
 }
 

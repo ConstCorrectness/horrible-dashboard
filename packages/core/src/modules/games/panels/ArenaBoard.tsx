@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 
+import { getArenaView, setArenaView, useArenaView } from '../arena-view';
 import { type PublicState } from '../game-ws';
 
 interface Tick {
@@ -25,26 +26,33 @@ export function ArenaBoard({ board }: { board: PublicState }) {
   const grid = Number(board.grid ?? 9);
   const wins = (board.round_wins as number[]) ?? [0, 0];
   const phase = String(board.phase ?? 'edit');
-  const [roundIdx, setRoundIdx] = useState(0);
-  const [tick, setTick] = useState(0);
-  const [playing, setPlaying] = useState(true);
+  // Playback position lives in a module-level store so scrubbing survives the
+  // frame's unmount-on-tab-switch (see arena-view.ts).
+  const { roundIdx: storedRoundIdx, tick: storedTick, playing, knownRounds } = useArenaView();
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  // Follow the newest round as it lands.
+  // Follow a NEWLY landed round only — a remount where nothing new arrived
+  // (logs.length === knownRounds) leaves the restored scrub position alone.
   useEffect(() => {
-    if (logs.length > 0) setRoundIdx(logs.length - 1);
-  }, [logs.length]);
+    if (logs.length > knownRounds) {
+      setArenaView({ roundIdx: logs.length - 1, tick: 0, knownRounds: logs.length });
+    }
+  }, [logs.length, knownRounds]);
 
+  // Clamp reads: the store can briefly be ahead of a fresh board's logs.
+  const roundIdx = Math.min(storedRoundIdx, Math.max(0, logs.length - 1));
   const round = logs[roundIdx];
   const ticks = round?.ticks ?? [];
+  const tick = Math.min(storedTick, Math.max(0, ticks.length - 1));
 
   useEffect(() => {
     if (!playing || ticks.length === 0) return;
-    const id = setInterval(() => setTick((t) => (t + 1 < ticks.length ? t + 1 : t)), 80);
+    const id = setInterval(() => {
+      const t = getArenaView().tick;
+      if (t + 1 < ticks.length) setArenaView({ tick: t + 1 });
+    }, 80);
     return () => clearInterval(id);
   }, [playing, ticks.length, roundIdx]);
-
-  useEffect(() => setTick(0), [roundIdx]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -110,7 +118,7 @@ export function ArenaBoard({ board }: { board: PublicState }) {
                 key={i}
                 type="button"
                 className={i === roundIdx ? 'games-tab-active' : undefined}
-                onClick={() => setRoundIdx(i)}
+                onClick={() => setArenaView({ roundIdx: i, tick: 0 })}
               >
                 R{r.round} {r.winner === null ? '=' : r.winner === 0 ? '🔵' : '🟠'}{' '}
                 {r.scores.join(':')}
@@ -125,7 +133,7 @@ export function ArenaBoard({ board }: { board: PublicState }) {
           />
           {round && (
             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-              <button type="button" onClick={() => setPlaying((p) => !p)}>
+              <button type="button" onClick={() => setArenaView({ playing: !playing })}>
                 {playing ? '⏸' : '▶'}
               </button>
               <input
@@ -134,8 +142,7 @@ export function ArenaBoard({ board }: { board: PublicState }) {
                 max={Math.max(0, ticks.length - 1)}
                 value={tick}
                 onChange={(e) => {
-                  setPlaying(false);
-                  setTick(Number(e.target.value));
+                  setArenaView({ playing: false, tick: Number(e.target.value) });
                 }}
                 style={{ flex: 1 }}
               />

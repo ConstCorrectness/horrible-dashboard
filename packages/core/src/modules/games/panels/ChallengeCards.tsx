@@ -4,11 +4,11 @@ import {
   challengeOffer,
   challengeRespond,
   dismissOffer,
-  gamesQueueJoin,
   gamesQueueLeave,
   useGames,
   type Ruleset,
 } from '../game-ws';
+import { findRankedMatch } from '../matchmaking';
 import { type ChallengeTarget } from '../challenge-draft';
 import { type GameCatalogEntry } from '../games-api';
 
@@ -253,7 +253,7 @@ export function RankedCard({ games }: { games: GameCatalogEntry[] }) {
       <button
         type="button"
         className="games-play-btn"
-        onClick={() => gamesQueueJoin(gameId, difficulty)}
+        onClick={() => void findRankedMatch(gameId, difficulty)}
       >
         Find match
       </button>

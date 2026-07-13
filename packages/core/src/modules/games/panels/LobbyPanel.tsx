@@ -1,28 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
 
-import { revealRegionView } from '../../../layout/controller';
 import { registry } from '../../../registry';
-import { useSetting } from '../../../settings';
-import { claimChallengeDraft, onChallengeDraft, type ChallengeTarget } from '../challenge-draft';
-import { requestChallenges } from '../challenge-focus';
-import {
-  gamesConnect,
-  gamesCreateTable,
-  gamesDisconnect,
-  gamesJoinTable,
-  gamesListTables,
-  useGames,
-  watchTable,
-} from '../game-ws';
-import { ChallengeDraftCard, IncomingOfferCard, RankedCard } from './ChallengeCards';
-import {
-  fetchGamesCatalog,
-  fetchStatus,
-  signInWith,
-  signOut,
-  type GameCatalogEntry,
-  type SignInProvider,
-} from '../games-api';
+import { useGames } from '../game-ws';
+import { fetchStatus, signInWith, signOut, type SignInProvider } from '../games-api';
+import { setHubSection, useHubSection, type HubSection } from '../hub-section';
+import { ChallengesPanel } from './ChallengesPanel';
+import { ConnectionChip } from './ConnectionChip';
+import { LeaderboardPanel } from './LeaderboardPanel';
+import { PlaySection } from './PlaySection';
+import { ProfilePanel } from './ProfilePanel';
+import { ReplayBrowserPanel } from './ReplayBrowserPanel';
+import { RosterPanel } from './RosterPanel';
 
 /** Sign-in status + device-flow sign-in (GitHub or Google — two different Google
  * accounts are two distinct players, handy for testing across machines). Identity
@@ -57,85 +45,59 @@ function SignIn() {
 
   if (name) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.78rem' }}>
+      <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.78rem' }}>
         {social.profile && (
           <span className="games-level-badge" title={`${social.profile.xp} XP`}>
             {social.profile.avatar} Lv {social.profile.level}
           </span>
         )}
         <span style={{ color: 'var(--text-dim)' }}>
-          Signed in as <strong>{name}</strong>
+          <strong>{name}</strong>
         </span>
         <button type="button" onClick={() => void signOut().then(() => setName(null))}>
           Sign out
         </button>
-      </div>
+      </span>
     );
   }
   return (
-    <div style={{ fontSize: '0.78rem', display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-        <button type="button" onClick={() => void signIn('github')} disabled={busy !== null}>
-          {busy === 'github' ? 'Signing in…' : 'Sign in with GitHub'}
-        </button>
-        <button type="button" onClick={() => void signIn('google')} disabled={busy !== null}>
-          {busy === 'google' ? 'Signing in…' : 'Sign in with Google'}
-        </button>
-        <span style={{ color: 'var(--text-dim)' }}>or play with the dev token</span>
-      </div>
+    <span style={{ fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+      <button type="button" onClick={() => void signIn('github')} disabled={busy !== null}>
+        {busy === 'github' ? 'Signing in…' : 'Sign in'}
+      </button>
+      <button type="button" onClick={() => void signIn('google')} disabled={busy !== null}>
+        {busy === 'google' ? '…' : 'Google'}
+      </button>
       {prompt && (
-        <div style={{ color: 'var(--text-dim)' }}>
-          Enter code <strong>{prompt.code}</strong> at{' '}
+        <span style={{ color: 'var(--text-dim)' }}>
+          code <strong>{prompt.code}</strong> at{' '}
           <a href={prompt.url} target="_blank" rel="noreferrer">
             {prompt.url}
           </a>
-        </div>
+        </span>
       )}
-      {err && <div style={{ color: 'var(--danger, #e5534b)' }}>{err}</div>}
-    </div>
+      {err && <span style={{ color: 'var(--danger, #e5534b)' }}>{err}</span>}
+    </span>
   );
 }
 
-// Icon per catalog game on the lobby cards; anything unrecognized gets the die.
-const GAME_ICONS: Record<string, string> = {
-  tictactoe: '❌',
-  connect_four: '🔴',
-  holdem: '🃏',
-  rag_race: '📚',
-  code_golf: '⛳',
-  test_duel: '⚖️',
-  bug_hunt: '🐛',
-  arena: '🤖',
-  fighter: '🥊',
-};
+const SECTIONS: [HubSection, string][] = [
+  ['play', 'Play'],
+  ['ladder', 'Ladder'],
+  ['challenges', 'Challenges'],
+  ['replays', 'Replays'],
+  ['players', 'Players'],
+  ['profile', 'Profile'],
+];
 
 /**
- * The games lobby: connect this node to the central server, start or join a table
- * from a game card (▶ Play hosts a table; 🎯 opens that game's challenge track),
- * and watch the board — it reveals itself when the match starts. "Self-play" seats
- * a sparring partner from this same node so a match runs with a single user.
+ * The Games hub — the module's single entry point. One pane, internal tabs:
+ * Play (matchmaking) plus Ladder / Challenges / Replays / Players / Profile
+ * folded in as sections. Connection is implicit (see matchmaking.ts); the only
+ * connection UI left is the status chip.
  */
 export function LobbyPanel() {
-  const { connected, accountId, selfPlay, tables } = useGames();
-  const [games, setGames] = useState<GameCatalogEntry[]>([]);
-  const [draft, setDraft] = useState<ChallengeTarget | null>(() => claimChallengeDraft());
-
-  useEffect(() => {
-    fetchGamesCatalog().then(setGames);
-  }, []);
-
-  useEffect(() => onChallengeDraft(setDraft), []);
-
-  useEffect(() => {
-    if (connected) gamesListTables();
-  }, [connected]);
-
-  const startMatch = (gameId: string) => {
-    revealRegionView('games.board');
-    gamesCreateTable(gameId);
-  };
-
-  const onboarded = useSetting<boolean>('games.onboarded') === true;
+  const section = useHubSection();
 
   return (
     <div
@@ -145,50 +107,13 @@ export function LobbyPanel() {
         display: 'flex',
         flexDirection: 'column',
         gap: '0.6rem',
+        height: '100%',
+        overflow: 'auto',
       }}
     >
-      {!onboarded && (
-        <div className="games-start-hero">
-          <div>
-            <strong>🚀 New here?</strong>{' '}
-            <span style={{ color: 'var(--text-dim)' }}>
-              Sign in, pick an avatar, ship your first harness, and play a placement match — four
-              guided steps.
-            </span>
-          </div>
-          <button
-            type="button"
-            className="games-play-btn"
-            onClick={() => registry.openPanel('games.onboarding')}
-          >
-            Start here →
-          </button>
-        </div>
-      )}
-
-      <SignIn />
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-        {connected ? (
-          <>
-            <span style={{ color: 'var(--text-dim)' }}>
-              Connected as <strong>{accountId}</strong>
-              {selfPlay ? ' · self-play' : ''}
-            </span>
-            <button type="button" onClick={() => gamesDisconnect()}>
-              Disconnect
-            </button>
-          </>
-        ) : (
-          <>
-            <button type="button" onClick={() => gamesConnect(true)}>
-              Connect (self-play)
-            </button>
-            <button type="button" onClick={() => gamesConnect(false)}>
-              Connect
-            </button>
-          </>
-        )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+        <ConnectionChip />
+        <SignIn />
         {/* The Plaza + town auto-connect the node, so they're reachable either way. */}
         <button
           type="button"
@@ -196,7 +121,7 @@ export function LobbyPanel() {
           title="The Plaza — hang out with real players, chat, and challenge them"
           onClick={() => registry.openPanel('games.plaza')}
         >
-          🏛 The Plaza
+          🏛 Plaza
         </button>
         <button
           type="button"
@@ -207,123 +132,25 @@ export function LobbyPanel() {
         </button>
       </div>
 
-      <IncomingOfferCard games={games} />
-      {draft && <ChallengeDraftCard target={draft} games={games} onDone={() => setDraft(null)} />}
+      <div className="games-hub-tabs">
+        {SECTIONS.map(([id, label]) => (
+          <button
+            key={id}
+            type="button"
+            className={section === id ? 'games-hub-tab active' : 'games-hub-tab'}
+            onClick={() => setHubSection(id)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
 
-      {connected && (
-        <>
-          <RankedCard games={games} />
-          <div>
-            <div style={{ color: 'var(--text-dim)', marginBottom: '0.3rem' }}>New match</div>
-            <div className="games-cards">
-              {games.map((g) => (
-                <div key={g.id} className="games-card">
-                  <span className="games-card-icon">{GAME_ICONS[g.id] ?? '🎲'}</span>
-                  <span className="games-card-name">{g.name}</span>
-                  <div className="games-card-actions">
-                    <button
-                      type="button"
-                      className="games-play-btn"
-                      onClick={() => startMatch(g.id)}
-                    >
-                      ▶ Play
-                    </button>
-                    <button
-                      type="button"
-                      className="games-chip-btn"
-                      title={`${g.name} challenges — grade your harness off-table`}
-                      onClick={() => requestChallenges(g.id)}
-                    >
-                      🎯
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div style={{ display: 'flex', gap: '0.6rem', marginTop: '0.4rem' }}>
-              <button
-                type="button"
-                onClick={() => revealRegionView('games.loadout')}
-                style={{ fontSize: '0.72rem' }}
-              >
-                Edit agent harness →
-              </button>
-              <button
-                type="button"
-                onClick={() => revealRegionView('games.leaderboard')}
-                style={{ fontSize: '0.72rem' }}
-              >
-                Ladder →
-              </button>
-              <button
-                type="button"
-                onClick={() => revealRegionView('games.challenges')}
-                style={{ fontSize: '0.72rem' }}
-              >
-                Challenges →
-              </button>
-            </div>
-          </div>
-
-          <div>
-            <div style={{ color: 'var(--text-dim)', marginBottom: '0.3rem' }}>
-              Open tables{' '}
-              <button
-                type="button"
-                onClick={() => gamesListTables()}
-                style={{ fontSize: '0.7rem' }}
-              >
-                refresh
-              </button>
-            </div>
-            {tables.length === 0 ? (
-              <div style={{ color: 'var(--text-dim)' }}>No tables yet.</div>
-            ) : (
-              <ul
-                style={{
-                  listStyle: 'none',
-                  padding: 0,
-                  margin: 0,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '0.25rem',
-                }}
-              >
-                {tables.map((t) => (
-                  <li key={t.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <code>{t.game_id}</code>
-                    <span style={{ color: 'var(--text-dim)' }}>
-                      {t.seats.filter(Boolean).length}/{t.capacity} · {t.status}
-                    </span>
-                    {t.status === 'open' && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          revealRegionView('games.board');
-                          gamesJoinTable(t.id);
-                        }}
-                      >
-                        Join
-                      </button>
-                    )}
-                    {t.status === 'playing' && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          revealRegionView('games.board');
-                          watchTable(t.id);
-                        }}
-                      >
-                        👁 Watch
-                      </button>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </>
-      )}
+      {section === 'play' && <PlaySection />}
+      {section === 'ladder' && <LeaderboardPanel />}
+      {section === 'challenges' && <ChallengesPanel />}
+      {section === 'replays' && <ReplayBrowserPanel />}
+      {section === 'players' && <RosterPanel />}
+      {section === 'profile' && <ProfilePanel />}
     </div>
   );
 }

@@ -1,6 +1,6 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 
-import { useGames, type TraceEntry } from '../game-ws';
+import { useGames, type TraceStep } from '../game-ws';
 
 const KIND_ICON: Record<string, string> = {
   assistant: '💬',
@@ -9,8 +9,9 @@ const KIND_ICON: Record<string, string> = {
   fallback: '🎲',
 };
 
-function TraceRow({ entry }: { entry: TraceEntry }) {
-  const { step } = entry;
+/** One reasoning step, rendered the same wherever a trace appears (this live
+ * pane, and the harness editor's dry-run tester). */
+export function TraceRow({ step, suffix }: { step: TraceStep; suffix?: ReactNode }) {
   return (
     <div className="games-trace-step" data-kind={step.kind}>
       <span className="games-trace-icon">{KIND_ICON[step.kind] ?? '·'}</span>
@@ -36,6 +37,7 @@ function TraceRow({ entry }: { entry: TraceEntry }) {
             harness failed — random fallback played {step.action_id}
           </div>
         )}
+        {suffix}
       </div>
     </div>
   );
@@ -80,7 +82,7 @@ export function AgentThoughtsPane() {
             policy, picks moves).
           </div>
         ) : (
-          trace.map((entry) => <TraceRow key={entry.idx} entry={entry} />)
+          trace.map((entry) => <TraceRow key={entry.idx} step={entry.step} />)
         )}
         <div ref={bottomRef} />
       </div>

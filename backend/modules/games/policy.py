@@ -123,6 +123,17 @@ class AgentPolicy:
         self._emit("fallback", action_id=fallback)
         return fallback
 
+    async def run_once(
+        self,
+        observation: dict[str, Any],
+        legal_actions: list[dict[str, Any]],
+        game_id: str | None = None,
+    ) -> str | None:
+        """One full harness drive with NO random fallback and no exception
+        swallowing — the dry-run tester's entry point (see dryrun.py). Returns the
+        committed action id, or None when the agent never committed."""
+        return await self._run(observation, legal_actions, _ids(legal_actions), game_id)
+
     async def _run(
         self,
         observation: dict[str, Any],

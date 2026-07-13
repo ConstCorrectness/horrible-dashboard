@@ -1,25 +1,23 @@
 import { revealRegionView } from '../../layout/controller';
 import { registry, type ModuleManifest } from '../../registry';
+import { setSetting } from '../../settings';
 import './games.css';
+import { openGamesHub } from './hub-section';
 import { AgentThoughtsPane } from './panels/AgentThoughtsPane';
-import { ChallengesPanel } from './panels/ChallengesPanel';
 import { FighterArcadePanel } from './panels/FighterArcadePanel';
-import { OnboardingPanel } from './panels/OnboardingPanel';
-import { ProfilePanel } from './panels/ProfilePanel';
 import { GameBoardPanel } from './panels/GameBoardPanel';
-import { LeaderboardPanel } from './panels/LeaderboardPanel';
 import { LoadoutPanel } from './panels/LoadoutPanel';
 import { LobbyPanel } from './panels/LobbyPanel';
 import { PlazaPanel } from './panels/PlazaPanel';
-import { ReplayBrowserPanel } from './panels/ReplayBrowserPanel';
 import { ReplayViewerPanel } from './panels/ReplayViewerPanel';
-import { RosterPanel } from './panels/RosterPanel';
 import { TownPanel } from './panels/TownPanel';
 
 /**
  * Games module: watch your agent play turn-based games against another user's
- * agent, refereed by the central game server. The lobby connects the node and
- * starts/joins tables; the board renders the live game. See docs/modules/games.mdx.
+ * agent, refereed by the central game server. The **Games hub** (`games.lobby`)
+ * is the single entry point — Play/Ladder/Challenges/Replays/Players/Profile as
+ * internal tabs, connection implicit. The board renders the live game.
+ * See docs/modules/games.mdx.
  */
 export const gamesModule: ModuleManifest = {
   id: 'games',
@@ -31,14 +29,12 @@ export const gamesModule: ModuleManifest = {
       component: LobbyPanel,
       role: 'document',
       icon: '🕹',
-      // The arcade cockpit as regions: harness/ladder/challenges on the right
-      // strip, the live board on the bottom strip (revealed when a match starts).
+      // Companion regions: the harness + live thoughts on the right strip, the
+      // live board on the bottom strip (revealed when a match starts). Ladder,
+      // Challenges, Replays, Players, and Profile are hub *tabs*, not regions.
       regions: [
-        { id: 'games.roster', label: 'Players', icon: '🧑‍🤝‍🧑', key: 'r', position: 'right' },
         { id: 'games.loadout', label: 'Agent Harness', icon: '🛠', key: 'h', position: 'right' },
         { id: 'games.thoughts', label: 'Agent Thoughts', icon: '💭', key: 'a', position: 'right' },
-        { id: 'games.leaderboard', label: 'Ladder', icon: '🏆', key: 'l', position: 'right' },
-        { id: 'games.challenges', label: 'Challenges', icon: '🎯', key: 'c', position: 'right' },
         {
           id: 'games.board',
           label: 'Game Board',
@@ -68,40 +64,6 @@ export const gamesModule: ModuleManifest = {
       singleton: true,
     },
     {
-      id: 'games.leaderboard',
-      title: 'Ladder',
-      component: LeaderboardPanel,
-      role: 'tool',
-      icon: '🏆',
-      defaultDock: 'right',
-      singleton: true,
-    },
-    {
-      id: 'games.challenges',
-      title: 'Challenges',
-      component: ChallengesPanel,
-      role: 'tool',
-      icon: '🎯',
-      defaultDock: 'right',
-      singleton: true,
-    },
-    {
-      id: 'games.onboarding',
-      title: 'Welcome to the Arena',
-      component: OnboardingPanel,
-      role: 'document',
-      icon: '🚀',
-      singleton: true,
-    },
-    {
-      id: 'games.profile',
-      title: 'Player Profile',
-      component: ProfilePanel,
-      role: 'document',
-      icon: '🪪',
-      singleton: true,
-    },
-    {
       id: 'games.arcade',
       title: 'Arcade Fighter',
       component: FighterArcadePanel,
@@ -127,14 +89,6 @@ export const gamesModule: ModuleManifest = {
       singleton: true,
     },
     {
-      id: 'games.replays',
-      title: 'Replays',
-      component: ReplayBrowserPanel,
-      role: 'document',
-      icon: '🗂',
-      singleton: true,
-    },
-    {
       id: 'games.town',
       title: 'AgentTown',
       component: TownPanel,
@@ -148,15 +102,6 @@ export const gamesModule: ModuleManifest = {
       component: PlazaPanel,
       role: 'document',
       icon: '🏛',
-      singleton: true,
-    },
-    {
-      id: 'games.roster',
-      title: 'Players',
-      component: RosterPanel,
-      role: 'tool',
-      icon: '🧑‍🤝‍🧑',
-      defaultDock: 'right',
       singleton: true,
     },
   ],
@@ -182,14 +127,17 @@ export const gamesModule: ModuleManifest = {
       run: () => registry.openPanel('games.loadout'),
     },
     {
-      id: 'games.openOnboarding',
-      title: 'Games: Start onboarding',
-      run: () => registry.openPanel('games.onboarding'),
+      id: 'games.restartOnboarding',
+      title: 'Games: Restart onboarding',
+      run: () => {
+        void setSetting('games.onboarded', false);
+        openGamesHub('play');
+      },
     },
     {
       id: 'games.openProfile',
       title: 'Games: Open player profile',
-      run: () => registry.openPanel('games.profile'),
+      run: () => openGamesHub('profile'),
     },
     {
       id: 'games.openArcade',
@@ -204,17 +152,17 @@ export const gamesModule: ModuleManifest = {
     {
       id: 'games.openReplays',
       title: 'Games: Browse replays',
-      run: () => registry.openPanel('games.replays'),
+      run: () => openGamesHub('replays'),
     },
     {
       id: 'games.openLeaderboard',
       title: 'Games: Open ladder',
-      run: () => revealRegionView('games.leaderboard'),
+      run: () => openGamesHub('ladder'),
     },
     {
       id: 'games.openChallenges',
       title: 'Games: Open challenge track',
-      run: () => revealRegionView('games.challenges'),
+      run: () => openGamesHub('challenges'),
     },
     {
       id: 'games.openTown',
@@ -228,8 +176,8 @@ export const gamesModule: ModuleManifest = {
     },
     {
       id: 'games.openRoster',
-      title: 'Games: Open players roster',
-      run: () => revealRegionView('games.roster'),
+      title: 'Games: Open players',
+      run: () => openGamesHub('players'),
     },
   ],
   settings: [
@@ -276,7 +224,7 @@ export const gamesModule: ModuleManifest = {
       key: 'games.onboarded',
       title: 'Onboarding complete',
       description:
-        'Set automatically when the first-run wizard finishes; clear it to see the wizard again.',
+        "Set when the hub's first-run card finishes (or is dismissed); clear it to see the card again.",
       type: 'boolean',
       default: false,
     },

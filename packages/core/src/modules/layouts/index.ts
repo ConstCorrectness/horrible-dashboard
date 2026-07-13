@@ -64,11 +64,7 @@ export const layoutsModule: ModuleManifest = {
         },
         docks: {
           left: { tools: ['games.loadout'], size: 320 },
-          right: {
-            tools: ['games.leaderboard', 'games.challenges'],
-            activeTool: 'games.leaderboard',
-            visible: false,
-          },
+          right: { tools: ['games.thoughts'], visible: false },
         },
       },
     },

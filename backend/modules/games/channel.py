@@ -112,6 +112,15 @@ async def handle_games_message(conn: Any, msg: dict[str, Any]) -> None:
             logger.debug("games: ignoring unknown event %r", event)
     except Exception as e:
         logger.exception("games channel event %r failed", event)
+        # A failed command usually means the server connection is dead or
+        # half-established (e.g. the server restarted, or a sparring seat failed
+        # auth). Tear the client down so node state matches the "not connected"
+        # we're about to tell the browser — otherwise the next auto-connect
+        # trusts a zombie connection and every command keeps failing.
+        try:
+            await games_client.disconnect()
+        except Exception:
+            logger.debug("games client cleanup after %r failed", event, exc_info=True)
         try:
             # Let the browser know we are not connected so UI can reset state
             await conn.send_json(

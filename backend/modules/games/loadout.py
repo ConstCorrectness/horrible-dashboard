@@ -32,6 +32,29 @@ logger = logging.getLogger(__name__)
 # Applies to any game when no game-specific loadout exists.
 DEFAULT_KEY = "default"
 
+# The commit tool's namespace; player tools must not shadow it.
+RESERVED_TOOL_PREFIX = "game."
+
+
+def tool_name_error(name: str, taken: set[str] | None = None) -> str | None:
+    """Why `name` is not a valid tool name, or None if it is. `taken` holds the
+    names already used by other tools in the same loadout (duplicate check).
+    Dots stay legal (the shipped `fighter.bot` template uses one); only the
+    `game.` prefix is reserved."""
+    import re
+
+    if not name:
+        return "tool name is empty"
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]*", name):
+        return "tool name must start with a letter or _ and use only letters, digits, _ . -"
+    if name.startswith(RESERVED_TOOL_PREFIX):
+        return (
+            f"the {RESERVED_TOOL_PREFIX}* namespace is reserved for built-in game tools"
+        )
+    if taken is not None and name in taken:
+        return f"duplicate tool name {name!r}"
+    return None
+
 
 @dataclass
 class ToolDef:
@@ -309,6 +332,10 @@ class HarnessRuntime:
 
     def compile_error(self, name: str) -> str | None:
         return self._errors.get(name)
+
+    def compile_errors(self) -> dict[str, str]:
+        """Every tool that failed to compile, name → error (for diagnostics)."""
+        return dict(self._errors)
 
     async def call(self, name: str, args: dict[str, Any], obs: dict[str, Any]) -> Any:
         fn = self._compiled.get(name)
