@@ -42,6 +42,7 @@ export const databaseModule: ModuleManifest = {
       title: 'Database Console',
       component: DatabaseConsole,
       role: 'document',
+      editor: true,
       icon: '🛢',
       agentTools: [
         {

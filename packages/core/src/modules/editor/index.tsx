@@ -92,6 +92,7 @@ export const editorModule: ModuleManifest = {
       title: 'Editor',
       component: BufferView,
       role: 'document',
+      editor: true,
       icon: '✎',
       // The code-workbench satellites as regions: panes that only mean something
       // *relative to the active buffer*. Outline and Symbol Search follow the

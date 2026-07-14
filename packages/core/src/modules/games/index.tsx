@@ -34,22 +34,6 @@ export const gamesModule: ModuleManifest = {
       component: LobbyPanel,
       role: 'document',
       icon: '🕹',
-      // Companion regions: the harness + live thoughts on the right strip, the
-      // live board on the bottom strip (revealed when a match starts). Ladder,
-      // Challenges, Replays, Players, and Profile are standalone tool panels on
-      // the activity rail (see below), not regions or tabs.
-      regions: [
-        { id: 'games.loadout', label: 'Agent Harness', icon: '🛠', key: 'h', position: 'right' },
-        { id: 'games.thoughts', label: 'Agent Thoughts', icon: '💭', key: 'a', position: 'right' },
-        {
-          id: 'games.board',
-          label: 'Game Board',
-          icon: '▦',
-          key: 'v',
-          position: 'bottom',
-          defaultSize: 340,
-        },
-      ],
       singleton: true,
     },
     {
@@ -64,10 +48,10 @@ export const gamesModule: ModuleManifest = {
       id: 'games.loadout',
       title: 'Agent Harness',
       component: LoadoutPanel,
-      role: 'tool',
+      role: 'document',
       icon: '🛠',
-      defaultDock: 'left',
       singleton: true,
+      editor: true,
     },
     // The former hub tabs, now standalone tool panels on the activity rail.
     {
@@ -127,9 +111,8 @@ export const gamesModule: ModuleManifest = {
       id: 'games.thoughts',
       title: 'Agent Thoughts',
       component: AgentThoughtsPane,
-      role: 'tool',
+      role: 'document',
       icon: '💭',
-      defaultDock: 'right',
       singleton: true,
     },
     {

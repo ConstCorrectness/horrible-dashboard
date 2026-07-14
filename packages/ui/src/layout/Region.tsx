@@ -99,57 +99,106 @@ export function Region({ pane, position }: { pane: PaneState; position: RegionPo
     />
   );
 
-  const content = (
-    <div className="frame-region-content">
-      <div className="frame-region-header">
-        {region.views.length > 1 ? (
-          <div className="frame-region-tabs">
-            {region.views.map((id) => (
-              <button
-                key={id}
-                className={`frame-region-tab${id === region.activeView ? ' active' : ''}`}
-                title={declFor(id)?.label ?? id}
-                onClick={() => setRegionView(pane.instanceId, id)}
-              >
-                {declFor(id)?.icon ? <span>{declFor(id)!.icon}</span> : null}
-                <span>{declFor(id)?.label ?? resolveView(id)?.title ?? id}</span>
-              </button>
-            ))}
-          </div>
-        ) : (
-          <>
-            {activeDecl?.icon ? <span>{activeDecl.icon}</span> : null}
-            <span className="frame-region-title">{activeTitle}</span>
-          </>
-        )}
-        <button
-          className="frame-region-btn"
-          title={`Collapse ${position} region (${POSITION_KEY[position]})`}
-          aria-label={`Collapse ${position} region`}
-          onClick={() => collapseRegion(pane.instanceId, position)}
-        >
-          {COLLAPSE_ICON[position]}
-        </button>
-        <button
-          className="frame-region-btn"
-          title={`Close ${activeTitle}`}
-          onClick={() => toggleRegion(pane.instanceId, position, false)}
-        >
-          ✕
-        </button>
+  const content =
+    position === 'right' && region.views.length > 1 ? (
+      <div className="frame-region-content" style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0, minHeight: 0 }}>
+        {region.views.map((id, index) => {
+          const decl = declFor(id);
+          const title = decl?.label ?? resolveView(id)?.title ?? id;
+          return (
+            <div
+              key={id}
+              className="frame-region-section"
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                flex: 1,
+                minHeight: 0,
+                borderBottom: index < region.views.length - 1 ? '1px solid var(--border)' : 'none',
+              }}
+            >
+              <div className="frame-region-header" style={{ flex: 'none', background: 'var(--bg-raised)' }}>
+                {decl?.icon ? <span>{decl.icon}</span> : null}
+                <span className="frame-region-title" style={{ fontWeight: 800 }}>{title}</span>
+                <button
+                  className="frame-region-btn"
+                  title={`Collapse ${position} region (${POSITION_KEY[position]})`}
+                  style={{ marginLeft: 'auto' }}
+                  onClick={() => collapseRegion(pane.instanceId, position)}
+                >
+                  {COLLAPSE_ICON[position]}
+                </button>
+                <button
+                  className="frame-region-btn"
+                  title={`Close ${title}`}
+                  onClick={() => toggleRegion(pane.instanceId, position, false)}
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="frame-region-body" style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+                <PaneHost
+                  pane={{
+                    instanceId: `${pane.instanceId}:${position}:${id}`,
+                    viewId: id,
+                  }}
+                />
+              </div>
+            </div>
+          );
+        })}
       </div>
-      <div className="frame-region-body">
-        <PaneHost
-          pane={{
-            // Region views get a synthetic per-host instance id, so e.g. each
-            // buffer's outline keeps a distinct agent-context key.
-            instanceId: `${pane.instanceId}:${position}:${region.activeView}`,
-            viewId: region.activeView,
-          }}
-        />
+    ) : (
+      <div className="frame-region-content">
+        <div className="frame-region-header">
+          {region.views.length > 1 ? (
+            <div className="frame-region-tabs">
+              {region.views.map((id) => (
+                <button
+                  key={id}
+                  className={`frame-region-tab${id === region.activeView ? ' active' : ''}`}
+                  title={declFor(id)?.label ?? id}
+                  onClick={() => setRegionView(pane.instanceId, id)}
+                >
+                  {declFor(id)?.icon ? <span>{declFor(id)!.icon}</span> : null}
+                  <span>{declFor(id)?.label ?? resolveView(id)?.title ?? id}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <>
+              {activeDecl?.icon ? <span>{activeDecl.icon}</span> : null}
+              <span className="frame-region-title">{activeTitle}</span>
+            </>
+          )}
+          <button
+            className="frame-region-btn"
+            title={`Collapse ${position} region (${POSITION_KEY[position]})`}
+            aria-label={`Collapse ${position} region`}
+            onClick={() => collapseRegion(pane.instanceId, position)}
+          >
+            {COLLAPSE_ICON[position]}
+          </button>
+          <button
+            className="frame-region-btn"
+            title={`Close ${activeTitle}`}
+            onClick={() => toggleRegion(pane.instanceId, position, false)}
+          >
+            ✕
+          </button>
+        </div>
+        <div className="frame-region-body">
+          <PaneHost
+            pane={{
+              // Region views get a synthetic per-host instance id, so e.g. each
+              // buffer's outline keeps a distinct agent-context key.
+              instanceId: `${pane.instanceId}:${position}:${region.activeView}`,
+              viewId: region.activeView,
+            }}
+          />
+        </div>
       </div>
-    </div>
-  );
+    );
 
   return (
     <div

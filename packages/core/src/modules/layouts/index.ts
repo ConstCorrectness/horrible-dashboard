@@ -58,13 +58,26 @@ export const layoutsModule: ModuleManifest = {
       icon: '🛠',
       frame: {
         center: {
-          split: 'column',
-          sizes: [0.65, 0.35],
-          children: [{ pane: 'games.board' }, { pane: 'games.lobby' }],
+          split: 'row',
+          sizes: [0.35, 0.65],
+          children: [
+            { pane: 'games.loadout' },
+            {
+              split: 'row',
+              sizes: [0.65, 0.35],
+              children: [
+                { pane: 'games.board' },
+                { pane: 'games.thoughts' },
+              ],
+            },
+          ],
         },
         docks: {
-          left: { tools: ['games.loadout'], size: 320 },
-          right: { tools: ['games.thoughts'], visible: false },
+          left: {
+            tools: ['games.lobby', 'games.ladder', 'games.replays', 'games.players', 'games.profile'],
+            activeTool: 'games.lobby',
+            size: 280,
+          },
         },
       },
     },

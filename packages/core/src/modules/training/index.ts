@@ -116,6 +116,7 @@ export const trainingModule: ModuleManifest = {
       title: 'Notebook',
       component: NotebookPane,
       role: 'document',
+      editor: true,
       icon: '🧠',
       // The training workbench as regions on the notebook itself.
       regions: [

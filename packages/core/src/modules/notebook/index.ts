@@ -52,6 +52,7 @@ export const notebookModule: ModuleManifest = {
       title: 'Notebook',
       component: NotebookEditor,
       role: 'document',
+      editor: true,
       icon: '📓',
       regions: [
         { id: 'notebook.browser', label: 'Notebooks', icon: '📓', key: 'k', position: 'left' },

@@ -143,14 +143,12 @@ export function toggleDock(side: DockSide, visible?: boolean): boolean {
 }
 
 /** The area new documents/widgets land in: focused if compatible, else a match. */
-function targetAreaFor(role: 'document' | 'widget'): string | null {
+function targetAreaFor(): string | null {
   const f = frame();
   const areas = collectAreas(f.center);
   const focused = areas.find((a) => a.id === f.focusedAreaId);
   const compatible = (a: AreaNode): boolean => {
-    const r = areaRole(a);
-    if (r === null) return true; // empty area takes anything
-    return role === 'document' && r === 'document'; // widgets never stack
+    return a.tabs.length === 0;
   };
   if (focused && compatible(focused)) return focused.id;
   const match = areas.find(compatible);
@@ -159,8 +157,9 @@ function targetAreaFor(role: 'document' | 'widget'): string | null {
 
 /**
  * Role-routed open — the frame engine's `registry.openPanel` target. Documents
- * tab into a compatible center area, widgets take an area of their own (splitting
- * if needed), tools go to their dock. Returns the instance id, or null.
+ * and widgets open in an empty area or split the active/focused area to take
+ * their own space (no overlapping tabs). Tools go to their dock.
+ * Returns the instance id, or null.
  */
 export function openPane(viewId: string, opts?: OpenPaneOptions): string | null {
   const decl = resolveView(viewId);
@@ -189,19 +188,14 @@ export function openPane(viewId: string, opts?: OpenPaneOptions): string | null 
     regions: regionsFor(viewId),
   };
 
-  const target = targetAreaFor(role);
-  if (target && findArea(f.center, target)!.tabs.length === 0) {
+  const target = targetAreaFor();
+  if (target) {
     layoutStore.dispatch({ type: 'INSERT_PANE', areaId: target, pane });
     return pane.instanceId;
   }
-  if (target && role === 'document') {
-    layoutStore.dispatch({ type: 'INSERT_PANE', areaId: target, pane });
-    return pane.instanceId;
-  }
-  // No compatible area (widgets always take their own area; a document with no
-  // document area to join): split the focused (or first) area and insert into
+  // No empty area: split the focused (or first) area and insert into
   // the new half — two dispatches so the id allocates from the advanced seq.
-  const areaId = target ?? f.focusedAreaId ?? collectAreas(f.center)[0].id;
+  const areaId = f.focusedAreaId ?? collectAreas(f.center)[0].id;
   const before = layoutStore.getSnapshot();
   const after = layoutStore.dispatch({ type: 'SPLIT_AREA', areaId, direction: 'right' });
   if (after === before) return null;
@@ -423,10 +417,8 @@ export function movePaneTo(
       : null;
   if (!targetId) return false;
   const neighbor = findArea(f.center, targetId)!;
-  const role = roleOf(pane.viewId);
-  const neighborRole = areaRole(neighbor);
-  // Respect area invariants: widgets don't stack, documents don't join widgets.
-  if (neighbor.tabs.length > 0 && (role === 'widget' || neighborRole !== 'document')) {
+  // Areas are single-occupancy: forbidden to move a pane into an already occupied area.
+  if (neighbor.tabs.length > 0) {
     return false;
   }
   const before = layoutStore.getSnapshot();

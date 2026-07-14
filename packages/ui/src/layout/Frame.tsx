@@ -22,6 +22,7 @@ import {
   setCenterMeasurer,
   splitAreaBy,
   toggleDock,
+  toggleRegion,
   workspaceStore,
   type OpenPaneOptions,
 } from '@horrible/core';
@@ -130,6 +131,39 @@ export function Frame({
           title: 'Dock: Toggle bottom',
           run: () => void toggleDock('bottom'),
         },
+        {
+          id: 'region.toggle:left',
+          title: 'Region: Toggle left',
+          run: () => {
+            const areaId = focusedAreaId();
+            if (!areaId) return;
+            const area = findArea(layoutStore.getSnapshot().frame.center, areaId);
+            const active = area?.tabs[area.activeTab];
+            if (active) void toggleRegion(active.instanceId, 'left');
+          },
+        },
+        {
+          id: 'region.toggle:right',
+          title: 'Region: Toggle right',
+          run: () => {
+            const areaId = focusedAreaId();
+            if (!areaId) return;
+            const area = findArea(layoutStore.getSnapshot().frame.center, areaId);
+            const active = area?.tabs[area.activeTab];
+            if (active) void toggleRegion(active.instanceId, 'right');
+          },
+        },
+        {
+          id: 'region.toggle:bottom',
+          title: 'Region: Toggle bottom',
+          run: () => {
+            const areaId = focusedAreaId();
+            if (!areaId) return;
+            const area = findArea(layoutStore.getSnapshot().frame.center, areaId);
+            const active = area?.tabs[area.activeTab];
+            if (active) void toggleRegion(active.instanceId, 'bottom');
+          },
+        },
         ...Array.from({ length: 9 }, (_, i) => ({
           id: `workspace.switch:${i + 1}`,
           title: `Workspace: Switch to #${i + 1}`,
@@ -148,6 +182,9 @@ export function Frame({
         { key: 'mod+b', command: 'dock.toggle:left' },
         { key: 'mod+alt+b', command: 'dock.toggle:right' },
         { key: 'mod+j', command: 'dock.toggle:bottom' },
+        { key: 't', command: 'region.toggle:left' },
+        { key: 'n', command: 'region.toggle:right' },
+        { key: 'b', command: 'region.toggle:bottom' },
         ...Array.from({ length: 9 }, (_, i) => ({
           key: `mod+${i + 1}`,
           command: `workspace.switch:${i + 1}`,

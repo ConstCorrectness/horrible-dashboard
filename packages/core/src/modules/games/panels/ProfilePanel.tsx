@@ -1,13 +1,26 @@
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 
 import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
 import Chip from '@mui/material/Chip';
 import Typography from '@mui/material/Typography';
 import LinearProgress from '@mui/material/LinearProgress';
+import Button from '@mui/material/Button';
+import TextField from '@mui/material/TextField';
+import Dialog from '@mui/material/Dialog';
+import DialogTitle from '@mui/material/DialogTitle';
+import DialogContent from '@mui/material/DialogContent';
+import DialogActions from '@mui/material/DialogActions';
+import List from '@mui/material/List';
+import ListItem from '@mui/material/ListItem';
+import ListItemAvatar from '@mui/material/ListItemAvatar';
+import Avatar from '@mui/material/Avatar';
+import IconButton from '@mui/material/IconButton';
+import MenuItem from '@mui/material/MenuItem';
+import Select from '@mui/material/Select';
 
 import { apiGet } from '../../../api';
-import { profileGet, profileSet, useGames } from '../game-ws';
+import { profileGet, profileSet, friendList, friendRequest, friendAccept, friendRemove, socialInvite, useGames } from '../game-ws';
 import { fetchGamesCatalog, fetchLeaderboard, type GameCatalogEntry } from '../games-api';
 import { openReplay } from '../replay-focus';
 import { GamesMui } from '../mui-theme';
@@ -31,16 +44,27 @@ interface TierCard {
   record: string;
 }
 
-/** Your arena identity: avatar + level ring, per-game tier cards, and the recent
- * match log with loadout/model attribution and one-click replays. */
 export function ProfilePanel() {
   const { social, accountId } = useGames();
   const [cards, setCards] = useState<TierCard[]>([]);
   const [log, setLog] = useState<MatchEntry[]>([]);
+  
+  // Custom states for editing
   const [editingAvatar, setEditingAvatar] = useState(false);
+  const [editingBio, setEditingBio] = useState(false);
+  const [bioInput, setBioInput] = useState('');
+  const [friendIdInput, setFriendIdInput] = useState('');
+
+  // Challenge modal states
+  const [challengeTarget, setChallengeTarget] = useState<string | null>(null);
+  const [challengeTargetName, setChallengeTargetName] = useState<string>('');
+  const [challengeGameId, setChallengeGameId] = useState<string>('tictactoe');
+  const [catalogGames, setCatalogGames] = useState<GameCatalogEntry[]>([]);
 
   useEffect(() => {
     profileGet();
+    friendList();
+    fetchGamesCatalog().then(setCatalogGames);
     apiGet<{ entries: MatchEntry[] }>('/games/match-log?limit=30')
       .then((r) => setLog(r.entries))
       .catch(() => setLog([]));
@@ -72,6 +96,14 @@ export function ProfilePanel() {
   }, [accountId]);
 
   const profile = social.profile;
+
+  // Sync bio input when profile loads
+  useEffect(() => {
+    if (profile) {
+      setBioInput(profile.bio || '');
+    }
+  }, [profile]);
+
   const pct =
     profile && profile.next_level_xp !== null
       ? Math.min(
@@ -83,140 +115,566 @@ export function ProfilePanel() {
         )
       : 100;
 
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (uploadEvent) => {
+      const base64 = uploadEvent.target?.result as string;
+      profileSet(base64, profile?.bio);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSaveBio = () => {
+    profileSet(profile?.avatar, bioInput);
+    setEditingBio(false);
+  };
+
+  const handleSendFriendRequest = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (friendIdInput.trim()) {
+      friendRequest(friendIdInput.trim());
+      setFriendIdInput('');
+    }
+  };
+
+  const handleLaunchChallenge = () => {
+    if (challengeTarget && challengeGameId) {
+      socialInvite(challengeTarget, challengeGameId);
+      setChallengeTarget(null);
+    }
+  };
+
+  const renderAvatar = (avatarStr: string, size = '4.5rem') => {
+    if (
+      avatarStr.startsWith('data:image/') ||
+      avatarStr.startsWith('http://') ||
+      avatarStr.startsWith('https://')
+    ) {
+      return (
+        <img
+          src={avatarStr}
+          alt="Profile Avatar"
+          style={{
+            width: size,
+            height: size,
+            borderRadius: '50%',
+            objectFit: 'cover',
+            border: '2px solid var(--accent, #6ea8fe)',
+          }}
+        />
+      );
+    }
+    return (
+      <Avatar
+        sx={{
+          width: size,
+          height: size,
+          fontSize: size === '4.5rem' ? '2.2rem' : '1.5rem',
+          bgcolor: 'rgba(110, 168, 254, 0.1)',
+          border: '2px solid var(--accent, #6ea8fe)',
+          color: 'var(--accent, #6ea8fe)',
+        }}
+      >
+        {avatarStr}
+      </Avatar>
+    );
+  };
+
   return (
     <GamesMui>
       <div
         style={{
-          padding: '0.8rem',
+          padding: '1rem',
           fontSize: '0.85rem',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '0.8rem',
           height: '100%',
-          overflow: 'auto',
+          overflowY: 'auto',
+          color: 'var(--text)',
+          boxSizing: 'border-box',
         }}
       >
-        {profile ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem' }}>
-            <button
-              type="button"
-              className="games-profile-avatar"
-              title="change avatar"
-              onClick={() => setEditingAvatar((v) => !v)}
-            >
-              {profile.avatar}
-            </button>
-            <div>
-              <div style={{ fontWeight: 800, fontSize: '1.05rem' }}>
-                {profile.handle ?? profile.account_id}
-              </div>
-              <div style={{ color: 'var(--text-dim)' }}>
-                Level {profile.level} · {profile.xp} XP
-              </div>
-              <LinearProgress
-                variant="determinate"
-                value={Math.max(4, pct)}
-                sx={{ width: '14rem', mt: 0.5, height: 8, borderRadius: 999 }}
-              />
-            </div>
-          </div>
-        ) : (
-          <div style={{ color: 'var(--text-dim)' }}>
+        {!profile ? (
+          <div style={{ color: 'var(--text-dim)', textAlign: 'center', marginTop: '2rem' }}>
             Connect to the game server to load your profile.
           </div>
-        )}
-        {editingAvatar && (
-          <div className="games-onboard-avatars">
-            {['🤖', '🦾', '🧠', '👾', '🐙', '🦊', '🐲', '⚡', '🛠', '🎯', '🃏', '🚀'].map((a) => (
-              <button
-                key={a}
-                type="button"
-                className="games-avatar-pick"
-                onClick={() => {
-                  profileSet(a);
-                  setEditingAvatar(false);
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+            
+            {/* ── Steam-Style Header ── */}
+            <Card
+              sx={{
+                background: 'linear-gradient(135deg, rgba(38,42,50,0.9) 0%, rgba(20,22,26,0.9) 100%)',
+                borderColor: 'divider',
+              }}
+            >
+              <CardContent
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '1.2rem',
+                  flexWrap: 'wrap',
+                  position: 'relative',
+                  p: '1.5rem',
                 }}
               >
-                {a}
-              </button>
-            ))}
-          </div>
-        )}
+                <div style={{ position: 'relative' }}>
+                  {renderAvatar(profile.avatar)}
+                  <button
+                    type="button"
+                    style={{
+                      position: 'absolute',
+                      bottom: 0,
+                      right: 0,
+                      background: 'var(--accent, #6ea8fe)',
+                      color: '#000',
+                      border: 'none',
+                      borderRadius: '50%',
+                      width: '1.8rem',
+                      height: '1.8rem',
+                      fontSize: '0.9rem',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
+                    }}
+                    title="Change picture / avatar"
+                    onClick={() => setEditingAvatar((v) => !v)}
+                  >
+                    ✏️
+                  </button>
+                </div>
 
-        <div>
-          <strong>Ranked tiers</strong>
-          {cards.length === 0 ? (
-            <div style={{ color: 'var(--text-dim)' }}>No rated games yet — hit Find match.</div>
-          ) : (
-            <div className="games-cards" style={{ marginTop: '0.3rem' }}>
-              {cards.map((c) => (
-                <Card key={c.game_id}>
-                  <CardContent
-                    sx={{
+                <div style={{ flex: 1, minWidth: '200px' }}>
+                  <Typography variant="h5" sx={{ fontWeight: 800, mb: 0.2 }}>
+                    {profile.handle ?? profile.account_id}
+                  </Typography>
+                  <Typography variant="body2" sx={{ color: 'text.secondary', fontSize: '0.78rem' }}>
+                    ID: {profile.account_id}
+                  </Typography>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginTop: '0.6rem' }}>
+                    <Typography variant="subtitle2" sx={{ fontWeight: 700, color: 'var(--accent, #6ea8fe)' }}>
+                      Level {profile.level}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {profile.xp} XP
+                    </Typography>
+                  </div>
+                  <LinearProgress
+                    variant="determinate"
+                    value={Math.max(4, pct)}
+                    sx={{ width: '100%', maxWidth: '280px', mt: 0.5, height: 6, borderRadius: 999 }}
+                  />
+                </div>
+
+                {editingAvatar && (
+                  <div
+                    style={{
+                      width: '100%',
+                      marginTop: '1rem',
+                      paddingTop: '1rem',
+                      borderTop: '1px solid var(--border)',
                       display: 'flex',
                       flexDirection: 'column',
-                      gap: 0.5,
-                      '&:last-child': { pb: 2 },
+                      gap: '0.8rem',
                     }}
                   >
-                    <Typography sx={{ fontWeight: 700 }}>{c.name}</Typography>
-                    <Chip
-                      size="small"
-                      color={c.tier ? 'primary' : 'default'}
-                      variant="outlined"
-                      label={c.tier ?? '—'}
-                      sx={{ alignSelf: 'flex-start' }}
-                    />
-                    <Typography variant="caption" color="text.secondary">
-                      {c.rating ?? '···'} · {c.record}
-                    </Typography>
+                    <div>
+                      <Typography variant="caption" sx={{ display: 'block', mb: 0.5, fontWeight: 700, color: 'text.secondary' }}>
+                        UPLOAD PICTURE
+                      </Typography>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleFileUpload}
+                        style={{ fontSize: '0.8rem' }}
+                      />
+                    </div>
+                    <div>
+                      <Typography variant="caption" sx={{ display: 'block', mb: 0.5, fontWeight: 700, color: 'text.secondary' }}>
+                        OR SELECT EMOJI
+                      </Typography>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                        {['🤖', '🦾', '🧠', '👾', '🐙', '🦊', '🐲', '⚡', '🛠', '🎯', '🃏', '🚀', '👑', '🧙', '🐯', '🐼'].map((a) => (
+                          <button
+                            key={a}
+                            type="button"
+                            style={{
+                              background: 'rgba(255,255,255,0.05)',
+                              border: 'none',
+                              borderRadius: '4px',
+                              padding: '0.4rem',
+                              fontSize: '1.2rem',
+                              cursor: 'pointer',
+                            }}
+                            onClick={() => {
+                              profileSet(a, profile?.bio);
+                              setEditingAvatar(false);
+                            }}
+                          >
+                            {a}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* ── Two-Column Steam Layout ── */}
+            <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
+              
+              {/* Left Column (Bio & Replays) */}
+              <div style={{ flex: '2 1 500px', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                
+                {/* Biography / Description */}
+                <Card sx={{ borderColor: 'divider' }}>
+                  <CardContent sx={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <Typography variant="subtitle1" sx={{ fontWeight: 800, color: 'text.secondary' }}>
+                        📝 Profile Description
+                      </Typography>
+                      {!editingBio && (
+                        <Button size="small" onClick={() => setEditingBio(true)}>
+                          Edit Bio
+                        </Button>
+                      )}
+                    </div>
+
+                    {editingBio ? (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                        <TextField
+                          multiline
+                          rows={3}
+                          fullWidth
+                          variant="outlined"
+                          size="small"
+                          placeholder="Tell people about yourself or your agent's strategy..."
+                          value={bioInput}
+                          onChange={(e) => setBioInput(e.target.value)}
+                        />
+                        <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
+                          <Button size="small" variant="outlined" color="inherit" onClick={() => setEditingBio(false)}>
+                            Cancel
+                          </Button>
+                          <Button size="small" variant="contained" color="primary" onClick={handleSaveBio}>
+                            Save
+                          </Button>
+                        </div>
+                      </div>
+                    ) : (
+                      <Typography variant="body2" sx={{ fontStyle: profile.bio ? 'normal' : 'italic', color: profile.bio ? 'text.primary' : 'text.secondary', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
+                        {profile.bio || 'No profile description set yet. Click Edit Bio to write one!'}
+                      </Typography>
+                    )}
                   </CardContent>
                 </Card>
-              ))}
-            </div>
-          )}
-        </div>
 
-        <div>
-          <strong>Recent matches</strong>
-          {log.length === 0 ? (
-            <div style={{ color: 'var(--text-dim)' }}>Nothing yet.</div>
-          ) : (
-            <table style={{ borderCollapse: 'collapse', width: '100%', marginTop: '0.3rem' }}>
-              <tbody>
-                {log.map((e, i) => (
-                  <tr key={i} style={{ borderTop: '1px solid var(--border)' }}>
-                    <td style={{ padding: '0.2rem 0.4rem' }}>
-                      {e.result === 'win' ? '🏆' : e.result === 'loss' ? '💥' : '🤝'} {e.game_id}
-                    </td>
-                    <td style={{ padding: '0.2rem 0.4rem', color: 'var(--text-dim)' }}>
-                      {e.loadout_version ?? '—'}
-                      {e.model_label ? ` · ${e.model_label}` : ''}
-                    </td>
-                    <td style={{ padding: '0.2rem 0.4rem' }}>
-                      {e.rating_delta !== null && (
-                        <span style={{ color: e.rating_delta >= 0 ? '#3fb950' : '#e5534b' }}>
-                          {e.rating_delta >= 0 ? '+' : ''}
-                          {e.rating_delta}
-                        </span>
-                      )}
-                    </td>
-                    <td style={{ padding: '0.2rem 0.4rem', color: 'var(--text-dim)' }}>
-                      {new Date(e.ts * 1000).toLocaleString()}
-                    </td>
-                    <td style={{ padding: '0.2rem 0.4rem' }}>
-                      {e.replay_id && (
-                        <button type="button" onClick={() => openReplay(e.replay_id!)}>
-                          📼
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
+                {/* Recent Matches */}
+                <Card sx={{ borderColor: 'divider' }}>
+                  <CardContent sx={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                    <Typography variant="subtitle1" sx={{ fontWeight: 800, color: 'text.secondary', mb: 0.5 }}>
+                      📼 Recent Match Replays
+                    </Typography>
+                    {log.length === 0 ? (
+                      <Typography variant="body2" color="text.secondary" sx={{ py: 1, textAlign: 'center' }}>
+                        No matches recorded yet. Complete a casual or ranked game to see replays here.
+                      </Typography>
+                    ) : (
+                      <div style={{ overflowX: 'auto' }}>
+                        <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: '0.8rem' }}>
+                          <thead>
+                            <tr style={{ borderBottom: '1px solid var(--border)', textAlign: 'left', color: 'var(--text-dim)' }}>
+                              <th style={{ padding: '0.4rem' }}>Result</th>
+                              <th style={{ padding: '0.4rem' }}>Game</th>
+                              <th style={{ padding: '0.4rem' }}>Harness Details</th>
+                              <th style={{ padding: '0.4rem' }}>Rating Change</th>
+                              <th style={{ padding: '0.4rem' }}>Date</th>
+                              <th style={{ padding: '0.4rem', textAlign: 'center' }}>Replay</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {log.map((e, i) => (
+                              <tr key={i} style={{ borderBottom: '1px solid var(--border)', '&:hover': { background: 'rgba(255,255,255,0.02)' } } as any}>
+                                <td style={{ padding: '0.4rem', fontWeight: 700 }}>
+                                  {e.result === 'win' ? (
+                                    <span style={{ color: '#3fb950' }}>🏆 Win</span>
+                                  ) : e.result === 'loss' ? (
+                                    <span style={{ color: '#e5534b' }}>💥 Loss</span>
+                                  ) : (
+                                    <span style={{ color: 'var(--text-dim)' }}>🤝 Draw</span>
+                                  )}
+                                </td>
+                                <td style={{ padding: '0.4rem', textTransform: 'capitalize' }}>
+                                  {e.game_id.replace('_', ' ')}
+                                </td>
+                                <td style={{ padding: '0.4rem', color: 'var(--text-dim)' }}>
+                                  {e.loadout_version ?? 'v1'}
+                                  {e.model_label ? ` (${e.model_label})` : ''}
+                                </td>
+                                <td style={{ padding: '0.4rem' }}>
+                                  {e.rating_delta !== null ? (
+                                    <span style={{ color: e.rating_delta >= 0 ? '#3fb950' : '#e5534b', fontWeight: 700 }}>
+                                      {e.rating_delta >= 0 ? `+${e.rating_delta}` : e.rating_delta}
+                                    </span>
+                                  ) : (
+                                    <span style={{ color: 'var(--text-dim)' }}>—</span>
+                                  )}
+                                </td>
+                                <td style={{ padding: '0.4rem', color: 'var(--text-dim)' }}>
+                                  {new Date(e.ts * 1000).toLocaleDateString()}
+                                </td>
+                                <td style={{ padding: '0.4rem', textAlign: 'center' }}>
+                                  {e.replay_id ? (
+                                    <Button
+                                      size="small"
+                                      variant="outlined"
+                                      sx={{ minWidth: 0, py: 0.1, px: 1, fontSize: '0.72rem' }}
+                                      onClick={() => openReplay(e.replay_id!)}
+                                    >
+                                      📼 Play
+                                    </Button>
+                                  ) : (
+                                    '—'
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Right Column (Tiers & Friends) */}
+              <div style={{ flex: '1 1 320px', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                
+                {/* Friends List Card */}
+                <Card sx={{ borderColor: 'divider' }}>
+                  <CardContent sx={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <Typography variant="subtitle1" sx={{ fontWeight: 800, color: 'text.secondary' }}>
+                        👥 Friends List ({social.friends.length})
+                      </Typography>
+                    </div>
+
+                    {/* Friend Add Input */}
+                    <form onSubmit={handleSendFriendRequest} style={{ display: 'flex', gap: '0.4rem' }}>
+                      <TextField
+                        size="small"
+                        placeholder="Add friend by Account ID..."
+                        variant="outlined"
+                        value={friendIdInput}
+                        onChange={(e) => setFriendIdInput(e.target.value)}
+                        fullWidth
+                        sx={{ input: { fontSize: '0.75rem', py: 0.6 } }}
+                      />
+                      <Button type="submit" variant="contained" size="small" sx={{ fontSize: '0.7rem' }}>
+                        Request
+                      </Button>
+                    </form>
+
+                    {/* Pending incoming requests */}
+                    {social.pending.length > 0 && (
+                      <div style={{ background: 'rgba(110, 168, 254, 0.05)', borderRadius: '4px', padding: '0.5rem' }}>
+                        <Typography variant="caption" sx={{ display: 'block', mb: 0.5, fontWeight: 700, color: 'primary.main' }}>
+                          📥 INCOMING FRIEND REQUESTS ({social.pending.length})
+                        </Typography>
+                        <List dense sx={{ p: 0 }}>
+                          {social.pending.map((req) => (
+                            <ListItem
+                              key={req.account_id}
+                              sx={{ px: 0.4, py: 0.2, display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                            >
+                              <ListItemAvatar sx={{ minWidth: 0 }}>
+                                {renderAvatar(req.avatar, '1.8rem')}
+                              </ListItemAvatar>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontSize: '0.78rem', fontWeight: 700 }}>
+                                  {req.display_name}
+                                </div>
+                              </div>
+                              <div style={{ display: 'flex', gap: '0.2rem' }}>
+                                <Button
+                                  size="small"
+                                  variant="contained"
+                                  color="success"
+                                  sx={{ minWidth: 0, py: 0.1, px: 0.8, fontSize: '0.65rem' }}
+                                  onClick={() => friendAccept(req.account_id)}
+                                >
+                                  Accept
+                                </Button>
+                                <Button
+                                  size="small"
+                                  variant="outlined"
+                                  color="error"
+                                  sx={{ minWidth: 0, py: 0.1, px: 0.8, fontSize: '0.65rem' }}
+                                  onClick={() => friendRemove(req.account_id)}
+                                >
+                                  Decline
+                                </Button>
+                              </div>
+                            </ListItem>
+                          ))}
+                        </List>
+                      </div>
+                    )}
+
+                    {/* Friends Roster */}
+                    {social.friends.length === 0 ? (
+                      <Typography variant="body2" color="text.secondary" sx={{ py: 1, textAlign: 'center' }}>
+                        No friends added yet. Send requests using their account ID above.
+                      </Typography>
+                    ) : (
+                      <List dense sx={{ p: 0 }}>
+                        {social.friends.map((friend) => (
+                          <ListItem
+                            key={friend.account_id}
+                            secondaryAction={
+                              <div style={{ display: 'flex', gap: '0.2rem', alignItems: 'center' }}>
+                                {friend.online && (
+                                  <Button
+                                    size="small"
+                                    variant="outlined"
+                                    color="primary"
+                                    sx={{ py: 0.1, px: 0.8, fontSize: '0.65rem', textTransform: 'none' }}
+                                    onClick={() => {
+                                      setChallengeTarget(friend.account_id);
+                                      setChallengeTargetName(friend.display_name);
+                                    }}
+                                  >
+                                    Challenge
+                                  </Button>
+                                )}
+                                <IconButton
+                                  size="small"
+                                  color="error"
+                                  onClick={() => friendRemove(friend.account_id)}
+                                  title="Remove friend"
+                                >
+                                  🗑
+                                </IconButton>
+                              </div>
+                            }
+                            sx={{ px: 0, py: 0.4 }}
+                          >
+                            <ListItemAvatar sx={{ minWidth: 0, mr: '0.6rem', position: 'relative' }}>
+                              {renderAvatar(friend.avatar, '2.2rem')}
+                              <div
+                                style={{
+                                  position: 'absolute',
+                                  bottom: 0,
+                                  right: 0,
+                                  width: '0.65rem',
+                                  height: '0.65rem',
+                                  borderRadius: '50%',
+                                  border: '2px solid var(--bg-raised, #1d2026)',
+                                  background: friend.online ? '#3fb950' : '#8a909c',
+                                }}
+                                title={friend.online ? 'Online' : 'Offline'}
+                              />
+                            </ListItemAvatar>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: '0.82rem', fontWeight: 700 }}>
+                                {friend.display_name}
+                              </div>
+                              <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>
+                                Lv {friend.level} · {friend.online ? 'Online' : 'Offline'}
+                              </div>
+                            </div>
+                          </ListItem>
+                        ))}
+                      </List>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* Ranked Game Tiers */}
+                <Card sx={{ borderColor: 'divider' }}>
+                  <CardContent sx={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                    <Typography variant="subtitle1" sx={{ fontWeight: 800, color: 'text.secondary' }}>
+                      🏆 Ranked Skill Tiers
+                    </Typography>
+                    {cards.length === 0 ? (
+                      <Typography variant="body2" color="text.secondary" sx={{ py: 1, textAlign: 'center' }}>
+                        No ranked game tiers records yet. Complete ranked games in the lobby to earn ratings.
+                      </Typography>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                        {cards.map((c) => (
+                          <div
+                            key={c.game_id}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              background: 'rgba(255,255,255,0.02)',
+                              border: '1px solid var(--border)',
+                              borderRadius: '4px',
+                              padding: '0.5rem 0.7rem',
+                            }}
+                          >
+                            <div>
+                              <Typography sx={{ fontWeight: 800, fontSize: '0.8rem' }}>{c.name}</Typography>
+                              <Typography variant="caption" color="text.secondary">
+                                Rating: {c.rating ?? '···'} · {c.record}
+                              </Typography>
+                            </div>
+                            <Chip
+                              size="small"
+                              color={c.tier ? 'primary' : 'default'}
+                              variant="outlined"
+                              label={c.tier ?? '—'}
+                              sx={{ height: 20, fontSize: '0.7rem', fontWeight: 700 }}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+
+            </div>
+
+            {/* ── Challenge Invitation Dialog ── */}
+            <Dialog open={challengeTarget !== null} onClose={() => setChallengeTarget(null)}>
+              <DialogTitle sx={{ fontWeight: 800, fontSize: '1rem' }}>
+                ⚔️ Challenge {challengeTargetName}
+              </DialogTitle>
+              <DialogContent sx={{ minWidth: '280px', py: 1 }}>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                  Select the game you would like to challenge them to play:
+                </Typography>
+                <Select
+                  value={challengeGameId}
+                  onChange={(e) => setChallengeGameId(e.target.value)}
+                  fullWidth
+                  size="small"
+                >
+                  {catalogGames.map((g) => (
+                    <MenuItem key={g.id} value={g.id}>
+                      {g.name}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </DialogContent>
+              <DialogActions sx={{ p: 2 }}>
+                <Button onClick={() => setChallengeTarget(null)} color="inherit">
+                  Cancel
+                </Button>
+                <Button onClick={handleLaunchChallenge} variant="contained" color="primary">
+                  Send Invite
+                </Button>
+              </DialogActions>
+            </Dialog>
+
+          </div>
+        )}
       </div>
     </GamesMui>
   );

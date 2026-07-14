@@ -142,6 +142,8 @@ export interface PanelDecl {
   agentTools?: AgentToolDecl[];
   /** When set, this pane is network-aware: it syncs over the `collab` channel. */
   collab?: CollabDecl;
+  /** When true, this view is an editor/input view that needs all plain-letter key events (e.g. t, n, b) without modifiers. */
+  editor?: boolean;
 }
 
 /**
@@ -170,6 +172,8 @@ export interface WidgetDecl {
   agentTools?: AgentToolDecl[];
   /** When set, this pane is network-aware: it syncs over the `collab` channel. */
   collab?: CollabDecl;
+  /** When true, this view is an editor/input view that needs all plain-letter key events (e.g. t, n, b) without modifiers. */
+  editor?: boolean;
 }
 
 /**

@@ -48,6 +48,7 @@ export const terminalModule: ModuleManifest = {
       title: 'Terminal',
       component: TerminalPane,
       role: 'tool',
+      editor: true,
       icon: '❯',
       defaultDock: 'bottom',
       agentTools: terminalAgentTools,

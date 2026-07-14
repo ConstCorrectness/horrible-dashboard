@@ -121,7 +121,16 @@ export function AppShell({
       // typing. Ignore no-modifier keydowns originating in a text field; `mod+`
       // shortcuts still work (they carry ctrl/meta).
       if (!e.ctrlKey && !e.metaKey && isEditableTarget(e.target)) return;
-      const command = resolveKeybinding(e, getActiveScope(), registry.keybindings);
+
+      const scope = getActiveScope();
+      const isEditorFocused = scope
+        ? registry.panels.find((p) => p.id === scope)?.editor ||
+          registry.widgets.find((w) => w.id === scope)?.editor
+        : false;
+      const isPlainKey = !e.ctrlKey && !e.metaKey && !e.altKey;
+      if (isPlainKey && isEditorFocused) return;
+
+      const command = resolveKeybinding(e, scope, registry.keybindings);
       if (command) {
         e.preventDefault();
         void registry.runCommand(command);

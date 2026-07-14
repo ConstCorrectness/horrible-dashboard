@@ -57,7 +57,6 @@ export function AreaHeader({ area }: { area: AreaNode }) {
 
   const active: PaneState | undefined = area.tabs[area.activeTab];
   const activeDecl = active ? resolveView(active.viewId) : undefined;
-  const isDocumentArea = active ? roleOf(active.viewId) === 'document' : false;
   const regionPositions = (resolveView(active?.viewId ?? '')?.regions ?? []).reduce(
     (set, r) => set.add(r.position ?? 'right'),
     new Set<RegionPosition>(),
@@ -103,41 +102,11 @@ export function AreaHeader({ area }: { area: AreaNode }) {
         )}
       </div>
 
-      {isDocumentArea ? (
-        <div className="frame-area-tabs">
-          {area.tabs.map((tab, i) => {
-            const decl = resolveView(tab.viewId);
-            const title = (tab.params?.title as string | undefined) ?? decl?.title ?? tab.viewId;
-            return (
-              <span
-                key={tab.instanceId}
-                className={`frame-area-tab${i === area.activeTab ? ' active' : ''}`}
-                onAuxClick={(e) => {
-                  if (e.button === 1) closeTab(tab);
-                }}
-              >
-                <button
-                  className="frame-area-tab-label"
-                  onClick={() =>
-                    layoutStore.dispatch({ type: 'SET_ACTIVE_TAB', areaId: area.id, index: i })
-                  }
-                >
-                  {title}
-                </button>
-                <button
-                  className="frame-area-tab-close"
-                  title="Close"
-                  onClick={() => closeTab(tab)}
-                >
-                  ✕
-                </button>
-              </span>
-            );
-          })}
-        </div>
-      ) : (
-        <span className="frame-area-title">{activeDecl?.title ?? 'Empty area'}</span>
-      )}
+      <span className="frame-area-title">
+        {active
+          ? ((active.params?.title as string | undefined) ?? activeDecl?.title ?? active.viewId)
+          : 'Empty area'}
+      </span>
 
       <div className="frame-area-header-actions">
         {active &&
