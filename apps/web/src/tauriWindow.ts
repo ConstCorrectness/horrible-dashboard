@@ -25,5 +25,6 @@ export function createTauriWindowControl(): WindowControl {
     startResizeDragging: (edge) =>
       invoke<void>('window_start_resize_dragging', { direction: edge }),
     openWorkspaceWindow: (workspaceId) => invoke<void>('window_open_workspace', { workspaceId }),
+    openBrowserWindow: (url) => invoke<void>('browser_open_url', { url }),
   };
 }

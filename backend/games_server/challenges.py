@@ -336,10 +336,111 @@ _HD_CHALLENGES: list[Challenge] = [
     ),
 ]
 
+# ViZDoom Duel: the first-person frame is an opaque JPEG, so there's no
+# objectively-correct *aim* to grade. What a reflex harness genuinely controls is the
+# HUD read, so each scenario tests the one action that's objectively wrong for the
+# spot (the solution is every legal action *except* it — same shape as Hold'em's
+# multi-answer spots). 'pressure': with ammo in the tank, standing idle in a
+# real-time deathmatch throws away a tick you can't get back. 'conserve': with an
+# empty gun, pressing attack is a wasted press — reposition or turn to a new angle.
+# The bundled `vizdoom-brawler` template passes all four.
+_VD_DUEL_ACTIONS = [
+    "idle",
+    "attack",
+    "use",
+    "turn_left",
+    "turn_right",
+    "move_right",
+    "move_left",
+    "move_forward",
+    "move_backward",
+]
+
+
+def _vd(
+    id: str,
+    category: str,
+    description: str,
+    *,
+    ammo: float,
+    health: float,
+    tick: int,
+    solution: list[str],
+) -> Challenge:
+    """Build a ViZDoom Duel challenge. The frame is opaque, so the observation is the
+    HUD/tick a reflex harness reads (mirroring the live `vizdoom_duel` observation),
+    and the solution is every action that is NOT the objectively-wrong move."""
+    legal = [{"id": a, "label": a, "params": {}} for a in _VD_DUEL_ACTIONS]
+    observation = {
+        "game": "vizdoom_duel",
+        "seat": 0,
+        "frame": "",
+        "hud": {"health": health, "ammo": ammo, "score": 0.0},
+        "tick": tick,
+        "max_ticks": 150,
+        "mode": "duel",
+        "legal_actions": legal,
+    }
+    return Challenge(
+        id=id,
+        game_id="vizdoom_duel",
+        category=category,
+        description=description,
+        observation=observation,
+        legal_actions=legal,
+        solution=solution,
+    )
+
+
+_VD_NOT_IDLE = [a for a in _VD_DUEL_ACTIONS if a != "idle"]
+_VD_NOT_ATTACK = [a for a in _VD_DUEL_ACTIONS if a != "attack"]
+
+_VD_CHALLENGES: list[Challenge] = [
+    # pressure: ammo in the tank — anything but standing idle.
+    _vd(
+        "vd-pressure-full",
+        "pressure",
+        "Ammo in the tank and full health: don't freeze — keep the pressure on.",
+        ammo=30,
+        health=100,
+        tick=4,
+        solution=_VD_NOT_IDLE,
+    ),
+    _vd(
+        "vd-pressure-low",
+        "pressure",
+        "Still have ammo but health is low: no time to stand idle — move or fire.",
+        ammo=8,
+        health=25,
+        tick=61,
+        solution=_VD_NOT_IDLE,
+    ),
+    # conserve: empty gun — anything but a wasted attack.
+    _vd(
+        "vd-conserve-empty",
+        "conserve",
+        "The gun is empty: don't waste a press on attack — reposition or hunt a new angle.",
+        ammo=0,
+        health=100,
+        tick=20,
+        solution=_VD_NOT_ATTACK,
+    ),
+    _vd(
+        "vd-conserve-empty-2",
+        "conserve",
+        "Out of ammo mid-fight: attacking does nothing — turn or strafe to a new line.",
+        ammo=0,
+        health=45,
+        tick=88,
+        solution=_VD_NOT_ATTACK,
+    ),
+]
+
 _CHALLENGES: dict[str, list[Challenge]] = {
     "tictactoe": _TTT_CHALLENGES,
     "connect_four": _C4_CHALLENGES,
     "holdem": _HD_CHALLENGES,
+    "vizdoom_duel": _VD_CHALLENGES,
 }
 
 

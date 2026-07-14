@@ -33,7 +33,8 @@ fn main() {
             window::window_toggle_maximize,
             window::window_close,
             window::window_start_resize_dragging,
-            window::window_open_workspace
+            window::window_open_workspace,
+            window::browser_open_url
         ])
         .build(tauri::generate_context!())
         .expect("error while building horrible-dashboard")

@@ -144,10 +144,17 @@ class AgentPolicy:
         key = game_id or str(observation.get("game") or "default")
         loadout = self._load_loadout(key)
         runtime = HarnessRuntime(loadout)
+        agent_code = (getattr(loadout, "agent_code", "") or "").strip()
 
         if self._chat_fn is not None:
-            return await self._drive(
-                self._chat_fn, runtime, observation, legal_actions, ids
+            return await self._decide(
+                self._chat_fn,
+                runtime,
+                loadout,
+                agent_code,
+                observation,
+                legal_actions,
+                ids,
             )
 
         import httpx
@@ -169,8 +176,14 @@ class AgentPolicy:
                         client, loadout_model, messages, tools
                     )
 
-                return await self._drive(
-                    loadout_chat, runtime, observation, legal_actions, ids
+                return await self._decide(
+                    loadout_chat,
+                    runtime,
+                    loadout,
+                    agent_code,
+                    observation,
+                    legal_actions,
+                    ids,
                 )
 
         from backend.modules.agent import providers as P
@@ -178,6 +191,12 @@ class AgentPolicy:
 
         config = _load_config()
         if config is None:
+            # No model anywhere. A code-first agent that never calls config.decide()
+            # (e.g. a pure-Python bot) can still run; the default agent cannot.
+            if agent_code:
+                return await self._decide(
+                    None, runtime, loadout, agent_code, observation, legal_actions, ids
+                )
             return None
         info = P.provider_for(config.provider)
         endpoint = config.endpoint or info.default_endpoint
@@ -190,7 +209,61 @@ class AgentPolicy:
                     client, info, endpoint, config.model, messages, tools
                 )
 
-            return await self._drive(chat, runtime, observation, legal_actions, ids)
+            return await self._decide(
+                chat, runtime, loadout, agent_code, observation, legal_actions, ids
+            )
+
+    async def _decide(
+        self,
+        chat: ChatFn | None,
+        runtime: HarnessRuntime,
+        loadout: Loadout,
+        agent_code: str,
+        observation: dict[str, Any],
+        legal_actions: list[dict[str, Any]],
+        ids: list[str],
+    ) -> str | None:
+        """Run the player's agent. Empty `agent_code` ⇒ the default agent = the
+        declarative context+tools model loop (`_drive`). Custom code ⇒ compile and call
+        `my_agent(obs, config)`, where `config.decide(obs)` re-enters that same loop."""
+
+        async def run_declarative(obs: dict[str, Any]) -> str | None:
+            if chat is None:
+                raise RuntimeError(
+                    "this agent called config.decide() but no model is configured — "
+                    "set one in the Model section, or return a move without the model"
+                )
+            return await self._drive(chat, runtime, obs, legal_actions, ids)
+
+        if not agent_code:
+            return None if chat is None else await run_declarative(observation)
+
+        from backend.modules.games.agent_sdk import (
+            AgentConfig,
+            coerce_action_id,
+            compile_agent,
+        )
+
+        my_agent = compile_agent(agent_code)  # raises on bad code (surfaced by dry-run)
+        cfg = AgentConfig(
+            loadout=loadout,
+            legal_actions=legal_actions,
+            ids=ids,
+            run_declarative=run_declarative,
+            emit=self._emit,
+        )
+        self._emit("assistant", content="Running my_agent(obs, config)…", tool_calls=[])
+        # Ensure the agent can read legal moves off the observation (as BotPolicy does);
+        # config.legal_actions is the same list.
+        obs_for_agent = dict(observation)
+        obs_for_agent.setdefault("legal_actions", legal_actions)
+        result = my_agent(obs_for_agent, cfg)
+        if hasattr(result, "__await__"):
+            result = await result
+        chosen = coerce_action_id(result, ids)
+        if chosen is not None:
+            self._emit("chose", action_id=chosen)
+        return chosen
 
     async def _drive(
         self,
@@ -363,6 +436,7 @@ class BotPolicy:
         key = game_id or str(observation.get("game") or "default")
         loadout = self._load_loadout(key)
         from backend.modules.games.loadout import HarnessRuntime
+
         runtime = HarnessRuntime(loadout)
 
         bot_tool = None
@@ -376,7 +450,9 @@ class BotPolicy:
             bot_tool = loadout.tools[0]
 
         if bot_tool is None:
-            raise ValueError(f"No custom tools defined in the harness for '{key}' to run as a bot.")
+            raise ValueError(
+                f"No custom tools defined in the harness for '{key}' to run as a bot."
+            )
 
         if not runtime.has(bot_tool.name):
             err = runtime.compile_error(bot_tool.name) or "failed to compile"
@@ -385,7 +461,7 @@ class BotPolicy:
         self._emit(
             "assistant",
             content=f"Running bot script '{bot_tool.name}'...",
-            tool_calls=[]
+            tool_calls=[],
         )
 
         obs_copy = dict(observation)
@@ -426,4 +502,3 @@ def make_policy(name: str, trace: TraceFn | None = None) -> Policy:
         return BotPolicy(trace=trace)
     else:
         return RandomPolicy()
-

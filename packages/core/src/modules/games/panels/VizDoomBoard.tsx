@@ -23,6 +23,15 @@ export function VizDoomBoard({ board }: { board: PublicState }) {
   const winner = board.winner as number | null | undefined;
   const tick = (board.tick as number) ?? 0;
   const maxTicks = (board.max_ticks as number) ?? 0;
+  // vizdoom_duel is a networked deathmatch (mode: 'duel' | 'degraded'); vizdoom_toy
+  // is the fixed-center score race. Label the clock accordingly.
+  const isDuel = board.game === 'vizdoom_duel';
+  const degraded = isDuel && board.mode === 'degraded';
+  const scenarioLabel = isDuel
+    ? degraded
+      ? 'deathmatch (offline — netcode unavailable)'
+      : 'deathmatch'
+    : 'defend the center';
 
   return (
     <div className="vzd-board">
@@ -64,7 +73,7 @@ export function VizDoomBoard({ board }: { board: PublicState }) {
       <div className="vzd-clock">
         {winner != null
           ? `${matchSeats?.[winner]?.display_name || `Marine ${winner}`} wins the round`
-          : `defend the center · tick ${tick}${maxTicks ? ` / ${maxTicks}` : ''}`}
+          : `${scenarioLabel} · tick ${tick}${maxTicks ? ` / ${maxTicks}` : ''}`}
       </div>
     </div>
   );

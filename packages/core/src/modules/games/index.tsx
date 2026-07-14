@@ -3,12 +3,12 @@ import { registry, type ModuleManifest } from '../../registry';
 import { setSetting } from '../../settings';
 import './games.css';
 import { openGamesHub } from './hub-section';
+import { AgentBuilderPanel } from './panels/AgentBuilderPanel';
 import { AgentThoughtsPane } from './panels/AgentThoughtsPane';
 import { ChallengesPanel } from './panels/ChallengesPanel';
 import { FighterArcadePanel } from './panels/FighterArcadePanel';
 import { GameBoardPanel } from './panels/GameBoardPanel';
 import { LeaderboardPanel } from './panels/LeaderboardPanel';
-import { LoadoutPanel } from './panels/LoadoutPanel';
 import { LobbyPanel } from './panels/LobbyPanel';
 import { PlazaPanel } from './panels/PlazaPanel';
 import { ProfilePanel } from './panels/ProfilePanel';
@@ -46,8 +46,8 @@ export const gamesModule: ModuleManifest = {
     },
     {
       id: 'games.loadout',
-      title: 'Agent Harness',
-      component: LoadoutPanel,
+      title: 'Build your agent',
+      component: AgentBuilderPanel,
       role: 'document',
       icon: '🛠',
       singleton: true,
@@ -153,7 +153,7 @@ export const gamesModule: ModuleManifest = {
     },
     {
       id: 'games.openLoadout',
-      title: 'Games: Edit agent harness',
+      title: 'Games: Build your agent',
       // Opens the harness as its own standalone pane (a companion renders its bare
       // component when opened directly) rather than docking it in the arcade shell —
       // the harness is a first-class authoring surface (see the Coding Harnesses

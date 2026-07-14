@@ -15,6 +15,7 @@
     "allow-window-close",
     "allow-window-start-resize-dragging",
     "allow-window-open-workspace",
+    "allow-browser-open-url",
     "core:window:allow-start-dragging",
     "core:window:allow-internal-toggle-maximize"
   ]

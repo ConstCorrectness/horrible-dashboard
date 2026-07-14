@@ -36,6 +36,7 @@ const SEAT_LABELS: Record<string, [string, string]> = {
   arena: ['Blue', 'Orange'],
   fighter: ['Blue', 'Orange'],
   vizdoom_toy: ['Marine 0', 'Marine 1'],
+  vizdoom_duel: ['Marine 0', 'Marine 1'],
 };
 
 /** Animated ellipsis for the "thinking" state (see games.css). */
@@ -69,7 +70,7 @@ export function BoardRenderer({ board }: { board: PublicState }) {
     <ArenaBoard board={board} />
   ) : board.game === 'fighter' ? (
     <FighterCanvas board={board} />
-  ) : board.game === 'vizdoom_toy' ? (
+  ) : board.game === 'vizdoom_toy' || board.game === 'vizdoom_duel' ? (
     <VizDoomBoard board={board} />
   ) : (
     <pre style={{ padding: '0.5rem', fontSize: '0.75rem' }}>{JSON.stringify(board, null, 2)}</pre>

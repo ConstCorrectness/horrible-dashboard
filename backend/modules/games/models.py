@@ -25,13 +25,16 @@ class ToolDefModel(BaseModel):
 
 
 class LoadoutModel(BaseModel):
-    """A player's agent harness for a game: strategy context + custom tools + the
-    model that drives it (None = borrow the agent module's configured model)."""
+    """A player's agent for a game: an optional `my_agent(obs, config)` entrypoint over
+    the harness (strategy context + custom tools + the model that drives it; None model =
+    borrow the agent module's configured model). Empty `agent_code` = the default agent
+    (context + tools drive the model)."""
 
     game_id: str
     context: str = ""
     tools: list[ToolDefModel] = []
     model: dict[str, Any] | None = None
+    agent_code: str = ""
 
 
 class LoadoutVersionInfo(BaseModel):
@@ -82,8 +85,11 @@ class ToolDiagnostic(BaseModel):
 
 
 class ValidateLoadoutResponse(BaseModel):
-    ok: bool  # every tool ok
+    ok: bool  # every tool ok AND the agent entrypoint compiles
     tools: list[ToolDiagnostic] = []
+    # None when the loadout uses the default agent (empty agent_code); otherwise the
+    # compile error for the `my_agent(obs, config)` entrypoint, or None if it's fine.
+    agent_error: str | None = None
 
 
 class DryRunRequest(BaseModel):

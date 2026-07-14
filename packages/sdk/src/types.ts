@@ -19,7 +19,11 @@ export type Capability =
   | 'window.fullscreen'
   | 'chrome.workspaceTabs'
   | 'shortcuts.global'
-  | 'tray';
+  | 'tray'
+  // The embedded browser can pop a page out to a real native OS window (a true
+  // browser, bypassing iframe X-Frame-Options/CSP). Desktop-only; the browser
+  // build leaves the window seam null and falls back to opening a new tab.
+  | 'browser.nativeWindow';
 
 /**
  * Minimal JSON Schema subset used to describe an agent tool's arguments to the

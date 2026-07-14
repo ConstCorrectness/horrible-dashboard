@@ -48,7 +48,9 @@ def _settings() -> tuple[str, str, str]:
     if _ENV_SERVER_URL:
         url = _ENV_SERVER_URL
     else:
-        url = str(get_value("games.serverUrl", DEFAULT_SERVER_URL) or DEFAULT_SERVER_URL)
+        url = str(
+            get_value("games.serverUrl", DEFAULT_SERVER_URL) or DEFAULT_SERVER_URL
+        )
     # Imported lazily to avoid a circular import (server_auth imports this module).
     from backend.modules.games.server_auth import get_token
 
@@ -97,8 +99,9 @@ class _PlayerConn:
         self._arcade_keys: list[str] = []
         # Compiled `fighter.bot` loadout tool for ranked fighter mode (lazy).
         self._fighter_bot: Any = None
-        # Compiled `vizdoom_toy.bot` loadout tool for VizDoom Toy mode (lazy).
-        self._vizdoom_bot: Any = None
+        # Compiled `<game_id>.bot` loadout tools for the ViZDoom modes, one per game
+        # id (vizdoom_toy / vizdoom_duel), compiled lazily on first tick.
+        self._vizdoom_bots: dict[str, Any] = {}
         # The AgentTown resident's mind (created on first use; whispers land here).
         self._town_policy: TownPolicy | None = None
 
@@ -431,23 +434,27 @@ class _PlayerConn:
             return "idle"
 
     def _vizdoom_bot_action(
-        self, observation: dict[str, Any], legal_ids: set[str]
+        self, game_id: str, observation: dict[str, Any], legal_ids: set[str]
     ) -> str:
-        """Run the compiled `vizdoom_toy.bot` loadout tool (a pure function, no model) to pick this tick's action."""
+        """Run the compiled `<game_id>.bot` loadout tool (a pure function, no model)
+        to pick this tick's action. Shared by ranked ViZDoom (score race) and the
+        networked ViZDoom Duel — the bot tool is named for whichever game is live."""
+        tool = f"{game_id}.bot"
         try:
-            if self._vizdoom_bot is None:
+            if game_id not in self._vizdoom_bots:
                 from backend.modules.games.loadout import HarnessRuntime, get_loadout
 
-                runtime = HarnessRuntime(get_loadout("vizdoom_toy"))
-                self._vizdoom_bot = runtime if runtime.has("vizdoom_toy.bot") else False
-            if not self._vizdoom_bot:
+                runtime = HarnessRuntime(get_loadout(game_id))
+                self._vizdoom_bots[game_id] = runtime if runtime.has(tool) else False
+            bot = self._vizdoom_bots[game_id]
+            if not bot:
                 return "idle"
-            fn = self._vizdoom_bot._compiled.get("vizdoom_toy.bot")
+            fn = bot._compiled.get(tool)
             result = fn({}, observation) if fn else None
             action = result if isinstance(result, str) else (result or {}).get("action")
             return str(action) if str(action) in legal_ids else "idle"
         except Exception:
-            logger.debug("vizdoom_toy.bot failed; idling", exc_info=True)
+            logger.debug("%s failed; idling", tool, exc_info=True)
             return "idle"
 
     async def _play_vizdoom(
@@ -456,20 +463,20 @@ class _PlayerConn:
         observation: dict[str, Any],
         legal: list[dict[str, Any]],
     ) -> None:
+        game_id = str(msg.get("game_id") or "vizdoom_toy")
         legal_ids = {str(a.get("id")) for a in legal}
-        action_id = self._vizdoom_bot_action(observation, legal_ids)
+        action_id = self._vizdoom_bot_action(game_id, observation, legal_ids)
         if self.last_turn is not msg:
             return
         await self._send(
             {
                 "type": models.ACTION,
-                "game_id": "vizdoom_toy",
+                "game_id": game_id,
                 "action_id": action_id if action_id in legal_ids else "idle",
             }
         )
         if self.last_turn is msg:
             self.last_turn = None
-
 
     async def _solve_task(
         self, msg: dict[str, Any], observation: dict[str, Any]
@@ -567,7 +574,7 @@ class _PlayerConn:
         if msg.get("game_id") == "fighter":
             await self._play_fighter(msg, observation, legal)
             return
-        elif msg.get("game_id") == "vizdoom_toy":
+        elif msg.get("game_id") in ("vizdoom_toy", "vizdoom_duel"):
             await self._play_vizdoom(msg, observation, legal)
             return
 

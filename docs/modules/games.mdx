@@ -103,7 +103,7 @@ board never appears twice.
 
 Harness engineering is the actual skill of the module, so besides the hub's
 regions there is a dedicated **Coding Harnesses** frame preset (`harness`, 🛠 in
-the workspace tab strip, `layouts` module): **Agent Harness** (`games.loadout`)
+the workspace tab strip, `layouts` module): **Build your agent** (`games.loadout`)
 in the left dock, **Game Board** (`games.board`) as the main center area with
 the **Games** hub (`games.lobby`) below it, and Agent Thoughts in the
 (hidden-by-default) right dock. The board's live match view lands in the
@@ -230,6 +230,49 @@ the human's skill is in tool/context engineering. This is the intended long-term
 shape: a battery of games spanning a gamut of agentic tasks, where whoever builds the
 better harness wins (most of the time).
 
+### The agent entrypoint — `my_agent(obs, config)`
+
+The harness above is the **declarative** layer; on top of it sits a **code-first**
+entrypoint. A loadout carries an optional `agent_code` string defining
+`my_agent(obs, config)`, which returns the id of a legal action. This is *the agent* —
+a spectrum from a one-liner to a fully-harnessed rig, all in one editor (see
+`agent_sdk.py`):
+
+```python
+async def my_agent(obs, config):
+    docs = await config.retrieve(obs.get("query", ""))   # RAG over your library
+    config.memory.store({"turn": obs.get("tick")})       # episodic memory
+    config.note(f"grounded on {len(docs)} docs")         # → live agent feed
+    return await config.decide(obs)      # run the declarative context+tools loop
+```
+
+- **Empty `agent_code` ⇒ the default agent** — the declarative harness *is* the agent
+  (the `AgentPolicy` tool loop below). Players who never write agent code are unaffected;
+  `config.decide(obs)` re-enters exactly that loop, so custom code can lean on it or
+  ignore it.
+- `my_agent` may be **sync or async**; its return value is coerced to a legal action id
+  (a bare id, an int, or an action dict). Returning nothing / an illegal id falls back to
+  a random legal move (live) or surfaces as "no move" (dry-run). A pure-Python agent that
+  never calls `config.decide` needs **no model** at all.
+- **SDK**: `config.decide(obs)`, `config.retrieve(query, source, k)` (the app vector
+  store), `config.memory` (per-match episodic store), `config.note(text)` (live feed),
+  and `config.context/tools/model`; `Harness(config)` is an ergonomic wrapper. `agent_code`
+  is compiled like a tool — trusted, own-node, **not** gated by `GAMES_ENABLE_CODE_EXEC`
+  (that gate is for grading *others'* submissions). `GET /games/agent-starter/{game_id}`
+  returns the per-game starter source to seed the editor (depth varies per game; the
+  editor is the same everywhere). `POST /games/loadout/validate` also reports the agent's
+  compile error (`agent_error`).
+
+**The builder pane** (`games.loadout`, "Build your agent" — `AgentBuilderPanel`): one code
+editor for `agent_code` (plus a collapsible system-prompt `context`), a game picker that
+seeds the per-game starter and marks the graded stat, and a **loadout readout** whose
+slots (Context / Tools / RAG / Memory / Model) and agent stats are derived live **from
+your code** (`agentBuild.ts` — calling `retrieve()` lights RAG, using `memory.` lights
+Memory), keeping the build honestly code-first. **Lock in** validates + saves, then plays
+the **VS lock-in ceremony** (`VsCeremony.tsx` — your agent vs a self-play mirror, ember
+vs cyan); **Enter arena** starts a real self-play match (`matchmaking.playVsOwnAgent`,
+no sign-in needed) and reveals the Game Board + the Agent Thoughts feed.
+
 Under `games.policy = agent`, `AgentPolicy` becomes a bounded tool loop: it advertises
 your compiled tools + `game.chooseAction`, lets the model call your tools (results fed
 back), and requires it to finally commit a legal action. A tool is a body defining
@@ -265,6 +308,22 @@ committed via `game.chooseAction`, else the turn falls back to a random legal mo
 budget caps *rounds*, not tools — one round may call several tools at once. The
 `ttt-tactician` and `holdem-calculator` starter templates are worked multi-tool
 examples.
+
+**Starter templates & the default harness.** Every registered game ships a starter
+template (`loadout_templates()` in `templates.py`, served by `GET /games/loadout-templates`
+and offered in the first-run card). Board/fast games get a worked helper or per-tick
+`.bot` (e.g. `board_scanner`, `fighter.bot`, `vizdoom_duel.bot`); the open-action
+code-submission games (`arena`, `bug_hunt`, `code_golf`, `test_duel`, `tabular_fe`) get a
+strategy `context` plus a helper that reads the observation (failing-test triage, a
+byte counter, a signature parser, a column lister, …). A game's **first** listed
+template is its **shipped default**: `get_loadout(game_id)` falls back to it
+(`templates.default_loadout_for`) when the player has saved nothing, so a brand-new
+player's agent already plays with a working harness before they open the editor —
+saving any loadout (or a global `default`) overrides it. A match played on the seeded
+default is attributed to a synthetic **`starter`** version (`active_version_id` /
+`list_versions`), so the ladder and replays show *which* harness played rather than a
+blank; the first real **Save as new version** branches to `v1` and the starter drops
+away.
 
 **Declaring tool arguments.** A tool's `parameters` (name → `{type, description}`)
 plus `required` become the function schema the model fills in — that's the `args` in
@@ -365,6 +424,14 @@ Hold'em contributes its own category set — `discipline` (fold trash facing a s
 `value` (never fold the nuts), and `aggression` (bet the nuts rather than check it
 back) — spots chosen so one line is objectively right even in a game of incomplete
 information.
+
+ViZDoom Duel is the first real-time game on the track. Its first-person frame is an
+opaque JPEG (no gradable aim), so its scenarios grade the **HUD reflex** a harness
+actually controls, and each solution is *every legal action except the objectively-
+wrong one* (like Hold'em's multi-answer spots): `pressure` (ammo in the tank — never
+stand idle in a live deathmatch) and `conserve` (empty gun — never waste a press on
+attack). The bundled `vizdoom-brawler` template passes all four, so a new player can
+ship it, clear the track, then improve.
 
 ## Texas Hold'em
 
@@ -541,10 +608,55 @@ the two first-person viewports (`<img>`, pixelated) with an HP/AMMO/SCORE HUD �
 client-side rendering. Actions are derived from the scenario's buttons
 (`idle`/`turn_left`/`turn_right`/`attack`, `idle` first for the timeout auto-play).
 The ranked harness is a fast `vizdoom_toy.bot` script (like `fighter.bot`); the
-`vizdoom-sweeper` loadout template ships a sweep-and-shoot starter. The engine and
-its native libs (`vizdoom`, `pillow`) install from prebuilt wheels on Windows and the
-Linux game-server image (`deploy/game-server/Dockerfile` adds `libsdl2`/`libopenal`;
-`set_window_visible(False)` renders headless, no X server).
+`vizdoom-sweeper` loadout template ships a sweep-and-shoot starter.
+
+**Packaging (all three OSes).** `vizdoom` is an **optional extra**
+(`games-native` — see `pyproject.toml`), lazy-imported so the core app installs on
+every platform without it; only nodes that actually run a Doom table pull it, via
+`uv sync --extra games-native`. Prebuilt wheels cover **Windows** amd64, **Linux**
+x86_64/aarch64, and **Apple-Silicon macOS 14+** (self-contained); Intel/old macOS
+falls back to an sdist build (`brew install cmake boost sdl2 openal-soft`). On Linux
+the wheel dlopens system SDL2/OpenAL, so a runtime host needs `libsdl2-2.0-0`
+/`libopenal1` — the Fly game-server image (`deploy/game-server/Dockerfile`) installs
+those and syncs `--extra games-native`. `set_window_visible(False)` renders headless
+everywhere (no X server). In production the engine only ever instantiates on that Fly
+Linux server (the referee owns the game), so "cross-platform" is really about local
+dev and the eval harness.
+
+### ViZDoom Duel — real networked deathmatch
+
+**ViZDoom Duel** (`vizdoom_duel`, 💀, `games_engine/vizdoom_duel.py`) is the PvP
+milestone the score race deferred: two headless `DoomGame` instances are joined over
+ZDoom's own netcode (host + join, `open_duel_pair`) so they share **one map** — the
+bundled `cig` arena — and actually shoot each other. Score is **frags** (opponent
+kills minus suicides); higher frag count when the clock runs out wins, mapping to the
+usual +1/−1 so the ELO ladder applies unchanged. The wire shape is identical to
+`vizdoom_toy` (`frames`/`hud`/`tick`/`winner` + a `mode` flag), so `VizDoomBoard.tsx`
+and the fast `vizdoom_duel.bot` loadout path (`vizdoom-brawler` template) are reused
+as-is.
+
+The engine model is dictated by the native engine: ViZDoom's *synchronous*
+multiplayer deadlocks when one process drives both seats in lockstep, so the duel runs
+`Mode.ASYNC_PLAYER` with **one free-running worker thread per instance** (a `DoomGame`
+isn't thread-safe, so each instance is touched only by its worker, which publishes a
+frame/HUD/frags snapshot under a lock; the referee sets held actions and reads the
+snapshot). Respawns happen inside the worker (`sv_forcerespawn`), so a dead marine
+never stalls the peer. If the netcode can't connect, the engine falls back to two
+**independent** `cig` instances so the table still completes and renders —
+`public_state().mode` reports `"duel"` vs `"degraded"`, and the board labels the clock
+accordingly.
+
+### Building a policy — the eval harness
+
+`games_engine/vizdoom_harness.py` is the local dev kit for the brain you ship as a
+loadout. `BasePolicy` is the contract (`get_action(state)` → a button-press vector);
+`RandomPolicy` and `RuleBasedPolicy` are runnable baselines to beat. `ViZDoomHarness`
+runs a policy through N single-player episodes on any bundled scenario and reports
+score metrics (the fast inner loop), and `evaluate_duel(policy_a, policy_b)` pits two
+policies head-to-head over the *same networked deathmatch* the `vizdoom_duel` game
+uses — so you can A/B two brains on a real shared map before laddering. Everything is
+lazy-imported and headless by default (`render=False`), so it runs in CI and on the
+game-server image; pass `render=True` on a desktop to watch.
 
 ## AgentTown — the fish tank
 
@@ -584,8 +696,8 @@ View.
   market.
 - **The server owns the world, never the mind.** Your resident's decisions run on
   *your* node (`backend/modules/games/town_policy.py`). Its **personality is the
-  Agent Harness persona** — the loadout context under game key `town` ("AgentTown
-  persona" in the harness picker). With `games.policy = agent` it makes one model
+  agent's persona** — the loadout context under game key `town` ("AgentTown
+  persona" in the game picker of **Build your agent**). With `games.policy = agent` it makes one model
   call per tick, persona + stats + a goldfish memory of recent local events in
   the prompt, committing via a `town.act` tool. Anything else (no model, provider
   down, `random`/`manual`) falls back to the built-in **routine** — a needs-and-

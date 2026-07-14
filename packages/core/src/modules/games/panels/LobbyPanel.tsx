@@ -2,7 +2,14 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { registry } from '../../../registry';
 import { useGames, gamesDisconnect, ensureConnected } from '../game-ws';
-import { fetchStatus, signInWith, signOut, fetchGamesCatalog, type SignInProvider, type GameCatalogEntry } from '../games-api';
+import {
+  fetchStatus,
+  signInWith,
+  signOut,
+  fetchGamesCatalog,
+  type SignInProvider,
+  type GameCatalogEntry,
+} from '../games-api';
 import { ConnectionChip } from './ConnectionChip';
 import { PlaySection } from './PlaySection';
 
@@ -17,6 +24,7 @@ const GAME_ICONS: Record<string, string> = {
   arena: '🤖',
   fighter: '🥊',
   vizdoom_toy: '🔫',
+  vizdoom_duel: '💀',
 };
 
 /** Sign-in status + device-flow sign-in (GitHub or Google — two different Google
@@ -131,11 +139,27 @@ export function LobbyPanel() {
           flexShrink: 0,
         }}
       >
-        <div style={{ padding: '0.8rem', borderBottom: '1px solid var(--border)', fontWeight: 800, fontSize: '0.85rem', color: 'var(--text-dim)' }}>
+        <div
+          style={{
+            padding: '0.8rem',
+            borderBottom: '1px solid var(--border)',
+            fontWeight: 800,
+            fontSize: '0.85rem',
+            color: 'var(--text-dim)',
+          }}
+        >
           🎮 GAMES LIBRARY
         </div>
         <div style={{ flex: 1, overflowY: 'auto', padding: '0.5rem' }}>
-          <div style={{ fontSize: '0.68rem', textTransform: 'uppercase', color: 'var(--text-dim)', padding: '0.3rem 0.5rem', fontWeight: 700 }}>
+          <div
+            style={{
+              fontSize: '0.68rem',
+              textTransform: 'uppercase',
+              color: 'var(--text-dim)',
+              padding: '0.3rem 0.5rem',
+              fontWeight: 700,
+            }}
+          >
             Shipped Defaults
           </div>
           <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
@@ -164,14 +188,24 @@ export function LobbyPanel() {
                   >
                     <span style={{ fontSize: '1.2rem' }}>{GAME_ICONS[g.id] ?? '🎲'}</span>
                     <span style={{ fontSize: '0.82rem', flex: 1 }}>{g.name}</span>
-                    {isSelected && <span style={{ color: 'var(--accent, #6ea8fe)', fontSize: '0.75rem' }}>●</span>}
+                    {isSelected && (
+                      <span style={{ color: 'var(--accent, #6ea8fe)', fontSize: '0.75rem' }}>
+                        ●
+                      </span>
+                    )}
                   </button>
                 </li>
               );
             })}
           </ul>
 
-          <div style={{ borderTop: '1px solid var(--border)', margin: '0.6rem 0.4rem', paddingTop: '0.6rem' }}>
+          <div
+            style={{
+              borderTop: '1px solid var(--border)',
+              margin: '0.6rem 0.4rem',
+              paddingTop: '0.6rem',
+            }}
+          >
             <button
               type="button"
               style={{
@@ -190,7 +224,9 @@ export function LobbyPanel() {
                 fontWeight: 700,
               }}
               onClick={() => {
-                alert("Importing custom games and the creator marketplace will be available in a future update!");
+                alert(
+                  'Importing custom games and the creator marketplace will be available in a future update!',
+                );
               }}
             >
               ➕ Import Custom Game
@@ -212,7 +248,16 @@ export function LobbyPanel() {
           overflowY: 'auto',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap', borderBottom: '1px solid var(--border)', paddingBottom: '0.6rem' }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.6rem',
+            flexWrap: 'wrap',
+            borderBottom: '1px solid var(--border)',
+            paddingBottom: '0.6rem',
+          }}
+        >
           <ConnectionChip />
           <SignIn />
           <button
@@ -232,11 +277,7 @@ export function LobbyPanel() {
           </button>
         </div>
 
-        <PlaySection
-          games={games}
-          selectedGame={selectedGame}
-          setSelectedGame={setSelectedGame}
-        />
+        <PlaySection games={games} selectedGame={selectedGame} setSelectedGame={setSelectedGame} />
       </div>
     </div>
   );

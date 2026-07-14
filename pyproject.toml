@@ -28,7 +28,6 @@ dependencies = [
     "trafilatura>=2.1.0",
     "tree-sitter-language-pack>=1.12.2",
     "uvicorn[standard]>=0.49.0",
-    "vizdoom>=1.2.3",
     "watchfiles>=1.2.0",
     "websockets>=16.0",
     "zeroconf>=0.150.0",
@@ -38,6 +37,19 @@ dependencies = [
 # WebRTC datachannel transport (NAT traversal). Heavy native deps (PyAV/cffi), so it's
 # opt-in: `uv sync --extra webrtc`. The transport is lazy-imported and skipped without it.
 webrtc = ["aiortc>=1.9"]
+# Native ViZDoom engine for the vizdoom_toy / vizdoom_duel games (server-rendered Doom
+# frames + real multiplayer netcode). Prebuilt wheels exist for Windows amd64, Linux
+# x86_64/aarch64, and Apple-Silicon macOS 14+; Intel/old macOS build from sdist (needs
+# `brew install cmake boost sdl2 openal-soft`). It's lazy-imported, so the core app
+# installs everywhere without it — only nodes that actually run a Doom table need it:
+# `uv sync --extra games-native`. The Fly game-server image pulls it in its Dockerfile.
+games-native = ["vizdoom>=1.3"]
+# Real headless-Chromium engine for the embedded browser's "full mode" (server-rendered
+# frames + live DOM the agent can read/scrape/drive). Playwright ships prebuilt browser
+# binaries per-OS via a one-time `playwright install chromium` (~150 MB), so it's opt-in:
+# `uv sync --extra browser-engine`. It's lazy-imported and gated behind
+# HORRIBLE_ENABLE_SERVER_BROWSER=1 — without it the panel stays in the light iframe mode.
+browser-engine = ["playwright>=1.4"]
 
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]

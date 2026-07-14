@@ -25,8 +25,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # Layer 1 — dependencies only, from the lockfile. Cached until pyproject/uv.lock change.
+# `--extra games-native` pulls the ViZDoom wheel: this image runs the vizdoom_toy /
+# vizdoom_duel engines, so unlike a bare node it needs the native Doom engine present.
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project
+RUN uv sync --frozen --no-dev --no-install-project --extra games-native
 
 # Layer 2 — the server source. The game server imports only backend.games_server and
 # backend.games_engine (plus the light backend/__init__).

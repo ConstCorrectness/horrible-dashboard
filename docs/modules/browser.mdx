@@ -1,0 +1,200 @@
+---
+sidebar_position: 18
+sidebar_label: Browser
+---
+
+# Module: browser
+
+An **embedded web browser** pane: a URL bar, back/forward/reload/home, and a page
+rendered inline. It works in **both** layouts (the `apps/web` browser build and the
+Tauri desktop build) with no per-platform fork — behavior branches on a
+[capability](../architecture/layout-shell.mdx), never a `__TAURI__` check.
+
+It has **two rendering engines**, selected by the `browser.engine` setting:
+
+- **iframe** (default, always available) — the page renders in a cross-origin
+  `<iframe>`. Light and zero-dependency, but opaque: we can't read the DOM, persist
+  cookies, or let the agent act on the page, and most large sites send
+  `X-Frame-Options` / CSP `frame-ancestors` and **refuse to be framed** (undetectable
+  cross-origin). So the module always offers manual escapes rather than guessing.
+- **full** — a **real headless Chromium** (Playwright) driven on the local backend and
+  **server-rendered** to the pane: JPEG frames stream over `/ws`, and interactions
+  (click/scroll/type/navigate) relay back — the same pattern
+  [vizdoom](./games.mdx) and the [visualizer](./visualizer.mdx) use. Because the backend
+  runs on the **user's own machine** (never a shared host), a server-side browser fits
+  the app's trust model, and the server holding the **live DOM** is what makes the
+  browser inherently agentic (the agent is handed content + an accessibility snapshot and
+  can scrape/click/type). Opt-in and gated — see [Full engine](#full-engine-real-chromium).
+
+`auto` (the default) uses **full** when the backend reports it enabled, else **iframe**.
+
+## Contributions to the layout shell
+
+- **Panels:** `browser.view` (role `document`, **non-singleton** — open as many tabs
+  as you like, icon 🌐).
+- **Commands:** `browser.open` (Browser: New tab), `browser.focusUrlBar`
+  (Browser: Focus URL bar).
+- **Keybindings:** `mod+l` → `browser.focusUrlBar`, **scoped** to `browser.view` so it
+  only fires in a focused browser pane and never shadows a global shortcut.
+- **Settings:** `browser.homePage` (URL for the Home button; blank shows a start page),
+  `browser.readerModeDefault` (open every page in reader mode), and `browser.engine`
+  (`auto` | `full` | `iframe` — the rendering engine, see above).
+
+## The pane
+
+The iframe is cross-origin, so navigation history can't be read from it — the pane
+keeps its **own per-instance back/forward stack**. The URL bar accepts a bare host
+(prefixed to `https://`) or a search query (routed to a search engine). Bookmarks and
+history persist server-side (see below).
+
+**Escaping a site that refuses framing** — always available, no fragile detection:
+
+- **▤ Reader** — server-side reader mode: the backend fetches the page and returns its
+  extracted text, rendered inline. Works for any site in any build.
+- **⧉ Pop out / Open tab** — on **desktop** (capability `browser.nativeWindow`) opens
+  the URL in a **real native window** (a true browser, bypassing X-Frame-Options
+  entirely) via the `WindowControl.openBrowserWindow` seam → the Tauri `browser_open_url`
+  command (`apps/desktop/src-tauri/src/window.rs`, http/https only). In the **browser**
+  build the seam is null, so it falls back to `window.open` (a new tab).
+
+## Agent tools
+
+The panel declares `agentTools`, so the agent orchestrator can use the browser (pushed
+to the backend in the capability manifest whenever the module is registered — always
+available, not tied to an open pane). They come in two tiers, chosen automatically by
+whether the full engine is enabled (`/api/browser/engine`):
+
+**Light (always available):**
+
+- **`browser.read`** (read-only) — return a page's readable text (title + extracted
+  content, capped). This is how the agent **reads / researches the web**. With the full
+  engine on it navigates the **live shared** browser and reads its content (omit `url` to
+  read the page already open); otherwise it runs the SSRF-guarded `/api/browser/read`
+  fetch, so the agent can't reach internal services. Read-only, never permission-gated.
+- **`browser.open`** (side-effecting) — open a page in a browser pane in the UI so the
+  user can see it. Gated by the permission engine via a `{url}` specifier.
+
+**Full engine (when enabled) — the same live Chromium the human panel drives becomes the
+agent's browser (one WS connection ⇒ one shared session):**
+
+- **`browser.snapshot`** (read-only) — the page's **interactable elements**, each with a
+  numeric `ref`, `role`, accessible `name`, and `value` (a tagged accessibility snapshot
+  via injected JS). The agent's "what can I click?" affordance.
+- **`browser.click{ref}`** / **`browser.type{ref,text}`** (side-effecting) — act on an
+  element by its snapshot `ref`.
+- **`browser.scrape{selector}`** (read-only) — pull structured data (text / href /
+  outerHTML, capped) for every element matching a CSS selector.
+
+Parameterized actions have to be `agentTools` rather than agent-exposed commands here,
+because agent commands currently ignore their args (see
+[agent tools](../architecture/agent-tools.mdx)).
+
+## Backend surface (`/api/browser`)
+
+A normal backend module (`backend/modules/browser`), same shape as `library`:
+
+- `GET /read?url=` — **reader mode**: SSRF-guarded fetch + main-content extraction
+  (reuses `library.extract.extract_article`).
+- `GET/POST/DELETE /history` and `GET/POST /bookmarks`, `DELETE /bookmarks/{id}` — a
+  SQLite catalog (`browser_history`, `browser_bookmarks`) in the shared app DB. History
+  is upserted per URL; bookmarks are deduped per URL.
+
+### Security — SSRF
+
+`GET /read` fetches an arbitrary user-supplied URL server-side, so `fetch.py` enforces
+an SSRF policy before **every** request and each redirect hop: `http`/`https` only;
+resolve the host and reject if any IP is loopback / private / link-local / multicast /
+reserved (blocks `localhost`, `169.254.169.254`, RFC1918, …); follow redirects manually
+and re-validate each `Location`; cap response size and content type. A TOCTOU
+DNS-rebind is mitigated but not fully eliminated (full protection needs pinning the
+validated IP into the connection). The existing `library` blog ingest has the same
+sink with **no** guard today — a worthwhile follow-up is to route it through
+`safe_fetch_html`.
+
+## Full engine (real Chromium)
+
+Full mode drives a **headless Chromium** on the local backend
+(`backend/modules/browser/session.py`) and server-renders it to the pane.
+
+**Engine.** One `BrowserSession` per `/ws` connection; a process-global
+`BrowserManager` owns them and tears each down on disconnect (`stop_for`, wired in
+`backend/app.py` alongside `visualizer_manager`). Chromium is driven via **Playwright's
+_sync_ API on a dedicated worker thread**, not the async API — Windows'
+`SelectorEventLoop` under `uvicorn --reload` can't spawn subprocesses via asyncio (see
+`backend/modules/lsp` / the visualizer for the same constraint). The worker owns all
+Playwright objects; the event loop posts commands over a queue and reads results back
+through per-command futures, and frames are relayed to the loop with
+`run_coroutine_threadsafe`. A **persistent context**
+(`$HORRIBLE_DATA_DIR/browser/<profile>`) persists cookies, cache, localStorage,
+IndexedDB, and site data across restarts.
+
+**`browser` `/ws` channel.** The session pushes `frame` events
+(`{frame: <data:image/jpeg>, url, title}`) after every interaction plus on an idle
+cadence (byte-identical frames are skipped). The panel relays input back as
+`navigate` / `back` / `forward` / `reload` / `click{x,y}` / `scroll{dx,dy}` /
+`type{text}` / `key{key}`; agent ops (`content` / `snapshot` / `scrape` / `click_ref` /
+`type_ref` / `screenshot` / `info`) carry an `id` and get a correlated `result` event —
+so the frontend `session.ts` request/reply layer serves both the human panel and the
+agent tools off one shared session.
+
+**Coordinates** are scaled by the panel from the rendered `<img>` to the fixed
+1280×800 backend viewport.
+
+### Gating & security
+
+A backend Chromium makes **real network requests to any host**, including the user's
+own localhost / LAN / cloud-metadata. Even on the user's machine, a hostile page or a
+misused agent tool could pivot inward, so full mode is:
+
+- **Opt-in**: `HORRIBLE_ENABLE_SERVER_BROWSER=1` (mirrors `GAMES_ENABLE_CODE_EXEC`). Off →
+  the panel stays in iframe mode and the full-engine agent tools return a "not enabled"
+  notice. `GET /api/browser/engine` reports `{enabled, installed}`.
+- **Egress-guarded**: every request is routed through Chromium's `context.route` and
+  aborted if its host resolves to a private / loopback / link-local / reserved IP
+  (reusing `fetch._check_host_public`, resolution cached per host). `file://` and other
+  non-`http(s)` schemes are blocked; `data:` / `blob:` / `about:` pass. Navigation
+  re-checks the scheme + host. `browser.eval` (arbitrary in-page JS) is behind the same
+  gate.
+- **Bounded**: one context per connection, released on disconnect / pane close.
+
+### Dependency & cross-platform
+
+Playwright is an **optional extra** (`browser-engine`), lazy-imported like the
+`games-native` ViZDoom extra, so the core app installs everywhere without it:
+
+```bash
+uv sync --extra browser-engine
+uv run playwright install chromium   # one-time, ~150 MB, prebuilt per-OS
+```
+
+The main backend isn't containerized (it runs on the user's machine), so there's no
+Dockerfile change. Without the extra, `GET /api/browser/engine` reports
+`installed: false` and the panel stays iframe-only.
+
+## Browser vs desktop
+
+| | Browser build | Desktop (Tauri) |
+| --- | --- | --- |
+| Inline framable sites | ✅ iframe | ✅ iframe |
+| Reader mode (any site) | ✅ | ✅ |
+| Full Chromium engine (any site, live DOM, agentic) | ✅ (gated + extra) | ✅ (gated + extra) |
+| Blocked-site escape (iframe mode) | Open in new tab (`window.open`) | **Native browser window** (`browser.nativeWindow`) |
+
+The full engine renders **the same backend Chromium** in both builds, so it's the
+general answer to framing-blocked sites; the native-window pop-out remains an
+iframe-mode escape hatch on desktop.
+
+## Known limitations / future
+
+- Frame streaming is functional but not buttery — a CDP `Page.startScreencast`
+  (paint-driven frames) is the planned upgrade. Chromium is heavy, so full mode is
+  bounded (one context per connection, released on disconnect).
+- Deferred full-engine work: in-pane **tabs** (multiple pages per context), a smart URL
+  bar / start page with favicons & titles, a history/bookmarks manager, "Save to
+  Library", and multi-profile switching.
+- Iframe-block detection is best-effort; in iframe mode the manual escapes are always
+  shown rather than auto-triggered.
+- A **true in-pane native webview** on desktop (Tauri's `unstable` multi-webview) is
+  superseded by the server engine and deferred.
+- Not to be confused with the external **Claude-in-Chrome** automation, which drives the
+  user's *real* Chrome; this module renders pages *inside* the dashboard.

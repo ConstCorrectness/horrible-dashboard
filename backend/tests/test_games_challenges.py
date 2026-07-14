@@ -167,6 +167,63 @@ def test_holdem_grade_perfect_covers_every_category() -> None:
     assert report["covered"] == report["category_count"]
 
 
+# ---- vizdoom duel challenge set --------------------------------------------
+
+
+def test_vd_scenarios_shape_and_hidden_solutions() -> None:
+    scenarios = challenges.scenarios_for("vizdoom_duel")
+    assert scenarios, "vizdoom duel should have challenge scenarios"
+    for sc in scenarios:
+        assert "solution" not in sc
+        obs = sc["observation"]
+        assert obs["game"] == "vizdoom_duel"
+        # The opaque frame carries no gradable aim — the HUD is what's tested.
+        assert set(obs["hud"]) == {"health", "ammo", "score"}
+
+
+def test_vd_every_solution_is_legal() -> None:
+    for ch in challenges._VD_CHALLENGES:
+        legal = {a["id"] for a in ch.legal_actions}
+        assert set(ch.solution) <= legal, ch.id
+
+
+def test_vd_grade_perfect_covers_every_category() -> None:
+    perfect = {c.id: c.solution[0] for c in challenges._VD_CHALLENGES}
+    report = challenges.grade("vizdoom_duel", perfect)
+    assert report["correct"] == report["total"] == len(challenges._VD_CHALLENGES)
+    assert set(report["categories"]) == {"pressure", "conserve"}
+    assert report["covered"] == report["category_count"]
+
+
+def test_vd_solutions_exclude_the_wrong_action() -> None:
+    """Each spot's solution is 'everything but the objectively-wrong action', so the
+    category is exactly the failure it guards against."""
+    for ch in challenges._VD_CHALLENGES:
+        legal = {a["id"] for a in ch.legal_actions}
+        wrong = legal - set(ch.solution)
+        if ch.category == "pressure":
+            assert wrong == {"idle"}, ch.id  # ammo in the tank: never freeze
+            assert ch.observation["hud"]["ammo"] > 0, ch.id
+        elif ch.category == "conserve":
+            assert wrong == {"attack"}, ch.id  # empty gun: never fire
+            assert ch.observation["hud"]["ammo"] == 0, ch.id
+        else:  # pragma: no cover - guards against an unhandled new category
+            raise AssertionError(f"unclassified category {ch.category!r} in {ch.id}")
+
+
+def test_vd_brawler_template_passes_the_track() -> None:
+    """The bundled `vizdoom-brawler` loadout template should solve its own onboarding
+    track — ship it, pass, then improve."""
+    from backend.modules.games.templates import _VIZDOOM_DUEL_BOT
+
+    ns: dict[str, Any] = {}
+    exec(_VIZDOOM_DUEL_BOT, ns)
+    run = ns["run"]
+    answers = {ch.id: run({}, ch.observation) for ch in challenges._VD_CHALLENGES}
+    report = challenges.grade("vizdoom_duel", answers)
+    assert report["correct"] == report["total"], answers
+
+
 # ---- hub exchange ----------------------------------------------------------
 
 

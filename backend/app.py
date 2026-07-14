@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.modules.agent import router as agent_router
 from backend.modules.agent.orchestrator import handle_agent_message
+from backend.modules.browser import router as browser_router
 from backend.modules.chat import router as chat_router
 from backend.modules.clubhouse import router as clubhouse_router
 from backend.modules.code import handle_code_message, push_code_events
@@ -73,6 +74,7 @@ from backend.modules.training.kernels import (
 from backend.modules.workspace import router as workspace_router
 from backend.modules.database import router as database_router
 from backend.modules.visualizer import visualizer_manager
+from backend.modules.browser.session import browser_manager
 from backend.modules.ws import WsConnection, set_ws_send_observer
 from backend.sdk import load_plugins
 from backend.sdk import registry as plugin_registry
@@ -127,6 +129,7 @@ app.include_router(agent_router, prefix="/api")
 app.include_router(workspace_router, prefix="/api")
 app.include_router(database_router, prefix="/api")
 app.include_router(library_router, prefix="/api")
+app.include_router(browser_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(files_router, prefix="/api")
 app.include_router(notebook_router, prefix="/api")
@@ -226,6 +229,8 @@ async def ws(websocket: WebSocket) -> None:
                 await lsp.handle(msg)
             elif channel == "visualizer":
                 await visualizer_manager.handle(conn, msg)
+            elif channel == "browser":
+                await browser_manager.handle(conn, msg)
             elif channel == "training":
                 await handle_training_message(conn, msg)
             elif channel == "notebook":
@@ -254,6 +259,7 @@ async def ws(websocket: WebSocket) -> None:
         await repl.close_all()
         await lsp.close_all()
         visualizer_manager.stop_for(conn)
+        browser_manager.stop_for(conn)
         telemetry_task.cancel()
         files_task.cancel()
         library_task.cancel()

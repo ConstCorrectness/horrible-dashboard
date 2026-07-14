@@ -55,3 +55,9 @@ identifier = "allow-window-open-workspace"
 description = "Enables the window_open_workspace custom command"
 [permission.commands]
 allow = ["window_open_workspace"]
+
+[[permission]]
+identifier = "allow-browser-open-url"
+description = "Enables the browser_open_url custom command"
+[permission.commands]
+allow = ["browser_open_url"]

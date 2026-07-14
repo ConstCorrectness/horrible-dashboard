@@ -32,6 +32,20 @@ logger = logging.getLogger(__name__)
 # Applies to any game when no game-specific loadout exists.
 DEFAULT_KEY = "default"
 
+# Synthetic version id for a game running its **shipped starter harness** (the
+# seeded default — no saved loadout yet). It isn't persisted; the first real save
+# branches to `v1` and the starter disappears. Surfaced so the ladder/replay can
+# attribute a default-harness match to *something* instead of a blank version.
+STARTER_VERSION = "starter"
+
+
+def _has_starter(game_id: str) -> bool:
+    """Whether `game_id` ships a starter template (so its seeded default plays)."""
+    from backend.modules.games.templates import default_loadout_for
+
+    return default_loadout_for(game_id) is not None
+
+
 # The commit tool's namespace; player tools must not shadow it.
 RESERVED_TOOL_PREFIX = "game."
 
@@ -107,6 +121,9 @@ class Loadout:
     # ModelConfig-shaped dict (provider/model/endpoint/api_key_name) or None to
     # borrow the agent module's configured model. See model_config.py.
     model: dict[str, Any] | None = None
+    # Optional `my_agent(obs, config)` entrypoint (agent_sdk.py). Empty ⇒ the default
+    # agent = this loadout's context+tools driving the model. The code-first top layer.
+    agent_code: str = ""
 
     def to_wire(self) -> dict[str, Any]:
         return {
@@ -114,6 +131,7 @@ class Loadout:
             "context": self.context,
             "tools": [t.to_wire() for t in self.tools],
             "model": self.model,
+            "agent_code": self.agent_code,
         }
 
     @classmethod
@@ -124,6 +142,7 @@ class Loadout:
             context=str(d.get("context") or ""),
             tools=[ToolDef.from_wire(t) for t in (d.get("tools") or [])],
             model=dict(model) if isinstance(model, dict) else None,
+            agent_code=str(d.get("agent_code") or ""),
         )
 
 
@@ -187,18 +206,27 @@ def _active_body(entry: dict[str, Any]) -> dict[str, Any]:
 
 def get_loadout(game_id: str) -> Loadout:
     """The **active version** of the loadout for `game_id`, falling back to the
-    `default` loadout."""
+    user's `default` loadout and, failing that, to the game's **shipped starter
+    harness** so a fresh player's agent already has a working default."""
     entry = _entry_for(_read_all(), game_id)
     if entry is None:
+        # Lazy import avoids a module-load cycle (templates is imported by routes).
+        from backend.modules.games.templates import default_loadout_for
+
+        body = default_loadout_for(game_id)
+        if body is not None:
+            return Loadout.from_wire(game_id, body)
         return Loadout(game_id=game_id)
     return Loadout.from_wire(game_id, _active_body(entry))
 
 
 def active_version_id(game_id: str) -> str | None:
-    """Which version would play right now (for match attribution)."""
+    """Which version would play right now (for match attribution). With no saved
+    loadout, returns the synthetic `STARTER_VERSION` when the game ships a starter
+    (its seeded default plays), else None."""
     entry = _entry_for(_read_all(), game_id)
     if entry is None:
-        return None
+        return STARTER_VERSION if _has_starter(game_id) else None
     active = entry.get("active")
     return active if active in (entry.get("versions") or {}) else None
 
@@ -223,9 +251,21 @@ def save_loadout(loadout: Loadout) -> Loadout:
 
 
 def list_versions(game_id: str) -> list[dict[str, Any]]:
-    """Version summaries for a game, newest first."""
+    """Version summaries for a game, newest first. With no saved loadout, a game that
+    ships a starter lists one synthetic, active `starter` version (kept in sync with
+    `active_version_id`)."""
     entry = _entry_for(_read_all(), game_id)
     if entry is None:
+        if _has_starter(game_id):
+            return [
+                {
+                    "id": STARTER_VERSION,
+                    "label": "starter",
+                    "created_at": 0.0,
+                    "active": True,
+                    "model": None,
+                }
+            ]
         return []
     versions = entry.get("versions") or {}
     return sorted(

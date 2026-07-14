@@ -44,6 +44,7 @@ const GAME_ICONS: Record<string, string> = {
   arena: '🤖',
   fighter: '🥊',
   vizdoom_toy: '🔫',
+  vizdoom_duel: '💀',
 };
 
 /** The negotiable terms of a battle — shared by the draft form and the counter. */

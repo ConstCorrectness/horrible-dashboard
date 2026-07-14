@@ -129,6 +129,7 @@ export {
 export { dashboardModule } from './modules/dashboard';
 export { layoutsModule } from './modules/layouts';
 export { scratchModule } from './modules/scratch';
+export { browserModule } from './modules/browser';
 export { stubModule } from './modules/stub';
 export { databaseModule } from './modules/database';
 export { libraryModule } from './modules/library';

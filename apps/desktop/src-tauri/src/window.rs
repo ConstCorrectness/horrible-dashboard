@@ -16,8 +16,13 @@
 //! core `WindowControl` seam; the shell stays a thin pass-through to tao's
 //! window API.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Window};
 use tauri_runtime::ResizeDirection;
+
+/// Monotonic counter for unique `browser-<n>` pop-out window labels.
+static BROWSER_WINDOW_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Whether the calling window is currently OS-fullscreen.
 #[tauri::command]
@@ -151,6 +156,32 @@ pub async fn window_open_workspace(app: AppHandle, workspace_id: String) -> Resu
         .min_inner_size(640.0, 480.0)
         .decorations(false)
         .initialization_script(&init)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// --- browser.nativeWindow: pop an embedded-browser page out to a real window ---
+
+/// Open `url` in a new **decorated** native browser window — the embedded
+/// browser's escape hatch for sites that refuse iframing (`X-Frame-Options`/CSP).
+/// A real webview window bypasses those headers entirely.
+///
+/// Only `http`/`https` URLs are accepted, so this can never be steered at
+/// `file:`/custom-scheme local resources. Each call gets a fresh `browser-<n>`
+/// label (external site, so no app permissions are needed on the new window).
+/// Async for the same main-thread `build()` reason as `window_open_workspace`.
+#[tauri::command]
+pub async fn browser_open_url(app: AppHandle, url: String) -> Result<(), String> {
+    let parsed = tauri::Url::parse(&url).map_err(|e| e.to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(format!("refusing to open non-http(s) URL: {url}"));
+    }
+    let n = BROWSER_WINDOW_SEQ.fetch_add(1, Ordering::Relaxed);
+    let label = format!("browser-{n}");
+    WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(parsed))
+        .title(&url)
+        .inner_size(1024.0, 768.0)
         .build()
         .map_err(|e| e.to_string())?;
     Ok(())

@@ -16,6 +16,7 @@ export const DESKTOP_CAPABILITIES: Capability[] = [
   'chrome.workspaceTabs',
   'shortcuts.global',
   'tray',
+  'browser.nativeWindow',
 ];
 
 let active = new Set<Capability>();

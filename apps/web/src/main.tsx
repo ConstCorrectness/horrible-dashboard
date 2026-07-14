@@ -27,6 +27,7 @@ import {
   initNetwork,
   marketplaceModule,
   networkModule,
+  browserModule,
   observabilityModule,
   registry,
   replModule,
@@ -68,6 +69,7 @@ async function boot(): Promise<void> {
   registry.register(layoutsModule);
   registry.register(agentModule);
   registry.register(scratchModule);
+  registry.register(browserModule);
   registry.register(clubhouseModule);
   registry.register(observabilityModule);
   registry.register(marketplaceModule);

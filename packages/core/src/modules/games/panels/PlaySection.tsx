@@ -16,7 +16,13 @@ import { claimChallengeDraft, onChallengeDraft, type ChallengeTarget } from '../
 import { requestChallenges } from '../challenge-focus';
 import { gamesListTables, useGames, gamesQueueLeave, type TableInfo } from '../game-ws';
 import { type GameCatalogEntry } from '../games-api';
-import { hostOpenTable, joinTableLive, playVsOwnAgent, watchTableLive, findRankedMatch } from '../matchmaking';
+import {
+  hostOpenTable,
+  joinTableLive,
+  playVsOwnAgent,
+  watchTableLive,
+  findRankedMatch,
+} from '../matchmaking';
 import { ChallengeDraftCard, IncomingOfferCard } from './ChallengeCards';
 import { FirstRunHero } from './FirstRunHero';
 import { GamesMui } from '../mui-theme';
@@ -33,19 +39,32 @@ const GAME_ICONS: Record<string, string> = {
   arena: '🤖',
   fighter: '🥊',
   vizdoom_toy: '🔫',
+  vizdoom_duel: '💀',
 };
 
 const GAME_DESCRIPTIONS: Record<string, string> = {
-  tictactoe: 'Classic 3-in-a-row board game. Excellent for testing basic search, minimax algorithms, and heuristic evaluation functions.',
-  connect_four: 'Drop checkers to line up four of your color. Requires deeper search trees, alpha-beta pruning, and column valuation strategy.',
-  holdem: "Limit Texas Hold'em poker. Evaluates reasoning under imperfect information, probability calculation, and opponent bluff detection.",
-  rag_race: 'Retrieval-Augmented Generation challenge. Build a pipeline to query documents and answer questions accurately under strict latency limits.',
-  code_golf: 'Write the shortest possible Python code to satisfy unit tests. Tests code generation efficiency and syntax minimization.',
-  test_duel: "Generate unit tests to cover branches of an opponent's code while defending your own. Tests adversarial test generation.",
-  bug_hunt: 'Locate and patch bugs in a multi-file Python codebase. Evaluates agent diagnostic logs, code reasoning, and surgical code edits.',
-  arena: 'Real-time survival arena. Navigate, gather resources, and outlast other agents in a dynamic grid world.',
-  fighter: '2D arcade street fighting game. Tests quick real-time state machine policies, hitbox management, and frame-data timing.',
-  vizdoom_toy: '3D Doom visual combat simulator. Tests reinforcement learning, visual field parsing, and continuous movement control.',
+  tictactoe:
+    'Classic 3-in-a-row board game. Excellent for testing basic search, minimax algorithms, and heuristic evaluation functions.',
+  connect_four:
+    'Drop checkers to line up four of your color. Requires deeper search trees, alpha-beta pruning, and column valuation strategy.',
+  holdem:
+    "Limit Texas Hold'em poker. Evaluates reasoning under imperfect information, probability calculation, and opponent bluff detection.",
+  rag_race:
+    'Retrieval-Augmented Generation challenge. Build a pipeline to query documents and answer questions accurately under strict latency limits.',
+  code_golf:
+    'Write the shortest possible Python code to satisfy unit tests. Tests code generation efficiency and syntax minimization.',
+  test_duel:
+    "Generate unit tests to cover branches of an opponent's code while defending your own. Tests adversarial test generation.",
+  bug_hunt:
+    'Locate and patch bugs in a multi-file Python codebase. Evaluates agent diagnostic logs, code reasoning, and surgical code edits.',
+  arena:
+    'Real-time survival arena. Navigate, gather resources, and outlast other agents in a dynamic grid world.',
+  fighter:
+    '2D arcade street fighting game. Tests quick real-time state machine policies, hitbox management, and frame-data timing.',
+  vizdoom_toy:
+    '3D Doom visual combat simulator. Tests reinforcement learning, visual field parsing, and continuous movement control.',
+  vizdoom_duel:
+    'Real networked 1v1 Doom deathmatch — two agents on one shared map, scored by frags. Tests real-time combat policy, positioning, and target acquisition.',
 };
 
 /** Simulated ping bars (4 bars, filled based on "strength"). */
@@ -172,7 +191,17 @@ export function PlaySection({
 
       {/* ── Active Queue Radar Banner ── */}
       {queue && (
-        <Card className="games-ranked-card active-queue" sx={{ mb: 2, display: 'flex', alignItems: 'center', p: 1.5, gap: 2, borderColor: '#c084fc' }}>
+        <Card
+          className="games-ranked-card active-queue"
+          sx={{
+            mb: 2,
+            display: 'flex',
+            alignItems: 'center',
+            p: 1.5,
+            gap: 2,
+            borderColor: '#c084fc',
+          }}
+        >
           <div className="games-radar-scan" style={{ width: 40, height: 40, flexShrink: 0 }}>
             <div className="games-radar-line" />
           </div>
@@ -181,7 +210,8 @@ export function PlaySection({
               🏁 Matchmaking Search Active
             </Typography>
             <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
-              Searching {nameOf(queue.gameId)} ({queue.difficulty})… <strong>{queue.waitingS}s</strong>
+              Searching {nameOf(queue.gameId)} ({queue.difficulty})…{' '}
+              <strong>{queue.waitingS}s</strong>
             </Typography>
             <Typography variant="body2" sx={{ fontSize: '0.7rem', color: 'text.secondary' }}>
               Window: ±{Math.round(queue.window)} MMR
@@ -196,23 +226,54 @@ export function PlaySection({
       {!selectedGame ? (
         <>
           {/* Welcome Section */}
-          <Card sx={{ p: 2.5, mb: 2, display: 'flex', flexDirection: 'column', gap: 1, background: 'rgba(110, 168, 254, 0.04)' }}>
+          <Card
+            sx={{
+              p: 2.5,
+              mb: 2,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 1,
+              background: 'rgba(110, 168, 254, 0.04)',
+            }}
+          >
             <Typography variant="subtitle1" sx={{ fontWeight: 800, color: 'primary.main' }}>
               🕹️ Games Library & Marketplace
             </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.6, fontSize: '0.82rem' }}>
-              Welcome to the Agent Arcade! You can select any game from the library sidebar on the left to configure your agent's strategy, test your custom tool code, or enter competitive queues. 
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              sx={{ lineHeight: 1.6, fontSize: '0.82rem' }}
+            >
+              Welcome to the Agent Arcade! You can select any game from the library sidebar on the
+              left to configure your agent's strategy, test your custom tool code, or enter
+              competitive queues.
             </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.6, fontSize: '0.82rem' }}>
-              In the future, creators will be able to develop custom reinforcement learning environments, list them here, and even monetize them in the dashboard's game shop.
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              sx={{ lineHeight: 1.6, fontSize: '0.82rem' }}
+            >
+              In the future, creators will be able to develop custom reinforcement learning
+              environments, list them here, and even monetize them in the dashboard's game shop.
             </Typography>
-            <Typography variant="body2" sx={{ fontWeight: 700, mt: 1, color: 'primary.main', fontSize: '0.8rem' }}>
+            <Typography
+              variant="body2"
+              sx={{ fontWeight: 700, mt: 1, color: 'primary.main', fontSize: '0.8rem' }}
+            >
               ← Please select a game from the Games Library on the left to play.
             </Typography>
           </Card>
 
           {/* Server Browser Table Header */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.4rem', marginTop: '1rem' }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: '0.4rem',
+              marginTop: '1rem',
+            }}
+          >
             <Typography variant="subtitle2" sx={{ fontWeight: 800, color: 'text.secondary' }}>
               🌐 Active Server Browser (All Games)
             </Typography>
@@ -269,9 +330,20 @@ export function PlaySection({
           return (
             <>
               {/* Play Mode & Difficulty Controls Row ── */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '1rem',
+                  marginBottom: '1rem',
+                  flexWrap: 'wrap',
+                }}
+              >
                 <div>
-                  <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', mb: 0.5, fontWeight: 700 }}>
+                  <Typography
+                    variant="caption"
+                    sx={{ display: 'block', color: 'text.secondary', mb: 0.5, fontWeight: 700 }}
+                  >
                     PLAY MODE
                   </Typography>
                   <ToggleButtonGroup
@@ -291,7 +363,10 @@ export function PlaySection({
 
                 {playMode === 'ranked' && (
                   <div>
-                    <Typography variant="caption" sx={{ display: 'block', color: 'text.secondary', mb: 0.5, fontWeight: 700 }}>
+                    <Typography
+                      variant="caption"
+                      sx={{ display: 'block', color: 'text.secondary', mb: 0.5, fontWeight: 700 }}
+                    >
                       QUEUE DIFFICULTY
                     </Typography>
                     <ToggleButtonGroup
@@ -300,9 +375,15 @@ export function PlaySection({
                       onChange={(_, val) => val && setDifficulty(val)}
                       size="small"
                     >
-                      <ToggleButton value="standard" sx={{ py: 0.5 }}>⚔️ Standard</ToggleButton>
-                      <ToggleButton value="hard" sx={{ py: 0.5 }}>🔒 Hard</ToggleButton>
-                      <ToggleButton value="expert" sx={{ py: 0.5 }}>💎 Expert</ToggleButton>
+                      <ToggleButton value="standard" sx={{ py: 0.5 }}>
+                        ⚔️ Standard
+                      </ToggleButton>
+                      <ToggleButton value="hard" sx={{ py: 0.5 }}>
+                        🔒 Hard
+                      </ToggleButton>
+                      <ToggleButton value="expert" sx={{ py: 0.5 }}>
+                        💎 Expert
+                      </ToggleButton>
                     </ToggleButtonGroup>
                   </div>
                 )}
@@ -330,7 +411,11 @@ export function PlaySection({
               >
                 <CardHeader
                   avatar={<span style={{ fontSize: '2rem' }}>{GAME_ICONS[g.id] ?? '🎲'}</span>}
-                  title={<Typography variant="h6" sx={{ fontWeight: 800 }}>{g.name}</Typography>}
+                  title={
+                    <Typography variant="h6" sx={{ fontWeight: 800 }}>
+                      {g.name}
+                    </Typography>
+                  }
                   subheader={
                     playMode === 'ranked' ? (
                       gameMMR?.tier ? (
@@ -342,12 +427,20 @@ export function PlaySection({
                           sx={{ fontSize: '0.75rem', height: 22 }}
                         />
                       ) : (
-                        <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.75rem' }}>
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{ fontSize: '0.75rem' }}
+                        >
                           Unrated · 1200 MMR
                         </Typography>
                       )
                     ) : (
-                      <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.75rem' }}>
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        sx={{ fontSize: '0.75rem' }}
+                      >
                         Practice Mode
                       </Typography>
                     )
@@ -355,12 +448,24 @@ export function PlaySection({
                   sx={{ pb: 0.5 }}
                 />
                 <CardContent sx={{ py: 1 }}>
-                  <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.82rem', lineHeight: 1.5 }}>
-                    {GAME_DESCRIPTIONS[g.id] ?? `Play ${g.name} against other agents or practice with your own.`}
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    sx={{ fontSize: '0.82rem', lineHeight: 1.5 }}
+                  >
+                    {GAME_DESCRIPTIONS[g.id] ??
+                      `Play ${g.name} against other agents or practice with your own.`}
                   </Typography>
                 </CardContent>
                 <CardActions
-                  sx={{ p: 2, pt: 1, gap: 1.5, flexDirection: 'row', flexWrap: 'wrap', borderTop: '1px solid var(--border)' }}
+                  sx={{
+                    p: 2,
+                    pt: 1,
+                    gap: 1.5,
+                    flexDirection: 'row',
+                    flexWrap: 'wrap',
+                    borderTop: '1px solid var(--border)',
+                  }}
                 >
                   {playMode === 'ranked' ? (
                     <Button
@@ -410,7 +515,15 @@ export function PlaySection({
               </Card>
 
               {/* Server Browser Table Header */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.4rem', marginTop: '1rem' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  marginBottom: '0.4rem',
+                  marginTop: '1rem',
+                }}
+              >
                 <Typography variant="subtitle2" sx={{ fontWeight: 800, color: 'text.secondary' }}>
                   🌐 Active Server Browser ({nameOf(selectedGame)} servers)
                 </Typography>

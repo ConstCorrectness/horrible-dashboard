@@ -4,7 +4,7 @@
  * Live match state comes over the `games` `/ws` channel (see game-ws.ts); these are
  * the request/response bits.
  */
-import { apiGet, apiPost } from '../../api';
+import { apiGet, apiPost, apiPut } from '../../api';
 
 export interface GamesStatus {
   connected: boolean;
@@ -66,6 +66,52 @@ export function fetchLeaderboard(
   gameId: string,
 ): Promise<{ game_id: string; entries: LeaderRow[] }> {
   return apiGet(`/games/leaderboard?game_id=${encodeURIComponent(gameId)}`);
+}
+
+// ---- the agent (loadout) -----------------------------------------------------
+//
+// A player's agent for a game: an optional `my_agent(obs, config)` entrypoint
+// (`agent_code`) over the declarative harness (system-prompt `context` + custom
+// Python `tools` + the `model` that drives them). Empty agent_code = the default
+// agent (context + tools drive the model). See backend agent_sdk.py.
+
+export interface LoadoutTool {
+  name: string;
+  description: string;
+  code: string;
+  parameters: Record<string, { type?: string; description?: string }>;
+  required: string[];
+}
+
+export interface Loadout {
+  game_id: string;
+  context: string;
+  tools: LoadoutTool[];
+  model: Record<string, unknown> | null;
+  agent_code: string;
+}
+
+export interface LoadoutValidation {
+  ok: boolean;
+  tools: { name: string; ok: boolean; error: string | null }[];
+  agent_error: string | null;
+}
+
+export function getLoadout(gameId: string): Promise<Loadout> {
+  return apiGet(`/games/loadout/${encodeURIComponent(gameId)}`);
+}
+
+export function saveLoadout(gameId: string, loadout: Loadout): Promise<Loadout> {
+  return apiPut(`/games/loadout/${encodeURIComponent(gameId)}`, loadout);
+}
+
+export function validateLoadout(loadout: Loadout): Promise<LoadoutValidation> {
+  return apiPost('/games/loadout/validate', loadout);
+}
+
+/** The starter `my_agent` source to seed the editor for a fresh agent on a game. */
+export function getAgentStarter(gameId: string): Promise<{ game_id: string; agent_code: string }> {
+  return apiGet(`/games/agent-starter/${encodeURIComponent(gameId)}`);
 }
 
 export interface ChallengeRow {

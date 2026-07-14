@@ -11,6 +11,7 @@ from fastapi import APIRouter
 
 from backend.games_engine.base import list_games
 from backend.modules.games import server_auth
+from backend.modules.games.agent_sdk import agent_compile_error
 from backend.modules.games.client import DEFAULT_SERVER_URL, games_client
 from backend.modules.games.loadout import (
     HarnessRuntime,
@@ -86,6 +87,7 @@ def _to_model(loadout: Loadout) -> LoadoutModel:
             for t in loadout.tools
         ],
         model=loadout.model,
+        agent_code=loadout.agent_code,
     )
 
 
@@ -104,6 +106,7 @@ def _from_model(game_id: str, body: LoadoutModel) -> Loadout:
             for t in body.tools
         ],
         model=body.model,
+        agent_code=body.agent_code,
     )
 
 
@@ -121,7 +124,14 @@ def validate_loadout_route(body: LoadoutModel) -> ValidateLoadoutResponse:
         err = tool_name_error(tool.name, taken) or runtime.compile_error(tool.name)
         taken.add(tool.name)
         diags.append(ToolDiagnostic(name=tool.name, ok=err is None, error=err))
-    return ValidateLoadoutResponse(ok=all(d.ok for d in diags), tools=diags)
+    # A broken `my_agent` entrypoint is silently absent in a match (falls back to random),
+    # so surface it here too. Empty agent_code = the default agent → no error.
+    agent_error = agent_compile_error(loadout.agent_code)
+    return ValidateLoadoutResponse(
+        ok=all(d.ok for d in diags) and agent_error is None,
+        tools=diags,
+        agent_error=agent_error,
+    )
 
 
 @router.get("/loadout/{game_id}", response_model=LoadoutModel)
@@ -187,6 +197,15 @@ def loadout_templates_route(game_id: str | None = None) -> dict[str, Any]:
     if game_id:
         templates = [t for t in templates if t["game_id"] == game_id]
     return {"templates": templates}
+
+
+@router.get("/agent-starter/{game_id}")
+def agent_starter_route(game_id: str) -> dict[str, str]:
+    """The starter `my_agent(obs, config)` source to pre-fill the builder's editor for a
+    fresh agent on `game_id` (depth varies per game; the editor is the same everywhere)."""
+    from backend.modules.games.agent_sdk import starter_agent_source
+
+    return {"game_id": game_id, "agent_code": starter_agent_source(game_id)}
 
 
 @router.get("/match-log")

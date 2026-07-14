@@ -113,6 +113,124 @@ def run(args, obs):
 '''
 
 
+_VIZDOOM_DUEL_BOT = '''\
+def run(args, obs):
+    """Return this tick's action for the networked ViZDoom Duel on the cig arena:
+    idle/attack/use/turn_left/turn_right/move_left/move_right/move_forward/
+    move_backward. The frame is an opaque JPEG (no vision here — keep it fast), so
+    this is a pressure-and-circle-strafe brawler: keep firing while you have ammo,
+    press forward to close, and alternate strafe + turn every few ticks so you keep
+    weaving and sweeping the arena for the other marine instead of standing still."""
+    legal = [a["id"] for a in obs.get("legal_actions", [])]
+    hud = obs.get("hud") or {}
+    tick = int(obs.get("tick", 0))
+
+    def pick(*prefs):
+        for a in prefs:
+            if a in legal:
+                return a
+        return "idle"
+
+    # Out of ammo: stop firing, reposition and hunt a new angle.
+    if hud.get("ammo", 0) <= 0:
+        return pick("turn_right", "move_forward", "idle")
+    phase = tick % 4
+    if phase == 0:
+        return pick("attack")
+    if phase == 1:
+        return pick("move_left", "attack")
+    if phase == 2:
+        return pick("turn_right", "attack")
+    return pick("move_right", "move_forward", "attack")
+'''
+
+
+# --- starters for the open-action (code-submission) games -------------------
+# These games are graded on *submitted content* (a bot program, a patch, a golfed
+# solution, tests, a feature transform), so their harness is context + a helper
+# tool that reads the observation — not a per-tick bot.
+
+_ARENA_HELPER = '''\
+def run(args, obs):
+    """Read where the arena match stands so you can iterate your bot(obs): am I
+    behind on round wins, and is there a round to study? Improve on
+    obs['starter_bot'] — chase the nearest pellet, and step onto the opponent's
+    just-vacated cell to steal points."""
+    seat = int(obs.get("seat", 0))
+    wins = obs.get("round_wins") or [0, 0]
+    me, opp = wins[seat], wins[1 - seat]
+    return {
+        "round": obs.get("round"),
+        "rounds": obs.get("rounds"),
+        "my_round_wins": me,
+        "opp_round_wins": opp,
+        "behind": me < opp,
+        "have_last_round": obs.get("last_round") is not None,
+    }
+'''
+
+_BUGHUNT_HELPER = '''\
+def run(args, obs):
+    """Triage the last bug-hunt attempt: which tests are still failing and how many
+    tries are left. Patch the smallest diff that turns them green, then resubmit the
+    whole files map — read obs['description'] and obs['visible_tests'] for intent."""
+    attempts = obs.get("attempts") or []
+    if not attempts:
+        return {"note": "no attempts yet - submit a fix, then read failures here",
+                "attempts_left": obs.get("attempts_left")}
+    last = attempts[-1]
+    return {
+        "all_green": bool(last.get("green")),
+        "passed": last.get("passed"),
+        "failed": last.get("failed"),
+        "attempts_left": obs.get("attempts_left"),
+    }
+'''
+
+_CODEGOLF_HELPER = '''\
+def run(args, obs):
+    """Byte-count a candidate solution (pass it as `code`) before you submit:
+    correctness first (it must satisfy obs['public_examples']), then fewest bytes
+    wins ties. Compare shorter rewrites by their byte length."""
+    code = str(args.get("code") or "")
+    return {
+        "bytes": len(code.encode("utf-8")),
+        "chars": len(code),
+        "signature": obs.get("signature"),
+        "n_public_examples": len(obs.get("public_examples") or []),
+    }
+'''
+
+_TESTDUEL_HELPER = '''\
+def run(args, obs):
+    """Parse the target signature so you can cover it: the function name and its
+    parameter names, plus the current phase (write a correct impl first, then tests
+    that pass a correct impl but break a buggy one)."""
+    import re
+    sig = str(obs.get("signature") or "")
+    m = re.search(r"(\\w+)\\s*\\(([^)]*)\\)", sig)
+    name = m.group(1) if m else None
+    params = []
+    if m and m.group(2).strip():
+        for p in m.group(2).split(","):
+            params.append(p.strip().split(":")[0].split("=")[0].strip())
+    return {"function": name, "params": params, "phase": obs.get("phase")}
+'''
+
+_TABULARFE_HELPER = '''\
+def run(args, obs):
+    """List the dataset columns and dtypes from obs['data_samples'] so you know what
+    to engineer: build ratios/interactions/log-transforms of numeric columns and
+    encode categoricals to move obs['metric']. Start from obs['starter_code']."""
+    samples = obs.get("data_samples") or []
+    if not samples:
+        return {"columns": [], "note": "no samples in observation"}
+    row = samples[0]
+    dtypes = {k: type(v).__name__ for k, v in row.items()}
+    return {"columns": list(dtypes), "dtypes": dtypes, "metric": obs.get("metric")}
+'''
+
+
 _TTT_FORKS = '''\
 def run(args, obs):
     """Find fork cells: empty squares that would create TWO winning threats at
@@ -231,6 +349,161 @@ def loadout_templates() -> list[dict[str, Any]]:
                         "name": "vizdoom_toy.bot",
                         "description": "Returns this tick's action for ranked ViZDoom (runs every frame — keep it fast, no model).",
                         "code": _VIZDOOM_BOT,
+                        "parameters": {},
+                        "required": [],
+                    }
+                ],
+                "model": None,
+            },
+        },
+        {
+            "id": "vizdoom-brawler",
+            "game_id": "vizdoom_duel",
+            "title": "Circle-strafe brawler",
+            "blurb": "A ViZDoom Duel bot (vizdoom_duel.bot): a real 1v1 deathmatch on a shared map — keep firing, close the distance, and weave so you're never a standing target.",
+            "loadout": {
+                "game_id": "vizdoom_duel",
+                "context": "",
+                "tools": [
+                    {
+                        "name": "vizdoom_duel.bot",
+                        "description": "Returns this tick's action for the networked ViZDoom Duel (runs every frame — keep it fast, no model).",
+                        "code": _VIZDOOM_DUEL_BOT,
+                        "parameters": {},
+                        "required": [],
+                    }
+                ],
+                "model": None,
+            },
+        },
+        {
+            "id": "arena-greedy",
+            "game_id": "arena",
+            "title": "Greedy pellet-seeker",
+            "blurb": "An Arena starter: submit a bot(obs) that chases the nearest pellet and contests the opponent's cell, plus a tool to read the score so you can iterate.",
+            "loadout": {
+                "game_id": "arena",
+                "context": (
+                    "Arena is a bot-programming duel: you submit bot(obs) returning "
+                    "up/down/left/right/stay, and the server simulates the rounds. Start "
+                    "from obs['starter_bot'] and make it greedy — each tick step one cell "
+                    "toward the nearest pellet, and if the opponent just vacated a cell you "
+                    "can reach, take it to steal points. Call round_report to see if you're "
+                    "behind and study obs['last_round'] to iterate."
+                ),
+                "tools": [
+                    {
+                        "name": "round_report",
+                        "description": "Round wins so far and whether you're behind, to guide your next bot(obs).",
+                        "code": _ARENA_HELPER,
+                        "parameters": {},
+                        "required": [],
+                    }
+                ],
+                "model": None,
+            },
+        },
+        {
+            "id": "bughunt-triage",
+            "game_id": "bug_hunt",
+            "title": "Failing-test triage",
+            "blurb": "A Bug Hunt starter: read the description and visible tests, patch the smallest diff, and use failing_tests to see what's still red between attempts.",
+            "loadout": {
+                "game_id": "bug_hunt",
+                "context": (
+                    "Bug Hunt: fix bugs across obs['files'] so the tests pass. Read "
+                    "obs['description'] and obs['visible_tests'] for intended behavior, "
+                    "change the fewest lines, and resubmit the whole files map. After each "
+                    "attempt call failing_tests to see which tests are still failing and "
+                    "how many attempts remain."
+                ),
+                "tools": [
+                    {
+                        "name": "failing_tests",
+                        "description": "Summarize the latest attempt: tests passed/failed and attempts left.",
+                        "code": _BUGHUNT_HELPER,
+                        "parameters": {},
+                        "required": [],
+                    }
+                ],
+                "model": None,
+            },
+        },
+        {
+            "id": "codegolf-golfer",
+            "game_id": "code_golf",
+            "title": "Correct-then-shortest",
+            "blurb": "A Code Golf starter: pass the public examples first, then shrink — byte_count measures each candidate so you can chase the fewest bytes.",
+            "loadout": {
+                "game_id": "code_golf",
+                "context": (
+                    "Code Golf: implement obs['signature'] to satisfy obs['public_examples'] "
+                    "(correctness first — a wrong-but-short answer loses), then rewrite to "
+                    "the fewest bytes. Call byte_count on each candidate to compare lengths; "
+                    "prefer lambdas, comprehensions, and no temporary variables."
+                ),
+                "tools": [
+                    {
+                        "name": "byte_count",
+                        "description": "Byte-count a candidate solution before submitting.",
+                        "code": _CODEGOLF_HELPER,
+                        "parameters": {
+                            "code": {
+                                "type": "string",
+                                "description": "a candidate solution to measure",
+                            }
+                        },
+                        "required": ["code"],
+                    }
+                ],
+                "model": None,
+            },
+        },
+        {
+            "id": "testduel-coverage",
+            "game_id": "test_duel",
+            "title": "Cover-and-break",
+            "blurb": "A Test Duel starter: write a correct implementation, then tests that pass a correct impl but break a buggy one — spec_signature pulls the function + params to cover.",
+            "loadout": {
+                "game_id": "test_duel",
+                "context": (
+                    "Test Duel has two phases (obs['phase']). First write a correct impl of "
+                    "obs['signature'] from obs['spec']. Then write unit tests that PASS a "
+                    "correct impl but BREAK a buggy one — cover edge cases (empty, zero, "
+                    "negative, boundary, wrong types). Call spec_signature for the function "
+                    "name and parameters. Invalid tests (failing the reference impl) score 0."
+                ),
+                "tools": [
+                    {
+                        "name": "spec_signature",
+                        "description": "Parse the target function name and parameters from the signature.",
+                        "code": _TESTDUEL_HELPER,
+                        "parameters": {},
+                        "required": [],
+                    }
+                ],
+                "model": None,
+            },
+        },
+        {
+            "id": "tabularfe-features",
+            "game_id": "tabular_fe",
+            "title": "Feature builder",
+            "blurb": "A Tabular Feature Engineering starter: inspect the columns, then build ratios/interactions/transforms to move the metric — feature_columns lists what you have to work with.",
+            "loadout": {
+                "game_id": "tabular_fe",
+                "context": (
+                    "Tabular Feature Engineering: transform the DataFrame in your submission "
+                    "to improve obs['metric']. Call feature_columns to list the columns and "
+                    "dtypes from obs['data_samples'], then add ratios, interactions, and "
+                    "log/scale transforms of numeric columns and encode categoricals. Start "
+                    "from obs['starter_code']."
+                ),
+                "tools": [
+                    {
+                        "name": "feature_columns",
+                        "description": "List dataset columns and dtypes from the observation samples.",
+                        "code": _TABULARFE_HELPER,
                         "parameters": {},
                         "required": [],
                     }
@@ -385,3 +658,13 @@ def loadout_templates() -> list[dict[str, Any]]:
             },
         },
     ]
+
+
+def default_loadout_for(game_id: str) -> dict[str, Any] | None:
+    """The shipped starter loadout (wire dict) for `game_id` — the **first** template
+    listed for it. Used to seed the default active loadout so a fresh player's agent
+    already has a working harness. None if the game has no template."""
+    for template in loadout_templates():
+        if template["game_id"] == game_id:
+            return template["loadout"]
+    return None
