@@ -133,6 +133,83 @@ async def _auth_poll(provider: str, device_code: str) -> dict[str, Any]:
     return data  # {pending: true} or {error: ...}
 
 
+# ---- web (authorization-code) sign-in --------------------------------------
+#
+# The redirect flow: the node asks the game server to open a login, keeps the
+# private `retrieval_code` here (never handed to the browser), and later pulls the
+# minted JWT with it. The browser only ever gets the `authorize_url` to open.
+
+# provider -> {retrieval_code, expires_at}. One interactive sign-in at a time.
+_pending_web: dict[str, dict[str, Any]] = {}
+
+
+async def web_login_start(provider: str) -> dict[str, Any]:
+    """Begin the redirect flow. Returns `{authorize_url}` for the browser to open, or
+    `{error}`. The private retrieval code is stashed node-side for the poll."""
+    import time
+
+    import httpx
+
+    if provider not in ("github", "google"):
+        return {"error": f"unknown provider {provider!r}"}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.post(f"{_http_base()}/auth/{provider}/web/start")
+            res.raise_for_status()
+            data = res.json()
+    except (httpx.ConnectError, httpx.ConnectTimeout):
+        return _unreachable_error()
+    except httpx.HTTPError as exc:
+        return {"error": f"Failed to start sign-in: {exc}"}
+    if data.get("error") or not data.get("login_url") or not data.get("retrieval_code"):
+        return {
+            "error": data.get("error")
+            or "sign-in unavailable — web OAuth is not configured on the game server"
+        }
+    _pending_web[provider] = {
+        "retrieval_code": data["retrieval_code"],
+        "expires_at": time.time() + float(data.get("expires_in") or 900),
+    }
+    return {"authorize_url": data["login_url"]}
+
+
+async def web_login_poll(provider: str) -> dict[str, Any]:
+    """Poll the pending redirect sign-in. `{pending: True}` until the user authorizes,
+    then persist the JWT and return `{signed_in, account}`; `{error}` otherwise."""
+    import time
+
+    import httpx
+
+    pending = _pending_web.get(provider)
+    if not pending:
+        return {"error": "no sign-in in progress"}
+    if time.time() > pending["expires_at"]:
+        _pending_web.pop(provider, None)
+        return {"error": "sign-in timed out"}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.post(
+                f"{_http_base()}/auth/{provider}/web/poll",
+                json={"retrieval_code": pending["retrieval_code"]},
+            )
+            res.raise_for_status()
+            data = res.json()
+    except (httpx.ConnectError, httpx.ConnectTimeout):
+        return _unreachable_error()
+    except httpx.HTTPError as exc:
+        return {"error": f"Failed to complete sign-in: {exc}"}
+    if data.get("pending"):
+        return {"pending": True}
+    if data.get("token"):
+        path = _token_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data), encoding="utf-8")
+        _pending_web.pop(provider, None)
+        return {"signed_in": True, "account": data.get("account")}
+    _pending_web.pop(provider, None)
+    return {"error": data.get("error") or "sign-in failed"}
+
+
 async def github_start() -> dict[str, Any]:
     return await _auth_start("github")
 

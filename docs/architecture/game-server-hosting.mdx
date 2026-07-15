@@ -40,9 +40,11 @@ and `store.py`). Environment variables take priority over database settings if b
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `GAMES_JWT_SECRET` | **Yes** in prod | HMAC key that signs session JWTs. If unset the server writes a random secret into `HORRIBLE_DATA_DIR` — on an ephemeral FS that regenerates on every restart and **logs everyone out**. Set it explicitly (`openssl rand -hex 32`). |
-| `GAMES_GITHUB_CLIENT_ID` | For sign-in | GitHub OAuth app **client id** (device flow — no client secret needed). Without it, "Sign in with GitHub" returns a friendly *"not configured"* error and only the dev token works. Overrides the database `games.github.clientId` setting. |
-| `GAMES_GOOGLE_CLIENT_ID` | For Google sign-in | Google OAuth **client id** — create a client of type **"TVs and Limited Input devices"** in Google Cloud Console (that's the device-flow client type; add your accounts as test users while the consent screen is in Testing). Overrides the database `games.google.clientId` setting. |
-| `GAMES_GOOGLE_CLIENT_SECRET` | For Google sign-in | The matching **client secret** — Google's device flow (unlike GitHub's) requires it at the token poll. Google treats TV-client secrets as non-confidential, but keep it in a host secret anyway. Overrides the database `games.google.clientSecret` setting. |
+| `GAMES_GITHUB_CLIENT_ID` | For sign-in | GitHub OAuth app **client id**. Without it, "Sign in with GitHub" returns a friendly *"not configured"* error and only the dev token works. Overrides the database `games.github.clientId` setting. |
+| `GAMES_GITHUB_CLIENT_SECRET` | For the **redirect** flow | GitHub OAuth app **client secret**, required by the default redirect (authorization-code) sign-in for the code→token exchange. Also register `https://<server>/auth/github/callback` as the app's **Authorization callback URL**. The device-flow fallback (*use a code*) needs neither. Overrides `games.github.clientSecret`. |
+| `GAMES_GOOGLE_CLIENT_ID` | For Google sign-in | Google OAuth **client id**. For the **redirect** flow create a **"Web application"** client with `https://<server>/auth/google/callback` as an authorized redirect URI; for the device-flow fallback use a **"TVs and Limited Input devices"** client (add your accounts as test users while the consent screen is in Testing). Overrides the database `games.google.clientId` setting. |
+| `GAMES_GOOGLE_CLIENT_SECRET` | For Google sign-in | The matching **client secret** — Google needs it for the token exchange in either flow. Overrides the database `games.google.clientSecret` setting. |
+| `GAMES_PUBLIC_URL` | Optional | The externally-reachable base URL (e.g. `https://games.example.com`) used to build the OAuth `redirect_uri`. Only needed if the server can't infer it from the request — behind a TLS-terminating proxy the inbound scheme can read as `http`; off localhost the server already coerces to `https`, so this is a belt-and-suspenders override. |
 | `GAMES_ALLOW_DEV_AUTH` | Recommended `0` | The dev token treats `token == account_id` (no auth). Fine locally; set to `0` in prod to require real sign-in. |
 | `GAMES_ENABLE_CODE_EXEC` | For code games | Opt-in gate for **running untrusted code** — the verification runner (code golf, test duel, bug hunt) and the arena bot simulation. Unset, those games report grading as unavailable and never execute anything. Only enable on a host you're comfortable running player-submitted Python on (isolated subprocess, but *not* container-grade yet — see the [architecture note](game-server.mdx)). |
 | `GAMES_QUEUE_BOT_S` | Optional (default `45`) | Seconds the ranked queue waits for a human before backfilling with a practice bot (instant for placement matches). |
@@ -74,8 +76,12 @@ fly launch --no-deploy --copy-config          # uses ./fly.toml
 fly volumes create game_data --size 1 --region iad
 fly secrets set GAMES_JWT_SECRET="$(openssl rand -hex 32)" \
   GAMES_GITHUB_CLIENT_ID=<your-oauth-client-id> \
+  GAMES_GITHUB_CLIENT_SECRET=<your-github-client-secret> \
   GAMES_GOOGLE_CLIENT_ID=<your-google-client-id> \
   GAMES_GOOGLE_CLIENT_SECRET=<your-google-client-secret>
+# For the default redirect sign-in, register the callback on each OAuth app:
+#   GitHub app  → Authorization callback URL: https://<server>/auth/github/callback
+#   Google app  → "Web application" client, Authorized redirect URI: https://<server>/auth/google/callback
 
 # Deploy / redeploy:
 fly deploy

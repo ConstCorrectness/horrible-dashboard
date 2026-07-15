@@ -11,10 +11,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import secrets
+import time
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
-from fastapi import FastAPI, Header, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
 from backend.games_engine.base import list_games
@@ -177,6 +181,150 @@ async def google_poll(body: _DevicePoll) -> dict[str, Any]:
     except Exception as exc:  # network / provider error — report, don't crash
         logger.warning("google poll failed: %s", exc)
         return {"error": str(exc)}
+
+
+# ---- web (authorization-code) sign-in --------------------------------------
+#
+# The redirect flow behind the browser "Sign in" button. A pending login carries
+# two secrets, mirroring the device flow: `login_id` is public (it rides in the
+# browser URL as the OAuth `state`), while `retrieval_code` is private — only the
+# node ever holds it, and only it can pull the minted JWT. So even someone who sees
+# the browser URL cannot lift the token.
+
+_WEB_LOGIN_TTL_S = 900  # 15 min, matching the device-code lifetime
+
+
+class _WebLogin:
+    def __init__(self, provider: str) -> None:
+        self.provider = provider
+        self.login_id = secrets.token_urlsafe(16)
+        self.retrieval_code = secrets.token_urlsafe(32)
+        self.created_at = time.time()
+        # {token, account} on success, {error} on failure, None until the callback.
+        self.result: dict[str, Any] | None = None
+
+
+# login_id -> entry. Process-global (the server is single-process per machine).
+_web_logins: dict[str, _WebLogin] = {}
+
+
+def _purge_web_logins() -> None:
+    now = time.time()
+    for lid in [
+        k for k, v in _web_logins.items() if now - v.created_at > _WEB_LOGIN_TTL_S
+    ]:
+        _web_logins.pop(lid, None)
+
+
+def _public_base(request: Request) -> str:
+    """The externally-reachable base URL, used to build the OAuth redirect_uri so it
+    matches the provider's registered callback. `GAMES_PUBLIC_URL` pins it; otherwise
+    we derive it from the request and force https off localhost (Fly terminates TLS,
+    so the inbound request scheme can read as http)."""
+    env = os.environ.get("GAMES_PUBLIC_URL")
+    if env:
+        return env.rstrip("/")
+    base = str(request.base_url).rstrip("/")
+    if "localhost" not in base and "127.0.0.1" not in base:
+        base = base.replace("http://", "https://", 1)
+    return base
+
+
+def _web_login_page(message: str) -> HTMLResponse:
+    """The tiny page the popup lands on; it reports status and closes itself."""
+    safe = message.replace("<", "&lt;").replace(">", "&gt;")
+    html = (
+        "<!doctype html><html><head><meta charset='utf-8'><title>Sign-in</title></head>"
+        "<body style='font-family:system-ui,sans-serif;background:#0d1117;color:#e6edf3;"
+        "display:flex;align-items:center;justify-content:center;height:100vh;margin:0'>"
+        f"<div style='text-align:center;max-width:24rem;padding:1rem'><p style='font-size:1.05rem'>{safe}</p>"
+        "<p style='color:#8b949e;font-size:0.85rem'>You can close this tab.</p></div>"
+        "<script>setTimeout(function(){window.close();},1500);</script>"
+        "</body></html>"
+    )
+    return HTMLResponse(html)
+
+
+@app.post("/auth/{provider}/web/start")
+async def web_start(provider: str, request: Request) -> dict[str, Any]:
+    """Begin the redirect flow. Returns the `login_url` to open in the browser and the
+    private `retrieval_code` the node polls with."""
+    if provider not in ("github", "google"):
+        return {"error": f"unknown provider {provider!r}"}
+    cfg_error = auth.web_config_error(provider)
+    if cfg_error:
+        return {"error": cfg_error}
+    _purge_web_logins()
+    entry = _WebLogin(provider)
+    _web_logins[entry.login_id] = entry
+    login_url = f"{_public_base(request)}/auth/{provider}/login?lid={entry.login_id}"
+    return {
+        "login_url": login_url,
+        "retrieval_code": entry.retrieval_code,
+        "expires_in": _WEB_LOGIN_TTL_S,
+    }
+
+
+@app.get("/auth/{provider}/login")
+async def web_login(provider: str, lid: str, request: Request) -> Any:
+    """Redirect the browser on to the provider's consent page (302). `lid` is the
+    pending login's public id, replayed as the OAuth `state`."""
+    entry = _web_logins.get(lid)
+    if entry is None or entry.provider != provider:
+        return _web_login_page("This sign-in link is invalid or has expired.")
+    redirect_uri = f"{_public_base(request)}/auth/{provider}/callback"
+    try:
+        url = auth.web_authorize_url(provider, entry.login_id, redirect_uri)
+    except ValueError as exc:
+        return _web_login_page(str(exc))
+    return RedirectResponse(url, status_code=302)
+
+
+@app.get("/auth/{provider}/callback")
+async def web_callback(
+    provider: str,
+    request: Request,
+    code: str = "",
+    state: str = "",
+    error: str = "",
+) -> HTMLResponse:
+    """The provider's redirect target: exchange the code and stash the result under the
+    pending login (keyed by `state`) for the node to retrieve."""
+    entry = _web_logins.get(state)
+    if entry is None or entry.provider != provider:
+        return _web_login_page("Sign-in session not found or expired.")
+    if error:
+        entry.result = {"error": error}
+        return _web_login_page(f"Sign-in was cancelled ({error}).")
+    redirect_uri = f"{_public_base(request)}/auth/{provider}/callback"
+    try:
+        entry.result = await auth.web_exchange(provider, code, redirect_uri)
+        name = (entry.result.get("account") or {}).get("display_name") or "you"
+        return _web_login_page(f"Signed in as {name}.")
+    except Exception as exc:
+        logger.warning("web callback exchange failed: %s", exc)
+        entry.result = {"error": str(exc)}
+        return _web_login_page("Sign-in failed. Return to the app and try again.")
+
+
+class _WebPoll(BaseModel):
+    retrieval_code: str
+
+
+@app.post("/auth/{provider}/web/poll")
+async def web_poll(provider: str, body: _WebPoll) -> dict[str, Any]:
+    """The node polls here with its private `retrieval_code`. `{pending: true}` until the
+    callback lands, then `{token, account}` (consumed once) or `{error}`."""
+    _purge_web_logins()
+    for lid, entry in list(_web_logins.items()):
+        if entry.provider == provider and secrets.compare_digest(
+            entry.retrieval_code, body.retrieval_code
+        ):
+            if entry.result is None:
+                return {"pending": True}
+            _web_logins.pop(lid, None)
+            return entry.result
+    return {"error": "sign-in session not found or expired"}
 
 
 @app.websocket("/game-ws")

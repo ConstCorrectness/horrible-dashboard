@@ -26,6 +26,7 @@ page, then we poll for the token and read their profile.
 
 from __future__ import annotations
 
+import json
 import os
 import secrets
 import time
@@ -300,3 +301,137 @@ def _finish_google(profile: dict[str, Any]) -> dict[str, Any]:
     store.ensure_handle(account_id, local_part or display_name)
     token = issue_jwt(account_id, display_name)
     return {"token": token, "account": {"id": account_id, "display_name": display_name}}
+
+
+# ---- Web (authorization-code) OAuth ----------------------------------------
+#
+# The redirect flow behind the browser "Sign in with GitHub/Google" button: the
+# user authorizes on the provider's normal consent page (no code typing) and the
+# provider redirects back to *this server's* callback. Unlike the device flow,
+# the code->token exchange needs a client secret, kept here server-side.
+
+GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
+GOOGLE_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+
+
+def _github_client_secret() -> str:
+    from backend.modules.settings.routes import get_value
+
+    return str(
+        os.environ.get("GAMES_GITHUB_CLIENT_SECRET", "")
+        or get_value("games.github.clientSecret", "")
+    )
+
+
+def web_config_error(provider: str) -> str | None:
+    """A human message if `provider`'s web flow isn't configured, else None — so the
+    UI fails fast at start rather than after a round-trip to the provider."""
+    if provider == "github":
+        if not _github_client_id():
+            return "games.github.clientId is not configured"
+        if not _github_client_secret():
+            return (
+                "games.github.clientSecret is not configured (required for web sign-in)"
+            )
+        return None
+    if provider == "google":
+        if not _google_client_id() or not _google_client_secret():
+            return "games.google.clientId / clientSecret are not configured"
+        return None
+    return f"unknown provider {provider!r}"
+
+
+def web_authorize_url(provider: str, state: str, redirect_uri: str) -> str:
+    """The provider consent URL to send the browser to (carrying our CSRF `state`)."""
+    from urllib.parse import urlencode
+
+    if provider == "github":
+        client_id = _github_client_id()
+        params = {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "scope": "read:user",
+            "state": state,
+        }
+        return f"{GITHUB_AUTHORIZE_URL}?{urlencode(params)}"
+    if provider == "google":
+        client_id = _google_client_id()
+        params = {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": "email profile",
+            "state": state,
+            "access_type": "online",
+        }
+        return f"{GOOGLE_AUTHORIZE_URL}?{urlencode(params)}"
+    raise ValueError(f"unknown provider {provider!r}")
+
+
+async def web_exchange(provider: str, code: str, redirect_uri: str) -> dict[str, Any]:
+    """Exchange an authorization `code` for the provider token, read the profile, and
+    mint our account + JWT (reuses `_finish_github`/`_finish_google`)."""
+    import httpx
+
+    if provider == "github":
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.post(
+                GITHUB_TOKEN_URL,
+                data={
+                    "client_id": _github_client_id(),
+                    "client_secret": _github_client_secret(),
+                    "code": code,
+                    "redirect_uri": redirect_uri,
+                },
+                headers={"Accept": "application/json"},
+            )
+            res.raise_for_status()
+            data = res.json()
+            access = data.get("access_token")
+            if not access:
+                raise ValueError(
+                    data.get("error_description")
+                    or data.get("error")
+                    or "no access_token from GitHub"
+                )
+            profile = await client.get(
+                GITHUB_USER_URL,
+                headers={
+                    "Authorization": f"Bearer {access}",
+                    "Accept": "application/json",
+                },
+            )
+            profile.raise_for_status()
+            return _finish_github(profile.json())
+    if provider == "google":
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.post(
+                GOOGLE_TOKEN_URL,
+                data={
+                    "client_id": _google_client_id(),
+                    "client_secret": _google_client_secret(),
+                    "code": code,
+                    "redirect_uri": redirect_uri,
+                    "grant_type": "authorization_code",
+                },
+                headers={"Accept": "application/json"},
+            )
+            res.raise_for_status()
+            data = res.json()
+            access = data.get("access_token")
+            if not access:
+                raise ValueError(
+                    data.get("error_description")
+                    or data.get("error")
+                    or "no access_token from Google"
+                )
+            profile = await client.get(
+                GOOGLE_USERINFO_URL,
+                headers={
+                    "Authorization": f"Bearer {access}",
+                    "Accept": "application/json",
+                },
+            )
+            profile.raise_for_status()
+            return _finish_google(profile.json())
+    raise ValueError(f"unknown provider {provider!r}")

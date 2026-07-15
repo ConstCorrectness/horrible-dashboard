@@ -60,12 +60,25 @@ def _device_id() -> str:
 
 
 def _get_helper_path() -> Path:
-    base_dir = Path(__file__).parent / "auth_helper"
-    bin_path = base_dir / "bin" / "ch-auth-helper"
-    if not bin_path.is_file():
-        import subprocess
+    import platform
+    import subprocess
 
-        logger.info("Compiling Clubhouse auth helper...")
+    base_dir = Path(__file__).parent / "auth_helper"
+
+    system = platform.system().lower()
+    if system == "windows":
+        rid = "win-x64"
+        bin_name = "ch-auth-helper.exe"
+    elif system == "darwin":
+        rid = "osx-arm64" if platform.machine() == "arm64" else "osx-x64"
+        bin_name = "ch-auth-helper"
+    else:
+        rid = "linux-x64"
+        bin_name = "ch-auth-helper"
+
+    bin_path = base_dir / "bin" / bin_name
+    if not bin_path.is_file():
+        logger.info("Compiling Clubhouse auth helper for %s...", rid)
         base_dir.mkdir(parents=True, exist_ok=True)
         try:
             subprocess.run(
@@ -76,7 +89,7 @@ def _get_helper_path() -> Path:
                     "-c",
                     "Release",
                     "-r",
-                    "linux-x64",
+                    rid,
                     "--self-contained",
                     "false",
                     "-o",

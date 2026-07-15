@@ -138,7 +138,8 @@ First-run players get a **first-run hero card** at the top of the hub's Play tab
 (until the `games.onboarded` setting flips — there is no separate wizard panel).
 Three inline steps (`FirstRunHero.tsx`):
 
-1. **Sign in** — GitHub device flow (Google available); your account lives on the
+1. **Sign in** — GitHub or Google OAuth (redirect flow by default, device-code
+   fallback available); your account lives on the
    central game server. Your **handle** is derived from your OAuth username (the
    GitHub login, or a Google email's local part) and locked at sign-in. (The
    username is folded to the `a-z 0-9 _ -` charset and made unique server-side.)
@@ -816,22 +817,37 @@ dropped on disconnect (a human who left has left, no sleep-in-place).
 
 ## Identity & ladder
 
-A node authenticates to the server with a token on `/game-ws`:
+A node authenticates to the server with a token on `/game-ws`. Signing in mints the
+server's signed **JWT**, which the node holds server-side (`.data/games_token.json`,
+never handed to the browser). Two OAuth flows produce it:
 
-- **GitHub sign-in** (the lobby's *Sign in with GitHub*) runs the OAuth **device
-  flow** — no client secret, no callback server, so it works headless/under Tauri.
-  The server verifies the GitHub profile, upserts an account (`github:<id>`), and
-  issues a signed **JWT** the node holds server-side (`.data/games_token.json`, never
-  handed to the browser). Configure `games.github.clientId` on the server host (or
-  override via the `GAMES_GITHUB_CLIENT_ID` env variable, which takes priority).
-- **Google sign-in** (*Sign in with Google*) — the same device flow (code entered at
-  google.com/device), accounts keyed `google:<sub>`, so **two different Gmail
+- **Redirect flow — the default** (the lobby's *Sign in*). A standard
+  authorization-code flow: click **Sign in**, authorize on the provider's normal
+  consent page in a popup, done — **no code to type**. The plumbing keeps the JWT off
+  the browser: the node asks the server to open a login and gets back a public
+  `login_id` (replayed as the OAuth `state`, it rides in the browser URL) plus a
+  **private `retrieval_code`** it keeps to itself. The popup opens
+  `…/auth/{provider}/login?lid=…` → the server 302s to the provider → the provider
+  redirects to `…/auth/{provider}/callback`, where the server exchanges the code and
+  stashes the result; the node then pulls the JWT with its private code
+  (`POST /auth/{provider}/web/poll`). Because the retrieval code never touches the
+  browser, seeing the URL can't lift the token. This flow **needs a client secret and
+  a registered callback**: for GitHub set `GAMES_GITHUB_CLIENT_SECRET` and add
+  `https://<server>/auth/github/callback` as the OAuth app's callback URL; for Google
+  use a **"Web application"** OAuth client with that redirect URI (the device-flow
+  "TVs and Limited Input devices" client won't work for redirect). Pin the public base
+  with `GAMES_PUBLIC_URL` if the server can't infer it (behind a proxy the inbound
+  scheme can read as http).
+- **Device flow — headless fallback** (the lobby's *use a code* link). The original
+  RFC 8628 flow: the server returns a `user_code` you enter at the provider's device
+  page, and the node polls. No client secret **for GitHub** and no callback server, so
+  it works when a popup is blocked or under a headless/CI node. Google's device flow
+  still needs its client secret and a **"TVs and Limited Input devices"** client.
+- Accounts key `github:<id>` / `google:<sub>` either way, so **two different Gmail
   accounts are two distinct players** (handy for testing across your own machines).
-  Google requires an OAuth client of type **"TVs and Limited Input devices"** and,
-  unlike GitHub, its token poll needs the **client secret** — configure
-  `games.google.clientId` + `games.google.clientSecret` on the server host (or
-  override via env `GAMES_GOOGLE_CLIENT_ID` / `GAMES_GOOGLE_CLIENT_SECRET`, which
-  take priority).
+  Configure `games.github.clientId` / `games.google.clientId` on the server host (or
+  the `GAMES_GITHUB_CLIENT_ID` / `GAMES_GOOGLE_CLIENT_ID` env overrides, which take
+  priority); the redirect flow adds the client-secret + callback requirements above.
 - **Dev token** (fallback) — when not signed in, the token *is* the account id, so
   local play and tests need no OAuth. Disable it with `GAMES_ALLOW_DEV_AUTH=0` to
   require real sign-in.

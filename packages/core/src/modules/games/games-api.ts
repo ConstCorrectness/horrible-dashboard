@@ -223,3 +223,39 @@ export async function signInWith(
 export function signInWithGitHub(onCode: (code: string, url: string) => void): Promise<string> {
   return signInWith('github', onCode);
 }
+
+/**
+ * Run a provider's redirect (authorization-code) flow — no code typing. Starts the
+ * flow, hands the provider consent URL to `openAuthorize` (the caller opens it, ideally
+ * in a pre-opened popup so it isn't blocked), then polls the node until it captures the
+ * token. The private retrieval code stays on the node; the browser never sees it.
+ * Resolves to the signed-in display name.
+ */
+export async function signInWithRedirect(
+  provider: SignInProvider,
+  openAuthorize: (url: string) => void,
+): Promise<string> {
+  const start = await apiPost<{ authorize_url?: string; error?: string }>(
+    `/games/auth/${provider}/web/start`,
+    {},
+  );
+  if (start.error || !start.authorize_url) {
+    throw new Error(
+      start.error || `sign-in unavailable — configure ${provider} web OAuth on the server`,
+    );
+  }
+  openAuthorize(start.authorize_url);
+  const deadline = Date.now() + 5 * 60 * 1000; // codes last ~15m; cap our wait at 5m
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 2500));
+    const poll = await apiPost<{
+      signed_in?: boolean;
+      pending?: boolean;
+      account?: { display_name?: string };
+      error?: string;
+    }>(`/games/auth/${provider}/web/poll`, {});
+    if (poll.signed_in) return poll.account?.display_name ?? 'signed in';
+    if (poll.error) throw new Error(poll.error);
+  }
+  throw new Error('sign-in timed out');
+}

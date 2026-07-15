@@ -94,6 +94,90 @@ def test_ensure_handle_resolves_collisions() -> None:
     assert handles == {"sam", "sam2"}
 
 
+def test_web_signin_flow_end_to_end(monkeypatch) -> None:
+    """The redirect (authorization-code) flow: start -> browser /login 302 -> provider
+    /callback exchange -> the node pulls the JWT with its private retrieval code."""
+    from starlette.testclient import TestClient
+
+    from backend.games_server import app as app_mod
+    from backend.games_server import auth as auth_mod
+
+    monkeypatch.setattr(auth_mod, "web_config_error", lambda provider: None)
+    monkeypatch.setattr(
+        auth_mod,
+        "web_authorize_url",
+        lambda provider, state, redirect_uri: (
+            f"https://prov.example/auth?state={state}"
+        ),
+    )
+
+    async def fake_exchange(provider, code, redirect_uri):
+        assert code == "abc123"
+        return {
+            "token": "TOK",
+            "account": {"id": "github:1", "display_name": "octocat"},
+        }
+
+    monkeypatch.setattr(auth_mod, "web_exchange", fake_exchange)
+    client = TestClient(app_mod.app)
+
+    start = client.post("/auth/github/web/start").json()
+    assert start["login_url"] and start["retrieval_code"]
+    lid = start["login_url"].split("lid=")[1]
+    code = start["retrieval_code"]
+
+    # Poll before authorization: pending. The public lid can't fetch the token.
+    assert client.post(
+        "/auth/github/web/poll", json={"retrieval_code": code}
+    ).json() == {"pending": True}
+
+    # The browser is redirected on to the provider, carrying our state.
+    login = client.get(f"/auth/github/login?lid={lid}", follow_redirects=False)
+    assert login.status_code == 302
+    assert f"state={lid}" in login.headers["location"]
+
+    # The provider redirects back to the callback; we exchange + stash the result.
+    cb = client.get(f"/auth/github/callback?code=abc123&state={lid}")
+    assert cb.status_code == 200
+    assert "Signed in as octocat" in cb.text
+
+    # The node's private poll now yields the token — exactly once.
+    poll = client.post("/auth/github/web/poll", json={"retrieval_code": code}).json()
+    assert poll["token"] == "TOK"
+    assert poll["account"]["display_name"] == "octocat"
+    assert (
+        "error"
+        in client.post("/auth/github/web/poll", json={"retrieval_code": code}).json()
+    )
+
+
+def test_web_signin_start_reports_config_error(monkeypatch) -> None:
+    """An unconfigured provider fails fast at start, before any provider round-trip."""
+    from starlette.testclient import TestClient
+
+    from backend.games_server import app as app_mod
+    from backend.games_server import auth as auth_mod
+
+    monkeypatch.setattr(
+        auth_mod,
+        "web_config_error",
+        lambda provider: "games.github.clientSecret is not configured",
+    )
+    client = TestClient(app_mod.app)
+    start = client.post("/auth/github/web/start").json()
+    assert "clientSecret" in start["error"]
+
+
+def test_web_poll_rejects_unknown_retrieval_code() -> None:
+    from starlette.testclient import TestClient
+
+    from backend.games_server import app as app_mod
+
+    client = TestClient(app_mod.app)
+    poll = client.post("/auth/github/web/poll", json={"retrieval_code": "nope"}).json()
+    assert "error" in poll
+
+
 class MockWS:
     def __init__(self, messages_to_send=None):
         self.messages_to_send = messages_to_send or []

@@ -5,6 +5,7 @@ import { useGames, gamesDisconnect, ensureConnected } from '../game-ws';
 import {
   fetchStatus,
   signInWith,
+  signInWithRedirect,
   signOut,
   fetchGamesCatalog,
   type SignInProvider,
@@ -28,13 +29,17 @@ const GAME_ICONS: Record<string, string> = {
   vizdoom_duel: '💀',
 };
 
-/** Sign-in status + device-flow sign-in (GitHub or Google — two different Google
- * accounts are two distinct players, handy for testing across machines). Identity
- * lives on the node (the JWT is held server-side); this just reflects and toggles it. */
+/** Sign-in status + OAuth sign-in (GitHub or Google — two different Google accounts
+ * are two distinct players, handy for testing across machines). The default is the
+ * redirect flow (authorize on the provider, no code typing); a device-code fallback
+ * remains for when a popup is blocked. Identity lives on the node (the JWT is held
+ * server-side); this just reflects and toggles it. */
 function SignIn() {
   const { social } = useGames();
   const [name, setName] = useState<string | null>(null);
-  const [prompt, setPrompt] = useState<{ code: string; url: string } | null>(null);
+  // `url` is the provider page to (re)open; `code` is set only for the device-code
+  // fallback. Presence of either means a sign-in is in progress.
+  const [prompt, setPrompt] = useState<{ code?: string; url: string } | null>(null);
   const [busy, setBusy] = useState<SignInProvider | null>(null);
   const [err, setErr] = useState('');
 
@@ -45,16 +50,43 @@ function SignIn() {
   }, []);
   useEffect(() => refresh(), [refresh]);
 
+  const onSignedIn = (display: string) => {
+    setName(display);
+    gamesDisconnect();
+    setTimeout(() => {
+      void ensureConnected(false);
+    }, 500);
+  };
+
+  // Redirect flow: authorize on the provider, no code typing. The popup is opened
+  // synchronously here so it isn't blocked, then pointed at the consent URL.
   const signIn = async (provider: SignInProvider) => {
+    setBusy(provider);
+    setErr('');
+    const popup = window.open('', 'games-oauth', 'popup,width=600,height=760');
+    try {
+      const display = await signInWithRedirect(provider, (url) => {
+        setPrompt({ url });
+        if (popup && !popup.closed) popup.location.href = url;
+        else window.open(url, '_blank', 'noopener');
+      });
+      onSignedIn(display);
+    } catch (e) {
+      setErr(String(e instanceof Error ? e.message : e));
+    } finally {
+      if (popup && !popup.closed) popup.close();
+      setBusy(null);
+      setPrompt(null);
+    }
+  };
+
+  // Fallback: the device-code flow, for when the popup is blocked or preferred.
+  const signInWithCode = async (provider: SignInProvider) => {
     setBusy(provider);
     setErr('');
     try {
       const display = await signInWith(provider, (code, url) => setPrompt({ code, url }));
-      setName(display);
-      gamesDisconnect();
-      setTimeout(() => {
-        void ensureConnected(false);
-      }, 500);
+      onSignedIn(display);
     } catch (e) {
       setErr(String(e instanceof Error ? e.message : e));
     } finally {
@@ -99,13 +131,40 @@ function SignIn() {
       <button type="button" onClick={() => void signIn('google')} disabled={busy !== null}>
         {busy === 'google' ? '…' : 'Google'}
       </button>
-      {prompt && (
-        <span style={{ color: 'var(--text-dim)' }}>
-          code <strong>{prompt.code}</strong> at{' '}
-          <a href={prompt.url} target="_blank" rel="noreferrer">
-            {prompt.url}
-          </a>
-        </span>
+      {prompt &&
+        (prompt.code ? (
+          // Device-code fallback: show the code + provider page.
+          <span style={{ color: 'var(--text-dim)' }}>
+            code <strong>{prompt.code}</strong> at{' '}
+            <a href={prompt.url} target="_blank" rel="noreferrer">
+              {prompt.url}
+            </a>
+          </span>
+        ) : (
+          // Redirect flow: a popup is open; offer a reopen link if it was blocked.
+          <span style={{ color: 'var(--text-dim)' }}>
+            Waiting for authorization…{' '}
+            <a href={prompt.url} target="_blank" rel="noreferrer">
+              reopen
+            </a>
+          </span>
+        ))}
+      {!prompt && busy === null && (
+        <button
+          type="button"
+          title="Use a sign-in code instead (if the popup is blocked)"
+          onClick={() => void signInWithCode('github')}
+          style={{
+            background: 'none',
+            border: 'none',
+            color: 'var(--text-dim)',
+            cursor: 'pointer',
+            fontSize: '0.72rem',
+            textDecoration: 'underline',
+          }}
+        >
+          use a code
+        </button>
       )}
       {err && <span style={{ color: 'var(--danger, #e5534b)' }}>{err}</span>}
     </span>

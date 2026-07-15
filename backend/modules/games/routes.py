@@ -300,6 +300,18 @@ async def google_poll_route(body: DevicePollRequest) -> dict[str, Any]:
     return await server_auth.google_poll(body.device_code)
 
 
+@router.post("/auth/{provider}/web/start")
+async def web_login_start_route(provider: str) -> dict[str, Any]:
+    """Begin the redirect (authorization-code) sign-in; returns `{authorize_url}`."""
+    return await server_auth.web_login_start(provider)
+
+
+@router.post("/auth/{provider}/web/poll")
+async def web_login_poll_route(provider: str) -> dict[str, Any]:
+    """Poll the redirect sign-in until the JWT is captured."""
+    return await server_auth.web_login_poll(provider)
+
+
 @router.post("/signout")
 def signout_route() -> dict[str, bool]:
     server_auth.sign_out()
