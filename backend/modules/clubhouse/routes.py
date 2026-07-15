@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import subprocess
 import uuid
 from pathlib import Path
 from typing import Any
@@ -118,12 +119,18 @@ async def _run_helper(
 
     cmd.append(_device_id())
 
-    proc = await asyncio.create_subprocess_exec(
-        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    # Use subprocess.run in a thread instead of asyncio.create_subprocess_exec
+    # because uvicorn's event loop on Windows does not support subprocess transports.
+    result = await asyncio.to_thread(
+        subprocess.run, cmd, capture_output=True
     )
-    stdout, stderr = await proc.communicate()
+    stdout = result.stdout
+    stderr = result.stderr
 
-    if proc.returncode != 0:
+    logger.info("ch-auth-helper [%s] exit=%d stdout=%s stderr=%s",
+                action, result.returncode, stdout.decode().strip(), stderr.decode().strip())
+
+    if result.returncode != 0:
         err_msg = stderr.decode().strip() or stdout.decode().strip()
         try:
             data = json.loads(stdout.decode())
@@ -134,7 +141,9 @@ async def _run_helper(
         raise HTTPException(status_code=400, detail=f"Authentication failed: {err_msg}")
 
     try:
-        return json.loads(stdout.decode())
+        data = json.loads(stdout.decode())
+        logger.info("ch-auth-helper [%s] parsed response: %s", action, data)
+        return data
     except json.JSONDecodeError as err:
         raise HTTPException(
             status_code=500, detail="Invalid response from auth helper"
@@ -146,15 +155,17 @@ def _api_base() -> str:
 
 
 def _headers(device_id: str | None = None) -> dict[str, str]:
-    # Current client values (build 3375 / app 24.01.02). Clubhouse rejects stale
-    # builds with "login did not pass token validation".
+    # Current Clubhouse Android client version (26.07.07).  Clubhouse rejects
+    # stale builds with "login did not pass token validation".  Update when
+    # the app publishes a new release.
+    _app_version = "26.07.07"
     return {
         "CH-Languages": "en-US",
         "CH-Locale": "en_US",
-        "CH-AppBuild": "3375",
-        "CH-AppVersion": "24.01.02",
+        "CH-AppBuild": _app_version,
+        "CH-AppVersion": _app_version,
         "CH-DeviceId": device_id or _device_id(),
-        "User-Agent": "clubhouse/3375 (iPhone; iOS 17.1.2; Scale/3.00)",
+        "User-Agent": f"clubhouse/android/{_app_version}",
     }
 
 

@@ -1,4 +1,5 @@
 using System;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -8,6 +9,11 @@ using System.Threading.Tasks;
 class Program
 {
     private static readonly string ApiBase = "https://www.clubhouseapi.com/api";
+
+    // Current Clubhouse Android app version (YY.MM.DD format).
+    // Update when Clubhouse publishes a new version and the API starts
+    // rejecting requests with "login did not pass token validation".
+    private static readonly string AppVersion = "26.07.07";
 
     static async Task<int> Main(string[] args)
     {
@@ -22,13 +28,25 @@ class Program
         string verificationCode = args.Length > 2 ? args[2] : "";
         string deviceId = args.Length > 3 && !string.IsNullOrEmpty(args[3]) ? args[3] : Guid.NewGuid().ToString().ToUpper();
 
-        using var client = new HttpClient();
+        // WinHttpHandler uses Windows' native WinHTTP/Schannel TLS stack,
+        // whose fingerprint is trust-listed by Cloudflare (same stack as
+        // Edge and Windows Update). This bypasses the reCAPTCHA gate on
+        // Clubhouse's auth endpoint.
+        var handler = new WinHttpHandler
+        {
+            AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+        };
+
+        using var client = new HttpClient(handler);
         client.DefaultRequestHeaders.Add("CH-Languages", "en-US");
         client.DefaultRequestHeaders.Add("CH-Locale", "en_US");
-        client.DefaultRequestHeaders.Add("CH-AppBuild", "3389");
-        client.DefaultRequestHeaders.Add("CH-AppVersion", "1.0.1");
+        client.DefaultRequestHeaders.Add("CH-AppBuild", AppVersion);
+        client.DefaultRequestHeaders.Add("CH-AppVersion", AppVersion);
         client.DefaultRequestHeaders.Add("CH-DeviceId", deviceId);
-        client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "clubhouse/android/3389");
+        client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent",
+            $"clubhouse/android/{AppVersion}");
+        client.DefaultRequestHeaders.AcceptEncoding.Add(new StringWithQualityHeaderValue("gzip"));
+        client.DefaultRequestHeaders.AcceptEncoding.Add(new StringWithQualityHeaderValue("deflate"));
 
         try
         {

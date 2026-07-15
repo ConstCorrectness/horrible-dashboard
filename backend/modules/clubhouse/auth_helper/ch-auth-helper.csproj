@@ -7,4 +7,7 @@
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>
   </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Net.Http.WinHttpHandler" Version="8.*" />
+  </ItemGroup>
 </Project>
