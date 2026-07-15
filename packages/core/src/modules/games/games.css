@@ -2041,3 +2041,201 @@
   font-size: 0.72rem;
   color: var(--text-dim, #8a909c);
 }
+
+/* ---- Sidebar Profile & Console Tiles Styles ---- */
+
+.games-sidebar-profile {
+  padding: 0.8rem;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.games-sidebar-profile-expanded {
+  display: flex;
+  gap: 0.8rem;
+  align-items: center;
+}
+
+.games-sidebar-profile-avatar-container {
+  position: relative;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.games-sidebar-profile-avatar-container:hover {
+  transform: scale(1.08);
+}
+
+.games-sidebar-profile-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.games-sidebar-profile-name {
+  font-weight: 700;
+  font-size: 0.82rem;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.games-sidebar-profile-level {
+  font-size: 0.7rem;
+  color: var(--accent, #6ea8fe);
+  font-weight: 600;
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.15rem;
+}
+
+.games-sidebar-profile-xp-bar {
+  height: 4px;
+  background: var(--bg-hover, #262a32);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 0.25rem;
+}
+
+.games-sidebar-profile-xp-progress {
+  height: 100%;
+  background: var(--accent, #6ea8fe);
+  border-radius: 2px;
+}
+
+.games-sidebar-profile-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.2rem;
+}
+
+.games-sidebar-profile-btn {
+  flex: 1;
+  background: var(--bg-hover, #262a32);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 6px;
+  padding: 0.3rem 0.4rem;
+  font-size: 0.72rem;
+  cursor: pointer;
+  text-align: center;
+  font-weight: 600;
+  transition: all 0.15s ease;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.games-sidebar-profile-btn:hover {
+  background: var(--border);
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+.games-sidebar-profile-signin-card {
+  padding: 0.8rem;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.games-sidebar-profile-signin-title {
+  font-size: 0.68rem;
+  font-weight: 800;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.games-sidebar-profile-signin-buttons {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.games-sidebar-profile-signin-btn {
+  flex: 1;
+  background: var(--bg-hover, #262a32);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  transition: all 0.15s ease;
+}
+
+.games-sidebar-profile-signin-btn:hover {
+  background: var(--border);
+}
+
+.games-console-tile {
+  background: rgba(255, 255, 255, 0.01);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.8rem 0.5rem;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text);
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.games-console-tile:hover {
+  background: color-mix(in srgb, var(--tile-accent, var(--accent, #6ea8fe)) 12%, rgba(255, 255, 255, 0.03)) !important;
+  border-color: var(--tile-accent, var(--accent, #6ea8fe)) !important;
+  box-shadow: 0 4px 20px color-mix(in srgb, var(--tile-accent, var(--accent, #6ea8fe)) 15%, transparent);
+  transform: translateY(-2px);
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@container games-lobby-root (max-width: 340px) {
+  .games-sidebar-profile-info,
+  .games-sidebar-profile-actions,
+  .games-sidebar-profile-signin-title,
+  .games-sidebar-profile-signin-label,
+  .games-sidebar-profile-signin-btn span:not(.icon) {
+    display: none !important;
+  }
+
+  .games-sidebar-profile {
+    align-items: center;
+    padding: 0.6rem 0.2rem;
+  }
+
+  .games-sidebar-profile-signin-card {
+    padding: 0.6rem 0.2rem;
+    align-items: center;
+  }
+
+  .games-sidebar-profile-signin-buttons {
+    flex-direction: column;
+    width: 100%;
+    align-items: center;
+  }
+
+  .games-sidebar-profile-signin-btn {
+    padding: 0.35rem;
+    width: 36px;
+    display: flex;
+    justify-content: center;
+  }
+}
+

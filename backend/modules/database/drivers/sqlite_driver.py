@@ -17,7 +17,7 @@ from backend.modules.database.drivers.base import (
     TableSchema,
     jsonable,
 )
-from backend.modules.database.vectorstore import cosine_similarity
+
 
 provider = "sqlite"
 
@@ -30,8 +30,7 @@ def _connect(config: dict[str, Any], *, read_only: bool = False) -> sqlite3.Conn
         raise DriverError(f"sqlite file not found: {path}")
     conn = sqlite3.connect(path)
     # Make the app DB's similarity function available so users can run the same
-    # semantic-search SQL the module uses internally.
-    conn.create_function("cosine_similarity", 2, cosine_similarity)
+    # semantic-search SQL the module uses internally. (Note: Removed since vectorstore is LanceDB)
     if read_only:
         conn.execute("PRAGMA query_only = ON")
     return conn

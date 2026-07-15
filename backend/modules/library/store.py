@@ -12,7 +12,28 @@ import json
 import uuid
 from typing import Any
 
-from backend.modules.database.vectorstore import get_db_conn, list_documents
+from backend.modules.database.vectorstore import list_documents
+
+from contextlib import contextmanager
+import sqlite3
+import os
+from pathlib import Path
+from typing import Generator
+
+@contextmanager
+def get_db_conn() -> Generator[sqlite3.Connection, None, None]:
+    data_dir = Path(os.environ.get("HORRIBLE_DATA_DIR", ".data"))
+    data_dir.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(data_dir / "app.db"))
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def init_library_db() -> None:

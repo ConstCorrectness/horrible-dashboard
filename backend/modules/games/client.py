@@ -845,11 +845,13 @@ class GameServerClient:
         return status
 
     async def disconnect(self) -> None:
-        for conn in (self._primary, self._sparring):
-            if conn is not None:
-                await conn.close()
+        primary = self._primary
+        sparring = self._sparring
         self._primary = None
         self._sparring = None
+        for conn in (primary, sparring):
+            if conn is not None:
+                await conn.close()
         await self._relay({"type": models.AUTHED, "connected": False})
 
     # ---- lobby (delegated to the primary seat) ----------------------------

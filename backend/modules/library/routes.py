@@ -19,7 +19,7 @@ from backend.modules.database.vectorstore import (
     search_documents,
 )
 from backend.modules.library import store
-from backend.modules.library.ingest import ingest_source
+from backend.modules.tasks import enqueue_task
 from backend.modules.library.models import (
     ChunkModel,
     ChunksResponse,
@@ -58,8 +58,11 @@ async def add_source(req: IngestRequest) -> SourceModel:
         author=req.author,
         tags=req.tags,
     )
-    # Detached so a slow fetch/embed doesn't block the request or the ws loop.
-    asyncio.create_task(ingest_source(source["id"], req))
+    # Queue the document for background ingestion via the task queue
+    enqueue_task(
+        task_type="ingest_source",
+        payload={"source_id": source["id"], "req": req.model_dump()},
+    )
     return SourceModel(**source)
 
 

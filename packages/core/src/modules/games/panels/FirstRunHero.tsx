@@ -1,30 +1,18 @@
 import { useEffect, useState } from 'react';
 
-import { apiGet, apiPost, apiPut } from '../../../api';
 import { revealRegionView } from '../../../layout/controller';
 import { setSetting } from '../../../settings';
-import { ensureConnected, profileGet, profileSet, useGames } from '../game-ws';
+import { useGames } from '../game-ws';
 import { fetchStatus, signInWith, type SignInProvider } from '../games-api';
 import { findRankedMatch } from '../matchmaking';
 
-const AVATARS = ['🤖', '🦾', '🧠', '👾', '🐙', '🦊', '🐲', '⚡', '🛠', '🎯', '🃏', '🚀'];
-
-interface Template {
-  id: string;
-  game_id: string;
-  title: string;
-  blurb: string;
-  loadout: Record<string, unknown>;
-}
-
-type Step = 'signin' | 'harness' | 'placement' | 'done';
+type Step = 'signin' | 'placement' | 'done';
 
 /**
  * The first-run card in the hub's Play tab — the wizard panel's replacement.
- * Three inline steps: sign in → pick an avatar + starter harness → placement
- * match, with the board and Agent Thoughts revealed so the first thing a new
- * player sees is their agent thinking. Sets `games.onboarded` when the
- * placement match goes live, or when dismissed.
+ * Two inline steps: sign in → placement match, with the board and Agent Thoughts
+ * revealed so the first thing a new player sees is their agent thinking.
+ * Sets `games.onboarded` when the placement match goes live, or when dismissed.
  */
 export function FirstRunHero() {
   const { matchSeats } = useGames();
@@ -33,9 +21,6 @@ export function FirstRunHero() {
   const [prompt, setPrompt] = useState<{ code: string; url: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
-  const [avatar, setAvatar] = useState('🤖');
-  const [templates, setTemplates] = useState<Template[]>([]);
-  const [picked, setPicked] = useState<Template | null>(null);
   const [queued, setQueued] = useState(false);
 
   useEffect(() => {
@@ -43,13 +28,10 @@ export function FirstRunHero() {
       .then((s) => {
         if (s.signed_in) {
           setName(s.display_name);
-          setStep('harness');
+          setStep('placement');
         }
       })
       .catch(() => undefined);
-    apiGet<{ templates: Template[] }>('/games/loadout-templates')
-      .then((r) => setTemplates(r.templates))
-      .catch(() => setTemplates([]));
   }, []);
 
   // The placement match went live → onboarding is done.
@@ -66,7 +48,7 @@ export function FirstRunHero() {
     try {
       const display = await signInWith(provider, (code, url) => setPrompt({ code, url }));
       setName(display);
-      setStep('harness');
+      setStep('placement');
     } catch (e) {
       setErr(String(e instanceof Error ? e.message : e));
     } finally {
@@ -75,33 +57,10 @@ export function FirstRunHero() {
     }
   };
 
-  const shipHarness = async () => {
-    setBusy(true);
-    setErr('');
-    try {
-      // Claim the avatar over a real connection (no fire-and-forget timer).
-      await ensureConnected(false);
-      profileSet(avatar);
-      profileGet();
-      if (picked) {
-        await apiPut(`/games/loadout/${picked.game_id}`, picked.loadout);
-        await apiPost(`/games/loadout/${picked.game_id}/versions`, {
-          label: 'starter',
-          loadout: picked.loadout,
-        }).catch(() => undefined);
-      }
-      setStep('placement');
-    } catch (e) {
-      setErr(String(e instanceof Error ? e.message : e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const startPlacement = () => {
     revealRegionView('games.board');
     revealRegionView('games.thoughts');
-    void findRankedMatch(picked?.game_id ?? 'tictactoe', 'standard', true);
+    void findRankedMatch('tictactoe', 'standard', true);
     setQueued(true);
   };
 
@@ -109,7 +68,6 @@ export function FirstRunHero() {
 
   const steps: [Step, string][] = [
     ['signin', 'Sign in'],
-    ['harness', 'Starter harness'],
     ['placement', 'Placement match'],
   ];
   const idx = steps.findIndex(([s]) => s === (step === 'done' ? 'placement' : step));
@@ -157,7 +115,7 @@ export function FirstRunHero() {
           <button type="button" onClick={() => void signIn('google')} disabled={busy}>
             Google instead
           </button>
-          <button type="button" onClick={() => setStep('harness')}>
+          <button type="button" onClick={() => setStep('placement')}>
             skip
           </button>
           {prompt && (
@@ -171,64 +129,10 @@ export function FirstRunHero() {
         </div>
       )}
 
-      {step === 'harness' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexWrap: 'wrap' }}>
-            <span style={{ color: 'var(--text-dim)' }}>
-              {name ? `Signed in as ${name} — pick` : 'Pick'} an avatar
-            </span>
-            {AVATARS.map((a) => (
-              <button
-                key={a}
-                type="button"
-                className={a === avatar ? 'games-avatar-pick active' : 'games-avatar-pick'}
-                onClick={() => setAvatar(a)}
-              >
-                {a}
-              </button>
-            ))}
-          </div>
-          <span style={{ color: 'var(--text-dim)' }}>
-            …and a starter harness (a strategy prompt + real Python tools your agent calls
-            mid-game):
-          </span>
-          <div className="games-onboard-templates">
-            {templates.map((t) => (
-              <button
-                key={t.id}
-                type="button"
-                className={`games-onboard-template${picked?.id === t.id ? ' active' : ''}`}
-                onClick={() => setPicked(t)}
-              >
-                <strong>{t.title}</strong>
-                <span style={{ color: 'var(--text-dim)' }}>{t.game_id}</span>
-                <span>{t.blurb}</span>
-              </button>
-            ))}
-          </div>
-          <div style={{ display: 'flex', gap: '0.5rem' }}>
-            <button
-              type="button"
-              className="games-play-btn"
-              disabled={!picked || busy}
-              onClick={() => void shipHarness()}
-            >
-              {busy ? 'Shipping…' : 'Ship it →'}
-            </button>
-            <button type="button" onClick={() => revealRegionView('games.loadout')}>
-              or open the full harness editor
-            </button>
-            <button type="button" onClick={() => setStep('placement')}>
-              skip
-            </button>
-          </div>
-        </div>
-      )}
-
       {step === 'placement' && (
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
           <span style={{ color: 'var(--text-dim)' }}>
-            First <strong>placement match</strong> — instantly paired against a practice bot, board
+            {name ? `Signed in as ${name}. ` : ''}Start your <strong>placement match</strong> — instantly paired against a practice bot, board
             and your agent's live thoughts side by side:
           </span>
           <button

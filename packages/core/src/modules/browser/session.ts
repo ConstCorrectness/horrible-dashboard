@@ -84,6 +84,18 @@ export function subscribeFrames(onFrame: (f: BrowserFrame) => void): () => void 
   });
 }
 
+/**
+ * Subscribe to live global `error` events from the backend session (e.g. startup errors).
+ */
+export function subscribeErrors(onError: (msg: string) => void): () => void {
+  return subscribeChannel('browser', (msg: WsMessage) => {
+    const data = (msg.data ?? {}) as Record<string, unknown>;
+    if (msg.event === 'error' && !data.id) {
+      onError(String(data.message ?? 'browser error'));
+    }
+  });
+}
+
 /** Start (or attach to) the session for this connection, optionally at `url`. */
 export function startSession(url?: string): void {
   ensureSubscribed();

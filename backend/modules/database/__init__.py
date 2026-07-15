@@ -11,7 +11,6 @@ from this module.
 
 from backend.modules.database.routes import router
 from backend.modules.database.vectorstore import (
-    cosine_similarity,
     delete_document,
     get_db_stats,
     init_db,
@@ -22,7 +21,6 @@ from backend.modules.database.vectorstore import (
 
 __all__ = [
     "router",
-    "cosine_similarity",
     "delete_document",
     "get_db_stats",
     "init_db",

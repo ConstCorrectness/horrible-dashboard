@@ -23,6 +23,7 @@ from typing import Any
 DeltaSink = Callable[[str, str], Awaitable[None]]
 
 import httpx
+import litellm
 
 from backend.modules.telemetry.instrument import tee_stream
 
@@ -65,6 +66,33 @@ PROVIDERS: dict[str, ProviderInfo] = {
         install_url="https://docs.vllm.ai",
         can_pull=False,
         can_spawn=True,
+    ),
+    "openai": ProviderInfo(
+        kind="openai",
+        label="OpenAI",
+        dialect="litellm",
+        default_endpoint="",
+        install_url="",
+        can_pull=False,
+        can_spawn=False,
+    ),
+    "anthropic": ProviderInfo(
+        kind="anthropic",
+        label="Anthropic",
+        dialect="litellm",
+        default_endpoint="",
+        install_url="",
+        can_pull=False,
+        can_spawn=False,
+    ),
+    "gemini": ProviderInfo(
+        kind="gemini",
+        label="Google Gemini",
+        dialect="litellm",
+        default_endpoint="",
+        install_url="",
+        can_pull=False,
+        can_spawn=False,
     ),
 }
 
@@ -122,6 +150,17 @@ async def list_models(
 ) -> list[str]:
     """Reachability probe doubling as a model list. Raises httpx.HTTPError when
     the provider is down."""
+    if info.dialect == "litellm":
+        # Cannot easily list models dynamically for external providers via litellm without keys.
+        # Fallback to returning a static list or empty list if they have to type it manually.
+        if info.kind == "openai":
+            return ["gpt-4o", "gpt-4o-mini", "o1-preview", "o1-mini"]
+        if info.kind == "anthropic":
+            return ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest"]
+        if info.kind == "gemini":
+            return ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.5-pro"]
+        return []
+
     if info.dialect == "ollama":
         res = await client.get(f"{endpoint}/api/tags")
         res.raise_for_status()
@@ -140,6 +179,30 @@ async def chat(
     tools: list[dict[str, Any]],
 ) -> ChatResult:
     """One non-streaming tool-calling round, normalized to a `ChatResult`."""
+    if info.dialect == "litellm":
+        from backend.modules.database.secrets_store import get_secret
+        key = get_secret(info.kind)
+        import os
+        # litellm expects keys in environment variables usually, or passed directly
+        # depending on the provider.
+        api_key_kwargs = {}
+        if key:
+            api_key_kwargs["api_key"] = key
+        
+        response = await litellm.acompletion(
+            model=model,
+            messages=messages,
+            tools=tools or None,
+            **api_key_kwargs
+        )
+        msg = response.choices[0].message
+        msg_dict = msg.model_dump()
+        return ChatResult(
+            assistant_message=msg_dict,
+            tool_calls=_parse_tool_calls(msg_dict.get("tool_calls") or []),
+            content=msg_dict.get("content") or "",
+        )
+
     if info.dialect == "ollama":
         res = await client.post(
             f"{endpoint}/api/chat",
@@ -205,6 +268,18 @@ async def chat_stream(
             on_delta,
             temperature,
             context_size,
+            max_tokens,
+            top_p,
+        )
+    if info.dialect == "litellm":
+        return await _litellm_chat_stream(
+            info.kind,
+            model,
+            messages,
+            tools,
+            on_delta,
+            temperature,
+            tool_choice,
             max_tokens,
             top_p,
         )
@@ -480,6 +555,95 @@ async def _openai_chat_stream(
     return ChatResult(assistant, tool_calls, full)
 
 
+async def _litellm_chat_stream(
+    provider_kind: str,
+    model: str,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    on_delta: DeltaSink,
+    temperature: float | None = None,
+    tool_choice: str | None = None,
+    max_tokens: int | None = None,
+    top_p: float | None = None,
+) -> ChatResult:
+    kwargs: dict[str, Any] = {}
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+    if tool_choice is not None:
+        kwargs["tool_choice"] = tool_choice
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
+    if top_p is not None:
+        kwargs["top_p"] = top_p
+    if tools:
+        kwargs["tools"] = tools
+
+    from backend.modules.database.secrets_store import get_secret
+    key = get_secret(provider_kind)
+    if key:
+        kwargs["api_key"] = key
+
+    extractor = ThinkingExtractor(on_delta)
+    tool_acc: dict[int, dict[str, Any]] = {}
+
+    response = await litellm.acompletion(
+        model=model,
+        messages=messages,
+        stream=True,
+        **kwargs
+    )
+
+    async for chunk in response:
+        delta = chunk.choices[0].delta
+        if not delta:
+            continue
+        
+        reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+        content = delta.content
+        if reasoning:
+            await extractor.feed_reasoning(reasoning)
+        if content:
+            await extractor.feed_content(content)
+            
+        tool_calls = delta.tool_calls
+        if tool_calls:
+            for tc in tool_calls:
+                idx = getattr(tc, "index", 0)
+                slot = tool_acc.setdefault(
+                    idx, {"id": None, "name": "", "args": ""}
+                )
+                if getattr(tc, "id", None):
+                    slot["id"] = tc.id
+                fn = getattr(tc, "function", None)
+                if fn:
+                    if getattr(fn, "name", None):
+                        slot["name"] = fn.name
+                    if getattr(fn, "arguments", None):
+                        slot["args"] += fn.arguments
+
+    reasoning, full = await extractor.flush()
+    ordered = [tool_acc[i] for i in sorted(tool_acc)]
+    tool_calls = [
+        ToolCall(
+            id=str(s["id"] or i), name=s["name"], arguments=_coerce_args(s["args"])
+        )
+        for i, s in enumerate(ordered)
+    ]
+    assistant: dict[str, Any] = {"role": "assistant", "content": full}
+    if reasoning:
+        assistant["reasoning_content"] = reasoning
+    if ordered:
+        assistant["tool_calls"] = [
+            {
+                "id": str(s["id"] or i),
+                "type": "function",
+                "function": {"name": s["name"], "arguments": s["args"]},
+            }
+            for i, s in enumerate(ordered)
+        ]
+    return ChatResult(assistant, tool_calls, full)
+
+
 def tool_result_message(
     info: ProviderInfo, call: ToolCall, result: Any
 ) -> dict[str, Any]:
@@ -503,6 +667,22 @@ async def generate(
     """One non-streaming, short completion (for editor autosuggest), normalized
     across dialects to a plain string. Token-capped to keep latency low; low
     ``temperature`` by default so code completions are stable, not creative."""
+    if info.dialect == "litellm":
+        from backend.modules.database.secrets_store import get_secret
+        key = get_secret(info.kind)
+        api_key_kwargs = {}
+        if key:
+            api_key_kwargs["api_key"] = key
+            
+        response = await litellm.acompletion(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=max_tokens,
+            temperature=temperature,
+            **api_key_kwargs
+        )
+        return response.choices[0].message.content or ""
+
     if info.dialect == "ollama":
         res = await client.post(
             f"{endpoint}/api/generate",
@@ -540,6 +720,25 @@ async def generate_stream(
     """Stream a one-shot completion as NDJSON ``{"response": <token>}`` lines,
     normalizing Ollama's ``/api/generate`` and the OpenAI ``/v1/chat/completions``
     SSE stream into the one shape the frontend already understands."""
+    if info.dialect == "litellm":
+        from backend.modules.database.secrets_store import get_secret
+        key = get_secret(info.kind)
+        api_key_kwargs = {}
+        if key:
+            api_key_kwargs["api_key"] = key
+            
+        response = await litellm.acompletion(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            stream=True,
+            **api_key_kwargs
+        )
+        async for chunk in response:
+            token = chunk.choices[0].delta.content or ""
+            if token:
+                yield json.dumps({"response": token}) + "\n"
+        return
+
     if info.dialect == "ollama":
         async with client.stream(
             "POST",

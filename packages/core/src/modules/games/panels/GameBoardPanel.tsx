@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 
+import Typography from '@mui/material/Typography';
+
 import { revealRegionView } from '../../../layout/controller';
 import { registry } from '../../../registry';
 import {
@@ -23,6 +25,33 @@ import { RagRaceBoard } from './RagRaceBoard';
 import { TestDuelBoard } from './TestDuelBoard';
 import { TicTacToeBoard } from './TicTacToeBoard';
 import { VizDoomBoard } from './VizDoomBoard';
+const GAME_ICONS: Record<string, string> = {
+  tictactoe: '❌',
+  connect_four: '🔴',
+  holdem: '🃏',
+  rag_race: '📚',
+  code_golf: '⛳',
+  test_duel: '⚖️',
+  bug_hunt: '🐛',
+  arena: '🤖',
+  fighter: '🥊',
+  vizdoom_toy: '🔫',
+  vizdoom_duel: '💀',
+};
+
+const GAME_ACCENT: Record<string, string> = {
+  tictactoe: '#fb7185',
+  connect_four: '#fbbf24',
+  holdem: '#a78bfa',
+  rag_race: '#60a5fa',
+  code_golf: '#4ade80',
+  test_duel: '#94a3b8',
+  bug_hunt: '#84cc16',
+  arena: '#fb923c',
+  fighter: '#f87171',
+  vizdoom_toy: '#dc2626',
+  vizdoom_duel: '#c084fc',
+};
 
 // Per-game seat labels (seat 0, seat 1). Falls back to "Seat N" for other games.
 const SEAT_LABELS: Record<string, [string, string]> = {
@@ -119,56 +148,140 @@ function IdleBoard() {
     if (connected) fetchGamesCatalog().then(setGames);
   }, [connected]);
 
-  const openHub = (
-    <button type="button" onClick={() => registry.openPanel('games.lobby')}>
-      Open Games
-    </button>
-  );
-
   let body;
   if (connecting) {
     body = (
-      <span>
-        ◌ Connecting to the game server
-        <ThinkingDots />
-      </span>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem', padding: '3rem 1.5rem' }}>
+        <div style={{
+          width: '40px',
+          height: '40px',
+          borderRadius: '50%',
+          border: '3px solid rgba(110, 168, 254, 0.1)',
+          borderTopColor: 'var(--accent, #6ea8fe)',
+          animation: 'spin 1s linear infinite'
+        }} className="games-loader-spinner" />
+        <span style={{ fontSize: '0.9rem', color: 'var(--text-dim)', fontWeight: 500 }}>
+          Establishing connection to game server<ThinkingDots />
+        </span>
+      </div>
     );
   } else if (queue) {
     body = (
-      <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-        ⏳ In queue for {queue.gameId} ({queue.difficulty}) · {queue.waitingS}s
-        <button type="button" onClick={() => gamesQueueLeave()}>
-          Leave queue
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1.2rem', padding: '3rem 1.5rem' }}>
+        <div className="games-radar-scan" style={{ width: '70px', height: '70px' }}>
+          <div className="games-radar-line" />
+        </div>
+        <div style={{ textAlign: 'center' }}>
+          <span style={{ fontSize: '1rem', fontWeight: 800, color: '#c084fc', display: 'block', marginBottom: '0.2rem' }}>
+            Searching for Opponent
+          </span>
+          <span style={{ fontSize: '0.82rem', color: 'var(--text-dim)' }}>
+            Ranked Queue · {queue.gameId} ({queue.difficulty}) · <strong>{queue.waitingS}s</strong>
+          </span>
+        </div>
+        <button
+          type="button"
+          className="games-sidebar-profile-btn"
+          style={{ width: 'auto', paddingLeft: '1.5rem', paddingRight: '1.5rem', borderColor: 'var(--danger, #e5534b)', color: 'var(--danger, #e5534b)' }}
+          onClick={() => gamesQueueLeave()}
+        >
+          Cancel Queue
         </button>
-      </span>
+      </div>
     );
   } else if (connected) {
     body = (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-        <span>Connected — pick a game to play against your own agent:</span>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
-          {games.map((g) => (
-            <button key={g.id} type="button" onClick={() => void playVsOwnAgent(g.id)}>
-              ▶ {g.name}
-            </button>
-          ))}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.2rem', width: '100%', maxWidth: '560px', margin: '0 auto', padding: '1rem' }}>
+        <div style={{ borderBottom: '1px solid var(--border)', paddingBottom: '0.6rem' }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 800, color: 'primary.main', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            ⚔️ Launch Practice Console
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            Launch a local self-play practice match immediately to test your agent's strategy.
+          </Typography>
         </div>
-        {openHub}
+        
+        {games.length === 0 ? (
+          <Typography variant="body2" color="text.secondary" sx={{ py: 2, textAlign: 'center' }}>
+            Loading available games...
+          </Typography>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: '0.6rem' }}>
+            {games.map((g) => {
+              const accent = GAME_ACCENT[g.id] ?? 'var(--accent, #6ea8fe)';
+              return (
+                <button
+                  key={g.id}
+                  type="button"
+                  className="games-console-tile"
+                  style={{
+                    background: 'rgba(255, 255, 255, 0.01)',
+                    border: '1px solid var(--border)',
+                    borderRadius: '8px',
+                    padding: '0.8rem 0.5rem',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                    color: 'var(--text)',
+                    transition: 'all 0.15s ease',
+                    '--tile-accent': accent,
+                  } as React.CSSProperties}
+                  onClick={() => void playVsOwnAgent(g.id)}
+                >
+                  <span style={{ fontSize: '1.6rem' }}>{GAME_ICONS[g.id] ?? '🎲'}</span>
+                  <span style={{ fontSize: '0.78rem', fontWeight: 700, textAlign: 'center' }}>{g.name}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        
+        <button
+          type="button"
+          className="games-sidebar-profile-btn"
+          onClick={() => registry.openPanel('games.lobby')}
+          style={{ padding: '0.45rem', alignSelf: 'center', width: 'auto', paddingLeft: '2rem', paddingRight: '2rem' }}
+        >
+          Open Games Lobby
+        </button>
       </div>
     );
   } else {
     body = (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-        <span>
-          No active game — pick a game in <strong>Games</strong> to play. The node connects by
-          itself when you hit ▶ Play.
-        </span>
-        {openHub}
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1.2rem', padding: '3rem 1.5rem', maxWidth: '400px', margin: '0 auto', textAlign: 'center' }}>
+        <div style={{ fontSize: '3rem', opacity: 0.35 }}>🖥️</div>
+        <div>
+          <span style={{ fontSize: '0.95rem', fontWeight: 800, color: 'var(--text)', display: 'block', marginBottom: '0.4rem' }}>
+            Console Standby
+          </span>
+          <span style={{ fontSize: '0.8rem', color: 'var(--text-dim)', lineHeight: 1.5, display: 'block' }}>
+            No game match is currently active. Connect and select a game in the Games lobby to start playing.
+          </span>
+        </div>
+        <button
+          type="button"
+          className="games-sidebar-profile-btn"
+          onClick={() => registry.openPanel('games.lobby')}
+          style={{ padding: '0.45rem 1.5rem', width: 'auto' }}
+        >
+          Open Games Lobby
+        </button>
       </div>
     );
   }
+
   return (
-    <div style={{ padding: '1rem', color: 'var(--text-dim)', fontSize: '0.85rem' }}>{body}</div>
+    <div style={{
+      height: '100%',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      background: 'radial-gradient(circle at center, rgba(30, 30, 36, 0.3) 0%, rgba(15, 15, 18, 0.7) 100%)',
+    }}>
+      {body}
+    </div>
   );
 }
 

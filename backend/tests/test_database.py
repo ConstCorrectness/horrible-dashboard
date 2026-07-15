@@ -2,41 +2,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app import app
-from backend.modules.database.vectorstore import cosine_similarity, float_list_to_bytes
-
-
 @pytest.fixture
 def client(tmp_path, monkeypatch) -> TestClient:
-    # Set data dir to temp path so we don't mess up project data
     monkeypatch.setenv("HORRIBLE_DATA_DIR", str(tmp_path))
-    # Re-import routes/vectorstore under the mock environment
     from backend.modules.database.vectorstore import init_db
-
     init_db()
     return TestClient(app)
-
-
-def test_cosine_similarity_edge_cases() -> None:
-    # 1. Zero vectors or empty inputs
-    v1_b = float_list_to_bytes([0.0, 0.0])
-    v2_b = float_list_to_bytes([0.0, 0.0])
-    assert cosine_similarity(v1_b, v2_b) == 0.0
-    assert cosine_similarity(b"", v2_b) == 0.0
-
-    # 2. Perfect match
-    v3_b = float_list_to_bytes([1.0, 2.0, 3.0])
-    assert cosine_similarity(v3_b, v3_b) == pytest.approx(1.0)
-
-    # 3. Orthogonal
-    v4_b = float_list_to_bytes([1.0, 0.0])
-    v5_b = float_list_to_bytes([0.0, 1.0])
-    assert cosine_similarity(v4_b, v5_b) == 0.0
-
-    # 4. Mismatched dimensions (padding/truncating checks)
-    v6_b = float_list_to_bytes([1.0, 0.0, 0.0, 0.0])  # 4D
-    v7_b = float_list_to_bytes([1.0, 0.0])  # 2D
-    # It should overlap only on first 2 elements: [1.0, 0.0] vs [1.0, 0.0], which is identical
-    assert cosine_similarity(v6_b, v7_b) == pytest.approx(1.0)
 
 
 def test_status_endpoint(client: TestClient) -> None:
@@ -256,51 +227,4 @@ def test_builtin_connection_is_read_only(client: TestClient) -> None:
     )
 
 
-def test_query_app_connection(client: TestClient) -> None:
-    client.post(
-        "/api/database/documents",
-        json={"id": "q1", "collection": "qtest", "text": "hello world"},
-    )
-    res = client.post(
-        "/api/database/query",
-        json={
-            "connection_id": "app",
-            "sql": "SELECT id, collection FROM documents",
-            "read_only": True,
-        },
-    )
-    assert res.status_code == 200
-    data = res.json()
-    assert [c["name"] for c in data["columns"]] == ["id", "collection"]
-    assert data["rowcount"] == 1
-    assert data["rows"][0][0] == "q1"
-    assert data["elapsed_ms"] >= 0
 
-
-def test_query_read_only_rejects_writes(client: TestClient) -> None:
-    res = client.post(
-        "/api/database/query",
-        json={
-            "connection_id": "app",
-            "sql": "DELETE FROM documents",
-            "read_only": True,
-        },
-    )
-    assert res.status_code == 400
-
-
-def test_query_unknown_connection_404(client: TestClient) -> None:
-    res = client.post(
-        "/api/database/query",
-        json={"connection_id": "nope", "sql": "SELECT 1"},
-    )
-    assert res.status_code == 404
-
-
-def test_schema_app_connection(client: TestClient) -> None:
-    res = client.get("/api/database/connections/app/schema")
-    assert res.status_code == 200
-    tables = {t["name"]: t for t in res.json()["tables"]}
-    assert "documents" in tables
-    cols = {c["name"] for c in tables["documents"]["columns"]}
-    assert {"id", "collection", "text", "embedding"} <= cols

@@ -15,7 +15,7 @@ import {
   type WheelEvent,
 } from 'react';
 
-import { sendInput, startSession, subscribeFrames, type BrowserFrame } from '../session';
+import { sendInput, startSession, subscribeFrames, subscribeErrors, type BrowserFrame } from '../session';
 
 // Must match _VIEWPORT in backend/modules/browser/session.py.
 const VW = 1280;
@@ -49,6 +49,7 @@ export function FullBrowserView({
   onMeta: (meta: { url: string; title: string }) => void;
 }) {
   const [frame, setFrame] = useState<BrowserFrame | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const imgRef = useRef<HTMLImageElement>(null);
 
   // Start the session once; re-navigate whenever the parent bumps navSeq.
@@ -61,10 +62,18 @@ export function FullBrowserView({
   }, [url, navSeq]);
 
   useEffect(() => {
-    return subscribeFrames((f) => {
+    const unsubFrames = subscribeFrames((f) => {
       setFrame(f);
+      setError(null); // Clear error if we got a frame
       onMeta({ url: f.url, title: f.title });
     });
+    const unsubErrors = subscribeErrors((err) => {
+      setError(err);
+    });
+    return () => {
+      unsubFrames();
+      unsubErrors();
+    };
   }, [onMeta]);
 
   // Map a client coordinate on the <img> to the backend viewport space.
@@ -115,7 +124,12 @@ export function FullBrowserView({
         justifyContent: 'center',
       }}
     >
-      {frame ? (
+      {error ? (
+        <div style={{ padding: '2rem', color: 'red', textAlign: 'center', maxWidth: '80%' }}>
+          <h4 style={{ margin: '0 0 1rem 0' }}>Browser Engine Error</h4>
+          <p style={{ fontSize: '0.9rem', color: 'var(--text-dim)', wordBreak: 'break-word' }}>{error}</p>
+        </div>
+      ) : frame ? (
         <img
           ref={imgRef}
           src={frame.frame}

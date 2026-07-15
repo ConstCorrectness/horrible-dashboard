@@ -4,7 +4,6 @@ import { registry } from '../../../registry';
 import { useGames, gamesDisconnect, ensureConnected } from '../game-ws';
 import {
   fetchStatus,
-  signInWith,
   signInWithRedirect,
   signOut,
   fetchGamesCatalog,
@@ -50,7 +49,9 @@ const GAME_ACCENT: Record<string, string> = {
  * redirect flow (authorize on the provider, no code typing); a device-code fallback
  * remains for when a popup is blocked. Identity lives on the node (the JWT is held
  * server-side); this just reflects and toggles it. */
-function SignIn() {
+/** Sidebar profile widget: displays user name, level, avatar, and XP progress,
+ * and handles provider sign-in when not authenticated. Collapses nicely. */
+function SidebarProfile() {
   const { social } = useGames();
   const [name, setName] = useState<string | null>(null);
   // `url` is the provider page to (re)open; `code` is set only for the device-code
@@ -96,94 +97,161 @@ function SignIn() {
     }
   };
 
-  // Fallback: the device-code flow, for when the popup is blocked or preferred.
-  const signInWithCode = async (provider: SignInProvider) => {
-    setBusy(provider);
-    setErr('');
-    try {
-      const display = await signInWith(provider, (code, url) => setPrompt({ code, url }));
-      onSignedIn(display);
-    } catch (e) {
-      setErr(String(e instanceof Error ? e.message : e));
-    } finally {
-      setBusy(null);
-      setPrompt(null);
-    }
+
+  const handleSignOut = () => {
+    void signOut().then(() => {
+      setName(null);
+      gamesDisconnect();
+      setTimeout(() => {
+        void ensureConnected(false);
+      }, 500);
+    });
   };
+
+  const renderAvatar = (avatarStr: string) => {
+    if (
+      avatarStr.startsWith('data:image/') ||
+      avatarStr.startsWith('http://') ||
+      avatarStr.startsWith('https://')
+    ) {
+      return (
+        <img
+          src={avatarStr}
+          alt="Avatar"
+          style={{
+            width: '2.2rem',
+            height: '2.2rem',
+            borderRadius: '50%',
+            objectFit: 'cover',
+            border: '2px solid var(--accent, #6ea8fe)',
+          }}
+        />
+      );
+    }
+    return (
+      <div
+        style={{
+          width: '2.2rem',
+          height: '2.2rem',
+          borderRadius: '50%',
+          fontSize: '1.25rem',
+          background: 'rgba(110, 168, 254, 0.1)',
+          border: '2px solid var(--accent, #6ea8fe)',
+          color: 'var(--accent, #6ea8fe)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        {avatarStr}
+      </div>
+    );
+  };
+
+  const profile = social.profile;
+  const pct =
+    profile && profile.next_level_xp !== null
+      ? Math.min(
+          100,
+          Math.round(
+            ((profile.xp - profile.level_floor) / (profile.next_level_xp - profile.level_floor)) *
+              100,
+          ),
+        )
+      : 100;
 
   if (name) {
     return (
-      <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.78rem' }}>
-        {social.profile && (
-          <span className="games-level-badge" title={`${social.profile.xp} XP`}>
-            {social.profile.avatar} Lv {social.profile.level}
-          </span>
-        )}
-        <span style={{ color: 'var(--text-dim)' }}>
-          <strong>{name}</strong>
-        </span>
-        <button
-          type="button"
-          onClick={() =>
-            void signOut().then(() => {
-              setName(null);
-              gamesDisconnect();
-              setTimeout(() => {
-                void ensureConnected(false);
-              }, 500);
-            })
-          }
-        >
-          Sign out
-        </button>
-      </span>
+      <div className="games-sidebar-profile">
+        <div className="games-sidebar-profile-expanded">
+          <div
+            className="games-sidebar-profile-avatar-container"
+            onClick={() => registry.openPanel('games.profile')}
+            title="Open Full Profile"
+          >
+            {renderAvatar(profile?.avatar ?? '👤')}
+          </div>
+          <div className="games-sidebar-profile-info">
+            <span className="games-sidebar-profile-name" title={name}>
+              {name}
+            </span>
+            {profile && (
+              <>
+                <div className="games-sidebar-profile-level">
+                  <span>Lv {profile.level}</span>
+                  <span style={{ opacity: 0.7, fontSize: '0.65rem' }}>{profile.xp} XP</span>
+                </div>
+                <div className="games-sidebar-profile-xp-bar" title={`${pct}% to next level`}>
+                  <div
+                    className="games-sidebar-profile-xp-progress"
+                    style={{ width: `${Math.max(4, pct)}%` }}
+                  />
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+        <div className="games-sidebar-profile-actions">
+          <button
+            type="button"
+            className="games-sidebar-profile-btn"
+            onClick={() => registry.openPanel('games.profile')}
+          >
+            🪪 Profile
+          </button>
+          <button
+            type="button"
+            className="games-sidebar-profile-btn"
+            onClick={handleSignOut}
+          >
+            Sign out
+          </button>
+        </div>
+      </div>
     );
   }
+
   return (
-    <span style={{ fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-      <button type="button" onClick={() => void signIn('github')} disabled={busy !== null}>
-        {busy === 'github' ? 'Signing in…' : 'Sign in'}
-      </button>
-      <button type="button" onClick={() => void signIn('google')} disabled={busy !== null}>
-        {busy === 'google' ? '…' : 'Google'}
-      </button>
+    <div className="games-sidebar-profile-signin-card">
+      <div className="games-sidebar-profile-signin-title">Player Profile</div>
+      <div className="games-sidebar-profile-signin-buttons">
+        <button
+          type="button"
+          className="games-sidebar-profile-signin-btn"
+          onClick={() => void signIn('github')}
+          disabled={busy !== null}
+          title="Sign in with GitHub"
+        >
+          <span className="icon">🐙</span> <span className="games-sidebar-profile-signin-label">GitHub</span>
+        </button>
+        <button
+          type="button"
+          className="games-sidebar-profile-signin-btn"
+          onClick={() => void signIn('google')}
+          disabled={busy !== null}
+          title="Sign in with Google"
+        >
+          <span className="icon">🌐</span> <span className="games-sidebar-profile-signin-label">Google</span>
+        </button>
+      </div>
       {prompt &&
         (prompt.code ? (
-          // Device-code fallback: show the code + provider page.
-          <span style={{ color: 'var(--text-dim)' }}>
+          <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.2rem' }}>
             code <strong>{prompt.code}</strong> at{' '}
-            <a href={prompt.url} target="_blank" rel="noreferrer">
-              {prompt.url}
+            <a href={prompt.url} target="_blank" rel="noreferrer" style={{ color: 'var(--accent, #6ea8fe)' }}>
+              link
             </a>
           </span>
         ) : (
-          // Redirect flow: a popup is open; offer a reopen link if it was blocked.
-          <span style={{ color: 'var(--text-dim)' }}>
-            Waiting for authorization…{' '}
-            <a href={prompt.url} target="_blank" rel="noreferrer">
+          <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.2rem' }}>
+            Authorizing...{' '}
+            <a href={prompt.url} target="_blank" rel="noreferrer" style={{ color: 'var(--accent, #6ea8fe)' }}>
               reopen
             </a>
           </span>
         ))}
-      {!prompt && busy === null && (
-        <button
-          type="button"
-          title="Use a sign-in code instead (if the popup is blocked)"
-          onClick={() => void signInWithCode('github')}
-          style={{
-            background: 'none',
-            border: 'none',
-            color: 'var(--text-dim)',
-            cursor: 'pointer',
-            fontSize: '0.72rem',
-            textDecoration: 'underline',
-          }}
-        >
-          use a code
-        </button>
-      )}
-      {err && <span style={{ color: 'var(--danger, #e5534b)' }}>{err}</span>}
-    </span>
+      {err && <span style={{ color: 'var(--danger, #e5534b)', fontSize: '0.7rem' }}>{err}</span>}
+    </div>
   );
 }
 
@@ -210,6 +278,8 @@ export function LobbyPanel() {
       {/* Left Sidebar: Games Library — collapses to an icon rail when the whole
           pane is narrow (a dock rail), see the games-lobby-root container query. */}
       <div className="games-lib-sidebar">
+        <SidebarProfile />
+
         <div className="games-lib-sidebar-title">
           <span>🎮</span>
           <span className="games-lib-sidebar-title-text"> GAMES LIBRARY</span>
@@ -291,22 +361,6 @@ export function LobbyPanel() {
           }}
         >
           <ConnectionChip />
-          <SignIn />
-          <button
-            type="button"
-            style={{ marginLeft: 'auto' }}
-            title="The Plaza — hang out with real players, chat, and challenge them"
-            onClick={() => registry.openPanel('games.plaza')}
-          >
-            🏛 Plaza
-          </button>
-          <button
-            type="button"
-            title="AgentTown — spawn your agent in the social fish tank"
-            onClick={() => registry.openPanel('games.town')}
-          >
-            🏘 AgentTown
-          </button>
         </div>
 
         <PlaySection games={games} selectedGame={selectedGame} setSelectedGame={setSelectedGame} />

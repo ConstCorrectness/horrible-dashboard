@@ -40,6 +40,15 @@ import { loadSource, saveSource } from './sources';
 
 const FILE_URI = 'workspace-file:';
 
+interface UnsavedState {
+  content: string;
+  dirty: boolean;
+  proposing: boolean;
+  original?: string;
+  dirtyBeforeProposal?: boolean;
+}
+const unsavedCache = new Map<string, UnsavedState>();
+
 /** Open a workspace file (go-to-definition target) and reveal it in the tree. The
  * reveal runs once the new buffer is the active one. */
 function goToFile(path: string): void {
@@ -139,6 +148,12 @@ export function BufferView() {
   // Curated framework-import suggestions (see pythonImports.ts); on by default.
   const frameworkImports = useSetting<boolean>('editor.frameworkImports') ?? true;
 
+  const sourceRef = useRef(source);
+  sourceRef.current = source;
+  const instanceIdRef = useRef(instanceId);
+  instanceIdRef.current = instanceId;
+  const isProgrammaticRef = useRef(false);
+
   // Mount CodeMirror once.
   useEffect(() => {
     if (!hostRef.current) return;
@@ -161,14 +176,25 @@ export function BufferView() {
           autoRef.current.of([]),
           lspRef.current.of([]),
           EditorView.updateListener.of((u) => {
-            if (u.docChanged) setDirty(true);
+            if (u.docChanged && !isProgrammaticRef.current) {
+              setDirty(true);
+              const src = sourceRef.current;
+              if (src) {
+                unsavedCache.set(src, {
+                  content: u.state.doc.toString(),
+                  dirty: true,
+                  proposing: false, // user edits drop proposing state in our cache model
+                });
+              }
+            }
             // Track the focused buffer as "active" (Mod-s etc. route through the
             // shell keybinding service → editor.save, never a hardcoded handler;
             // the agent attaches this instance's snapshot to a turn so it can alter
             // the open code without a discovery round-trip).
             if (u.focusChanged && u.view.hasFocus) {
-              if (source) setActiveBufferSource(source);
-              if (instanceId) setActiveContextInstance(instanceId);
+              const src = sourceRef.current;
+              if (src) setActiveBufferSource(src);
+              if (instanceIdRef.current) setActiveContextInstance(instanceIdRef.current);
             }
             // Publish the cursor to the code-locus bus (so the outline follows) — on
             // focus, and when the cursor changes line. Throttled to line granularity;
@@ -207,17 +233,45 @@ export function BufferView() {
         if (cancelled || !view) return;
         revisionRef.current = loaded.revision;
         setTitle(loaded.title);
+
+        let insertContent = loaded.content;
+        let initialDirty = false;
+        let isProposing = false;
+
+        const src = sourceRef.current;
+        if (src) {
+          const cached = unsavedCache.get(src);
+          if (cached) {
+            if (cached.dirty || cached.proposing) {
+              insertContent = cached.content;
+              initialDirty = cached.dirty;
+            }
+            if (cached.proposing) {
+              isProposing = true;
+              originalRef.current = cached.original || '';
+              dirtyBeforeProposalRef.current = cached.dirtyBeforeProposal || false;
+            }
+          }
+        }
+
+        isProgrammaticRef.current = true;
         view.dispatch({
-          changes: { from: 0, to: view.state.doc.length, insert: loaded.content },
+          changes: { from: 0, to: view.state.doc.length, insert: insertContent },
           effects: [
             langRef.current.reconfigure(languageForHint(langHint, loaded.title)),
             // Connect (or disconnect) a language server for this buffer. The
             // reconfigure tears down any prior session (didClose + stop) and the
             // new plugin sees the just-applied content for its didOpen.
             lspRef.current.reconfigure(lspFor(source, loaded.title, pythonPath, frameworkImports)),
+            ...(isProposing
+              ? [mergeRef.current.reconfigure(unifiedMergeView({ original: originalRef.current }))]
+              : []),
           ],
         });
-        setDirty(false);
+        isProgrammaticRef.current = false;
+
+        setDirty(initialDirty);
+        setProposing(isProposing);
         setStatus(null);
         // Content is now in the doc — re-apply any pending locus so a jump that opened
         // this file (its scroll fired against an empty doc) lands on the right line.
@@ -275,6 +329,7 @@ export function BufferView() {
       const res = await saveSource(source, view.state.doc.toString(), revisionRef.current);
       if (res.revision !== undefined) revisionRef.current = res.revision;
       setDirty(false);
+      unsavedCache.delete(source);
       setStatus('Saved');
       setTimeout(() => setStatus((s) => (s === 'Saved' ? null : s)), 1200);
     } catch (err) {
@@ -296,11 +351,24 @@ export function BufferView() {
       originalRef.current = view.state.doc.toString();
       dirtyBeforeProposalRef.current = dirty;
     }
+    isProgrammaticRef.current = true;
     view.dispatch({
       changes: { from: 0, to: view.state.doc.length, insert: content },
       effects: mergeRef.current.reconfigure(unifiedMergeView({ original: originalRef.current })),
     });
+    isProgrammaticRef.current = false;
     setProposing(true);
+
+    const src = sourceRef.current;
+    if (src) {
+      unsavedCache.set(src, {
+        content,
+        dirty, // we retain the dirty state it had, or whatever it is, but it's part of proposal
+        proposing: true,
+        original: originalRef.current,
+        dirtyBeforeProposal: dirtyBeforeProposalRef.current,
+      });
+    }
   };
   // The controller registers once per source; route through a ref so it always
   // calls the current `propose` (which closes over live `dirty`/`proposing`).
@@ -310,15 +378,27 @@ export function BufferView() {
   const closeProposal = (revert: boolean) => {
     const view = viewRef.current;
     if (!view) return;
+    isProgrammaticRef.current = true;
     view.dispatch({
       ...(revert
         ? { changes: { from: 0, to: view.state.doc.length, insert: originalRef.current } }
         : {}),
       effects: mergeRef.current.reconfigure([]),
     });
+    isProgrammaticRef.current = false;
     // Accept leaves changes in place (dirty); Decline restores the pre-proposal state.
-    setDirty(revert ? dirtyBeforeProposalRef.current : true);
+    const newDirty = revert ? dirtyBeforeProposalRef.current : true;
+    setDirty(newDirty);
     setProposing(false);
+
+    const src = sourceRef.current;
+    if (src) {
+      unsavedCache.set(src, {
+        content: view.state.doc.toString(),
+        dirty: newDirty,
+        proposing: false,
+      });
+    }
   };
 
   // A live snapshot for the agent (kept current via a ref reassigned each render).

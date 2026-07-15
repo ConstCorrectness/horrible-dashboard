@@ -3,6 +3,21 @@
 import asyncio
 import logging
 from pathlib import Path
+import os
+
+# Auto-enable full browser engine if Playwright is installed and not explicitly disabled.
+if "HORRIBLE_ENABLE_SERVER_BROWSER" not in os.environ:
+    try:
+        import playwright
+        os.environ["HORRIBLE_ENABLE_SERVER_BROWSER"] = "1"
+        env_path = Path(__file__).resolve().parent.parent / ".env"
+        if env_path.exists():
+            content = env_path.read_text()
+            if "HORRIBLE_ENABLE_SERVER_BROWSER" not in content:
+                with open(env_path, "a") as f:
+                    f.write("\nHORRIBLE_ENABLE_SERVER_BROWSER=1\n")
+    except ImportError:
+        pass
 
 _LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
 _LOG_DIR.mkdir(exist_ok=True)
@@ -34,6 +49,8 @@ from backend.modules.flow import router as flow_router
 from backend.modules.games import drop_games_conn, handle_games_message
 from backend.modules.games import register_agent_tools as register_games_tools
 from backend.modules.games import router as games_router
+from backend.modules.integrations import google as google_integrations
+from backend.modules.integrations import google_sync
 from backend.modules.library import push_library_events
 from backend.modules.library import router as library_router
 from backend.modules.lsp import LspManager
@@ -60,6 +77,7 @@ from backend.modules.notes import router as notes_router
 from backend.modules.plugins import router as plugins_router
 from backend.modules.repl import ReplManager
 from backend.modules.settings import router as settings_router
+from backend.modules.secrets import router as secrets_router
 from backend.modules.telemetry import push_telemetry
 from backend.modules.telemetry import router as telemetry_router
 from backend.modules.telemetry.instrument import record_ws_frame, telemetry_middleware
@@ -78,6 +96,8 @@ from backend.modules.browser.session import browser_manager
 from backend.modules.ws import WsConnection, set_ws_send_observer
 from backend.sdk import load_plugins
 from backend.sdk import registry as plugin_registry
+from backend.modules.tasks import queue
+import backend.modules.library.queue_handlers  # Register handlers
 
 # Observe every outbound `/ws` frame for the observability panel (inbound frames
 # are recorded in the receive loop below). One global observer covers all sockets.
@@ -91,9 +111,11 @@ async def lifespan(app: FastAPI):
     # Bring the peer fabric up so this node can reach (and be reached by) others.
     await start_network()
     await plugin_registry.run_startup()  # backend plugins' startup hooks
+    queue.start()
     try:
         yield
     finally:
+        queue.stop()
         await plugin_registry.run_shutdown()
         # Kernels are child processes; leaving them behind on reload/shutdown
         # would strand orphaned ipykernels.
@@ -129,6 +151,7 @@ app.include_router(agent_router, prefix="/api")
 app.include_router(workspace_router, prefix="/api")
 app.include_router(database_router, prefix="/api")
 app.include_router(library_router, prefix="/api")
+app.include_router(google_integrations.router, prefix="/api")
 app.include_router(browser_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(files_router, prefix="/api")
@@ -138,6 +161,7 @@ app.include_router(clubhouse_router, prefix="/api")
 app.include_router(telemetry_router, prefix="/api")
 app.include_router(plugins_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
+app.include_router(secrets_router, prefix="/api")
 app.include_router(flow_router, prefix="/api")
 app.include_router(network_router, prefix="/api")
 app.include_router(training_router, prefix="/api")

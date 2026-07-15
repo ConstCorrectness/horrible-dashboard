@@ -1,9 +1,7 @@
 import { useContext, useEffect, useState } from 'react';
 
 import Card from '@mui/material/Card';
-import CardHeader from '@mui/material/CardHeader';
 import CardContent from '@mui/material/CardContent';
-import CardActions from '@mui/material/CardActions';
 import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
 import Typography from '@mui/material/Typography';
@@ -80,6 +78,20 @@ const GAME_DESCRIPTIONS: Record<string, string> = {
     '3D Doom visual combat simulator. Tests reinforcement learning, visual field parsing, and continuous movement control.',
   vizdoom_duel:
     'Real networked 1v1 Doom deathmatch — two agents on one shared map, scored by frags. Tests real-time combat policy, positioning, and target acquisition.',
+};
+
+const GAME_ACCENT: Record<string, string> = {
+  tictactoe: '#fb7185',
+  connect_four: '#fbbf24',
+  holdem: '#a78bfa',
+  rag_race: '#60a5fa',
+  code_golf: '#4ade80',
+  test_duel: '#94a3b8',
+  bug_hunt: '#84cc16',
+  arena: '#fb923c',
+  fighter: '#f87171',
+  vizdoom_toy: '#dc2626',
+  vizdoom_duel: '#c084fc',
 };
 
 /** Simulated ping bars (4 bars, filled based on "strength"). */
@@ -346,6 +358,7 @@ export function PlaySection({
           const g = games.find((x) => x.id === selectedGame);
           if (!g) return null;
           const gameMMR = lastRating && lastRating.game_id === g.id ? lastRating : null;
+          const accent = GAME_ACCENT[g.id] ?? 'var(--accent, #6ea8fe)';
           return (
             <>
               {/* Play Mode & Difficulty Controls Row ── */}
@@ -457,144 +470,364 @@ export function PlaySection({
                   display: 'flex',
                   flexDirection: 'column',
                   mb: 2,
-                  borderColor: 'primary.main',
-                  boxShadow: '0 0 12px rgba(110, 168, 254, 0.15)',
+                  borderColor: accent,
+                  boxShadow: `0 0 16px ${accent}20`,
+                  background: 'var(--bg-raised, #1d2026)',
+                  overflow: 'hidden',
                 }}
               >
-                <CardHeader
-                  avatar={<span style={{ fontSize: '2rem' }}>{GAME_ICONS[g.id] ?? '🎲'}</span>}
-                  title={
-                    <Typography variant="h6" sx={{ fontWeight: 800 }}>
-                      {g.name}
-                    </Typography>
-                  }
-                  subheader={
-                    playMode === 'ranked' ? (
-                      gameMMR?.tier ? (
+                {/* Hero Header Area */}
+                <div
+                  className="games-hero-header"
+                  style={{
+                    position: 'relative',
+                    padding: '2rem 1.5rem',
+                    background: `linear-gradient(135deg, ${accent}25 0%, rgba(20, 22, 26, 0.95) 100%)`,
+                    borderBottom: '1px solid var(--border)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '1.5rem',
+                    overflow: 'hidden',
+                  }}
+                >
+                  {/* Glowing background effect */}
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: '50%',
+                      left: '2rem',
+                      transform: 'translateY(-50%)',
+                      width: '120px',
+                      height: '120px',
+                      borderRadius: '50%',
+                      background: accent,
+                      filter: 'blur(50px)',
+                      opacity: 0.18,
+                      pointerEvents: 'none',
+                    }}
+                  />
+
+                  {/* Game Icon Container */}
+                  <div
+                    style={{
+                      fontSize: '3rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      width: '4.8rem',
+                      height: '4.8rem',
+                      borderRadius: '16px',
+                      background: 'rgba(255, 255, 255, 0.03)',
+                      border: `1px solid ${accent}40`,
+                      boxShadow: `0 8px 32px ${accent}15`,
+                      zIndex: 1,
+                      flexShrink: 0,
+                    }}
+                  >
+                    {GAME_ICONS[g.id] ?? '🎲'}
+                  </div>
+
+                  {/* Title & Info */}
+                  <div style={{ flex: 1, zIndex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', flexWrap: 'wrap' }}>
+                      <Typography variant="h5" sx={{ fontWeight: 950, color: 'text.primary' }}>
+                        {g.name}
+                      </Typography>
+                      {gameMMR?.tier ? (
                         <Chip
                           size="small"
                           color="primary"
                           variant="outlined"
-                          label={`${gameMMR.tier} · ${Math.round(gameMMR.rating ?? 1200)}`}
-                          sx={{ fontSize: '0.75rem', height: 22 }}
+                          label={`${gameMMR.tier} · ${Math.round(gameMMR.rating ?? 1200)} MMR`}
+                          sx={{ fontWeight: 800, borderColor: `${accent}80`, color: accent }}
                         />
                       ) : (
-                        <Typography
-                          variant="caption"
-                          color="text.secondary"
-                          sx={{ fontSize: '0.75rem' }}
-                        >
-                          Unrated · 1200 MMR
-                        </Typography>
-                      )
-                    ) : (
-                      <Typography
-                        variant="caption"
-                        color="text.secondary"
-                        sx={{ fontSize: '0.75rem' }}
-                      >
-                        Practice Mode
-                      </Typography>
-                    )
-                  }
-                  sx={{ pb: 0.5 }}
-                />
-                <CardContent sx={{ py: 1 }}>
-                  <Typography
-                    variant="body2"
-                    color="text.secondary"
-                    sx={{ fontSize: '0.82rem', lineHeight: 1.5 }}
-                  >
-                    {GAME_DESCRIPTIONS[g.id] ??
-                      `Play ${g.name} against other agents or practice with your own.`}
-                  </Typography>
-                </CardContent>
-                <CardActions
-                  sx={{
-                    p: 2,
-                    pt: 1,
-                    gap: 1.5,
-                    flexDirection: 'row',
+                        <Chip
+                          size="small"
+                          variant="outlined"
+                          label="Unrated · 1200 MMR"
+                          sx={{ fontWeight: 800, color: 'text.secondary' }}
+                        />
+                      )}
+                    </div>
+                    <Typography variant="body2" sx={{ color: 'text.secondary', fontSize: '0.82rem', maxWidth: '650px', lineHeight: 1.5, mt: 1 }}>
+                      {GAME_DESCRIPTIONS[g.id] ??
+                        `Play ${g.name} against other agents or practice with your own.`}
+                    </Typography>
+                  </div>
+                </div>
+
+                {/* Control Bar: Move Policy */}
+                <div
+                  style={{
+                    padding: '0.75rem 1.5rem',
+                    borderBottom: '1px solid var(--border)',
+                    background: 'rgba(0, 0, 0, 0.1)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '1rem',
                     flexWrap: 'wrap',
-                    borderTop: '1px solid var(--border)',
                   }}
                 >
-                  {playMode === 'ranked' ? (
-                    <Button
-                      variant="contained"
-                      color="primary"
-                      disabled={!!queue}
-                      onClick={() => void findRankedMatch(g.id, difficulty)}
-                      sx={{ px: 3, py: 0.6, fontWeight: 800 }}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                    <Typography
+                      variant="caption"
+                      sx={{ color: 'text.secondary', fontWeight: 800, letterSpacing: '0.05em' }}
                     >
-                      Find Match
-                    </Button>
-                  ) : (
-                    <div
-                      style={{
+                      MOVE POLICY:
+                    </Typography>
+                    <ToggleButtonGroup
+                      value={policy}
+                      exclusive
+                      onChange={(_, val) => val && void setSetting('games.policy', val)}
+                      size="small"
+                    >
+                      <ToggleButton value="random" sx={{ px: 1.5, py: 0.25, fontSize: '0.75rem' }}>
+                        🎲 Random
+                      </ToggleButton>
+                      <ToggleButton value="agent" sx={{ px: 1.5, py: 0.25, fontSize: '0.75rem' }}>
+                        🧠 Agent
+                      </ToggleButton>
+                      <ToggleButton value="bot" sx={{ px: 1.5, py: 0.25, fontSize: '0.75rem' }}>
+                        🤖 Bot
+                      </ToggleButton>
+                      <ToggleButton value="manual" sx={{ px: 1.5, py: 0.25, fontSize: '0.75rem' }}>
+                        🎮 Manual
+                      </ToggleButton>
+                    </ToggleButtonGroup>
+                  </div>
+
+                  <Button
+                    variant="text"
+                    color="inherit"
+                    size="small"
+                    sx={{ textTransform: 'none', fontSize: '0.75rem', opacity: 0.7, '&:hover': { opacity: 1 } }}
+                    onClick={() => setSelectedGame(null)}
+                  >
+                    🌐 Deselect Game
+                  </Button>
+                </div>
+
+                {/* Action Modules Columns */}
+                <div
+                  style={{
+                    padding: '1.5rem',
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
+                    gap: '1.5rem',
+                  }}
+                >
+                  {/* Left Column: Development & Configuration */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    <Typography
+                      variant="subtitle2"
+                      sx={{
+                        fontWeight: 800,
+                        color: 'text.secondary',
+                        letterSpacing: '0.08em',
+                        textTransform: 'uppercase',
+                        fontSize: '0.75rem',
                         display: 'flex',
-                        gap: '0.5rem',
                         alignItems: 'center',
-                        flexWrap: 'wrap',
+                        gap: '0.4rem',
                       }}
                     >
-                      <Button
-                        variant="contained"
-                        onClick={() => void playVsOwnAgent(g.id)}
-                        sx={{ px: 2, py: 0.6, fontWeight: 800 }}
-                      >
-                        Play Vs My Agent
-                      </Button>
-                      <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'stretch' }}>
+                      🛠️ Agent Strategy & Dev Kit
+                    </Typography>
+
+                    {/* Edit Harness Action Box */}
+                    <Card
+                      sx={{
+                        background: 'rgba(255, 255, 255, 0.01)',
+                        border: '1px solid var(--border)',
+                        boxShadow: 'none',
+                        transition: 'all 0.2s ease',
+                        '&:hover': { background: 'rgba(255, 255, 255, 0.02)', borderColor: `${accent}40` },
+                      }}
+                    >
+                      <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+                        <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>
+                          Configure Strategy (Edit Harness)
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5, lineHeight: 1.4 }}>
+                          Author agent policy code, equip tools, ground docs, and refine decision heuristics.
+                        </Typography>
                         <Button
                           variant="outlined"
-                          color="secondary"
-                          onClick={() => void playVsBot(g.id, botTier)}
-                          sx={{ px: 2, py: 0.6, fontWeight: 800 }}
+                          size="small"
+                          fullWidth
+                          onClick={() => openHarnessFor(g.id, paneInstanceId)}
+                          sx={{ fontWeight: 700, borderColor: 'divider' }}
                         >
-                          🤖 Test Vs Bot
+                          Open Workspace
                         </Button>
-                        <Tooltip title="Bot difficulty — an unrated practice opponent" arrow>
-                          <Select
-                            value={botTier}
-                            onChange={(e) => setBotTier(e.target.value)}
-                            size="small"
-                            sx={{ fontSize: '0.78rem', '& .MuiSelect-select': { py: 0.6 } }}
+                      </CardContent>
+                    </Card>
+
+                    {/* Challenges Action Box */}
+                    <Card
+                      sx={{
+                        background: 'rgba(255, 255, 255, 0.01)',
+                        border: '1px solid var(--border)',
+                        boxShadow: 'none',
+                        transition: 'all 0.2s ease',
+                        '&:hover': { background: 'rgba(255, 255, 255, 0.02)', borderColor: `${accent}40` },
+                      }}
+                    >
+                      <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+                        <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>
+                          Scenario Grader (Challenges)
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5, lineHeight: 1.4 }}>
+                          Run scenario-grading tests against your agent harness to verify decision correctness.
+                        </Typography>
+                        <Button
+                          variant="outlined"
+                          size="small"
+                          fullWidth
+                          onClick={() => requestChallenges(g.id)}
+                          sx={{ fontWeight: 700, borderColor: 'divider' }}
+                        >
+                          Run Challenge Track
+                        </Button>
+                      </CardContent>
+                    </Card>
+                  </div>
+
+                  {/* Right Column: Battle Arena */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    <Typography
+                      variant="subtitle2"
+                      sx={{
+                        fontWeight: 800,
+                        color: 'text.secondary',
+                        letterSpacing: '0.08em',
+                        textTransform: 'uppercase',
+                        fontSize: '0.75rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.4rem',
+                      }}
+                    >
+                      ⚔️ Battle Arena
+                    </Typography>
+
+                    {/* Ranked Matchmaking Box */}
+                    <Card
+                      sx={{
+                        background: 'rgba(110, 168, 254, 0.02)',
+                        border: `1px solid ${accent}25`,
+                        boxShadow: 'none',
+                        position: 'relative',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+                        <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>
+                          Ranked Matchmaking
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5, lineHeight: 1.4 }}>
+                          Queue to match against other live player agents. Increases MMR and climbs leaderboard.
+                        </Typography>
+
+                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                          <div style={{ flex: 1 }}>
+                            <Select
+                              value={difficulty}
+                              onChange={(e) => setDifficulty(e.target.value)}
+                              size="small"
+                              fullWidth
+                              sx={{ fontSize: '0.78rem' }}
+                            >
+                              <MenuItem value="standard">Standard Difficulty</MenuItem>
+                              <MenuItem value="hard">Hard Difficulty</MenuItem>
+                              <MenuItem value="expert">Expert Difficulty</MenuItem>
+                            </Select>
+                          </div>
+                          <Button
+                            variant="contained"
+                            color="primary"
+                            disabled={!!queue}
+                            onClick={() => void findRankedMatch(g.id, difficulty)}
+                            sx={{ fontWeight: 800, px: 2, py: 0.8 }}
                           >
-                            {BOT_TIERS.map((t) => (
-                              <MenuItem key={t.value} value={t.value} sx={{ fontSize: '0.8rem' }}>
-                                {t.label}
-                              </MenuItem>
-                            ))}
-                          </Select>
-                        </Tooltip>
-                      </div>
-                      <Button
-                        variant="outlined"
-                        onClick={() => void hostOpenTable(g.id)}
-                        sx={{ px: 2, py: 0.6, fontWeight: 800 }}
-                      >
-                        Host Server
-                      </Button>
-                    </div>
-                  )}
-                  <Button
-                    size="small"
-                    color="inherit"
-                    onClick={() => requestChallenges(g.id)}
-                    sx={{ py: 0.6, textTransform: 'none' }}
-                  >
-                    🎯 Challenges
-                  </Button>
-                  <Button
-                    size="small"
-                    color="inherit"
-                    onClick={() => openHarnessFor(g.id, paneInstanceId)}
-                    sx={{ py: 0.6, textTransform: 'none' }}
-                  >
-                    ⚙ Edit Harness
-                  </Button>
-                </CardActions>
+                            Find Match
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    {/* Practice Zone Box */}
+                    <Card
+                      sx={{
+                        background: 'rgba(255, 255, 255, 0.01)',
+                        border: '1px solid var(--border)',
+                        boxShadow: 'none',
+                      }}
+                    >
+                      <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
+                        <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>
+                          Practice & Hosting
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5, lineHeight: 1.4 }}>
+                          Play unrated practice sessions against your own agent configuration or practice bots.
+                        </Typography>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                          <Button
+                            variant="outlined"
+                            onClick={() => void playVsOwnAgent(g.id)}
+                            sx={{ fontWeight: 700, fontSize: '0.78rem', py: 0.5 }}
+                            fullWidth
+                          >
+                            Play vs My Agent
+                          </Button>
+
+                          <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'stretch' }}>
+                            <Button
+                              variant="outlined"
+                              color="secondary"
+                              onClick={() => void playVsBot(g.id, botTier)}
+                              sx={{ fontWeight: 700, flex: 1, fontSize: '0.78rem', py: 0.5 }}
+                            >
+                              🤖 Test vs Bot
+                            </Button>
+                            <Select
+                              value={botTier}
+                              onChange={(e) => setBotTier(e.target.value)}
+                              size="small"
+                              sx={{ fontSize: '0.78rem', width: '130px' }}
+                            >
+                              {BOT_TIERS.map((t) => (
+                                <MenuItem key={t.value} value={t.value} sx={{ fontSize: '0.8rem' }}>
+                                  {t.label}
+                                </MenuItem>
+                              ))}
+                            </Select>
+                          </div>
+
+                          <Button
+                            variant="text"
+                            onClick={() => void hostOpenTable(g.id)}
+                            sx={{
+                              fontWeight: 700,
+                              color: 'text.secondary',
+                              textTransform: 'none',
+                              fontSize: '0.72rem',
+                              py: 0.25,
+                              mt: 0.25,
+                              '&:hover': { color: 'text.primary' },
+                            }}
+                            size="small"
+                          >
+                            🌐 Host Open Server Table
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
+                </div>
               </Card>
 
               {/* Server Browser Table Header */}
