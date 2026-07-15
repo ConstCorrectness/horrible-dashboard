@@ -3,6 +3,158 @@
  * module manifest (see index.tsx), like flow.css. Colors come from the shared
  * CSS variables so both themes work. */
 
+/* ---- Games Library sidebar (Lobby panel) — colorful tiles, not flat rows ---- */
+
+.games-lobby-root {
+  container-type: inline-size;
+  container-name: games-lobby-root;
+}
+
+.games-lib-sidebar {
+  width: 170px;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-raised, #1d2026);
+  flex-shrink: 0;
+  transition: width 0.15s ease;
+}
+
+.games-lib-sidebar-title {
+  padding: 0.8rem;
+  border-bottom: 1px solid var(--border);
+  font-weight: 800;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.games-lib-section-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  padding: 0.3rem 0.5rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.games-lib-import-btn {
+  width: 100%;
+  background: rgba(110, 168, 254, 0.08);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  padding: 0.5rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  color: var(--accent, #6ea8fe);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+/* Below this, the sidebar collapses to an icon-only rail so a narrow dock still
+   leaves usable room for the actual content (play controls, server browser)
+   instead of squeezing everything into a sliver. */
+@container games-lobby-root (max-width: 340px) {
+  .games-lib-sidebar {
+    width: 60px;
+  }
+
+  .games-lib-sidebar-title-text,
+  .games-lib-section-label,
+  .games-lib-import-label,
+  .games-lib-tile-name {
+    display: none;
+  }
+
+  .games-lib-tile {
+    justify-content: center;
+    padding: 0.45rem;
+    border-left-width: 0;
+    border-radius: 8px;
+  }
+
+  .games-lib-tile.selected {
+    box-shadow: inset 0 0 0 2px var(--tile-accent, var(--accent, #6ea8fe));
+  }
+
+  .games-lib-import-btn {
+    padding: 0.45rem;
+  }
+}
+
+.games-lib-tile {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-left: 3px solid transparent;
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem 0.4rem 0.5rem;
+  cursor: pointer;
+  color: var(--text-dim, #8a909c);
+  font-weight: 500;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    transform 0.15s ease;
+}
+
+.games-lib-tile:hover {
+  background: var(--bg-hover, #262a32);
+  transform: translateX(2px);
+}
+
+.games-lib-tile.selected {
+  background: color-mix(
+    in srgb,
+    var(--tile-accent, var(--accent, #6ea8fe)) 16%,
+    var(--bg-hover, #262a32)
+  );
+  border-left-color: var(--tile-accent, var(--accent, #6ea8fe));
+  color: var(--text, #d7dae0);
+  font-weight: 800;
+}
+
+.games-lib-tile-icon {
+  font-size: 1.1rem;
+  line-height: 1;
+  width: 1.7rem;
+  height: 1.7rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--tile-accent, var(--accent, #6ea8fe)) 18%, transparent);
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+
+.games-lib-tile:hover .games-lib-tile-icon {
+  transform: scale(1.12) rotate(-4deg);
+}
+
+.games-lib-tile-name {
+  font-size: 0.8rem;
+  flex: 1;
+  overflow-wrap: break-word;
+}
+
+.games-lib-tile-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--tile-accent, var(--accent, #6ea8fe));
+  box-shadow: 0 0 6px var(--tile-accent, var(--accent, #6ea8fe));
+  flex-shrink: 0;
+}
+
 /* ---- lobby game cards ---- */
 
 .games-cards {
@@ -1734,6 +1886,40 @@
   color: #f1f5f9;
   border-color: rgba(255, 255, 255, 0.15);
   transform: translateY(-1px);
+}
+
+/* ---- Lobby responsive compaction — the same PlaySection markup, reflowed by
+   the pane's own width (a dock rail and a full document width both use it) ---- */
+
+.games-lobby-content {
+  container-type: inline-size;
+  container-name: games-lobby;
+}
+
+@container games-lobby (max-width: 480px) {
+  /* Toggle groups (Play Mode / Move Policy / Queue Difficulty): icon only,
+     the text label is the first thing to go when space is tight. */
+  .games-toggle-label {
+    display: none;
+  }
+
+  .games-welcome-card {
+    padding: 0.7rem !important;
+  }
+
+  /* Server browser: drop the Players/Ping columns, keep Server/Status/Action. */
+  .games-server-header,
+  .games-server-row {
+    grid-template-columns: 2fr 1fr auto;
+    column-gap: 0.6rem;
+  }
+
+  .games-server-header > :nth-child(3),
+  .games-server-header > :nth-child(4),
+  .games-server-row > :nth-child(3),
+  .games-server-row > :nth-child(4) {
+    display: none;
+  }
 }
 
 /* ---- ViZDoom board (server-streamed frames) ---- */

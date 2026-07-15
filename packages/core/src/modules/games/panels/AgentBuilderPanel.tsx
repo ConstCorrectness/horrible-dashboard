@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useState, type CSSProperties } from 'react';
 
+import { PaneInstanceContext } from '../../../agent-context';
 import { revealRegionView } from '../../../layout/controller';
 import {
   gradedStat,
@@ -10,7 +11,12 @@ import {
   type StatKey,
 } from '../agentBuild';
 import { playVsOwnAgent } from '../matchmaking';
-import { setActiveGame, useActiveGame } from '../selected-game';
+import {
+  goBackFromHarness,
+  harnessReplacedView,
+  setActiveGame,
+  useActiveGame,
+} from '../selected-game';
 import {
   fetchGamesCatalog,
   getAgentStarter,
@@ -72,6 +78,13 @@ export function AgentBuilderPanel() {
   const [agentError, setAgentError] = useState<string | null>(null);
   const [showContext, setShowContext] = useState(false);
   const [vsOpen, setVsOpen] = useState(false);
+  // Only show "back" when this instance actually took over another view (see
+  // selected-game.ts) — not e.g. the Coding Harnesses preset's own dedicated slot.
+  const paneInstanceId = useContext(PaneInstanceContext);
+  const cameFromElsewhere = paneInstanceId != null && harnessReplacedView(paneInstanceId) != null;
+  const goBack = useCallback(() => {
+    if (paneInstanceId) goBackFromHarness(paneInstanceId);
+  }, [paneInstanceId]);
 
   useEffect(() => {
     fetchGamesCatalog()
@@ -190,6 +203,16 @@ export function AgentBuilderPanel() {
             borderBottom: '1px solid var(--border, #33343a)',
           }}
         >
+          {cameFromElsewhere && (
+            <button
+              type="button"
+              onClick={goBack}
+              title="Back to Games"
+              style={{ ...btn, padding: '0.2rem 0.5rem' }}
+            >
+              ← Games
+            </button>
+          )}
           <span style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: '0.8rem' }}>
             my_agent.py
           </span>

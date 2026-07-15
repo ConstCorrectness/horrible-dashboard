@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useContext, useEffect, useState } from 'react';
 
 import Card from '@mui/material/Card';
 import CardHeader from '@mui/material/CardHeader';
@@ -14,6 +14,7 @@ import Tooltip from '@mui/material/Tooltip';
 import Select from '@mui/material/Select';
 import MenuItem from '@mui/material/MenuItem';
 
+import { PaneInstanceContext } from '../../../agent-context';
 import { useSetting, setSetting } from '../../../settings';
 import { claimChallengeDraft, onChallengeDraft, type ChallengeTarget } from '../challenge-draft';
 import { requestChallenges } from '../challenge-focus';
@@ -185,6 +186,7 @@ export function PlaySection({
   const [botTier, setBotTier] = useState<string>('bronze');
   const onboarded = useSetting<boolean>('games.onboarded') === true;
   const policy = useSetting<string>('games.policy') ?? 'random';
+  const paneInstanceId = useContext(PaneInstanceContext);
 
   useEffect(() => onChallengeDraft(setDraft), []);
 
@@ -243,6 +245,7 @@ export function PlaySection({
         <>
           {/* Welcome Section */}
           <Card
+            className="games-welcome-card"
             sx={{
               p: 2.5,
               mb: 2,
@@ -369,10 +372,10 @@ export function PlaySection({
                     size="small"
                   >
                     <ToggleButton value="casual" sx={{ px: 2, py: 0.5 }}>
-                      🎮 Casual Practice
+                      🎮<span className="games-toggle-label"> Casual Practice</span>
                     </ToggleButton>
                     <ToggleButton value="ranked" sx={{ px: 2, py: 0.5 }}>
-                      🏁 Ranked Matchmaking
+                      🏁<span className="games-toggle-label"> Ranked Matchmaking</span>
                     </ToggleButton>
                   </ToggleButtonGroup>
                 </div>
@@ -396,16 +399,16 @@ export function PlaySection({
                     size="small"
                   >
                     <ToggleButton value="random" sx={{ px: 1.5, py: 0.5 }}>
-                      🎲 Random
+                      🎲<span className="games-toggle-label"> Random</span>
                     </ToggleButton>
                     <ToggleButton value="agent" sx={{ px: 1.5, py: 0.5 }}>
-                      🧠 Agent
+                      🧠<span className="games-toggle-label"> Agent</span>
                     </ToggleButton>
                     <ToggleButton value="bot" sx={{ px: 1.5, py: 0.5 }}>
-                      🤖 Bot
+                      🤖<span className="games-toggle-label"> Bot</span>
                     </ToggleButton>
                     <ToggleButton value="manual" sx={{ px: 1.5, py: 0.5 }}>
-                      🎮 Manual
+                      🎮<span className="games-toggle-label"> Manual</span>
                     </ToggleButton>
                   </ToggleButtonGroup>
                 </div>
@@ -425,13 +428,13 @@ export function PlaySection({
                       size="small"
                     >
                       <ToggleButton value="standard" sx={{ py: 0.5 }}>
-                        ⚔️ Standard
+                        ⚔️<span className="games-toggle-label"> Standard</span>
                       </ToggleButton>
                       <ToggleButton value="hard" sx={{ py: 0.5 }}>
-                        🔒 Hard
+                        🔒<span className="games-toggle-label"> Hard</span>
                       </ToggleButton>
                       <ToggleButton value="expert" sx={{ py: 0.5 }}>
-                        💎 Expert
+                        💎<span className="games-toggle-label"> Expert</span>
                       </ToggleButton>
                     </ToggleButtonGroup>
                   </div>
@@ -586,7 +589,7 @@ export function PlaySection({
                   <Button
                     size="small"
                     color="inherit"
-                    onClick={() => openHarnessFor(g.id)}
+                    onClick={() => openHarnessFor(g.id, paneInstanceId)}
                     sx={{ py: 0.6, textTransform: 'none' }}
                   >
                     ⚙ Edit Harness

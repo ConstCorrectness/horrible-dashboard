@@ -307,7 +307,11 @@ Memory), keeping the build honestly code-first. The builder's game is **shared w
 Games Library** (`selected-game.ts`): picking a game in the library — or clicking a
 card's **Edit Harness** — switches the builder to that game (and its picker switches the
 library back), so the harness/template you're editing always follows the game you
-selected instead of drifting onto a stale one. **Lock in** validates + saves, then plays
+selected instead of drifting onto a stale one. **Edit Harness** (`openHarnessFor`) focuses
+the builder pane if it's already open anywhere; otherwise it replaces the Games pane in
+place (`changePaneType`, same instance id) rather than opening a second pane beside it —
+the builder then shows a **← Games** back button (`changePaneType` back to `games.lobby`)
+since it knows it took over another pane's slot. **Lock in** validates + saves, then plays
 the **VS lock-in ceremony** (`VsCeremony.tsx` — your agent vs a self-play mirror, ember
 vs cyan); **Enter arena** starts a real self-play match (`matchmaking.playVsOwnAgent`,
 no sign-in needed) and reveals the Game Board + the Agent Thoughts feed.

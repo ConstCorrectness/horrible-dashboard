@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 
 import { registry } from '../../../registry';
 import { useGames, gamesDisconnect, ensureConnected } from '../game-ws';
@@ -27,6 +27,22 @@ const GAME_ICONS: Record<string, string> = {
   fighter: '🥊',
   vizdoom_toy: '🔫',
   vizdoom_duel: '💀',
+};
+
+// A per-game accent color so the library sidebar reads as a shelf of distinct
+// games rather than a flat list — used for the tile's icon chip and selected state.
+const GAME_ACCENT: Record<string, string> = {
+  tictactoe: '#fb7185',
+  connect_four: '#fbbf24',
+  holdem: '#a78bfa',
+  rag_race: '#60a5fa',
+  code_golf: '#4ade80',
+  test_duel: '#94a3b8',
+  bug_hunt: '#84cc16',
+  arena: '#fb923c',
+  fighter: '#f87171',
+  vizdoom_toy: '#dc2626',
+  vizdoom_duel: '#c084fc',
 };
 
 /** Sign-in status + OAuth sign-in (GitHub or Google — two different Google accounts
@@ -187,63 +203,29 @@ export function LobbyPanel() {
   }, []);
 
   return (
-    <div style={{ display: 'flex', height: '100%', overflow: 'hidden' }}>
-      {/* Left Sidebar: Games Library */}
-      <div
-        style={{
-          width: '240px',
-          borderRight: '1px solid var(--border)',
-          display: 'flex',
-          flexDirection: 'column',
-          background: 'var(--bg-raised, #1d2026)',
-          flexShrink: 0,
-        }}
-      >
-        <div
-          style={{
-            padding: '0.8rem',
-            borderBottom: '1px solid var(--border)',
-            fontWeight: 800,
-            fontSize: '0.85rem',
-            color: 'var(--text-dim)',
-          }}
-        >
-          🎮 GAMES LIBRARY
+    <div
+      className="games-lobby-root"
+      style={{ display: 'flex', height: '100%', overflow: 'hidden' }}
+    >
+      {/* Left Sidebar: Games Library — collapses to an icon rail when the whole
+          pane is narrow (a dock rail), see the games-lobby-root container query. */}
+      <div className="games-lib-sidebar">
+        <div className="games-lib-sidebar-title">
+          <span>🎮</span>
+          <span className="games-lib-sidebar-title-text"> GAMES LIBRARY</span>
         </div>
         <div style={{ flex: 1, overflowY: 'auto', padding: '0.5rem' }}>
-          <div
-            style={{
-              fontSize: '0.68rem',
-              textTransform: 'uppercase',
-              color: 'var(--text-dim)',
-              padding: '0.3rem 0.5rem',
-              fontWeight: 700,
-            }}
-          >
-            Shipped Defaults
-          </div>
+          <div className="games-lib-section-label">Shipped Defaults</div>
           <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
             {games.map((g) => {
               const isSelected = selectedGame === g.id;
+              const accent = GAME_ACCENT[g.id] ?? 'var(--accent, #6ea8fe)';
               return (
                 <li key={g.id} style={{ margin: '0.2rem 0' }}>
                   <button
                     type="button"
-                    style={{
-                      width: '100%',
-                      textAlign: 'left',
-                      background: isSelected ? 'var(--bg-hover, #262a32)' : 'transparent',
-                      border: 'none',
-                      borderRadius: '6px',
-                      padding: '0.4rem 0.6rem',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.5rem',
-                      color: isSelected ? 'var(--text, #d7dae0)' : 'var(--text-dim, #8a909c)',
-                      fontWeight: isSelected ? 800 : 500,
-                      transition: 'all 0.15s ease',
-                    }}
+                    className={`games-lib-tile${isSelected ? ' selected' : ''}`}
+                    style={{ '--tile-accent': accent } as CSSProperties}
                     onClick={() => {
                       const next = isSelected ? null : g.id;
                       setSelectedGame(next);
@@ -252,13 +234,9 @@ export function LobbyPanel() {
                       if (next) setActiveGame(next);
                     }}
                   >
-                    <span style={{ fontSize: '1.2rem' }}>{GAME_ICONS[g.id] ?? '🎲'}</span>
-                    <span style={{ fontSize: '0.82rem', flex: 1 }}>{g.name}</span>
-                    {isSelected && (
-                      <span style={{ color: 'var(--accent, #6ea8fe)', fontSize: '0.75rem' }}>
-                        ●
-                      </span>
-                    )}
+                    <span className="games-lib-tile-icon">{GAME_ICONS[g.id] ?? '🎲'}</span>
+                    <span className="games-lib-tile-name">{g.name}</span>
+                    {isSelected && <span className="games-lib-tile-dot" />}
                   </button>
                 </li>
               );
@@ -274,28 +252,15 @@ export function LobbyPanel() {
           >
             <button
               type="button"
-              style={{
-                width: '100%',
-                background: 'rgba(110, 168, 254, 0.08)',
-                border: '1px dashed var(--border)',
-                borderRadius: '6px',
-                padding: '0.5rem',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '0.3rem',
-                color: 'var(--accent, #6ea8fe)',
-                fontSize: '0.75rem',
-                fontWeight: 700,
-              }}
+              className="games-lib-import-btn"
               onClick={() => {
                 alert(
                   'Importing custom games and the creator marketplace will be available in a future update!',
                 );
               }}
             >
-              ➕ Import Custom Game
+              <span>➕</span>
+              <span className="games-lib-import-label"> Import Custom Game</span>
             </button>
           </div>
         </div>
@@ -303,6 +268,7 @@ export function LobbyPanel() {
 
       {/* Right Main Content Panel */}
       <div
+        className="games-lobby-content"
         style={{
           flex: 1,
           padding: '0.8rem',
