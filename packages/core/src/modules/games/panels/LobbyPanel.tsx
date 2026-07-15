@@ -10,6 +10,7 @@ import {
   type SignInProvider,
   type GameCatalogEntry,
 } from '../games-api';
+import { setActiveGame } from '../selected-game';
 import { ConnectionChip } from './ConnectionChip';
 import { PlaySection } from './PlaySection';
 
@@ -184,7 +185,13 @@ export function LobbyPanel() {
                       fontWeight: isSelected ? 800 : 500,
                       transition: 'all 0.15s ease',
                     }}
-                    onClick={() => setSelectedGame(isSelected ? null : g.id)}
+                    onClick={() => {
+                      const next = isSelected ? null : g.id;
+                      setSelectedGame(next);
+                      // Keep the harness pane in sync so switching games here
+                      // switches the "Build your agent" template too.
+                      if (next) setActiveGame(next);
+                    }}
                   >
                     <span style={{ fontSize: '1.2rem' }}>{GAME_ICONS[g.id] ?? '🎲'}</span>
                     <span style={{ fontSize: '0.82rem', flex: 1 }}>{g.name}</span>

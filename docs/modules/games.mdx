@@ -152,7 +152,19 @@ Three inline steps (`FirstRunHero.tsx`):
 Every step is skippable, and a **dismiss** link hides the card for players who
 are just exploring (also setting `games.onboarded`); the
 `games.restartOnboarding` command clears the flag and reopens the hub.
-Local self-play still needs no account; ranked/online play does. The
+Local self-play still needs no account; ranked/online play does.
+
+**Sign-in token & server resolution.** The node holds the game server's JWT
+server-side (`.data/games_token.json`, never sent to the browser) and presents it on
+`/game-ws`. Sign-in and play resolve the server URL the **same** way
+(`client.resolve_server_url` — `GAMES_SERVER_URL` env wins over the `games.serverUrl`
+setting), so the node can't sign in to one server and play against another — a mismatch
+the play server rejects as `invalid token`. If the server rejects the token anyway
+(expired, or signed by a secret a redeploy rotated), the node **clears the stale token**
+and the UI drops back to signed-out with a "sign in again" prompt (`channel.py`), rather
+than silently failing every connect.
+
+The
 **Profile** panel (`games.profile`) shows your avatar/level ring, per-game tier
 cards (MUI `Card`s with a tier `Chip` and an XP `LinearProgress`), and the
 recent match log (with loadout/model attribution and one-click replays). The
@@ -268,7 +280,11 @@ editor for `agent_code` (plus a collapsible system-prompt `context`), a game pic
 seeds the per-game starter and marks the graded stat, and a **loadout readout** whose
 slots (Context / Tools / RAG / Memory / Model) and agent stats are derived live **from
 your code** (`agentBuild.ts` — calling `retrieve()` lights RAG, using `memory.` lights
-Memory), keeping the build honestly code-first. **Lock in** validates + saves, then plays
+Memory), keeping the build honestly code-first. The builder's game is **shared with the
+Games Library** (`selected-game.ts`): picking a game in the library — or clicking a
+card's **Edit Harness** — switches the builder to that game (and its picker switches the
+library back), so the harness/template you're editing always follows the game you
+selected instead of drifting onto a stale one. **Lock in** validates + saves, then plays
 the **VS lock-in ceremony** (`VsCeremony.tsx` — your agent vs a self-play mirror, ember
 vs cyan); **Enter arena** starts a real self-play match (`matchmaking.playVsOwnAgent`,
 no sign-in needed) and reveals the Game Board + the Agent Thoughts feed.

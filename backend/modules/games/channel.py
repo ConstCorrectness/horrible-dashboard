@@ -121,6 +121,27 @@ async def handle_games_message(conn: Any, msg: dict[str, Any]) -> None:
             await games_client.disconnect()
         except Exception:
             logger.debug("games client cleanup after %r failed", event, exc_info=True)
+
+        # A signed-in token the server rejects (expired, or signed by a secret this
+        # server no longer uses) is dead weight: it blocks every connect and there's
+        # no way forward while the node keeps presenting it. Clear it so the UI drops
+        # back to signed-out and prompts a fresh sign-in, and give an actionable toast
+        # instead of the raw "invalid token".
+        message = str(e)
+        code: str | None = None
+        if (
+            "invalid token" in message.lower()
+            or "authentication failed" in message.lower()
+        ):
+            code = "auth_invalid"
+            from backend.modules.games import server_auth
+
+            if server_auth.get_token() is not None:
+                server_auth.sign_out()
+                message = (
+                    "Your game-server sign-in is no longer valid (the server may have "
+                    "been redeployed). Please sign in again to reconnect."
+                )
         try:
             # Let the browser know we are not connected so UI can reset state
             await conn.send_json(
@@ -140,7 +161,8 @@ async def handle_games_message(conn: Any, msg: dict[str, Any]) -> None:
                     "channel": "games",
                     "event": "error",
                     "data": {
-                        "message": str(e),
+                        "message": message,
+                        "code": code,
                         "event": event,
                     },
                 }

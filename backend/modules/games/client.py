@@ -39,18 +39,25 @@ def _dev_token() -> str:
     return str(get_value("games.devToken", "player") or "player")
 
 
+def resolve_server_url() -> str:
+    """The game-server URL this node targets for BOTH sign-in and play.
+
+    `GAMES_SERVER_URL` (env, set by local dev) wins over the persisted
+    `games.serverUrl` setting — otherwise a saved hosted-server URL would override
+    the bundled local game server and locally-added games like vizdoom_toy get
+    rejected. Sign-in (`server_auth`) and `/game-ws` (here) MUST resolve the URL
+    the same way: if they diverge, the node signs in to one server and plays against
+    another, and the play server rejects the foreign-signed JWT as 'invalid token'.
+    """
+    if _ENV_SERVER_URL:
+        return _ENV_SERVER_URL
+    return str(get_value("games.serverUrl", DEFAULT_SERVER_URL) or DEFAULT_SERVER_URL)
+
+
 def _settings() -> tuple[str, str, str]:
     """(server url, auth token, policy). The token is the signed-in JWT if we have
     one, else the dev token."""
-    # When GAMES_SERVER_URL is explicitly set (local dev), it always wins over the
-    # persisted setting — otherwise a saved hosted-server URL overrides the bundled
-    # local game server and locally-added games like vizdoom_toy get rejected.
-    if _ENV_SERVER_URL:
-        url = _ENV_SERVER_URL
-    else:
-        url = str(
-            get_value("games.serverUrl", DEFAULT_SERVER_URL) or DEFAULT_SERVER_URL
-        )
+    url = resolve_server_url()
     # Imported lazily to avoid a circular import (server_auth imports this module).
     from backend.modules.games.server_auth import get_token
 

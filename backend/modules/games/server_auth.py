@@ -17,7 +17,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from backend.modules.games.client import DEFAULT_SERVER_URL
+from backend.modules.games.client import resolve_server_url
 from backend.modules.settings.routes import get_value
 
 
@@ -53,8 +53,9 @@ def sign_out() -> None:
 
 
 def _http_base() -> str:
-    """The game server's HTTP base, derived from the ws:// setting."""
-    url = str(get_value("games.serverUrl", DEFAULT_SERVER_URL) or DEFAULT_SERVER_URL)
+    """The game server's HTTP base for sign-in, derived from the same ws:// URL the
+    node plays against (resolve_server_url) — see that function on why they must match."""
+    url = resolve_server_url()
     return url.replace("wss://", "https://").replace("ws://", "http://")
 
 

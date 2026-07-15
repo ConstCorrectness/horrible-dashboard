@@ -10,6 +10,7 @@ import {
   type StatKey,
 } from '../agentBuild';
 import { playVsOwnAgent } from '../matchmaking';
+import { setActiveGame, useActiveGame } from '../selected-game';
 import {
   fetchGamesCatalog,
   getAgentStarter,
@@ -61,7 +62,11 @@ export function AgentBuilderPanel() {
   const [games, setGames] = useState<GameCatalogEntry[]>([
     { id: 'tictactoe', name: 'Tic-Tac-Toe' },
   ]);
-  const [gameId, setGameId] = useState('tictactoe');
+  // The active game is shared with the Games Library (see selected-game.ts), so
+  // switching games there switches the harness here. Seed from it on mount; fall
+  // back to Tic-Tac-Toe when nothing's been selected yet.
+  const activeGame = useActiveGame();
+  const [gameId, setGameId] = useState(activeGame ?? 'tictactoe');
   const [loadout, setLoadout] = useState<Loadout | null>(null);
   const [status, setStatus] = useState('');
   const [agentError, setAgentError] = useState<string | null>(null);
@@ -73,6 +78,12 @@ export function AgentBuilderPanel() {
       .then(setGames)
       .catch(() => {});
   }, []);
+
+  // Follow the shared selection: when the library (or another panel) switches the
+  // active game, switch the harness to match.
+  useEffect(() => {
+    if (activeGame) setGameId(activeGame);
+  }, [activeGame]);
 
   // Load the game's agent; seed the editor with the per-game starter if it's blank.
   useEffect(() => {
@@ -260,7 +271,10 @@ export function AgentBuilderPanel() {
               <button
                 key={g.id}
                 type="button"
-                onClick={() => setGameId(g.id)}
+                onClick={() => {
+                  setGameId(g.id);
+                  setActiveGame(g.id);
+                }}
                 style={{
                   ...btn,
                   fontSize: '0.72rem',

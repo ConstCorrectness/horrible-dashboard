@@ -12,7 +12,7 @@ from fastapi import APIRouter
 from backend.games_engine.base import list_games
 from backend.modules.games import server_auth
 from backend.modules.games.agent_sdk import agent_compile_error
-from backend.modules.games.client import DEFAULT_SERVER_URL, games_client
+from backend.modules.games.client import games_client, resolve_server_url
 from backend.modules.games.loadout import (
     HarnessRuntime,
     Loadout,
@@ -64,9 +64,7 @@ def status() -> GamesStatus:
         ),
         signed_in=name is not None,
         display_name=name,
-        server_url=str(
-            get_value("games.serverUrl", DEFAULT_SERVER_URL) or DEFAULT_SERVER_URL
-        ),
+        server_url=resolve_server_url(),
         policy=str(get_value("games.policy", "random") or "random"),
         games=_catalog(),
     )

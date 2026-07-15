@@ -10,7 +10,6 @@ import Typography from '@mui/material/Typography';
 import ToggleButton from '@mui/material/ToggleButton';
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 
-import { revealRegionView } from '../../../layout/controller';
 import { useSetting } from '../../../settings';
 import { claimChallengeDraft, onChallengeDraft, type ChallengeTarget } from '../challenge-draft';
 import { requestChallenges } from '../challenge-focus';
@@ -23,6 +22,7 @@ import {
   watchTableLive,
   findRankedMatch,
 } from '../matchmaking';
+import { openHarnessFor } from '../selected-game';
 import { ChallengeDraftCard, IncomingOfferCard } from './ChallengeCards';
 import { FirstRunHero } from './FirstRunHero';
 import { GamesMui } from '../mui-theme';
@@ -506,7 +506,7 @@ export function PlaySection({
                   <Button
                     size="small"
                     color="inherit"
-                    onClick={() => revealRegionView('games.loadout')}
+                    onClick={() => openHarnessFor(g.id)}
                     sx={{ py: 0.6, textTransform: 'none' }}
                   >
                     ⚙ Edit Harness
