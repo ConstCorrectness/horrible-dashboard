@@ -228,9 +228,31 @@ The `games.policy` setting controls how a node picks its move:
   `game.getObservation` / `game.chooseAction` agent tools (grouped under `games`), or
   a future in-board control does.
 
+Switching the setting takes effect **between games, not mid-match**: the primary
+seat re-reads `games.policy` at each match boundary (the `match_info` event) and
+rebuilds its policy if it changed, so a switch never disturbs a game in progress
+and no reconnect is needed. AgentTown, having no match boundary, honors a switch on
+its next tick. The self-play sparring seat below never follows the setting — it
+stays `random` so the demo keeps running. Besides the settings page, the hub's
+**Play section** (`PlaySection`, shown once a game is selected) carries a **Move
+policy** toggle right beside Play Mode — the same `games.policy` setting, so you can
+flip it inline between games without leaving the board.
+
 **Self-play** (what ▶ Play connects as) seats a second "sparring" partner from the
 same node so a full match runs with a single user — handy for demos. The server
 still just referees two independent players.
+
+**Test vs a bot** (casual practice, `matchmaking.playVsBot`): the Play section's
+**🤖 Test Vs Bot** button — with an adjacent difficulty dropdown — starts an
+**unrated** table and asks the server to seat a [practice bot](../architecture/game-server.mdx)
+of the chosen tier in the other seat. The tiers are the server's pinned ladder
+anchors, so difficulty is real (blunder rate + search depth): 🥉 Easy · Rusty,
+🥈 Medium · Circuit, 🥇 Hard · Aurum, 💠 Expert · Nemesis. Mechanically it's a bare
+`create_table` carrying `bot_tier` + `rated:false`: the node connects on its own
+account seat (not self-play), and `_create_table` calls `seat_bot` once the human is
+seated. Because the table is unrated, testing against a bot never moves your rating
+(unlike the ranked queue, which also backfills with these bots — there by *rating*,
+scored — when no human shows). An unknown tier is ignored and the table stays open.
 
 ## Agent harness — the skill game
 

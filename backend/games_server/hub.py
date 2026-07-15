@@ -300,6 +300,14 @@ class GameHub:
             )
             return
         await self._seat(session, table)
+        # Practice-vs-bot: fill the other seat immediately with a server-hosted bot
+        # at the requested tier, so a solo player can test against a known opponent.
+        # An unknown tier is ignored (the table stays open for a human/self-play).
+        from backend.games_server import bots
+
+        bot_tier = str(msg.get("bot_tier") or "").strip()
+        if bot_tier in bots.TIER_RATINGS and table.status == "open":
+            await self.seat_bot(table, bot_tier)
 
     async def _social_invite(self, session: Session, msg: dict[str, Any]) -> None:
         """Challenge another user (from the Plaza roster/friends) to a game: host a

@@ -32,7 +32,9 @@ async def handle_games_message(conn: Any, msg: dict[str, Any]) -> None:
             await games_client.list_tables()
         elif event == "create_table":
             await games_client.create_table(
-                str(data.get("gameId") or ""), data.get("ruleset")
+                str(data.get("gameId") or ""),
+                data.get("ruleset"),
+                str(data.get("botTier") or "") or None,
             )
         elif event == "join_table":
             await games_client.join_table(str(data.get("tableId") or ""))

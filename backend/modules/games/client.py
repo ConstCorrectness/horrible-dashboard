@@ -77,11 +77,18 @@ class _PlayerConn:
         on_event: Callable[[dict[str, Any]], Any],
         *,
         log_matches: bool = True,
+        follow_setting: bool = False,
     ) -> None:
         self._url = url
         self._token = token
         # policy None => manual: don't auto-play; the agent tool / UI drives instead.
         self._policy = policy
+        # The primary seat re-reads games.policy at each match boundary so a switch
+        # takes effect between games without a reconnect; `_policy_name` is the name
+        # last applied, so an unchanged setting skips the rebuild. The sparring seat
+        # doesn't follow the setting — it stays random to keep self-play running.
+        self._follow_setting = follow_setting
+        self._policy_name: str | None = None
         self._on_event = on_event
         # The primary seat keeps the local match log (loadout attribution); the
         # sparring seat doesn't — it would double-count self-play games.
@@ -114,6 +121,21 @@ class _PlayerConn:
 
     def set_policy(self, policy: Policy | None) -> None:
         self._policy = policy
+
+    def _refresh_policy_from_setting(self) -> None:
+        """Re-read `games.policy` and rebuild this seat's policy if it changed.
+        No-op unless this seat follows the setting (the primary). Called at each
+        match boundary (and each town tick) so a switch lands between games, never
+        mid-match. `manual` => no auto-play policy (the agent tool / UI drives)."""
+        if not self._follow_setting:
+            return
+        name = str(get_value("games.policy", "random") or "random")
+        if name == self._policy_name:
+            return
+        self._policy_name = name
+        self._policy = (
+            None if name == "manual" else make_policy(name, trace=self.trace_step)
+        )
 
     def trace_step(self, step: dict[str, Any]) -> None:
         """Trace sink for this seat's policy: buffer the step for the post-move
@@ -157,11 +179,17 @@ class _PlayerConn:
         await self._send({"type": models.LIST_TABLES})
 
     async def create_table(
-        self, game_id: str, ruleset: dict[str, Any] | None = None
+        self,
+        game_id: str,
+        ruleset: dict[str, Any] | None = None,
+        bot_tier: str | None = None,
     ) -> None:
         msg: dict[str, Any] = {"type": models.CREATE_TABLE, "game_id": game_id}
         if ruleset:
             msg["ruleset"] = ruleset
+        if bot_tier:
+            # Server seats a practice bot at this tier into the other seat.
+            msg["bot_tier"] = bot_tier
         await self._send(msg)
 
     async def join_table(self, table_id: str) -> None:
@@ -254,6 +282,9 @@ class _PlayerConn:
         elif mtype == models.MATCH_INFO:
             self._match = msg
             self._my_seat = None
+            # A new match is the safe boundary to pick up a games.policy switch made
+            # since the last game — never mid-match.
+            self._refresh_policy_from_setting()
             # Declare what plays at this seat (harness version + model) so the
             # replay records it — detached; a failure never blocks the match.
             asyncio.create_task(self._declare_loadout_meta(msg))
@@ -657,6 +688,9 @@ class _PlayerConn:
     async def _town_act(self, msg: dict[str, Any]) -> None:
         """Decide and send this tick's town action (runs as a detached task)."""
         try:
+            # Town is a persistent world with no match boundary, so honor a policy
+            # switch on the next tick instead.
+            self._refresh_policy_from_setting()
             policy = self.ensure_town_policy()
             agent_mode = isinstance(self._policy, AgentPolicy)
             action = await policy.decide(msg, agent_mode)
@@ -766,16 +800,16 @@ class GameServerClient:
         return self._primary is not None and self._primary.account_id is not None
 
     async def connect(self, self_play: bool = False) -> dict[str, Any]:
-        url, token, policy_name = _settings()
+        url, token, _ = _settings()
         if self._primary is None:
             # `manual` => the primary seat is driven by the agent tool / UI, not
             # auto-play. The policy's trace sink is the conn itself (live reasoning
-            # relay + replay upload), so the conn is built first.
-            self._primary = _PlayerConn(url, token, None, self._relay)
-            if policy_name != "manual":
-                self._primary.set_policy(
-                    make_policy(policy_name, trace=self._primary.trace_step)
-                )
+            # relay + replay upload), so the conn is built first. It follows the
+            # games.policy setting: applied here and re-read at each match boundary.
+            self._primary = _PlayerConn(
+                url, token, None, self._relay, follow_setting=True
+            )
+            self._primary._refresh_policy_from_setting()
             try:
                 await self._primary.start()
             except Exception as e:
@@ -825,11 +859,14 @@ class GameServerClient:
             await self._primary.list_tables()
 
     async def create_table(
-        self, game_id: str, ruleset: dict[str, Any] | None = None
+        self,
+        game_id: str,
+        ruleset: dict[str, Any] | None = None,
+        bot_tier: str | None = None,
     ) -> None:
         if not self._primary:
             return
-        await self._primary.create_table(game_id, ruleset)
+        await self._primary.create_table(game_id, ruleset, bot_tier)
         if self._self_play and self._sparring is not None:
             # Wait for the table to exist, then seat the sparring partner into it.
             table_id = await self._await_open_table(game_id)

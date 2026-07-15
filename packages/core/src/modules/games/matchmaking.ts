@@ -8,6 +8,7 @@
 import { toastsStore } from '../../toasts';
 import {
   ensureConnected,
+  gamesCreateBotTable,
   gamesCreateTable,
   gamesJoinTable,
   gamesQueueJoin,
@@ -25,6 +26,19 @@ export async function playVsOwnAgent(gameId: string): Promise<void> {
   try {
     await ensureConnected(true);
     gamesCreateTable(gameId);
+  } catch (err) {
+    report(err);
+  }
+}
+
+/** Casual practice against a server-hosted bot at a chosen difficulty tier. The
+ * node connects on its own account seat (not self-play) and the server fills the
+ * other seat with the bot; the match is unrated. */
+export async function playVsBot(gameId: string, tier: string): Promise<void> {
+  revealBoard();
+  try {
+    await ensureConnected(false);
+    gamesCreateBotTable(gameId, tier);
   } catch (err) {
     report(err);
   }

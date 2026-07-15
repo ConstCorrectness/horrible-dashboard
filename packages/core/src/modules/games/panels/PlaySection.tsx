@@ -10,7 +10,11 @@ import Typography from '@mui/material/Typography';
 import ToggleButton from '@mui/material/ToggleButton';
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 
-import { useSetting } from '../../../settings';
+import Tooltip from '@mui/material/Tooltip';
+import Select from '@mui/material/Select';
+import MenuItem from '@mui/material/MenuItem';
+
+import { useSetting, setSetting } from '../../../settings';
 import { claimChallengeDraft, onChallengeDraft, type ChallengeTarget } from '../challenge-draft';
 import { requestChallenges } from '../challenge-focus';
 import { gamesListTables, useGames, gamesQueueLeave, type TableInfo } from '../game-ws';
@@ -18,6 +22,7 @@ import { type GameCatalogEntry } from '../games-api';
 import {
   hostOpenTable,
   joinTableLive,
+  playVsBot,
   playVsOwnAgent,
   watchTableLive,
   findRankedMatch,
@@ -26,6 +31,15 @@ import { openHarnessFor } from '../selected-game';
 import { ChallengeDraftCard, IncomingOfferCard } from './ChallengeCards';
 import { FirstRunHero } from './FirstRunHero';
 import { GamesMui } from '../mui-theme';
+
+// Practice-bot difficulty tiers (server-hosted opponents). Values match the
+// server's bot tiers; labels pair a difficulty word with the bot's persona.
+const BOT_TIERS: { value: string; label: string }[] = [
+  { value: 'bronze', label: '🥉 Easy · Rusty' },
+  { value: 'silver', label: '🥈 Medium · Circuit' },
+  { value: 'gold', label: '🥇 Hard · Aurum' },
+  { value: 'platinum', label: '💠 Expert · Nemesis' },
+];
 
 // Icon per catalog game on the cards; anything unrecognized gets the die.
 const GAME_ICONS: Record<string, string> = {
@@ -168,7 +182,9 @@ export function PlaySection({
   const [draft, setDraft] = useState<ChallengeTarget | null>(() => claimChallengeDraft());
   const [playMode, setPlayMode] = useState<'casual' | 'ranked'>('casual');
   const [difficulty, setDifficulty] = useState<string>('standard');
+  const [botTier, setBotTier] = useState<string>('bronze');
   const onboarded = useSetting<boolean>('games.onboarded') === true;
+  const policy = useSetting<string>('games.policy') ?? 'random';
 
   useEffect(() => onChallengeDraft(setDraft), []);
 
@@ -361,6 +377,39 @@ export function PlaySection({
                   </ToggleButtonGroup>
                 </div>
 
+                <div>
+                  <Typography
+                    variant="caption"
+                    sx={{ display: 'block', color: 'text.secondary', mb: 0.5, fontWeight: 700 }}
+                  >
+                    <Tooltip
+                      title="How your seat picks moves. Takes effect on your next game — never mid-match."
+                      arrow
+                    >
+                      <span>MOVE POLICY ⓘ</span>
+                    </Tooltip>
+                  </Typography>
+                  <ToggleButtonGroup
+                    value={policy}
+                    exclusive
+                    onChange={(_, val) => val && void setSetting('games.policy', val)}
+                    size="small"
+                  >
+                    <ToggleButton value="random" sx={{ px: 1.5, py: 0.5 }}>
+                      🎲 Random
+                    </ToggleButton>
+                    <ToggleButton value="agent" sx={{ px: 1.5, py: 0.5 }}>
+                      🧠 Agent
+                    </ToggleButton>
+                    <ToggleButton value="bot" sx={{ px: 1.5, py: 0.5 }}>
+                      🤖 Bot
+                    </ToggleButton>
+                    <ToggleButton value="manual" sx={{ px: 1.5, py: 0.5 }}>
+                      🎮 Manual
+                    </ToggleButton>
+                  </ToggleButtonGroup>
+                </div>
+
                 {playMode === 'ranked' && (
                   <div>
                     <Typography
@@ -478,7 +527,14 @@ export function PlaySection({
                       Find Match
                     </Button>
                   ) : (
-                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        gap: '0.5rem',
+                        alignItems: 'center',
+                        flexWrap: 'wrap',
+                      }}
+                    >
                       <Button
                         variant="contained"
                         onClick={() => void playVsOwnAgent(g.id)}
@@ -486,6 +542,30 @@ export function PlaySection({
                       >
                         Play Vs My Agent
                       </Button>
+                      <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'stretch' }}>
+                        <Button
+                          variant="outlined"
+                          color="secondary"
+                          onClick={() => void playVsBot(g.id, botTier)}
+                          sx={{ px: 2, py: 0.6, fontWeight: 800 }}
+                        >
+                          🤖 Test Vs Bot
+                        </Button>
+                        <Tooltip title="Bot difficulty — an unrated practice opponent" arrow>
+                          <Select
+                            value={botTier}
+                            onChange={(e) => setBotTier(e.target.value)}
+                            size="small"
+                            sx={{ fontSize: '0.78rem', '& .MuiSelect-select': { py: 0.6 } }}
+                          >
+                            {BOT_TIERS.map((t) => (
+                              <MenuItem key={t.value} value={t.value} sx={{ fontSize: '0.8rem' }}>
+                                {t.label}
+                              </MenuItem>
+                            ))}
+                          </Select>
+                        </Tooltip>
+                      </div>
                       <Button
                         variant="outlined"
                         onClick={() => void hostOpenTable(g.id)}

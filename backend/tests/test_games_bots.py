@@ -84,6 +84,52 @@ def test_bot_plays_a_full_game_and_stays_pinned() -> None:
     asyncio.run(go())
 
 
+def test_create_table_with_bot_tier_seats_a_practice_bot() -> None:
+    """Practice-vs-bot: a bare create_table carrying `bot_tier` fills the other
+    seat with a server bot and starts the match, so a solo player can test."""
+
+    async def go() -> None:
+        hub = GameHub(move_timeout_s=0)
+        conn = FakeConn()
+        session = hub.connect(conn)
+        await hub.handle(session, {"type": models.AUTH, "token": "alice"})
+        await hub.handle(
+            session,
+            {
+                "type": models.CREATE_TABLE,
+                "game_id": "tictactoe",
+                "ruleset": {"game_id": "tictactoe", "rated": False},
+                "bot_tier": "silver",
+            },
+        )
+        info = await _wait_for(conn, models.MATCH_INFO)
+        assert any(s["is_bot"] for s in info["seats"])
+        table = next(iter(hub._tables.values()))
+        assert table.status == "playing"
+
+    asyncio.run(go())
+
+
+def test_create_table_ignores_an_unknown_bot_tier() -> None:
+    """A bogus tier is ignored — the table stays open for a human/self-play rather
+    than erroring or seating a mystery bot."""
+
+    async def go() -> None:
+        hub = GameHub(move_timeout_s=0)
+        conn = FakeConn()
+        session = hub.connect(conn)
+        await hub.handle(session, {"type": models.AUTH, "token": "alice"})
+        await hub.handle(
+            session,
+            {"type": models.CREATE_TABLE, "game_id": "tictactoe", "bot_tier": "bogus"},
+        )
+        table = next(iter(hub._tables.values()))
+        assert table.status == "open"
+        assert conn.last(models.MATCH_INFO) is None
+
+    asyncio.run(go())
+
+
 def test_bot_tictactoe_takes_the_win() -> None:
     # X (the bot, seat 0) to move with two in a row: minimax must complete the line.
     board = ["X", "X", None, "O", "O", None, None, None, None]

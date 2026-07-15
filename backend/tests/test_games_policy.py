@@ -25,6 +25,7 @@ def test_random_policy_picks_a_legal_action() -> None:
 
 def test_make_policy_selects_type() -> None:
     from backend.modules.games.policy import BotPolicy
+
     assert isinstance(make_policy("random"), RandomPolicy)
     assert isinstance(make_policy("agent"), AgentPolicy)
     assert isinstance(make_policy("bot"), BotPolicy)
@@ -49,7 +50,7 @@ def test_bot_policy_executes_script() -> None:
     )
     steps: list[dict] = []
     policy = BotPolicy(trace=steps.append, load_loadout=lambda _g: loadout_with_bot)
-    
+
     chosen = asyncio.run(policy.choose({"board": []}, LEGAL, "t"))
     assert chosen == "4"
     kinds = [s["kind"] for s in steps]
@@ -102,7 +103,9 @@ def test_bot_policy_executes_script() -> None:
         ],
     )
     steps = []
-    policy = BotPolicy(trace=steps.append, load_loadout=lambda _g: loadout_compile_error)
+    policy = BotPolicy(
+        trace=steps.append, load_loadout=lambda _g: loadout_compile_error
+    )
     chosen = asyncio.run(policy.choose({"board": []}, LEGAL, "t"))
     assert chosen in IDS
     kinds = [s["kind"] for s in steps]
@@ -142,9 +145,6 @@ def test_bot_policy_executes_script() -> None:
     policy = BotPolicy(trace=steps.append, load_loadout=lambda _g: loadout_legal_check)
     chosen = asyncio.run(policy.choose({"board": []}, LEGAL, "t"))
     assert chosen == "4"
-
-
-
 
 
 class _Call:
@@ -221,3 +221,49 @@ def test_agent_policy_falls_back_to_random_without_a_model(monkeypatch) -> None:
     policy = AgentPolicy(fallback=RandomPolicy(random.Random(1)))
     chosen = asyncio.run(policy.choose({"x": 1}, LEGAL))
     assert chosen in IDS
+
+
+def test_primary_seat_refreshes_policy_between_games(monkeypatch) -> None:
+    """The primary seat (follow_setting) re-reads games.policy on demand — the hook
+    that lets a switch land between games without a reconnect — while a seat that
+    doesn't follow the setting keeps whatever it was built with."""
+    from backend.modules.games import client as client_mod
+    from backend.modules.games.policy import BotPolicy
+
+    setting = {"value": "random"}
+    monkeypatch.setattr(
+        client_mod, "get_value", lambda key, default=None: setting["value"]
+    )
+
+    primary = client_mod._PlayerConn(
+        "ws://x", "tok", None, lambda _m: None, follow_setting=True
+    )
+    primary._refresh_policy_from_setting()
+    assert isinstance(primary._policy, RandomPolicy)
+
+    # Switch to agent -> next refresh rebuilds; the applied name is tracked.
+    setting["value"] = "agent"
+    primary._refresh_policy_from_setting()
+    assert isinstance(primary._policy, AgentPolicy)
+    assert primary._policy_name == "agent"
+
+    # Unchanged setting => same object (no needless rebuild).
+    same = primary._policy
+    primary._refresh_policy_from_setting()
+    assert primary._policy is same
+
+    # bot and manual are reachable too; manual clears the auto-play policy.
+    setting["value"] = "bot"
+    primary._refresh_policy_from_setting()
+    assert isinstance(primary._policy, BotPolicy)
+    setting["value"] = "manual"
+    primary._refresh_policy_from_setting()
+    assert primary._policy is None
+
+    # A seat that doesn't follow the setting ignores the switch entirely.
+    sparring = client_mod._PlayerConn(
+        "ws://x", "tok", make_policy("random"), lambda _m: None
+    )
+    setting["value"] = "agent"
+    sparring._refresh_policy_from_setting()
+    assert isinstance(sparring._policy, RandomPolicy)

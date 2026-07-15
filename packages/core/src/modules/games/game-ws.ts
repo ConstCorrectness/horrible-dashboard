@@ -757,6 +757,16 @@ export function gamesCreateTable(gameId: string): void {
   sendChannel('games', 'create_table', { gameId });
 }
 
+/** Start an unrated practice table with a server-hosted bot seated at the given
+ * tier (bronze/silver/gold/platinum) — "test against a bot". */
+export function gamesCreateBotTable(gameId: string, botTier: string): void {
+  sendChannel('games', 'create_table', {
+    gameId,
+    ruleset: { game_id: gameId, rated: false },
+    botTier,
+  });
+}
+
 export function gamesJoinTable(tableId: string): void {
   sendChannel('games', 'join_table', { tableId });
 }
