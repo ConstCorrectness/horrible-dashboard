@@ -70,6 +70,31 @@ read/write is the [file explorer](file-explorer.mdx)'s `GET /files/read` /
 `PUT /files/write` (`workspace-file:` buffers), so the editor's buffer layer is
 URI-agnostic.
 
+### Unsaved-changes guard on close
+
+Closing a buffer with unsaved edits prompts before discarding them, VS Code-style.
+The mechanism is a generic **pane close guard** in the frame engine
+(`layout/close-guards.ts`): a pane registers `registerCloseGuard(instanceId, fn)`,
+and every close path — the area-menu **Close pane**, the dock/floating **✕**, and
+`LayoutController.closePane` (so agent-driven closes are covered too) — routes
+through `closePaneGuarded`, which runs the guard and only dispatches `REMOVE_PANE`
+when it resolves `true`. `BufferView` registers a guard that, when the buffer is
+dirty, shows a `dialogs.choice(...)` prompt mirroring VS Code's exactly — _"Do you
+want to save the changes you made to_ `{title}`_?"_ / _"Your changes will be lost
+if you don't save."_ — with **Save** (default) / **Don't Save** / **Cancel**. The save
+must succeed for the close to proceed; a failed or cancelled save keeps the buffer
+open. Like VS Code there's no separate "Save As…" button: a **sourceless (untitled)
+buffer has nowhere to write, so its Save falls through to the Save As flow** —
+`saveAs()` prompts for a destination (a `workspace-file:` path, or a new `note:`
+for note/untitled buffers) and writes there without re-pointing the closing buffer.
+`dialogs.choice` is the general multi-button dialog kind (alongside
+`prompt`/`confirm`); the `<Dialogs />` component renders it.
+
+Closing the whole tab/window is guarded separately: dirty buffers flag themselves
+via `setPaneDirty`, and a `beforeunload` handler triggers the browser's native
+unsaved-changes prompt when `anyPaneDirty()` — the async choice dialog can't run
+during unload. (A native Tauri window-close confirmation can gate on the same flag.)
+
 ## Agent integration
 
 **Status: implemented (C4).** Declared on the `editor.buffer` panel; a live buffer
@@ -106,12 +131,18 @@ real safety boundary. Buffer controllers gain a `propose(content)` method
 ### Inline autosuggest
 
 Opt-in, off by default — the `editor.autosuggest` setting. When on, after a typing
-pause the buffer requests a short fill-in completion (`POST /api/agent/complete`,
-the local model via `providers.generate`) and renders it as ghost text at the
-cursor; **Tab** accepts, **Esc** dismisses. In-flight requests are debounced and
-cancelled on further typing; suggestions are suppressed while an edit proposal is
-under review. The CodeMirror extension is `autosuggest.ts`, toggled live via a
-compartment in `BufferView.tsx`.
+pause the buffer shows ghost text at the cursor; **Tab** accepts, **Esc**
+dismisses. **The suggestion is a prefix lookup into the DB symbol index** (the tail
+of the single best-matching symbol for the token under the cursor — see
+[Completion is a database lookup](#completion-is-a-database-lookup)), **not a
+model** — so there's no round-trip latency and no hallucinated multi-line guesses.
+In-flight requests are debounced and cancelled on further typing; suggestions are
+suppressed while an edit proposal is under review. The CodeMirror extension is
+`autosuggest.ts` (ghost-text rendering + Tab/Esc), its `fetch` wired to
+`dbGhostFetch` in `symbolCompletion.ts`; toggled live via a compartment in
+`BufferView.tsx`. (The old model path — `POST /api/agent/complete` via
+`providers.generate` — is no longer in the completion loop; the model is reserved
+for the agent/orchestrator's deliberate edits.)
 
 ## Language intelligence (LSP) & deeper agent editing
 
@@ -124,14 +155,16 @@ Copilot side by side:
 | Layer       | Source                          | Provides                                                              | Latency        |
 | ----------- | ------------------------------- | -------------------------------------------------------------------- | -------------- |
 | **L1 local** | CodeMirror in the browser       | syntax, brackets, search/replace, multi-cursor, indentation          | instant        |
-| **L2 LSP**   | backend language-server process | diagnostics, completion list, hover, go-to-def, references, rename, format | ~10–100 ms |
-| **L3 LLM**   | backend local model             | inline ghost text + agent edits, **grounded by L2**                  | ~0.1–n s       |
+| **L1.5 DB**  | backend symbol index (SQLite)   | prefix completions (dropdown + ghost text) from a `code_symbols` table | sub-ms (indexed SQL) |
+| **L2 LSP**   | backend language-server process | diagnostics, type-aware/member completion, hover, go-to-def, references, rename, format | ~10–100 ms |
+| **L3 LLM**   | backend local model             | agent/orchestrator edits (read, rename, alter, format selection) — **not** completion | ~0.1–n s       |
 
-L3 ships (the ghost-text autosuggest above + the agent edit tools). L1 is mostly
-CodeMirror's `basicSetup`. **L2 (LSP) now covers** the transport plus
-**diagnostics**, **completion**, **hover**, **go-to-definition**, **rename**, and
-**references** — with formatting layering onto the same pipe next. L2 also now
-**grounds L3**: the ghost-text prompt and the agent both read LSP state (see below).
+L1 is mostly CodeMirror's `basicSetup`. **L1.5** is the DB symbol lookup that backs
+both completion surfaces (see [below](#completion-is-a-database-lookup)). **L2
+(LSP) covers** the transport plus **diagnostics**, **type-aware completion**,
+**hover**, **go-to-definition**, **rename**, and **references** — with formatting
+layering onto the same pipe next. **L3 (the model) is no longer in the completion
+loop**: it drives the agent/orchestrator's deliberate edits, not typeahead.
 
 ### Where the LSP runs: the backend, over a `/ws` `lsp` channel (implemented)
 
@@ -222,8 +255,9 @@ you've imported them. The editor ships a curated **framework-import completion s
 `plt`, `nn`, `DataFrame`, `Tensor`, `AutoModelForCausalLM`, `LLM`, …) offers it in any
 `.py` buffer, and accepting **inserts the symbol and prepends the matching `import`**
 (deduped, skipped when already imported). It merges into the same completion popup as
-the LSP results but ranks below them, works even when no language server is running, and
-is toggled by the **`editor.frameworkImports`** setting (on by default).
+the LSP and DB-symbol results but ranks below them (`boost: -99`), works even when no
+language server is running, and is toggled by the **`editor.frameworkImports`** setting
+(on by default).
 
 Those suggestions are **gated to installed packages and annotated with the version**: a
 backend service (`backend/modules/lsp/pyenv.py`, `GET /api/editor/python-env`) resolves
@@ -235,6 +269,37 @@ buffer. Only installed packages are suggested, and the popup shows the version
 interpreter and persists a **version snapshot** (`editor.indexedPackages`), flagging when
 the installed versions drift from it — so it's clear which library versions intellisense
 is running against.
+
+### Completion is a database lookup
+
+Typeahead completion — **both** the dropdown popup and the inline ghost text — is a
+**fast prefix lookup into a symbol database, never a model**. The model (the
+agent/orchestrator) is reserved for deliberate edits (read editors, rename, alter
+code, format the selection); it is not in the completion loop, so completion has no
+model latency.
+
+- **The index.** A `code_symbols` table (`symbol, lang, kind, detail, module,
+  source, freq`) in the built-in `.data/app.db` SQLite file — the same file the
+  library catalog uses, so the `app` database connection can browse it. Indexed on
+  `(lang, symbol)` so `symbol LIKE 'req%'` is sub-millisecond
+  (`backend/modules/lsp/symbol_store.py`).
+- **What's indexed.** Python **builtins + keywords** are seeded once; each open
+  buffer's symbols are **harvested with `ast`** (parse only, no import → no side
+  effects) into defs, classes, params, assigned names, and imported names
+  (`backend/modules/lsp/symbol_index.py`). The client pushes a buffer to
+  `POST /api/editor/symbols/index` on open and on a debounced idle after edits;
+  each push **replaces** that source's rows so its symbols never go stale.
+- **The lookup.** `GET /api/editor/complete?lang=&prefix=&limit=` runs the ranked
+  prefix query (freq → shortest → alpha). On the client, `symbolCompletion.ts`
+  exposes `dbSymbolSource` (a `@codemirror/autocomplete` source merged into the
+  same popup as the LSP, `boost: -50`) and `dbGhostFetch` (the ghost-text
+  producer). The DB source **bails on member access** (`obj.attr`) — a prefix index
+  has no type info, so **member completion stays with the LSP** (L2). The DB source
+  fills in instantly (and while the LSP warms up) for plain identifier prefixes.
+
+**Division of labor:** L1.5 (DB) drives identifier-prefix completion + ghost text;
+**L2 (LSP) drives type-aware / member completion**; the framework-import source
+adds not-yet-imported library symbols; the **model does none of it**.
 
 A small **by-URI registry** (`editor/lsp-registry.ts`, keyed by the buffer's
 `workspace-file:` source URI — the same key the [agent edit tools](#agent-integration)
@@ -292,19 +357,20 @@ existing accept/decline `unifiedMergeView` renders them per-chunk unchanged — 
 the tool payload narrows from "whole doc" to surgical edits. This is what lets the
 agent edit a large file with a small local model.
 
-### LSP-grounded ghost text
+### Ghost text (superseded: was LSP-grounded model, now a DB lookup)
 
-**Status: implemented.** The ghost-text prompt was `prefix<CURSOR>suffix`; it is now
-enriched with **L2 context** — the LSP's completion candidates in scope and the
-hover type/signature at the cursor — so the local model suggests code that actually
-resolves instead of hallucinating symbols. Before each `/agent/complete` request the
-buffer pulls `grounding(offset)` from its LSP client (a parallel
-`completion`+`hover` round-trip), and `CompleteRequest` carries the `completions`
-list and `hover` text into the prompt (`_grounding` in `routes.py`). Only code
-buffers with a server get grounded; notes fall back to the plain prompt. The split
-stays clean: **LSP drives the dropdown completion list, the LLM drives multi-token
-inline ghost text**, now grounded. (A dedicated small code model for
-`/agent/complete` is worth considering — see [agent chat](agent-chat.mdx).)
+**Status: reworked.** Ghost text used to be a **model** completion
+(`/agent/complete` via `providers.generate`), grounded with LSP context to reduce
+hallucination. It was **too slow** — a full model round-trip per suggestion. It is
+now a **prefix lookup into the DB symbol index** (`dbGhostFetch` in
+`symbolCompletion.ts` → `GET /api/editor/complete`): the tail of the single
+best-matching symbol for the token at the cursor, or nothing when there's no
+confident match. No model, no round-trip. See [Completion is a database
+lookup](#completion-is-a-database-lookup). The split is now: **L1.5 (DB) drives
+identifier completion + ghost text, L2 (LSP) drives type-aware/member completion,
+and the model drives only the agent/orchestrator's deliberate edits** (below). The
+`/agent/complete` endpoint + `_grounding` remain in the agent module but are no
+longer wired to the editor.
 
 ### The agent reading & watching the buffer
 

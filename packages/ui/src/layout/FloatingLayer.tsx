@@ -5,7 +5,7 @@
  * close. Not OS windows — the phase-2 shell may promote them.
  */
 import type { RefObject } from 'react';
-import { layoutStore, resolveView, type FloatingPane } from '@horrible/core';
+import { closePaneGuarded, layoutStore, resolveView, type FloatingPane } from '@horrible/core';
 
 import { PaneHost } from './PaneHost';
 
@@ -111,12 +111,7 @@ export function FloatingLayer({
                   className="frame-floating-btn"
                   title="Close"
                   onPointerDown={(e) => e.stopPropagation()}
-                  onClick={() =>
-                    layoutStore.dispatch({
-                      type: 'REMOVE_PANE',
-                      instanceId: float.pane.instanceId,
-                    })
-                  }
+                  onClick={() => void closePaneGuarded(float.pane.instanceId)}
                 >
                   ✕
                 </button>

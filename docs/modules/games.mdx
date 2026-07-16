@@ -109,6 +109,20 @@ the **Games** hub (`games.lobby`) below it, and Agent Thoughts in the
 (hidden-by-default) right dock. The board's live match view lands in the
 standalone board pane via the `revealBoard()` focus path above.
 
+### DashArena workspace
+
+**DashArena** (`dasharena`, 🏟 in the workspace tab strip) is the game-tuned
+preset, contributed by the games module itself (`ModuleManifest.frames` in
+`modules/games/index.tsx`). It's a **three-column arena** with every core game
+pane visible at once and no tabs: the **Games** hub (`games.lobby`, pick a game /
+find a match) on the left, the **Game Board** (`games.board`) as the central
+stage with **Build your agent** (`games.loadout`) docked below it, and the
+**Agent Thoughts** commentary column (`games.thoughts`) on the right. The
+auxiliary `tool` panels — Ladder, Replays, Players, Profile, Challenges — aren't
+pre-placed; they're summoned on demand from the left **activity rail** (each is a
+`role: 'tool'` view, so it appears there automatically). Where Coding Harnesses is
+tuned for authoring, DashArena is tuned for watching your agent compete.
+
 The **Play view is gamified**: each catalog game renders as a card with a
 **▶ Play** button (self-play table, auto-connect) and a **🎯 challenges
 shortcut** that opens the Challenges panel *pre-set to that game*
@@ -920,16 +934,23 @@ point. Signing in with the **same GitHub account on both is fully supported** (s
 
 ### Panels
 
-The hub folds Ladder / Challenges / Replays / Players / Profile in as internal
-tabs; only the true companions (harness, thoughts, board) remain
-[region strips](../architecture/panel-groups.mdx) / dockable tools.
+Ladder / Challenges / Replays / Players / Profile are **standalone `tool` panels
+on the left activity rail** (they used to be folded into the hub as internal
+tabs); the Games hub itself is now just the Play/matchmaking view. Docks show one
+tool at a time — the rail switches between them, there is no in-dock tab strip
+(see [windowing](../architecture/windowing.mdx)).
 
 | Panel | Id | Role | What |
 | --- | --- | --- | --- |
-| Games hub | `games.lobby` | document; hosts the regions | Tabs: Play (matchmaking, first-run card, open tables) / Ladder / Challenges / Replays / Players / Profile. Connection is implicit. |
-| Game board | `games.board` | document; hub bottom region (`v`) | Live spectator board (dispatches by game type); auto-opens on match start; stateful idle/connecting/queue view. |
-| Agent harness | `games.loadout` | tool (left dock); hub region (`h`) | Context + tools up front; dry run; versions/model/sample-obs behind the Advanced fold. |
-| Agent thoughts | `games.thoughts` | tool (right dock); hub region (`a`) | Your agent's live reasoning feed. |
+| Games hub | `games.lobby` | document | The Play view: games library, matchmaking, first-run card, open tables. Connection is implicit. |
+| Game board | `games.board` | document | Live spectator board (dispatches by game type); auto-opens on match start; stateful idle/connecting/queue view. |
+| Agent harness | `games.loadout` | document (`editor`) | Build your agent: context + tools up front; dry run; versions/model/sample-obs behind the Advanced fold. |
+| Agent thoughts | `games.thoughts` | document | Your agent's live reasoning feed. |
+| Ladder | `games.ladder` | tool (left) | Per-game leaderboard. |
+| Challenges | `games.challenges` | tool (left) | The challenge track. |
+| Replays | `games.replays` | tool (left) | Browse finished matches. |
+| Players | `games.players` | tool (left) | The roster of known players. |
+| Profile | `games.profile` | tool (left) | Your player profile. |
 | Replay viewer | `games.replay` | document | Scrub a finished match with both seats' reasoning. |
 | Arcade fighter | `games.arcade` | document | Human-playable fighter cabinet. |
 | AgentTown | `games.town` | document | The fish tank: spawn your resident, watch the town, whisper nudges. |
@@ -941,7 +962,7 @@ tabs; only the true companions (harness, thoughts, board) remain
 - `games.openBoard` — open the board.
 - `games.openLoadout` — edit your agent harness.
 - `games.openLeaderboard` / `games.openChallenges` / `games.openReplays` /
-  `games.openRoster` / `games.openProfile` — open the hub on that tab.
+  `games.openRoster` / `games.openProfile` — open that standalone tool panel.
 - `games.restartOnboarding` — clear `games.onboarded` and show the first-run card.
 - `games.openArcade` — the human-playable fighter.
 - `games.openTown` — visit AgentTown.

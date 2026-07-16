@@ -29,6 +29,26 @@ export interface ConfirmOptions {
   danger?: boolean;
 }
 
+/** One button of a multi-choice dialog (e.g. Save / Don't Save / Cancel). */
+export interface ChoiceButton {
+  label: string;
+  /** The value `choice(...)` resolves to when this button is picked. */
+  value: string;
+  /** Destructive styling (red). */
+  danger?: boolean;
+  /** The default action — autofocused and triggered by Enter. */
+  primary?: boolean;
+}
+
+export interface ChoiceOptions {
+  title: string;
+  message?: string;
+  /** Buttons rendered left-to-right. Pick one to resolve with its `value`. */
+  buttons: ChoiceButton[];
+  /** Value resolved on Esc / backdrop dismiss. Defaults to null. */
+  cancelValue?: string | null;
+}
+
 interface ActivePrompt extends PromptOptions {
   id: string;
   kind: 'prompt';
@@ -41,7 +61,13 @@ interface ActiveConfirm extends ConfirmOptions {
   resolve: (value: boolean) => void;
 }
 
-export type ActiveDialog = ActivePrompt | ActiveConfirm;
+interface ActiveChoice extends ChoiceOptions {
+  id: string;
+  kind: 'choice';
+  resolve: (value: string | null) => void;
+}
+
+export type ActiveDialog = ActivePrompt | ActiveConfirm | ActiveChoice;
 
 const listeners = new Set<(dialog: ActiveDialog | null) => void>();
 let queue: ActiveDialog[] = [];
@@ -91,6 +117,14 @@ export const dialogsStore = {
     });
   },
 
+  /** Ask a multi-way question (Save / Don't Save / Cancel, …). Resolves to the
+   * picked button's `value`, or `cancelValue` (default null) if dismissed. */
+  choice(options: ChoiceOptions): Promise<string | null> {
+    return new Promise((resolve) => {
+      enqueue({ ...options, id: newId(), kind: 'choice', resolve });
+    });
+  },
+
   /** Settle a prompt dialog with the entered value (or null on cancel). */
   resolvePrompt(id: string, value: string | null): void {
     const dialog = queue.find((d) => d.id === id);
@@ -108,10 +142,20 @@ export const dialogsStore = {
       dialog.resolve(value);
     }
   },
+
+  /** Settle a choice dialog with the picked value (or the cancel value). */
+  resolveChoice(id: string, value: string | null): void {
+    const dialog = queue.find((d) => d.id === id);
+    if (dialog?.kind === 'choice') {
+      settle(id);
+      dialog.resolve(value);
+    }
+  },
 };
 
 /** Convenience helpers mirroring the global functions they replace. */
 export const dialogs = {
   prompt: dialogsStore.prompt.bind(dialogsStore),
   confirm: dialogsStore.confirm.bind(dialogsStore),
+  choice: dialogsStore.choice.bind(dialogsStore),
 };

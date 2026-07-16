@@ -27,6 +27,34 @@ import { TownPanel } from './panels/TownPanel';
 export const gamesModule: ModuleManifest = {
   id: 'games',
   title: 'Games',
+  // DashArena: the game-tuned workspace. A three-column arena with the Games hub
+  // (pick a game / find a match) on the left, the GameBoard stage in the middle
+  // with "Build your agent" docked below it, and the Agent Thoughts commentary
+  // column on the right — every core game pane visible at once, no tabs. The
+  // auxiliary tools (Ladder, Replays, Players, Profile, Challenges) are summoned
+  // on demand from the left activity rail rather than pre-stacked here.
+  frames: [
+    {
+      id: 'dasharena',
+      name: 'DashArena',
+      icon: '🏟',
+      frame: {
+        center: {
+          split: 'row',
+          sizes: [0.27, 0.48, 0.25],
+          children: [
+            { pane: 'games.lobby' },
+            {
+              split: 'column',
+              sizes: [0.62, 0.38],
+              children: [{ pane: 'games.board' }, { pane: 'games.loadout' }],
+            },
+            { pane: 'games.thoughts' },
+          ],
+        },
+      },
+    },
+  ],
   panels: [
     {
       id: 'games.lobby',

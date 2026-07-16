@@ -1,10 +1,15 @@
 /**
- * One fixed tool dock (left/right/bottom). Tools stack as tabs in the dock
- * header, one visible at a time; the visible tool renders with its region
- * strips. Hidden entirely when not visible — the activity rail and the
- * `dock.toggle:*` commands re-open it.
+ * One fixed tool dock (left/right/bottom). A dock shows exactly **one** tool at
+ * a time — its title in the header, its body below with region strips. There is
+ * no in-dock tab strip: the activity rail is the single tool switcher (clicking
+ * a rail glyph makes that tool the dock's active one via `SET_ACTIVE_TOOL`,
+ * which also reveals the dock). A dock can still hold several tools in its
+ * `tools` list; only the active one is visible, and the rail cycles between
+ * them. Hidden entirely when not visible — the rail and the `dock.toggle:*`
+ * commands re-open it.
  */
 import {
+  closePaneGuarded,
   layoutStore,
   resolveView,
   toggleDock,
@@ -59,60 +64,21 @@ export function Dock({ side, dock }: { side: DockSide; dock: DockState }) {
       {(side === 'right' || side === 'bottom') && handle}
       <div className="frame-dock-content">
         <div className="frame-dock-header">
-          {side === 'right' ? (
-            <div className="frame-dock-title-container" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flex: 1, minWidth: 0 }}>
-              {resolveView(active.viewId)?.icon ? <span>{resolveView(active.viewId)!.icon}</span> : null}
-              <span className="frame-dock-title" style={{ fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {resolveView(active.viewId)?.title ?? active.viewId}
-              </span>
-              <button
-                className="frame-dock-tab-close"
-                title={`Close ${resolveView(active.viewId)?.title ?? active.viewId}`}
-                style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--text-dim)' }}
-                onClick={() =>
-                  layoutStore.dispatch({ type: 'REMOVE_PANE', instanceId: active.instanceId })
-                }
-              >
-                ✕
-              </button>
-            </div>
-          ) : (
-            <div className="frame-dock-tabs">
-              {dock.tools.map((tool) => {
-                const decl = resolveView(tool.viewId);
-                return (
-                  <span
-                    key={tool.instanceId}
-                    className={`frame-dock-tab${tool.instanceId === active.instanceId ? ' active' : ''}`}
-                  >
-                    <button
-                      className="frame-dock-tab-label"
-                      title={decl?.title ?? tool.viewId}
-                      onClick={() =>
-                        layoutStore.dispatch({
-                          type: 'SET_ACTIVE_TOOL',
-                          side,
-                          instanceId: tool.instanceId,
-                        })
-                      }
-                    >
-                      {decl?.icon ? <span className="frame-dock-tab-icon">{decl.icon}</span> : null}
-                      <span>{decl?.title ?? tool.viewId}</span>
-                    </button>
-                    <button
-                      className="frame-dock-tab-close"
-                      title={`Close ${decl?.title ?? tool.viewId}`}
-                      onClick={() =>
-                        layoutStore.dispatch({ type: 'REMOVE_PANE', instanceId: tool.instanceId })
-                      }
-                    >
-                      ✕
-                    </button>
-                  </span>
-                );
-              })}
-            </div>
-          )}
+          <div className="frame-dock-title-container">
+            {resolveView(active.viewId)?.icon ? (
+              <span className="frame-dock-title-icon">{resolveView(active.viewId)!.icon}</span>
+            ) : null}
+            <span className="frame-dock-title">
+              {resolveView(active.viewId)?.title ?? active.viewId}
+            </span>
+            <button
+              className="frame-dock-tab-close"
+              title={`Close ${resolveView(active.viewId)?.title ?? active.viewId}`}
+              onClick={() => void closePaneGuarded(active.instanceId)}
+            >
+              ✕
+            </button>
+          </div>
           <button
             className="frame-dock-btn"
             title="Hide dock"

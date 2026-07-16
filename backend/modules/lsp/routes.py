@@ -16,7 +16,7 @@ import os
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from backend.modules.lsp import pyenv
+from backend.modules.lsp import pyenv, symbol_index, symbol_store
 
 router = APIRouter(prefix="/editor", tags=["editor"])
 
@@ -44,3 +44,60 @@ async def python_env(path: str = "") -> PythonEnv:
         root=root or (start if start and os.path.isdir(start) else ""),
         packages=dict(packages),
     )
+
+
+# --- Completion symbol index -------------------------------------------------
+#
+# The editor's "intellisense" is a prefix lookup into a DB symbol index, not a
+# model. The client pushes each open buffer's harvested symbols here, then queries
+# `/editor/complete` on every keystroke (a plain indexed SQL prefix scan). See
+# backend/modules/lsp/symbol_store.py and docs/modules/editor.mdx.
+
+
+class IndexRequest(BaseModel):
+    """A buffer to (re)index: `source` is the buffer URI (the index key), `lang` the
+    LSP language id (only `python` is harvested in v1), `text` its current content."""
+
+    source: str
+    lang: str
+    text: str
+
+
+class IndexResult(BaseModel):
+    count: int
+
+
+class CompletionItem(BaseModel):
+    symbol: str
+    kind: str
+    detail: str = ""
+    module: str = ""
+
+
+class CompletionResult(BaseModel):
+    items: list[CompletionItem]
+
+
+@router.post("/symbols/index")
+async def index_symbols(req: IndexRequest) -> IndexResult:
+    """Harvest a buffer's symbols and replace its rows in the index. Offloaded (parse
+    + SQLite writes) so the event loop stays free."""
+    if req.lang == "python":
+        rows = await asyncio.to_thread(symbol_index.harvest_python, req.text)
+    else:
+        rows = []
+    count = await asyncio.to_thread(
+        symbol_store.replace_source, req.source, req.lang, rows
+    )
+    return IndexResult(count=count)
+
+
+@router.get("/complete")
+async def complete(
+    lang: str, prefix: str, limit: int = 25, member_of: str = ""
+) -> CompletionResult:
+    """The hot completion path: ranked prefix matches from the symbol index. No model."""
+    items = await asyncio.to_thread(
+        symbol_store.query, lang, prefix, limit, member_of or None
+    )
+    return CompletionResult(items=[CompletionItem(**it) for it in items])

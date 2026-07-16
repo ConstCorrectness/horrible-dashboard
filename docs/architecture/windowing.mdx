@@ -34,9 +34,12 @@ a custom layout engine that hybridizes VS Code and Blender:
   declares `role: 'document' | 'tool' | 'widget'`:
   - **document** — lives in center areas; documents **stack as tabs** (editor
     buffers, notebooks, the SQL console, scratch, the games lobby/board…);
-  - **tool** — lives **only in the docks**, one visible per dock (file explorer,
-    outline, terminal, REPL, agent chat, observability…); `defaultDock` picks
-    its side;
+  - **tool** — lives **only in the docks** (file explorer, outline, terminal,
+    REPL, agent chat, observability…); `defaultDock` picks its side. A dock shows
+    **exactly one tool at a time** — its title in the dock header, no in-dock tab
+    strip. The **activity rail is the single tool switcher**: a dock may hold
+    several tools in its list, and clicking a rail glyph makes that one active
+    (and reveals the dock);
   - **widget** — takes a center **area of its own**, no tab strip (dashboard
     widgets, clubhouse, commons…).
 
@@ -47,8 +50,9 @@ a custom layout engine that hybridizes VS Code and Blender:
   region state, focus, fullscreen. Switching workspaces switches the whole
   picture. `FramePreset`s (contributed via `ModuleManifest.frames`) seed
   stable-id workspaces on first activation — **Dashboard**, **Scripting**,
-  **Coding Harnesses**, plus module-contributed ones (Training, Notebook,
-  Orchestration); `layout.reset` restores the preset.
+  **Coding Harnesses**, plus module-contributed ones (**DashArena** from the
+  games module, Training, Notebook, Orchestration); `layout.reset` restores the
+  preset.
 
 ## Model
 

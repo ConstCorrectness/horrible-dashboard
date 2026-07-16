@@ -26,17 +26,19 @@ import {
   useAgentContext,
 } from '../../agent-context';
 import { ApiError } from '../../api';
+import { dialogs } from '../../dialogs';
+import { registerCloseGuard, setPaneDirty } from '../../layout/close-guards';
 import { getLocus, setLocus, subscribeLocus } from '../../locus';
 import { registry } from '../../registry';
 import { usePaneParams } from '../../panes';
 import { useSetting } from '../../settings';
-import { completeCode } from '../agent/api';
 import { autosuggest } from './autosuggest';
 import { registerBuffer, type BufferSnapshot } from './buffers';
 import { openBuffer, setActiveBufferSource } from './index';
 import { dirOf, lspExtension, lspLanguageId } from './lsp';
-import { getLspClient, readDiagnostics } from './lsp-registry';
-import { loadSource, saveSource } from './sources';
+import { readDiagnostics } from './lsp-registry';
+import { createNote, loadSource, saveSource } from './sources';
+import { dbGhostFetch, indexBuffer, indexBufferNow } from './symbolCompletion';
 
 const FILE_URI = 'workspace-file:';
 
@@ -98,15 +100,6 @@ function languageForHint(hint: string | null, title: string) {
   return languageFor(title);
 }
 
-/** A coarse language hint for the completion prompt. */
-function languageHint(title: string): string {
-  if (/\.tsx?$/i.test(title)) return 'TypeScript';
-  if (/\.jsx?$|\.mjs$|\.cjs$/i.test(title)) return 'JavaScript';
-  if (/\.py$/i.test(title)) return 'Python';
-  if (/\.rs$/i.test(title)) return 'Rust';
-  return 'Markdown';
-}
-
 export function BufferView() {
   const params = usePaneParams();
   const source = typeof params.source === 'string' ? params.source : null;
@@ -153,6 +146,14 @@ export function BufferView() {
   const instanceIdRef = useRef(instanceId);
   instanceIdRef.current = instanceId;
   const isProgrammaticRef = useRef(false);
+  // The LSP language id of the loaded buffer ('' when unknown), read live by the
+  // mount-time change listener so it can push edits to the symbol index.
+  const indexLangRef = useRef('');
+  // Live dirty/title, read by the close guard (registered once, called on close).
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  const titleRef = useRef(title);
+  titleRef.current = title;
 
   // Mount CodeMirror once.
   useEffect(() => {
@@ -180,11 +181,15 @@ export function BufferView() {
               setDirty(true);
               const src = sourceRef.current;
               if (src) {
+                const content = u.state.doc.toString();
                 unsavedCache.set(src, {
-                  content: u.state.doc.toString(),
+                  content,
                   dirty: true,
                   proposing: false, // user edits drop proposing state in our cache model
                 });
+                // Keep the buffer's symbols current in the completion index
+                // (debounced; harvest is a no-op for languages we don't parse yet).
+                if (indexLangRef.current) indexBuffer(src, indexLangRef.current, content);
               }
             }
             // Track the focused buffer as "active" (Mod-s etc. route through the
@@ -270,6 +275,12 @@ export function BufferView() {
         });
         isProgrammaticRef.current = false;
 
+        // Seed the completion index with this buffer's symbols right away, and
+        // remember its language for the live change listener above.
+        const indexLang = lspLanguageId(loaded.title) ?? '';
+        indexLangRef.current = indexLang;
+        if (indexLang) indexBufferNow(source, indexLang, insertContent);
+
         setDirty(initialDirty);
         setProposing(isProposing);
         setStatus(null);
@@ -317,12 +328,14 @@ export function BufferView() {
     return subscribeLocus(apply);
   }, [source]);
 
-  const save = async () => {
+  // Returns whether the buffer was saved — the close guard uses this to decide
+  // whether closing may proceed (a failed save must not silently discard work).
+  const save = async (): Promise<boolean> => {
     const view = viewRef.current;
-    if (!view || !source) {
-      // A sourceless scratch buffer can't be saved yet (C3 adds "save as new note").
-      setStatus(source ? null : 'Unsaved buffer — no source');
-      return;
+    if (!view) return false;
+    if (!source) {
+      // A sourceless scratch buffer has nowhere to save in place — Save As it.
+      return saveAs();
     }
     try {
       setStatus('Saving…');
@@ -332,6 +345,7 @@ export function BufferView() {
       unsavedCache.delete(source);
       setStatus('Saved');
       setTimeout(() => setStatus((s) => (s === 'Saved' ? null : s)), 1200);
+      return true;
     } catch (err) {
       setStatus(
         err instanceof ApiError && err.status === 409
@@ -340,6 +354,51 @@ export function BufferView() {
             ? err.message
             : String(err),
       );
+      return false;
+    }
+  };
+
+  // Save the current content to a **new** destination (VS Code's "Save As…"):
+  // a workspace file path for file buffers, or a new note otherwise. Writes a
+  // copy and leaves this buffer's own source untouched — used from the close
+  // prompt and for sourceless buffers that have nowhere else to go. Returns
+  // whether it saved.
+  const saveAs = async (): Promise<boolean> => {
+    const view = viewRef.current;
+    if (!view) return false;
+    const content = view.state.doc.toString();
+    const FILE = 'workspace-file:';
+    try {
+      if (source && source.startsWith(FILE)) {
+        const dest = await dialogs.prompt({
+          title: 'Save As',
+          message: 'Path to save a copy to',
+          defaultValue: source.slice(FILE.length),
+          confirmLabel: 'Save',
+        });
+        const path = dest?.trim();
+        if (!path) return false;
+        setStatus('Saving…');
+        await saveSource(`${FILE}${path}`, content);
+      } else {
+        const name = await dialogs.prompt({
+          title: 'Save As note',
+          message: 'Title for the new note',
+          defaultValue: title === 'Untitled' ? '' : title,
+          placeholder: 'Untitled',
+          confirmLabel: 'Save',
+        });
+        const noteTitle = name?.trim();
+        if (!noteTitle) return false;
+        setStatus('Saving…');
+        await createNote(noteTitle, content);
+      }
+      setStatus('Saved a copy');
+      setTimeout(() => setStatus((s) => (s === 'Saved a copy' ? null : s)), 1500);
+      return true;
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : String(err));
+      return false;
     }
   };
   // Show an agent-proposed edit as an inline diff (original vs proposed). The user
@@ -401,6 +460,48 @@ export function BufferView() {
     }
   };
 
+  // Close guard: an unsaved buffer prompts before it's removed. Mirrors VS Code's
+  // prompt exactly — Save (default) / Don't Save / Cancel. An untitled buffer has
+  // nowhere to write, so its Save runs the Save As flow (`save()` falls through);
+  // VS Code labels that button "Save" too rather than offering a separate one.
+  // Returns whether the close proceeds.
+  const closeGuard = async (): Promise<boolean> => {
+    if (!dirtyRef.current) return true;
+    const choice = await dialogs.choice({
+      title: `Do you want to save the changes you made to ${titleRef.current}?`,
+      message: "Your changes will be lost if you don't save.",
+      buttons: [
+        { label: 'Save', value: 'save', primary: true },
+        { label: "Don't Save", value: 'dontSave' },
+        { label: 'Cancel', value: 'cancel' },
+      ],
+      cancelValue: 'cancel',
+    });
+    switch (choice) {
+      case 'save':
+        return save();
+      case 'dontSave':
+        return true;
+      default:
+        return false; // Cancel / Esc / backdrop — keep the buffer open
+    }
+  };
+  const closeGuardRef = useRef(closeGuard);
+  closeGuardRef.current = closeGuard;
+
+  // Register the guard for this pane instance (the frame's close paths run it),
+  // and flag the buffer dirty for the app-exit (beforeunload) warning.
+  useEffect(() => {
+    if (!instanceId) return;
+    return registerCloseGuard(instanceId, () => closeGuardRef.current());
+  }, [instanceId]);
+  useEffect(() => {
+    const id = instanceId ?? source;
+    if (!id) return;
+    setPaneDirty(id, dirty);
+    return () => setPaneDirty(id, false);
+  }, [instanceId, source, dirty]);
+
   // A live snapshot for the agent (kept current via a ref reassigned each render).
   const snapshotRef = useRef<() => BufferSnapshot>(() => ({
     uri: '(unsaved)',
@@ -437,26 +538,11 @@ export function BufferView() {
     const ext =
       autosuggestOn && !proposing
         ? autosuggest({
-            fetch: async (prefix, suffix, signal) => {
-              // Ground the prompt with L2 (LSP) context — the symbols in scope and
-              // the type at the cursor — so the local model suggests code that
-              // resolves instead of hallucinating. Only code buffers have a client;
-              // notes fall back to the plain prefix/suffix prompt.
-              const client = source ? getLspClient(source) : undefined;
-              const grounding = client
-                ? await client.grounding(prefix.length).catch(() => null)
-                : null;
-              return completeCode(
-                {
-                  prefix,
-                  suffix,
-                  language: languageHint(title),
-                  completions: grounding?.completions,
-                  hover: grounding?.hover || undefined,
-                },
-                signal,
-              );
-            },
+            // Ghost text is a prefix lookup into the DB symbol index — the same
+            // index the dropdown uses — not a model. It returns the tail of the
+            // single best-matching symbol for the token at the cursor, so there's
+            // no round-trip latency and no hallucinated multi-line guesses.
+            fetch: (prefix, suffix) => dbGhostFetch(prefix, suffix, lspLanguageId(title) ?? ''),
           })
         : [];
     view.dispatch({ effects: autoRef.current.reconfigure(ext) });
@@ -475,7 +561,7 @@ export function BufferView() {
         }
       },
       propose: (content) => proposeRef.current(content),
-      save: () => save(),
+      save: () => save().then(() => undefined),
     });
     // `save`/`snapshotRef`/`propose` read current values via refs; only `source` re-registers.
   }, [source]);

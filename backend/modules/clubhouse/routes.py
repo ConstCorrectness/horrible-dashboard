@@ -121,14 +121,17 @@ async def _run_helper(
 
     # Use subprocess.run in a thread instead of asyncio.create_subprocess_exec
     # because uvicorn's event loop on Windows does not support subprocess transports.
-    result = await asyncio.to_thread(
-        subprocess.run, cmd, capture_output=True
-    )
+    result = await asyncio.to_thread(subprocess.run, cmd, capture_output=True)
     stdout = result.stdout
     stderr = result.stderr
 
-    logger.info("ch-auth-helper [%s] exit=%d stdout=%s stderr=%s",
-                action, result.returncode, stdout.decode().strip(), stderr.decode().strip())
+    logger.info(
+        "ch-auth-helper [%s] exit=%d stdout=%s stderr=%s",
+        action,
+        result.returncode,
+        stdout.decode().strip(),
+        stderr.decode().strip(),
+    )
 
     if result.returncode != 0:
         err_msg = stderr.decode().strip() or stdout.decode().strip()
@@ -155,10 +158,10 @@ def _api_base() -> str:
 
 
 def _headers(device_id: str | None = None) -> dict[str, str]:
-    # Current Clubhouse Android client version (26.07.12).  Clubhouse rejects
+    # Current Clubhouse Android client version (26.07.07).  Clubhouse rejects
     # stale builds with "login did not pass token validation".  Update when
     # the app publishes a new release.
-    _app_version = "26.07.12"
+    _app_version = "26.07.07"
     return {
         "CH-Languages": "en-US",
         "CH-Locale": "en_US",

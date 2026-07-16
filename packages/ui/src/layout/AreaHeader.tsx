@@ -6,6 +6,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import {
+  closePaneGuarded,
   fullscreenArea,
   joinAreaDirection,
   layoutStore,
@@ -72,8 +73,8 @@ export function AreaHeader({ area }: { area: AreaNode }) {
     registry.layoutController?.changePaneType(active.instanceId, viewId);
   };
 
-  const closeTab = (pane: PaneState) =>
-    layoutStore.dispatch({ type: 'REMOVE_PANE', instanceId: pane.instanceId });
+  // Guarded so a pane with unsaved changes (an editor buffer) can prompt first.
+  const closeTab = (pane: PaneState) => void closePaneGuarded(pane.instanceId);
 
   return (
     <div ref={headerRef} className="frame-area-header">

@@ -93,6 +93,47 @@ function ConfirmDialog({ dialog }: { dialog: Extract<ActiveDialog, { kind: 'conf
   );
 }
 
+/** The multi-button dialog (e.g. Save / Don't Save / Cancel). */
+function ChoiceDialog({ dialog }: { dialog: Extract<ActiveDialog, { kind: 'choice' }> }) {
+  const primaryRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    primaryRef.current?.focus();
+  }, []);
+
+  const primaryIndex = dialog.buttons.findIndex((b) => b.primary);
+
+  return (
+    <div className="dialog-card">
+      <div className="dialog-title">{dialog.title}</div>
+      {dialog.message && <div className="dialog-message">{dialog.message}</div>}
+      <div className="dialog-actions">
+        {dialog.buttons.map((button, i) => (
+          <button
+            key={button.value}
+            ref={i === primaryIndex ? primaryRef : undefined}
+            type="button"
+            className={`dialog-btn${button.primary ? ' dialog-btn-primary' : ''}${
+              button.danger ? ' dialog-btn-danger' : ''
+            }`}
+            onClick={() => dialogsStore.resolveChoice(dialog.id, button.value)}
+          >
+            {button.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Dismiss the active dialog the way Esc / a backdrop click should — each kind
+ * resolves with its own cancel value. */
+function dismissActive(dialog: ActiveDialog): void {
+  if (dialog.kind === 'prompt') dialogsStore.resolvePrompt(dialog.id, null);
+  else if (dialog.kind === 'confirm') dialogsStore.resolveConfirm(dialog.id, false);
+  else dialogsStore.resolveChoice(dialog.id, dialog.cancelValue ?? null);
+}
+
 export function Dialogs() {
   const dialog = useActiveDialog();
 
@@ -103,8 +144,7 @@ export function Dialogs() {
       if (e.key !== 'Escape') return;
       e.preventDefault();
       e.stopPropagation();
-      if (dialog.kind === 'prompt') dialogsStore.resolvePrompt(dialog.id, null);
-      else dialogsStore.resolveConfirm(dialog.id, false);
+      dismissActive(dialog);
     };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
@@ -118,14 +158,15 @@ export function Dialogs() {
       onMouseDown={(e) => {
         // Click on the backdrop (not the card) cancels.
         if (e.target !== e.currentTarget) return;
-        if (dialog.kind === 'prompt') dialogsStore.resolvePrompt(dialog.id, null);
-        else dialogsStore.resolveConfirm(dialog.id, false);
+        dismissActive(dialog);
       }}
     >
       {dialog.kind === 'prompt' ? (
         <PromptDialog key={dialog.id} dialog={dialog} />
-      ) : (
+      ) : dialog.kind === 'confirm' ? (
         <ConfirmDialog key={dialog.id} dialog={dialog} />
+      ) : (
+        <ChoiceDialog key={dialog.id} dialog={dialog} />
       )}
     </div>
   );

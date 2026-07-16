@@ -44,6 +44,7 @@ import {
 } from './lsp-registry';
 import { loadSource, saveSource } from './sources';
 import { frameworkImportSource } from './pythonImports';
+import { dbSymbolSource } from './symbolCompletion';
 import { fetchPythonEnv } from './pythonEnv';
 
 /** LSP CompletionItemKind → CodeMirror completion `type` (drives the icon). */
@@ -979,7 +980,8 @@ export function lspExtension(opts: LspOptions): Extension {
         const doc = this.view.state.doc;
         const line = doc.lineAt(context.pos);
         const position = { line: line.number - 1, character: context.pos - line.from };
-        let completionContext: { triggerKind: number; triggerCharacter?: string } | undefined = undefined;
+        let completionContext: { triggerKind: number; triggerCharacter?: string } | undefined =
+          undefined;
         if (context.explicit) {
           completionContext = { triggerKind: 1 };
         } else {
@@ -1255,12 +1257,16 @@ export function lspExtension(opts: LspOptions): Extension {
     if (last && p.triggerChars.includes(last)) startCompletion(update.view);
   });
 
+  // The DB symbol index (prefix lookup, no model) is merged into the same popup as
+  // an instant identifier source — it fills in while the LSP warms up and covers
+  // symbols the server doesn't surface. Ranked below the LSP's type-aware results.
+  const dbSource = dbSymbolSource(() => opts.languageId);
   // Python buffers also get the curated framework-import source (basedpyright can't
   // auto-import installed libraries) — merged into the same popup, ranked below LSP.
   const useFrameworkImports = opts.languageId === 'python' && opts.frameworkImports !== false;
   const completionSources = useFrameworkImports
-    ? [completionSource, frameworkImportSource(() => env.packages)]
-    : [completionSource];
+    ? [completionSource, dbSource, frameworkImportSource(() => env.packages)]
+    : [completionSource, dbSource];
 
   return [
     lintGutter(),

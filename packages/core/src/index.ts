@@ -53,6 +53,7 @@ export type {
 } from './layout/types';
 export type { FramePreset, PresetNode } from './layout/presets';
 export {
+  closePaneGuarded,
   collapseRegion,
   focusAreaDirection,
   focusInstance,
@@ -75,6 +76,13 @@ export {
   toggleRegion,
   toggleRegionView,
 } from './layout/controller';
+export {
+  anyPaneDirty,
+  registerCloseGuard,
+  runCloseGuard,
+  setPaneDirty,
+  type CloseGuard,
+} from './layout/close-guards';
 export * as framePersistence from './layout/persistence';
 export {
   useWorkspaces,
@@ -248,6 +256,8 @@ export {
   dialogs,
   dialogsStore,
   type ActiveDialog,
+  type ChoiceButton,
+  type ChoiceOptions,
   type ConfirmOptions,
   type PromptOptions,
 } from './dialogs';

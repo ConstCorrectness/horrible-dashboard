@@ -14,6 +14,7 @@ import {
   type SplitDirection,
   type WidgetDecl,
 } from '../registry';
+import { runCloseGuard } from './close-guards';
 import { setRegionCommandHandler } from './region-bus';
 import {
   areaOfInstance,
@@ -139,6 +140,26 @@ export function toggleDock(side: DockSide, visible?: boolean): boolean {
   const next = visible ?? !dock.visible;
   if (next && dock.tools.length === 0) return false;
   layoutStore.dispatch({ type: 'SET_DOCK', side, patch: { visible: next } });
+  return true;
+}
+
+/**
+ * Close a pane, first running its close guard (if any) so a pane with unsaved
+ * work can prompt and veto. The single close path — the UI close buttons and
+ * `LayoutController.closePane` both go through here. Accepts an instanceId or a
+ * (singleton) view id. Resolves true when the pane was actually removed.
+ */
+export async function closePaneGuarded(idOrInstance: string): Promise<boolean> {
+  const located =
+    findPaneAnywhere(frame(), idOrInstance) ??
+    listPanes(frame()).find((p) => p.pane.viewId === idOrInstance) ??
+    null;
+  if (!located) return false;
+  const instanceId = located.pane.instanceId;
+  if (!(await runCloseGuard(instanceId))) return false;
+  // Re-check existence: the guard's dialog is async and the pane could have gone.
+  if (!findPaneAnywhere(frame(), instanceId)) return false;
+  layoutStore.dispatch({ type: 'REMOVE_PANE', instanceId });
   return true;
 }
 
@@ -575,7 +596,9 @@ export function installFrameController(): void {
       const located =
         findPaneAnywhere(f, id) ?? listPanes(f).find((p) => p.pane.viewId === id) ?? null;
       if (!located) return false;
-      layoutStore.dispatch({ type: 'REMOVE_PANE', instanceId: located.pane.instanceId });
+      // Kick off the guarded close (may await a save dialog); the boolean here
+      // reports that the pane existed and a close was initiated.
+      void closePaneGuarded(located.pane.instanceId);
       return true;
     },
     focusPane: (instanceId) => {

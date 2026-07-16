@@ -301,34 +301,29 @@
   flex: none;
   overflow-x: auto;
 }
-.frame-dock-tabs {
+/* The dock header shows exactly one tool's title (the activity rail switches
+   tools); there is no in-dock tab strip. */
+.frame-dock-title-container {
   display: flex;
-  flex: 1;
-  gap: 2px;
-  min-width: 0;
-  overflow-x: auto;
-}
-.frame-dock-tab {
-  display: inline-flex;
-  align-items: center;
-  border-radius: 6px;
-  color: var(--text-dim);
-}
-.frame-dock-tab.active {
-  background: var(--bg-raised);
-  color: var(--text);
-}
-.frame-dock-tab-label {
-  display: inline-flex;
   align-items: center;
   gap: 5px;
-  border: none;
-  background: transparent;
-  color: inherit;
+  flex: 1;
+  min-width: 0;
+  padding: 2px 2px 2px 4px;
+}
+.frame-dock-title-icon {
+  flex: none;
   font-size: 12px;
-  padding: 4px 6px;
-  cursor: pointer;
+}
+.frame-dock-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .frame-dock-tab-close {
   border: none;
@@ -338,9 +333,9 @@
   padding: 2px 5px 2px 0;
   cursor: pointer;
   visibility: hidden;
+  flex: none;
 }
-.frame-dock-tab:hover .frame-dock-tab-close,
-.frame-dock-tab.active .frame-dock-tab-close {
+.frame-dock-title-container:hover .frame-dock-tab-close {
   visibility: visible;
 }
 .frame-dock-tab-close:hover {
