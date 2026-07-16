@@ -1,5 +1,7 @@
 import { spawn, spawnSync } from 'child_process';
 import { existsSync } from 'fs';
+import net from 'net';
+import { setTimeout } from 'timers';
 
 // Load .env file if it exists so we inherit any local credentials/config (e.g. GAMES_GOOGLE_CLIENT_ID)
 if (existsSync('.env')) {
@@ -100,13 +102,37 @@ const backend = spawn(
   },
 );
 
-// Start the Vite frontend (its config reads HORRIBLE_DEV_HOST for the listen host
-// and HORRIBLE_DEV_BACKEND_PORT for the /api and /ws proxy target).
-const frontend = spawn('pnpm', ['--filter', '@horrible/web', 'dev'], {
-  stdio: 'inherit',
-  shell: useShell,
-  env: { ...process.env, HORRIBLE_DEV_HOST: host, HORRIBLE_DEV_BACKEND_PORT: backendPort },
-});
+function waitForPort(port, host, timeoutMs = 15000) {
+  return new Promise((resolve) => {
+    const startTime = Date.now();
+    const clientHost = host === '0.0.0.0' ? '127.0.0.1' : host;
+    
+    const tryConnect = () => {
+      if (backend.exitCode !== null) {
+        resolve(false);
+        return;
+      }
+      
+      const socket = net.connect({ port, host: clientHost });
+      
+      socket.on('connect', () => {
+        socket.end();
+        resolve(true);
+      });
+      
+      socket.on('error', () => {
+        socket.destroy();
+        if (Date.now() - startTime > timeoutMs) {
+          resolve(false);
+        } else {
+          setTimeout(tryConnect, 250);
+        }
+      });
+    };
+    
+    tryConnect();
+  });
+}
 
 const gameserver = startGameServer
   ? spawn(
@@ -133,6 +159,7 @@ const gameserver = startGameServer
     )
   : null;
 
+let frontend;
 let cleanedUp = false;
 function cleanup() {
   if (cleanedUp) return;
@@ -157,6 +184,26 @@ function cleanup() {
 
 // If a *core* server dies, tear the other down so we don't leave a half-stack up.
 backend.on('exit', cleanup);
+
+// Wait for the backend to start listening before launching the frontend
+// to avoid Vite proxy ECONNREFUSED log spam.
+console.log(`⏳ Waiting for backend to start on http://${host}:${backendPort}...`);
+const backendReady = await waitForPort(Number(backendPort), host);
+if (backendReady) {
+  console.log(`✅ Backend is up and listening!`);
+} else if (backend.exitCode !== null) {
+  console.warn(`❌ Backend process exited early with code ${backend.exitCode}.`);
+} else {
+  console.warn(`⚠️  Backend port did not respond within timeout, starting frontend anyway.`);
+}
+
+// Start the Vite frontend (its config reads HORRIBLE_DEV_HOST for the listen host
+// and HORRIBLE_DEV_BACKEND_PORT for the /api and /ws proxy target).
+frontend = spawn('pnpm', ['--filter', '@horrible/web', 'dev'], {
+  stdio: 'inherit',
+  shell: useShell,
+  env: { ...process.env, HORRIBLE_DEV_HOST: host, HORRIBLE_DEV_BACKEND_PORT: backendPort },
+});
 frontend.on('exit', cleanup);
 // The game server is non-core: if it dies (commonly because :9090 is already in use
 // from a game server you started yourself), warn but keep the rest of the stack up.

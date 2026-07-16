@@ -86,6 +86,7 @@ def _make_game(vzd: Any, config_name: str, render: bool) -> Any:
     game = vzd.DoomGame()
     game.load_config(config_path)
     game.set_window_visible(render)
+    game.set_console_enabled(False)  # suppress engine logging to stdout/stderr
     return game
 
 

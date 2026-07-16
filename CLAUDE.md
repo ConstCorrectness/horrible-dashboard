@@ -94,6 +94,8 @@ buffers, terminal + file explorer.
   platform — branch on a platform capability check instead.
 - Formatting/linting is automatic: a PostToolUse hook runs ruff (Python), prettier +
   eslint (TS/JS), and rustfmt (Rust) on every file you edit. Don't hand-format.
+- **Clubhouse App Versioning:** The Clubhouse API requires a current Android app version header (e.g. `26.07.12`). If auth fails with `login did not pass token validation`, update `AppVersion` in `backend/modules/clubhouse/auth_helper/Program.cs` and `routes.py`, then delete `backend/modules/clubhouse/auth_helper/bin/ch-auth-helper.exe` so the backend forces a recompile.
+
 
 ## Documentation (docs/)
 

@@ -13,7 +13,7 @@ class Program
     // Current Clubhouse Android app version (YY.MM.DD format).
     // Update when Clubhouse publishes a new version and the API starts
     // rejecting requests with "login did not pass token validation".
-    private static readonly string AppVersion = "26.07.09";
+    private static readonly string AppVersion = "26.07.12";
 
     static async Task<int> Main(string[] args)
     {

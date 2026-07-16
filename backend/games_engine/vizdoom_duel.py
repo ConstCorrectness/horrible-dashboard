@@ -82,6 +82,7 @@ def _configure(g: Any, vzd: Any, visible: bool) -> None:
     g.set_screen_resolution(vzd.ScreenResolution.RES_160X120)
     g.set_screen_format(vzd.ScreenFormat.RGB24)
     g.set_window_visible(visible)
+    g.set_console_enabled(False)  # suppress engine logging to stdout/stderr
     g.set_mode(vzd.Mode.ASYNC_PLAYER)  # real-time: make_action never blocks on the peer
 
 

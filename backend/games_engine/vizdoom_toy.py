@@ -99,6 +99,7 @@ class VizDoomGame(GameState):
         g.set_screen_resolution(vzd.ScreenResolution.RES_160X120)
         g.set_screen_format(vzd.ScreenFormat.RGB24)
         g.set_window_visible(False)  # headless: no X server / framebuffer needed
+        g.set_console_enabled(False)  # suppress engine logging to stdout/stderr
         g.set_mode(vzd.Mode.PLAYER)
         return g
 

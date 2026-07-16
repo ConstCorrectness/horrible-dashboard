@@ -155,10 +155,10 @@ def _api_base() -> str:
 
 
 def _headers(device_id: str | None = None) -> dict[str, str]:
-    # Current Clubhouse Android client version (26.07.09).  Clubhouse rejects
+    # Current Clubhouse Android client version (26.07.12).  Clubhouse rejects
     # stale builds with "login did not pass token validation".  Update when
     # the app publishes a new release.
-    _app_version = "26.07.09"
+    _app_version = "26.07.12"
     return {
         "CH-Languages": "en-US",
         "CH-Locale": "en_US",
