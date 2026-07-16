@@ -133,7 +133,7 @@
   opacity: 0.9;
 }
 .flow-node-stream {
-  font-family: var(--mono, ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 11px;
 }
 .flow-node-error {

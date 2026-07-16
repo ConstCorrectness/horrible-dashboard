@@ -1,0 +1,59 @@
+/**
+ * How a game identifies itself in the UI: its icon and its accent.
+ *
+ * These two maps were copy-pasted across LobbyPanel, PlaySection, GameBoardPanel and
+ * ChallengeCards (four identical icon maps, three identical accent maps). Adding a
+ * game meant remembering all of them, and retinting meant editing 33 hexes — so they
+ * live here once and every panel imports them.
+ *
+ * **The accents are identification, not decoration, and not the interactive voltage.**
+ * The games palette runs a single accent (`--accent`, orange) for everything you can
+ * click: buttons, focus rings, active states. These colours exist only so a game is
+ * recognizable at a glance in a shelf of eleven — so they're used *only* for small
+ * marks (a tile edge, an icon chip) and are deliberately muted and warm-biased to sit
+ * on the warm near-black without competing with the voltage. A saturated cool blue
+ * here would out-shout the buttons and break the one-voltage rule. Keep new entries in
+ * the same register: low chroma, warm-leaning, nothing that reads as "press me".
+ *
+ * See `.games-theme` in games.css.
+ */
+
+/** Icon per catalog game; anything unrecognized gets the die. */
+export const GAME_ICONS: Record<string, string> = {
+  tictactoe: '❌',
+  connect_four: '🔴',
+  holdem: '🃏',
+  rag_race: '📚',
+  code_golf: '⛳',
+  test_duel: '⚖️',
+  bug_hunt: '🐛',
+  arena: '🤖',
+  fighter: '🥊',
+  vizdoom_toy: '🔫',
+  vizdoom_duel: '💀',
+};
+
+/** Identification accent per game — small marks only. See the note above. */
+export const GAME_ACCENT: Record<string, string> = {
+  tictactoe: '#b45c4a',
+  connect_four: '#c98a2e',
+  holdem: '#8a6ea8',
+  rag_race: '#6f86a8',
+  code_golf: '#6f9464',
+  test_duel: '#8a8578',
+  bug_hunt: '#87914e',
+  arena: '#c07a45',
+  fighter: '#b05a52',
+  vizdoom_toy: '#9c4038',
+  vizdoom_duel: '#8f5f96',
+};
+
+/** The icon for a game id, falling back to the die for anything uncatalogued. */
+export function gameIcon(id: string): string {
+  return GAME_ICONS[id] ?? '🎲';
+}
+
+/** The identification accent for a game id, falling back to the module voltage. */
+export function gameAccent(id: string): string {
+  return GAME_ACCENT[id] ?? 'var(--accent)';
+}

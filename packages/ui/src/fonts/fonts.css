@@ -1,0 +1,39 @@
+/* Self-hosted webfonts.
+ *
+ * Deliberately NOT the Google Fonts CDN: the app is offline-first and ships as a
+ * Tauri desktop build, so a network dependency for text would mean the UI renders
+ * unstyled (or not at all) on a plane. The files sit next to this stylesheet and are
+ * bundled by Vite like any other asset.
+ *
+ * `font-display: swap` so the fallback in each stack renders immediately and is
+ * replaced when the real face lands — the display stack falls back to Georgia, which
+ * is metrically close enough to Instrument Serif that the swap isn't jarring.
+ *
+ * Both families are SIL OFL 1.1. Adding a face: drop the woff2 here, add the
+ * @font-face, and reference it from a token in styles.css — never from a component.
+ */
+
+@font-face {
+  font-family: 'Instrument Serif';
+  src: url('./InstrumentSerif-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Instrument Serif';
+  src: url('./InstrumentSerif-Italic.woff2') format('woff2');
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+
+/* Variable face: one file covers the 100–1000 weight range. */
+@font-face {
+  font-family: 'DM Sans';
+  src: url('./DMSans-Variable.woff2') format('woff2-variations');
+  font-weight: 100 1000;
+  font-style: normal;
+  font-display: swap;
+}

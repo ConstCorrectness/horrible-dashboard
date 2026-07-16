@@ -20,7 +20,7 @@ import { registerTerminal, setActiveTerminal, unregisterTerminal } from './store
  * generic monospace fallback so an uninstalled font degrades gracefully. */
 function fontStack(choice: string | undefined): string {
   return !choice || choice === 'Monospace'
-    ? 'var(--mono, ui-monospace, monospace)'
+    ? 'var(--font-mono)'
     : `'${choice}', ui-monospace, monospace`;
 }
 

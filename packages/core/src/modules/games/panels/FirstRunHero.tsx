@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 
 import { registry } from '../../../registry';
 import { setSetting } from '../../../settings';
@@ -10,12 +10,62 @@ import { findRankedMatch } from '../matchmaking';
 type Step = 'signin' | 'placement' | 'done';
 
 /**
- * The first-run card in the Games pane's Play section — the wizard panel's
- * replacement. Two inline steps: sign in → placement match, switching to the Game
- * Board section and opening the Games Log so the first thing a new player sees is
- * their agent thinking. Sets `games.onboarded` when the placement match goes live,
- * or when dismissed.
+ * The first-run hero in the Games pane's Play section — the wizard panel's
+ * replacement, and the one surface here allowed to be loud. Two inline steps: sign
+ * in → placement match, switching to the Game Board section and opening the Games
+ * Log so the first thing a new player sees is their agent thinking. Sets
+ * `games.onboarded` when the placement match goes live, or when dismissed.
+ *
+ * Each step gets its own headline, because the headline is doing the teaching: the
+ * premise of the whole module (you engineer the agent, you don't play) has to land
+ * before the sign-in button means anything. Display type is sized against the pane's
+ * container query, not the viewport — see `.games-hero` in games.css.
  */
+
+// Headline copy per step. The <em> is the italic accent word the line lands on
+// (styled by .games-hero-title em); keep it to one word — the emphasis is the point.
+const COPY: Record<Step, { title: ReactNode; sub: ReactNode }> = {
+  signin: {
+    title: (
+      <>
+        You don't play the games.
+        <br />
+        You <em>engineer</em> the agent that does.
+      </>
+    ),
+    sub: (
+      <>
+        Your opponent is another player's harness — the tools they wrote, the context they fed it.
+        An account holds your ratings, replays, and friends, but ▶ Play works without one.
+      </>
+    ),
+  },
+  placement: {
+    title: (
+      <>
+        Time to <em>place</em> you.
+      </>
+    ),
+    sub: (
+      <>
+        One match against a practice bot sets your opening rating. The board and your agent's live
+        thoughts sit side by side — watch how it reasons before you change a thing.
+      </>
+    ),
+  },
+  done: {
+    title: (
+      <>
+        You're <em>in</em>.
+      </>
+    ),
+    sub: (
+      <>
+        Study the replay, branch your harness, climb. The agent only gets as good as you build it.
+      </>
+    ),
+  },
+};
 export function FirstRunHero() {
   const { matchSeats } = useGames();
   const [step, setStep] = useState<Step>('signin');
@@ -75,12 +125,9 @@ export function FirstRunHero() {
   const idx = steps.findIndex(([s]) => s === (step === 'done' ? 'placement' : step));
 
   return (
-    <div className="games-start-hero" style={{ flexDirection: 'column', alignItems: 'stretch' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-        <strong>🚀 New here?</strong>
-        <span style={{ color: 'var(--text-dim)' }}>
-          You don't play the games — you <strong>engineer the agent</strong> that plays them.
-        </span>
+    <div className="games-hero">
+      <div className="games-hero-top">
+        <span className="games-eyebrow">New here</span>
         <span className="games-onboard-steps" style={{ marginLeft: 'auto' }}>
           {steps.map(([s, label], i) => (
             <span key={s} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
@@ -96,32 +143,46 @@ export function FirstRunHero() {
             </span>
           ))}
         </span>
-        <button type="button" onClick={dismiss} title="Hide this — restart via the command palette">
+        <button
+          type="button"
+          className="games-ghost-btn"
+          onClick={dismiss}
+          title="Hide this — restart via the command palette"
+        >
           dismiss
         </button>
       </div>
 
+      <h1 className="games-hero-title">{COPY[step].title}</h1>
+      <p className="games-hero-sub">
+        {step === 'placement' && name ? `Signed in as ${name}. ` : ''}
+        {COPY[step].sub}
+      </p>
+
       {step === 'signin' && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.5rem' }}>
-          <span style={{ color: 'var(--text-dim)' }}>
-            An account holds your ratings, replays, and friends (▶ Play works without one):
-          </span>
+        <div className="games-hero-actions">
           <button
             type="button"
             className="games-play-btn"
+            style={{ flex: '0 0 auto' }}
             onClick={() => void signIn('github')}
             disabled={busy}
           >
             {busy ? 'Signing in…' : '🐙 Sign in with GitHub'}
           </button>
-          <button type="button" onClick={() => void signIn('google')} disabled={busy}>
+          <button
+            type="button"
+            className="games-ghost-btn"
+            onClick={() => void signIn('google')}
+            disabled={busy}
+          >
             Google instead
           </button>
-          <button type="button" onClick={() => setStep('placement')}>
+          <button type="button" className="games-ghost-btn" onClick={() => setStep('placement')}>
             skip
           </button>
           {prompt && (
-            <span>
+            <span className="games-hero-note">
               Enter code <strong>{prompt.code}</strong> at{' '}
               <a href={prompt.url} target="_blank" rel="noreferrer">
                 {prompt.url}
@@ -132,15 +193,11 @@ export function FirstRunHero() {
       )}
 
       {step === 'placement' && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-          <span style={{ color: 'var(--text-dim)' }}>
-            {name ? `Signed in as ${name}. ` : ''}Start your <strong>placement match</strong> —
-            instantly paired against a practice bot, board and your agent's live thoughts side by
-            side:
-          </span>
+        <div className="games-hero-actions">
           <button
             type="button"
             className="games-play-btn"
+            style={{ flex: '0 0 auto' }}
             onClick={startPlacement}
             disabled={queued}
           >
@@ -150,12 +207,13 @@ export function FirstRunHero() {
       )}
 
       {step === 'done' && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <span>
-            🎉 <strong>You're in.</strong> After the game: study the replay, branch your harness,
-            and climb.
-          </span>
-          <button type="button" onClick={() => openGamesSection('build')}>
+        <div className="games-hero-actions">
+          <button
+            type="button"
+            className="games-play-btn"
+            style={{ flex: '0 0 auto' }}
+            onClick={() => openGamesSection('build')}
+          >
             Improve the harness
           </button>
         </div>

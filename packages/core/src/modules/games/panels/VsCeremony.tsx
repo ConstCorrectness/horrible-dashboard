@@ -13,9 +13,16 @@ import type { Build } from '../agentBuild';
  * Warm (ember) = you, cool (cyan) = opponent — the same VS colour logic the live board
  * uses. This overlay deliberately commits to a dark, single look (a match-intro screen),
  * so it doesn't theme to light.
+ *
+ * The portal mounts on `document.body`, i.e. **outside** the `.games-theme` subtree, so
+ * the games palette would not reach it by inheritance — the root below carries the class
+ * itself. That's what lets the ember be `var(--accent)` rather than a second hardcoded
+ * orange drifting from the module's.
  */
 
-const YOU = '#ff5e3a';
+// You = the module's voltage. Aligning these means "you" reads the same here as it does
+// on every button in the pane.
+const YOU = 'var(--accent)';
 const OPP = '#2fe3cf';
 
 const KEYFRAMES = `
@@ -97,8 +104,16 @@ function Fighter({
       >
         {side === 'you' ? '◢ You' : 'Opponent ◣'}
       </div>
+      {/* The fighter's name is the one editorial line in the ceremony — everything
+          around it stays mono, which is what makes the serif read as a billing. */}
       <div
-        style={{ fontFamily: 'ui-monospace, monospace', fontSize: '1.05rem', margin: '6px 0 3px' }}
+        style={{
+          fontFamily: 'var(--games-display)',
+          fontSize: '1.6rem',
+          lineHeight: 1.1,
+          margin: '8px 0 4px',
+          overflowWrap: 'anywhere',
+        }}
       >
         {name}
       </div>
@@ -169,6 +184,7 @@ export function VsCeremony({
       role="dialog"
       aria-modal="true"
       aria-label="Lock in your agent"
+      className="games-theme"
       style={{
         position: 'fixed',
         inset: 0,
@@ -176,7 +192,7 @@ export function VsCeremony({
         display: 'grid',
         placeItems: 'center',
         padding: 20,
-        background: 'rgba(6, 7, 11, 0.82)',
+        background: 'rgba(9, 6, 4, 0.86)',
         backdropFilter: 'blur(6px)',
       }}
     >

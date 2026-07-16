@@ -60,7 +60,17 @@ export function GamesPanel() {
   const live = board !== null || yourTurn !== null;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+    <div
+      className="games-theme"
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        minHeight: 0,
+        position: 'relative',
+      }}
+    >
+      <div className="games-grain" aria-hidden />
       <nav
         style={{
           display: 'flex',

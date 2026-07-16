@@ -27,6 +27,7 @@ import {
 } from '../matchmaking';
 import { openHarnessFor } from '../selected-game';
 import { ChallengeDraftCard, IncomingOfferCard } from './ChallengeCards';
+import { gameAccent, gameIcon } from '../game-identity';
 import { FirstRunHero } from './FirstRunHero';
 import { GamesMui } from '../mui-theme';
 
@@ -38,21 +39,6 @@ const BOT_TIERS: { value: string; label: string }[] = [
   { value: 'gold', label: '🥇 Hard · Aurum' },
   { value: 'platinum', label: '💠 Expert · Nemesis' },
 ];
-
-// Icon per catalog game on the cards; anything unrecognized gets the die.
-const GAME_ICONS: Record<string, string> = {
-  tictactoe: '❌',
-  connect_four: '🔴',
-  holdem: '🃏',
-  rag_race: '📚',
-  code_golf: '⛳',
-  test_duel: '⚖️',
-  bug_hunt: '🐛',
-  arena: '🤖',
-  fighter: '🥊',
-  vizdoom_toy: '🔫',
-  vizdoom_duel: '💀',
-};
 
 const GAME_DESCRIPTIONS: Record<string, string> = {
   tictactoe:
@@ -77,20 +63,6 @@ const GAME_DESCRIPTIONS: Record<string, string> = {
     '3D Doom visual combat simulator. Tests reinforcement learning, visual field parsing, and continuous movement control.',
   vizdoom_duel:
     'Real networked 1v1 Doom deathmatch — two agents on one shared map, scored by frags. Tests real-time combat policy, positioning, and target acquisition.',
-};
-
-const GAME_ACCENT: Record<string, string> = {
-  tictactoe: '#fb7185',
-  connect_four: '#fbbf24',
-  holdem: '#a78bfa',
-  rag_race: '#60a5fa',
-  code_golf: '#4ade80',
-  test_duel: '#94a3b8',
-  bug_hunt: '#84cc16',
-  arena: '#fb923c',
-  fighter: '#f87171',
-  vizdoom_toy: '#dc2626',
-  vizdoom_duel: '#c084fc',
 };
 
 /** Simulated ping bars (4 bars, filled based on "strength"). */
@@ -227,14 +199,14 @@ export function PlaySection({
             alignItems: 'center',
             p: 1.5,
             gap: 2,
-            borderColor: '#c084fc',
+            borderColor: 'primary.main',
           }}
         >
           <div className="games-radar-scan" style={{ width: 40, height: 40, flexShrink: 0 }}>
             <div className="games-radar-line" />
           </div>
           <div style={{ flex: 1 }}>
-            <Typography variant="subtitle2" sx={{ color: '#c084fc', fontWeight: 800 }}>
+            <Typography variant="subtitle2" sx={{ color: 'primary.main', fontWeight: 800 }}>
               🏁 Matchmaking Search Active
             </Typography>
             <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
@@ -262,7 +234,7 @@ export function PlaySection({
               display: 'flex',
               flexDirection: 'column',
               gap: 1,
-              background: 'rgba(110, 168, 254, 0.04)',
+              background: 'color-mix(in srgb, var(--accent) 4%, transparent)',
             }}
           >
             <Typography variant="subtitle1" sx={{ fontWeight: 800, color: 'primary.main' }}>
@@ -345,7 +317,7 @@ export function PlaySection({
                   key={t.id}
                   table={t}
                   gameName={nameOf(t.game_id)}
-                  gameIcon={GAME_ICONS[t.game_id] ?? '🎲'}
+                  gameIcon={gameIcon(t.game_id)}
                 />
               ))
             )}
@@ -356,7 +328,7 @@ export function PlaySection({
           const g = games.find((x) => x.id === selectedGame);
           if (!g) return null;
           const gameMMR = lastRating && lastRating.game_id === g.id ? lastRating : null;
-          const accent = GAME_ACCENT[g.id] ?? 'var(--accent, #6ea8fe)';
+          const accent = gameAccent(g.id);
           return (
             <>
               {/* Play Mode & Difficulty Controls Row ── */}
@@ -470,7 +442,7 @@ export function PlaySection({
                   mb: 2,
                   borderColor: accent,
                   boxShadow: `0 0 16px ${accent}20`,
-                  background: 'var(--bg-raised, #1d2026)',
+                  background: 'var(--bg-raised)',
                   overflow: 'hidden',
                 }}
               >
@@ -480,7 +452,7 @@ export function PlaySection({
                   style={{
                     position: 'relative',
                     padding: '2rem 1.5rem',
-                    background: `linear-gradient(135deg, ${accent}25 0%, rgba(20, 22, 26, 0.95) 100%)`,
+                    background: `linear-gradient(135deg, ${accent}25 0%, var(--bg-raised) 100%)`,
                     borderBottom: '1px solid var(--border)',
                     display: 'flex',
                     alignItems: 'center',
@@ -522,7 +494,7 @@ export function PlaySection({
                       flexShrink: 0,
                     }}
                   >
-                    {GAME_ICONS[g.id] ?? '🎲'}
+                    {gameIcon(g.id)}
                   </div>
 
                   {/* Title & Info */}
@@ -751,7 +723,7 @@ export function PlaySection({
                     {/* Ranked Matchmaking Box */}
                     <Card
                       sx={{
-                        background: 'rgba(110, 168, 254, 0.02)',
+                        background: 'color-mix(in srgb, var(--accent) 2%, transparent)',
                         border: `1px solid ${accent}25`,
                         boxShadow: 'none',
                         position: 'relative',
@@ -927,7 +899,7 @@ export function PlaySection({
                       key={t.id}
                       table={t}
                       gameName={nameOf(t.game_id)}
-                      gameIcon={GAME_ICONS[t.game_id] ?? '🎲'}
+                      gameIcon={gameIcon(t.game_id)}
                     />
                   ))
                 )}

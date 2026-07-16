@@ -10,6 +10,7 @@ import Typography from '@mui/material/Typography';
 import ToggleButton from '@mui/material/ToggleButton';
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 
+import { gameIcon } from '../game-identity';
 import {
   challengeOffer,
   challengeRespond,
@@ -30,21 +31,6 @@ const DEFAULT_TERMS: Omit<Ruleset, 'game_id'> = {
   edit_phase_s: 0,
   model_class: 'any',
   rated: true,
-};
-
-// Icon per catalog game — shared across the ranked picker and headers.
-const GAME_ICONS: Record<string, string> = {
-  tictactoe: '❌',
-  connect_four: '🔴',
-  holdem: '🃏',
-  rag_race: '📚',
-  code_golf: '⛳',
-  test_duel: '⚖️',
-  bug_hunt: '🐛',
-  arena: '🤖',
-  fighter: '🥊',
-  vizdoom_toy: '🔫',
-  vizdoom_duel: '💀',
 };
 
 /** The negotiable terms of a battle — shared by the draft form and the counter. */
@@ -334,7 +320,7 @@ export function RankedCard({ games }: { games: GameCatalogEntry[] }) {
           >
             {games.map((g) => (
               <ToggleButton key={g.id} value={g.id} sx={{ textTransform: 'none', gap: 0.5 }}>
-                <span>{GAME_ICONS[g.id] ?? '🎲'}</span>
+                <span>{gameIcon(g.id)}</span>
                 {g.name}
               </ToggleButton>
             ))}

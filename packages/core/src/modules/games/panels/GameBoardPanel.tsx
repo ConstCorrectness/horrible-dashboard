@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import Typography from '@mui/material/Typography';
 
 import { registry } from '../../../registry';
+import { gameAccent, gameIcon } from '../game-identity';
 import {
   gamesQueueLeave,
   rematchOffer,
@@ -24,34 +25,6 @@ import { RagRaceBoard } from './RagRaceBoard';
 import { TestDuelBoard } from './TestDuelBoard';
 import { TicTacToeBoard } from './TicTacToeBoard';
 import { VizDoomBoard } from './VizDoomBoard';
-const GAME_ICONS: Record<string, string> = {
-  tictactoe: '❌',
-  connect_four: '🔴',
-  holdem: '🃏',
-  rag_race: '📚',
-  code_golf: '⛳',
-  test_duel: '⚖️',
-  bug_hunt: '🐛',
-  arena: '🤖',
-  fighter: '🥊',
-  vizdoom_toy: '🔫',
-  vizdoom_duel: '💀',
-};
-
-const GAME_ACCENT: Record<string, string> = {
-  tictactoe: '#fb7185',
-  connect_four: '#fbbf24',
-  holdem: '#a78bfa',
-  rag_race: '#60a5fa',
-  code_golf: '#4ade80',
-  test_duel: '#94a3b8',
-  bug_hunt: '#84cc16',
-  arena: '#fb923c',
-  fighter: '#f87171',
-  vizdoom_toy: '#dc2626',
-  vizdoom_duel: '#c084fc',
-};
-
 // Per-game seat labels (seat 0, seat 1). Falls back to "Seat N" for other games.
 const SEAT_LABELS: Record<string, [string, string]> = {
   tictactoe: ['X', 'O'],
@@ -265,7 +238,7 @@ function IdleBoard() {
             }}
           >
             {games.map((g) => {
-              const accent = GAME_ACCENT[g.id] ?? 'var(--accent, #6ea8fe)';
+              const accent = gameAccent(g.id);
               return (
                 <button
                   key={g.id}
@@ -289,7 +262,7 @@ function IdleBoard() {
                   }
                   onClick={() => void playVsOwnAgent(g.id)}
                 >
-                  <span style={{ fontSize: '1.6rem' }}>{GAME_ICONS[g.id] ?? '🎲'}</span>
+                  <span style={{ fontSize: '1.6rem' }}>{gameIcon(g.id)}</span>
                   <span style={{ fontSize: '0.78rem', fontWeight: 700, textAlign: 'center' }}>
                     {g.name}
                   </span>

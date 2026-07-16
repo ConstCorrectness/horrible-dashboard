@@ -168,11 +168,57 @@ label** (`phase-label.ts`): arena "round 2/3 · ⚙️ simulating", bug hunt
 is thinking it names the model doing the thinking plus a **watch reasoning →**
 link that opens the Games Log.
 
+## Look and feel — the warm arcade
+
+Games runs its **own palette**, scoped to the module: warm near-black (`#0d0a08`),
+a single orange voltage (`#f97316`), hairline borders, small radii, editorial serif
+display type, and a film-grain wash. The workspace chrome around the pane keeps the
+app's cool blue-grey look — the contrast is the point, the pane should feel like
+somewhere you *went*. (AgentTown's wood/cream set is the precedent for a
+games-local palette.)
+
+The mechanism is one class. `GamesPanel`'s root carries `.games-theme`, which
+**redeclares the app's own token names** (`--bg`, `--accent`, `--border`, …) rather
+than inventing games-specific ones, so every panel in the subtree retints by plain
+CSS inheritance — no per-selector sweep. Two consequences worth knowing before you
+touch it:
+
+- **`mui-theme.tsx` can't inherit.** MUI's theme is a JS object built at module
+  scope and cannot read CSS custom properties, so its `TOKENS` duplicate the palette
+  as literals. Change one, change the other.
+- **Portals escape the subtree.** `VsCeremony` renders through `createPortal` onto
+  `document.body`, outside `.games-theme`, so it carries the class on its own root.
+  Anything else that portals out needs the same.
+
+**One voltage, plus identification.** `--accent` is the only colour for things you
+can click — buttons, focus rings, active states. The per-game colours in
+`game-identity.ts` (`GAME_ACCENT`) are *identification*, not decoration: muted and
+warm-biased, used only for small marks (a tile edge, an icon chip) so eleven games
+stay tellable apart in the shelf without out-shouting the buttons. That module is
+also the single home for `GAME_ICONS` — both maps used to be copy-pasted across four
+panels.
+
+Display type (`--games-display`) is sized in **container query units** against
+`.games-lobby-root`, not `vw`: this is a pane in a resizable dock, so viewport units
+would size the hero headline off the window while the pane sits 400px wide.
+The webfonts are **self-hosted** (`packages/ui/src/fonts/`), never the Google CDN —
+the app is offline-first and ships as a Tauri desktop build. Until a woff2 lands
+there, `font-display: swap` renders the Georgia fallback.
+
+:::note Motion stays guarded
+`VsCeremony` honors `prefers-reduced-motion` and must keep doing so. The design
+template this look came from hard-sets `reduceMotion = false`; that's an
+accessibility regression, and it was deliberately not imported.
+:::
+
 ## Onboarding — the first-run card
 
-First-run players get a **first-run hero card** at the top of the hub's Play tab
-(until the `games.onboarded` setting flips — there is no separate wizard panel).
-Three inline steps (`FirstRunHero.tsx`):
+First-run players get a **first-run hero** at the top of the hub's Play tab (until
+the `games.onboarded` setting flips — there is no separate wizard panel). It is the
+loudest surface in the module by design, and the headline is doing the teaching:
+each step gets its own serif line landing on an italic orange accent word, because
+the premise — *you engineer the agent, you don't play* — has to land before the
+sign-in button means anything. Inline steps (`FirstRunHero.tsx`):
 
 1. **Sign in** — GitHub or Google OAuth (redirect flow by default, device-code
    fallback available); your account lives on the

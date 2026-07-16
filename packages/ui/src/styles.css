@@ -1,3 +1,5 @@
+@import './fonts/fonts.css';
+
 :root {
   color-scheme: dark;
   --bg: #14161a;
@@ -7,6 +9,10 @@
   --text: #d7dae0;
   --text-dim: #8a909c;
   --accent: #6ea8fe;
+  /* The one mono stack. Every "mono" surface (editors, diffs, logs, terminal)
+     reads this token — don't hardcode a stack in a component. */
+  --font-mono:
+    ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', 'JetBrains Mono', menlo, consolas, monospace;
 }
 
 * {
@@ -244,7 +250,7 @@ body {
   text-align: center;
   font-size: 0.62rem;
   font-weight: 700;
-  font-family: var(--mono, ui-monospace, monospace);
+  font-family: var(--font-mono);
   letter-spacing: -0.02em;
 }
 

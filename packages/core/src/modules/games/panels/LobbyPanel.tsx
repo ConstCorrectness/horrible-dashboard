@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 
 import { registry } from '../../../registry';
+import { gameAccent, gameIcon } from '../game-identity';
 import { useGames, gamesDisconnect, ensureConnected } from '../game-ws';
 import {
   fetchStatus,
@@ -13,36 +14,6 @@ import {
 import { setActiveGame } from '../selected-game';
 import { ConnectionChip } from './ConnectionChip';
 import { PlaySection } from './PlaySection';
-
-const GAME_ICONS: Record<string, string> = {
-  tictactoe: '❌',
-  connect_four: '🔴',
-  holdem: '🃏',
-  rag_race: '📚',
-  code_golf: '⛳',
-  test_duel: '⚖️',
-  bug_hunt: '🐛',
-  arena: '🤖',
-  fighter: '🥊',
-  vizdoom_toy: '🔫',
-  vizdoom_duel: '💀',
-};
-
-// A per-game accent color so the library sidebar reads as a shelf of distinct
-// games rather than a flat list — used for the tile's icon chip and selected state.
-const GAME_ACCENT: Record<string, string> = {
-  tictactoe: '#fb7185',
-  connect_four: '#fbbf24',
-  holdem: '#a78bfa',
-  rag_race: '#60a5fa',
-  code_golf: '#4ade80',
-  test_duel: '#94a3b8',
-  bug_hunt: '#84cc16',
-  arena: '#fb923c',
-  fighter: '#f87171',
-  vizdoom_toy: '#dc2626',
-  vizdoom_duel: '#c084fc',
-};
 
 /** Sign-in status + OAuth sign-in (GitHub or Google — two different Google accounts
  * are two distinct players, handy for testing across machines). The default is the
@@ -96,7 +67,6 @@ function SidebarProfile() {
       setPrompt(null);
     }
   };
-
 
   const handleSignOut = () => {
     void signOut().then(() => {
@@ -199,11 +169,7 @@ function SidebarProfile() {
           >
             🪪 Profile
           </button>
-          <button
-            type="button"
-            className="games-sidebar-profile-btn"
-            onClick={handleSignOut}
-          >
+          <button type="button" className="games-sidebar-profile-btn" onClick={handleSignOut}>
             Sign out
           </button>
         </div>
@@ -222,7 +188,8 @@ function SidebarProfile() {
           disabled={busy !== null}
           title="Sign in with GitHub"
         >
-          <span className="icon">🐙</span> <span className="games-sidebar-profile-signin-label">GitHub</span>
+          <span className="icon">🐙</span>{' '}
+          <span className="games-sidebar-profile-signin-label">GitHub</span>
         </button>
         <button
           type="button"
@@ -231,21 +198,32 @@ function SidebarProfile() {
           disabled={busy !== null}
           title="Sign in with Google"
         >
-          <span className="icon">🌐</span> <span className="games-sidebar-profile-signin-label">Google</span>
+          <span className="icon">🌐</span>{' '}
+          <span className="games-sidebar-profile-signin-label">Google</span>
         </button>
       </div>
       {prompt &&
         (prompt.code ? (
           <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.2rem' }}>
             code <strong>{prompt.code}</strong> at{' '}
-            <a href={prompt.url} target="_blank" rel="noreferrer" style={{ color: 'var(--accent, #6ea8fe)' }}>
+            <a
+              href={prompt.url}
+              target="_blank"
+              rel="noreferrer"
+              style={{ color: 'var(--accent, #6ea8fe)' }}
+            >
               link
             </a>
           </span>
         ) : (
           <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.2rem' }}>
             Authorizing...{' '}
-            <a href={prompt.url} target="_blank" rel="noreferrer" style={{ color: 'var(--accent, #6ea8fe)' }}>
+            <a
+              href={prompt.url}
+              target="_blank"
+              rel="noreferrer"
+              style={{ color: 'var(--accent, #6ea8fe)' }}
+            >
               reopen
             </a>
           </span>
@@ -289,7 +267,7 @@ export function LobbyPanel() {
           <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
             {games.map((g) => {
               const isSelected = selectedGame === g.id;
-              const accent = GAME_ACCENT[g.id] ?? 'var(--accent, #6ea8fe)';
+              const accent = gameAccent(g.id);
               return (
                 <li key={g.id} style={{ margin: '0.2rem 0' }}>
                   <button
@@ -304,7 +282,7 @@ export function LobbyPanel() {
                       if (next) setActiveGame(next);
                     }}
                   >
-                    <span className="games-lib-tile-icon">{GAME_ICONS[g.id] ?? '🎲'}</span>
+                    <span className="games-lib-tile-icon">{gameIcon(g.id)}</span>
                     <span className="games-lib-tile-name">{g.name}</span>
                     {isSelected && <span className="games-lib-tile-dot" />}
                   </button>

@@ -204,7 +204,7 @@ export function ReplPane() {
       display: 'flex',
       flexDirection: 'column',
       height: '100%',
-      fontFamily: 'var(--mono, ui-monospace, monospace)',
+      fontFamily: 'var(--font-mono)',
       fontSize: 13,
     }),
     [],
