@@ -30,11 +30,14 @@ import logging
 import os
 import queue
 import threading
+import time
+from functools import partial
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 from backend.modules.browser.fetch import UnsafeUrlError, _check_host_public
+from backend.modules.telemetry.instrument import record_browser_request
 from backend.modules.ws import WsConnection
 
 logger = logging.getLogger(__name__)
@@ -50,7 +53,22 @@ _SEND_TIMEOUT_S = 5.0
 
 # Ops that return a value to the caller (agent tools). Everything else is a
 # human interaction whose only effect is the next frame.
-_RESULT_OPS = {"content", "snapshot", "scrape", "screenshot", "eval", "info"}
+_RESULT_OPS = {"content", "snapshot", "scrape", "screenshot", "eval", "info", "media"}
+
+# Network observability caps. A page can fire hundreds of requests; `_MAX_INFLIGHT`
+# bounds the in-flight map against a request that never completes, and
+# `_MAX_BODY_BYTES` bounds what any single response contributes to the ring buffer.
+_MAX_INFLIGHT = 200
+_MAX_BODY_BYTES = 262_144  # 256 KB
+_TEXTY_CONTENT_TYPES = (
+    "text/",
+    "application/json",
+    "application/javascript",
+    "application/xml",
+    "application/x-www-form-urlencoded",
+    "+json",
+    "+xml",
+)
 
 
 def server_browser_enabled() -> bool:
@@ -110,6 +128,87 @@ _SNAPSHOT_JS = r"""
 """
 
 
+# JS that harvests the page's media along with the **text that describes it**.
+#
+# This is the whole basis of media search in the library: there is no multimodal
+# embedder in the app (embeddings are text-only — see database/embeddings.py), so an
+# image becomes searchable via the words around it — alt text, figcaption, aria-label,
+# title, and the nearest heading. Collecting that context here, while the live DOM is
+# in hand, is the only moment it's cheaply available; by the time an asset reaches the
+# ingest pipeline it's just bytes at a URL. A future CLIP vector would *supplement*
+# these fields, not replace them.
+_MEDIA_JS = r"""
+() => {
+  const abs = (u) => { try { return new URL(u, location.href).href; } catch { return null; } };
+  const clip = (s, n) => { s = (s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
+
+  // The words that describe an element: its own labels, then its <figure>
+  // caption, then the nearest preceding heading. Ordered most- to least-specific.
+  const describe = (el) => {
+    const parts = [];
+    const fig = el.closest('figure');
+    const cap = fig && fig.querySelector('figcaption');
+    if (cap) parts.push(clip(cap.innerText, 300));
+    let node = el, heading = null;
+    while (node && !heading) {
+      let sib = node.previousElementSibling;
+      while (sib && !heading) {
+        if (/^H[1-6]$/.test(sib.tagName)) heading = sib;
+        sib = sib.previousElementSibling;
+      }
+      node = node.parentElement;
+    }
+    if (heading) parts.push(clip(heading.innerText, 160));
+    return parts;
+  };
+
+  const images = [];
+  for (const el of document.querySelectorAll('img')) {
+    const src = abs(el.currentSrc || el.src);
+    if (!src || src.startsWith('data:')) continue;      // inline pixels aren't addressable
+    const w = el.naturalWidth || el.width, h = el.naturalHeight || el.height;
+    if (w && h && w < 64 && h < 64) continue;           // spacers, icons, tracking pixels
+    images.push({
+      src, kind: 'image',
+      alt: clip(el.alt, 300),
+      title: clip(el.getAttribute('title'), 160),
+      width: w || null, height: h || null,
+      context: describe(el),
+    });
+    if (images.length >= 100) break;
+  }
+
+  const videos = [];
+  for (const el of document.querySelectorAll('video, iframe')) {
+    let src = null, kind = 'video';
+    if (el.tagName === 'VIDEO') {
+      src = abs(el.currentSrc || el.src);
+      if (!src) { const s = el.querySelector('source'); if (s) src = abs(s.src); }
+    } else {
+      // Only embeds that are actually video players — a generic iframe isn't media.
+      const u = abs(el.src) || '';
+      if (!/(youtube|youtube-nocookie|vimeo|dailymotion|player\.twitch)\./.test(u)) continue;
+      src = u; kind = 'embed';
+    }
+    if (!src) continue;
+    videos.push({
+      src, kind,
+      alt: clip(el.getAttribute('aria-label') || el.getAttribute('title'), 300),
+      title: clip(el.getAttribute('title'), 160),
+      width: el.videoWidth || el.width || null,
+      height: el.videoHeight || el.height || null,
+      duration: (el.duration && isFinite(el.duration)) ? Math.round(el.duration) : null,
+      poster: el.poster ? abs(el.poster) : null,
+      context: describe(el),
+    });
+    if (videos.length >= 50) break;
+  }
+
+  return { url: location.href, title: document.title, images, videos };
+}
+"""
+
+
 class _Cmd:
     """A unit of work handed to the worker thread with a Future for its result."""
 
@@ -142,6 +241,13 @@ class BrowserSession:
         self._last_frame_hash: int | None = None
         # Resolved-host cache for the egress route (getaddrinfo per request is costly).
         self._host_ok: dict[str, bool] = {}
+        # Network observability (worker-thread state; see the handlers below).
+        # `_inflight` is the live open-connections set, keyed by the Playwright
+        # Request object; `_blocked` carries the egress verdict from `_route` to
+        # `_on_request_failed`, which is the only place it can be attributed.
+        self._inflight: dict[Any, dict[str, Any]] = {}
+        self._blocked: dict[Any, str] = {}
+        self._seq = 0
 
     # ---- lifecycle ---------------------------------------------------------
 
@@ -212,6 +318,9 @@ class BrowserSession:
             )
             context.set_default_timeout(_NAV_TIMEOUT_MS)
             context.route("**/*", self._route)
+            context.on("request", self._on_request)
+            context.on("response", self._on_response)
+            context.on("requestfailed", self._on_request_failed)
             page = context.pages[0] if context.pages else context.new_page()
             self._started.set()
             self._loop_commands(page)
@@ -233,13 +342,21 @@ class BrowserSession:
                 pass
 
     def _route(self, route: Any, request: Any) -> None:
-        """Egress guard: abort any request whose host resolves to a non-public IP."""
+        """Egress guard: abort any request whose host resolves to a non-public IP.
+
+        Also the **policy** half of the network-observability story: a request the
+        guard kills never reaches Chromium's `requestfailed` with a reason we could
+        attribute, so the verdict is stamped here (`self._blocked`) and read back by
+        `_on_request_failed`. Blocked requests stay visible in the I/O stream — a
+        silent abort is exactly the kind of thing this pane exists to expose.
+        """
         parts = urlsplit(request.url)
         scheme = parts.scheme
         if scheme in ("data", "blob", "about"):
             route.continue_()
             return
         if scheme not in ("http", "https"):
+            self._blocked[request] = f"scheme not allowed: {scheme or '(none)'}"
             route.abort()  # file://, chrome://, etc.
             return
         host = parts.hostname or ""
@@ -254,7 +371,114 @@ class BrowserSession:
         if ok:
             route.continue_()
         else:
+            self._blocked[request] = f"blocked by egress policy: {host} is not public"
             route.abort()
+
+    # ---- network observability ---------------------------------------------
+    #
+    # Chromium's own traffic is the app's biggest blind spot: `_route` sees every
+    # request but historically only allowed/aborted it. These three handlers turn
+    # that into I/O events (recorded on completion, like the httpx seam) plus a live
+    # in-flight set for the open-connections view. All of them run on the **worker
+    # thread**, so every hand-off to the recorder or the socket is posted onto the
+    # loop rather than called directly.
+
+    def _post(self, fn: Any) -> None:
+        """Run `fn` on the event loop from the worker thread, fire-and-forget."""
+        if self._closing or self._loop is None:
+            return
+        try:
+            self._loop.call_soon_threadsafe(fn)
+        except RuntimeError:  # loop already closed
+            pass
+
+    def _emit_nowait(self, event: str, data: dict[str, Any]) -> None:
+        """Like `_emit_threadsafe` but does not wait for the send to land.
+
+        Frames use the blocking variant on purpose (it backpressures the worker
+        against a slow socket). Network events must not: a page load fires hundreds
+        of them, and stalling the worker 5s each would hold up the browser itself.
+        """
+        if self._closing or self._loop is None:
+            return
+        try:
+            fut = asyncio.run_coroutine_threadsafe(self._emit(event, data), self._loop)
+        except RuntimeError:
+            return
+        # Retrieve the exception so a dropped send doesn't warn on GC.
+        fut.add_done_callback(lambda f: f.exception() if not f.cancelled() else None)
+
+    def _emit_connections(self) -> None:
+        now = time.perf_counter()
+        conns = [
+            {
+                "id": meta["seq"],
+                "url": meta["url"],
+                "method": meta["method"],
+                "resourceType": meta["resource_type"],
+                "startedAt": meta["wall"],
+                "elapsedMs": round((now - meta["started"]) * 1000, 1),
+            }
+            for meta in self._inflight.values()
+        ]
+        self._emit_nowait("connections", {"connections": conns})
+
+    def _on_request(self, request: Any) -> None:
+        # Key by the Request object, not id(): it keeps the object alive for the
+        # lifetime of the entry, so an id can't be recycled onto a later request.
+        if len(self._inflight) >= _MAX_INFLIGHT:
+            return
+        self._seq += 1
+        self._inflight[request] = {
+            "seq": self._seq,
+            "url": request.url,
+            "method": request.method,
+            "resource_type": _safe_attr(request, "resource_type"),
+            "started": time.perf_counter(),
+            "wall": time.time(),
+        }
+        self._emit_connections()
+
+    def _on_response(self, response: Any) -> None:
+        request = response.request
+        meta = self._inflight.pop(request, None)
+        self._blocked.pop(request, None)
+        body = _response_body(response)
+        self._post(
+            partial(
+                record_browser_request,
+                method=request.method,
+                target=response.url,
+                resource_type=_safe_attr(request, "resource_type"),
+                verdict="allowed",
+                status=response.status,
+                duration_ms=_elapsed_ms(meta),
+                request_headers=_safe_headers(request),
+                response_headers=_safe_headers(response),
+                response_bytes=len(body) if body is not None else None,
+                body=body,
+            )
+        )
+        self._emit_connections()
+
+    def _on_request_failed(self, request: Any) -> None:
+        meta = self._inflight.pop(request, None)
+        reason = self._blocked.pop(request, None)
+        # No policy reason recorded ⇒ Chromium failed it on its own (DNS, reset,
+        # cancelled navigation), which is an `allowed` request that didn't land.
+        self._post(
+            partial(
+                record_browser_request,
+                method=request.method,
+                target=request.url,
+                resource_type=_safe_attr(request, "resource_type"),
+                verdict="blocked" if reason else "allowed",
+                duration_ms=_elapsed_ms(meta),
+                request_headers=_safe_headers(request),
+                error=reason or _safe_attr(request, "failure") or "request failed",
+            )
+        )
+        self._emit_connections()
 
     def _loop_commands(self, page: Any) -> None:
         """Pump commands; on idle, refresh the frame so async updates surface."""
@@ -309,6 +533,8 @@ class BrowserSession:
             return self._content(page)
         if op == "snapshot":
             return page.evaluate(_SNAPSHOT_JS)
+        if op == "media":
+            return page.evaluate(_MEDIA_JS)
         if op == "scrape":
             return self._scrape(page, str(args.get("selector", "")))
         if op == "screenshot":
@@ -391,6 +617,56 @@ def _safe_title(page: Any) -> str:
         return page.title()
     except Exception:  # noqa: BLE001
         return ""
+
+
+def _safe_attr(obj: Any, name: str) -> str | None:
+    """Read a Playwright property that can raise if the object is already torn down."""
+    try:
+        value = getattr(obj, name)
+        return str(value) if value is not None else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _safe_headers(obj: Any) -> dict[str, str] | None:
+    try:
+        return {str(k).lower(): str(v) for k, v in obj.headers.items()}
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _elapsed_ms(meta: dict[str, Any] | None) -> float | None:
+    if not meta:
+        return None
+    return round((time.perf_counter() - meta["started"]) * 1000, 1)
+
+
+def _response_body(response: Any) -> bytes | None:
+    """Body of a *text-ish* response, size-capped.
+
+    Deliberately narrow. Bodies are the most useful thing in the pane and the most
+    expensive: pulling a 40 MB video or every JPEG through the ring buffer would
+    dwarf the traffic being observed, and `response.body()` on the worker thread
+    can raise for a redirect or a cancelled navigation. So: text/JSON only, under
+    the cap, and never fatal.
+    """
+    ctype = ""
+    try:
+        ctype = response.headers.get("content-type", "")
+    except Exception:  # noqa: BLE001
+        return None
+    if not any(marker in ctype for marker in _TEXTY_CONTENT_TYPES):
+        return None
+    try:
+        if int(response.headers.get("content-length") or 0) > _MAX_BODY_BYTES:
+            return None
+    except (TypeError, ValueError):
+        pass
+    try:
+        raw = response.body()
+    except Exception:  # noqa: BLE001 — redirect, aborted nav, or body already gone
+        return None
+    return raw[:_MAX_BODY_BYTES] if raw else None
 
 
 class BrowserManager:

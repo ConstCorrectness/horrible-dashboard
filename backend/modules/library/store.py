@@ -1,9 +1,11 @@
 """The `library_sources` catalog — one row per ingested source.
 
-Lives in the **same** SQLite file as the vector store (`vector_store.db`), so the
-built-in `app` database connection sees it alongside the `documents` table and the
-whole knowledge base is a single file. Chunk *content* lives in `documents`; this
-table is the human-facing index (title, type, status, tags, chunk count).
+A SQLite table in the app database (`$HORRIBLE_DATA_DIR/app.db`). Chunk *content*
+and its vectors live in the vector store — LanceDB, under
+`$HORRIBLE_DATA_DIR/lancedb`, one table per library (see `database/vectorstore.py`).
+This table is the human-facing index: title, type, status, tags, chunk count, and —
+for `image`/`video` sources — the `asset` descriptor pointing at media we reference
+but never copy.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ import sqlite3
 import os
 from pathlib import Path
 from typing import Generator
+
 
 @contextmanager
 def get_db_conn() -> Generator[sqlite3.Connection, None, None]:
@@ -59,6 +62,14 @@ def init_library_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_library ON library_sources(library)"
         )
+        # `asset` (JSON MediaAsset, null for blog/note) arrived after the table did,
+        # so CREATE TABLE IF NOT EXISTS alone would leave existing databases without
+        # it. Add it in place; SQLite has no ADD COLUMN IF NOT EXISTS, so probe first.
+        columns = {
+            r["name"] for r in conn.execute("PRAGMA table_info(library_sources)")
+        }
+        if "asset" not in columns:
+            conn.execute("ALTER TABLE library_sources ADD COLUMN asset TEXT")
 
 
 def _row(r: Any) -> dict[str, Any]:
@@ -74,6 +85,7 @@ def _row(r: Any) -> dict[str, Any]:
         "error": r["error"],
         "chunk_count": r["chunk_count"],
         "added_at": str(r["added_at"]),
+        "asset": json.loads(r["asset"]) if r["asset"] else None,
     }
 
 
@@ -85,6 +97,7 @@ def create_source(
     url: str | None,
     author: str | None,
     tags: list[str],
+    asset: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Insert a new source in `queued` status and return it."""
     init_library_db()
@@ -93,10 +106,19 @@ def create_source(
         conn.execute(
             """
             INSERT INTO library_sources
-                (id, library, type, title, url, author, tags, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'queued')
+                (id, library, type, title, url, author, tags, status, asset)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?)
             """,
-            (source_id, library, type, title, url, author, json.dumps(tags)),
+            (
+                source_id,
+                library,
+                type,
+                title,
+                url,
+                author,
+                json.dumps(tags),
+                json.dumps(asset) if asset else None,
+            ),
         )
     source = get_source(source_id)
     assert source is not None  # just inserted

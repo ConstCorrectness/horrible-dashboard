@@ -1018,12 +1018,24 @@ body {
   color: #ffa502;
 }
 
+/* Traffic from the embedded Chromium — distinct from the app's own outbound calls. */
+.io-browser {
+  background: rgb(186 130 255 / 20%);
+  color: #ba82ff;
+}
+
 .io-status-ok {
   color: #2ed573;
 }
 
 .io-status-bad {
   color: #f08c8c;
+}
+
+/* An egress-policy abort: not a failure, a deliberate verdict — so it reads as a
+   warning rather than an error. */
+.io-status-blocked {
+  color: #ffb454;
 }
 
 .io-dim {
@@ -3633,4 +3645,27 @@ kbd {
   color: var(--text-dim);
   font-size: 12px;
   line-height: 1.5;
+}
+
+/* A media hit's thumbnail. Capped rather than stretched: a search result is a
+   reference to the asset, not a viewer for it. */
+.lib-thumb {
+  display: block;
+  max-width: 220px;
+  max-height: 140px;
+  margin: 6px 0 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  object-fit: cover;
+}
+
+/* "Matched visually" — why a result with no snippet is here at all. */
+.lib-badge {
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 500;
 }

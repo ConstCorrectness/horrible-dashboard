@@ -23,24 +23,97 @@ Ingested content is structured as **sources** (the human-facing catalog) and
 **chunks** (the embedded units), so retrieval returns passages that can be grouped
 back to their source for citation.
 
-- A **source** is one ingested item — a `blog` or a `note`. Catalog rows live in a
-  new `library_sources` table in the **same** SQLite file as the vector store
-  (`vector_store.db`), so the built-in `app` database connection sees the whole
-  knowledge base as one file.
-- Each source is split into overlapping **chunks**; every chunk is a row in the
-  existing `documents` table, keyed `"<source_id>#<chunk_index>"`, with
-  `collection` = the **library** name (so `search_documents(collection, …)` scopes a
-  search to one library) and metadata linking the chunk back to its source.
+- A **source** is one ingested item — a `blog`, a `note`, or a media asset
+  (`image` / `video`). Catalog rows live in the `library_sources` table in the app's
+  SQLite database (`$HORRIBLE_DATA_DIR/app.db`).
+- Each source is split into overlapping **chunks**; every chunk is a row in the vector
+  store — **LanceDB**, under `$HORRIBLE_DATA_DIR/lancedb` — keyed
+  `"<source_id>#<chunk_index>"`, in the table named for the **library** (so
+  `search_documents(collection, …)` scopes a search to one library), with metadata
+  linking the chunk back to its source.
 
 ```
-library_sources                         documents  (shared vector store)
+library_sources  (app.db, SQLite)       vector store  (LanceDB, one table per library)
   id          uuid                        id        "<source_id>#<chunk_index>"
   library     collection name             collection = library name
-  type        blog | note                 text      chunk text
-  title, url, author, tags[]              metadata  { source_id, title, type,
-  status      queued…ready|failed                     url, author, tags, chunk_index }
-  chunk_count, added_at                   embedding BLOB (float32)
+  type        blog | note | image | video  text     chunk text (proxy text for media)
+  title, url, author, tags[]              metadata  { source_id, title, type, url,
+  status      queued…ready|failed                     author, tags, chunk_index, asset }
+  asset       MediaAsset JSON | null      vector    float32[]
+  chunk_count, added_at
 ```
+
+### Media sources
+
+The default embedder is **text-only**, so an `image` / `video` source is embedded by
+**proxy**: the words that describe the asset (alt text, caption, nearest heading, page
+title), harvested from the live DOM by the
+[browser](./browser.mdx#saving-to-the-library)'s `media` op. The bytes are
+**referenced, never copied** — `asset.src` addresses the original. A media source is
+always **one chunk**: its proxy text is a few phrases about one asset, and splitting it
+would scatter an image across chunks that each point back at the same `src`.
+
+Text-only, an asset with nothing describing it is **unfindable** — the best index it
+could get is a filename like `IMG_4821.png`, which no realistic query matches — so
+saving it is refused rather than burying a row nothing can reach. **CLIP lifts that
+restriction**; see below.
+
+## Visual search (CLIP)
+
+Optional, off by default. Enable `library.clipEnabled` and install the extra:
+
+```bash
+uv sync --extra clip     # onnxruntime + tokenizers (~60 MB); weights (~350 MB) on first use
+```
+
+With it on, media is indexed a second time by **what it looks like**, so an image with
+no alt text at all is still findable — the point of the feature.
+
+### Two spaces, fused
+
+| table | holds | vector |
+| --- | --- | --- |
+| `<library>` | every source (prose + media proxy text) | app embedder (384/768/1024-dim) |
+| `<library>__clip` | media only | CLIP ViT-B/32 image encoder (512-dim) |
+
+They can't share a table: **LanceDB fixes vector width per table**, so the sibling is
+additive — same doc id, no migration of the text vectors. Sharing the id also means
+deletes cascade for free (`delete_document` sweeps every table by id), and the sibling
+is hidden from the "all collections" sweeps so the [database](./database.mdx) panel
+doesn't count every media row twice.
+
+A query is encoded **once per space** — by the app embedder against `<library>`, and by
+**CLIP's own text encoder** against the sibling (CLIP is capped at 77 tokens, which is
+why it only ever encodes queries, never document text). The two ranked lists are fused
+with **Reciprocal Rank Fusion**, deliberately rank-based rather than score-based: the
+lists come from different models, so their cosine scores share no scale — `0.31` from
+CLIP and `0.31` from all-MiniLM mean unrelated things, and averaging them would be
+arithmetic on incomparable units. Ranks are all they have in common.
+
+Each `SearchGroup` reports `matched_by: ["text" | "clip"]`. A **clip-only hit has no
+`chunks`** — no passage matched; the picture did.
+
+### Operational notes
+
+- **ONNX Runtime, not torch** — ~60 MB against ~1-2 GB, and `pillow` / `numpy` /
+  `huggingface-hub` are already core deps, so the extra installs on every OS. The model
+  is **pinned by revision**: a silent upstream re-export would change the vector space
+  under stored embeddings, and nothing would look broken — searches would just quietly
+  get worse.
+- **Enabling CLIP does nothing retroactively.** Media ingested earlier has no CLIP
+  vector until `POST /api/library/reindex-clip`, which enqueues **one task per source**
+  (the task queue is serial, so a monolithic backfill would block every new ingest
+  behind it). `GET /api/library/clip` reports coverage.
+- **It reverses a security property.** Text-proxy ingest fetched nothing server-side;
+  CLIP needs the actual pixels, so every captured `asset.src` becomes a backend request.
+  It routes through the browser module's SSRF guard (`safe_fetch_bytes` — same
+  validate-every-redirect-hop policy as reader mode, plus an image content-type
+  allowlist and a streaming size cap), and Pillow decoding is capped against
+  decompression bombs.
+- **A CLIP failure never fails a source.** It's an additive space on top of a text proxy
+  that already succeeded — a dead image URL degrades the source, it doesn't lose it.
+- Video is embedded from its **poster frame** if the page provides one; real keyframe
+  sampling would need ffmpeg and isn't done.
 
 A **library** is just a collection name; the default is `default`. Switching or
 creating a library in the panel changes which collection ingestion and search use.
@@ -81,7 +154,9 @@ flowchart LR
 
 | Route                                | Purpose                                             |
 | ------------------------------------ | --------------------------------------------------- |
-| `POST /library/sources`              | add a source (blog `url` or note `text`); starts ingest |
+| `POST /library/sources`              | add a source (blog `url`, note `text`, or image/video `asset`); starts ingest |
+| `GET /library/clip`                  | visual-search availability + coverage                   |
+| `POST /library/reindex-clip`         | backfill CLIP vectors for existing media                |
 | `GET /library/sources`               | catalog list (`?library=&type=&tag=`)               |
 | `GET /library/sources/{id}/chunks`   | a source's stored chunks (detail view)              |
 | `DELETE /library/sources/{id}`       | delete a source and its chunk rows                  |

@@ -26,6 +26,8 @@ import {
 } from '../api';
 import { sendInput, stopSession } from '../session';
 import { FullBrowserView } from './FullBrowserView';
+import { NetworkStrip } from './NetworkStrip';
+import { SaveToLibrary } from './SaveToLibrary';
 
 /**
  * The embedded browser pane. Renders a page inline via `<iframe>` (works in both
@@ -78,6 +80,7 @@ export function BrowserPanel() {
   const homePage = (useSetting<string>('browser.homePage') ?? '').trim();
   const readerDefault = useSetting<boolean>('browser.readerModeDefault') ?? false;
   const enginePref = useSetting<string>('browser.engine') ?? 'auto';
+  const saveLibrary = (useSetting<string>('browser.saveLibrary') ?? 'default').trim() || 'default';
 
   // Whether to run the real backend Chromium engine ("full mode") vs the light
   // iframe. In `auto` we use the engine only when the backend reports it enabled;
@@ -118,6 +121,10 @@ export function BrowserPanel() {
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [showHistory, setShowHistory] = useState(false);
+  // Both are full-engine-only: saving reads the live DOM for media context, and the
+  // network view reflects the backend Chromium's requests. An iframe exposes neither.
+  const [showSave, setShowSave] = useState(false);
+  const [showNetwork, setShowNetwork] = useState(false);
 
   const urlRef = useRef<HTMLInputElement>(null);
   const canPopOut = hasCapability('browser.nativeWindow');
@@ -314,6 +321,27 @@ export function BrowserPanel() {
         <button type="button" style={btn} title="History" onClick={openHistory}>
           🕘
         </button>
+        {useFull && (
+          <>
+            <button
+              type="button"
+              style={{ ...btn, color: showSave ? 'var(--accent, #6ea8fe)' : undefined }}
+              disabled={!current}
+              title="Save page or its media to a library"
+              onClick={() => setShowSave((s) => !s)}
+            >
+              📥
+            </button>
+            <button
+              type="button"
+              style={{ ...btn, color: showNetwork ? 'var(--accent, #6ea8fe)' : undefined }}
+              title="Show this page’s network requests"
+              onClick={() => setShowNetwork((s) => !s)}
+            >
+              📡
+            </button>
+          </>
+        )}
         {canPopOut ? (
           <button
             type="button"
@@ -423,58 +451,69 @@ export function BrowserPanel() {
         </div>
       )}
 
-      {/* Content: reader view, or the iframe, or the start page */}
-      <div style={{ flex: 1, position: 'relative', overflow: 'auto' }}>
-        {reader ? (
-          <article style={{ maxWidth: 720, margin: '0 auto', padding: '1.5rem', lineHeight: 1.6 }}>
-            <h1 style={{ fontSize: '1.4rem' }}>{reader.title}</h1>
-            {reader.author && (
-              <div style={{ color: 'var(--text-dim)', marginBottom: '1rem' }}>{reader.author}</div>
-            )}
-            <div style={{ whiteSpace: 'pre-wrap' }}>{reader.text}</div>
-          </article>
-        ) : readerBusy ? (
-          <div style={{ padding: '1rem', color: 'var(--text-dim)' }}>
-            Fetching readable version…
-          </div>
-        ) : readerError ? (
-          <div style={{ padding: '1rem', color: 'var(--danger, #f87171)' }}>
-            Reader mode failed: {readerError}
-          </div>
-        ) : useFull && current ? (
-          <FullBrowserView url={fullTarget} navSeq={navSeq} onMeta={setLiveMeta} />
-        ) : current ? (
-          <iframe
-            key={`${reloadKey}:${current}`}
-            src={current}
-            title="Embedded browser"
-            onLoad={() => setLoading(false)}
-            referrerPolicy="no-referrer"
-            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
-            style={{ width: '100%', height: '100%', border: 'none', background: '#fff' }}
-          />
-        ) : (
-          <div style={{ padding: '2rem', color: 'var(--text-dim)', textAlign: 'center' }}>
-            <div style={{ fontSize: '2rem' }}>🌐</div>
-            <p>
-              Type a URL above to start browsing. Some sites block embedding — use ▤ Reader or ⧉ to
-              open them.
-            </p>
-          </div>
-        )}
-        {loading && current && !reader && (
-          <div
-            style={{
-              position: 'absolute',
-              top: 6,
-              right: 10,
-              fontSize: '0.7rem',
-              color: 'var(--text-dim)',
-            }}
-          >
-            loading…
-          </div>
-        )}
+      {/* Content: reader view, or the iframe, or the start page — beside the network
+          strip, which needs to stay visible while you browse (that's the point). */}
+      <div style={{ flex: 1, display: 'flex', minHeight: 0 }}>
+        <div style={{ flex: 1, position: 'relative', overflow: 'auto', minWidth: 0 }}>
+          {reader ? (
+            <article
+              style={{ maxWidth: 720, margin: '0 auto', padding: '1.5rem', lineHeight: 1.6 }}
+            >
+              <h1 style={{ fontSize: '1.4rem' }}>{reader.title}</h1>
+              {reader.author && (
+                <div style={{ color: 'var(--text-dim)', marginBottom: '1rem' }}>
+                  {reader.author}
+                </div>
+              )}
+              <div style={{ whiteSpace: 'pre-wrap' }}>{reader.text}</div>
+            </article>
+          ) : readerBusy ? (
+            <div style={{ padding: '1rem', color: 'var(--text-dim)' }}>
+              Fetching readable version…
+            </div>
+          ) : readerError ? (
+            <div style={{ padding: '1rem', color: 'var(--danger, #f87171)' }}>
+              Reader mode failed: {readerError}
+            </div>
+          ) : useFull && current ? (
+            <FullBrowserView url={fullTarget} navSeq={navSeq} onMeta={setLiveMeta} />
+          ) : current ? (
+            <iframe
+              key={`${reloadKey}:${current}`}
+              src={current}
+              title="Embedded browser"
+              onLoad={() => setLoading(false)}
+              referrerPolicy="no-referrer"
+              sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
+              style={{ width: '100%', height: '100%', border: 'none', background: '#fff' }}
+            />
+          ) : (
+            <div style={{ padding: '2rem', color: 'var(--text-dim)', textAlign: 'center' }}>
+              <div style={{ fontSize: '2rem' }}>🌐</div>
+              <p>
+                Type a URL above to start browsing. Some sites block embedding — use ▤ Reader or ⧉
+                to open them.
+              </p>
+            </div>
+          )}
+          {loading && current && !reader && (
+            <div
+              style={{
+                position: 'absolute',
+                top: 6,
+                right: 10,
+                fontSize: '0.7rem',
+                color: 'var(--text-dim)',
+              }}
+            >
+              loading…
+            </div>
+          )}
+          {showSave && useFull && current && (
+            <SaveToLibrary library={saveLibrary} onClose={() => setShowSave(false)} />
+          )}
+        </div>
+        {showNetwork && useFull && <NetworkStrip onClose={() => setShowNetwork(false)} />}
       </div>
     </div>
   );

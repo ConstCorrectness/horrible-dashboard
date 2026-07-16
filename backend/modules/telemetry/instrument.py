@@ -232,6 +232,49 @@ def record_ws_frame(direction: str, data: object) -> None:
     )
 
 
+def record_browser_request(
+    *,
+    method: str,
+    target: str,
+    resource_type: str | None = None,
+    verdict: str = "allowed",
+    status: int | None = None,
+    duration_ms: float | None = None,
+    request_headers: dict[str, str] | None = None,
+    response_headers: dict[str, str] | None = None,
+    request_bytes: int | None = None,
+    response_bytes: int | None = None,
+    body: bytes | None = None,
+    error: str | None = None,
+) -> None:
+    """Record one request made by the embedded Chromium (see modules/browser).
+
+    Unlike the httpx/inbound seams this is called from the browser's **worker
+    thread**, so it must be posted onto the loop (``call_soon_threadsafe``) rather
+    than invoked directly — ``Recorder`` notifies asyncio.Queue subscribers, which
+    is not thread-safe. ``session.py`` owns that hop; this function assumes it has
+    already happened and only ever runs on the loop.
+
+    ``body`` is passed raw so the settings-backed truncation cap is read here, on
+    the loop, rather than on the worker thread.
+    """
+    recorder.record(
+        source="browser",
+        method=method,
+        target=target,
+        resource_type=resource_type,
+        verdict=verdict,
+        status=status,
+        duration_ms=duration_ms,
+        request_bytes=request_bytes,
+        response_bytes=response_bytes,
+        request_headers=request_headers,
+        response_headers=response_headers,
+        response_body=safe_body(body, max_chars=_max_body_chars()),
+        error=error,
+    )
+
+
 def instrumented_client(**kwargs: object) -> httpx.AsyncClient:
     """An httpx.AsyncClient whose calls are recorded as outbound I/O events."""
     hooks = dict(kwargs.pop("event_hooks", {}) or {})  # type: ignore[arg-type]

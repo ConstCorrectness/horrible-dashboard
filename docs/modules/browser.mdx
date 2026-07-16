@@ -37,8 +37,9 @@ It has **two rendering engines**, selected by the `browser.engine` setting:
 - **Keybindings:** `mod+l` → `browser.focusUrlBar`, **scoped** to `browser.view` so it
   only fires in a focused browser pane and never shadows a global shortcut.
 - **Settings:** `browser.homePage` (URL for the Home button; blank shows a start page),
-  `browser.readerModeDefault` (open every page in reader mode), and `browser.engine`
-  (`auto` | `full` | `iframe` — the rendering engine, see above).
+  `browser.readerModeDefault` (open every page in reader mode), `browser.engine`
+  (`auto` | `full` | `iframe` — the rendering engine, see above), and
+  `browser.saveLibrary` (which library 📥 Save files into).
 
 ## The pane
 
@@ -51,6 +52,11 @@ history persist server-side (see below).
 
 - **▤ Reader** — server-side reader mode: the backend fetches the page and returns its
   extracted text, rendered inline. Works for any site in any build.
+Two more affordances appear in **full mode only**, since both need the live DOM /
+backend Chromium that an iframe can't give: **📥 Save**
+([to the library](#saving-to-the-library)) and **📡 Network**
+([what the page is talking to](#network-observability)).
+
 - **⧉ Pop out / Open tab** — on **desktop** (capability `browser.nativeWindow`) opens
   the URL in a **real native window** (a true browser, bypassing X-Frame-Options
   entirely) via the `WindowControl.openBrowserWindow` seam → the Tauri `browser_open_url`
@@ -84,10 +90,112 @@ agent's browser (one WS connection ⇒ one shared session):**
   element by its snapshot `ref`.
 - **`browser.scrape{selector}`** (read-only) — pull structured data (text / href /
   outerHTML, capped) for every element matching a CSS selector.
+- **`browser.media`** (read-only) — the page's images and videos, each with its `src`,
+  alt text, caption, and surrounding context, plus a `described` flag saying whether
+  `browser.save` would accept it.
+- **`browser.save{target,src?,library?,tags?}`** (side-effecting) — file the page
+  (`target: "page"`), one media item (`"media"` + `src`), or every described asset
+  (`"allMedia"`) into a [library](./library.mdx). See
+  [Saving to the library](#saving-to-the-library).
+
+`browser.read` + `browser.save` are the **write half of RAG** — `library.search` is the
+read half. Without `save`, the agent can read the whole web and remember none of it.
 
 Parameterized actions have to be `agentTools` rather than agent-exposed commands here,
 because agent commands currently ignore their args (see
 [agent tools](../architecture/agent-tools.mdx)).
+
+## Saving to the library
+
+The browser is where the app meets the web, so it's where things worth keeping are
+found. **📥 Save** (full engine only) files the open page or its media into a
+[knowledge library](./library.mdx), where it's chunked, embedded, and semantically
+searchable. The human button and the agent's `browser.save` both go through
+`packages/core/src/modules/browser/capture.ts`, so a page saved by hand and one saved by
+the agent are the same kind of source.
+
+- **The page** → a `blog` source: the backend re-fetches and extracts it, identical to
+  adding the URL in the Library panel.
+- **Images / videos** → `image` / `video` sources.
+
+### Why media is stored by reference and description
+
+The app's embedder is **text-only** (`backend/modules/database/embeddings.py` — a
+provider call with a deterministic hash fallback). There is no multimodal model, so an
+image cannot be turned into a vector directly. Two consequences shape the design:
+
+1. **Media is embedded by proxy.** An asset becomes searchable through the words around
+   it — alt text, `<figcaption>`, the nearest heading, the page title. The `media` op
+   harvests those from the **live DOM**, which is the only moment they're cheaply
+   available: by the time a URL reaches the ingest pipeline, the context is gone. The
+   proxy text is deduped before embedding, because the same string routinely arrives as
+   alt *and* title *and* caption, and embedding it three times skews the vector.
+2. **An undescribed asset is rejected, not stored.** A spacer GIF with no alt text has
+   nothing to match on; storing it would put a row in the store that no query can ever
+   reach. `browser.save` returns an error explaining why, and the Save popover greys the
+   item out rather than hiding it — a silent drop looks like a bug.
+
+Both of these are consequences of a text-only embedder, and
+**[CLIP visual search](./library.mdx#visual-search-clip) removes the second one**: with
+it enabled the pixels themselves are indexed, so an undescribed image is savable and
+findable, description becomes a bonus rather than a requirement, and the Save popover
+shows a 👁 marker with the item labelled *indexed by appearance*. `browser.media`
+reports both `described` and `savable` per item so the agent knows which applies.
+
+The **bytes are never copied**: a source holds an `asset` descriptor (`src`, `page_url`,
+dimensions, caption) and the client renders from the original URL. That also means media
+ingest performs no server-side fetch, so it adds no new SSRF sink — unlike `blog`, which
+does fetch (see [Security](#security--ssrf)).
+
+CLIP is a **supplement, not a replacement** — the descriptive fields stay useful either
+way, and a hit reports which space found it (`matched_by`). See
+[Visual search](./library.mdx#visual-search-clip) for the two-space design.
+
+## Network observability
+
+A browser is the app's largest source of outbound traffic and, before this, its largest
+blind spot: the pane fetched hundreds of subresources per page and **none of it was
+visible**. The `_route` egress hook already saw every request — it just allowed or
+aborted it and recorded nothing.
+
+Every request the embedded Chromium makes is now recorded as an I/O event with
+`source: "browser"`, alongside `inbound` / `outbound` / `ws` in the
+[observability panel](./observability.mdx). Two extra axes come with it:
+
+- **`resource_type`** — Chromium's own classification (`document`, `script`, `image`,
+  `xhr`, `fetch`, `media`, …), the thing that makes a page's traffic legible at a glance.
+- **`verdict`** — `allowed` or `blocked`. **A request the egress guard kills stays
+  visible**, labelled with its reason. A silently aborted request is exactly what this
+  pane exists to expose.
+
+**📡 Network** in the pane is the glanceable version, sitting next to the page it
+describes:
+
+- **Open connections** — requests currently *in flight*, pushed live on the `browser`
+  channel as `connections` events. These exist only while unresolved, so they can't come
+  from the I/O ring buffer, which (like the httpx seam) records on **completion**. This
+  is the "why is this page hanging" view.
+- **Completed** — finished requests read from the shared telemetry store, filtered to
+  `browser`. Full headers and bodies live in the observability panel's inspector.
+
+### Implementation notes
+
+- **Recorded on completion, not amended.** `Recorder.amend` needs an event id, which a
+  thread-safe `call_soon_threadsafe` post can't hand back — so `_on_response` /
+  `_on_request_failed` record once, and the live in-flight set is tracked separately.
+- **Thread affinity.** `_route` and the request/response handlers run on the **Playwright
+  worker thread**, while `Recorder` notifies asyncio.Queue subscribers and is loop-affine.
+  Every hand-off is posted with `call_soon_threadsafe`; frames keep their blocking
+  `_emit_threadsafe` (it backpressures the worker), but network events use a
+  non-blocking send — a page fires hundreds, and stalling the worker on each would hold
+  up the browser itself.
+- **The verdict is stamped in `_route`.** Chromium's `requestfailed` can't distinguish
+  our abort from a DNS failure, so `_route` records the reason and
+  `_on_request_failed` reads it back.
+- **Bodies are text/JSON only**, size-capped (256 KB). Pulling every JPEG and video
+  through the ring buffer would dwarf the traffic being observed.
+- Like the rest of the I/O buffer, capture is **raw** — treat it as sensitive, since it
+  holds cookies and auth headers from sites you browse.
 
 ## Backend surface (`/api/browser`)
 
@@ -190,8 +298,18 @@ iframe-mode escape hatch on desktop.
   (paint-driven frames) is the planned upgrade. Chromium is heavy, so full mode is
   bounded (one context per connection, released on disconnect).
 - Deferred full-engine work: in-pane **tabs** (multiple pages per context), a smart URL
-  bar / start page with favicons & titles, a history/bookmarks manager, "Save to
-  Library", and multi-profile switching.
+  bar / start page with favicons & titles, a history/bookmarks manager, and
+  multi-profile switching.
+- Media search is proxy-text only **unless [CLIP visual search](./library.mdx#visual-search-clip)
+  is enabled** — without it, an image with no alt text, caption, or nearby heading can't
+  be saved at all (its only index would be a filename). With CLIP on, the pixels become
+  the index and 📥 accepts it. OCR and video transcripts are still not done; video is
+  embedded from its poster frame only.
+- Saved media is stored **by reference**: if the origin removes the asset or it sits
+  behind auth, the library keeps a searchable record pointing at a URL that no longer
+  renders.
+- The network view covers the **full engine only** — an iframe's requests are made by
+  the user's own browser and are invisible to the backend.
 - Iframe-block detection is best-effort; in iframe mode the manual escapes are always
   shown rather than auto-triggered.
 - A **true in-pane native webview** on desktop (Tauri's `unstable` multi-webview) is

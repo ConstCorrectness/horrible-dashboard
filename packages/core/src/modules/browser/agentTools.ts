@@ -16,12 +16,24 @@
  *   the live page and reads its extracted content; `browser.snapshot` returns the
  *   interactable elements (ref + role + name) so the agent can `browser.click`/
  *   `browser.type` by ref; `browser.scrape` pulls structured data by CSS selector.
+ * - **Remembering.** `browser.media` lists the page's images/videos and `browser.save`
+ *   files the page or its media into a knowledge library — the write half of RAG, where
+ *   `library.search` is the read half. Without these the agent can read the whole web
+ *   and keep none of it.
  */
 import type { AgentToolDecl } from '@horribledashboard/sdk';
 
 import { registry } from '../../registry';
 import { engineStatus, readerMode } from './api';
-import { engine, type SnapshotElement } from './session';
+import {
+  captureAllMedia,
+  capturePage,
+  captureMedia,
+  isDescribed,
+  isSavable,
+  pageMedia,
+} from './capture';
+import { engine, type MediaItem, type SnapshotElement } from './session';
 
 // Cap the text handed back to the model so one page can't blow the context window.
 const MAX_TEXT = 8000;
@@ -168,6 +180,116 @@ export const browserAgentTools: AgentToolDecl[] = [
     handler: async (args) => {
       if (!(await engineEnabled())) return ENGINE_OFF;
       return engine.scrape(String(args.selector));
+    },
+  },
+  {
+    name: 'browser.media',
+    description:
+      'List the images and videos on the live page — each with its src, alt text, caption, and surrounding context. Use this to see what is available to save before calling browser.save. Requires the full browser engine.',
+    params: { type: 'object', properties: {} },
+    sideEffect: false,
+    handler: async () => {
+      if (!(await engineEnabled())) return ENGINE_OFF;
+      const media = await pageMedia();
+      // `savable` tells the model which items browser.save would actually accept, so
+      // it doesn't try to save a decorative image and get an error. It's not the same
+      // as `described`: with CLIP on, an undescribed image is savable via its pixels.
+      const savableFlags = await Promise.all(
+        [...media.images, ...media.videos].map((m) => isSavable(m)),
+      );
+      const savable = new Map(
+        [...media.images, ...media.videos].map((m, i) => [m.src, savableFlags[i]]),
+      );
+      const summarize = (items: MediaItem[]) =>
+        items.map((m) => ({
+          src: m.src,
+          alt: m.alt,
+          caption: m.context?.[0] ?? '',
+          width: m.width,
+          height: m.height,
+          described: isDescribed(m),
+          savable: savable.get(m.src) ?? false,
+        }));
+      return {
+        url: media.url,
+        title: media.title,
+        images: summarize(media.images),
+        videos: summarize(media.videos),
+      };
+    },
+  },
+  {
+    name: 'browser.save',
+    description:
+      'Save what is on the live page into a knowledge library so it can be semantically searched later with library.search. Use target "page" to save the article text, "media" to save one image/video by its src (from browser.media), or "allMedia" to save every described image/video on the page. Requires the full browser engine.',
+    params: {
+      type: 'object',
+      properties: {
+        target: {
+          type: 'string',
+          enum: ['page', 'media', 'allMedia'],
+          description: 'What to save: the page text, one media item, or all media',
+        },
+        src: {
+          type: 'string',
+          description: 'For target "media": the src of the image/video (from browser.media)',
+        },
+        library: { type: 'string', description: 'Library to save into (default: "default")' },
+        tags: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional tags to file the source under',
+        },
+      },
+      required: ['target'],
+    },
+    sideEffect: true,
+    specifierTemplate: '{target}',
+    handler: async (args) => {
+      if (!(await engineEnabled())) return ENGINE_OFF;
+      const opts = {
+        library: args.library ? String(args.library) : undefined,
+        tags: Array.isArray(args.tags) ? args.tags.map(String) : undefined,
+      };
+      const target = String(args.target);
+
+      if (target === 'page') {
+        const source = await capturePage(opts);
+        return { ok: true, saved: 'page', id: source.id, title: source.title };
+      }
+      if (target === 'allMedia') {
+        const { saved, skipped } = await captureAllMedia(opts);
+        return {
+          ok: true,
+          saved: saved.length,
+          skipped,
+          note: skipped
+            ? `${skipped} item(s) had no alt text, caption, or heading to embed, so they were skipped — nothing could match them in a search.`
+            : undefined,
+        };
+      }
+      if (target !== 'media') {
+        return { error: `unknown target "${target}" — use page, media, or allMedia.` };
+      }
+
+      const src = args.src ? String(args.src) : '';
+      if (!src) return { error: 'browser.save with target "media" needs a src.' };
+      const media = await pageMedia();
+      const item = [...media.images, ...media.videos].find((m) => m.src === src);
+      if (!item) {
+        return { error: `no image or video with src "${src}" on this page — call browser.media.` };
+      }
+      if (!(await isSavable(item))) {
+        return {
+          error:
+            'That media has no alt text, caption, or nearby heading. Without CLIP visual ' +
+            'search it is embedded only via the text describing it, so there is nothing to ' +
+            'index — saving it would make it unfindable. Enable the library.clipEnabled ' +
+            'setting (and the `clip` extra) to index media by appearance instead.',
+        };
+      }
+      const source = await captureMedia(item, media.url, opts);
+      return { ok: true, saved: 'media', id: source.id, title: source.title, src };
     },
   },
 ];

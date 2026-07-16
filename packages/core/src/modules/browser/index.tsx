@@ -58,6 +58,13 @@ export const browserModule: ModuleManifest = {
       default: false,
     },
     {
+      key: 'browser.saveLibrary',
+      title: 'Save to library',
+      description: 'Which knowledge library the browser’s Save button files pages and media into.',
+      type: 'string',
+      default: 'default',
+    },
+    {
       key: 'browser.engine',
       title: 'Rendering engine',
       description:

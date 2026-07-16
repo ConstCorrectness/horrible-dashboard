@@ -6,8 +6,28 @@
  */
 import { apiDelete, apiGet, apiPost } from '../../api';
 
-export type SourceType = 'blog' | 'note';
+export type SourceType = 'blog' | 'note' | 'image' | 'video';
 export type SourceStatus = 'queued' | 'fetching' | 'chunking' | 'embedding' | 'ready' | 'failed';
+
+/**
+ * A referenced image/video. The bytes stay at `src` — the library never copies
+ * them — and the descriptive fields (`alt`, `caption`, `context`) are what get
+ * embedded, since the backend embedder is text-only. Mirrors `MediaAsset` in
+ * backend/modules/library/models.py.
+ */
+export interface MediaAsset {
+  src: string;
+  kind: 'image' | 'video' | 'embed';
+  page_url?: string | null;
+  alt?: string | null;
+  caption?: string | null;
+  context?: string[];
+  width?: number | null;
+  height?: number | null;
+  duration?: number | null;
+  poster?: string | null;
+  mime?: string | null;
+}
 
 export interface SourceModel {
   id: string;
@@ -21,6 +41,7 @@ export interface SourceModel {
   error?: string | null;
   chunk_count: number;
   added_at: string;
+  asset?: MediaAsset | null;
 }
 
 export interface IngestRequest {
@@ -31,6 +52,8 @@ export interface IngestRequest {
   text?: string;
   author?: string;
   tags?: string[];
+  /** Required for `image`/`video`; ignored otherwise. */
+  asset?: MediaAsset;
 }
 
 export interface LibraryInfo {
@@ -63,6 +86,32 @@ export interface SearchGroup {
   tags: string[];
   top_score: number;
   chunks: SearchChunk[];
+  /** Present on image/video hits: what matched is proxy text, what you want is this. */
+  asset?: MediaAsset | null;
+  /**
+   * Which space(s) matched. A `clip`-only hit means the *picture* matched while its
+   * words didn't — and it has no `chunks`, because no passage was involved.
+   */
+  matched_by?: ('text' | 'clip')[];
+}
+
+/** Availability + coverage of CLIP visual search (`GET /api/library/clip`). */
+export interface ClipStatus {
+  enabled: boolean;
+  installed: boolean;
+  model: string;
+  dim: number;
+  media_sources: number;
+  libraries_indexed: string[];
+}
+
+export function clipStatus(): Promise<ClipStatus> {
+  return apiGet<ClipStatus>('/library/clip');
+}
+
+export function reindexClip(library?: string): Promise<{ started: boolean; queued: number }> {
+  const qs = library ? `?library=${encodeURIComponent(library)}` : '';
+  return apiPost<{ started: boolean; queued: number }>(`/library/reindex-clip${qs}`, {});
 }
 
 export interface LibrarySearchResponse {

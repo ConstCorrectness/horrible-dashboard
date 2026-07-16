@@ -15,6 +15,14 @@ function isError(e: IoEvent): boolean {
 }
 
 /**
+ * A request the egress policy aborted. Distinct from an error: nothing went wrong,
+ * the guard did its job — so it reads as a deliberate verdict, not a failure.
+ */
+function isBlocked(e: IoEvent): boolean {
+  return e.verdict === 'blocked';
+}
+
+/**
  * The agent-readable snapshot of the data flow: a summary plus the most recent
  * calls (newest first) so the agent can reason about what the app is doing —
  * "did that request fail?", "how much traffic is going out?".
@@ -54,9 +62,17 @@ function eventBytes(e: IoEvent): number | null | undefined {
 }
 
 function statusClass(e: IoEvent): string {
+  if (isBlocked(e)) return 'io-status-blocked';
   if (e.error || (e.status != null && e.status >= 400)) return 'io-status-bad';
   if (e.status != null && e.status >= 200 && e.status < 300) return 'io-status-ok';
   return '';
+}
+
+/** The status cell's text: a verdict outranks a code, since a blocked request has none. */
+function statusLabel(e: IoEvent): string | number {
+  if (isBlocked(e)) return 'BLOCKED';
+  if (e.error) return 'ERR';
+  return e.status ?? '';
 }
 
 function eventKey(e: IoEvent): string {
@@ -189,9 +205,20 @@ function Inspector({ event, onClose }: { event: IoEvent; onClose: () => void }) 
     ['Method', event.method],
     ['Target', <span className="io-mono">{event.target}</span>],
   ];
+  // Browser requests carry two extra axes: what kind of resource Chromium thought
+  // it was fetching, and whether the egress guard let it out.
+  if (event.resource_type) rows.push(['Resource', event.resource_type]);
+  if (event.verdict) {
+    rows.push(['Egress', <span className={statusClass(event)}>{event.verdict}</span>]);
+  }
   if (event.status != null)
     rows.push(['Status', <span className={statusClass(event)}>{event.status}</span>]);
-  if (event.error) rows.push(['Error', <code className="io-status-bad">{event.error}</code>]);
+  if (event.error) {
+    rows.push([
+      isBlocked(event) ? 'Reason' : 'Error',
+      <code className={statusClass(event)}>{event.error}</code>,
+    ]);
+  }
   if (event.duration_ms != null) rows.push(['Duration', `${Math.round(event.duration_ms)} ms`]);
   if (event.request_bytes != null) rows.push(['Request size', fmtBytes(event.request_bytes)]);
   if (event.response_bytes != null) rows.push(['Response size', fmtBytes(event.response_bytes)]);
@@ -255,7 +282,7 @@ interface IoFilter {
 }
 
 const EMPTY_FILTER: IoFilter = { query: '', source: 'all', errorsOnly: false };
-const SOURCES: readonly IoSource[] = ['client', 'inbound', 'outbound', 'ws'];
+const SOURCES: readonly IoSource[] = ['client', 'inbound', 'outbound', 'ws', 'browser'];
 
 /** Apply a filter to the event list (method/target/body substring, source, errors). */
 function applyFilter(events: IoEvent[], f: IoFilter): IoEvent[] {
@@ -365,7 +392,7 @@ export function ObservabilityPanel() {
                   <td className="io-target" title={e.target}>
                     {e.target}
                   </td>
-                  <td className={statusClass(e)}>{e.error ? 'ERR' : (e.status ?? '')}</td>
+                  <td className={statusClass(e)}>{statusLabel(e)}</td>
                   <td className="io-dim">
                     {e.duration_ms != null ? Math.round(e.duration_ms) : ''}
                   </td>
@@ -417,7 +444,7 @@ export function ObservabilityWidget() {
               <span className="io-target" title={e.target}>
                 {e.method} {e.target}
               </span>
-              <span className={statusClass(e)}>{e.error ? 'ERR' : (e.status ?? '')}</span>
+              <span className={statusClass(e)}>{statusLabel(e)}</span>
             </button>
             {isExpanded(e) && <IoDetails event={e} />}
           </li>

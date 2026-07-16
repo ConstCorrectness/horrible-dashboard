@@ -6,7 +6,10 @@ import { subscribeChannel, type WsMessage } from './ws';
  * and `inbound`/`outbound` events streamed from the backend over `/ws`. See
  * docs/modules/observability.md.
  */
-export type IoSource = 'client' | 'inbound' | 'outbound' | 'ws';
+export type IoSource = 'client' | 'inbound' | 'outbound' | 'ws' | 'browser';
+
+/** What the egress policy decided about a `browser` request. */
+export type IoVerdict = 'allowed' | 'blocked' | 'pending';
 
 export interface IoEvent {
   id: number | string;
@@ -25,6 +28,10 @@ export interface IoEvent {
   response_headers?: Record<string, string> | null;
   request_body?: string | null;
   response_body?: string | null;
+  // `browser`-only: Chromium's own resource classification (document, script,
+  // image, xhr, …) and whether the SSRF guard let the request out.
+  resource_type?: string | null;
+  verdict?: IoVerdict | null;
 }
 
 const MAX_EVENTS = 300;

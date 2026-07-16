@@ -21,8 +21,10 @@ import pytest
 from backend.modules.browser.session import (
     BrowserManager,
     BrowserSession,
+    _response_body,
     server_browser_enabled,
 )
+from backend.modules.telemetry.recorder import recorder
 
 
 class FakeConn:
@@ -197,3 +199,115 @@ def test_manager_handle_correlates_result_by_id(monkeypatch) -> None:
         mgr.close_all()
         time.sleep(0.2)
         loop.close()
+
+
+# ---- network observability -------------------------------------------------
+
+
+def test_route_records_a_reason_for_every_block() -> None:
+    """`_route` is the only place a blocked request can be attributed: Chromium's
+    `requestfailed` can't tell our abort from a DNS failure. If the reason isn't
+    stamped here, a blocked request silently reads as `allowed` in the I/O pane."""
+    session = BrowserSession(FakeConn())  # type: ignore[arg-type]
+
+    private = _FakeRequest("http://10.0.0.5/")
+    session._route(_FakeRoute(), private)
+    assert "egress policy" in session._blocked[private]
+
+    scheme = _FakeRequest("file:///etc/passwd")
+    session._route(_FakeRoute(), scheme)
+    assert "scheme not allowed" in session._blocked[scheme]
+
+    allowed = _FakeRequest("https://example.com/")
+    session._route(_FakeRoute(), allowed)
+    assert allowed not in session._blocked, "an allowed request must carry no verdict"
+
+
+def test_response_body_only_captures_texty_payloads() -> None:
+    """Pulling every JPEG and video through the ring buffer would dwarf the traffic
+    being observed, so bodies are text/JSON only — and never fatal."""
+
+    class _Resp:
+        def __init__(self, ctype: str, body: bytes, length: int | None = None):
+            self.headers = {"content-type": ctype}
+            if length is not None:
+                self.headers["content-length"] = str(length)
+            self._body = body
+
+        def body(self) -> bytes:
+            return self._body
+
+    assert _response_body(_Resp("application/json", b'{"a":1}')) == b'{"a":1}'
+    assert (
+        _response_body(_Resp("text/html; charset=utf-8", b"<p>hi</p>")) == b"<p>hi</p>"
+    )
+    assert _response_body(_Resp("image/jpeg", b"\xff\xd8\xff")) is None
+    assert _response_body(_Resp("video/mp4", b"\x00\x00")) is None
+    # Oversized text is skipped by its declared length rather than read.
+    assert _response_body(_Resp("text/plain", b"x", length=999_999_999)) is None
+
+    class _Broken:
+        headers = {"content-type": "text/html"}
+
+        def body(self):
+            raise RuntimeError("navigation cancelled")
+
+    assert _response_body(_Broken()) is None, "a body read must never escape"
+
+
+@pytest.mark.timeout(90)
+def test_page_requests_are_recorded_and_streamed(live_session, monkeypatch) -> None:
+    """End-to-end: a page load produces `browser` I/O events on the recorder and
+    `connections` events on the socket. This also exercises the thread hop —
+    `_route`/`_on_response` run on the Playwright worker, while the recorder is
+    loop-affine, so a missing `call_soon_threadsafe` would show up here."""
+    loop, sess, conn = live_session
+    recorder.clear()
+
+    async def drive():
+        # A same-document navigation with a subresource: the <img> 404s, which is
+        # fine — we're asserting the request was *observed*, not that it succeeded.
+        await sess.submit(
+            "navigate",
+            {
+                "url": "data:text/html,<title>N</title><img src='https://example.com/x.png'>"
+            },
+        )
+        await asyncio.sleep(1.5)  # let the subresource settle and the post land
+
+    loop.run_until_complete(drive())
+
+    events = [e for e in recorder.recent() if e.source == "browser"]
+    assert events, "a page load must produce browser I/O events"
+    assert all(e.verdict in ("allowed", "blocked") for e in events)
+    assert any("example.com" in e.target for e in events), (
+        "the subresource was not observed"
+    )
+
+
+@pytest.mark.timeout(90)
+def test_media_op_harvests_describing_text(live_session) -> None:
+    """The media op is the only moment an asset's describing words are available —
+    once it's a bare URL in the ingest pipeline, the caption is gone. So the
+    figcaption and the nearest heading have to come back attached to the image."""
+    loop, sess, _conn = live_session
+    page = (
+        "data:text/html,<title>M</title><h2>Retry strategies</h2>"
+        "<figure><img src='https://example.com/a.png' alt='Backoff chart' width='200' height='200'>"
+        "<figcaption>Exponential backoff over time</figcaption></figure>"
+        "<img src='https://example.com/spacer.gif' width='1' height='1'>"
+    )
+
+    async def drive():
+        await sess.submit("navigate", {"url": page})
+        return await sess.submit("media", {})
+
+    media = loop.run_until_complete(drive())
+
+    # The 1×1 spacer is dropped; only the real image survives.
+    assert len(media["images"]) == 1
+    img = media["images"][0]
+    assert img["src"] == "https://example.com/a.png"
+    assert img["alt"] == "Backoff chart"
+    # Caption first, then the nearest heading — most- to least-specific.
+    assert img["context"] == ["Exponential backoff over time", "Retry strategies"]

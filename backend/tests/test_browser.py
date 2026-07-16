@@ -6,14 +6,16 @@ store at a temp DB per test.
 
 from __future__ import annotations
 
+import asyncio
 import socket
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from backend.app import app
 from backend.modules.browser import fetch, store
-from backend.modules.browser.fetch import UnsafeUrlError, _validate
+from backend.modules.browser.fetch import UnsafeUrlError, _validate, safe_fetch_bytes
 from backend.modules.library.extract import Article
 
 client = TestClient(app)
@@ -132,3 +134,90 @@ def test_record_visit_requires_url() -> None:
 def test_store_direct_roundtrip() -> None:
     store.record_visit("https://direct.test", "Direct")
     assert any(e["url"] == "https://direct.test" for e in store.list_history())
+
+
+# ---- safe_fetch_bytes (CLIP's image sink) ----------------------------------
+
+
+def _png_bytes() -> bytes:
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (8, 8), "red").save(buf, "PNG")
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://127.0.0.1/x.png",
+        "http://localhost:8000/x.png",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://10.0.0.5/internal.png",
+        "file:///etc/passwd",
+    ],
+)
+def test_safe_fetch_bytes_enforces_the_same_egress_policy(url):
+    """The byte sink is new; the policy behind it must not be."""
+    with pytest.raises(UnsafeUrlError):
+        asyncio.run(safe_fetch_bytes(url))
+
+
+@pytest.fixture
+def fake_web(monkeypatch: pytest.MonkeyPatch):
+    """Serve canned responses to `fetch.py`'s internal client, with a public-IP DNS.
+
+    `_fetch_guarded` builds its own AsyncClient, so the transport is injected by
+    swapping the class in the module's namespace.
+    """
+    monkeypatch.setattr(
+        socket, "getaddrinfo", lambda *a, **k: [(2, 1, 6, "", ("93.184.216.34", 0))]
+    )
+
+    def install(content: bytes, content_type: str):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200, content=content, headers={"content-type": content_type}
+            )
+
+        real = httpx.AsyncClient
+
+        class Patched(real):  # type: ignore[misc,valid-type]
+            def __init__(self, *a, **kw):
+                kw["transport"] = httpx.MockTransport(handler)
+                super().__init__(*a, **kw)
+
+        monkeypatch.setattr(fetch.httpx, "AsyncClient", Patched)
+
+    return install
+
+
+def test_safe_fetch_bytes_returns_actual_bytes(fake_web):
+    """Regression: it used to return the httpx.Response itself, so every CLIP embed
+    died on "a bytes-like object is required" — while the source still reported
+    `ready`, because a CLIP failure is non-fatal by design. Nothing looked broken;
+    visual search simply never worked. Stubbing this call in the library tests is
+    exactly why they missed it, so assert the real contract here."""
+    raw = _png_bytes()
+    fake_web(raw, "image/png")
+
+    final_url, data = asyncio.run(safe_fetch_bytes("https://example.com/a.png"))
+
+    assert final_url == "https://example.com/a.png"
+    assert isinstance(data, bytes), f"expected bytes, got {type(data).__name__}"
+    assert data == raw
+
+
+def test_safe_fetch_bytes_rejects_a_non_image_content_type(fake_web):
+    fake_web(b"<html>nope</html>", "text/html")
+    with pytest.raises(UnsafeUrlError, match="content-type"):
+        asyncio.run(safe_fetch_bytes("https://example.com/a.png"))
+
+
+def test_safe_fetch_bytes_caps_an_oversized_body(fake_web):
+    """The cap must bite during transfer, not after the body is already in memory."""
+    fake_web(b"\x00" * 5000, "image/png")
+    with pytest.raises(UnsafeUrlError, match="too large"):
+        asyncio.run(safe_fetch_bytes("https://example.com/big.png", max_bytes=1000))

@@ -38,6 +38,40 @@ export interface PageContent {
   text: string;
 }
 
+/**
+ * One image/video found on the live page, with the text that describes it.
+ * `context` is the surrounding prose (figcaption, nearest heading) — the app has no
+ * multimodal embedder, so these words are what make the asset searchable once saved.
+ */
+export interface MediaItem {
+  src: string;
+  kind: 'image' | 'video' | 'embed';
+  alt: string;
+  title: string;
+  width: number | null;
+  height: number | null;
+  duration?: number | null;
+  poster?: string | null;
+  context: string[];
+}
+
+export interface PageMedia {
+  url: string;
+  title: string;
+  images: MediaItem[];
+  videos: MediaItem[];
+}
+
+/** One request the embedded Chromium currently has in flight. */
+export interface BrowserConnection {
+  id: number;
+  url: string;
+  method: string;
+  resourceType: string | null;
+  startedAt: number;
+  elapsedMs: number;
+}
+
 type PendingResolver = {
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
@@ -81,6 +115,21 @@ function ensureSubscribed(): void {
 export function subscribeFrames(onFrame: (f: BrowserFrame) => void): () => void {
   return subscribeChannel('browser', (msg: WsMessage) => {
     if (msg.event === 'frame') onFrame(msg.data as BrowserFrame);
+  });
+}
+
+/**
+ * Subscribe to the live set of in-flight Chromium requests. Emitted whenever a
+ * request starts or settles, so a listener always holds the current set — this is
+ * the "open connections" view; completed requests land in the I/O stream instead.
+ */
+export function subscribeConnections(
+  onConnections: (conns: BrowserConnection[]) => void,
+): () => void {
+  return subscribeChannel('browser', (msg: WsMessage) => {
+    if (msg.event === 'connections') {
+      onConnections((msg.data as { connections: BrowserConnection[] }).connections);
+    }
   });
 }
 
@@ -145,6 +194,7 @@ export const engine = {
   snapshot: (): Promise<{ url: string; title: string; elements: SnapshotElement[] }> =>
     requestOp('snapshot'),
   scrape: (selector: string) => requestOp('scrape', { selector }),
+  media: (): Promise<PageMedia> => requestOp<PageMedia>('media'),
   screenshot: (): Promise<{ frame: string }> => requestOp('screenshot'),
   clickRef: (ref: number) => requestOp<null>('click_ref', { ref }),
   typeRef: (ref: number, text: string) => requestOp<null>('type_ref', { ref, text }),

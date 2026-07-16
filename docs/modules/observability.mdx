@@ -17,7 +17,7 @@ of the seeded Dashboard workspace; the full I/O panel is opened on demand.
 
 A useful observability view can't be per-module logging — it instruments the
 **chokepoints once** so every module's traffic shows up for free (like the
-Docker daemon already seeing all container I/O). Four sources feed one stream:
+Docker daemon already seeing all container I/O). Five sources feed one stream:
 
 - **`client`** — every frontend→backend round-trip, recorded in the API client's
   `request<T>` ([packages/core/src/api.ts](../../packages/core/src/api.ts)).
@@ -32,6 +32,14 @@ Docker daemon already seeing all container I/O). Four sources feed one stream:
   inbound in the `/ws` receive loop. The `telemetry` channel itself is skipped so
   the push stream doesn't observe its own output. The frame's JSON payload is the
   body; the direction (`send`/`recv`) is the method.
+- **`browser`** — every request the embedded Chromium makes, at the `_route` egress
+  hook plus Chromium's own request/response events
+  ([browser](./browser.mdx#network-observability)). Distinct from `outbound`: those are
+  calls *the app* chose to make, these are made by **pages the user visits**, which is
+  both the largest volume and the least trusted. Carries two extra fields —
+  `resource_type` (document/script/image/xhr/…) and `verdict` (`allowed`/`blocked`), so
+  a request the SSRF guard aborted stays visible instead of vanishing. Full mode only;
+  an iframe's requests are made by the user's own browser and never reach the backend.
 
 So a single user action reads end to end: `client GET /agent/status` →
 `inbound /api/agent/status` → `outbound GET …/api/tags` (Ollama).
@@ -45,6 +53,8 @@ flowchart LR
     MW --> OUT["instrumented_client (outbound)"]
     OUT -->|"httpx"| EXT[("Ollama · Clubhouse")]
     OUT -- "outbound" --> Rec
+    CHR["Embedded Chromium (_route + events)"] -->|"any site"| WEB[("The web")]
+    CHR -- "browser" --> Rec
     Rec -- "/ws telemetry" --> Store
     Store --> DF["Data flow widget / I/O panel"]
 ```

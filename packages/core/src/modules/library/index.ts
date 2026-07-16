@@ -32,6 +32,16 @@ export const libraryModule: ModuleManifest = {
       type: 'number',
       default: 1000,
     },
+    {
+      key: 'library.clipEnabled',
+      title: 'Visual search (CLIP)',
+      description:
+        'Index images by what they look like, not just their alt text — so undescribed ' +
+        'media becomes findable. Needs the clip extra (uv sync --extra clip); the model ' +
+        'downloads once (~350 MB). Media saved before enabling this needs a re-index.',
+      type: 'boolean',
+      default: false,
+    },
   ],
   widgets: [
     {

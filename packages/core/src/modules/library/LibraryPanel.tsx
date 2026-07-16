@@ -9,7 +9,7 @@ import { ApiError } from '../../api';
 import { dialogs } from '../../dialogs';
 import { useSetting } from '../../settings';
 import { toastsStore } from '../../toasts';
-import type { SourceModel, SourceStatus } from './api';
+import type { SourceModel, SourceStatus, SourceType } from './api';
 import {
   addSource,
   clearSearch,
@@ -25,6 +25,13 @@ import {
   setCurrentLibrary,
   subscribeLibrary,
 } from './store';
+
+const SOURCE_ICON: Record<SourceType, string> = {
+  blog: '🌐',
+  note: '📝',
+  image: '🖼',
+  video: '🎬',
+};
 
 const STATUS_LABEL: Record<SourceStatus, string> = {
   queued: 'Queued',
@@ -270,8 +277,25 @@ export function LibraryPanel() {
                 ) : (
                   g.title
                 )}
+                {/* A visual match is worth saying out loud: it means the *picture*
+                    matched, which is why there may be no snippet below it. */}
+                {g.matched_by?.includes('clip') && (
+                  <span className="lib-badge" title="The image itself matched this query">
+                    👁 visual
+                  </span>
+                )}
                 <span className="lib-score">{Math.round(g.top_score * 100)}%</span>
               </div>
+              {g.asset && (
+                <a href={g.asset.page_url ?? g.asset.src} target="_blank" rel="noreferrer">
+                  <img
+                    className="lib-thumb"
+                    src={g.asset.kind === 'image' ? g.asset.src : (g.asset.poster ?? g.asset.src)}
+                    alt={g.asset.alt ?? g.title}
+                    loading="lazy"
+                  />
+                </a>
+              )}
               {g.chunks.slice(0, 2).map((c) => (
                 <p className="lib-snippet" key={c.chunk_index}>
                   {c.text.slice(0, 280)}
@@ -300,7 +324,7 @@ export function LibraryPanel() {
           <tbody>
             {sources.map((s) => (
               <tr key={s.id}>
-                <td className="lib-icon">{s.type === 'blog' ? '🌐' : '📝'}</td>
+                <td className="lib-icon">{SOURCE_ICON[s.type] ?? '📝'}</td>
                 <td>
                   <div className="lib-title">
                     {s.url ? (
