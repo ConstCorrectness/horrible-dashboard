@@ -3,8 +3,6 @@ import * as THREE from 'three';
 
 import type { SocialBubble, SocialOccupant } from '../game-ws';
 
-
-
 interface Rendered {
   x: number;
   y: number;
@@ -201,11 +199,16 @@ export function PlazaCanvas({
 
     const getAccessoryEmoji = (accName: string): string => {
       switch (accName) {
-        case 'crown': return '👑';
-        case 'wizard': return '🧙';
-        case 'goggles': return '🕶️';
-        case 'halo': return '👼';
-        default: return '';
+        case 'crown':
+          return '👑';
+        case 'wizard':
+          return '🧙';
+        case 'goggles':
+          return '🕶️';
+        case 'halo':
+          return '👼';
+        default:
+          return '';
       }
     };
 
@@ -229,7 +232,7 @@ export function PlazaCanvas({
 
     // ── Occupant 3D Cache ──
     const rendered = renderedRef.current;
-    
+
     // Clean up past runs
     for (const key of rendered.keys()) {
       const cur = rendered.get(key)!;
@@ -252,7 +255,7 @@ export function PlazaCanvas({
       requestAnimationFrame(animate);
 
       const present = new Set(occRef.current.map((o) => o.account_id));
-      
+
       // Clean up gone players
       for (const id of [...rendered.keys()]) {
         if (!present.has(id)) {
@@ -278,7 +281,7 @@ export function PlazaCanvas({
         if (!cur) {
           // Initialize new 3D player representation
           const group = new THREE.Group();
-          
+
           // Capsule body mesh
           const capsuleGeo = new THREE.CylinderGeometry(0.4, 0.4, 1.4, 16);
           const capsuleMat = new THREE.MeshStandardMaterial({
@@ -315,7 +318,7 @@ export function PlazaCanvas({
         const dx = o.x - cur.x;
         const dy = o.y - cur.y;
         const dist = Math.sqrt(dx * dx + dy * dy);
-        
+
         if (dist > 15) {
           cur.running = true;
         } else if (dist < 1.5) {
@@ -330,8 +333,8 @@ export function PlazaCanvas({
         if (cur.history.length > 10) cur.history.pop();
 
         // Map world coords (0..100) to 3D space (-12..12)
-        const targetX = ((cur.x / 100) * floorSize) - (floorSize / 2);
-        const targetZ = ((cur.y / 100) * floorSize) - (floorSize / 2);
+        const targetX = (cur.x / 100) * floorSize - floorSize / 2;
+        const targetZ = (cur.y / 100) * floorSize - floorSize / 2;
         cur.group.position.set(targetX, 0, targetZ);
 
         // Update/create accessory sprite if equipped
@@ -383,7 +386,7 @@ export function PlazaCanvas({
           pMesh.position.set(
             targetX + (Math.random() - 0.5) * 0.4,
             0.1,
-            targetZ + (Math.random() - 0.5) * 0.4
+            targetZ + (Math.random() - 0.5) * 0.4,
           );
           scene.add(pMesh);
 
@@ -401,7 +404,7 @@ export function PlazaCanvas({
       if (meGroup) {
         playerSpotlight.position.set(meGroup.position.x, 8, meGroup.position.z + 4);
         playerSpotlight.target.position.copy(meGroup.position);
-        
+
         // Smooth camera follow
         const camTargetX = meGroup.position.x;
         const camTargetZ = meGroup.position.z + 13;
@@ -452,7 +455,7 @@ export function PlazaCanvas({
       if (container.contains(renderer.domElement)) {
         container.removeChild(renderer.domElement);
       }
-      
+
       // Resource disposal
       floorGeo.dispose();
       floorMat.dispose();
@@ -464,7 +467,7 @@ export function PlazaCanvas({
 
   // Raycaster click handling
   const handleClick = useCallback(
-    (e: React.MouseEvent<HTMLCanvasElement>) => {
+    (e: React.MouseEvent<HTMLDivElement>) => {
       const container = mountRef.current;
       if (!container) return;
 
@@ -482,12 +485,12 @@ export function PlazaCanvas({
       // Recreate camera for calculation
       const tempCamera = new THREE.PerspectiveCamera(42, width / height, 0.1, 100);
       const localMe = occRef.current.find((o) => o.account_id === meRef.current);
-      
+
       if (localMe) {
         const curMe = renderedRef.current.get(localMe.account_id);
         if (curMe) {
-          const targetX = ((curMe.x / 100) * 24) - 12;
-          const targetZ = ((curMe.y / 100) * 24) - 12;
+          const targetX = (curMe.x / 100) * 24 - 12;
+          const targetZ = (curMe.y / 100) * 24 - 12;
           tempCamera.position.set(targetX, 11, targetZ + 13);
           tempCamera.lookAt(targetX, 0.5, targetZ);
         } else {
@@ -506,7 +509,7 @@ export function PlazaCanvas({
       const occupantGroups: { group: THREE.Object3D; occupant: SocialOccupant }[] = [];
       renderedRef.current.forEach((val: Rendered, key: string) => {
         if (key !== meRef.current) {
-          const occ = occRef.current.find(o => o.account_id === key);
+          const occ = occRef.current.find((o) => o.account_id === key);
           if (occ) {
             occupantGroups.push({ group: val.group, occupant: occ });
           }
@@ -545,7 +548,7 @@ export function PlazaCanvas({
         onMove(Math.max(0, Math.min(100, wx)), Math.max(0, Math.min(100, wy)));
       }
     },
-    [onMove, onSelectPlayer]
+    [onMove, onSelectPlayer],
   );
 
   return (
@@ -557,10 +560,8 @@ export function PlazaCanvas({
         position: 'relative',
         cursor: 'pointer',
       }}
-      onClick={handleClick as any}
+      onClick={handleClick}
       title="Click 3D floor to move/run · Click avatars to interact"
     />
   );
 }
-
-

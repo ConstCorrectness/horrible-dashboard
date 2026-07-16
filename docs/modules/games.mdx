@@ -61,26 +61,42 @@ The agent **only chooses among legal moves** — the engine emits `legal_actions
 the model never computes legality and can't stall the game with an illegal move. A
 per-move clock on the server auto-plays a safe default if a node is slow.
 
-## The Games hub
+## The Games pane
 
-The module's entry point is the **Games hub** ("Games", `games.lobby`, a
-`document`): the **Play** matchmaking view. The header carries the **connection
-status chip** (see below), compact sign-in, and the Plaza/AgentTown shortcuts.
-`openGamesHub()` (`hub-section.ts`) opens it.
+The module's entry point is the **Games pane** ("Games", `games.lobby`, a
+`document`, `GamesPanel`) — **the whole play loop in one pane**, with three
+internal sections you switch between on its tab strip:
 
-The hub used to fold **Ladder**, **Challenges**, **Replays**, **Players**, and
+| Section | What it is |
+| --- | --- |
+| 🕹 **Play** | Pick a game, find a match, sign in (`LobbyPanel`). |
+| ▦ **Game Board** | The live match (`GameBoardPanel`). |
+| 🛠 **Build your agent** | The code editor + loadout (`AgentBuilderPanel`). |
+
+These were three separate panes (`games.lobby` / `games.board` / `games.loadout`)
+tiled beside each other. Merging them means picking a game, engineering the agent,
+and watching it play are one surface rather than three panes to arrange — and the
+frame only has to place one pane. `hub-section.ts` owns the section store:
+`openGamesSection('board' | 'build' | 'play')` is the single entry point every
+hand-off goes through (`revealBoard()` on a live match, `openHarnessFor(gameId)`
+from a game card, the `games.openBoard` / `games.openLoadout` commands).
+
+Sections are **mounted lazily and never unmounted** once visited (hidden with
+`display: none`): the builder holds unsaved code and the board holds canvas state,
+and neither should be lost by looking at the other.
+
+The pane used to fold **Ladder**, **Challenges**, **Replays**, **Players**, and
 **Profile** in as an internal tab strip, but that got too cluttery — they're now
 **standalone `tool` panels on the left activity rail** (`games.ladder`,
 `games.challenges`, `games.replays`, `games.players`, `games.profile`), each also
 reachable from the command palette (`games.openLeaderboard`, `games.openChallenges`,
 `games.openReplays`, `games.openRoster`, `games.openProfile`).
 
-Only the true *companions* remain **[region strips](../architecture/panel-groups.mdx)**
-on the hub: the **Agent Harness** and **Agent Thoughts** on the right, the
-**Game Board** on the bottom (pick keys `h` / `a` / `v` while the hub is
-focused; `n`/`b` toggle the whole strips). **AgentTown** (`games.town`) is a
-*separate* document — the social fish tank is its own surface, not a hub tab
-(see below).
+The two **spectator surfaces** are their own `document` panes, because you watch
+them *alongside* the Games pane rather than instead of it: the **Games Log**
+(`games.log`) and **Episodes** (`games.episodes`) — both below. **AgentTown**
+(`games.town`) is likewise a separate document — the social fish tank is its own
+surface (see below).
 
 **Connection is implicit.** There are no Connect buttons: **▶ Play** (self-play
 vs your own agent), **Find match** (ranked), and **Join/Watch** each call
@@ -90,38 +106,44 @@ mode-switches — the node and resolves on the server's `authed` ack
 `● connected · self-play · account` / `◌ connecting…`, and its ⋯ menu keeps
 **Disconnect** and the server URL for debugging.
 
-The **Game Board opens automatically when a match goes live** — when you start or
-join a table, and whenever the server sends the first `public_state`/`your_turn`
-for a game (so the board also pops on the *other* player's node the moment a
-match begins). This is driven by `revealBoard()` in `game-ws.ts`: if a
-**standalone** Game Board pane is already open (as in the **Coding Harnesses**
-workspace, below) it focuses that pane; otherwise it calls
-`revealRegionView('games.board')` to open the lobby's bottom strip — so the
-board never appears twice.
+The **Game Board section opens automatically when a match goes live** — when you
+start or join a table, and whenever the server sends the first
+`public_state`/`your_turn` for a game (so the board also pops on the *other*
+player's node the moment a match begins). This is driven by `revealBoard()` in
+`game-ws.ts`, which now just calls `openGamesSection('board')`: one pane, one
+section switch, so the board can't appear twice.
 
 ### Coding Harnesses workspace
 
-Harness engineering is the actual skill of the module, so besides the hub's
-regions there is a dedicated **Coding Harnesses** frame preset (`harness`, 🛠 in
-the workspace tab strip, `layouts` module): **Build your agent** (`games.loadout`)
-in the left dock, **Game Board** (`games.board`) as the main center area with
-the **Games** hub (`games.lobby`) below it, and Agent Thoughts in the
-(hidden-by-default) right dock. The board's live match view lands in the
-standalone board pane via the `revealBoard()` focus path above.
+Harness engineering is the actual skill of the module, so there is a dedicated
+**Coding Harnesses** frame preset (`harness`, 🛠 in the workspace tab strip,
+`layouts` module): the **Games** pane (`games.lobby` — build, board, and play in
+its sections) as the center stage, with the **Games Log** and **Episodes** stacked
+beside it, and the auxiliary tools (Ladder, Replays, Players, Profile) in the left
+dock.
 
 ### DashArena workspace
 
 **DashArena** (`dasharena`, 🏟 in the workspace tab strip) is the game-tuned
 preset, contributed by the games module itself (`ModuleManifest.frames` in
-`modules/games/index.tsx`). It's a **three-column arena** with every core game
-pane visible at once and no tabs: the **Games** hub (`games.lobby`, pick a game /
-find a match) on the left, the **Game Board** (`games.board`) as the central
-stage with **Build your agent** (`games.loadout`) docked below it, and the
-**Agent Thoughts** commentary column (`games.thoughts`) on the right. The
-auxiliary `tool` panels — Ladder, Replays, Players, Profile, Challenges — aren't
-pre-placed; they're summoned on demand from the left **activity rail** (each is a
-`role: 'tool'` view, so it appears there automatically). Where Coding Harnesses is
-tuned for authoring, DashArena is tuned for watching your agent compete.
+`modules/games/index.tsx`): the **Games** pane takes the stage, with the two live
+spectator surfaces stacked beside it — the **Games Log** (`games.log`) above and
+the **Episode** visualizer (`games.episodes`) below. The auxiliary `tool` panels —
+Ladder, Replays, Players, Profile, Challenges — aren't pre-placed; they're summoned
+on demand from the left **activity rail** (each is a `role: 'tool'` view, so it
+appears there automatically). Where Coding Harnesses is tuned for authoring,
+DashArena is tuned for watching your agent compete.
+
+:::note Layouts saved before the merge
+`games.board`, `games.loadout`, and `games.thoughts` no longer exist as panes, so a
+workspace saved before this change names views that are gone. `RENAMED_VIEWS` in
+`layout/serialize.ts` migrates them on load (`games.board`/`games.loadout` →
+`games.lobby`, `games.thoughts` → `games.log`), collapsing the duplicates the merge
+creates and pruning any area left empty — an old layout keeps working instead of
+opening with holes in it. A migrated layout keeps *your* arrangement, so it won't
+grow an Episodes pane on its own; **Layout: Reset to preset** re-seeds the frame
+above.
+:::
 
 The **Play view is gamified**: each catalog game renders as a card with a
 **▶ Play** button (self-play table, auto-connect) and a **🎯 challenges
@@ -144,7 +166,7 @@ disconnected. During a match the status banner appends a per-game **phase
 label** (`phase-label.ts`): arena "round 2/3 · ⚙️ simulating", bug hunt
 "🧪 verifying a fix…", hold'em streets, duels' grading — and while *your* seat
 is thinking it names the model doing the thinking plus a **watch reasoning →**
-link to Agent Thoughts.
+link that opens the Games Log.
 
 ## Onboarding — the first-run card
 
@@ -161,8 +183,8 @@ Three inline steps (`FirstRunHero.tsx`):
    (`GET /games/loadout-templates`) and ship it as your loadout's first version
    (the avatar claim rides the real `ensureConnected` ack, no timers).
 3. **Placement** — one click queues a placement match (instant practice-bot
-   pairing) with the board and Agent Thoughts revealed side by side, so the
-   first thing a new player sees is their agent thinking.
+   pairing), switching to the Game Board section and opening the Games Log, so
+   the first thing a new player sees is their agent thinking.
 
 Every step is skippable, and a **dismiss** link hides the card for players who
 are just exploring (also setting `games.onboarded`); the
@@ -205,7 +227,7 @@ any, and (for series) the **edit window** between games. The other player gets a
 offer card and can **accept** (the match starts immediately on both nodes),
 **decline**, or **counter** with edited terms. Best-of-N series chain games on one
 table with seat swaps for fairness and the edit window held open between games —
-that's your moment to study the Agent Thoughts feed and patch your harness, since
+that's your moment to study the Games Log's `agent` stream and patch your harness, since
 the loadout is re-read every move. After any match, **🔁 Rematch** on the board
 banner re-offers the same terms.
 
@@ -214,10 +236,12 @@ banner re-offers the same terms.
 Two surfaces make the agent's reasoning visible (the core of the skill loop), with
 a strict visibility rule: **live = your own agent only; both sides = post-match.**
 
-- **Agent Thoughts** (`games.thoughts`, 💭, a lobby region and a dockable tool):
-  streams your own agent's reasoning live during a match — every model turn, tool
-  call, tool result, and the committed move. Fed by `agent_trace` events the node
-  emits from its `AgentPolicy` trace sink. Your opponent never appears here.
+- **Games Log** (`games.log`, 📜, a document): your own agent's reasoning live during
+  a match — every model turn, tool call, tool result, and the committed move — as the
+  **`agent` stream of the module's one log** (see below). Fed by `agent_trace` events
+  the node emits from its `AgentPolicy` trace sink. Your opponent never appears here.
+- **Episodes** (`games.episodes`, 🎞, a document): the same reasoning attached to the
+  step it drove, scrubbable after the fact (see below).
 - **Board seat badges:** the server broadcasts `match_info` (seat profiles:
   handle/avatar/rating/level, bot + model markers) when a match starts, so the
   board header shows *who you're playing*, which seat is thinking, and marks you.
@@ -228,6 +252,53 @@ a strict visibility rule: **live = your own agent only; both sides = post-match.
   matches are always visible to you; hit **Publish** to share one to the public
   browser. See [game-server.mdx](../architecture/game-server.mdx) for the wire and
   storage details.
+
+### The Games Log
+
+**Games Log** (`games.log`, 📜, `GamesLogPanel`) is the module's **one chronological
+record** of everything that happens while you play, as filterable streams:
+
+| Stream | Carries |
+| --- | --- |
+| 💭 `agent` | Your agent's reasoning — every model turn, tool call, result, committed move. |
+| ▦ `match` | The referee's events: `match_info`, `your_turn`, `chose`, `game_over`, rating/XP. |
+| 📡 `server` | Connection/auth (`authed`), queue status, `match_found`. |
+| ⚠ `error` | Server errors. |
+
+This **replaced the Agent Thoughts pane**: "why did my agent do that" and "what did
+the server actually say" are the same question when you're debugging a harness, and
+reading them in two panes meant correlating by eye. Filter chips scope the view; any
+row expands to its raw payload (an `agent` row expands to the full reasoning step,
+rendered by the shared `TraceRow`, which the builder's dry-run tester also uses).
+Autoscroll follows the tail and releases the moment you scroll up to read something.
+
+`games-log.ts` holds the store and subscribes to the `games` channel **independently
+of `game-ws.ts`** (the ws layer fans one channel out to every handler), so logging is
+a passive observer: it can't perturb the state machine that drives the board, and
+`game-ws.ts` doesn't carry logging calls through every case.
+
+### Episodes
+
+**Episodes** (`games.episodes`, 🎞, `EpisodePanel`) renders a match as a **trajectory
+you can step through**. The board shows the *current* position and the log shows a
+*stream*; neither answers "what did my agent see when it made that move?" — so this
+scrubs a timeline and shows, per step: the **observation** the seat was handed, its
+**legal actions** (the taken one highlighted), the **reasoning** behind it, the
+**resulting state**, and the **reward**.
+
+One `Episode` shape, two sources, so live and finished matches render with the same
+code:
+
+- **live** — `episode-live.ts` assembles the trajectory off the `games` channel as
+  the match plays (pinning to the newest step until you scrub back).
+- **past** — `episodeFromReplay` (`episode.ts`) rebuilds one from any replay's event
+  log; pick a replay from the pane's dropdown.
+
+`episode.ts` is deliberately **pure** — types and builders, no socket, no store — so
+the trajectory logic is unit-testable without a backend (`__tests__/episode.test.ts`);
+`episode-live.ts` is the subscribing half. A **step** is one seat's decision; rewards
+are terminal in these games, so `applyReturns` mirrors each seat's return onto its
+own final step.
 
 ## Move policy
 
@@ -312,23 +383,35 @@ async def my_agent(obs, config):
   editor is the same everywhere). `POST /games/loadout/validate` also reports the agent's
   compile error (`agent_error`).
 
-**The builder pane** (`games.loadout`, "Build your agent" — `AgentBuilderPanel`): one code
-editor for `agent_code` (plus a collapsible system-prompt `context`), a game picker that
-seeds the per-game starter and marks the graded stat, and a **loadout readout** whose
-slots (Context / Tools / RAG / Memory / Model) and agent stats are derived live **from
-your code** (`agentBuild.ts` — calling `retrieve()` lights RAG, using `memory.` lights
-Memory), keeping the build honestly code-first. The builder's game is **shared with the
-Games Library** (`selected-game.ts`): picking a game in the library — or clicking a
-card's **Edit Harness** — switches the builder to that game (and its picker switches the
-library back), so the harness/template you're editing always follows the game you
-selected instead of drifting onto a stale one. **Edit Harness** (`openHarnessFor`) focuses
-the builder pane if it's already open anywhere; otherwise it replaces the Games pane in
-place (`changePaneType`, same instance id) rather than opening a second pane beside it —
-the builder then shows a **← Games** back button (`changePaneType` back to `games.lobby`)
-since it knows it took over another pane's slot. **Lock in** validates + saves, then plays
-the **VS lock-in ceremony** (`VsCeremony.tsx` — your agent vs a self-play mirror, ember
-vs cyan); **Enter arena** starts a real self-play match (`matchmaking.playVsOwnAgent`,
-no sign-in needed) and reveals the Game Board + the Agent Thoughts feed.
+**The builder** ("Build your agent" — the Games pane's `build` section,
+`AgentBuilderPanel`): one code editor for `agent_code`, two collapsible folds
+(**Context**, the system prompt, and **Tools**, below), a game picker that seeds the
+per-game starter and marks the graded stat, and a **loadout readout** whose slots
+(Context / Tools / RAG / Memory / Model) and agent stats are derived live **from your
+code** (`agentBuild.ts` — calling `retrieve()` lights RAG, using `memory.` lights
+Memory), keeping the build honestly code-first.
+
+The **Tools fold** (`ToolsEditor.tsx`) edits `loadout.tools` — each tool's name and
+description (both go to the model as its schema), its `run(args, obs)` body, and its
+`parameters` (edited as JSON, since it *is* a JSON-Schema properties map; invalid JSON
+is flagged and the last valid value kept). Above the list, **Templates** offers the
+shipped starter tool definitions for the current game (`GET /games/loadout-templates`
+→ `templates.py`). Applying one is **additive and idempotent**: it appends only the
+tools you don't already have (matched by name, so it never clobbers a tool you've
+since edited) and adopts the template's context only when yours is blank. Before this,
+the builder had no UI for `tools` at all, so the shipped templates were unreachable
+from the app.
+
+The builder's game is **shared with the Play section** (`selected-game.ts`): picking a
+game in the library — or clicking a card's **Edit Harness** — switches the builder to
+that game (and its picker switches the library back), so the harness/template you're
+editing always follows the game you selected instead of drifting onto a stale one.
+**Edit Harness** (`openHarnessFor`) is now just `openGamesSection('build')` — no pane to
+find, focus, or swap back — and the builder's **← Play** button returns to the Play
+section. **Lock in** validates + saves, then plays the **VS lock-in ceremony**
+(`VsCeremony.tsx` — your agent vs a self-play mirror, ember vs cyan); **Enter arena**
+starts a real self-play match (`matchmaking.playVsOwnAgent`, no sign-in needed), which
+switches to the Game Board section and opens the Games Log.
 
 Under `games.policy = agent`, `AgentPolicy` becomes a bounded tool loop: it advertises
 your compiled tools + `game.chooseAction`, lets the model call your tools (results fed
@@ -593,7 +676,7 @@ in replays — the meta is meant to be studied.
   fix→run→fix loop is the game. On the node side, `games.policy = agent` drives a
   dedicated long-horizon **task agent** (`task_agent.py`) with `readFile` /
   `writeFile` / `listFiles` / `runTests` / `submit` tools that runs the *visible*
-  tests locally between edits; its trace streams to the Agent Thoughts pane, so
+  tests locally between edits; its trace streams to the Games Log, so
   bug-hunt replays are the most watchable of all. Tasks come from the server's
   **task bank** (`task_bank.py`): a curated starter set (`tasks_builtin.py`) plus
   a mutation **generator** (`task_gen.py` — AST-level bug planting, accepted only
@@ -942,10 +1025,9 @@ tool at a time — the rail switches between them, there is no in-dock tab strip
 
 | Panel | Id | Role | What |
 | --- | --- | --- | --- |
-| Games hub | `games.lobby` | document | The Play view: games library, matchmaking, first-run card, open tables. Connection is implicit. |
-| Game board | `games.board` | document | Live spectator board (dispatches by game type); auto-opens on match start; stateful idle/connecting/queue view. |
-| Agent harness | `games.loadout` | document (`editor`) | Build your agent: context + tools up front; dry run; versions/model/sample-obs behind the Advanced fold. |
-| Agent thoughts | `games.thoughts` | document | Your agent's live reasoning feed. |
+| Games | `games.lobby` | document | The whole play loop in one pane, as sections: **Play** (games library, matchmaking, first-run card, open tables — connection is implicit), **Game Board** (live spectator board, dispatches by game type; auto-switches on match start; stateful idle/connecting/queue view), and **Build your agent** (code editor, tools + templates, dry run, loadout readout). |
+| Games Log | `games.log` | document | One record of the match: agent reasoning, referee events, connection, errors — filterable streams. |
+| Episodes | `games.episodes` | document | The episode as a scrubbable trajectory: per-step obs, action, reasoning, reward. Live or any past replay. |
 | Ladder | `games.ladder` | tool (left) | Per-game leaderboard. |
 | Challenges | `games.challenges` | tool (left) | The challenge track. |
 | Replays | `games.replays` | tool (left) | Browse finished matches. |

@@ -114,6 +114,24 @@ export function getAgentStarter(gameId: string): Promise<{ game_id: string; agen
   return apiGet(`/games/agent-starter/${encodeURIComponent(gameId)}`);
 }
 
+/** A shipped starter harness for a game: a titled, blurbed loadout whose `tools`
+ * are the templated tool definitions the builder's Tools section offers as a
+ * starting point (backend/modules/games/templates.py). */
+export interface LoadoutTemplate {
+  id: string;
+  game_id: string;
+  title: string;
+  blurb: string;
+  loadout: Loadout;
+}
+
+/** The shipped templates, optionally narrowed to one game. */
+export async function fetchLoadoutTemplates(gameId?: string): Promise<LoadoutTemplate[]> {
+  const q = gameId ? `?game_id=${encodeURIComponent(gameId)}` : '';
+  const res = await apiGet<{ templates?: LoadoutTemplate[] }>(`/games/loadout-templates${q}`);
+  return res.templates ?? [];
+}
+
 export interface ChallengeRow {
   account_id: string;
   display_name: string;

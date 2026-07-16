@@ -1,7 +1,7 @@
 import { useState } from 'react';
 
-import { revealRegionView } from '../../../layout/controller';
 import { townJoin, townLeave, townWhisper, useGames, type TownEvent } from '../game-ws';
+import { openGamesSection } from '../hub-section';
 import { TownMapCanvas } from './TownMapCanvas';
 
 const AVATARS = ['🐠', '🐙', '🦀', '🦜', '🐢', '🦊', '🐸', '🦉'];
@@ -129,7 +129,7 @@ export function TownPanel() {
           <button
             type="button"
             style={{ fontSize: '0.72rem', padding: '0.1rem 0.3rem' }}
-            onClick={() => revealRegionView('games.loadout')}
+            onClick={() => openGamesSection('build')}
           >
             Edit persona →
           </button>

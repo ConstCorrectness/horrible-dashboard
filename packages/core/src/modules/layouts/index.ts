@@ -56,28 +56,25 @@ export const layoutsModule: ModuleManifest = {
       id: 'harness',
       name: 'Coding Harnesses',
       icon: '🛠',
+      // The Games pane carries the whole loop (build → board → play) as internal
+      // sections, so the center is just that pane; the log and the episode
+      // trajectory are what you watch beside it while your agent plays.
       frame: {
         center: {
           split: 'row',
           sizes: [0.65, 0.35],
           children: [
+            { pane: 'games.lobby' },
             {
               split: 'column',
-              children: [{ pane: 'games.loadout' }, { pane: 'games.board' }],
+              children: [{ pane: 'games.log' }, { pane: 'games.episodes' }],
             },
-            { pane: 'games.thoughts' },
           ],
         },
         docks: {
           left: {
-            tools: [
-              'games.lobby',
-              'games.ladder',
-              'games.replays',
-              'games.players',
-              'games.profile',
-            ],
-            activeTool: 'games.lobby',
+            tools: ['games.ladder', 'games.replays', 'games.players', 'games.profile'],
+            activeTool: 'games.ladder',
             size: 280,
           },
         },

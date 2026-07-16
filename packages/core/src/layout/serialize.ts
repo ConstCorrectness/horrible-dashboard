@@ -27,6 +27,25 @@ export const FRAME_VERSION = 1;
 const DOCK_SIDES: readonly DockSide[] = ['left', 'right', 'bottom'];
 const REGION_POSITIONS: readonly RegionPosition[] = ['left', 'right', 'bottom'];
 
+/**
+ * Views that were merged or renamed away, mapped to what replaced them.
+ *
+ * A saved layout outlives the code that wrote it: without this, a workspace that
+ * still names a retired view just loses that pane, and a user who had the old
+ * layout opens their workspace to holes where their panes used to be. Renaming
+ * here means their layout keeps working across the change.
+ *
+ * `games.board` / `games.loadout` became sections of the merged `games.lobby`
+ * pane, and `games.thoughts` became a stream of `games.log` (see
+ * modules/games/hub-section.ts). Duplicates that result from two old views
+ * collapsing onto one are dropped by `readPane`.
+ */
+const RENAMED_VIEWS: Readonly<Record<string, string>> = {
+  'games.board': 'games.lobby',
+  'games.loadout': 'games.lobby',
+  'games.thoughts': 'games.log',
+};
+
 export function serialize(frame: FrameState): SerializedLayout {
   return {
     schema: FRAME_SCHEMA,
@@ -55,17 +74,29 @@ export function deserialize(
     const src = raw as Record<string, unknown>;
     let maxSeq = 0;
     const seenInstances = new Set<string>();
+    // Views a rename has already landed on, so two retired views collapsing onto
+    // one replacement (games.board + games.loadout → games.lobby) leave one pane,
+    // not two of the same. A pane the layout already names natively wins over a
+    // renamed one — it's the instance the user actually placed.
+    const nativeViews = collectViewIds(src);
+    const renamedInto = new Set<string>();
 
     const readPane = (value: unknown): PaneState | null => {
       if (!value || typeof value !== 'object') return null;
       const p = value as Record<string, unknown>;
       if (typeof p.instanceId !== 'string' || typeof p.viewId !== 'string') return null;
-      if (!knownViews.has(p.viewId)) return null;
+      const renamed = RENAMED_VIEWS[p.viewId];
+      const viewId = renamed ?? p.viewId;
+      if (!knownViews.has(viewId)) return null;
+      if (renamed !== undefined) {
+        if (nativeViews.has(renamed) || renamedInto.has(renamed)) return null;
+        renamedInto.add(renamed);
+      }
       if (seenInstances.has(p.instanceId)) return null;
       seenInstances.add(p.instanceId);
       const seqPart = Number(p.instanceId.split('#').pop());
       if (Number.isFinite(seqPart)) maxSeq = Math.max(maxSeq, seqPart);
-      const pane: PaneState = { instanceId: p.instanceId, viewId: p.viewId };
+      const pane: PaneState = { instanceId: p.instanceId, viewId };
       if (p.params && typeof p.params === 'object') {
         pane.params = p.params as Record<string, unknown>;
       }
@@ -82,14 +113,20 @@ export function deserialize(
         if (!r || typeof r !== 'object') continue;
         const region = r as Record<string, unknown>;
         if (!Array.isArray(region.views)) continue;
-        const views = region.views.filter(
-          (v): v is string => typeof v === 'string' && knownViews.has(v),
-        );
+        const views = [
+          ...new Set(
+            region.views
+              .filter((v): v is string => typeof v === 'string')
+              .map((v) => RENAMED_VIEWS[v] ?? v)
+              .filter((v) => knownViews.has(v)),
+          ),
+        ];
         if (views.length === 0) continue;
-        const activeView =
-          typeof region.activeView === 'string' && views.includes(region.activeView)
-            ? region.activeView
-            : views[0];
+        const rawActive =
+          typeof region.activeView === 'string'
+            ? (RENAMED_VIEWS[region.activeView] ?? region.activeView)
+            : null;
+        const activeView = rawActive && views.includes(rawActive) ? rawActive : views[0];
         const state: RegionState = {
           open: region.open === true,
           size: clampSize(region.size, 260),
@@ -146,7 +183,8 @@ export function deserialize(
     };
 
     const fallback = createEmptyFrame();
-    const center = normalize(readNode(src.center) ?? fallback.center);
+    const read = readNode(src.center);
+    const center = normalize((read && pruneEmptyAreas(read)) ?? fallback.center);
 
     const docks = {} as Record<DockSide, DockState>;
     for (const side of DOCK_SIDES) {
@@ -210,6 +248,51 @@ export function deserialize(
   } catch {
     return null;
   }
+}
+
+/** Every `viewId` named anywhere in a raw blob that is NOT itself a retired view —
+ * i.e. the views the layout already places under their current name. A rename must
+ * not add a second copy of one of these. */
+function collectViewIds(src: unknown): Set<string> {
+  const out = new Set<string>();
+  const walk = (v: unknown): void => {
+    if (!v || typeof v !== 'object') return;
+    if (Array.isArray(v)) {
+      v.forEach(walk);
+      return;
+    }
+    const o = v as Record<string, unknown>;
+    if (typeof o.viewId === 'string' && RENAMED_VIEWS[o.viewId] === undefined) {
+      out.add(o.viewId);
+    }
+    Object.values(o).forEach(walk);
+  };
+  walk(src);
+  return out;
+}
+
+/** Drop areas left with no tabs, so a pane pruned (or merged away) by this
+ * deserializer doesn't leave an "Empty area" placeholder where it used to sit.
+ * Returns null when nothing survives, letting the caller reseed from the preset;
+ * a genuinely empty single-area frame is preserved by the caller's fallback. */
+function pruneEmptyAreas(node: LayoutNode): LayoutNode | null {
+  if (node.kind === 'area') return node.tabs.length > 0 ? node : null;
+  const kept: LayoutNode[] = [];
+  const sizes: number[] = [];
+  node.children.forEach((child, i) => {
+    const pruned = pruneEmptyAreas(child);
+    if (pruned) {
+      kept.push(pruned);
+      sizes.push(node.sizes[i] ?? 1 / node.children.length);
+    }
+  });
+  if (kept.length === 0) return null;
+  return { ...node, children: kept, sizes: renormalizeSizes(sizes) };
+}
+
+function renormalizeSizes(sizes: number[]): number[] {
+  const total = sizes.reduce((a, b) => a + b, 0);
+  return total > 0 ? sizes.map((s) => s / total) : sizes.map(() => 1 / sizes.length);
 }
 
 function clampSize(value: unknown, fallback: number): number {

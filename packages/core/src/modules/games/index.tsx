@@ -1,15 +1,13 @@
-import { revealRegionView } from '../../layout/controller';
 import { registry, type ModuleManifest } from '../../registry';
 import { setSetting } from '../../settings';
 import './games.css';
-import { openGamesHub } from './hub-section';
-import { AgentBuilderPanel } from './panels/AgentBuilderPanel';
-import { AgentThoughtsPane } from './panels/AgentThoughtsPane';
+import { openGamesHub, openGamesSection } from './hub-section';
 import { ChallengesPanel } from './panels/ChallengesPanel';
+import { EpisodePanel } from './panels/EpisodePanel';
 import { FighterArcadePanel } from './panels/FighterArcadePanel';
-import { GameBoardPanel } from './panels/GameBoardPanel';
+import { GamesLogPanel } from './panels/GamesLogPanel';
+import { GamesPanel } from './panels/GamesPanel';
 import { LeaderboardPanel } from './panels/LeaderboardPanel';
-import { LobbyPanel } from './panels/LobbyPanel';
 import { PlazaPanel } from './panels/PlazaPanel';
 import { ProfilePanel } from './panels/ProfilePanel';
 import { ReplayBrowserPanel } from './panels/ReplayBrowserPanel';
@@ -19,20 +17,24 @@ import { TownPanel } from './panels/TownPanel';
 
 /**
  * Games module: watch your agent play turn-based games against another user's
- * agent, refereed by the central game server. The **Games hub** (`games.lobby`)
- * is the Play/matchmaking entry point; Ladder, Challenges, Replays, Players, and
- * Profile are standalone tool panels on the left activity rail (they used to be
- * hub tabs). The board renders the live game. See docs/modules/games.mdx.
+ * agent, refereed by the central game server.
+ *
+ * The **Games pane** (`games.lobby`) is the whole play loop in one pane — Play,
+ * Game Board, and Build your agent as internal sections (see hub-section.ts).
+ * Around it sit the two spectator surfaces you watch *while* it plays — the
+ * **Games Log** (`games.log`, every match/server/agent event) and **Episodes**
+ * (`games.episodes`, the step-by-step trajectory) — plus the auxiliary tools
+ * (Ladder, Challenges, Replays, Players, Profile) on the left activity rail.
+ * See docs/modules/games.mdx.
  */
 export const gamesModule: ModuleManifest = {
   id: 'games',
   title: 'Games',
-  // DashArena: the game-tuned workspace. A three-column arena with the Games hub
-  // (pick a game / find a match) on the left, the GameBoard stage in the middle
-  // with "Build your agent" docked below it, and the Agent Thoughts commentary
-  // column on the right — every core game pane visible at once, no tabs. The
-  // auxiliary tools (Ladder, Replays, Players, Profile, Challenges) are summoned
-  // on demand from the left activity rail rather than pre-stacked here.
+  // DashArena: the game-tuned workspace. The Games pane (play → build → board, all
+  // in one) takes the stage, with the two live spectator surfaces stacked beside
+  // it: the Games Log on top and the Episode visualizer below. The auxiliary tools
+  // (Ladder, Replays, Players, Profile, Challenges) are summoned on demand from the
+  // left activity rail rather than pre-stacked here.
   frames: [
     {
       id: 'dasharena',
@@ -41,15 +43,14 @@ export const gamesModule: ModuleManifest = {
       frame: {
         center: {
           split: 'row',
-          sizes: [0.27, 0.48, 0.25],
+          sizes: [0.66, 0.34],
           children: [
             { pane: 'games.lobby' },
             {
               split: 'column',
-              sizes: [0.62, 0.38],
-              children: [{ pane: 'games.board' }, { pane: 'games.loadout' }],
+              sizes: [0.5, 0.5],
+              children: [{ pane: 'games.log' }, { pane: 'games.episodes' }],
             },
-            { pane: 'games.thoughts' },
           ],
         },
       },
@@ -59,27 +60,26 @@ export const gamesModule: ModuleManifest = {
     {
       id: 'games.lobby',
       title: 'Games',
-      component: LobbyPanel,
+      component: GamesPanel,
       role: 'document',
       icon: '🕹',
       singleton: true,
     },
     {
-      id: 'games.board',
-      title: 'Game Board',
-      component: GameBoardPanel,
+      id: 'games.log',
+      title: 'Games Log',
+      component: GamesLogPanel,
       role: 'document',
-      icon: '▦',
+      icon: '📜',
       singleton: true,
     },
     {
-      id: 'games.loadout',
-      title: 'Build your agent',
-      component: AgentBuilderPanel,
+      id: 'games.episodes',
+      title: 'Episodes',
+      component: EpisodePanel,
       role: 'document',
-      icon: '🛠',
+      icon: '🎞',
       singleton: true,
-      editor: true,
     },
     // The former hub tabs, now standalone tool panels on the activity rail.
     {
@@ -136,14 +136,6 @@ export const gamesModule: ModuleManifest = {
       singleton: true,
     },
     {
-      id: 'games.thoughts',
-      title: 'Agent Thoughts',
-      component: AgentThoughtsPane,
-      role: 'document',
-      icon: '💭',
-      singleton: true,
-    },
-    {
       id: 'games.replay',
       title: 'Replay',
       component: ReplayViewerPanel,
@@ -177,17 +169,12 @@ export const gamesModule: ModuleManifest = {
     {
       id: 'games.openBoard',
       title: 'Games: Open board',
-      run: () => revealRegionView('games.board'),
+      run: () => openGamesSection('board'),
     },
     {
       id: 'games.openLoadout',
       title: 'Games: Build your agent',
-      // Opens the harness as its own standalone pane (a companion renders its bare
-      // component when opened directly) rather than docking it in the arcade shell —
-      // the harness is a first-class authoring surface (see the Coding Harnesses
-      // workspace). The in-arcade `t` toggle and the Lobby/Town "edit harness" buttons
-      // still reveal it inside their shell.
-      run: () => registry.openPanel('games.loadout'),
+      run: () => openGamesSection('build'),
     },
     {
       id: 'games.restartOnboarding',
@@ -208,9 +195,14 @@ export const gamesModule: ModuleManifest = {
       run: () => registry.openPanel('games.arcade'),
     },
     {
-      id: 'games.openThoughts',
-      title: 'Games: Open agent thoughts',
-      run: () => revealRegionView('games.thoughts'),
+      id: 'games.openLog',
+      title: 'Games: Open games log',
+      run: () => registry.openPanel('games.log'),
+    },
+    {
+      id: 'games.openEpisodes',
+      title: 'Games: Open episode visualizer',
+      run: () => registry.openPanel('games.episodes'),
     },
     {
       id: 'games.openReplays',

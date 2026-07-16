@@ -2,7 +2,7 @@ import { useState, type CSSProperties } from 'react';
 
 import { apiPost } from '../../../api';
 import type { TraceStep } from '../game-ws';
-import { TraceRow } from './AgentThoughtsPane';
+import { TraceRow } from './TraceRow';
 
 /**
  * The harness editor's **full-loop tester**: run the WHOLE draft loadout —

@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import Card from '@mui/material/Card';
 import CardContent from '@mui/material/CardContent';
@@ -12,7 +12,6 @@ import Tooltip from '@mui/material/Tooltip';
 import Select from '@mui/material/Select';
 import MenuItem from '@mui/material/MenuItem';
 
-import { PaneInstanceContext } from '../../../agent-context';
 import { useSetting, setSetting } from '../../../settings';
 import { claimChallengeDraft, onChallengeDraft, type ChallengeTarget } from '../challenge-draft';
 import { requestChallenges } from '../challenge-focus';
@@ -198,7 +197,6 @@ export function PlaySection({
   const [botTier, setBotTier] = useState<string>('bronze');
   const onboarded = useSetting<boolean>('games.onboarded') === true;
   const policy = useSetting<string>('games.policy') ?? 'random';
-  const paneInstanceId = useContext(PaneInstanceContext);
 
   useEffect(() => onChallengeDraft(setDraft), []);
 
@@ -529,7 +527,14 @@ export function PlaySection({
 
                   {/* Title & Info */}
                   <div style={{ flex: 1, zIndex: 1, minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', flexWrap: 'wrap' }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.8rem',
+                        flexWrap: 'wrap',
+                      }}
+                    >
                       <Typography variant="h5" sx={{ fontWeight: 950, color: 'text.primary' }}>
                         {g.name}
                       </Typography>
@@ -550,7 +555,16 @@ export function PlaySection({
                         />
                       )}
                     </div>
-                    <Typography variant="body2" sx={{ color: 'text.secondary', fontSize: '0.82rem', maxWidth: '650px', lineHeight: 1.5, mt: 1 }}>
+                    <Typography
+                      variant="body2"
+                      sx={{
+                        color: 'text.secondary',
+                        fontSize: '0.82rem',
+                        maxWidth: '650px',
+                        lineHeight: 1.5,
+                        mt: 1,
+                      }}
+                    >
                       {GAME_DESCRIPTIONS[g.id] ??
                         `Play ${g.name} against other agents or practice with your own.`}
                     </Typography>
@@ -602,7 +616,12 @@ export function PlaySection({
                     variant="text"
                     color="inherit"
                     size="small"
-                    sx={{ textTransform: 'none', fontSize: '0.75rem', opacity: 0.7, '&:hover': { opacity: 1 } }}
+                    sx={{
+                      textTransform: 'none',
+                      fontSize: '0.75rem',
+                      opacity: 0.7,
+                      '&:hover': { opacity: 1 },
+                    }}
                     onClick={() => setSelectedGame(null)}
                   >
                     🌐 Deselect Game
@@ -643,21 +662,29 @@ export function PlaySection({
                         border: '1px solid var(--border)',
                         boxShadow: 'none',
                         transition: 'all 0.2s ease',
-                        '&:hover': { background: 'rgba(255, 255, 255, 0.02)', borderColor: `${accent}40` },
+                        '&:hover': {
+                          background: 'rgba(255, 255, 255, 0.02)',
+                          borderColor: `${accent}40`,
+                        },
                       }}
                     >
                       <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
                         <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>
                           Configure Strategy (Edit Harness)
                         </Typography>
-                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5, lineHeight: 1.4 }}>
-                          Author agent policy code, equip tools, ground docs, and refine decision heuristics.
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{ display: 'block', mb: 1.5, lineHeight: 1.4 }}
+                        >
+                          Author agent policy code, equip tools, ground docs, and refine decision
+                          heuristics.
                         </Typography>
                         <Button
                           variant="outlined"
                           size="small"
                           fullWidth
-                          onClick={() => openHarnessFor(g.id, paneInstanceId)}
+                          onClick={() => openHarnessFor(g.id)}
                           sx={{ fontWeight: 700, borderColor: 'divider' }}
                         >
                           Open Workspace
@@ -672,15 +699,23 @@ export function PlaySection({
                         border: '1px solid var(--border)',
                         boxShadow: 'none',
                         transition: 'all 0.2s ease',
-                        '&:hover': { background: 'rgba(255, 255, 255, 0.02)', borderColor: `${accent}40` },
+                        '&:hover': {
+                          background: 'rgba(255, 255, 255, 0.02)',
+                          borderColor: `${accent}40`,
+                        },
                       }}
                     >
                       <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
                         <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>
                           Scenario Grader (Challenges)
                         </Typography>
-                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5, lineHeight: 1.4 }}>
-                          Run scenario-grading tests against your agent harness to verify decision correctness.
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{ display: 'block', mb: 1.5, lineHeight: 1.4 }}
+                        >
+                          Run scenario-grading tests against your agent harness to verify decision
+                          correctness.
                         </Typography>
                         <Button
                           variant="outlined"
@@ -727,8 +762,13 @@ export function PlaySection({
                         <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>
                           Ranked Matchmaking
                         </Typography>
-                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5, lineHeight: 1.4 }}>
-                          Queue to match against other live player agents. Increases MMR and climbs leaderboard.
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{ display: 'block', mb: 1.5, lineHeight: 1.4 }}
+                        >
+                          Queue to match against other live player agents. Increases MMR and climbs
+                          leaderboard.
                         </Typography>
 
                         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
@@ -770,8 +810,13 @@ export function PlaySection({
                         <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>
                           Practice & Hosting
                         </Typography>
-                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5, lineHeight: 1.4 }}>
-                          Play unrated practice sessions against your own agent configuration or practice bots.
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{ display: 'block', mb: 1.5, lineHeight: 1.4 }}
+                        >
+                          Play unrated practice sessions against your own agent configuration or
+                          practice bots.
                         </Typography>
 
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>

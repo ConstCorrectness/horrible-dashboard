@@ -12,7 +12,6 @@ import DialogActions from '@mui/material/DialogActions';
 import Avatar from '@mui/material/Avatar';
 import Divider from '@mui/material/Divider';
 
-
 import {
   dismissInvite,
   friendRequest,
@@ -26,7 +25,12 @@ import {
   socialSay,
   useGames,
 } from '../game-ws';
-import { fetchGamesCatalog, fetchStatus, fetchLeaderboard, type GameCatalogEntry } from '../games-api';
+import {
+  fetchGamesCatalog,
+  fetchStatus,
+  fetchLeaderboard,
+  type GameCatalogEntry,
+} from '../games-api';
 import { PlazaCanvas } from './PlazaCanvas';
 import { GamesMui } from '../mui-theme';
 import { toastsStore } from '../../../toasts';
@@ -59,10 +63,34 @@ interface ShopItem {
 }
 
 const COSMETIC_ITEMS: ShopItem[] = [
-  { id: 'crown', name: 'Royal Crown', emoji: '👑', cost: 100, description: 'Show off your supreme coding dominance.' },
-  { id: 'wizard', name: 'Wizard Hat', emoji: '🧙', cost: 80, description: 'Cast compiler spells and fix bugs instantly.' },
-  { id: 'goggles', name: 'Cyber Visor', emoji: '🕶️', cost: 50, description: 'A sleek, futuristic neon-lit accessory.' },
-  { id: 'halo', name: 'Angelic Halo', emoji: '👼', cost: 120, description: 'An extremely rare glowing golden halo.' },
+  {
+    id: 'crown',
+    name: 'Royal Crown',
+    emoji: '👑',
+    cost: 100,
+    description: 'Show off your supreme coding dominance.',
+  },
+  {
+    id: 'wizard',
+    name: 'Wizard Hat',
+    emoji: '🧙',
+    cost: 80,
+    description: 'Cast compiler spells and fix bugs instantly.',
+  },
+  {
+    id: 'goggles',
+    name: 'Cyber Visor',
+    emoji: '🕶️',
+    cost: 50,
+    description: 'A sleek, futuristic neon-lit accessory.',
+  },
+  {
+    id: 'halo',
+    name: 'Angelic Halo',
+    emoji: '👼',
+    cost: 120,
+    description: 'An extremely rare glowing golden halo.',
+  },
 ];
 
 export function PlazaPanel() {
@@ -76,7 +104,7 @@ export function PlazaPanel() {
   // Selected player overlay state
   const [selectedPlayer, setSelectedPlayer] = useState<SocialOccupant | null>(null);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
-  
+
   // Selected player's profile stats states
   const [showProfileCard, setShowProfileCard] = useState(false);
   const [playerTiers, setPlayerTiers] = useState<LeaderboardRecord[]>([]);
@@ -218,7 +246,11 @@ export function PlazaPanel() {
     if (selectedPlayer && challengeGame) {
       socialInvite(selectedPlayer.account_id, challengeGame);
       revealBoard();
-      toastsStore.add('info', 'Central Plaza', `Challenged ${selectedPlayer.name} to ${games.find(g => g.id === challengeGame)?.name}!`);
+      toastsStore.add(
+        'info',
+        'Central Plaza',
+        `Challenged ${selectedPlayer.name} to ${games.find((g) => g.id === challengeGame)?.name}!`,
+      );
       setActionMenuOpen(false);
     }
   };
@@ -287,7 +319,12 @@ export function PlazaPanel() {
         micStreamRef.current = stream;
         setMicActive(true);
 
-        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        // Safari only exposes the constructor under its vendor prefix, which the DOM
+        // lib doesn't declare — hence the widened window, not a cast to any.
+        const AudioContextClass =
+          window.AudioContext ??
+          (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!AudioContextClass) throw new Error('Web Audio is unavailable in this browser');
         const audioCtx = new AudioContextClass();
         audioCtxRef.current = audioCtx;
 
@@ -302,9 +339,9 @@ export function PlazaPanel() {
 
         toastsStore.add('success', 'Voice Channel', 'Microphone connected!');
 
-        // Render waveform & check speaking volume levels
+        // Render waveform & check speaking volume levels. Both teardown paths
+        // (toggling the mic off, and unmount) cancelAnimationFrame this loop.
         const drawWaveform = () => {
-          if (disposed) return;
           animationRef.current = requestAnimationFrame(drawWaveform);
 
           analyser.getByteFrequencyData(dataArray);
@@ -348,7 +385,6 @@ export function PlazaPanel() {
           }
         };
 
-        let disposed = false;
         drawWaveform();
       } catch (err) {
         console.error(err);
@@ -407,7 +443,15 @@ export function PlazaPanel() {
     <GamesMui>
       <div className="games-plaza">
         {/* Header bar */}
-        <div className="games-plaza-topbar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.6rem 0.8rem' }}>
+        <div
+          className="games-plaza-topbar"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '0.6rem 0.8rem',
+          }}
+        >
           <strong style={{ fontSize: '0.95rem' }}>🌐 Central Plaza (3D WebGL)</strong>
           <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
             <Button
@@ -422,7 +466,11 @@ export function PlazaPanel() {
               {social.roster.length} online
             </span>
             {social.joined && (
-              <button type="button" onClick={() => socialLeave()} style={{ padding: '0.2rem 0.6rem', fontSize: '0.75rem' }}>
+              <button
+                type="button"
+                onClick={() => socialLeave()}
+                style={{ padding: '0.2rem 0.6rem', fontSize: '0.75rem' }}
+              >
                 Leave
               </button>
             )}
@@ -451,7 +499,9 @@ export function PlazaPanel() {
                 </>
               )}
             </div>
-            <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <div
+              style={{ display: 'flex', gap: '0.35rem', alignItems: 'center', flexWrap: 'wrap' }}
+            >
               <div className="games-avatar-picker">
                 {AVATARS.map((a) => (
                   <button
@@ -475,7 +525,7 @@ export function PlazaPanel() {
                   ⚔️ <strong>{social.invite.from_name}</strong> challenged you to{' '}
                   <strong>{social.invite.game_name}</strong>
                 </span>
-                <span style={{ style: { marginLeft: 'auto', display: 'flex', gap: '0.35rem' } } as any}>
+                <span style={{ marginLeft: 'auto', display: 'flex', gap: '0.35rem' }}>
                   <button type="button" className="games-play-btn" onClick={acceptInvite}>
                     Join
                   </button>
@@ -487,7 +537,15 @@ export function PlazaPanel() {
             )}
 
             {/* 3D Canvas wrapper */}
-            <div className="games-plaza-floor" style={{ height: '360px', overflow: 'hidden', background: '#101216', borderBottom: '1px solid var(--border)' }}>
+            <div
+              className="games-plaza-floor"
+              style={{
+                height: '360px',
+                overflow: 'hidden',
+                background: '#101216',
+                borderBottom: '1px solid var(--border)',
+              }}
+            >
               <PlazaCanvas
                 occupants={social.occupants}
                 bubbles={social.bubbles}
@@ -501,9 +559,16 @@ export function PlazaPanel() {
             </div>
 
             {/* Say + Mic + Quick Emotes */}
-            <div className="games-plaza-saybar" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', padding: '0.6rem 0.8rem' }}>
+            <div
+              className="games-plaza-saybar"
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.5rem',
+                padding: '0.6rem 0.8rem',
+              }}
+            >
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', width: '100%' }}>
-                
                 {/* Voice Mic Toggle */}
                 <button
                   type="button"
@@ -559,17 +624,27 @@ export function PlazaPanel() {
                 </form>
               </div>
 
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div
+                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+              >
                 <div className="games-plaza-emotes" style={{ margin: 0 }}>
                   {QUICK_EMOTES.map((em) => (
-                    <button key={em} type="button" onClick={() => socialSay(em, true)} title="emote">
+                    <button
+                      key={em}
+                      type="button"
+                      onClick={() => socialSay(em, true)}
+                      title="emote"
+                    >
                       {em}
                     </button>
                   ))}
                 </div>
                 {accountId && equippedAccessories[accountId] && (
                   <Typography variant="caption" color="text.secondary">
-                    Equipped cosmetic: <span style={{ fontWeight: 700 }}>{COSMETIC_ITEMS.find(i => i.id === equippedAccessories[accountId])?.name}</span>
+                    Equipped cosmetic:{' '}
+                    <span style={{ fontWeight: 700 }}>
+                      {COSMETIC_ITEMS.find((i) => i.id === equippedAccessories[accountId])?.name}
+                    </span>
                   </Typography>
                 )}
               </div>
@@ -579,7 +654,9 @@ export function PlazaPanel() {
             <div className="games-plaza-here" style={{ flex: 1, overflowY: 'auto' }}>
               <div className="games-plaza-here-head">
                 <span style={{ color: 'var(--text-dim)' }}>In the Plaza</span>
-                <label style={{ marginLeft: 'auto', fontSize: '0.72rem', color: 'var(--text-dim)' }}>
+                <label
+                  style={{ marginLeft: 'auto', fontSize: '0.72rem', color: 'var(--text-dim)' }}
+                >
                   challenge game:{' '}
                   <select value={challengeGame} onChange={(e) => setChallengeGame(e.target.value)}>
                     {games.map((g) => (
@@ -597,15 +674,42 @@ export function PlazaPanel() {
               ) : (
                 <ul className="games-plaza-people">
                   {others.map((o) => (
-                    <li key={o.account_id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.3rem 0.6rem', borderBottom: '1px solid var(--border)' }}>
-                      <span className="games-plaza-person" style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.4rem' }} onClick={() => handleSelectPlayer(o)}>
-                        {renderPlayerAvatar(o.avatar, '1.6rem')} 
+                    <li
+                      key={o.account_id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '0.3rem 0.6rem',
+                        borderBottom: '1px solid var(--border)',
+                      }}
+                    >
+                      <span
+                        className="games-plaza-person"
+                        style={{
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.4rem',
+                        }}
+                        onClick={() => handleSelectPlayer(o)}
+                      >
+                        {renderPlayerAvatar(o.avatar, '1.6rem')}
                         <strong>{o.name}</strong>
                         {equippedAccessories[o.account_id] && (
-                          <span>{COSMETIC_ITEMS.find(i => i.id === equippedAccessories[o.account_id])?.emoji}</span>
+                          <span>
+                            {
+                              COSMETIC_ITEMS.find((i) => i.id === equippedAccessories[o.account_id])
+                                ?.emoji
+                            }
+                          </span>
                         )}
                         {speakingPlayers[o.account_id] && (
-                          <span style={{ color: '#2ed573', fontSize: '0.75rem', marginLeft: '0.2rem' }}>🔊</span>
+                          <span
+                            style={{ color: '#2ed573', fontSize: '0.75rem', marginLeft: '0.2rem' }}
+                          >
+                            🔊
+                          </span>
                         )}
                       </span>
                       <div style={{ display: 'flex', gap: '0.3rem' }}>
@@ -628,60 +732,100 @@ export function PlazaPanel() {
 
         {/* ── Wardrobe Shop Modal ── */}
         <Dialog open={shopOpen} onClose={() => setShopOpen(false)} maxWidth="sm" fullWidth>
-          <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <DialogTitle
+            sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}
+          >
             <span style={{ fontWeight: 800 }}>🛍️ Wardrobe & Cosmetic Shop</span>
             <Chip label={`🪙 ${tokens} Tokens`} color="primary" sx={{ fontWeight: 800 }} />
           </DialogTitle>
           <Divider />
           <DialogContent sx={{ py: 3 }}>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-              Earn Arcade Tokens by competing in games and writing top-tier agents. Spend them below to buy exclusive cosmetics:
+              Earn Arcade Tokens by competing in games and writing top-tier agents. Spend them below
+              to buy exclusive cosmetics:
             </Typography>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '1rem' }}>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                gap: '1rem',
+              }}
+            >
               {COSMETIC_ITEMS.map((item) => {
                 const isUnlocked = unlockedCosmetics.includes(item.id);
                 const isEquipped = accountId && equippedAccessories[accountId] === item.id;
                 return (
-                    <Card variant="outlined" sx={{ height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-                      <CardContent sx={{ pb: 1 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-                          <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
-                            {item.emoji} {item.name}
-                          </Typography>
-                          {!isUnlocked && (
-                            <Chip size="small" label={`🪙 ${item.cost}`} color="secondary" sx={{ fontWeight: 700 }} />
-                          )}
-                        </div>
-                        <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.75rem', lineHeight: 1.4 }}>
-                          {item.description}
+                  <Card
+                    variant="outlined"
+                    sx={{
+                      height: '100%',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <CardContent sx={{ pb: 1 }}>
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          marginBottom: '0.5rem',
+                        }}
+                      >
+                        <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
+                          {item.emoji} {item.name}
                         </Typography>
-                      </CardContent>
-                      <Divider />
-                      <div style={{ padding: '0.6rem 0.8rem', display: 'flex', justifyContent: 'flex-end', background: 'rgba(255,255,255,0.01)' }}>
-                        {isUnlocked ? (
-                          <Button
+                        {!isUnlocked && (
+                          <Chip
                             size="small"
-                            variant={isEquipped ? 'contained' : 'outlined'}
-                            color={isEquipped ? 'success' : 'primary'}
-                            onClick={() => handleEquip(item.id)}
-                            fullWidth
-                          >
-                            {isEquipped ? 'Equipped 👼' : 'Equip Accessory'}
-                          </Button>
-                        ) : (
-                          <Button
-                            size="small"
-                            variant="contained"
-                            color="primary"
-                            onClick={() => handlePurchase(item)}
-                            disabled={tokens < item.cost}
-                            fullWidth
-                          >
-                            Buy Item
-                          </Button>
+                            label={`🪙 ${item.cost}`}
+                            color="secondary"
+                            sx={{ fontWeight: 700 }}
+                          />
                         )}
                       </div>
-                    </Card>
+                      <Typography
+                        variant="body2"
+                        color="text.secondary"
+                        sx={{ fontSize: '0.75rem', lineHeight: 1.4 }}
+                      >
+                        {item.description}
+                      </Typography>
+                    </CardContent>
+                    <Divider />
+                    <div
+                      style={{
+                        padding: '0.6rem 0.8rem',
+                        display: 'flex',
+                        justifyContent: 'flex-end',
+                        background: 'rgba(255,255,255,0.01)',
+                      }}
+                    >
+                      {isUnlocked ? (
+                        <Button
+                          size="small"
+                          variant={isEquipped ? 'contained' : 'outlined'}
+                          color={isEquipped ? 'success' : 'primary'}
+                          onClick={() => handleEquip(item.id)}
+                          fullWidth
+                        >
+                          {isEquipped ? 'Equipped 👼' : 'Equip Accessory'}
+                        </Button>
+                      ) : (
+                        <Button
+                          size="small"
+                          variant="contained"
+                          color="primary"
+                          onClick={() => handlePurchase(item)}
+                          disabled={tokens < item.cost}
+                          fullWidth
+                        >
+                          Buy Item
+                        </Button>
+                      )}
+                    </div>
+                  </Card>
                 );
               })}
             </div>
@@ -697,7 +841,9 @@ export function PlazaPanel() {
         <Dialog open={actionMenuOpen} onClose={() => setActionMenuOpen(false)}>
           {selectedPlayer && (
             <>
-              <DialogTitle sx={{ fontWeight: 800, display: 'flex', alignItems: 'center', gap: '0.8rem' }}>
+              <DialogTitle
+                sx={{ fontWeight: 800, display: 'flex', alignItems: 'center', gap: '0.8rem' }}
+              >
                 {renderPlayerAvatar(selectedPlayer.avatar, '2.4rem')}
                 <div>
                   <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
@@ -709,14 +855,32 @@ export function PlazaPanel() {
                 </div>
               </DialogTitle>
               <Divider />
-              <DialogContent sx={{ minWidth: '280px', display: 'flex', flexDirection: 'column', gap: '0.8rem', py: 2 }}>
-                <Button variant="contained" color="primary" onClick={handleChallengePlayer} fullWidth>
-                  ⚔️ Challenge to {games.find(g => g.id === challengeGame)?.name ?? challengeGame}
+              <DialogContent
+                sx={{
+                  minWidth: '280px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.8rem',
+                  py: 2,
+                }}
+              >
+                <Button
+                  variant="contained"
+                  color="primary"
+                  onClick={handleChallengePlayer}
+                  fullWidth
+                >
+                  ⚔️ Challenge to {games.find((g) => g.id === challengeGame)?.name ?? challengeGame}
                 </Button>
                 <Button variant="outlined" color="primary" onClick={handleViewProfile} fullWidth>
                   👤 View Profile Card
                 </Button>
-                <Button variant="outlined" color="inherit" onClick={handleSendFriendRequest} fullWidth>
+                <Button
+                  variant="outlined"
+                  color="inherit"
+                  onClick={handleSendFriendRequest}
+                  fullWidth
+                >
                   🤝 Send Friend Request
                 </Button>
                 <Button variant="outlined" color="inherit" onClick={handleDirectMessage} fullWidth>
@@ -733,10 +897,24 @@ export function PlazaPanel() {
         </Dialog>
 
         {/* ── Player Profile Card Modal ── */}
-        <Dialog open={showProfileCard} onClose={() => setShowProfileCard(false)} maxWidth="sm" fullWidth>
+        <Dialog
+          open={showProfileCard}
+          onClose={() => setShowProfileCard(false)}
+          maxWidth="sm"
+          fullWidth
+        >
           {selectedPlayer && (
             <>
-              <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: '1rem', background: 'linear-gradient(135deg, rgba(38,42,50,0.9) 0%, rgba(20,22,26,0.9) 100%)', p: 3 }}>
+              <DialogTitle
+                sx={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '1rem',
+                  background:
+                    'linear-gradient(135deg, rgba(38,42,50,0.9) 0%, rgba(20,22,26,0.9) 100%)',
+                  p: 3,
+                }}
+              >
                 {renderPlayerAvatar(selectedPlayer.avatar, '3.5rem')}
                 <div>
                   <Typography variant="h6" sx={{ fontWeight: 800, color: '#fff' }}>
@@ -747,23 +925,35 @@ export function PlazaPanel() {
                   </Typography>
                 </div>
               </DialogTitle>
-              <DialogContent sx={{ py: 3, px: 3, display: 'flex', flexDirection: 'column', gap: '1.2rem' }}>
+              <DialogContent
+                sx={{ py: 3, px: 3, display: 'flex', flexDirection: 'column', gap: '1.2rem' }}
+              >
                 <div>
-                  <Typography variant="caption" sx={{ display: 'block', mb: 0.5, fontWeight: 700, color: 'text.secondary' }}>
+                  <Typography
+                    variant="caption"
+                    sx={{ display: 'block', mb: 0.5, fontWeight: 700, color: 'text.secondary' }}
+                  >
                     ABOUT DEVELOPER
                   </Typography>
-                  <Typography variant="body2" sx={{ fontStyle: 'italic', color: 'text.secondary', lineHeight: 1.5 }}>
-                    "A fellow software engineer and game agent creator hanging out in the Central Plaza. Let's play a game!"
+                  <Typography
+                    variant="body2"
+                    sx={{ fontStyle: 'italic', color: 'text.secondary', lineHeight: 1.5 }}
+                  >
+                    "A fellow software engineer and game agent creator hanging out in the Central
+                    Plaza. Let's play a game!"
                   </Typography>
                 </div>
 
                 <Divider />
 
                 <div>
-                  <Typography variant="caption" sx={{ display: 'block', mb: 0.8, fontWeight: 700, color: 'text.secondary' }}>
+                  <Typography
+                    variant="caption"
+                    sx={{ display: 'block', mb: 0.8, fontWeight: 700, color: 'text.secondary' }}
+                  >
                     🏆 RANKED SKILL TIERS
                   </Typography>
-                  
+
                   {loadingTiers ? (
                     <Typography variant="body2" color="text.secondary">
                       Loading ratings from leaderboards…
@@ -788,8 +978,14 @@ export function PlazaPanel() {
                           }}
                         >
                           <div>
-                            <Typography sx={{ fontWeight: 800, fontSize: '0.75rem' }}>{tier.gameName}</Typography>
-                            <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.68rem' }}>
+                            <Typography sx={{ fontWeight: 800, fontSize: '0.75rem' }}>
+                              {tier.gameName}
+                            </Typography>
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              sx={{ fontSize: '0.68rem' }}
+                            >
                               Rating: {tier.rating}
                             </Typography>
                           </div>
@@ -814,7 +1010,6 @@ export function PlazaPanel() {
             </>
           )}
         </Dialog>
-
       </div>
     </GamesMui>
   );

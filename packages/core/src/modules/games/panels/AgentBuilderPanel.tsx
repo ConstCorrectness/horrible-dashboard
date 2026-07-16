@@ -1,7 +1,6 @@
-import { useCallback, useContext, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 
-import { PaneInstanceContext } from '../../../agent-context';
-import { revealRegionView } from '../../../layout/controller';
+import { registry } from '../../../registry';
 import {
   gradedStat,
   power as buildPower,
@@ -10,23 +9,22 @@ import {
   STAT_LABEL,
   type StatKey,
 } from '../agentBuild';
-import { playVsOwnAgent } from '../matchmaking';
-import {
-  goBackFromHarness,
-  harnessReplacedView,
-  setActiveGame,
-  useActiveGame,
-} from '../selected-game';
 import {
   fetchGamesCatalog,
+  fetchLoadoutTemplates,
   getAgentStarter,
   getLoadout,
   saveLoadout,
   validateLoadout,
   type GameCatalogEntry,
   type Loadout,
+  type LoadoutTemplate,
 } from '../games-api';
+import { setGamesSection } from '../hub-section';
+import { playVsOwnAgent } from '../matchmaking';
+import { setActiveGame, useActiveGame } from '../selected-game';
 import { CodeEditor } from './CodeEditor';
+import { ToolsEditor } from './ToolsEditor';
 import { VsCeremony } from './VsCeremony';
 
 /**
@@ -77,20 +75,27 @@ export function AgentBuilderPanel() {
   const [status, setStatus] = useState('');
   const [agentError, setAgentError] = useState<string | null>(null);
   const [showContext, setShowContext] = useState(false);
+  const [showTools, setShowTools] = useState(false);
   const [vsOpen, setVsOpen] = useState(false);
-  // Only show "back" when this instance actually took over another view (see
-  // selected-game.ts) — not e.g. the Coding Harnesses preset's own dedicated slot.
-  const paneInstanceId = useContext(PaneInstanceContext);
-  const cameFromElsewhere = paneInstanceId != null && harnessReplacedView(paneInstanceId) != null;
-  const goBack = useCallback(() => {
-    if (paneInstanceId) goBackFromHarness(paneInstanceId);
-  }, [paneInstanceId]);
+  const [templates, setTemplates] = useState<LoadoutTemplate[]>([]);
 
   useEffect(() => {
     fetchGamesCatalog()
       .then(setGames)
       .catch(() => {});
   }, []);
+
+  // The shipped tool templates for this game — the editor's starting points for
+  // `tools` (the backend has always served these; nothing consumed them before).
+  useEffect(() => {
+    let cancelled = false;
+    fetchLoadoutTemplates(gameId)
+      .then((t) => !cancelled && setTemplates(t))
+      .catch(() => !cancelled && setTemplates([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [gameId]);
 
   // Follow the shared selection: when the library (or another panel) switches the
   // active game, switch the harness to match.
@@ -133,6 +138,25 @@ export function AgentBuilderPanel() {
     [],
   );
 
+  // Load a shipped template's tool definitions as a starting point. Additive on
+  // purpose: a template is a gift, not a reset — it appends the tools you don't
+  // already have (matching by name, so re-applying is idempotent and never clobbers
+  // a tool you've since edited) and only adopts its context when you have none.
+  const applyTemplate = useCallback((t: LoadoutTemplate) => {
+    setLoadout((lo) => {
+      if (!lo) return lo;
+      const have = new Set(lo.tools.map((x) => x.name));
+      const added = t.loadout.tools.filter((x) => !have.has(x.name));
+      return {
+        ...lo,
+        tools: [...lo.tools, ...added],
+        context: lo.context.trim() ? lo.context : t.loadout.context,
+      };
+    });
+    setShowTools(true);
+    setStatus(`loaded template "${t.title}"`);
+  }, []);
+
   // Validate + persist the active version. Returns true if the agent is saveable
   // (compiles); false surfaces the error and blocks lock-in.
   const save = useCallback(async (): Promise<boolean> => {
@@ -161,12 +185,12 @@ export function AgentBuilderPanel() {
   }, [save]);
 
   // From the ceremony's "Enter arena": start a real self-play match (no sign-in
-  // needed — it plays on this node), which reveals the board; also reveal the live
-  // reasoning feed so the tool-calls stream as the agent plays.
+  // needed — it plays on this node), which switches this pane to the Game Board
+  // section; also open the Games Log so the reasoning streams as the agent plays.
   const enterArena = useCallback(() => {
     setVsOpen(false);
     void playVsOwnAgent(gameId);
-    revealRegionView('games.thoughts');
+    registry.openPanel('games.log');
   }, [gameId]);
 
   if (!loadout || !build || !st) {
@@ -203,16 +227,14 @@ export function AgentBuilderPanel() {
             borderBottom: '1px solid var(--border, #33343a)',
           }}
         >
-          {cameFromElsewhere && (
-            <button
-              type="button"
-              onClick={goBack}
-              title="Back to Games"
-              style={{ ...btn, padding: '0.2rem 0.5rem' }}
-            >
-              ← Games
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => setGamesSection('play')}
+            title="Back to Play"
+            style={{ ...btn, padding: '0.2rem 0.5rem' }}
+          >
+            ← Play
+          </button>
           <span style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: '0.8rem' }}>
             my_agent.py
           </span>
@@ -276,6 +298,30 @@ export function AgentBuilderPanel() {
                 border: '1px solid var(--border, #33343a)',
                 borderRadius: 6,
               }}
+            />
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={() => setShowTools((s) => !s)}
+          style={{
+            ...btn,
+            border: 'none',
+            borderTop: '1px solid var(--border, #33343a)',
+            borderRadius: 0,
+            textAlign: 'left',
+            color: 'var(--text-dim)',
+          }}
+        >
+          {showTools ? '▾' : '▸'} Tools ({loadout.tools.length}) — Python your agent can call
+        </button>
+        {showTools && (
+          <div style={{ padding: 10 }}>
+            <ToolsEditor
+              tools={loadout.tools}
+              templates={templates}
+              onChange={(tools) => patch({ tools })}
+              onApplyTemplate={applyTemplate}
             />
           </div>
         )}

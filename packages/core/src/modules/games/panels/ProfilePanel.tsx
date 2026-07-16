@@ -20,7 +20,16 @@ import MenuItem from '@mui/material/MenuItem';
 import Select from '@mui/material/Select';
 
 import { apiGet } from '../../../api';
-import { profileGet, profileSet, friendList, friendRequest, friendAccept, friendRemove, socialInvite, useGames } from '../game-ws';
+import {
+  profileGet,
+  profileSet,
+  friendList,
+  friendRequest,
+  friendAccept,
+  friendRemove,
+  socialInvite,
+  useGames,
+} from '../game-ws';
 import { fetchGamesCatalog, fetchLeaderboard, type GameCatalogEntry } from '../games-api';
 import { openReplay } from '../replay-focus';
 import { GamesMui } from '../mui-theme';
@@ -48,7 +57,7 @@ export function ProfilePanel() {
   const { social, accountId } = useGames();
   const [cards, setCards] = useState<TierCard[]>([]);
   const [log, setLog] = useState<MatchEntry[]>([]);
-  
+
   // Custom states for editing
   const [editingAvatar, setEditingAvatar] = useState(false);
   const [editingBio, setEditingBio] = useState(false);
@@ -200,11 +209,11 @@ export function ProfilePanel() {
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-            
             {/* ── Steam-Style Header ── */}
             <Card
               sx={{
-                background: 'linear-gradient(135deg, rgba(38,42,50,0.9) 0%, rgba(20,22,26,0.9) 100%)',
+                background:
+                  'linear-gradient(135deg, rgba(38,42,50,0.9) 0%, rgba(20,22,26,0.9) 100%)',
                 borderColor: 'divider',
               }}
             >
@@ -253,8 +262,18 @@ export function ProfilePanel() {
                   <Typography variant="body2" sx={{ color: 'text.secondary', fontSize: '0.78rem' }}>
                     ID: {profile.account_id}
                   </Typography>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginTop: '0.6rem' }}>
-                    <Typography variant="subtitle2" sx={{ fontWeight: 700, color: 'var(--accent, #6ea8fe)' }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.6rem',
+                      marginTop: '0.6rem',
+                    }}
+                  >
+                    <Typography
+                      variant="subtitle2"
+                      sx={{ fontWeight: 700, color: 'var(--accent, #6ea8fe)' }}
+                    >
                       Level {profile.level}
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
@@ -281,7 +300,10 @@ export function ProfilePanel() {
                     }}
                   >
                     <div>
-                      <Typography variant="caption" sx={{ display: 'block', mb: 0.5, fontWeight: 700, color: 'text.secondary' }}>
+                      <Typography
+                        variant="caption"
+                        sx={{ display: 'block', mb: 0.5, fontWeight: 700, color: 'text.secondary' }}
+                      >
                         UPLOAD PICTURE
                       </Typography>
                       <input
@@ -292,11 +314,31 @@ export function ProfilePanel() {
                       />
                     </div>
                     <div>
-                      <Typography variant="caption" sx={{ display: 'block', mb: 0.5, fontWeight: 700, color: 'text.secondary' }}>
+                      <Typography
+                        variant="caption"
+                        sx={{ display: 'block', mb: 0.5, fontWeight: 700, color: 'text.secondary' }}
+                      >
                         OR SELECT EMOJI
                       </Typography>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
-                        {['🤖', '🦾', '🧠', '👾', '🐙', '🦊', '🐲', '⚡', '🛠', '🎯', '🃏', '🚀', '👑', '🧙', '🐯', '🐼'].map((a) => (
+                        {[
+                          '🤖',
+                          '🦾',
+                          '🧠',
+                          '👾',
+                          '🐙',
+                          '🦊',
+                          '🐲',
+                          '⚡',
+                          '🛠',
+                          '🎯',
+                          '🃏',
+                          '🚀',
+                          '👑',
+                          '🧙',
+                          '🐯',
+                          '🐼',
+                        ].map((a) => (
                           <button
                             key={a}
                             type="button"
@@ -325,15 +367,29 @@ export function ProfilePanel() {
 
             {/* ── Two-Column Steam Layout ── */}
             <div style={{ display: 'flex', gap: '1.5rem', flexWrap: 'wrap' }}>
-              
               {/* Left Column (Bio & Replays) */}
-              <div style={{ flex: '2 1 500px', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-                
+              <div
+                style={{
+                  flex: '2 1 500px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '1.5rem',
+                }}
+              >
                 {/* Biography / Description */}
                 <Card sx={{ borderColor: 'divider' }}>
                   <CardContent sx={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                      <Typography variant="subtitle1" sx={{ fontWeight: 800, color: 'text.secondary' }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                      }}
+                    >
+                      <Typography
+                        variant="subtitle1"
+                        sx={{ fontWeight: 800, color: 'text.secondary' }}
+                      >
                         📝 Profile Description
                       </Typography>
                       {!editingBio && (
@@ -356,17 +412,36 @@ export function ProfilePanel() {
                           onChange={(e) => setBioInput(e.target.value)}
                         />
                         <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end' }}>
-                          <Button size="small" variant="outlined" color="inherit" onClick={() => setEditingBio(false)}>
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            color="inherit"
+                            onClick={() => setEditingBio(false)}
+                          >
                             Cancel
                           </Button>
-                          <Button size="small" variant="contained" color="primary" onClick={handleSaveBio}>
+                          <Button
+                            size="small"
+                            variant="contained"
+                            color="primary"
+                            onClick={handleSaveBio}
+                          >
                             Save
                           </Button>
                         </div>
                       </div>
                     ) : (
-                      <Typography variant="body2" sx={{ fontStyle: profile.bio ? 'normal' : 'italic', color: profile.bio ? 'text.primary' : 'text.secondary', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>
-                        {profile.bio || 'No profile description set yet. Click Edit Bio to write one!'}
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          fontStyle: profile.bio ? 'normal' : 'italic',
+                          color: profile.bio ? 'text.primary' : 'text.secondary',
+                          whiteSpace: 'pre-wrap',
+                          lineHeight: 1.5,
+                        }}
+                      >
+                        {profile.bio ||
+                          'No profile description set yet. Click Edit Bio to write one!'}
                       </Typography>
                     )}
                   </CardContent>
@@ -375,18 +450,34 @@ export function ProfilePanel() {
                 {/* Recent Matches */}
                 <Card sx={{ borderColor: 'divider' }}>
                   <CardContent sx={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-                    <Typography variant="subtitle1" sx={{ fontWeight: 800, color: 'text.secondary', mb: 0.5 }}>
+                    <Typography
+                      variant="subtitle1"
+                      sx={{ fontWeight: 800, color: 'text.secondary', mb: 0.5 }}
+                    >
                       📼 Recent Match Replays
                     </Typography>
                     {log.length === 0 ? (
-                      <Typography variant="body2" color="text.secondary" sx={{ py: 1, textAlign: 'center' }}>
-                        No matches recorded yet. Complete a casual or ranked game to see replays here.
+                      <Typography
+                        variant="body2"
+                        color="text.secondary"
+                        sx={{ py: 1, textAlign: 'center' }}
+                      >
+                        No matches recorded yet. Complete a casual or ranked game to see replays
+                        here.
                       </Typography>
                     ) : (
                       <div style={{ overflowX: 'auto' }}>
-                        <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: '0.8rem' }}>
+                        <table
+                          style={{ borderCollapse: 'collapse', width: '100%', fontSize: '0.8rem' }}
+                        >
                           <thead>
-                            <tr style={{ borderBottom: '1px solid var(--border)', textAlign: 'left', color: 'var(--text-dim)' }}>
+                            <tr
+                              style={{
+                                borderBottom: '1px solid var(--border)',
+                                textAlign: 'left',
+                                color: 'var(--text-dim)',
+                              }}
+                            >
                               <th style={{ padding: '0.4rem' }}>Result</th>
                               <th style={{ padding: '0.4rem' }}>Game</th>
                               <th style={{ padding: '0.4rem' }}>Harness Details</th>
@@ -397,7 +488,7 @@ export function ProfilePanel() {
                           </thead>
                           <tbody>
                             {log.map((e, i) => (
-                              <tr key={i} style={{ borderBottom: '1px solid var(--border)', '&:hover': { background: 'rgba(255,255,255,0.02)' } } as any}>
+                              <tr key={i} className="games-match-log-row">
                                 <td style={{ padding: '0.4rem', fontWeight: 700 }}>
                                   {e.result === 'win' ? (
                                     <span style={{ color: '#3fb950' }}>🏆 Win</span>
@@ -416,7 +507,12 @@ export function ProfilePanel() {
                                 </td>
                                 <td style={{ padding: '0.4rem' }}>
                                   {e.rating_delta !== null ? (
-                                    <span style={{ color: e.rating_delta >= 0 ? '#3fb950' : '#e5534b', fontWeight: 700 }}>
+                                    <span
+                                      style={{
+                                        color: e.rating_delta >= 0 ? '#3fb950' : '#e5534b',
+                                        fontWeight: 700,
+                                      }}
+                                    >
                                       {e.rating_delta >= 0 ? `+${e.rating_delta}` : e.rating_delta}
                                     </span>
                                   ) : (
@@ -451,19 +547,37 @@ export function ProfilePanel() {
               </div>
 
               {/* Right Column (Tiers & Friends) */}
-              <div style={{ flex: '1 1 320px', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-                
+              <div
+                style={{
+                  flex: '1 1 320px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '1.5rem',
+                }}
+              >
                 {/* Friends List Card */}
                 <Card sx={{ borderColor: 'divider' }}>
                   <CardContent sx={{ display: 'flex', flexDirection: 'column', gap: '0.8rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                      <Typography variant="subtitle1" sx={{ fontWeight: 800, color: 'text.secondary' }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                      }}
+                    >
+                      <Typography
+                        variant="subtitle1"
+                        sx={{ fontWeight: 800, color: 'text.secondary' }}
+                      >
                         👥 Friends List ({social.friends.length})
                       </Typography>
                     </div>
 
                     {/* Friend Add Input */}
-                    <form onSubmit={handleSendFriendRequest} style={{ display: 'flex', gap: '0.4rem' }}>
+                    <form
+                      onSubmit={handleSendFriendRequest}
+                      style={{ display: 'flex', gap: '0.4rem' }}
+                    >
                       <TextField
                         size="small"
                         placeholder="Add friend by Account ID..."
@@ -473,22 +587,42 @@ export function ProfilePanel() {
                         fullWidth
                         sx={{ input: { fontSize: '0.75rem', py: 0.6 } }}
                       />
-                      <Button type="submit" variant="contained" size="small" sx={{ fontSize: '0.7rem' }}>
+                      <Button
+                        type="submit"
+                        variant="contained"
+                        size="small"
+                        sx={{ fontSize: '0.7rem' }}
+                      >
                         Request
                       </Button>
                     </form>
 
                     {/* Pending incoming requests */}
                     {social.pending.length > 0 && (
-                      <div style={{ background: 'rgba(110, 168, 254, 0.05)', borderRadius: '4px', padding: '0.5rem' }}>
-                        <Typography variant="caption" sx={{ display: 'block', mb: 0.5, fontWeight: 700, color: 'primary.main' }}>
+                      <div
+                        style={{
+                          background: 'rgba(110, 168, 254, 0.05)',
+                          borderRadius: '4px',
+                          padding: '0.5rem',
+                        }}
+                      >
+                        <Typography
+                          variant="caption"
+                          sx={{ display: 'block', mb: 0.5, fontWeight: 700, color: 'primary.main' }}
+                        >
                           📥 INCOMING FRIEND REQUESTS ({social.pending.length})
                         </Typography>
                         <List dense sx={{ p: 0 }}>
                           {social.pending.map((req) => (
                             <ListItem
                               key={req.account_id}
-                              sx={{ px: 0.4, py: 0.2, display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                              sx={{
+                                px: 0.4,
+                                py: 0.2,
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.5rem',
+                              }}
                             >
                               <ListItemAvatar sx={{ minWidth: 0 }}>
                                 {renderAvatar(req.avatar, '1.8rem')}
@@ -526,7 +660,11 @@ export function ProfilePanel() {
 
                     {/* Friends Roster */}
                     {social.friends.length === 0 ? (
-                      <Typography variant="body2" color="text.secondary" sx={{ py: 1, textAlign: 'center' }}>
+                      <Typography
+                        variant="body2"
+                        color="text.secondary"
+                        sx={{ py: 1, textAlign: 'center' }}
+                      >
                         No friends added yet. Send requests using their account ID above.
                       </Typography>
                     ) : (
@@ -541,7 +679,12 @@ export function ProfilePanel() {
                                     size="small"
                                     variant="outlined"
                                     color="primary"
-                                    sx={{ py: 0.1, px: 0.8, fontSize: '0.65rem', textTransform: 'none' }}
+                                    sx={{
+                                      py: 0.1,
+                                      px: 0.8,
+                                      fontSize: '0.65rem',
+                                      textTransform: 'none',
+                                    }}
                                     onClick={() => {
                                       setChallengeTarget(friend.account_id);
                                       setChallengeTargetName(friend.display_name);
@@ -562,7 +705,9 @@ export function ProfilePanel() {
                             }
                             sx={{ px: 0, py: 0.4 }}
                           >
-                            <ListItemAvatar sx={{ minWidth: 0, mr: '0.6rem', position: 'relative' }}>
+                            <ListItemAvatar
+                              sx={{ minWidth: 0, mr: '0.6rem', position: 'relative' }}
+                            >
                               {renderAvatar(friend.avatar, '2.2rem')}
                               <div
                                 style={{
@@ -596,12 +741,20 @@ export function ProfilePanel() {
                 {/* Ranked Game Tiers */}
                 <Card sx={{ borderColor: 'divider' }}>
                   <CardContent sx={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-                    <Typography variant="subtitle1" sx={{ fontWeight: 800, color: 'text.secondary' }}>
+                    <Typography
+                      variant="subtitle1"
+                      sx={{ fontWeight: 800, color: 'text.secondary' }}
+                    >
                       🏆 Ranked Skill Tiers
                     </Typography>
                     {cards.length === 0 ? (
-                      <Typography variant="body2" color="text.secondary" sx={{ py: 1, textAlign: 'center' }}>
-                        No ranked game tiers records yet. Complete ranked games in the lobby to earn ratings.
+                      <Typography
+                        variant="body2"
+                        color="text.secondary"
+                        sx={{ py: 1, textAlign: 'center' }}
+                      >
+                        No ranked game tiers records yet. Complete ranked games in the lobby to earn
+                        ratings.
                       </Typography>
                     ) : (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
@@ -619,7 +772,9 @@ export function ProfilePanel() {
                             }}
                           >
                             <div>
-                              <Typography sx={{ fontWeight: 800, fontSize: '0.8rem' }}>{c.name}</Typography>
+                              <Typography sx={{ fontWeight: 800, fontSize: '0.8rem' }}>
+                                {c.name}
+                              </Typography>
                               <Typography variant="caption" color="text.secondary">
                                 Rating: {c.rating ?? '···'} · {c.record}
                               </Typography>
@@ -638,7 +793,6 @@ export function ProfilePanel() {
                   </CardContent>
                 </Card>
               </div>
-
             </div>
 
             {/* ── Challenge Invitation Dialog ── */}
@@ -672,7 +826,6 @@ export function ProfilePanel() {
                 </Button>
               </DialogActions>
             </Dialog>
-
           </div>
         )}
       </div>

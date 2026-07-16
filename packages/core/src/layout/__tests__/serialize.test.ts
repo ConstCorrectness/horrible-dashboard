@@ -139,4 +139,94 @@ describe('deserialize pruning', () => {
     expect(back.fullscreenAreaId).toBeNull();
     expect(back.focusedAreaId).not.toBe('a999');
   });
+
+  it('drops areas a prune emptied instead of leaving a placeholder', () => {
+    const frame = seeded();
+    const blob = JSON.parse(JSON.stringify(serialize(frame))) as Record<string, unknown>;
+    const f = blob.frame as {
+      center: { children: Array<{ tabs: Array<{ viewId: string }> }> };
+    };
+    // The second area holds one pane; retire its view and the area has nothing left.
+    f.center.children[1].tabs[0].viewId = 'ghost.pane';
+    const back = deserialize(blob, KNOWN)!;
+    // The split collapses to the one surviving area rather than keeping an empty one.
+    expect(back.center.kind).toBe('area');
+    expect((back.center as { tabs: unknown[] }).tabs).toHaveLength(2);
+  });
+});
+
+// A saved layout outlives the code that wrote it: a workspace naming a view that
+// has since been merged away must keep working, not open with holes in it.
+describe('deserialize view renames', () => {
+  const RENAMED = new Set(['games.lobby', 'games.log', 'scratch.note']);
+
+  function blobWith(viewIds: string[]): Record<string, unknown> {
+    return {
+      schema: FRAME_SCHEMA,
+      version: FRAME_VERSION,
+      frame: {
+        center: {
+          kind: 'split',
+          id: 's1',
+          orientation: 'row',
+          sizes: viewIds.map(() => 1 / viewIds.length),
+          children: viewIds.map((viewId, i) => ({
+            kind: 'area',
+            id: `a${i + 1}`,
+            tabs: [{ instanceId: `${viewId}#${i + 1}`, viewId }],
+            activeTab: 0,
+          })),
+        },
+        docks: {},
+        floating: [],
+        focusedAreaId: 'a1',
+        fullscreenAreaId: null,
+        paneSeq: 9,
+      },
+    };
+  }
+
+  function viewIdsOf(node: FrameState['center']): string[] {
+    if (node.kind === 'area') return node.tabs.map((t) => t.viewId);
+    return node.children.flatMap(viewIdsOf);
+  }
+
+  it('renames a retired view to its replacement', () => {
+    const back = deserialize(blobWith(['games.thoughts', 'scratch.note']), RENAMED)!;
+    expect(viewIdsOf(back.center)).toEqual(['games.log', 'scratch.note']);
+  });
+
+  it('collapses two retired views that merged into one pane', () => {
+    // games.board and games.loadout both became sections of games.lobby.
+    const back = deserialize(blobWith(['games.board', 'games.loadout']), RENAMED)!;
+    expect(viewIdsOf(back.center)).toEqual(['games.lobby']);
+  });
+
+  it('keeps the pane the layout already placed over a renamed duplicate', () => {
+    const back = deserialize(blobWith(['games.lobby', 'games.board']), RENAMED)!;
+    expect(viewIdsOf(back.center)).toEqual(['games.lobby']);
+  });
+
+  it('renames region views and their activeView', () => {
+    const blob = blobWith(['scratch.note']);
+    const center = (blob.frame as { center: { children: Array<{ tabs: Array<object> }> } }).center;
+    center.children[0].tabs[0] = {
+      instanceId: 'scratch.note#1',
+      viewId: 'scratch.note',
+      regions: {
+        right: {
+          open: true,
+          size: 300,
+          collapsed: false,
+          views: ['games.thoughts'],
+          activeView: 'games.thoughts',
+        },
+      },
+    };
+    const back = deserialize(blob, RENAMED)!;
+    const pane = (back.center as { tabs: Array<{ regions?: Record<string, RegionState> }> })
+      .tabs[0];
+    expect(pane.regions?.right.views).toEqual(['games.log']);
+    expect(pane.regions?.right.activeView).toBe('games.log');
+  });
 });

@@ -9,25 +9,17 @@
  */
 import { useSyncExternalStore } from 'react';
 
-import { revealRegionView } from '../../layout/controller';
-import { registry } from '../../registry';
 import { toastsStore } from '../../toasts';
 import { sendChannel, subscribeChannel } from '../../ws';
 import { resetArenaView } from './arena-view';
+import { openGamesSection } from './hub-section';
 import { sfx } from './sfx';
 
-/** Pop the Game Board when a match becomes live. If a **standalone** Game Board pane
- * is already open (e.g. the "Coding Harnesses" workspace seeds one), focus that pane
- * so we don't render a second board inside the lobby; otherwise reveal the board
- * as the lobby's bottom region (opening the lobby if needed). */
+/** Pop the Game Board when a match becomes live: the board is a section of the
+ * single Games pane, so this switches that pane's section (opening it if needed)
+ * rather than revealing a separate board pane. */
 export function revealBoard(): void {
-  const lc = registry.layoutController;
-  const standalone = lc?.listOpenPanes().find((p) => p.id === 'games.board');
-  if (standalone) {
-    lc!.focusPane(standalone.instanceId);
-    return;
-  }
-  revealRegionView('games.board');
+  openGamesSection('board');
 }
 
 export interface TableInfo {

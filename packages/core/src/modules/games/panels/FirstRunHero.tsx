@@ -1,18 +1,20 @@
 import { useEffect, useState } from 'react';
 
-import { revealRegionView } from '../../../layout/controller';
+import { registry } from '../../../registry';
 import { setSetting } from '../../../settings';
 import { useGames } from '../game-ws';
 import { fetchStatus, signInWith, type SignInProvider } from '../games-api';
+import { openGamesSection } from '../hub-section';
 import { findRankedMatch } from '../matchmaking';
 
 type Step = 'signin' | 'placement' | 'done';
 
 /**
- * The first-run card in the hub's Play tab — the wizard panel's replacement.
- * Two inline steps: sign in → placement match, with the board and Agent Thoughts
- * revealed so the first thing a new player sees is their agent thinking.
- * Sets `games.onboarded` when the placement match goes live, or when dismissed.
+ * The first-run card in the Games pane's Play section — the wizard panel's
+ * replacement. Two inline steps: sign in → placement match, switching to the Game
+ * Board section and opening the Games Log so the first thing a new player sees is
+ * their agent thinking. Sets `games.onboarded` when the placement match goes live,
+ * or when dismissed.
  */
 export function FirstRunHero() {
   const { matchSeats } = useGames();
@@ -58,8 +60,8 @@ export function FirstRunHero() {
   };
 
   const startPlacement = () => {
-    revealRegionView('games.board');
-    revealRegionView('games.thoughts');
+    openGamesSection('board');
+    registry.openPanel('games.log');
     void findRankedMatch('tictactoe', 'standard', true);
     setQueued(true);
   };
@@ -132,8 +134,9 @@ export function FirstRunHero() {
       {step === 'placement' && (
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
           <span style={{ color: 'var(--text-dim)' }}>
-            {name ? `Signed in as ${name}. ` : ''}Start your <strong>placement match</strong> — instantly paired against a practice bot, board
-            and your agent's live thoughts side by side:
+            {name ? `Signed in as ${name}. ` : ''}Start your <strong>placement match</strong> —
+            instantly paired against a practice bot, board and your agent's live thoughts side by
+            side:
           </span>
           <button
             type="button"
@@ -152,7 +155,7 @@ export function FirstRunHero() {
             🎉 <strong>You're in.</strong> After the game: study the replay, branch your harness,
             and climb.
           </span>
-          <button type="button" onClick={() => revealRegionView('games.loadout')}>
+          <button type="button" onClick={() => openGamesSection('build')}>
             Improve the harness
           </button>
         </div>

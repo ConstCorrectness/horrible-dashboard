@@ -1,17 +1,16 @@
 /**
- * Shared "active game" selection for the games module: the Games Library (lobby)
- * and the **Build your agent** harness pane both read/write it, so picking a game
- * in one place switches the other. Without this the harness had its own private
- * game state and stayed stuck on the wrong game when you switched games in the
- * library — the starter/template you were editing didn't follow your selection.
+ * Shared "active game" selection for the games module: the Play section and the
+ * **Build your agent** section of the Games pane both read/write it, so picking a
+ * game in one place switches the other. Without this the builder had its own
+ * private game state and stayed stuck on the wrong game when you switched games in
+ * the library — the starter/template you were editing didn't follow your selection.
  *
  * Same module-level store pattern as game-ws.ts (useSyncExternalStore) and the
  * challenge-draft hand-off.
  */
 import { useSyncExternalStore } from 'react';
 
-import { revealRegionView } from '../../layout/controller';
-import { registry } from '../../registry';
+import { openGamesSection } from './hub-section';
 
 let activeGame: string | null = null;
 const listeners = new Set<() => void>();
@@ -39,47 +38,13 @@ export function useActiveGame(): string | null {
   );
 }
 
-// Instances the harness took over via `openHarnessFor`'s replace-in-place path,
-// mapped to the view they used to show — so the harness's back button can swap
-// that exact instance back, and so we don't mistake a pane the harness has
-// *always* occupied (e.g. the Coding Harnesses preset's dedicated slot) for one
-// it merely borrowed from another view.
-const replacedFrom = new Map<string, string>();
-
-/** Set the active game AND reveal the harness editor on it — the "Edit Harness"
- * hand-off, so the builder opens on the game whose card you clicked.
+/** Set the active game AND show the builder on it — the "Edit agent" hand-off, so
+ * the builder opens on the game whose card you clicked.
  *
- * If the harness is already open anywhere, just focus it. Otherwise, when the
- * caller passes its own pane instance id (the Games pane the button lives in),
- * replace that pane's content with the harness in place — rather than opening
- * a second pane beside it — so "Edit Harness" feels like drilling into the
- * current view, not spawning a new one. Falls back to opening it standalone. */
-export function openHarnessFor(gameId: string, fromInstanceId?: string | null): void {
+ * The builder is a section of the Games pane, so this is just a section switch: no
+ * second pane to find, focus, or swap back. The builder's own "← Play" button is
+ * the way back. */
+export function openHarnessFor(gameId: string): void {
   setActiveGame(gameId);
-  const controller = registry.layoutController;
-  const existing = controller?.listOpenPanes().find((p) => p.id === 'games.loadout');
-  if (existing) {
-    controller?.focusPane(existing.instanceId);
-    return;
-  }
-  if (fromInstanceId && controller?.changePaneType(fromInstanceId, 'games.loadout')) {
-    replacedFrom.set(fromInstanceId, 'games.lobby');
-    return;
-  }
-  revealRegionView('games.loadout');
-}
-
-/** The view instance id `instanceId` replaced to show the harness, if any —
- * powers the harness's "back" button. */
-export function harnessReplacedView(instanceId: string): string | null {
-  return replacedFrom.get(instanceId) ?? null;
-}
-
-/** Swap `instanceId` back to whatever it showed before `openHarnessFor` took it
- * over. No-op if it wasn't a replace-in-place instance. */
-export function goBackFromHarness(instanceId: string): void {
-  const viewId = replacedFrom.get(instanceId);
-  if (!viewId) return;
-  replacedFrom.delete(instanceId);
-  registry.layoutController?.changePaneType(instanceId, viewId);
+  openGamesSection('build');
 }

@@ -2239,3 +2239,13 @@
   }
 }
 
+
+/* Match-log rows in the Profile panel. The hover lived in the row's inline style
+   as an `&:hover` key — MUI `sx` syntax, which a plain DOM <tr> ignores, so it
+   never actually highlighted. It's a real CSS rule now. */
+.games-match-log-row {
+  border-bottom: 1px solid var(--border);
+}
+.games-match-log-row:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
