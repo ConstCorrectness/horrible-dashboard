@@ -16,6 +16,7 @@ from fastapi import APIRouter
 from backend.sdk.registry import PluginRegistry, _MountedRouter, registry
 from backend.sdk.types import (
     AgentTool,
+    Connector,
     DashFacadeFactory,
     LifecycleHook,
     PluginManifest,
@@ -51,6 +52,15 @@ class PluginHost:
         """Expose a server-side agent tool. Backend plugins win name conflicts in load
         order; a name clash with a core tool is the plugin author's responsibility."""
         self._registry.agent_tools[tool.name] = tool
+
+    def add_connector(self, connector: Connector) -> None:
+        """Expose an external account the user can connect from the home page, and
+        whose credential the node holds server-side.
+
+        Name the connector's agent tools `<connector.id>.*` — the orchestrator groups
+        tools by their name prefix, so a mismatch silently splits the connector's
+        tools off from its blurb and guide."""
+        self._registry.connectors[connector.id] = connector
 
     def add_ws_channel(self, channel: str, handler: WsChannelHandler) -> None:
         """Handle a new channel on the shared `/ws` socket. Built-in channels

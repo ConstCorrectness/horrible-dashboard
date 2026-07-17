@@ -1,9 +1,13 @@
 """Named-connection store.
 
 User connections persist as a list in ``.data/connections.json`` (mirrors the
-settings store). The built-in ``app`` connection — the local vector store — is always
+settings store). The built-in ``app`` connection — the node's own SQLite database
+(``.data/app.db``: library sources, browser history, code symbols, tasks) — is always
 synthesized first and cannot be edited or removed. Credentials are stored as-is in the
 gitignored ``.data/`` dir (plaintext for v1; encryption is a tracked follow-up).
+
+Note it points at ``app.db``, **not** the LanceDB vector store: LanceDB is a directory,
+not a SQLite file, so there is nothing for the SQL console to open. See ``app_db.py``.
 """
 
 from __future__ import annotations
@@ -14,7 +18,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from backend.modules.database.vectorstore import get_db_path
+from backend.modules.database.app_db import get_app_db_path
+
 
 # Connection config keys whose values must never be returned to the client.
 _SECRET_FIELDS = {"password", "dsn"}
@@ -46,9 +51,9 @@ def _write(rows: list[dict[str, Any]]) -> None:
 def _builtin_app() -> dict[str, Any]:
     return {
         "id": BUILTIN_APP_ID,
-        "name": "App (vector store)",
+        "name": "App (local database)",
         "provider": "sqlite",
-        "config": {"path": str(get_db_path()), "builtin": True},
+        "config": {"path": str(get_app_db_path()), "builtin": True},
         "builtin": True,
     }
 
@@ -64,9 +69,9 @@ def get_connection(conn_id: str) -> dict[str, Any] | None:
 
 def resolve_config(conn: dict[str, Any]) -> dict[str, Any]:
     """The driver-ready config for a connection (built-in app always points at the
-    live vector-store path, even if the data dir moved since it was created)."""
+    live app-database path, even if the data dir moved since it was created)."""
     if conn.get("id") == BUILTIN_APP_ID:
-        return {"path": str(get_db_path()), "builtin": True}
+        return {"path": str(get_app_db_path()), "builtin": True}
     return dict(conn.get("config") or {})
 
 

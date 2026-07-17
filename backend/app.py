@@ -9,6 +9,7 @@ import os
 if "HORRIBLE_ENABLE_SERVER_BROWSER" not in os.environ:
     try:
         import playwright
+
         os.environ["HORRIBLE_ENABLE_SERVER_BROWSER"] = "1"
         env_path = Path(__file__).resolve().parent.parent / ".env"
         if env_path.exists():
@@ -49,8 +50,9 @@ from backend.modules.flow import router as flow_router
 from backend.modules.games import drop_games_conn, handle_games_message
 from backend.modules.games import register_agent_tools as register_games_tools
 from backend.modules.games import router as games_router
-from backend.modules.integrations import google as google_integrations
-from backend.modules.integrations import google_sync
+from backend.modules.connectors import google_router as google_connector_router
+from backend.modules.connectors import register_connectors
+from backend.modules.connectors import router as connectors_router
 from backend.modules.library import push_library_events
 from backend.modules.library import router as library_router
 from backend.modules.lsp import LspManager
@@ -97,7 +99,6 @@ from backend.modules.ws import WsConnection, set_ws_send_observer
 from backend.sdk import load_plugins
 from backend.sdk import registry as plugin_registry
 from backend.modules.tasks import queue
-import backend.modules.library.queue_handlers  # Register handlers
 
 # Observe every outbound `/ws` frame for the observability panel (inbound frames
 # are recorded in the receive loop below). One global observer covers all sockets.
@@ -151,7 +152,8 @@ app.include_router(agent_router, prefix="/api")
 app.include_router(workspace_router, prefix="/api")
 app.include_router(database_router, prefix="/api")
 app.include_router(library_router, prefix="/api")
-app.include_router(google_integrations.router, prefix="/api")
+app.include_router(connectors_router, prefix="/api")
+app.include_router(google_connector_router, prefix="/api")
 app.include_router(browser_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(files_router, prefix="/api")
@@ -178,6 +180,10 @@ register_training_tools()
 # Register the games module's backend agent tools (grouped under `games`); the
 # manual-play seat drives its move through game.getObservation/game.chooseAction.
 register_games_tools()
+
+# Register the built-in connectors (GitHub, …) and the agent tools they unlock. Each
+# connector's tools are grouped under its id and disclosed progressively.
+register_connectors()
 
 # Discover and mount backend plugins (bundled, HORRIBLE_PLUGINS_DIR, and pip entry
 # points). Ships empty; each plugin's routes mount under /api + its prefix. Agent

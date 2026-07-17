@@ -1,7 +1,7 @@
 """Server-side browser history + bookmarks — a small SQLite catalog so both
 persist across reloads and machines.
 
-Lives in the shared app DB (the same file as the vector store / library catalog),
+Lives in the shared app DB (`.data/app.db`, the same file as the library catalog),
 mirroring `library.store`. History is upserted per URL (one row per URL, bumped to
 the latest visit) so it stays compact; bookmarks are deduped by URL.
 """
@@ -14,15 +14,14 @@ from typing import Any
 
 from contextlib import contextmanager
 import sqlite3
-import os
-from pathlib import Path
 from typing import Generator
+
+from backend.modules.database.app_db import ensure_app_db_dir
+
 
 @contextmanager
 def get_db_conn() -> Generator[sqlite3.Connection, None, None]:
-    data_dir = Path(os.environ.get("HORRIBLE_DATA_DIR", ".data"))
-    data_dir.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(data_dir / "app.db"))
+    conn = sqlite3.connect(str(ensure_app_db_dir()))
     conn.row_factory = sqlite3.Row
     try:
         yield conn

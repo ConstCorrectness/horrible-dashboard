@@ -17,6 +17,7 @@ from fastapi import APIRouter
 
 from backend.sdk.types import (
     AgentTool,
+    Connector,
     DashFacadeFactory,
     LifecycleHook,
     PluginManifest,
@@ -40,6 +41,9 @@ class PluginRegistry:
     loaded: list[PluginManifest] = field(default_factory=list)
     routers: list[_MountedRouter] = field(default_factory=list)
     agent_tools: dict[str, AgentTool] = field(default_factory=dict)
+    # External accounts the node can connect to, keyed by connector id. The id also
+    # names the agent tool group the connector enables (see Connector.id).
+    connectors: dict[str, Connector] = field(default_factory=dict)
     ws_channels: dict[str, WsChannelHandler] = field(default_factory=dict)
     dash_facades: dict[str, DashFacadeFactory] = field(default_factory=dict)
     # Environment providers for the training module (duck-typed against
@@ -56,6 +60,7 @@ class PluginRegistry:
         self.loaded.clear()
         self.routers.clear()
         self.agent_tools.clear()
+        self.connectors.clear()
         self.ws_channels.clear()
         self.dash_facades.clear()
         self.training_providers.clear()

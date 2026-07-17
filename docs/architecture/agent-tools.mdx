@@ -43,13 +43,48 @@ meta-tools, with each turn's list recomputed and groups injected on demand (see
 Remaining work is incremental per-module polish (e.g. the editor's desktop-only
 `osfile:` source), not foundational.
 
+## A tool's group is its name prefix
+
+`_group_of(name)` takes the namespace **before the first dot** — `github.searchCode`
+is in group `github`; a dotless name (the layout verbs) is in the always-present
+`layout` core.
+
+`AgentTool.group` does **not** name the group. It's only a flag: `provider_tools(grouped=…)`
+checks whether it is set, to split always-core tools from progressively-disclosed
+ones. So a tool named `game.getObservation` that declares `group="games"` really lands
+in a group called `game` — and if nothing describes `game`, it shows up in the catalog
+as a bare `"game tools"` fallback with no blurb and no guide. That exact mismatch
+existed for the games tools until the connectors work added an invariant test
+(`test_connectors.py::test_agent_tool_names_match_their_declared_group`).
+
+**Keep the name prefix and the declared group identical.** For a
+[connector](../modules/connectors.mdx), both must also equal the connector's `id` —
+that's what lets one definition feed the home tile, the group blurb, and the guide.
+
+### Two tiers of disclosure
+
+`list_tool_groups` shows each group's one-line blurb (`_GROUP_DESCRIPTIONS`, falling
+back to a connector's `blurb`); `load_tools` delivers the group's full **guide** — a
+SKILL.md-style markdown doc. The blurb answers "would this help?"; the guide answers
+"how do I use it without getting it wrong?". Guides ride the tool-result message, so
+they need no orchestrator plumbing of their own.
+
 ## The model: one tool path, one gate
 
-Every agent tool call flows through the **frontend relay** over the shared `/ws`
-`agent` channel — there is no separate backend-direct tool path, even for tools
-whose resource (a PTY, the filesystem) lives in the backend. Those tools' handlers
-run in the frontend and call the backend's existing HTTP/WS API, so the agent has
-exactly **one** tool model to reason about.
+Every **frontend-declared** agent tool call flows through the **frontend relay** over
+the shared `/ws` `agent` channel — there is no relay bypass, even for tools whose
+resource (a PTY, the filesystem) lives in the backend. Those tools' handlers run in
+the frontend and call the backend's existing HTTP/WS API, so the agent has exactly
+**one** tool model to reason about.
+
+:::note Backend-registered tools are the exception
+Tools contributed via `backend/sdk` (`host.add_agent_tool`) run their handler in the
+backend and never touch the relay — used where a tab may not exist at all (a cron run,
+the `dash` REPL, `agent.ask_peer`) or where the resource is a server-held secret the
+browser must never see. Today: games, training, and the
+[connectors](../modules/connectors.mdx). They pass through the same permission gate,
+so the sentence that matters is unaffected: **one gate**, not one path.
+:::
 
 The consequence that shapes everything: because all calls pass through the
 orchestrator loop, the **permission gate sits in the backend orchestrator, before

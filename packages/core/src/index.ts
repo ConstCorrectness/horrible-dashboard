@@ -134,6 +134,20 @@ export {
   type WidgetDecl,
   type WorkspaceInfo,
 } from './registry';
+export {
+  beginConnect,
+  disconnectConnector,
+  listConnectors,
+  pollConnect,
+  pollUntilDone,
+  submitConnect,
+  type Connector,
+  type ConnectorAccount,
+  type ConnectorField,
+  type ConnectorKind,
+  type ConnectorScope,
+  type ConnectStep,
+} from './connectors/api';
 export { dashboardModule } from './modules/dashboard';
 export { layoutsModule } from './modules/layouts';
 export { scratchModule } from './modules/scratch';

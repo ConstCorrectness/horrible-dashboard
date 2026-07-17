@@ -180,20 +180,19 @@ async def chat(
 ) -> ChatResult:
     """One non-streaming tool-calling round, normalized to a `ChatResult`."""
     if info.dialect == "litellm":
-        from backend.modules.database.secrets_store import get_secret
-        key = get_secret(info.kind)
+        from backend.modules.database.secrets_store import get_secret_or_none
+
+        key = get_secret_or_none(info.kind)
         import os
+
         # litellm expects keys in environment variables usually, or passed directly
         # depending on the provider.
         api_key_kwargs = {}
         if key:
             api_key_kwargs["api_key"] = key
-        
+
         response = await litellm.acompletion(
-            model=model,
-            messages=messages,
-            tools=tools or None,
-            **api_key_kwargs
+            model=model, messages=messages, tools=tools or None, **api_key_kwargs
         )
         msg = response.choices[0].message
         msg_dict = msg.model_dump()
@@ -578,8 +577,9 @@ async def _litellm_chat_stream(
     if tools:
         kwargs["tools"] = tools
 
-    from backend.modules.database.secrets_store import get_secret
-    key = get_secret(provider_kind)
+    from backend.modules.database.secrets_store import get_secret_or_none
+
+    key = get_secret_or_none(provider_kind)
     if key:
         kwargs["api_key"] = key
 
@@ -587,31 +587,28 @@ async def _litellm_chat_stream(
     tool_acc: dict[int, dict[str, Any]] = {}
 
     response = await litellm.acompletion(
-        model=model,
-        messages=messages,
-        stream=True,
-        **kwargs
+        model=model, messages=messages, stream=True, **kwargs
     )
 
     async for chunk in response:
         delta = chunk.choices[0].delta
         if not delta:
             continue
-        
-        reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+
+        reasoning = getattr(delta, "reasoning_content", None) or getattr(
+            delta, "reasoning", None
+        )
         content = delta.content
         if reasoning:
             await extractor.feed_reasoning(reasoning)
         if content:
             await extractor.feed_content(content)
-            
+
         tool_calls = delta.tool_calls
         if tool_calls:
             for tc in tool_calls:
                 idx = getattr(tc, "index", 0)
-                slot = tool_acc.setdefault(
-                    idx, {"id": None, "name": "", "args": ""}
-                )
+                slot = tool_acc.setdefault(idx, {"id": None, "name": "", "args": ""})
                 if getattr(tc, "id", None):
                     slot["id"] = tc.id
                 fn = getattr(tc, "function", None)
@@ -668,18 +665,19 @@ async def generate(
     across dialects to a plain string. Token-capped to keep latency low; low
     ``temperature`` by default so code completions are stable, not creative."""
     if info.dialect == "litellm":
-        from backend.modules.database.secrets_store import get_secret
-        key = get_secret(info.kind)
+        from backend.modules.database.secrets_store import get_secret_or_none
+
+        key = get_secret_or_none(info.kind)
         api_key_kwargs = {}
         if key:
             api_key_kwargs["api_key"] = key
-            
+
         response = await litellm.acompletion(
             model=model,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=max_tokens,
             temperature=temperature,
-            **api_key_kwargs
+            **api_key_kwargs,
         )
         return response.choices[0].message.content or ""
 
@@ -721,17 +719,18 @@ async def generate_stream(
     normalizing Ollama's ``/api/generate`` and the OpenAI ``/v1/chat/completions``
     SSE stream into the one shape the frontend already understands."""
     if info.dialect == "litellm":
-        from backend.modules.database.secrets_store import get_secret
-        key = get_secret(info.kind)
+        from backend.modules.database.secrets_store import get_secret_or_none
+
+        key = get_secret_or_none(info.kind)
         api_key_kwargs = {}
         if key:
             api_key_kwargs["api_key"] = key
-            
+
         response = await litellm.acompletion(
             model=model,
             messages=[{"role": "user", "content": prompt}],
             stream=True,
-            **api_key_kwargs
+            **api_key_kwargs,
         )
         async for chunk in response:
             token = chunk.choices[0].delta.content or ""

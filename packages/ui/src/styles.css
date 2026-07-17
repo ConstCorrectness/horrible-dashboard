@@ -1833,6 +1833,162 @@ body {
   opacity: 1;
 }
 
+/* Integration tiles: the row above the ask bar — what the agent can reach. Built on
+   the .provider-option vocabulary (hairline border, 6px radius) so it reads as native
+   to the page rather than a bolted-on strip. */
+.integration-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.9rem;
+  min-height: 4.4rem;
+}
+
+.integration-slot {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  width: 4rem;
+}
+
+.integration-tile {
+  display: grid;
+  place-items: center;
+  width: 2.9rem;
+  height: 2.9rem;
+  padding: 0;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text);
+  cursor: pointer;
+  /* Unconnected reads as "available, not on" — desaturated rather than hidden. */
+  filter: grayscale(1);
+  opacity: 0.55;
+  transition:
+    opacity 0.15s,
+    filter 0.15s,
+    border-color 0.15s;
+}
+
+.integration-tile:hover {
+  opacity: 0.85;
+  border-color: var(--border-strong, var(--accent));
+}
+
+.integration-tile.connected {
+  filter: none;
+  opacity: 1;
+}
+
+.integration-tile svg {
+  width: 1.5rem;
+  height: 1.5rem;
+}
+
+.integration-letter {
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+
+.integration-tile.skeleton {
+  cursor: default;
+  background: var(--bg-raised);
+  opacity: 0.3;
+}
+
+.integration-badge,
+.integration-dot {
+  position: absolute;
+  top: -0.25rem;
+  right: -0.25rem;
+  display: grid;
+  place-items: center;
+  width: 1.05rem;
+  height: 1.05rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+/* A connection that exists but is broken — distinct from "not connected". */
+.integration-dot.warn {
+  background: #e5a03a;
+  border-color: #e5a03a;
+}
+
+.integration-label {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.integration-popover {
+  position: absolute;
+  top: 3.6rem;
+  left: 50%;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  width: min(22rem, 80vw);
+  padding: 0.9rem 1rem;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  text-align: left;
+  transform: translateX(-50%);
+}
+
+.integration-popover-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.integration-scopes {
+  margin: 0;
+  padding-left: 1rem;
+  font-size: 0.8rem;
+}
+
+.integration-scopes li {
+  margin-bottom: 0.3rem;
+}
+
+.integration-code {
+  padding: 0.5rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 1.2rem;
+  letter-spacing: 0.18em;
+  text-align: center;
+}
+
+.integration-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.integration-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+}
+
 .vllm-controls {
   display: flex;
   flex-wrap: wrap;

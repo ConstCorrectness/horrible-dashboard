@@ -44,6 +44,20 @@ mutate; `useSetting(key)` is the hook built-in components use for a live read.
 Setting a value is optimistic (local update + `PUT`), so widgets bound via
 `useSetting` re-render immediately.
 
+## Never put a secret in a setting
+
+`GET /api/settings` returns the **entire** bag to the browser, unfiltered — that is
+what makes the frontend-owned-schema design work, and it means **every setting value
+is readable by any code running in the page**.
+
+So: an OAuth **client id** is fine (it's public by design), but a **client secret**,
+an API key, or a token must never be a setting. Those belong in the environment or
+the encrypted secrets store — see [connectors](connectors.mdx#credential-custody).
+
+`games.google.clientSecret` is a legacy exception that predates this rule; its own
+description already tells you to prefer the `GAMES_GOOGLE_CLIENT_SECRET` env var.
+Don't add more.
+
 ## Custom sections
 
 Some configuration is too rich for the declarative `SettingDecl` controls

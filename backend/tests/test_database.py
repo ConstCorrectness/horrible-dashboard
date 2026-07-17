@@ -2,10 +2,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app import app
+
+
 @pytest.fixture
 def client(tmp_path, monkeypatch) -> TestClient:
     monkeypatch.setenv("HORRIBLE_DATA_DIR", str(tmp_path))
     from backend.modules.database.vectorstore import init_db
+
     init_db()
     return TestClient(app)
 
@@ -196,6 +199,25 @@ def test_connections_lists_builtin_app(client: TestClient) -> None:
     }
 
 
+def test_builtin_app_connection_opens_the_app_db_not_the_vector_store(
+    client: TestClient, tmp_path
+) -> None:
+    """The `app` connection must point at `app.db`, not the LanceDB directory.
+
+    Regression: `connections.py` imported `get_db_path` from `vectorstore`, which after
+    the LanceDB migration returns a *directory*. Listing the connection still worked —
+    only opening it failed, with sqlite3's opaque "unable to open database file". So
+    assert the connection can actually be *used*, not merely enumerated.
+    """
+    from backend.modules.database.connections import get_connection, resolve_config
+
+    cfg = resolve_config(get_connection("app"))
+    assert cfg["path"] == str(tmp_path / "app.db")
+
+    res = client.get("/api/database/connections/app/schema")
+    assert res.status_code == 200, res.text
+
+
 def test_connection_crud_and_secret_redaction(client: TestClient, tmp_path) -> None:
     payload = {
         "name": "My PG",
@@ -225,6 +247,3 @@ def test_builtin_connection_is_read_only(client: TestClient) -> None:
         ).status_code
         == 400
     )
-
-
-

@@ -26,9 +26,19 @@ def _connect(config: dict[str, Any], *, read_only: bool = False) -> sqlite3.Conn
     path = str(config.get("path") or "").strip()
     if not path:
         raise DriverError("sqlite connection requires a 'path'")
-    if not Path(path).exists() and config.get("builtin") is not True:
+    builtin = config.get("builtin") is True
+    if not Path(path).exists() and not builtin:
         raise DriverError(f"sqlite file not found: {path}")
-    conn = sqlite3.connect(path)
+    if builtin:
+        # The built-in DB is allowed not to exist yet — SQLite will create the file on
+        # connect, but only if its directory is already there.
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+    try:
+        conn = sqlite3.connect(path)
+    except sqlite3.OperationalError as exc:
+        # sqlite3 reports "unable to open database file" for a directory, a bad parent,
+        # and a permissions problem alike; say which path failed at least.
+        raise DriverError(f"cannot open sqlite database at {path}: {exc}") from exc
     # Make the app DB's similarity function available so users can run the same
     # semantic-search SQL the module uses internally. (Note: Removed since vectorstore is LanceDB)
     if read_only:

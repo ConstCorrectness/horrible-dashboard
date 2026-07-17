@@ -499,6 +499,7 @@ _GROUP_DESCRIPTIONS: dict[str, str] = {
     "database": "Connect to and query SQL/vector databases (psql-like): list connections, inspect schema, run read queries, write/execute statements, and semantic search the app DB.",
     "network": "Distributed peer fabric: peer monitor, peer chat, agent relay.",
     "clubhouse": "Connected Clubhouse account and its live rooms.",
+    "game": "Play the current game seat: read the observation, choose a legal action.",
     "observability": "Inspect live client / inbound / outbound I/O data flow.",
     "training": (
         "Build & train neural networks: search/create Kaggle/HF/Gym projects, "
@@ -542,6 +543,23 @@ _GROUP_KEYWORDS: dict[str, tuple[str, ...]] = {
         "npm",
         "pip",
         "git",
+    ),
+    # The connector groups. A group's own name is always an implicit keyword, so
+    # "github" needs no entry — these are the words people actually use instead.
+    "github": (
+        "repo",
+        "repository",
+        "pull request",
+        "issue",
+        "commit",
+        "branch",
+        "readme",
+    ),
+    "google": (
+        "drive",
+        "google doc",
+        "spreadsheet",
+        "my documents",
     ),
     "visualizer": (
         "visualizer",
@@ -632,6 +650,51 @@ def _all_dynamic_tools(conn: WsConnection) -> list[dict[str, Any]]:
     return out
 
 
+def _group_description(group: str) -> str:
+    """A group's one-line blurb for the catalog.
+
+    Connectors describe themselves once (`Connector.blurb`) and that single definition
+    feeds both the home page's tile and this catalog — a connector's id is also its
+    tool namespace, so the lookup is direct."""
+    if known := _GROUP_DESCRIPTIONS.get(group):
+        return known
+    from backend.sdk.registry import registry as _plugins
+
+    if connector := _plugins.connectors.get(group):
+        return connector.blurb
+    return f"{group} tools"
+
+
+def _group_guide(group: str) -> str | None:
+    """A group's full usage guide — the second tier of disclosure.
+
+    The blurb (above) answers "would this group help?"; the guide answers "how do I use
+    it without getting it wrong?" — search-qualifier syntax, useless argument
+    combinations, provider quirks. It's only ever delivered once a group is active, so
+    it costs nothing on turns that don't touch it."""
+    from backend.sdk.registry import registry as _plugins
+
+    if connector := _plugins.connectors.get(group):
+        return connector.resolve_guide()
+    return None
+
+
+def _guides_text(groups: set[str]) -> str | None:
+    """The guides for `groups`, concatenated, or None if none of them have one."""
+    parts = [text for g in sorted(groups) if (text := _group_guide(g))]
+    return "\n\n---\n\n".join(parts) if parts else None
+
+
+def _guides_message(groups: set[str]) -> dict[str, Any] | None:
+    """A system message carrying the guides for the groups a turn starts with.
+
+    Needed because a keyword preload activates a group *without* the model ever calling
+    `load_tools` — which is the common case ("search my github repos" preloads `github`
+    outright). Without this the guide would almost never reach the model."""
+    text = _guides_text(groups)
+    return {"role": "system", "content": text} if text else None
+
+
 def _group_catalog(conn: WsConnection) -> list[dict[str, Any]]:
     """The loadable groups (dynamic tools only), each with a description + count."""
     counts: dict[str, int] = {}
@@ -639,7 +702,7 @@ def _group_catalog(conn: WsConnection) -> list[dict[str, Any]]:
         g = _group_of(t["function"]["name"])
         counts[g] = counts.get(g, 0) + 1
     return [
-        {"name": g, "description": _GROUP_DESCRIPTIONS.get(g, f"{g} tools"), "tools": n}
+        {"name": g, "description": _group_description(g), "tools": n}
         for g, n in sorted(counts.items())
     ]
 
@@ -939,7 +1002,16 @@ async def _dispatch_call(
             if _group_of(t["function"]["name"]) in loaded
         ]
         unknown = [g for g in requested if g not in available]
-        return {"loaded": loaded, "tools": tools_now, "unknown": unknown}
+        result: dict[str, Any] = {
+            "loaded": loaded,
+            "tools": tools_now,
+            "unknown": unknown,
+        }
+        # A tool result *is* a message, so returning the guide here is all it takes to
+        # put it in context — no plumbing in the turn loop.
+        if guide := _guides_text(set(loaded)):
+            result["guide"] = guide
+        return result
 
     # Forgiveness: the model called a known tool from a group it hadn't loaded — pull
     # the group in (so it stays visible next round) and run the call.
@@ -1096,8 +1168,12 @@ async def run_agent_turn(
         None if remote else _preload_groups(conn, prompt, history)
     )
     editor_msg = _active_editor_message(context)
+    # Guides for groups the prompt preloaded — the model never calls load_tools for
+    # those, so this is the only chance to hand it the usage notes.
+    guides_msg = _guides_message(active_groups) if active_groups else None
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
+        *([guides_msg] if guides_msg else []),
         *_history_messages(history),
         # The focused buffer goes right before the user turn so it's the freshest
         # context the model sees (and isn't diluted by prior conversation).

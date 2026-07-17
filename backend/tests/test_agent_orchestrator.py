@@ -545,6 +545,90 @@ def test_load_tools_meta_activates_group() -> None:
     assert "files.read" in res["tools"]
 
 
+def _fake_connector(connector_id: str, *, blurb: str, guide: str | None):
+    """Register a throwaway connector so the group blurb/guide lookups have something
+    to find. Returns a cleanup callable."""
+    from backend.sdk.registry import registry as _plugins
+    from backend.sdk.types import Connector, ConnectorStatus
+
+    _plugins.connectors[connector_id] = Connector(
+        id=connector_id,
+        label=connector_id,
+        kind="oauth",
+        icon="x",
+        blurb=blurb,
+        status=lambda: ConnectorStatus(connected=False),
+        begin=lambda _o: {},
+        disconnect=lambda: None,
+        guide=guide,
+    )
+    return lambda: _plugins.connectors.pop(connector_id, None)
+
+
+def test_group_catalog_blurb_falls_back_to_the_connector() -> None:
+    # One connector definition feeds both the home tile and the agent's catalog, so a
+    # connector never shows up as a bare "<id> tools" fallback.
+    cleanup = _fake_connector("fakegh", blurb="Search code on FakeGH.", guide=None)
+    try:
+        conn = FakeConn(agent_tools=[{"name": "fakegh.search", "description": "s"}])
+        catalog = {
+            g["name"]: g["description"] for g in orchestrator._group_catalog(conn)
+        }
+        assert catalog["fakegh"] == "Search code on FakeGH."
+    finally:
+        cleanup()
+
+
+def test_load_tools_delivers_the_group_guide() -> None:
+    cleanup = _fake_connector(
+        "fakegh", blurb="b", guide="# FakeGH\nUse repo: to scope."
+    )
+    try:
+        conn = FakeConn(agent_tools=[{"name": "fakegh.search", "description": "s"}])
+        res = asyncio.run(
+            orchestrator._dispatch_call(
+                conn, "t", _Call("load_tools", {"groups": ["fakegh"]}), set()
+            )
+        )
+        assert "Use repo: to scope." in res["guide"]
+    finally:
+        cleanup()
+
+
+def test_load_tools_omits_guide_when_the_group_has_none() -> None:
+    conn = FakeConn(agent_tools=[{"name": "files.read", "description": "r"}])
+    res = asyncio.run(
+        orchestrator._dispatch_call(
+            conn, "t", _Call("load_tools", {"groups": ["files"]}), set()
+        )
+    )
+    assert "guide" not in res
+
+
+def test_preloaded_group_guide_is_injected_as_a_system_message() -> None:
+    # The path that actually matters: a keyword preload activates a group without the
+    # model ever calling load_tools, so this is the only chance to deliver the guide.
+    cleanup = _fake_connector(
+        "fakegh", blurb="b", guide="# FakeGH\nOnly the default branch."
+    )
+    try:
+        msg = orchestrator._guides_message({"fakegh"})
+        assert msg["role"] == "system"
+        assert "Only the default branch." in msg["content"]
+        assert orchestrator._guides_message({"files"}) is None
+        assert orchestrator._guides_message(set()) is None
+    finally:
+        cleanup()
+
+
+def test_github_keywords_preload_the_group() -> None:
+    conn = FakeConn(agent_tools=[{"name": "github.searchCode", "description": "s"}])
+    # "repo" is the word people use; the group's own name is an implicit keyword.
+    assert "github" in orchestrator._preload_groups(conn, "find it in my repo")
+    assert "github" in orchestrator._preload_groups(conn, "search github for X")
+    assert "github" not in orchestrator._preload_groups(conn, "what time is it")
+
+
 def test_auto_load_forgiveness_activates_group_and_runs() -> None:
     # The model calls a known tool from a group it never loaded — run it anyway and
     # activate the group so it's visible next round.

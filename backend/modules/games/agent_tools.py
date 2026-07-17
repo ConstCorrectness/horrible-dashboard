@@ -47,7 +47,7 @@ _TOOLS = [
         parameters={},
         required=[],
         handler=_get_observation,
-        group="games",
+        group="game",
     ),
     AgentTool(
         name="game.chooseAction",
@@ -72,7 +72,7 @@ _TOOLS = [
         handler=_choose_action,
         side_effect=True,
         specifier_template="{action_id}",
-        group="games",
+        group="game",
     ),
 ]
 

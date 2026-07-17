@@ -191,9 +191,14 @@ the agent can answer "what's in my library?" and cite what it retrieves.
 
 ## Deferred
 
-- **PDF/EPUB parsing** + a **file-upload dropzone** and `POST /library/upload`
-  multipart route. The `type` enum and pipeline are built to absorb `pdf`/`epub` by
-  adding an extractor branch.
+- **PDF/EPUB parsing** as a first-class source `type` + a **file-upload dropzone** and
+  `POST /library/upload` multipart route. The `type` enum and pipeline are built to
+  absorb `pdf`/`epub` by adding an extractor branch.
+
+  Partially overtaken: the [connectors](connectors.mdx#drive--library-sync) module
+  already extracts PDF text (`pypdf`, in `providers/drive_api.py`) to sync Drive PDFs
+  in as `note` sources. That's the extractor a `pdf` source type would reuse — what's
+  missing is the upload route and the `type` branch, not the parsing.
 - **Browser clipper extension** (Obsidian-web-clipper style): a separate
   distributable that POSTs to `/api/library/sources` — that endpoint is its contract.
 - **Embedded browser** for in-app clipping.

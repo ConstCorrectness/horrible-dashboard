@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 # A backend agent-tool handler: receives the model's arguments, returns a JSON-able
 # result. May be sync or async — the orchestrator awaits coroutines.
@@ -78,3 +78,98 @@ class AgentTool:
             "sideEffect": self.side_effect,
             "specifierTemplate": self.specifier_template,
         }
+
+
+# --- connectors ------------------------------------------------------------
+#
+# A connector is one external account the node can hold credentials for (GitHub,
+# Google, an API-key provider…). It owns the connect/disconnect flow and the
+# credential; the agent tools it enables are ordinary `AgentTool`s registered
+# alongside it. The home page renders whatever is registered here.
+
+# How a connector is connected. `oauth` runs a provider handshake (device or
+# redirect); `api-key` takes a pasted secret; `custom` is any other multi-step
+# flow (Clubhouse's phone -> SMS code). All three drive the same begin/submit/poll
+# machine — `custom` is just "a form step that may return another form step".
+ConnectorKind = Literal["oauth", "api-key", "custom"]
+
+# One step of a connect flow, returned by `begin`/`submit`/`poll`:
+#   {"step": "device",   "user_code": ..., "verification_uri": ..., "interval": 5}
+#   {"step": "redirect", "authorize_url": ...}
+#   {"step": "form",     "fields": [{"name": "api_key", "secret": True}]}
+#   {"connected": True,  "account": {...}}
+#   {"pending": True} | {"error": "..."}
+ConnectorStep = dict[str, Any]
+
+ConnectorBegin = Callable[[dict[str, Any]], Awaitable[ConnectorStep]]
+ConnectorSubmit = Callable[[dict[str, Any]], Awaitable[ConnectorStep]]
+ConnectorPoll = Callable[[], Awaitable[ConnectorStep]]
+ConnectorDisconnect = Callable[[], Awaitable[None]]
+
+
+@dataclass(frozen=True)
+class ConnectorScope:
+    """One permission the connector asks the provider for, in the user's words.
+    Rendered in the tile popover so "what did I grant this thing" is answerable
+    without reading the source."""
+
+    id: str
+    label: str
+    description: str = ""
+
+
+@dataclass(frozen=True)
+class ConnectorAccount:
+    """The connected identity, for display only — never a credential."""
+
+    id: str
+    label: str
+    avatar_url: str | None = None
+
+
+@dataclass(frozen=True)
+class ConnectorStatus:
+    """A connector's current state. `error` is for a connection that exists but is
+    unusable (revoked token, unreadable credential) — distinct from `connected=False`,
+    which means "never connected". Collapsing the two is what makes a broken
+    integration look like an unconfigured one."""
+
+    connected: bool
+    account: ConnectorAccount | None = None
+    scopes: list[str] = field(default_factory=list)
+    error: str | None = None
+
+
+@dataclass
+class Connector:
+    """An external account the node can connect to and hold credentials for.
+
+    `id` MUST equal the namespace of the agent tools it enables (`github` ->
+    `github.searchCode`), because the orchestrator derives a tool's group from its
+    name prefix (`_group_of`) — the `AgentTool.group` field does not name the group.
+    Keeping them equal is what lets one connector definition feed both the home tile
+    and the agent's tool-group catalog."""
+
+    id: str
+    label: str
+    kind: ConnectorKind
+    # Icon slug the frontend resolves against its icon map; unknown slugs fall back
+    # to a letter avatar, so a third-party connector still renders.
+    icon: str
+    # One line. Doubles as the agent tool-group blurb in `list_tool_groups`.
+    blurb: str
+    status: Callable[[], ConnectorStatus]
+    begin: ConnectorBegin
+    disconnect: ConnectorDisconnect
+    scopes: list[ConnectorScope] = field(default_factory=list)
+    # SKILL.md-style guide injected into the agent's context when its tool group is
+    # loaded. A callable is resolved lazily so a guide can be read from a file.
+    guide: str | Callable[[], str] | None = None
+    submit: ConnectorSubmit | None = None
+    poll: ConnectorPoll | None = None
+
+    def resolve_guide(self) -> str | None:
+        """The guide text, calling the factory if one was given."""
+        if callable(self.guide):
+            return self.guide()
+        return self.guide

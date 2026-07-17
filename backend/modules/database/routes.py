@@ -187,8 +187,9 @@ async def run_query(req: QueryRequest) -> QueryResultModel:
 
 # ---------------------------------------------------------------------------
 # Built-in app vector store: status, embedding-model pull, semantic search,
-# document CRUD. These operate on the local vector_store.db (the `app` connection)
-# and back the semantic-search agent tool + commons matchmaking config.
+# document CRUD. These operate on the LanceDB vector store (`.data/lancedb`) — NOT the
+# `app` connection, which is the SQLite app database (`.data/app.db`). They back the
+# semantic-search agent tool + commons matchmaking config.
 # ---------------------------------------------------------------------------
 
 
