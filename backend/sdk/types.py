@@ -80,6 +80,35 @@ class AgentTool:
         }
 
 
+# --- agents ----------------------------------------------------------------
+
+
+@dataclass
+class AgentSpec:
+    """One agent persona in the roster — a fully separate loop with its own system
+    prompt, tool scope, per-agent settings (`agent.<id>.*`), and conversation
+    history. The built-in roster (main/coder/dba/researcher) lives in
+    `backend.modules.agent.roster`; plugins add their own via `host.add_agent`.
+
+    `tool_groups=None` means unrestricted (every group loadable — the main
+    orchestrator); a list restricts the agent to those groups. `preload_groups`
+    are active from the first round (specialized agents skip keyword preloading,
+    their scope is already known)."""
+
+    id: str
+    name: str
+    description: str
+    system_prompt: str
+    tool_groups: list[str] | None = None
+    preload_groups: list[str] = field(default_factory=list)
+    # Default permission-mode name ('default'|'plan'|'acceptEdits'|'autonomous');
+    # overridable per agent via the `agent.<id>.permissionMode` setting. Empty
+    # string = use the user's global session mode.
+    default_mode: str = ""
+    include_peer_tools: bool = False
+    can_delegate: bool = False
+
+
 # --- connectors ------------------------------------------------------------
 #
 # A connector is one external account the node can hold credentials for (GitHub,

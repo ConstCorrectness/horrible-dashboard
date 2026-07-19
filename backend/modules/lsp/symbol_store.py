@@ -58,10 +58,17 @@ def init() -> None:
                 detail TEXT NOT NULL DEFAULT '',
                 module TEXT NOT NULL DEFAULT '',
                 source TEXT NOT NULL,
-                freq   INTEGER NOT NULL DEFAULT 1
+                freq   INTEGER NOT NULL DEFAULT 1,
+                doc    TEXT NOT NULL DEFAULT ''
             )
             """
         )
+        # Additive migration for tables created before the symdex `doc` column.
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(code_symbols)")}
+        if "doc" not in cols:
+            conn.execute(
+                "ALTER TABLE code_symbols ADD COLUMN doc TEXT NOT NULL DEFAULT ''"
+            )
         # The index that makes `symbol LIKE 'req%'` sub-millisecond.
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_code_symbols ON code_symbols(lang, symbol)"
@@ -115,6 +122,7 @@ def replace_source(source: str, lang: str, rows: Iterable[Mapping[str, object]])
             str(r.get("module", "")),
             source,
             int(r.get("freq", 1) or 1),
+            str(r.get("doc", "")),
         )
         for r in rows
         if r.get("symbol")
@@ -123,8 +131,8 @@ def replace_source(source: str, lang: str, rows: Iterable[Mapping[str, object]])
         conn.execute("DELETE FROM code_symbols WHERE source = ?", (source,))
         if data:
             conn.executemany(
-                "INSERT INTO code_symbols (symbol, lang, kind, detail, module, source, freq) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO code_symbols (symbol, lang, kind, detail, module, source, freq, doc) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 data,
             )
     return len(data)
@@ -142,7 +150,7 @@ def query(
     like = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
     sql = (
         "SELECT symbol, MIN(kind) AS kind, MIN(detail) AS detail, "
-        "MIN(module) AS module, MAX(freq) AS freq "
+        "MIN(module) AS module, MAX(freq) AS freq, MAX(doc) AS doc "
         "FROM code_symbols WHERE lang = ? AND symbol LIKE ? ESCAPE '\\' "
     )
     params: list[object] = [lang, like]
@@ -159,6 +167,7 @@ def query(
                 "kind": r["kind"],
                 "detail": r["detail"],
                 "module": r["module"],
+                "doc": r["doc"] or "",
             }
             for r in cur.fetchall()
         ]

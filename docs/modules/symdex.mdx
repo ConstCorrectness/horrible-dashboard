@@ -1,0 +1,77 @@
+# Module: symdex
+
+The **shared symbol/docs embedding index** — one ingestion pipeline whose corpus
+feeds two consumers: the roster agents' semantic retrieval (`symbols.*` tools,
+preloaded by the [coder and dba agents](agent-chat.mdx#specialized-agents--delegation))
+and the [editor](editor.mdx)'s completion layer (doc snippets on suggestions,
+with no embedding lookup on the keystroke path).
+
+## The corpus (three kinds)
+
+| kind | id prefix | source | one document per |
+| --- | --- | --- | --- |
+| `packages` | `pkg:` | installed curated framework packages (`lsp/pyenv.py` `FRAMEWORK_PACKAGES`) in the resolved interpreter's site-packages | public module/class/function/method — `ast.unparse`d signature + first docstring paragraph |
+| `schema` | `schema:` | every saved [database](database.mdx) connection via `driver.introspect` | table (qualified name + column list) |
+| `docs` | `doc:` | this repo's `docs/**/*.mdx` | chunk (`library/chunking.chunk_text`) |
+
+Package extraction (`backend/modules/symdex/extract_packages.py`) is **static AST
+only — packages are never imported** (imports run side effects and are slow);
+private modules (`_*`), `tests/`, and vendored trees are skipped, and per-package
+file/symbol caps keep even torch-sized dists bounded. The site-packages probe is
+the one subprocess, run on a thread (the Windows `--reload` loop can't spawn
+asyncio subprocesses — see `lsp/manager.py`).
+
+## Two projections
+
+1. **LanceDB `symdex` collection** (`database/vectorstore.py`) — the semantic
+   space, searched by `symbols.searchDocs` / `GET /api/symdex/search`.
+2. **`code_symbols` in `app.db`** (`lsp/symbol_store.py`, source `pkg:<dist>`,
+   new `doc` column) — the same package symbols in the relational prefix index,
+   so `GET /editor/complete` returns signature + doc snippet from the SQLite
+   scan it already does. **Embedding lookups never sit on the keystroke path.**
+
+## The embed-model drift guard
+
+`get_embedding` picks its model dynamically (whatever embedding model the
+provider offers — 384/768/1024 dims) and silently falls back to a 384-dim hash
+offline, while a LanceDB collection's vector width is fixed at first write. The
+index therefore keeps a meta sidecar (`$HORRIBLE_DATA_DIR/symdex.meta.json`,
+`{embed_model, dim, counts}`):
+
+- **Model changed** → the next reindex is a full rebuild under the new model.
+- **Only the hash fallback available** → reindex refuses (never poisons a
+  real-model collection); search returns `status: "reindex_needed"` with empty
+  results — never a `DimensionMismatch` crash.
+
+## Triggers & status
+
+- `POST /api/symdex/reindex` `{kinds: ["packages"|"schema"|"docs"]}` — manual,
+  detached.
+- Auto-kick: the first `GET /api/editor/python-env` resolve with an interpreter
+  and an empty packages corpus starts a background packages build; creating or
+  editing a database connection re-kicks the `schema` kind.
+- Progress streams on the **`symdex` `/ws` channel**
+  (`{event: "index", data: {state, kind, done, total}}`); `GET /api/symdex/status`
+  reports `{building, total, counts, embed_model}`.
+
+## Agent tools (group `symbols`)
+
+- `symbols.searchDocs(query, kind?, limit?)` — semantic retrieval across the
+  corpus (read-only). The dba agent uses `kind: "schema"` before writing SQL
+  against unfamiliar tables; the coder agent uses it before coding against an
+  unfamiliar API.
+- `symbols.lookup(name, lang?)` — exact prefix lookup via the relational
+  projection (fast, offline).
+
+## Backend surface
+
+`backend/modules/symdex/`: `models.py` (Pydantic), `extract_packages.py` /
+`extract_schema.py` / `extract_docs.py` (sync extractors, run on threads),
+`index.py` (`SymdexIndex` singleton + the `symdex` broadcaster), `routes.py`
+(`/api/symdex/*`), `tools.py` (registered from `app.py` like the training/games
+tools). Modeled on `code/semantic.py`'s `SemanticIndex`.
+
+## Browser vs desktop
+
+Identical — everything runs in the backend; the frontend only sees `/ws`
+progress events and enriched completion items.

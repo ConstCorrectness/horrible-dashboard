@@ -67,9 +67,19 @@ async def get_connections() -> ConnectionsResponse:
     )
 
 
+def _rekick_schema_index() -> None:
+    """A connection changed — refresh the symdex schema corpus in the background
+    (best-effort; skipped while a build is already running)."""
+    from backend.modules.symdex.index import symdex_index
+
+    if not symdex_index.building:
+        asyncio.create_task(symdex_index.reindex(["schema"]))
+
+
 @router.post("/connections", response_model=ConnectionInfo)
 async def create_connection(body: ConnectionInput) -> ConnectionInfo:
     record = add_connection(body.name, body.provider, body.config)
+    _rekick_schema_index()
     return ConnectionInfo(**redact(record))
 
 
@@ -82,6 +92,7 @@ async def edit_connection(conn_id: str, body: ConnectionInput) -> ConnectionInfo
     record = update_connection(conn_id, body.name, body.provider, body.config)
     if record is None:
         raise HTTPException(status_code=404, detail=f"No connection '{conn_id}'")
+    _rekick_schema_index()
     return ConnectionInfo(**redact(record))
 
 

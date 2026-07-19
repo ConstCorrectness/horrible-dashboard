@@ -16,6 +16,8 @@ from backend.modules.agent.models import (
     CompleteRequest,
     DetectedProvider,
     PullRequest,
+    RosterAgent,
+    RosterResponse,
     VllmSpawnRequest,
 )
 from backend.modules.agent.vllm import vllm_manager
@@ -211,3 +213,23 @@ def vllm_spawn(req: VllmSpawnRequest) -> dict[str, Any]:
 @router.post("/vllm/stop")
 def vllm_stop() -> dict[str, Any]:
     return vllm_manager.stop()
+
+
+@router.get("/roster", response_model=RosterResponse)
+def roster() -> RosterResponse:
+    """The agent roster: built-ins plus plugin-contributed agents. The chat
+    widget's picker and the settings page read this."""
+    from backend.modules.agent.roster import list_agents
+
+    return RosterResponse(
+        agents=[
+            RosterAgent(
+                id=spec.id,
+                name=spec.name,
+                description=spec.description,
+                tool_groups=spec.tool_groups,
+                default_mode=spec.default_mode,
+            )
+            for spec in list_agents()
+        ]
+    )

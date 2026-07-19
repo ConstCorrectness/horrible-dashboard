@@ -1,9 +1,7 @@
-"""Tabular Feature Engineering duel: agents submit feature engineering code to maximize ROC-AUC.
-"""
+"""Tabular Feature Engineering duel: agents submit feature engineering code to maximize ROC-AUC."""
 
 from __future__ import annotations
 
-import random as _random
 from typing import Any
 import pandas as pd
 import numpy as np
@@ -55,7 +53,7 @@ DEFAULT_TASKS: list[dict[str, Any]] = [
             "        df = df.drop(columns=['target'])\n"
             "        \n"
             "    return df\n"
-        )
+        ),
     }
 ]
 
@@ -172,51 +170,63 @@ class TabularFE(GameState):
     def _generate_space_mining_data(self) -> tuple[pd.DataFrame, pd.DataFrame]:
         np.random.seed(self.seed)
         n_samples = 800
-        
+
         distance = np.random.uniform(50, 1500, n_samples)
         nan_mask = np.random.rand(n_samples) < 0.15
         distance[nan_mask] = np.nan
-        
+
         fuel_density = np.random.uniform(0.1, 2.0, n_samples)
         nan_mask_2 = np.random.rand(n_samples) < 0.05
         fuel_density[nan_mask_2] = np.nan
-        
-        crew_experience = np.random.choice(['rookie', 'veteran', 'elite'], n_samples, p=[0.4, 0.4, 0.2])
-        ship_class = np.random.choice(['light_freighter', 'heavy_cruiser', 'mining_barge'], n_samples, p=[0.5, 0.3, 0.2])
-        anomaly_type = np.random.choice(['gravitational', 'magnetic', 'solar_flare', 'none'], n_samples, p=[0.2, 0.2, 0.1, 0.5])
-        
+
+        crew_experience = np.random.choice(
+            ["rookie", "veteran", "elite"], n_samples, p=[0.4, 0.4, 0.2]
+        )
+        ship_class = np.random.choice(
+            ["light_freighter", "heavy_cruiser", "mining_barge"],
+            n_samples,
+            p=[0.5, 0.3, 0.2],
+        )
+        anomaly_type = np.random.choice(
+            ["gravitational", "magnetic", "solar_flare", "none"],
+            n_samples,
+            p=[0.2, 0.2, 0.1, 0.5],
+        )
+
         prob = np.full(n_samples, 0.4)
-        
+
         d_clean = np.where(np.isnan(distance), 600.0, distance)
         prob -= (d_clean > 1000) * 0.3
         prob += (d_clean < 300) * 0.2
-        
-        prob += (crew_experience == 'elite') * 0.3
-        prob += (crew_experience == 'veteran') * 0.1
-        prob -= (crew_experience == 'rookie') * 0.15
-        
-        prob += (ship_class == 'heavy_cruiser') * 0.15
-        prob -= (ship_class == 'light_freighter') * 0.1
-        
+
+        prob += (crew_experience == "elite") * 0.3
+        prob += (crew_experience == "veteran") * 0.1
+        prob -= (crew_experience == "rookie") * 0.15
+
+        prob += (ship_class == "heavy_cruiser") * 0.15
+        prob -= (ship_class == "light_freighter") * 0.1
+
         for i in range(n_samples):
-            if anomaly_type[i] != 'none':
-                if crew_experience[i] == 'rookie':
+            if anomaly_type[i] != "none":
+                if crew_experience[i] == "rookie":
                     prob[i] -= 0.35
-                elif crew_experience[i] == 'elite':
+                elif crew_experience[i] == "elite":
                     prob[i] += 0.1
-                    
+
         prob = np.clip(prob, 0.01, 0.99)
         target = np.random.binomial(1, prob)
-        
-        df = pd.DataFrame({
-            'distance': distance,
-            'fuel_density': fuel_density,
-            'crew_experience': crew_experience,
-            'ship_class': ship_class,
-            'anomaly_type': anomaly_type,
-            'target': target
-        })
-        
+
+        df = pd.DataFrame(
+            {
+                "distance": distance,
+                "fuel_density": fuel_density,
+                "crew_experience": crew_experience,
+                "ship_class": ship_class,
+                "anomaly_type": anomaly_type,
+                "target": target,
+            }
+        )
+
         train_df = df.iloc[:500].copy()
         test_df = df.iloc[500:].copy()
         return train_df, test_df
@@ -235,16 +245,17 @@ class TabularFE(GameState):
                     "test.csv": test_csv,
                     "evaluate.py": EVALUATE_SCRIPT,
                 },
-                entry=["evaluate.py"]
+                entry=["evaluate.py"],
             )
-            
+
             score = 0.0
             ok = result.green
             error_message = ""
             try:
                 import json
+
                 output_clean = result.stdout.strip()
-                json_start = output_clean.find('{')
+                json_start = output_clean.find("{")
                 if json_start != -1:
                     data = json.loads(output_clean[json_start:])
                     if data.get("ok"):
@@ -310,7 +321,7 @@ class TabularFE(GameState):
             return 1
         if not ok0 and not ok1:
             return None
-        
+
         s0, s1 = self.reports[0]["score"], self.reports[1]["score"]
         if s0 == s1:
             return None

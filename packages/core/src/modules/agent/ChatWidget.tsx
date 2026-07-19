@@ -15,7 +15,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 
 import { Avatar3D, DEFAULT_AVATAR_MOOD, DEFAULT_AVATAR_MOODS } from '../../Avatar3D';
 import { useSetting } from '../../settings';
-import { getAgentStatus, type AgentStatus } from './api';
+import { getAgentRoster, getAgentStatus, type AgentStatus, type RosterAgent } from './api';
 import { askAgent, type AgentTurn } from './orchestrator-client';
 import {
   createSession,
@@ -140,11 +140,16 @@ export function ChatWidget() {
   const [turns, setTurns] = useState<ChatTurn[]>([]);
   const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState(false);
+  // The roster agent this pane is talking to; each agent keeps its own sessions.
+  const [roster, setRoster] = useState<RosterAgent[]>([]);
+  const [agentId, setAgentId] = useState('main');
   const scrollRef = useRef<HTMLDivElement>(null);
   const turnsRef = useRef<ChatTurn[]>([]);
   turnsRef.current = turns;
   const activeIdRef = useRef<string | null>(null);
   activeIdRef.current = activeId;
+  const agentIdRef = useRef('main');
+  agentIdRef.current = agentId;
   // The avatar (default on) cycles through its mood animations; the setting turns
   // it off for a plain text pane (see agentModule settings).
   const animateAvatar = useSetting<boolean>('agent.avatarAnimation') ?? true;
@@ -162,17 +167,26 @@ export function ChatWidget() {
     getAgentStatus()
       .then(setStatus)
       .catch(() => setStatus('backend-down'));
+    getAgentRoster()
+      .then(setRoster)
+      .catch(() => {
+        /* backend down — the picker just shows the orchestrator */
+      });
   }, []);
 
-  // Restore the active session's transcript on mount (also runs after a pane
-  // remount, so switching tabs no longer loses the conversation).
+  // Restore the selected agent's active session (on mount, after a pane remount,
+  // and whenever the user switches agents — each agent has its own sessions).
   useEffect(() => {
     let cancelled = false;
-    void getSessions()
+    void getSessions(agentId)
       .then(async (list) => {
         if (cancelled) return;
         setSessions(list.sessions);
-        if (!list.active) return;
+        if (!list.active) {
+          setActiveId(null);
+          setTurns([]);
+          return;
+        }
         setActiveId(list.active);
         const session = await getSession(list.active);
         if (!cancelled) setTurns(toTurns(session.messages));
@@ -183,7 +197,7 @@ export function ChatWidget() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [agentId]);
 
   useEffect(() => {
     if (!animateAvatar) return;
@@ -205,7 +219,7 @@ export function ChatWidget() {
 
   const refreshSessions = async () => {
     try {
-      setSessions((await getSessions()).sessions);
+      setSessions((await getSessions(agentIdRef.current)).sessions);
     } catch {
       /* keep current list */
     }
@@ -214,7 +228,7 @@ export function ChatWidget() {
   const newSession = async () => {
     setTurns([]);
     try {
-      const session = await createSession();
+      const session = await createSession(undefined, agentIdRef.current);
       setActiveId(session.id);
       activeIdRef.current = session.id;
       await refreshSessions();
@@ -259,7 +273,7 @@ export function ChatWidget() {
   const ensureSession = async (firstPrompt: string): Promise<void> => {
     if (activeIdRef.current) return;
     try {
-      const session = await createSession(firstPrompt.slice(0, 40));
+      const session = await createSession(firstPrompt.slice(0, 40), agentIdRef.current);
       setActiveId(session.id);
       activeIdRef.current = session.id;
       await refreshSessions();
@@ -402,7 +416,7 @@ export function ChatWidget() {
     if (text.startsWith('/')) {
       setPrompt('');
       setTurns((prev) => [...prev, { role: 'user', text, ephemeral: true }]);
-      const out = await runSlash(text, { newSession });
+      const out = await runSlash(text, { newSession, setAgent: setAgentId });
       setTurns((prev) => [...prev, { role: 'system', text: out, ephemeral: true }]);
       return;
     }
@@ -423,18 +437,33 @@ export function ChatWidget() {
     const patch = (fn: (t: ChatTurn) => ChatTurn) =>
       setTurns((prev) => prev.map((t, i) => (i === assistantIndex ? fn(t) : t)));
 
+    // Delegated sub-agents stream under the parent turn: note the hand-off once,
+    // then fold their deltas into the reasoning disclosure.
+    const delegatesSeen = new Set<string>();
     try {
       await askAgent(
         text,
         {
           onToken: (delta) => patch((t) => ({ ...t, text: t.text + delta })),
           onReasoning: (delta) => patch((t) => ({ ...t, reasoning: (t.reasoning ?? '') + delta })),
+          onDelegateToken: (delegateId, delta) => {
+            if (delegateId && !delegatesSeen.has(delegateId)) {
+              delegatesSeen.add(delegateId);
+              patch((t) => ({
+                ...t,
+                actions: [...(t.actions ?? []), `Delegated to ${delegateId}`],
+                reasoning: `${t.reasoning ?? ''}\n[${delegateId}] `,
+              }));
+            }
+            patch((t) => ({ ...t, reasoning: (t.reasoning ?? '') + delta }));
+          },
           // The final answer is authoritative; fall back to the streamed text if empty.
           onAnswer: (answer) => patch((t) => ({ ...t, text: answer || t.text })),
           onAction: (note) => patch((t) => ({ ...t, actions: [...(t.actions ?? []), note] })),
           onError: (msg) => patch((t) => ({ ...t, text: `⚠ ${msg}` })),
         },
         history,
+        { agentId: agentIdRef.current },
       );
     } finally {
       setBusy(false);
@@ -447,6 +476,21 @@ export function ChatWidget() {
   return (
     <div className="agent-chat">
       <div className="agent-session-bar">
+        {roster.length > 1 && (
+          <select
+            value={agentId}
+            onChange={(e) => setAgentId(e.target.value)}
+            aria-label="Agent"
+            title={roster.find((a) => a.id === agentId)?.description ?? ''}
+            disabled={busy}
+          >
+            {roster.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
+          </select>
+        )}
         <select
           value={activeId ?? ''}
           onChange={(e) => void switchSession(e.target.value)}

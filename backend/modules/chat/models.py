@@ -15,10 +15,13 @@ class ChatMessage(BaseModel):
 
 
 class ChatSession(BaseModel):
-    """A named, persisted conversation transcript."""
+    """A named, persisted conversation transcript. `agent_id` names the roster
+    agent the conversation belongs to ("main" = the orchestrator) — additive with
+    a default so pre-roster session files still validate."""
 
     id: str
     title: str
+    agent_id: str = "main"
     messages: list[ChatMessage] = []
     created: float
     updated: float
@@ -29,18 +32,23 @@ class ChatSessionMeta(BaseModel):
 
     id: str
     title: str
+    agent_id: str = "main"
     updated: float
 
 
 class ChatSessionsState(BaseModel):
-    """The whole stored collection (with messages) plus the active selection."""
+    """The whole stored collection (with messages) plus the active selection.
+    `active` stays the legacy pointer (and remains authoritative for "main");
+    `active_by_agent` tracks each specialized agent's active session."""
 
     active: str | None = None
+    active_by_agent: dict[str, str] = {}
     sessions: list[ChatSession] = []
 
 
 class ChatSessionsList(BaseModel):
-    """The list view returned to the client: metadata only, keeps it light."""
+    """The list view returned to the client: metadata only, keeps it light. When
+    the list is filtered to one agent, `active` is that agent's active session."""
 
     active: str | None = None
     sessions: list[ChatSessionMeta] = []
@@ -48,13 +56,16 @@ class ChatSessionsList(BaseModel):
 
 class CreateSession(BaseModel):
     title: str | None = None
+    agent_id: str = "main"
 
 
 class UpsertSession(BaseModel):
     """Partial update: only fields present are applied (`model_fields_set`), so
-    saving messages never clobbers the title and vice-versa."""
+    saving messages never clobbers the title and vice-versa. `agent_id` only
+    matters when the PUT creates the session (it is never re-assigned)."""
 
     title: str | None = None
+    agent_id: str | None = None
     messages: list[ChatMessage] | None = None
 
 

@@ -3163,6 +3163,23 @@ kbd {
   line-height: 1.5;
 }
 
+/* CodeMirror host variant of the SQL editor (padding/colors come from the
+ * editor theme; the container keeps the console's frame). */
+.dbc-editor-cm {
+  padding: 0;
+  overflow: hidden auto;
+  max-height: 40vh;
+}
+
+.dbc-editor-cm .cm-editor {
+  min-height: 6rem;
+  font-size: 0.82rem;
+}
+
+.dbc-editor-cm .cm-editor.cm-focused {
+  outline: none;
+}
+
 .dbc-run-bar {
   display: flex;
   align-items: center;

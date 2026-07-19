@@ -15,13 +15,55 @@ async def main():
 
     # Let's test create_channel with different payloads
     payloads = [
-        {"topic": "T1", "privacy_level": "house", "club_id": None, "user_ids": [], "event_id": None},
-        {"topic": "T2", "privacy_level": "mutuals", "club_id": None, "user_ids": [], "event_id": None},
-        {"topic": "T3", "privacy_level": "club", "club_id": None, "user_ids": [], "event_id": None},
-        {"topic": "T4", "privacy_level": "members", "club_id": None, "user_ids": [], "event_id": None},
-        {"topic": "T5", "privacy_level": "invite", "club_id": None, "user_ids": [], "event_id": None},
-        {"topic": "T6", "privacy_level": "invited", "club_id": None, "user_ids": [], "event_id": None},
-        {"topic": "T7", "privacy_level": "open", "club_id": None, "user_ids": [], "event_id": None},
+        {
+            "topic": "T1",
+            "privacy_level": "house",
+            "club_id": None,
+            "user_ids": [],
+            "event_id": None,
+        },
+        {
+            "topic": "T2",
+            "privacy_level": "mutuals",
+            "club_id": None,
+            "user_ids": [],
+            "event_id": None,
+        },
+        {
+            "topic": "T3",
+            "privacy_level": "club",
+            "club_id": None,
+            "user_ids": [],
+            "event_id": None,
+        },
+        {
+            "topic": "T4",
+            "privacy_level": "members",
+            "club_id": None,
+            "user_ids": [],
+            "event_id": None,
+        },
+        {
+            "topic": "T5",
+            "privacy_level": "invite",
+            "club_id": None,
+            "user_ids": [],
+            "event_id": None,
+        },
+        {
+            "topic": "T6",
+            "privacy_level": "invited",
+            "club_id": None,
+            "user_ids": [],
+            "event_id": None,
+        },
+        {
+            "topic": "T7",
+            "privacy_level": "open",
+            "club_id": None,
+            "user_ids": [],
+            "event_id": None,
+        },
     ]
 
     for idx, p in enumerate(payloads, start=1):

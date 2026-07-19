@@ -51,7 +51,12 @@ returns metadata only; `GET /{id}` returns the full transcript; `PUT /{id}` is a
 partial upsert of `title`/`messages`; plus `/active` and `DELETE`). The chat widget
 loads the active session on mount (so a pane remount restores the conversation),
 lazily creates a session titled from the first prompt, and **auto-saves each
-completed turn**. The session bar (a `<select>` + new/delete) switches between them.
+completed turn**. The session bar (a `<select>` + new/delete) switches between them,
+and an **agent picker** beside it (populated from `GET /api/agent/roster`) selects
+which roster agent the pane talks to — sessions are **per agent** (`agent_id` on
+the session, `?agent=` on the list endpoint), so each agent keeps its own
+conversations and active pointer. See
+[Specialized agents & delegation](#specialized-agents--delegation).
 Frontend client: `packages/core/src/modules/agent/sessions.ts`.
 
 ## Slash commands
@@ -60,7 +65,8 @@ Frontend client: `packages/core/src/modules/agent/sessions.ts`.
 ephemeral system output that is never persisted or replayed to the model
 (`packages/core/src/modules/agent/slash.ts`): `/tools` (the agent's live tool
 catalog, fetched via the `list_tools`→`tools` WS round-trip), `/help`, `/panes`
-(open panes), `/clear` (new session), `/llm` (query, set, or reset orchestrator LLM
+(open panes), `/clear` (new session), `/agent` (list the roster agents or switch
+the pane to one: `/agent dba`), `/llm` (query, set, or reset orchestrator LLM
 hyperparameter overrides), and honest placeholders `/mcp` and `/skills`
 (those subsystems don't exist yet). Typing `/` shows a suggestion list.
 
@@ -210,20 +216,25 @@ are stable, not creative.
 
 **Channel protocol** (`{channel:'agent', event, data:{turnId, …}}`):
 
-| Direction     | event               | data                                          |
-| ------------- | ------------------- | --------------------------------------------- |
-| client→server | `manifest`          | `{tools: SerializedTool[]}`                   |
-| client→server | `ask`               | `{turnId, prompt, history?, context?}`        |
-| server→client | `tool_call`         | `{turnId, callId, name, args}`                |
-| client→server | `tool_result`       | `{turnId, callId, ok, result?, error?}`       |
-| server→client | `approval_request`  | `{turnId, approvalId, tool, specifier, mode}` |
-| client→server | `approval_response` | `{approvalId, decision, rule?}`               |
-| client→server | `list_tools`        | `{}` — request the live tool catalog          |
-| server→client | `tools`             | `{tools: [{name, description, source}]}`      |
-| server→client | `reasoning`         | `{turnId, delta}` — streamed thinking         |
-| server→client | `token`             | `{turnId, delta}` — streamed answer content   |
-| server→client | `answer`            | `{turnId, text}` — final, authoritative       |
-| server→client | `done` / `error`    | `{turnId, …}`                                 |
+| Direction     | event               | data                                              |
+| ------------- | ------------------- | ------------------------------------------------- |
+| client→server | `manifest`          | `{tools: SerializedTool[]}`                       |
+| client→server | `ask`               | `{turnId, prompt, history?, context?, agentId?}`  |
+| server→client | `tool_call`         | `{turnId, callId, name, args}`                    |
+| client→server | `tool_result`       | `{turnId, callId, ok, result?, error?}`           |
+| server→client | `approval_request`  | `{turnId, approvalId, tool, specifier, mode}`     |
+| client→server | `approval_response` | `{approvalId, decision, rule?}`                   |
+| client→server | `list_tools`        | `{}` — request the live tool catalog              |
+| server→client | `tools`             | `{tools: [{name, description, source}]}`          |
+| server→client | `reasoning`         | `{turnId, agentId, delta}` — streamed thinking    |
+| server→client | `token`             | `{turnId, agentId, delta}` — streamed answer      |
+| server→client | `delegate_token`    | `{turnId, agentId, delta}` — sub-agent's stream   |
+| server→client | `answer`            | `{turnId, agentId, text}` — final, authoritative  |
+| server→client | `done` / `error`    | `{turnId, agentId, …}`                            |
+
+`agentId` selects (and tags) the **roster agent** driving the turn — omitted it
+means `main`, so pre-roster clients keep working. See
+[Specialized agents & delegation](#specialized-agents--delegation).
 
 The frontend pushes the **capability manifest** (`manifest`) on connect, on every
 reconnect, and whenever the registry changes
@@ -239,6 +250,65 @@ dispatched on the frontend via `executeDynamicTool`. Side-effecting calls pass t
 denied calls return an error to the model, and an `ASK` decision prompts the user
 via `approval_request`/`approval_response` (the in-chat approval UI is the next
 slice) — see [agent tools & permissions](../architecture/agent-tools.mdx).
+
+### Specialized agents & delegation
+
+The orchestrator is one of several **roster agents** — fully separate loops, each
+with its own system prompt, tool-group scope, per-agent settings, and chat
+sessions. Built-ins (`backend/modules/agent/roster.py`):
+
+| id           | scope (`tool_groups`)                        | preloaded          | default mode  |
+| ------------ | -------------------------------------------- | ------------------ | ------------- |
+| `main`       | unrestricted (keyword preloading, delegate)  | by prompt keywords | session mode  |
+| `coder`      | files, editor, terminal, code, symbols       | editor, files, symbols | `acceptEdits` |
+| `dba`        | database, symbols                            | database           | session mode  |
+| `researcher` | browser, library, github, google             | browser, library   | session mode  |
+
+Mechanics (`run_agent_turn(agent_id=…)`):
+
+- A specialized agent **skips keyword preloading** — its `active_groups` start at
+  the spec's `preload_groups`, and `list_tool_groups`/`load_tools` only see its
+  allowed groups (no forgiveness auto-load outside them). The peer tools and
+  `agent.delegate` are core only for specs that declare them (`main`).
+- **Per-agent settings** `agent.<id>.model/temperature/contextSize/maxTokens/topP/permissionMode`
+  fall back to the `agent.orchestrator.*` keys, then defaults (`roster.agent_setting`).
+  The permission-mode override threads through the gate; the user's explicit
+  allow/ask/deny rules still apply unchanged.
+- **Per-agent sessions**: `ChatSession.agent_id` (default `main`) + an
+  `active_by_agent` map and a `GET /api/chat/sessions?agent=<id>` filter — all
+  additive, so pre-roster `chat-sessions.json` files load unchanged.
+- `GET /api/agent/roster` lists the roster (id, name, description, scope) for the
+  chat widget's agent picker; plugins add agents with `host.add_agent(AgentSpec(…))`
+  (see [backend plugin SDK](../architecture/backend-plugin-sdk.mdx)).
+
+**Delegation** — `agent.delegate(agentId, prompt)` (backend-static, side-effecting,
+specifier `{agentId}`) runs a whole sub-turn of the target agent **on the same
+browser connection**, so unlike `agent.ask_peer`'s tool-less remote turns the
+specialist can actuate — its tool calls relay to the same frontend and pass the
+same permission gate under its own mode. The sub-turn gets a fresh turn id (its
+stream stays out of the parent chat's turn-scoped subscription); its answer deltas
+surface as `delegate_token` events on the parent turn, and the final answer
+returns to the caller as an ordinary tool result. One level deep by design:
+specialists don't see the delegate tool (`spec.can_delegate`), and a
+`DELEGATE_TIMEOUT_S` (300 s) bounds the sub-turn.
+
+```mermaid
+sequenceDiagram
+    participant M as model (main)
+    participant O as orchestrator turn
+    participant D as delegate.run_delegate
+    participant L as sub-loop (dba spec)
+    participant B as browser
+    M->>O: tool_call agent.delegate(agentId=dba, prompt)
+    Note over O: _gate (side-effecting, specifier "dba")
+    O->>D: run_delegate(conn, parentTurnId, "dba", prompt)
+    D->>L: run_agent_loop(sub turn id, dba prompt/scope/mode)
+    L->>B: tool_call database.query … (same conn, gated)
+    B-->>L: tool_result
+    L-->>D: final answer
+    D-->>O: {agent: "dba", answer}
+    O-->>M: tool result
+```
 
 ### Agent-to-agent (talking to a peer's agent)
 

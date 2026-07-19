@@ -6,6 +6,7 @@
  * See docs/modules/agent-chat.md.
  */
 import { registry } from '../../registry';
+import { getAgentRoster } from './api';
 import { requestAgentTools } from './orchestrator-client';
 import { getSetting, resetSetting, setSetting } from '../../settings';
 
@@ -13,6 +14,8 @@ import { getSetting, resetSetting, setSetting } from '../../settings';
 export interface SlashContext {
   /** Start a fresh chat session (Part 1 sessions). */
   newSession: () => void | Promise<void>;
+  /** Switch the pane to another roster agent (loads that agent's sessions). */
+  setAgent?: (id: string) => void;
 }
 
 export interface SlashCommand {
@@ -75,6 +78,28 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     },
   },
   {
+    name: 'agent',
+    description: 'List the roster agents, or switch: /agent <id>',
+    run: async (args, ctx) => {
+      const roster = await getAgentRoster().catch(() => []);
+      if (roster.length === 0) return 'Roster unavailable (is the backend connected?).';
+      const target = args.trim();
+      if (!target) {
+        return [
+          'Agents (switch with /agent <id>):',
+          ...roster.map(
+            (a) =>
+              `  • ${a.id} — ${a.description}${a.tool_groups ? ` [${a.tool_groups.join(', ')}]` : ''}`,
+          ),
+        ].join('\n');
+      }
+      const found = roster.find((a) => a.id === target);
+      if (!found) return `Unknown agent '${target}'. Try: ${roster.map((a) => a.id).join(', ')}`;
+      ctx.setAgent?.(found.id);
+      return `Switched to ${found.name} (${found.id}).`;
+    },
+  },
+  {
     name: 'mcp',
     description: 'List connected MCP servers.',
     run: () => 'No MCP servers configured yet.',
@@ -86,15 +111,24 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   },
   {
     name: 'llm',
-    description: 'Manage orchestrator LLM settings: /llm, /llm set <param> <val>, /llm reset [param]',
+    description:
+      'Manage orchestrator LLM settings: /llm, /llm set <param> <val>, /llm reset [param]',
     run: async (args) => {
       const parts = args.trim().split(/\s+/).filter(Boolean);
       const keys = {
         model: { key: 'agent.orchestrator.model', type: 'string', name: 'Model override' },
         temperature: { key: 'agent.orchestrator.temperature', type: 'number', name: 'Temperature' },
         temp: { key: 'agent.orchestrator.temperature', type: 'number', name: 'Temperature' },
-        contextsize: { key: 'agent.orchestrator.contextSize', type: 'number', name: 'Context size' },
-        context_size: { key: 'agent.orchestrator.contextSize', type: 'number', name: 'Context size' },
+        contextsize: {
+          key: 'agent.orchestrator.contextSize',
+          type: 'number',
+          name: 'Context size',
+        },
+        context_size: {
+          key: 'agent.orchestrator.contextSize',
+          type: 'number',
+          name: 'Context size',
+        },
         ctx: { key: 'agent.orchestrator.contextSize', type: 'number', name: 'Context size' },
         maxtokens: { key: 'agent.orchestrator.maxTokens', type: 'number', name: 'Max tokens' },
         max_tokens: { key: 'agent.orchestrator.maxTokens', type: 'number', name: 'Max tokens' },
@@ -105,7 +139,11 @@ export const SLASH_COMMANDS: SlashCommand[] = [
 
       if (parts.length === 0) {
         const items = [
-          { name: 'Model override', key: 'agent.orchestrator.model', defaultVal: 'Configured model' },
+          {
+            name: 'Model override',
+            key: 'agent.orchestrator.model',
+            defaultVal: 'Configured model',
+          },
           { name: 'Temperature', key: 'agent.orchestrator.temperature', defaultVal: '0.0' },
           { name: 'Context size', key: 'agent.orchestrator.contextSize', defaultVal: 'Default' },
           { name: 'Max tokens', key: 'agent.orchestrator.maxTokens', defaultVal: 'Default' },

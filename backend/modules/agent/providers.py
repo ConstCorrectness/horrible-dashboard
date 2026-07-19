@@ -183,7 +183,6 @@ async def chat(
         from backend.modules.database.secrets_store import get_secret_or_none
 
         key = get_secret_or_none(info.kind)
-        import os
 
         # litellm expects keys in environment variables usually, or passed directly
         # depending on the provider.

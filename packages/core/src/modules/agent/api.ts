@@ -47,6 +47,20 @@ export function getAgentStatus(): Promise<AgentStatus> {
   return apiGet<AgentStatus>('/agent/status');
 }
 
+/** One roster agent (a fully separate loop: own prompt, tool scope, settings,
+ * sessions). `tool_groups: null` = unrestricted (the main orchestrator). */
+export interface RosterAgent {
+  id: string;
+  name: string;
+  description: string;
+  tool_groups: string[] | null;
+  default_mode: string;
+}
+
+export function getAgentRoster(): Promise<RosterAgent[]> {
+  return apiGet<{ agents: RosterAgent[] }>('/agent/roster').then((r) => r.agents);
+}
+
 export function saveAgentConfig(
   model: string,
   provider: string,

@@ -19,6 +19,7 @@ import {
   type QueryResult,
   type SchemaResponse,
 } from './api';
+import { SqlEditor } from './SqlEditor';
 
 const MAX_HISTORY = 25;
 
@@ -121,13 +122,6 @@ export function DatabaseConsole() {
     }
   }, [sql, running, activeConn, readOnly, rowLimit]);
 
-  const onEditorKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-      e.preventDefault();
-      void execute();
-    }
-  };
-
   const onTableClick = (qualifiedName: string) => {
     setSql(`SELECT * FROM ${qualifiedName} LIMIT 100;`);
   };
@@ -223,13 +217,12 @@ export function DatabaseConsole() {
         </aside>
 
         <div className="dbc-main">
-          <textarea
-            className="dbc-editor"
-            spellCheck={false}
-            placeholder="Write SQL, then press Ctrl/Cmd+Enter or Run…"
+          <SqlEditor
             value={sql}
-            onChange={(e) => setSql(e.target.value)}
-            onKeyDown={onEditorKeyDown}
+            onChange={setSql}
+            onRun={() => void execute()}
+            provider={activeConnInfo?.provider ?? null}
+            schema={schema}
           />
           <div className="dbc-run-bar">
             <button

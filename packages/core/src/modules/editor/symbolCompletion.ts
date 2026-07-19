@@ -21,6 +21,8 @@ interface DbSymbol {
   kind: string;
   detail: string;
   module: string;
+  /** First docstring paragraph for indexed package symbols (symdex projection). */
+  doc?: string;
 }
 
 // Map our stored `kind` to a CodeMirror completion `type` (drives the popup icon).
@@ -87,6 +89,12 @@ export function dbSymbolSource(getLang: () => string | null): CompletionSource {
       label: r.symbol,
       type: KIND_TO_TYPE[r.kind] ?? 'text',
       detail: r.detail || undefined,
+      // Indexed package symbols carry a doc snippet (symdex); CodeMirror shows
+      // `info` as the lazy side panel next to the selected suggestion. Same
+      // single request — the doc rides the row we already fetched.
+      info: r.doc
+        ? () => Object.assign(document.createElement('div'), { textContent: r.doc })
+        : undefined,
       boost: -50,
     }));
     return { from: word.from, options, validFor: /^[A-Za-z_]\w*$/ };

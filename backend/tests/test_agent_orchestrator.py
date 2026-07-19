@@ -4,7 +4,7 @@ from typing import Any
 
 import httpx
 
-from backend.modules.agent import orchestrator, permission_store, permissions
+from backend.modules.agent import orchestrator, permission_store, permissions, roster
 from backend.modules.agent.models import AgentConfig
 from backend.modules.agent.orchestrator import _history_messages
 from backend.modules.agent.permissions import Mode
@@ -158,24 +158,24 @@ def test_turn_sends_low_temperature(monkeypatch) -> None:
 
 def test_tool_temperature_setting_override(monkeypatch) -> None:
     monkeypatch.setattr(
-        orchestrator,
+        roster,
         "get_value",
-        lambda key, default: 0.7 if "temperature" in key else default,
+        lambda key, default=None: 0.7 if "temperature" in key else default,
     )
     assert orchestrator._tool_temperature() == 0.7
     # A non-numeric override falls back to the default rather than crashing a turn.
-    monkeypatch.setattr(orchestrator, "get_value", lambda key, default: "oops")
+    monkeypatch.setattr(roster, "get_value", lambda key, default=None: "oops")
     assert orchestrator._tool_temperature() == orchestrator.DEFAULT_TOOL_TEMPERATURE
 
 
 def test_orchestrator_model_setting_override(monkeypatch) -> None:
     # A blank/whitespace/non-string override reuses the configured agent model;
     # a real value lets a stronger model drive tool calls than chat/autosuggest.
-    monkeypatch.setattr(orchestrator, "get_value", lambda key, default: "gemma4:12b")
+    monkeypatch.setattr(roster, "get_value", lambda key, default=None: "gemma4:12b")
     assert orchestrator._orchestrator_model("m") == "gemma4:12b"
-    monkeypatch.setattr(orchestrator, "get_value", lambda key, default: "   ")
+    monkeypatch.setattr(roster, "get_value", lambda key, default=None: "   ")
     assert orchestrator._orchestrator_model("m") == "m"
-    monkeypatch.setattr(orchestrator, "get_value", lambda key, default: 123)
+    monkeypatch.setattr(roster, "get_value", lambda key, default=None: 123)
     assert orchestrator._orchestrator_model("m") == "m"
 
 
@@ -253,9 +253,9 @@ def test_turn_uses_orchestrator_model_override(monkeypatch) -> None:
 
     _configure(monkeypatch)
     monkeypatch.setattr(
-        orchestrator,
+        roster,
         "get_value",
-        lambda key, default: "gemma4:12b" if key.endswith(".model") else default,
+        lambda key, default=None: "gemma4:12b" if key.endswith(".model") else default,
     )
     _mock_ollama(monkeypatch, handler)
     asyncio.run(orchestrator.run_agent_turn(FakeConn(), "t", "hi"))
@@ -265,18 +265,18 @@ def test_turn_uses_orchestrator_model_override(monkeypatch) -> None:
 def test_orchestrator_model_override(monkeypatch) -> None:
     # Blank/unset → the configured agent model; a non-blank override wins (lets a
     # stronger model drive tool calls than chat/autosuggest use).
-    monkeypatch.setattr(orchestrator, "get_value", lambda key, default: default)
+    monkeypatch.setattr(roster, "get_value", lambda key, default=None: default)
     assert orchestrator._orchestrator_model("gemma4:e2b") == "gemma4:e2b"
     monkeypatch.setattr(
-        orchestrator,
+        roster,
         "get_value",
-        lambda key, default: (
+        lambda key, default=None: (
             "gemma4:12b" if key == "agent.orchestrator.model" else default
         ),
     )
     assert orchestrator._orchestrator_model("gemma4:e2b") == "gemma4:12b"
     # Whitespace-only override is treated as unset.
-    monkeypatch.setattr(orchestrator, "get_value", lambda key, default: "   ")
+    monkeypatch.setattr(roster, "get_value", lambda key, default=None: "   ")
     assert orchestrator._orchestrator_model("gemma4:e2b") == "gemma4:e2b"
 
 
@@ -298,9 +298,9 @@ def test_turn_uses_hyperparameters_overrides(monkeypatch) -> None:
         "agent.orchestrator.topP": 0.85,
     }
     monkeypatch.setattr(
-        orchestrator,
+        roster,
         "get_value",
-        lambda key, default: settings_dict.get(key, default),
+        lambda key, default=None: settings_dict.get(key, default),
     )
     _mock_ollama(monkeypatch, handler)
 

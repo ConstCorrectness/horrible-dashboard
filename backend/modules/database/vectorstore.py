@@ -120,6 +120,24 @@ def delete_document(doc_id: str) -> bool:
     return deleted
 
 
+def delete_documents_with_prefix(collection: str, id_prefix: str) -> None:
+    """Delete every document whose id starts with `id_prefix` (used by the symdex
+    per-kind rebuild — ids are ours, so a LIKE predicate is safe)."""
+    db = _get_db()
+    if collection not in db.table_names():
+        return
+    escaped = id_prefix.replace("'", "''").replace("%", r"\%").replace("_", r"\_")
+    try:
+        db.open_table(collection).delete(f"id LIKE '{escaped}%' ESCAPE '\\'")
+    except Exception:  # noqa: BLE001 — dialect quirks; fall back to per-id deletes
+        tbl = db.open_table(collection)
+        rows = tbl.search().limit(len(tbl)).to_list()
+        for r in rows:
+            row_id = str(r.get("id", ""))
+            if row_id.startswith(id_prefix):
+                tbl.delete("id = '{}'".format(row_id.replace("'", "''")))
+
+
 def delete_collection(collection: str) -> int:
     """Delete every document in a collection (used for a full reindex)."""
     db = _get_db()

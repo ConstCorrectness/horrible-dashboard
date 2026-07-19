@@ -85,6 +85,9 @@ from backend.modules.telemetry import push_telemetry
 from backend.modules.telemetry import router as telemetry_router
 from backend.modules.telemetry.instrument import record_ws_frame, telemetry_middleware
 from backend.modules.terminal import TerminalManager
+from backend.modules.symdex import push_symdex_events
+from backend.modules.symdex import register_agent_tools as register_symdex_tools
+from backend.modules.symdex import router as symdex_router
 from backend.modules.training import register_agent_tools as register_training_tools
 from backend.modules.training import router as training_router
 from backend.modules.training import subscribe_training_conn
@@ -173,6 +176,7 @@ app.include_router(lsp_router, prefix="/api")
 app.include_router(games_router, prefix="/api")
 app.include_router(code_router, prefix="/api")
 app.include_router(git_router, prefix="/api")
+app.include_router(symdex_router, prefix="/api")
 
 # Register the training module's backend agent tools into the sdk registry (the
 # training module is a first-party consumer of the same registry backend plugins
@@ -186,6 +190,10 @@ register_games_tools()
 # Register the built-in connectors (GitHub, …) and the agent tools they unlock. Each
 # connector's tools are grouped under its id and disclosed progressively.
 register_connectors()
+
+# Register the symdex module's backend agent tools (grouped under `symbols`): the
+# semantic symbol/docs/schema retrieval the coder and dba agents preload.
+register_symdex_tools()
 
 # Discover and mount backend plugins (bundled, HORRIBLE_PLUGINS_DIR, and pip entry
 # points). Ships empty; each plugin's routes mount under /api + its prefix. Agent
@@ -234,6 +242,8 @@ async def ws(websocket: WebSocket) -> None:
     library_task = asyncio.create_task(push_library_events(conn))
     # Fan code-locus updates (dash/agent-set, and cross-window sync) to this browser.
     code_task = asyncio.create_task(push_code_events(conn))
+    # Fan symdex index progress (packages/schema/docs builds) to this browser.
+    symdex_task = asyncio.create_task(push_symdex_events(conn))
     # Fan peer/presence events from the process-global hub out to this browser.
     network_unsub = subscribe_conn(conn)
     # Fan lobby (directory/rooms) events out to this browser.
@@ -296,6 +306,7 @@ async def ws(websocket: WebSocket) -> None:
         files_task.cancel()
         library_task.cancel()
         code_task.cancel()
+        symdex_task.cancel()
         network_unsub()  # type: ignore[operator]
         lobby_unsub()  # type: ignore[operator]
         commons_unsub()  # type: ignore[operator]

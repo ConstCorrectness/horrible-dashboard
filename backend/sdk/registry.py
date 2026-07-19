@@ -41,6 +41,10 @@ class PluginRegistry:
     loaded: list[PluginManifest] = field(default_factory=list)
     routers: list[_MountedRouter] = field(default_factory=list)
     agent_tools: dict[str, AgentTool] = field(default_factory=dict)
+    # Plugin-contributed specialized agents, keyed by agent id. Built-in agents
+    # (main/coder/dba/researcher) live in the agent module's roster and win id
+    # conflicts.
+    agents: dict[str, AgentSpec] = field(default_factory=dict)
     # External accounts the node can connect to, keyed by connector id. The id also
     # names the agent tool group the connector enables (see Connector.id).
     connectors: dict[str, Connector] = field(default_factory=dict)
@@ -60,6 +64,7 @@ class PluginRegistry:
         self.loaded.clear()
         self.routers.clear()
         self.agent_tools.clear()
+        self.agents.clear()
         self.connectors.clear()
         self.ws_channels.clear()
         self.dash_facades.clear()

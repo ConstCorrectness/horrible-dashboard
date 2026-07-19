@@ -5,11 +5,11 @@ import os
 import sqlite3
 import uuid
 from collections.abc import Callable
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Awaitable
 
 logger = logging.getLogger(__name__)
+
 
 def _get_db_conn() -> sqlite3.Connection:
     data_dir = Path(os.environ.get("HORRIBLE_DATA_DIR", ".data"))
@@ -17,6 +17,7 @@ def _get_db_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(str(data_dir / "app.db"))
     conn.row_factory = sqlite3.Row
     return conn
+
 
 def init_queue_db() -> None:
     with _get_db_conn() as conn:
@@ -33,7 +34,10 @@ def init_queue_db() -> None:
             )
             """
         )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_task_status ON async_tasks(status)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_task_status ON async_tasks(status)"
+        )
+
 
 def enqueue_task(task_type: str, payload: dict[str, Any]) -> str:
     """Queue a background task."""
@@ -46,11 +50,14 @@ def enqueue_task(task_type: str, payload: dict[str, Any]) -> str:
         )
     return task_id
 
+
 def get_task_status(task_id: str) -> dict[str, Any] | None:
     """Retrieve task status."""
     init_queue_db()
     with _get_db_conn() as conn:
-        r = conn.execute("SELECT * FROM async_tasks WHERE id = ?", (task_id,)).fetchone()
+        r = conn.execute(
+            "SELECT * FROM async_tasks WHERE id = ?", (task_id,)
+        ).fetchone()
     if not r:
         return None
     return {
@@ -63,13 +70,16 @@ def get_task_status(task_id: str) -> dict[str, Any] | None:
         "updated_at": r["updated_at"],
     }
 
+
 class TaskQueue:
     def __init__(self):
         self.handlers: dict[str, Callable[[dict[str, Any]], Awaitable[None]]] = {}
         self._running = False
         self._worker_task: asyncio.Task | None = None
 
-    def register_handler(self, task_type: str, handler: Callable[[dict[str, Any]], Awaitable[None]]):
+    def register_handler(
+        self, task_type: str, handler: Callable[[dict[str, Any]], Awaitable[None]]
+    ):
         self.handlers[task_type] = handler
 
     def start(self):
@@ -97,7 +107,9 @@ class TaskQueue:
 
             handler = self.handlers.get(task_type)
             if not handler:
-                self._update_task_status(task_id, "failed", f"No handler registered for {task_type}")
+                self._update_task_status(
+                    task_id, "failed", f"No handler registered for {task_type}"
+                )
                 continue
 
             try:
@@ -128,6 +140,7 @@ class TaskQueue:
                 "UPDATE async_tasks SET status = ?, error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (status, error, task_id),
             )
+
 
 # Global queue instance
 queue = TaskQueue()

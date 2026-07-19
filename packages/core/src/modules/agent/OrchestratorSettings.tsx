@@ -1,25 +1,36 @@
 /**
- * Settings-page section for the agent **orchestrator** (the backend tool-calling
- * loop, distinct from chat/autosuggest). The model override is a dropdown of the
- * configured provider's live models — fetched from `/agent/status` rather than a
- * static enum — with a blank-equivalent "Configured agent model" choice that clears
- * the override. Temperature sits alongside it. Both read/write the scalar settings
- * store (`agent.orchestrator.*`), consumed by backend/modules/agent/orchestrator.py.
+ * Settings-page section for the agent **orchestrator** and the roster's
+ * specialized agents. An agent selector at the top switches which agent's keys
+ * the controls read/write: `main` keeps the original `agent.orchestrator.*` keys
+ * (consumed by backend/modules/agent/orchestrator.py); a specialized agent uses
+ * `agent.<id>.*`, which fall back to the orchestrator keys server-side
+ * (backend/modules/agent/roster.py, `agent_setting`). The model override is a
+ * dropdown of the configured provider's live models — fetched from
+ * `/agent/status` rather than a static enum — with a blank-equivalent choice
+ * that clears the override.
  */
 import { useEffect, useState } from 'react';
 
 import { isSettingOverridden, resetSetting, setSetting, useSetting } from '../../settings';
-import { getAgentStatus } from './api';
+import { getAgentRoster, getAgentStatus, type RosterAgent } from './api';
 
-const MODEL_KEY = 'agent.orchestrator.model';
-const TEMP_KEY = 'agent.orchestrator.temperature';
-const CTX_KEY = 'agent.orchestrator.contextSize';
-const MAX_TOKENS_KEY = 'agent.orchestrator.maxTokens';
-const TOP_P_KEY = 'agent.orchestrator.topP';
+const MODES = ['default', 'plan', 'acceptEdits', 'autonomous'] as const;
 
 export function OrchestratorSettings() {
+  const [roster, setRoster] = useState<RosterAgent[]>([]);
+  const [agentId, setAgentId] = useState('main');
+  // main predates the roster and keeps its original settings namespace.
+  const prefix = agentId === 'main' ? 'agent.orchestrator' : `agent.${agentId}`;
+
+  const MODEL_KEY = `${prefix}.model`;
+  const TEMP_KEY = `${prefix}.temperature`;
+  const CTX_KEY = `${prefix}.contextSize`;
+  const MAX_TOKENS_KEY = `${prefix}.maxTokens`;
+  const TOP_P_KEY = `${prefix}.topP`;
+  const MODE_KEY = `agent.${agentId}.permissionMode`;
+
   const model = useSetting<string>(MODEL_KEY) ?? '';
-  const temperature = useSetting<number>(TEMP_KEY) ?? 0;
+  const temperature = useSetting<number>(TEMP_KEY);
   const tempOverridden = isSettingOverridden(TEMP_KEY);
 
   const contextSize = useSetting<number>(CTX_KEY);
@@ -30,6 +41,8 @@ export function OrchestratorSettings() {
 
   const topP = useSetting<number>(TOP_P_KEY);
   const topPOverridden = isSettingOverridden(TOP_P_KEY);
+
+  const mode = useSetting<string>(MODE_KEY) ?? '';
 
   const [models, setModels] = useState<string[]>([]);
   const [configuredModel, setConfiguredModel] = useState<string | null>(null);
@@ -43,7 +56,16 @@ export function OrchestratorSettings() {
       .catch(() => {
         // Provider/backend down — the current override still stays selectable below.
       });
+    void getAgentRoster()
+      .then(setRoster)
+      .catch(() => {
+        // Roster unavailable — the section still edits the orchestrator keys.
+      });
   }, []);
+
+  const selected = roster.find((a) => a.id === agentId);
+  const isMain = agentId === 'main';
+  const fallbackNote = isMain ? '' : ' Blank falls back to the orchestrator’s value.';
 
   // Keep an override that isn't in the live list (e.g. provider offline) selectable.
   const options = model && !models.includes(model) ? [model, ...models] : models;
@@ -55,19 +77,41 @@ export function OrchestratorSettings() {
 
   return (
     <div className="orchestrator-settings">
+      {roster.length > 1 && (
+        <div className="setting-row">
+          <div className="setting-label">
+            <label>Agent</label>
+            <p className="setting-desc">
+              Which roster agent these settings apply to.
+              {selected ? ` ${selected.description}` : ''}
+            </p>
+          </div>
+          <div className="setting-control">
+            <select value={agentId} onChange={(e) => setAgentId(e.target.value)}>
+              {roster.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+      )}
+
       <div className="setting-row">
         <div className="setting-label">
-          <label>Orchestrator model override</label>
+          <label>Model override</label>
           <p className="setting-desc">
-            Model the orchestrator uses to drive tool calls. A stronger model (e.g. gemma4:12b)
-            emits tool calls more reliably than a small one; keep chat/autosuggest on the configured
-            model by leaving this on it.
+            Model this agent uses to drive tool calls. A stronger model (e.g. gemma4:12b) emits tool
+            calls more reliably than a small one.{fallbackNote}
           </p>
         </div>
         <div className="setting-control">
           <select value={model} onChange={(e) => onModelChange(e.target.value)}>
             <option value="">
-              Configured agent model{configuredModel ? ` (${configuredModel})` : ''}
+              {isMain
+                ? `Configured agent model${configuredModel ? ` (${configuredModel})` : ''}`
+                : 'Orchestrator model'}
             </option>
             {options.map((m) => (
               <option key={m} value={m}>
@@ -78,22 +122,53 @@ export function OrchestratorSettings() {
         </div>
       </div>
 
+      {!isMain && (
+        <div className="setting-row">
+          <div className="setting-label">
+            <label>Permission mode</label>
+            <p className="setting-desc">
+              The permission mode this agent's turns run under. Blank uses the agent's built-in
+              default{selected?.default_mode ? ` (${selected.default_mode})` : ''}, else your
+              session mode. Explicit allow/ask/deny rules always apply.
+            </p>
+          </div>
+          <div className="setting-control">
+            <select
+              value={mode}
+              onChange={(e) => {
+                if (e.target.value === '') void resetSetting(MODE_KEY);
+                else void setSetting(MODE_KEY, e.target.value);
+              }}
+            >
+              <option value="">Agent default</option>
+              {MODES.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+      )}
+
       <div className="setting-row">
         <div className="setting-label">
-          <label>Orchestrator temperature</label>
+          <label>Temperature</label>
           <p className="setting-desc">
             Sampling temperature for the tool-calling loop. Keep near 0 so the model emits
-            structured tool calls instead of narrating them.
+            structured tool calls instead of narrating them.{fallbackNote}
           </p>
         </div>
         <div className="setting-control">
           <input
             type="number"
-            value={temperature}
+            value={temperature ?? (isMain ? 0 : '')}
             step={0.1}
             min={0}
+            placeholder={isMain ? undefined : 'Orchestrator value'}
             onChange={(e) => {
               if (e.target.value !== '') void setSetting(TEMP_KEY, e.target.valueAsNumber);
+              else if (!isMain) void resetSetting(TEMP_KEY);
             }}
           />
           {tempOverridden && (
@@ -110,10 +185,10 @@ export function OrchestratorSettings() {
 
       <div className="setting-row">
         <div className="setting-label">
-          <label>Orchestrator context size</label>
+          <label>Context size</label>
           <p className="setting-desc">
-            Maximum context window (tokens) for the orchestrator turns. For Ollama, this maps to
-            the num_ctx option.
+            Maximum context window (tokens) for this agent's turns. For Ollama, this maps to the
+            num_ctx option.{fallbackNote}
           </p>
         </div>
         <div className="setting-control">
@@ -121,7 +196,7 @@ export function OrchestratorSettings() {
             type="number"
             value={contextSize ?? ''}
             min={1}
-            placeholder="Default"
+            placeholder={isMain ? 'Default' : 'Orchestrator value'}
             onChange={(e) => {
               if (e.target.value !== '') void setSetting(CTX_KEY, e.target.valueAsNumber);
               else void resetSetting(CTX_KEY);
@@ -141,10 +216,10 @@ export function OrchestratorSettings() {
 
       <div className="setting-row">
         <div className="setting-label">
-          <label>Orchestrator max output tokens</label>
+          <label>Max output tokens</label>
           <p className="setting-desc">
             Maximum tokens the model can generate in a single turn. Maps to max_tokens for OpenAI
-            and num_predict for Ollama.
+            and num_predict for Ollama.{fallbackNote}
           </p>
         </div>
         <div className="setting-control">
@@ -152,7 +227,7 @@ export function OrchestratorSettings() {
             type="number"
             value={maxTokens ?? ''}
             min={1}
-            placeholder="Default"
+            placeholder={isMain ? 'Default' : 'Orchestrator value'}
             onChange={(e) => {
               if (e.target.value !== '') void setSetting(MAX_TOKENS_KEY, e.target.valueAsNumber);
               else void resetSetting(MAX_TOKENS_KEY);
@@ -172,9 +247,10 @@ export function OrchestratorSettings() {
 
       <div className="setting-row">
         <div className="setting-label">
-          <label>Orchestrator Top P</label>
+          <label>Top P</label>
           <p className="setting-desc">
-            Top P sampling (nucleus sampling) threshold. Keep blank/default to let the provider decide.
+            Top P sampling (nucleus sampling) threshold. Keep blank/default to let the provider
+            decide.{fallbackNote}
           </p>
         </div>
         <div className="setting-control">
@@ -184,7 +260,7 @@ export function OrchestratorSettings() {
             step={0.05}
             min={0}
             max={1}
-            placeholder="Default"
+            placeholder={isMain ? 'Default' : 'Orchestrator value'}
             onChange={(e) => {
               if (e.target.value !== '') void setSetting(TOP_P_KEY, e.target.valueAsNumber);
               else void resetSetting(TOP_P_KEY);

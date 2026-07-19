@@ -32,6 +32,13 @@ dashboard's own local vector store as the built-in **`app`** connection.
   results grid with column headers, a status line (`N rows · M ms`, truncation flag),
   and inline error output. Recent queries are kept in a history dropdown. A **Read-only**
   toggle restricts a run to a single `SELECT`/`WITH`/`EXPLAIN` statement.
+- **Schema-aware autocomplete** — the editor is CodeMirror with `@codemirror/lang-sql`
+  (`SqlEditor.tsx`): keyword completion in the connection's dialect (postgres, mysql,
+  sqlite; duckdb uses the PostgreSQL dialect as its nearest match) plus table and column
+  completion fed live from the same `/database/connections/{id}/schema` introspection the
+  sidebar shows — schema-qualified names (`public.users`) included, with the dominant
+  schema as the unqualified default. The mapping lives in the pure helper
+  `sqlSchema.ts:schemaToSqlConfig`.
 - **Schema sidebar** — an introspected tree of tables → columns (with types and PK
   markers). Click a table to drop a `SELECT * FROM <table> LIMIT 100` into the editor.
 - **No synthetic data** — the pane only ever shows real rows returned from a real

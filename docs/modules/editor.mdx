@@ -18,9 +18,11 @@ command surface and the keybinding-service keymap (C3), agent tools (C4), and th
 
 **Engine: [CodeMirror 6](https://codemirror.dev).** Lean, extensible, and
 emacs-friendly — code-aware (syntax highlighting, markdown) without pulling in a
-full IDE. No language-server/IntelliSense in v1; that is a later addition. The CM6
-keymap is exposed through the shell keybinding service so bindings stay rebindable
-— editing key handlers are never hardcoded in the component.
+full IDE. IntelliSense **ships**: the layered completion stack below (LSP spine +
+DB symbol index + curated imports) plus hover, diagnostics, go-to-definition,
+rename, and references. The CM6 keymap is exposed through the shell keybinding
+service so bindings stay rebindable — editing key handlers are never hardcoded in
+the component.
 
 ## Contributions to the layout shell
 
@@ -182,11 +184,16 @@ Copilot side by side:
 | **L3 LLM**   | backend local model             | agent/orchestrator edits (read, rename, alter, format selection) — **not** completion | ~0.1–n s       |
 
 L1 is mostly CodeMirror's `basicSetup`. **L1.5** is the DB symbol lookup that backs
-both completion surfaces (see [below](#completion-is-a-database-lookup)). **L2
-(LSP) covers** the transport plus **diagnostics**, **type-aware completion**,
-**hover**, **go-to-definition**, **rename**, and **references** — with formatting
-layering onto the same pipe next. **L3 (the model) is no longer in the completion
-loop**: it drives the agent/orchestrator's deliberate edits, not typeahead.
+both completion surfaces (see [below](#completion-is-a-database-lookup)) —
+**enriched by [symdex](symdex.mdx)**: the package-symbol harvest projects each
+indexed API's signature and first docstring paragraph into `code_symbols`
+(`doc` column, source `pkg:<dist>`), so suggestions for framework symbols show a
+doc panel (`info` on the completion item) from the same single SQLite request —
+no embedding lookup ever sits on the keystroke path. **L2 (LSP) covers** the
+transport plus **diagnostics**, **type-aware completion**, **hover**,
+**go-to-definition**, **rename**, and **references** — with formatting layering
+onto the same pipe next. **L3 (the model) is no longer in the completion loop**:
+it drives the agent/orchestrator's deliberate edits, not typeahead.
 
 ### Where the LSP runs: the backend, over a `/ws` `lsp` channel (implemented)
 

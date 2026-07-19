@@ -20,9 +20,9 @@ import httpx
 from backend.modules.agent import permission_store, permissions
 from backend.modules.agent import providers as P
 from backend.modules.agent.routes import _load_config
-from backend.modules.settings.routes import get_value
 from backend.modules.telemetry.instrument import instrumented_client
 from backend.modules.ws import WsConnection
+from backend.sdk.types import AgentSpec
 
 logger = logging.getLogger(__name__)
 
@@ -51,18 +51,26 @@ _FORCE_TOOL_NUDGE = (
 )
 
 
-def _tool_temperature() -> float:
-    """Sampling temperature for orchestrator turns (settings-overridable)."""
-    value = get_value("agent.orchestrator.temperature", DEFAULT_TOOL_TEMPERATURE)
+def _agent_setting(agent_id: str, key: str, default: Any = None) -> Any:
+    """Per-agent settings resolution (lazy import — roster imports this module)."""
+    from backend.modules.agent.roster import agent_setting
+
+    return agent_setting(agent_id, key, default)
+
+
+def _tool_temperature(agent_id: str = "main") -> float:
+    """Sampling temperature for an agent's turns (settings-overridable, per-agent
+    `agent.<id>.temperature` falling back to `agent.orchestrator.temperature`)."""
+    value = _agent_setting(agent_id, "temperature", DEFAULT_TOOL_TEMPERATURE)
     try:
         return float(value)
     except (TypeError, ValueError):
         return DEFAULT_TOOL_TEMPERATURE
 
 
-def _tool_context_size() -> int | None:
-    """Context size limit (num_ctx) for orchestrator turns (settings-overridable)."""
-    value = get_value("agent.orchestrator.contextSize", None)
+def _tool_context_size(agent_id: str = "main") -> int | None:
+    """Context size limit (num_ctx) for an agent's turns (settings-overridable)."""
+    value = _agent_setting(agent_id, "contextSize", None)
     if value is None or value == "":
         return None
     try:
@@ -71,9 +79,9 @@ def _tool_context_size() -> int | None:
         return None
 
 
-def _tool_max_tokens() -> int | None:
-    """Max output tokens for orchestrator turns (settings-overridable)."""
-    value = get_value("agent.orchestrator.maxTokens", None)
+def _tool_max_tokens(agent_id: str = "main") -> int | None:
+    """Max output tokens for an agent's turns (settings-overridable)."""
+    value = _agent_setting(agent_id, "maxTokens", None)
     if value is None or value == "":
         return None
     try:
@@ -82,9 +90,9 @@ def _tool_max_tokens() -> int | None:
         return None
 
 
-def _tool_top_p() -> float | None:
-    """Top P sampling for orchestrator turns (settings-overridable)."""
-    value = get_value("agent.orchestrator.topP", None)
+def _tool_top_p(agent_id: str = "main") -> float | None:
+    """Top P sampling for an agent's turns (settings-overridable)."""
+    value = _agent_setting(agent_id, "topP", None)
     if value is None or value == "":
         return None
     try:
@@ -93,11 +101,12 @@ def _tool_top_p() -> float | None:
         return None
 
 
-def _orchestrator_model(default: str) -> str:
-    """Model for orchestrator turns. A separate override (settings-overridable)
-    lets a stronger model drive tool calls than the one used for chat/autosuggest;
-    blank falls back to the configured agent model."""
-    value = get_value("agent.orchestrator.model", "")
+def _orchestrator_model(default: str, agent_id: str = "main") -> str:
+    """Model for an agent's turns. A separate override (settings-overridable)
+    lets a stronger model drive tool calls than the one used for chat/autosuggest
+    — and each roster agent can pin its own (`agent.<id>.model`); blank falls
+    back to the orchestrator override, then the configured agent model."""
+    value = _agent_setting(agent_id, "model", "")
     return value.strip() if isinstance(value, str) and value.strip() else default
 
 
@@ -413,17 +422,47 @@ PEER_TOOLS: list[dict[str, Any]] = [
     ),
 ]
 
+# Delegation to the local specialized-agent roster (coder/dba/researcher + plugin
+# agents). Backend-resolved like the peer tools, but the sub-agent runs on THIS
+# node against the same browser connection, so it can actuate (unlike ask_peer's
+# tool-less remote turns). Only agents whose spec allows it see this tool.
+DELEGATE_TOOLS: list[dict[str, Any]] = [
+    _tool(
+        "agent.delegate",
+        "Delegate a task to one of this app's specialized agents (e.g. 'coder' for "
+        "editor/code work, 'dba' for SQL/schema work, 'researcher' for web/library "
+        "research) and get its answer back. The specialized agent runs here with "
+        "its own scoped tools and can act on the app. Use for tasks squarely in a "
+        "specialist's domain; do the work yourself when it spans domains.",
+        {
+            "agentId": {
+                "type": "string",
+                "description": "Specialized agent id, e.g. 'coder', 'dba', 'researcher'",
+            },
+            "prompt": {"type": "string", "description": "The task for the agent"},
+        },
+        ["agentId", "prompt"],
+    ),
+]
+
 # Names dispatched in the backend (not relayed to the browser).
-BACKEND_TOOL_NAMES = {t["function"]["name"] for t in PEER_TOOLS}
+BACKEND_TOOL_NAMES = {t["function"]["name"] for t in PEER_TOOLS + DELEGATE_TOOLS}
 
 # Side-effect metadata for static backend tools (the browser manifest carries this
 # for frontend tools; static tools declare it here so the gate can see it).
 # agent.ask_peer reaches another machine, so it's gated; list_peers is read-only.
+# agent.delegate hands the wheel to a sub-agent (which is itself gated per call,
+# under its own mode) — the prompt makes delegation itself a visible, gated step.
 _STATIC_TOOL_META: dict[str, dict[str, Any]] = {
     "agent.ask_peer": {
         "name": "agent.ask_peer",
         "sideEffect": True,
         "specifierTemplate": "{peerId}",
+    },
+    "agent.delegate": {
+        "name": "agent.delegate",
+        "sideEffect": True,
+        "specifierTemplate": "{agentId}",
     },
 }
 
@@ -507,6 +546,10 @@ _GROUP_DESCRIPTIONS: dict[str, str] = {
         "Kaggle kernels or Colab, render manim explainers."
     ),
     "notebook": "Read, edit, and execute cells of the open training notebook.",
+    "symbols": (
+        "Semantic + exact lookup over the symbol/docs index: installed package "
+        "APIs (signatures, docstrings), database schemas, and this app's docs."
+    ),
 }
 
 # Keywords that auto-preload a group for a turn (so common asks stay one-shot). A
@@ -607,6 +650,14 @@ _GROUP_KEYWORDS: dict[str, tuple[str, ...]] = {
         "model",
     ),
     "notebook": ("notebook", "cell", "kernel", "ipynb", "jupyter"),
+    "symbols": (
+        "docstring",
+        "signature",
+        "documentation",
+        "api reference",
+        "how do i use",
+        "what does",
+    ),
 }
 
 
@@ -616,19 +667,27 @@ def _group_of(name: str) -> str:
     return name.split(".", 1)[0] if "." in name else "layout"
 
 
-def _core_tools() -> list[dict[str, Any]]:
-    """Always-present tools: the layout verbs, the peer tools, the meta tools, and
-    the *ungrouped* backend-plugin agent tools (registered via backend.sdk). Plugin
-    tools that declare a `group` are disclosed progressively instead (see
-    `_all_dynamic_tools`)."""
+def _core_tools(spec: AgentSpec | None = None) -> list[dict[str, Any]]:
+    """Always-present tools: the layout verbs, the peer/delegate tools (spec-gated),
+    the meta tools, and the *ungrouped* backend-plugin agent tools (registered via
+    backend.sdk). Plugin tools that declare a `group` are disclosed progressively
+    instead (see `_all_dynamic_tools`). `spec=None` (the main orchestrator and
+    every pre-roster caller) keeps the full core."""
     from backend.sdk.registry import registry as _plugins
 
-    return (
-        list(LAYOUT_TOOLS)
-        + list(PEER_TOOLS)
-        + list(META_TOOLS)
-        + _plugins.provider_tools(grouped=False)
-    )
+    tools = list(LAYOUT_TOOLS)
+    if spec is None or spec.include_peer_tools:
+        tools += list(PEER_TOOLS)
+    if spec is None or spec.can_delegate:
+        tools += list(DELEGATE_TOOLS)
+    tools += list(META_TOOLS)
+    core_plugin = _plugins.provider_tools(grouped=False)
+    if spec is not None and spec.tool_groups is not None:
+        allowed = set(spec.tool_groups)
+        core_plugin = [
+            t for t in core_plugin if _group_of(t["function"]["name"]) in allowed
+        ]
+    return tools + core_plugin
 
 
 def _all_dynamic_tools(conn: WsConnection) -> list[dict[str, Any]]:
@@ -695,11 +754,16 @@ def _guides_message(groups: set[str]) -> dict[str, Any] | None:
     return {"role": "system", "content": text} if text else None
 
 
-def _group_catalog(conn: WsConnection) -> list[dict[str, Any]]:
-    """The loadable groups (dynamic tools only), each with a description + count."""
+def _group_catalog(
+    conn: WsConnection, allowed: set[str] | None = None
+) -> list[dict[str, Any]]:
+    """The loadable groups (dynamic tools only), each with a description + count.
+    `allowed` restricts the catalog to a specialized agent's tool groups."""
     counts: dict[str, int] = {}
     for t in _all_dynamic_tools(conn):
         g = _group_of(t["function"]["name"])
+        if allowed is not None and g not in allowed:
+            continue
         counts[g] = counts.get(g, 0) + 1
     return [
         {"name": g, "description": _group_description(g), "tools": n}
@@ -724,12 +788,17 @@ def _preload_groups(
     return active
 
 
-def _select_tools(conn: WsConnection, active_groups: set[str]) -> list[dict[str, Any]]:
-    """The tool list presented this round: core + every dynamic tool whose group is
-    active. Capped at TOOL_BUDGET as a backstop (core is always kept first)."""
-    selected = _core_tools()
+def _select_tools(
+    conn: WsConnection, active_groups: set[str], spec: AgentSpec | None = None
+) -> list[dict[str, Any]]:
+    """The tool list presented this round: core (spec-gated) + every dynamic tool
+    whose group is active — and, for a scoped agent, allowed. Capped at
+    TOOL_BUDGET as a backstop (core is always kept first)."""
+    allowed = set(spec.tool_groups) if spec and spec.tool_groups is not None else None
+    selected = _core_tools(spec)
     for t in _all_dynamic_tools(conn):
-        if _group_of(t["function"]["name"]) in active_groups:
+        group = _group_of(t["function"]["name"])
+        if group in active_groups and (allowed is None or group in allowed):
             selected.append(t)
     if len(selected) > TOOL_BUDGET:
         logger.warning(
@@ -786,6 +855,7 @@ async def handle_agent_message(conn: WsConnection, msg: dict[str, Any]) -> None:
                 str(data.get("prompt", "")),
                 history if isinstance(history, list) else None,
                 context if isinstance(context, dict) else None,
+                agent_id=str(data.get("agentId") or "main"),
             )
         )
     elif event == "tool_result":
@@ -874,7 +944,12 @@ async def _request_approval(
         return {"decision": "deny"}
 
 
-async def _gate(conn: WsConnection, turn_id: str, call: Any) -> bool:
+async def _gate(
+    conn: WsConnection,
+    turn_id: str,
+    call: Any,
+    mode_override: permissions.Mode | None = None,
+) -> bool:
     """Decide whether a relayed tool call may run. Read-only/layout tools pass
     straight through; side-effecting tools are evaluated against the permission
     rules + mode, prompting the user on an ASK and persisting a rule on
@@ -887,8 +962,14 @@ async def _gate(conn: WsConnection, turn_id: str, call: Any) -> bool:
         meta.get("specifierTemplate") if meta else None, call.arguments
     )
     # A remote (peer-driven) turn forces its own mode (network.remoteAgentMode) and
-    # never has a human to prompt; a local turn uses the user's session mode.
-    mode = getattr(conn, "force_mode", None) or permission_store.load_mode()
+    # never has a human to prompt; a roster agent may carry its own default mode
+    # (`agent.<id>.permissionMode` / spec.default_mode); otherwise the user's
+    # session mode applies.
+    mode = (
+        getattr(conn, "force_mode", None)
+        or mode_override
+        or permission_store.load_mode()
+    )
     rules = permission_store.load_rules()
     decision = permissions.evaluate(call.name, specifier, side_effect, mode, rules)
     if decision is permissions.Decision.ALLOW:
@@ -959,10 +1040,20 @@ def _history_messages(history: list[Any] | None) -> list[dict[str, Any]]:
     return out
 
 
-async def _run_backend_tool(conn: WsConnection, call: Any) -> Any:
-    """Execute a backend-resolved tool (the peer fabric verbs) against the
-    process-global PeerHub. Imported lazily to avoid an import cycle with the network
-    module (whose agent_bridge imports this orchestrator)."""
+async def _run_backend_tool(conn: WsConnection, turn_id: str, call: Any) -> Any:
+    """Execute a backend-resolved tool: the peer fabric verbs (against the
+    process-global PeerHub) and local roster delegation. Imported lazily to avoid
+    an import cycle with the network module (whose agent_bridge imports this
+    orchestrator) and the delegate module (which reuses the loop here)."""
+    if call.name == "agent.delegate":
+        from backend.modules.agent.delegate import run_delegate
+
+        return await run_delegate(
+            conn,
+            turn_id,
+            str(call.arguments.get("agentId", "")),
+            str(call.arguments.get("prompt", "")),
+        )
     from backend.modules.network import agent_bridge
     from backend.modules.network.hub import peer_hub
 
@@ -979,21 +1070,31 @@ async def _run_backend_tool(conn: WsConnection, call: Any) -> Any:
 
 
 async def _dispatch_call(
-    conn: WsConnection, turn_id: str, call: Any, active_groups: set[str]
+    conn: WsConnection,
+    turn_id: str,
+    call: Any,
+    active_groups: set[str],
+    spec: AgentSpec | None = None,
+    mode_override: permissions.Mode | None = None,
 ) -> Any:
     """Resolve one tool call under progressive disclosure. The meta tools mutate
     `active_groups` (so the next round presents more tools); a known dynamic tool
     whose group isn't active yet is auto-loaded (forgiving); everything else is gated,
-    then run in the backend or relayed to the browser."""
+    then run in the backend or relayed to the browser. A scoped agent's `spec`
+    restricts the catalog/auto-load to its allowed groups."""
+    allowed = set(spec.tool_groups) if spec and spec.tool_groups is not None else None
     name = call.name
     if name == "list_tool_groups":
-        return {"groups": _group_catalog(conn), "loaded": sorted(active_groups)}
+        return {
+            "groups": _group_catalog(conn, allowed),
+            "loaded": sorted(active_groups),
+        }
     if name == "load_tools":
         requested = call.arguments.get("groups")
         if isinstance(requested, str):
             requested = [requested]
         requested = requested if isinstance(requested, list) else []
-        available = {g["name"] for g in _group_catalog(conn)}
+        available = {g["name"] for g in _group_catalog(conn, allowed)}
         loaded = [g for g in requested if g in available]
         active_groups.update(loaded)
         tools_now = [
@@ -1014,18 +1115,22 @@ async def _dispatch_call(
         return result
 
     # Forgiveness: the model called a known tool from a group it hadn't loaded — pull
-    # the group in (so it stays visible next round) and run the call.
+    # the group in (so it stays visible next round) and run the call. A scoped
+    # agent gets no forgiveness outside its allowed groups: the call is refused.
     if any(t["function"]["name"] == name for t in _all_dynamic_tools(conn)):
-        active_groups.add(_group_of(name))
+        group = _group_of(name)
+        if allowed is not None and group not in allowed:
+            return {"error": f"tool {name} is outside this agent's allowed groups"}
+        active_groups.add(group)
 
-    if not await _gate(conn, turn_id, call):
+    if not await _gate(conn, turn_id, call, mode_override):
         return {"error": "denied by permission policy"}
     from backend.sdk.registry import registry as _plugins
 
     if name in _plugins.agent_tools:
         return await _plugins.invoke_agent_tool(name, call.arguments)
     if name in BACKEND_TOOL_NAMES:
-        return await _run_backend_tool(conn, call)
+        return await _run_backend_tool(conn, turn_id, call)
     return await _call_frontend_tool(conn, turn_id, name, call.arguments)
 
 
@@ -1044,6 +1149,8 @@ async def run_agent_loop(
     max_tokens: int | None = None,
     top_p: float | None = None,
     active_groups: set[str] | None = None,
+    spec: AgentSpec | None = None,
+    mode_override: permissions.Mode | None = None,
 ) -> str:
     """The shared tool-calling loop: stream the provider, relay each gated tool call
     to the frontend, and repeat until the model returns a final answer (no tool
@@ -1066,7 +1173,7 @@ async def run_agent_loop(
         for _ in range(MAX_ROUNDS):
             # Under progressive disclosure, inject the groups loaded last round.
             if progressive:
-                tools = _select_tools(conn, active_groups)
+                tools = _select_tools(conn, active_groups, spec)
             result = await P.chat_stream(
                 client,
                 info,
@@ -1113,13 +1220,13 @@ async def run_agent_loop(
             for call in result.tool_calls:
                 if progressive:
                     tool_result = await _dispatch_call(
-                        conn, turn_id, call, active_groups
+                        conn, turn_id, call, active_groups, spec, mode_override
                     )
-                elif not await _gate(conn, turn_id, call):
+                elif not await _gate(conn, turn_id, call, mode_override):
                     tool_result = {"error": "denied by permission policy"}
                 elif call.name in BACKEND_TOOL_NAMES:
                     # Resolved in the backend (peer fabric), not relayed to the UI.
-                    tool_result = await _run_backend_tool(conn, call)
+                    tool_result = await _run_backend_tool(conn, turn_id, call)
                 else:
                     tool_result = await _call_frontend_tool(
                         conn, turn_id, call.name, call.arguments
@@ -1136,6 +1243,7 @@ async def run_agent_turn(
     context: dict[str, Any] | None = None,
     *,
     remote: bool = False,
+    agent_id: str = "main",
 ) -> None:
     """Drive one user turn: assemble the conversation, run the shared tool-calling
     loop, and send the authoritative answer. The provider dialect (Ollama vs
@@ -1147,32 +1255,63 @@ async def run_agent_turn(
 
     `remote=True` marks a turn driven by a *peer's* agent (no browser behind it): it
     runs with no actuating tools, so a remote agent answers from the model but cannot
-    drive this machine. See modules/network agent_bridge."""
+    drive this machine. See modules/network agent_bridge.
+
+    `agent_id` selects the roster persona driving the turn ("main" is the
+    unrestricted orchestrator): its system prompt, tool-group scope, per-agent
+    model/hyperparameters, and default permission mode. Every event this turn
+    emits is tagged with the agentId so the UI can attribute it."""
+    from backend.modules.agent import roster
+
+    spec = roster.get_agent(agent_id)
+    if spec is None:
+        await conn.send_json(
+            _evt(
+                "error",
+                {
+                    "turnId": turn_id,
+                    "agentId": agent_id,
+                    "message": f"Unknown agent '{agent_id}'",
+                },
+            )
+        )
+        return
     config = _load_config()
     if config is None:
         await conn.send_json(
-            _evt("error", {"turnId": turn_id, "message": "Agent not configured"})
+            _evt(
+                "error",
+                {
+                    "turnId": turn_id,
+                    "agentId": agent_id,
+                    "message": "Agent not configured",
+                },
+            )
         )
         return
     info = P.provider_for(config.provider)
     endpoint = config.endpoint or info.default_endpoint
-    model = _orchestrator_model(config.model)
+    model = _orchestrator_model(config.model, agent_id)
     # A remote turn gets no tools (it can't reach a browser to execute them, and must
-    # not act on this machine). A local turn presents the core plus whatever tool
-    # groups are active — seeded from the prompt's keywords and grown as the model
-    # calls load_tools; the list is recomputed each round (progressive disclosure).
-    # Local turns use progressive disclosure (active_groups drives a per-round tool
-    # list); a remote turn gets None → the loop runs with no tools (it has no browser
-    # to execute them and must not act on this machine).
-    active_groups: set[str] | None = (
-        None if remote else _preload_groups(conn, prompt, history)
-    )
+    # not act on this machine) → active_groups=None → the loop runs tool-less.
+    # A local main turn seeds its groups from prompt/history keywords and grows them
+    # as the model calls load_tools (progressive disclosure, recomputed per round).
+    # A specialized agent skips keyword preloading — its scope is declared: it
+    # starts with spec.preload_groups and can only load within spec.tool_groups.
+    active_groups: set[str] | None
+    if remote:
+        active_groups = None
+    elif spec.tool_groups is None:
+        active_groups = _preload_groups(conn, prompt, history)
+    else:
+        active_groups = set(spec.preload_groups)
+    mode_override = None if remote else roster.resolve_mode(spec)
     editor_msg = _active_editor_message(context)
-    # Guides for groups the prompt preloaded — the model never calls load_tools for
+    # Guides for groups the turn starts with — the model never calls load_tools for
     # those, so this is the only chance to hand it the usage notes.
     guides_msg = _guides_message(active_groups) if active_groups else None
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": spec.system_prompt},
         *([guides_msg] if guides_msg else []),
         *_history_messages(history),
         # The focused buffer goes right before the user turn so it's the freshest
@@ -1186,10 +1325,17 @@ async def run_agent_turn(
         # they arrive (the final `answer` event below stays authoritative).
         if reasoning:
             await conn.send_json(
-                _evt("reasoning", {"turnId": turn_id, "delta": reasoning})
+                _evt(
+                    "reasoning",
+                    {"turnId": turn_id, "agentId": agent_id, "delta": reasoning},
+                )
             )
         if content:
-            await conn.send_json(_evt("token", {"turnId": turn_id, "delta": content}))
+            await conn.send_json(
+                _evt(
+                    "token", {"turnId": turn_id, "agentId": agent_id, "delta": content}
+                )
+            )
 
     try:
         text = await run_agent_loop(
@@ -1201,17 +1347,26 @@ async def run_agent_turn(
             endpoint,
             model,
             emit,
-            temperature=_tool_temperature(),
-            context_size=_tool_context_size(),
-            max_tokens=_tool_max_tokens(),
-            top_p=_tool_top_p(),
+            temperature=_tool_temperature(agent_id),
+            context_size=_tool_context_size(agent_id),
+            max_tokens=_tool_max_tokens(agent_id),
+            top_p=_tool_top_p(agent_id),
             active_groups=active_groups,
+            spec=spec,
+            mode_override=mode_override,
         )
-        await conn.send_json(_evt("answer", {"turnId": turn_id, "text": text}))
-        await conn.send_json(_evt("done", {"turnId": turn_id}))
+        await conn.send_json(
+            _evt("answer", {"turnId": turn_id, "agentId": agent_id, "text": text})
+        )
+        await conn.send_json(_evt("done", {"turnId": turn_id, "agentId": agent_id}))
     except httpx.HTTPError as exc:
         await conn.send_json(
             _evt(
-                "error", {"turnId": turn_id, "message": f"{type(exc).__name__}: {exc}"}
+                "error",
+                {
+                    "turnId": turn_id,
+                    "agentId": agent_id,
+                    "message": f"{type(exc).__name__}: {exc}",
+                },
             )
         )

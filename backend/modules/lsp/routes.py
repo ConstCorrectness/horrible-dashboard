@@ -34,11 +34,19 @@ class PythonEnv(BaseModel):
 @router.get("/python-env")
 async def python_env(path: str = "") -> PythonEnv:
     """Resolve the interpreter, project root, and installed framework versions for a
-    file/directory. Offloaded (the interpreter probe shells out) and cached in `pyenv`."""
+    file/directory. Offloaded (the interpreter probe shells out) and cached in `pyenv`.
+    Also the symdex package-index auto-kick: the first resolve with an interpreter
+    and an empty packages corpus starts a detached background build."""
     start = path or None
     interpreter = await asyncio.to_thread(pyenv.resolve_python_interpreter, start)
     root = await asyncio.to_thread(pyenv.resolve_project_root, start)
     packages = await asyncio.to_thread(pyenv.installed_versions, interpreter)
+    if interpreter:
+        from backend.modules.symdex.index import symdex_index
+
+        status = symdex_index.status()
+        if not status["building"] and not status["counts"].get("packages"):
+            asyncio.create_task(symdex_index.reindex(["packages"], interpreter))
     return PythonEnv(
         interpreter=interpreter,
         root=root or (start if start and os.path.isdir(start) else ""),
@@ -72,6 +80,9 @@ class CompletionItem(BaseModel):
     kind: str
     detail: str = ""
     module: str = ""
+    # First docstring paragraph for indexed package symbols (symdex projection);
+    # empty for buffer-local symbols.
+    doc: str = ""
 
 
 class CompletionResult(BaseModel):

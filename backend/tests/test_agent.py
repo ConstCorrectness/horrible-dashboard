@@ -48,7 +48,11 @@ def test_status_unconfigured_and_unreachable(client: TestClient) -> None:
     kinds = {p["kind"] for p in body["providers"]}
     assert kinds == {"ollama", "lmstudio", "vllm", "openai", "anthropic", "gemini"}
     # litellm providers are always considered reachable since we can't reliably ping them
-    assert all(p["reachable"] is False for p in body["providers"] if p["kind"] in {"ollama", "lmstudio", "vllm"})
+    assert all(
+        p["reachable"] is False
+        for p in body["providers"]
+        if p["kind"] in {"ollama", "lmstudio", "vllm"}
+    )
 
 
 def test_chat_requires_onboarding(client: TestClient) -> None:

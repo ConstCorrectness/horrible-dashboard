@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-import pytest
-from backend.games_engine import verify
 from backend.games_engine.base import TERMINAL, WORK
 from backend.games_engine.tabular_fe import TabularFE, DEFAULT_TASKS
+
 
 def test_tabular_fe_flow(monkeypatch) -> None:
     # Ensure code execution is enabled for testing
     monkeypatch.setenv("GAMES_ENABLE_CODE_EXEC", "1")
-    
+
     game = TabularFE(task=DEFAULT_TASKS[0], seed=42)
     assert sorted(game.current_players()) == [0, 1]
-    
+
     # Player 0: basic map template (ignores anomaly_type)
     code_0 = (
         "import pandas as pd\n"
@@ -37,7 +36,7 @@ def test_tabular_fe_flow(monkeypatch) -> None:
         "    df = df.select_dtypes(include=[np.number])\n"
         "    return df\n"
     )
-    
+
     # Player 1: advanced template with one-hot encoding (better features!)
     code_1 = (
         "import pandas as pd\n"
@@ -59,22 +58,28 @@ def test_tabular_fe_flow(monkeypatch) -> None:
         "    df = df.select_dtypes(include=[np.number])\n"
         "    return df\n"
     )
-    
+
     game.apply_action(0, "submit", {"code": code_0})
     game.apply_action(1, "submit", {"code": code_1})
-    
+
     assert game.current_player() == WORK
-    
+
     # Run the grading task
     game.run_work()
-    
+
     assert game.current_player() == TERMINAL
-    
+
     r0, r1 = game.reports
-    assert r0["ok"] is True, f"Player 0 evaluation failed: {r0['error']}\\nOutput:\\n{r0['output']}"
-    assert r1["ok"] is True, f"Player 1 evaluation failed: {r1['error']}\\nOutput:\\n{r1['output']}"
-    
+    assert r0["ok"] is True, (
+        f"Player 0 evaluation failed: {r0['error']}\\nOutput:\\n{r0['output']}"
+    )
+    assert r1["ok"] is True, (
+        f"Player 1 evaluation failed: {r1['error']}\\nOutput:\\n{r1['output']}"
+    )
+
     # Player 1 should have a strictly higher score because they handled anomaly_type
-    assert r1["score"] > r0["score"], f"Scores did not match expectations: r0={r0['score']}, r1={r1['score']}"
+    assert r1["score"] > r0["score"], (
+        f"Scores did not match expectations: r0={r0['score']}, r1={r1['score']}"
+    )
     assert game._winner() == 1
     assert game.returns() == {0: -1.0, 1: 1.0}

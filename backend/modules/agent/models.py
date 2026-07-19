@@ -66,6 +66,21 @@ class CompleteRequest(BaseModel):
     hover: str | None = None
 
 
+class RosterAgent(BaseModel):
+    """One roster entry for the UI: identity + scope, never the system prompt."""
+
+    id: str
+    name: str
+    description: str
+    # None = unrestricted (the main orchestrator).
+    tool_groups: list[str] | None = None
+    default_mode: str = ""
+
+
+class RosterResponse(BaseModel):
+    agents: list[RosterAgent] = []
+
+
 class PullRequest(BaseModel):
     model: str
 

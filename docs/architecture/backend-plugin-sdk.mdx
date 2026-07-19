@@ -64,6 +64,7 @@ every capability and doubles as the integration test fixture.
 | --- | --- |
 | `host.add_router(router, prefix=None)` | a FastAPI `APIRouter`. Default prefix `/api/plugins/<id>`; pass `prefix` (joined under `/api`) to override |
 | `host.add_agent_tool(AgentTool(...))` | a **server-side** agent tool — its handler runs in the backend (works with no browser). `side_effect=True` routes it through the agent permission gate |
+| `host.add_agent(AgentSpec(...))` | a **specialized agent** in the roster (own system prompt, tool-group scope, per-agent `agent.<id>.*` settings and chat sessions) — addressable from the chat widget's picker and `agent.delegate`. Built-in ids (`main`, `coder`, `dba`, `researcher`) cannot be shadowed. See [agent chat](../modules/agent-chat.mdx#specialized-agents--delegation) |
 | `host.add_connector(Connector(...))` | an external account the user can connect from the home page, whose credential the node holds server-side. See [connectors](../modules/connectors.mdx) |
 | `host.add_ws_channel(name, handler)` | an `async (conn, message)` handler for a new channel on the shared `/ws` socket |
 | `host.add_dash_facade(name, factory)` | an object bound to `dash.<name>` in every REPL session (also shows in `dash.help()`) |

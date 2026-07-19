@@ -53,6 +53,13 @@ class PluginHost:
         order; a name clash with a core tool is the plugin author's responsibility."""
         self._registry.agent_tools[tool.name] = tool
 
+    def add_agent(self, spec: AgentSpec) -> None:
+        """Register a specialized agent (own system prompt, tool-group scope, and
+        per-agent `agent.<id>.*` settings). It appears in the roster next to the
+        built-ins and is addressable from the chat widget and `agent.delegate`.
+        Built-in agent ids (main, coder, dba, researcher) cannot be overridden."""
+        self._registry.agents[spec.id] = spec
+
     def add_connector(self, connector: Connector) -> None:
         """Expose an external account the user can connect from the home page, and
         whose credential the node holds server-side.

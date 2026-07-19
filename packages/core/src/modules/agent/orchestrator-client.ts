@@ -17,7 +17,14 @@ export interface AgentCallbacks {
   onReasoning?: (delta: string) => void;
   /** A human-readable note for each mutating tool the agent ran. */
   onAction?: (text: string) => void;
+  /** A delegated sub-agent's streamed answer delta (agent.delegate progress). */
+  onDelegateToken?: (agentId: string, delta: string) => void;
   onError?: (message: string) => void;
+}
+
+export interface AskOptions {
+  /** Roster agent driving the turn; omitted = the main orchestrator. */
+  agentId?: string;
 }
 
 /** A prior conversation turn replayed to the backend so a turn has context. */
@@ -110,8 +117,14 @@ function describe(name: string, args: Record<string, unknown>): string | null {
 }
 
 /** Run one agent turn over the WS `agent` channel; resolves when the turn ends.
- * `history` replays prior user/assistant turns so the conversation is multi-turn. */
-export function askAgent(prompt: string, cb: AgentCallbacks, history?: AgentTurn[]): Promise<void> {
+ * `history` replays prior user/assistant turns so the conversation is multi-turn.
+ * `opts.agentId` selects the roster agent (omitted = the main orchestrator). */
+export function askAgent(
+  prompt: string,
+  cb: AgentCallbacks,
+  history?: AgentTurn[],
+  opts?: AskOptions,
+): Promise<void> {
   return new Promise<void>((resolve) => {
     const turnId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const unsub = subscribeChannel('agent', (msg) => {
@@ -132,6 +145,9 @@ export function askAgent(prompt: string, cb: AgentCallbacks, history?: AgentTurn
           case 'reasoning':
             cb.onReasoning?.(String(data.delta ?? ''));
             break;
+          case 'delegate_token':
+            cb.onDelegateToken?.(String(data.agentId ?? ''), String(data.delta ?? ''));
+            break;
           case 'answer':
             cb.onAnswer?.(String(data.text ?? ''));
             break;
@@ -150,6 +166,12 @@ export function askAgent(prompt: string, cb: AgentCallbacks, history?: AgentTurn
     // Attach the focused editor buffer (if any) so the backend can give the model
     // the open code up front — it can then alter it without a discovery round-trip.
     const context = readActiveAgentContext();
-    sendChannel('agent', 'ask', { turnId, prompt, history: history ?? [], context });
+    sendChannel('agent', 'ask', {
+      turnId,
+      prompt,
+      history: history ?? [],
+      context,
+      ...(opts?.agentId && opts.agentId !== 'main' ? { agentId: opts.agentId } : {}),
+    });
   });
 }

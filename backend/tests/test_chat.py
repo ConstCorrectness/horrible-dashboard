@@ -29,6 +29,7 @@ def test_create_sets_first_active(client: TestClient) -> None:
     assert state["sessions"][0] == {
         "id": session["id"],
         "title": "Layout help",
+        "agent_id": "main",
         "updated": session["updated"],
     }
 

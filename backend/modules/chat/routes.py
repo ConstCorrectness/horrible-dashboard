@@ -55,19 +55,38 @@ def _find(state: ChatSessionsState, sid: str) -> ChatSession | None:
     return next((s for s in state.sessions if s.id == sid), None)
 
 
-def _list(state: ChatSessionsState) -> ChatSessionsList:
+def _active_for(state: ChatSessionsState, agent: str) -> str | None:
+    """The active session id for one agent. `main` keeps the legacy `active`
+    pointer (pre-roster files have only that); other agents use the per-agent map."""
+    if agent == "main":
+        return state.active_by_agent.get("main") or state.active
+    return state.active_by_agent.get(agent)
+
+
+def _set_active(state: ChatSessionsState, session: ChatSession) -> None:
+    state.active_by_agent[session.agent_id] = session.id
+    if session.agent_id == "main":
+        state.active = session.id
+
+
+def _list(state: ChatSessionsState, agent: str | None = None) -> ChatSessionsList:
+    sessions = [s for s in state.sessions if agent is None or s.agent_id == agent]
     return ChatSessionsList(
-        active=state.active,
+        active=_active_for(state, agent) if agent is not None else state.active,
         sessions=[
-            ChatSessionMeta(id=s.id, title=s.title, updated=s.updated)
-            for s in state.sessions
+            ChatSessionMeta(
+                id=s.id, title=s.title, agent_id=s.agent_id, updated=s.updated
+            )
+            for s in sessions
         ],
     )
 
 
 @router.get("/sessions", response_model=ChatSessionsList)
-def list_sessions() -> ChatSessionsList:
-    return _list(_read())
+def list_sessions(agent: str | None = None) -> ChatSessionsList:
+    """All sessions, or one agent's with `?agent=<id>` (then `active` is that
+    agent's active session)."""
+    return _list(_read(), agent)
 
 
 @router.post("/sessions", response_model=ChatSession)
@@ -77,12 +96,13 @@ def create_session(body: CreateSession) -> ChatSession:
     session = ChatSession(
         id=uuid.uuid4().hex[:8],
         title=body.title or "New chat",
+        agent_id=body.agent_id,
         messages=[],
         created=now,
         updated=now,
     )
     state.sessions.append(session)
-    state.active = session.id
+    _set_active(state, session)
     _write(state)
     return session
 
@@ -90,11 +110,12 @@ def create_session(body: CreateSession) -> ChatSession:
 @router.put("/sessions/active", response_model=ChatSessionsList)
 def set_active(body: ActiveRequest) -> ChatSessionsList:
     state = _read()
-    if _find(state, body.id) is None:
+    session = _find(state, body.id)
+    if session is None:
         raise HTTPException(status_code=404, detail=f"Unknown session '{body.id}'")
-    state.active = body.id
+    _set_active(state, session)
     _write(state)
-    return _list(state)
+    return _list(state, session.agent_id)
 
 
 @router.get("/sessions/{sid}", response_model=ChatSession)
@@ -122,13 +143,15 @@ def upsert_session(sid: SessionId, body: UpsertSession) -> ChatSession:
         session = ChatSession(
             id=sid,
             title=body.title or "New chat",
+            agent_id=body.agent_id or "main",
             messages=body.messages or [],
             created=now,
             updated=now,
         )
         state.sessions.append(session)
-    if state.active is None:
+    if state.active is None and session.agent_id == "main":
         state.active = session.id
+    state.active_by_agent.setdefault(session.agent_id, session.id)
     _write(state)
     return session
 
@@ -136,8 +159,20 @@ def upsert_session(sid: SessionId, body: UpsertSession) -> ChatSession:
 @router.delete("/sessions/{sid}", response_model=ChatSessionsList)
 def delete_session(sid: SessionId) -> ChatSessionsList:
     state = _read()
+    deleted = _find(state, sid)
     state.sessions = [s for s in state.sessions if s.id != sid]
     if state.active == sid:
-        state.active = state.sessions[0].id if state.sessions else None
+        state.active = next(
+            (s.id for s in state.sessions if s.agent_id == "main"), None
+        )
+    for agent, active_id in list(state.active_by_agent.items()):
+        if active_id == sid:
+            replacement = next(
+                (s.id for s in state.sessions if s.agent_id == agent), None
+            )
+            if replacement is None:
+                del state.active_by_agent[agent]
+            else:
+                state.active_by_agent[agent] = replacement
     _write(state)
-    return _list(state)
+    return _list(state, deleted.agent_id if deleted else None)
