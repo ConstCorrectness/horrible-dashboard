@@ -59,13 +59,30 @@
 }
 
 .games-lib-sidebar {
-  width: 170px;
+  width: 212px;
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   background: var(--bg-raised, #1d2026);
   flex-shrink: 0;
   transition: width 0.15s ease;
+}
+
+/* The scrolling column of game cards. Uniform gap, vertical scroll. */
+.games-lib-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.5rem;
+}
+
+.games-lib-cards {
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
 }
 
 .games-lib-sidebar-title {
@@ -110,7 +127,8 @@
 
 /* Below this, the sidebar collapses to an icon-only rail so a narrow dock still
    leaves usable room for the actual content (play controls, server browser)
-   instead of squeezing everything into a sliver. */
+   instead of squeezing everything into a sliver. The rich cards shrink to square
+   icon tiles rather than disappearing. */
 @container games-lobby-root (max-width: 340px) {
   .games-lib-sidebar {
     width: 60px;
@@ -119,19 +137,23 @@
   .games-lib-sidebar-title-text,
   .games-lib-section-label,
   .games-lib-import-label,
-  .games-lib-tile-name {
+  .games-lib-card-body {
     display: none;
   }
 
-  .games-lib-tile {
-    justify-content: center;
-    padding: 0.45rem;
-    border-left-width: 0;
-    border-radius: 8px;
+  .games-lib-card {
+    aspect-ratio: 1 / 1;
+    min-height: 0;
   }
 
-  .games-lib-tile.selected {
-    box-shadow: inset 0 0 0 2px var(--tile-accent, var(--accent, #6ea8fe));
+  .games-lib-card-glyph {
+    font-size: 2rem;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.85;
+    transform: none;
   }
 
   .games-lib-import-btn {
@@ -139,73 +161,133 @@
   }
 }
 
-.games-lib-tile {
+/* A rich game card: a distinct accent gradient (its "background image"), a large
+   faded glyph, a dark bottom scrim, and white title + tagline anchored to the
+   bottom. Modelled on the Brave new-tab shortcut cards in the design template. */
+.games-lib-card {
+  position: relative;
   width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 0.55rem;
+  min-height: 104px;
+  display: block;
+  overflow: hidden;
   text-align: left;
-  background: transparent;
-  border: none;
-  border-left: 3px solid transparent;
-  border-radius: 8px;
-  padding: 0.4rem 0.6rem 0.4rem 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--tile-accent, var(--accent, #6ea8fe)) 35%, transparent);
+  border-radius: 14px;
+  padding: 0;
   cursor: pointer;
-  color: var(--text-dim, #8a909c);
-  font-weight: 500;
+  color: #fff;
+  /* Rich tint per game, built from its identification accent. */
+  background:
+    radial-gradient(
+      circle at 78% 22%,
+      color-mix(in srgb, var(--tile-accent, var(--accent, #6ea8fe)) 60%, transparent),
+      transparent 62%
+    ),
+    linear-gradient(
+      158deg,
+      color-mix(in srgb, var(--tile-accent, var(--accent, #6ea8fe)) 42%, #14161b) 0%,
+      #14161b 92%
+    );
   transition:
-    background-color 0.15s ease,
-    border-color 0.15s ease,
-    transform 0.15s ease;
+    transform 0.15s ease,
+    box-shadow 0.15s ease,
+    border-color 0.15s ease;
 }
 
-.games-lib-tile:hover {
-  background: var(--bg-hover, #262a32);
-  transform: translateX(2px);
+.games-lib-card:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--tile-accent, var(--accent, #6ea8fe)) 70%, transparent);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
 }
 
-.games-lib-tile.selected {
-  background: color-mix(
-    in srgb,
-    var(--tile-accent, var(--accent, #6ea8fe)) 16%,
-    var(--bg-hover, #262a32)
-  );
-  border-left-color: var(--tile-accent, var(--accent, #6ea8fe));
-  color: var(--text, #d7dae0);
-  font-weight: 800;
+.games-lib-card.selected {
+  border-color: var(--tile-accent, var(--accent, #6ea8fe));
+  box-shadow:
+    0 0 0 1px var(--tile-accent, var(--accent, #6ea8fe)),
+    0 6px 20px color-mix(in srgb, var(--tile-accent, var(--accent, #6ea8fe)) 35%, transparent);
 }
 
-.games-lib-tile-icon {
-  font-size: 1.1rem;
+/* The oversized glyph reads as the card art. */
+.games-lib-card-glyph {
+  position: absolute;
+  top: -0.4rem;
+  right: 0.1rem;
+  font-size: 3.4rem;
   line-height: 1;
-  width: 1.7rem;
-  height: 1.7rem;
+  opacity: 0.28;
+  transform: rotate(-8deg);
+  pointer-events: none;
+  filter: saturate(1.1);
+}
+
+.games-lib-card:hover .games-lib-card-glyph {
+  transform: rotate(-4deg) scale(1.06);
+}
+
+/* Dark gradient overlay at the bottom for text legibility. */
+.games-lib-card-scrim {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(
+    to top,
+    rgba(0, 0, 0, 0.82) 0%,
+    rgba(0, 0, 0, 0.5) 42%,
+    rgba(0, 0, 0, 0) 100%
+  );
+  pointer-events: none;
+}
+
+/* White text anchored to the bottom of the card. */
+.games-lib-card-body {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.5rem 0.6rem 0.55rem;
+}
+
+.games-lib-card-name {
+  font-size: 0.9rem;
+  font-weight: 800;
+  line-height: 1.15;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+
+.games-lib-card-desc {
+  font-size: 0.68rem;
+  line-height: 1.25;
+  color: rgba(255, 255, 255, 0.82);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Selected check, top-left, in the game accent. */
+.games-lib-card-check {
+  position: absolute;
+  top: 0.4rem;
+  left: 0.45rem;
+  z-index: 1;
+  width: 1.15rem;
+  height: 1.15rem;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--tile-accent, var(--accent, #6ea8fe)) 18%, transparent);
-  flex-shrink: 0;
-  transition: transform 0.15s ease;
-}
-
-.games-lib-tile:hover .games-lib-tile-icon {
-  transform: scale(1.12) rotate(-4deg);
-}
-
-.games-lib-tile-name {
-  font-size: 0.8rem;
-  flex: 1;
-  overflow-wrap: break-word;
-}
-
-.games-lib-tile-dot {
-  width: 6px;
-  height: 6px;
   border-radius: 50%;
+  font-size: 0.7rem;
+  font-weight: 900;
+  color: #fff;
   background: var(--tile-accent, var(--accent, #6ea8fe));
-  box-shadow: 0 0 6px var(--tile-accent, var(--accent, #6ea8fe));
-  flex-shrink: 0;
+  box-shadow: 0 0 8px
+    color-mix(in srgb, var(--tile-accent, var(--accent, #6ea8fe)) 70%, transparent);
 }
 
 /* ---- lobby game cards ---- */

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 
 import { registry } from '../../../registry';
-import { gameAccent, gameIcon } from '../game-identity';
+import { gameAccent, gameIcon, gameTagline } from '../game-identity';
 import { useGames, gamesDisconnect, ensureConnected } from '../game-ws';
 import {
   fetchStatus,
@@ -262,18 +262,19 @@ export function LobbyPanel() {
           <span>🎮</span>
           <span className="games-lib-sidebar-title-text"> GAMES LIBRARY</span>
         </div>
-        <div style={{ flex: 1, overflowY: 'auto', padding: '0.5rem' }}>
+        <div className="games-lib-scroll">
           <div className="games-lib-section-label">Shipped Defaults</div>
-          <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+          <ul className="games-lib-cards">
             {games.map((g) => {
               const isSelected = selectedGame === g.id;
               const accent = gameAccent(g.id);
               return (
-                <li key={g.id} style={{ margin: '0.2rem 0' }}>
+                <li key={g.id}>
                   <button
                     type="button"
-                    className={`games-lib-tile${isSelected ? ' selected' : ''}`}
+                    className={`games-lib-card${isSelected ? ' selected' : ''}`}
                     style={{ '--tile-accent': accent } as CSSProperties}
+                    title={g.name}
                     onClick={() => {
                       const next = isSelected ? null : g.id;
                       setSelectedGame(next);
@@ -282,9 +283,21 @@ export function LobbyPanel() {
                       if (next) setActiveGame(next);
                     }}
                   >
-                    <span className="games-lib-tile-icon">{gameIcon(g.id)}</span>
-                    <span className="games-lib-tile-name">{g.name}</span>
-                    {isSelected && <span className="games-lib-tile-dot" />}
+                    {/* Large faded glyph reads as the card's "background image". */}
+                    <span className="games-lib-card-glyph" aria-hidden>
+                      {gameIcon(g.id)}
+                    </span>
+                    {/* Dark bottom scrim so white text stays readable over the tint. */}
+                    <span className="games-lib-card-scrim" aria-hidden />
+                    <span className="games-lib-card-body">
+                      <span className="games-lib-card-name">{g.name}</span>
+                      <span className="games-lib-card-desc">{gameTagline(g.id)}</span>
+                    </span>
+                    {isSelected && (
+                      <span className="games-lib-card-check" aria-hidden>
+                        ✓
+                      </span>
+                    )}
                   </button>
                 </li>
               );

@@ -193,10 +193,16 @@ touch it:
 **One voltage, plus identification.** `--accent` is the only colour for things you
 can click — buttons, focus rings, active states. The per-game colours in
 `game-identity.ts` (`GAME_ACCENT`) are *identification*, not decoration: muted and
-warm-biased, used only for small marks (a tile edge, an icon chip) so eleven games
-stay tellable apart in the shelf without out-shouting the buttons. That module is
-also the single home for `GAME_ICONS` — both maps used to be copy-pasted across four
-panels.
+warm-biased, so eleven games stay tellable apart in the shelf without out-shouting
+the buttons. They're used for small marks (a focus ring, an icon chip) and — the one
+deliberate exception — as the tint of each **game card in the Play section's library
+sidebar**, where the whole point is a rich, distinct-per-game card (`LobbyPanel`'s
+`.games-lib-card`, modelled on the design template's Brave-style shortcut cards): an
+accent gradient behind an oversized faded glyph, a dark bottom scrim, and white
+title + tagline. Because the accents are low-chroma the cards read as identification
+rather than eleven competing "press me" surfaces; the actual controls keep the single
+voltage. That module is also the single home for `GAME_ICONS` and the card taglines
+(`GAME_TAGLINES`) — the icon/accent maps used to be copy-pasted across four panels.
 
 Display type (`--games-display`) is sized in **container query units** against
 `.games-lobby-root`, not `vw`: this is a pane in a resizable dock, so viewport units

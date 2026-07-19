@@ -48,9 +48,33 @@ export const GAME_ACCENT: Record<string, string> = {
   vizdoom_duel: '#8f5f96',
 };
 
+/**
+ * A one-line tagline per game — the card subtitle in the library sidebar. Kept short
+ * (a phrase, not the paragraph-length blurbs in PlaySection's GAME_DESCRIPTIONS) so it
+ * sits on one or two lines under the title inside a card.
+ */
+export const GAME_TAGLINES: Record<string, string> = {
+  tictactoe: 'Classic 3-in-a-row search test',
+  connect_four: 'Drop four in a row — deeper trees',
+  holdem: "Limit hold'em under imperfect info",
+  rag_race: 'Retrieval-augmented Q&A sprint',
+  code_golf: 'Shortest Python that passes',
+  test_duel: 'Test-cover their code, defend yours',
+  bug_hunt: 'Find and patch bugs in a codebase',
+  arena: 'Real-time survival grid world',
+  fighter: '2D arcade street fighting',
+  vizdoom_toy: '3D Doom visual combat sim',
+  vizdoom_duel: 'Networked 1v1 Doom deathmatch',
+};
+
 /** The icon for a game id, falling back to the die for anything uncatalogued. */
 export function gameIcon(id: string): string {
   return GAME_ICONS[id] ?? '🎲';
+}
+
+/** The card tagline for a game id, with a neutral fallback for uncatalogued games. */
+export function gameTagline(id: string): string {
+  return GAME_TAGLINES[id] ?? 'Agent competition environment';
 }
 
 /** The identification accent for a game id, falling back to the module voltage. */
