@@ -55,6 +55,19 @@ async def _call(fn: Any, *args: Any) -> dict[str, Any]:
         return {"error": f"{type(exc).__name__}: {exc}"}
 
 
+def _configured(connector: Connector) -> bool:
+    """Whether the node has this connector's client credentials. A broken check must
+    not hide the tile, so it degrades to "not configured" — which surfaces the
+    Configure form rather than a dead end."""
+    if connector.configured is None:
+        return False
+    try:
+        return bool(connector.configured())
+    except Exception:  # noqa: BLE001 — a config probe must never take the row down
+        logger.exception("connector %s configured() failed", connector.id)
+        return False
+
+
 def _describe(connector: Connector) -> ConnectorModel:
     """Project one connector + its live status into a tile."""
     try:
@@ -69,6 +82,8 @@ def _describe(connector: Connector) -> ConnectorModel:
             blurb=connector.blurb,
             connected=False,
             error=f"{type(exc).__name__}: {exc}",
+            configurable=connector.configured is not None,
+            configured=_configured(connector),
         )
     return ConnectorModel(
         id=connector.id,
@@ -90,6 +105,8 @@ def _describe(connector: Connector) -> ConnectorModel:
         ],
         granted_scopes=list(status.scopes),
         error=status.error,
+        configurable=connector.configured is not None,
+        configured=_configured(connector),
     )
 
 

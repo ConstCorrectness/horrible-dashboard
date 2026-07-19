@@ -18,12 +18,41 @@ export interface FileEntry {
   mtime: number | null;
 }
 
+/**
+ * A path belonging to a **virtual root** (`gdrive:/…`) rather than the filesystem.
+ *
+ * Two or more characters before the colon, deliberately: `C:/Users/x` is a Windows
+ * path, not a URI, and a one-character scheme would classify every file on a Windows
+ * root as virtual. Mirrors `_SCHEME` in backend/modules/files/providers.py.
+ *
+ * Virtual roots are read-only, so this is also what gates rename/delete/save in the UI.
+ */
+const VIRTUAL_SCHEME = /^[a-z][a-z0-9+.-]+:\//;
+
+export function isVirtualPath(path: string): boolean {
+  return VIRTUAL_SCHEME.test(path);
+}
+
+/**
+ * The editor source URI for a tree row. A virtual path is already a URI (`gdrive:/…`)
+ * and the editor dispatches on its scheme; a filesystem path needs the
+ * `workspace-file:` prefix to become one.
+ */
+export function bufferUriFor(path: string): string {
+  return isVirtualPath(path) ? path : `workspace-file:${path}`;
+}
+
 export function listRoots(): Promise<RootInfo[]> {
   return apiGet<RootInfo[]>('/files/roots');
 }
 
-export function listDir(path: string): Promise<{ path: string; entries: FileEntry[] }> {
-  return apiGet(`/files/list?path=${encodeURIComponent(path)}`);
+/** List a directory. `fresh` bypasses a virtual root's cache (no effect locally). */
+export function listDir(
+  path: string,
+  fresh = false,
+): Promise<{ path: string; entries: FileEntry[] }> {
+  const q = fresh ? '&fresh=true' : '';
+  return apiGet(`/files/list?path=${encodeURIComponent(path)}${q}`);
 }
 
 export type GitStatusKind = 'modified' | 'added' | 'deleted' | 'untracked' | 'renamed' | 'conflict';

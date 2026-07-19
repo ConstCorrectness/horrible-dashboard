@@ -29,6 +29,9 @@ class FileContent(BaseModel):
     path: str
     content: str
     truncated: bool = False
+    # The display name, when the path isn't one. A virtual path carries an opaque id
+    # (`gdrive:/1a2b3c`), so the editor has no other way to title the buffer.
+    name: str | None = None
 
 
 class CreateRequest(BaseModel):

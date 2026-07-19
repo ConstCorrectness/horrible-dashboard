@@ -107,6 +107,27 @@ def _api_key_connector() -> Connector:
     )
 
 
+def _no_form_connector() -> Connector:
+    """A connector with no `submit` callback at all — submitting to it is a 400."""
+
+    async def begin(_options: dict[str, Any]) -> dict[str, Any]:
+        return {"step": "redirect", "authorize_url": "https://example.test/auth"}
+
+    async def disconnect() -> None:
+        store.clear("fakenoform")
+
+    return Connector(
+        id="fakenoform",
+        label="Fake No Form",
+        kind="oauth",
+        icon="key",
+        blurb="Takes no form input.",
+        status=lambda: ConnectorStatus(connected=False),
+        begin=begin,
+        disconnect=disconnect,
+    )
+
+
 def _custom_connector() -> Connector:
     """A `custom` connector: phone -> code -> connected, i.e. a form step that returns
     another form step. This is the check that `custom` needs no new concepts."""
@@ -242,8 +263,13 @@ def test_unknown_connector_is_404(client: TestClient):
     assert client.post("/api/connectors/nope/poll").status_code == 404
 
 
-def test_submit_on_a_connector_without_a_form_is_400(client: TestClient):
-    res = client.post("/api/connectors/github/submit", json={"values": {}})
+def test_submit_on_a_connector_without_a_form_is_400(
+    client: TestClient, fake_connectors
+):
+    # Deliberately a fake rather than a built-in: every built-in OAuth connector now
+    # takes a form (its client credentials), so none of them exercises this path.
+    fake_connectors(_no_form_connector())
+    res = client.post("/api/connectors/fakenoform/submit", json={"values": {}})
     assert res.status_code == 400
 
 
@@ -297,6 +323,8 @@ def test_api_key_round_trip(client: TestClient, fake_connectors):
         "label": "API key",
         "secret": True,
         "placeholder": "",
+        "value": "",
+        "help": "",
     }
 
     res = client.post(

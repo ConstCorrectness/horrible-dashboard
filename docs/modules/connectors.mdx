@@ -116,6 +116,38 @@ A **client id is public** by design, so it may be a setting or a shipped default
 to the browser (see [settings](settings.mdx)). Secrets come from the environment or
 the secrets store only.
 
+`backend/modules/connectors/config.py` owns this contract for every OAuth connector,
+so a provider never re-implements it:
+
+| | Client id | Client secret |
+| --- | --- | --- |
+| Resolution | `<PROVIDER>_CLIENT_ID` → `connectors.<id>.clientId` setting | `<PROVIDER>_CLIENT_SECRET` → `secrets.db` under `<id>_client_secret` |
+| Sent to the browser | yes (it's in every authorize URL) | **never** — not as a value, not as a form prefill |
+| Reported in `/api/connectors` | — | only as the boolean `configured` |
+
+### Configuring a client from the UI
+
+An unconfigured connector returns a **`form` step** rather than an `{error}`. An error
+string tells you what you'd have to go and do in a terminal; a form lets you do it
+where you are. Submitting it persists the credentials and then **chains straight into
+the OAuth step** — you fill in the fields and land on the consent screen, rather than
+having to press Connect a second time.
+
+- `configurable` / `configured` on `ConnectorModel` drive the tile: an unconfigured
+  connector offers **Set up**, a connected one also offers **Reconfigure** (rotate a
+  secret, point at a different project). Reconfigure is
+  `POST /connectors/<id>/connect` with `{"options": {"reconfigure": true}}` — no new
+  route; `begin` already receives options.
+- **The environment always wins.** A field pinned by an env var renders with a note
+  saying so and its submitted value is *discarded* rather than stored — persisting a
+  setting that is never read would be a lie the UI then displays back as if in effect.
+- A **blank secret means "leave it alone"**, not "clear it". The form can't prefill a
+  secret, so blank cannot be a deliberate erasure — and treating it as one would break
+  the connector every time you edited only the client id.
+
+Adding a connector to this: give it a `configured` callable (`Connector.configured`)
+and a `submit` that calls `config.apply_config`.
+
 ## GitHub
 
 **Device flow**, because GitHub OAuth Apps don't support PKCE — an
@@ -147,11 +179,36 @@ sequenceDiagram
 Scopes: `read:user` (identify the account) and `repo` (search code, read files, list
 issues — private repos included). GitHub has **no read-only `repo` scope** for OAuth
 Apps, so the grant also permits writes; the agent still routes writes through the
-permission gate. Configure with `GITHUB_CLIENT_ID` or the
-`connectors.github.clientId` setting.
+permission gate. Configure it **in the app** (the tile's Set up form), or with
+`GITHUB_CLIENT_ID` / the `connectors.github.clientId` setting. No client secret is
+asked for, because the device flow doesn't use one.
 
 GitHub OAuth App user tokens **don't expire by default**, so `ensure_fresh` is a
 no-op for this connector.
+
+### Repo-viewer routes
+
+`github_routes.py` backs the [GitHub viewer](github.mdx) pane. It lives beside the
+connector rather than in a `backend/modules/github/` of its own, mirroring
+`google_routes.py`: the token is reached through `github_tools._request`, and a separate
+module would have to import another module's private helpers.
+
+| Route (under `/api/connectors/github`) | Purpose |
+| --- | --- |
+| `GET /repos` | the connected user's repositories |
+| `GET /search/repos?q=` | repository search |
+| `GET /repos/{owner}/{repo}` | metadata, incl. `default_branch` |
+| `GET /repos/{owner}/{repo}/branches` | branch names |
+| `GET /repos/{owner}/{repo}/tree?ref=` | the whole tree in one request |
+| `GET /repos/{owner}/{repo}/contents?path=&ref=` | one directory (lazy fallback) |
+| `GET /repos/{owner}/{repo}/file?path=&ref=` | one file's text; backs the `github:` buffer scheme |
+| `GET /repos/{owner}/{repo}/readme?ref=` | the README, 404 when there isn't one |
+
+All of them cache (60 s for the repo list, 300 s for refs/trees/files, `?fresh=1` to
+bypass) because GitHub allows 5000 requests/hour and browsing is read-heavy and
+repetitive. Errors keep `github_tools`' error-as-value convention internally and become
+HTTP codes at the boundary: **409** for "not connected" (yours to fix), **502** for
+anything upstream.
 
 ## Google
 
@@ -165,27 +222,40 @@ Scope: `drive.readonly` only. The account is labelled from Drive's own `about.ge
 which reports the signed-in user under that same scope — so no extra `openid`/`email`
 scope is needed just to show who's connected.
 
-Configure with `GOOGLE_CLIENT_ID` + `GOOGLE_CLIENT_SECRET`, or the
-`connectors.google.clientId` setting plus a `google_client_secret` **secret** (never a
-setting — see above).
+Configure it **in the app** (the tile's Set up form), or with `GOOGLE_CLIENT_ID` +
+`GOOGLE_CLIENT_SECRET`, or the `connectors.google.clientId` setting plus a
+`google_client_secret` **secret** (never a setting — see above).
 
-:::warning v1 Google is bring-your-own-client
-You point this at **your own Google Cloud project**. That isn't a shortcut, it's the
-design:
+:::warning Publish your consent screen to "In Production"
+This is the single setting that decides whether you configure Google once or
+**re-authorize every week**.
 
-- `drive.readonly` is a Google **restricted** scope. A *published* app using it needs
-  Google verification **plus an annual third-party CASA security assessment**.
-- An app in **Testing** is capped at 100 hand-added test users, and — the sharper edge
-  — **its refresh tokens expire after 7 days**, so you'd reconnect weekly.
+An app whose consent screen is in **Testing** has all its refresh tokens expire after
+**7 days**. Publishing removes that — and you can publish **without verification**: you
+get an "unverified app" interstitial and a 100-user cap, neither of which matters for a
+personal node.
 
-With your own project you are your own sole test user, the data never leaves your
-machine, and CASA doesn't apply. A credential that comes back without a refresh token
-is reported as a *broken* connection rather than a working one, because it would
-otherwise stop working an hour later with no explanation.
+Verification plus the annual third-party **CASA** assessment only become necessary to
+ship `drive.readonly` (a **restricted** scope) publicly to strangers — which is exactly
+why v1 is bring-your-own-client. With your own project the data never leaves your
+machine and CASA doesn't apply.
 :::
+
+A credential that comes back without a refresh token is reported as a *broken*
+connection rather than a working one, because it would otherwise stop working an hour
+later with no explanation.
 
 `google` tool group: `driveSearch`, `driveRead`, and `syncDrive` (side-effecting — it
 writes into a library, so it goes through the permission gate).
+
+### Drive as a browsable root
+
+Beyond the sync, Drive **mounts** into the ordinary file tree: connecting Google makes
+a "Google Drive" root appear in the `files.tree` pane, folders expand lazily, and files
+open as read-only editor buffers. `backend/modules/connectors/providers/drive_fs.py`
+registers a `gdrive:` provider with the files module's virtual-root seam — see
+[file explorer → Virtual roots](file-explorer.mdx#virtual-roots) for the mechanism, and
+note the path is a **file id**, not a name path, because Drive is an id graph.
 
 ### Drive → library sync
 

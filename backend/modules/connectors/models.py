@@ -44,6 +44,11 @@ class ConnectorModel(BaseModel):
     # Set when a connection exists but is unusable (revoked token, unreadable
     # credential). Distinct from `connected=False`, which means "never connected".
     error: str | None = None
+    # Whether this connector takes client credentials the user can supply in the UI,
+    # and whether this node already has them. Booleans only — the credential itself
+    # never crosses this boundary.
+    configurable: bool = False
+    configured: bool = False
 
 
 class ConnectorListModel(BaseModel):
@@ -58,6 +63,11 @@ class FieldModel(BaseModel):
     # Renders masked and is never echoed back.
     secret: bool = False
     placeholder: str = ""
+    # Prefill for the input. Only ever set for public values (a client id); a `secret`
+    # field's value stays empty even when one is stored, so the browser never sees it.
+    value: str = ""
+    # One line of guidance rendered under the input (e.g. "set by GOOGLE_CLIENT_ID").
+    help: str = ""
 
 
 class StepModel(BaseModel):

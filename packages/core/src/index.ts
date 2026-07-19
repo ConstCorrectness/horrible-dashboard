@@ -162,6 +162,7 @@ export { flowModule } from './modules/flow';
 export { gamesModule } from './modules/games';
 export { codeModule, SymbolSearchModal } from './modules/code';
 export { gitModule } from './modules/git';
+export { githubModule } from './modules/github';
 export {
   editorModule,
   getActiveBufferSource,

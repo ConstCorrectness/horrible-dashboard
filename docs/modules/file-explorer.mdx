@@ -75,6 +75,49 @@ channel, and the tree re-lists the affected directories on them (see
 [Live watch](#live-file-watch-ws-channel) below). Clients still re-list after their
 own mutations as a belt-and-braces fallback.
 
+## Virtual roots
+
+A **provider** claims a URI scheme and answers the read half of the files API for paths
+under it, so a non-filesystem source can browse like a directory. Google Drive is the
+first: connecting Google makes a "Google Drive" root appear in the tree, Colab-style,
+and its files open as read-only editor buffers. The tree and the editor learn nothing
+about Drive — only about the scheme.
+
+`backend/modules/files/providers.py` is the registry; it contains **no** provider
+implementations, so providers register from their own package
+(`connectors/providers/drive_fs.py`) and the dependency runs connectors → files, never
+the reverse.
+
+**The traversal boundary is untouched.** `_resolve` is not modified and not reused;
+each route detects a scheme and dispatches *before* calling it. That ordering is
+load-bearing — `_resolve` anchors relative paths to a root, so letting `gdrive:/abc`
+reach it would produce `<root>/gdrive:/abc` and a 403 that describes the wrong problem.
+
+Two rules that are easy to get wrong, and are pinned by tests:
+
+- **The scheme needs two or more characters** (`^[a-z][a-z0-9+.-]+:/`). `C:/Users/x`
+  is a Windows path, not a URI; a one-character scheme would route every file on a
+  Windows root into a provider. `packages/core/src/modules/files/api.ts` mirrors the
+  regex for the same reason.
+- **A virtual root never enters `_roots()`.** That list feeds the traversal check and
+  the filesystem watcher, neither of which can mean anything for a remote id graph.
+  Virtual roots are appended to the `/roots` *response* only — which is also why
+  `watcher.py` needs no guard.
+
+Providers are read-only in v1, so the write routes reject them rather than failing
+oddly further down:
+
+| Route | Virtual path |
+| --- | --- |
+| `/roots`, `/list`, `/read` | dispatched to the provider |
+| `/create`, `/write`, `/rename`, `/delete` | **403** "this location is read-only" (`/rename` checks *both* ends) |
+| `/git-status` | `is_repo: false` — a clean answer, not an error, since the tree asks this of every root on each refresh |
+
+`GET /files/list` takes `fresh=1` to bypass a provider's cache; the tree's Refresh
+button passes it, watch-driven reloads don't. The UI gates the mutating affordances on
+the same `isVirtualPath` check: no F2, no Delete, and a context menu reduced to Open and
+Copy Path.
+
 ## Agent integration
 
 **Status: implemented (B4).** Declared on the `files.tree` panel, so they reach the

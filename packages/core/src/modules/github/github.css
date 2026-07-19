@@ -1,0 +1,280 @@
+/* GitHub repo viewer. Shares the shell's tokens (--bg-raised, --border, --text-dim,
+   --accent) so it themes with everything else; only layout lives here. */
+
+.gh-viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* --- header ------------------------------------------------------------- */
+
+.gh-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.82rem;
+}
+
+.gh-header-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gh-back,
+.gh-open-external {
+  padding: 0.1rem 0.45rem;
+  line-height: 1.4;
+}
+
+.gh-open-external {
+  margin-left: auto;
+  color: var(--text-dim);
+  text-decoration: none;
+}
+
+.gh-ref {
+  padding: 0.1rem 0.35rem;
+  font-size: 0.78rem;
+  max-width: 14rem;
+}
+
+.gh-lazy-note {
+  padding: 0.3rem 0.6rem;
+  margin: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+/* --- body: tree beside content ------------------------------------------ */
+
+.gh-body {
+  display: grid;
+  grid-template-columns: minmax(180px, 280px) 1fr;
+  flex: 1;
+  min-height: 0;
+}
+
+.gh-sidebar {
+  border-right: 1px solid var(--border);
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.gh-content {
+  min-height: 0;
+  overflow: auto;
+  padding: 0.75rem 1rem;
+}
+
+/* Narrow panes stack instead of squeezing the tree to nothing. */
+@media (max-width: 620px) {
+  .gh-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: 40% 1fr;
+  }
+
+  .gh-sidebar {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+/* --- tree --------------------------------------------------------------- */
+
+.gh-tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.gh-tree-inner {
+  position: relative;
+  width: 100%;
+}
+
+.gh-tree-row {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding-right: 0.4rem;
+  background: none;
+  border: none;
+  border-radius: 0;
+  color: var(--text);
+  font-size: 0.78rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.gh-tree-row:hover {
+  background: var(--bg-raised);
+}
+
+.gh-tree-row.active {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.gh-tree-caret {
+  width: 0.7rem;
+  flex: none;
+  color: var(--text-dim);
+}
+
+.gh-tree-icon {
+  flex: none;
+  font-size: 0.7rem;
+}
+
+.gh-tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gh-tree-empty,
+.gh-readme-empty {
+  padding: 0.6rem;
+}
+
+/* --- picker ------------------------------------------------------------- */
+
+.gh-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.75rem;
+  min-height: 0;
+  overflow: auto;
+}
+
+.gh-picker-search {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.gh-picker-search input {
+  flex: 1;
+}
+
+.gh-repo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.gh-repo-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  text-align: left;
+  background: none;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.gh-repo-item:hover {
+  background: var(--bg-raised);
+  border-color: var(--border);
+}
+
+.gh-repo-name {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.gh-badge {
+  padding: 0 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-dim);
+  font-size: 0.62rem;
+  font-weight: 400;
+  text-transform: uppercase;
+}
+
+.gh-repo-desc,
+.gh-repo-meta {
+  color: var(--text-dim);
+  font-size: 0.72rem;
+}
+
+.gh-repo-meta {
+  display: flex;
+  gap: 0.6rem;
+}
+
+/* --- README ------------------------------------------------------------- */
+
+.gh-readme {
+  font-size: 0.85rem;
+  line-height: 1.6;
+  max-width: 46rem;
+}
+
+.gh-readme h1,
+.gh-readme h2,
+.gh-readme h3 {
+  margin: 1.2em 0 0.5em;
+  line-height: 1.3;
+}
+
+.gh-readme h1:first-child {
+  margin-top: 0;
+}
+
+.gh-readme pre {
+  padding: 0.6rem 0.75rem;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow-x: auto;
+}
+
+.gh-readme code {
+  font-size: 0.85em;
+}
+
+.gh-readme :not(pre) > code {
+  padding: 0.05em 0.3em;
+  background: var(--bg-raised);
+  border-radius: 4px;
+}
+
+.gh-readme blockquote {
+  margin: 0.8em 0;
+  padding-left: 0.8em;
+  border-left: 3px solid var(--border);
+  color: var(--text-dim);
+}
+
+.gh-readme table {
+  border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
+}
+
+.gh-readme td,
+.gh-readme th {
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--border);
+}

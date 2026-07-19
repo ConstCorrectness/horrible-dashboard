@@ -45,7 +45,8 @@ keymap is exposed through the shell keybinding service so bindings stay rebindab
   instead of indenting.
 - **Services for other modules:** `editor.openBuffer(source, { language? })` is the
   public way any module shows editable text. Sources are URIs (`note:`,
-  `workspace-file:`, `osfile:` on desktop) so the buffer layer doesn't care where
+  `workspace-file:`, `gdrive:`, `github:`, `osfile:` on desktop) so the buffer layer
+  doesn't care where
   content lives; an optional `language` param highlights extensionless sources (notes).
   For richer cross-module use, the editor also registers an **`editor` service** on the
   registry (`registry.getService('editor')`, from `service.ts`) — `openBufferFromContent`
@@ -69,6 +70,27 @@ the current note (`{message, current}`) so the client reconciles. Workspace-file
 read/write is the [file explorer](file-explorer.mdx)'s `GET /files/read` /
 `PUT /files/write` (`workspace-file:` buffers), so the editor's buffer layer is
 URI-agnostic.
+
+### Read-only sources
+
+Some sources can be read but not written back. `loadSource` sets `readOnly` on the
+result and `BufferView` reconfigures a CodeMirror `Compartment` to
+`EditorState.readOnly`, replacing the Save button with a **Read-only** badge — so the
+absence of Save reads as a property of the source rather than a missing control.
+`saveSource` also throws for them, as a backstop against a caller going around the
+editor.
+
+Enforcing it in the editor rather than at each call site is the point: a read-only
+buffer can never go dirty, so the close guard, the dirty marker, and the autosave path
+all no-op without needing to know about any particular provider.
+
+| Scheme | Backed by | Notes |
+| --- | --- | --- |
+| `gdrive:/<fileId>` | `GET /files/read` via the Drive [virtual root](file-explorer.mdx#virtual-roots) | Docs exported to text, PDFs extracted; the title arrives with the content, since the path is an id |
+| `github:<owner>/<repo>@<ref>/<path>` | `GET /connectors/github/…/file` | opened from the [GitHub viewer](github.mdx) |
+
+Both inherit tabs, splits, find, and CodeMirror syntax highlighting, which is why
+neither the Drive mount nor the GitHub viewer ships a file viewer of its own.
 
 ### Unsaved-changes guard on close
 
