@@ -12,11 +12,10 @@ and holds onto the token — that's the whole point of the integration.
 
 from __future__ import annotations
 
-import os
 import time
 from typing import Any
 
-from backend.modules.connectors import oauth, store
+from backend.modules.connectors import config, oauth, store
 from backend.modules.connectors.guides import guide_loader
 from backend.modules.connectors.store import Credential
 from backend.sdk.types import (
@@ -55,31 +54,50 @@ SCOPES = [
 _SCOPE_PARAM = "read:user repo"
 
 
+ID_ENV = "GITHUB_CLIENT_ID"
+
+
 def client_id() -> str:
     """`GITHUB_CLIENT_ID`, else the `connectors.github.clientId` setting.
 
     A client id is public by design, so a shipped default is safe; the setting is the
     bring-your-own-app escape hatch.
     """
-    from backend.modules.settings.routes import get_value
+    return config.client_id(CONNECTOR_ID, ID_ENV)
 
-    return str(
-        os.environ.get("GITHUB_CLIENT_ID", "")
-        or get_value("connectors.github.clientId", "")
+
+def _configured() -> bool:
+    # No secret: the device flow needs only the client id.
+    return config.is_configured(CONNECTOR_ID, id_env=ID_ENV)
+
+
+def _configure_step() -> dict[str, Any]:
+    return config.configure_step(
+        CONNECTOR_ID,
+        id_env=ID_ENV,
+        id_help=(
+            "From an OAuth App at github.com/settings/developers, with Device Flow "
+            "enabled. No client secret needed — the device flow doesn't use one."
+        ),
     )
 
 
-async def _begin(_options: dict[str, Any]) -> dict[str, Any]:
+async def _submit(values: dict[str, str]) -> dict[str, Any]:
+    """Persist the client id, then chain straight into the device flow."""
+    if error := config.apply_config(CONNECTOR_ID, values, id_env=ID_ENV):
+        return {"error": error}
+    return await _begin({})
+
+
+async def _begin(options: dict[str, Any]) -> dict[str, Any]:
     import httpx
 
+    if options.get("reconfigure"):
+        return _configure_step()
     cid = client_id()
     if not cid:
-        return {
-            "error": (
-                "GitHub isn't configured on this node — set GITHUB_CLIENT_ID or the "
-                "connectors.github.clientId setting to an OAuth app's client id."
-            )
-        }
+        # A form, not an error string: the user can fix this here rather than in a shell.
+        return _configure_step()
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             res = await client.post(
@@ -209,8 +227,10 @@ def build() -> Connector:
         blurb="Search code and repositories, read files, and manage issues on GitHub.",
         status=_status,
         begin=_begin,
+        submit=_submit,
         poll=lambda: oauth.poll_flow(CONNECTOR_ID),
         disconnect=_disconnect,
         scopes=SCOPES,
         guide=guide_loader(CONNECTOR_ID),
+        configured=_configured,
     )

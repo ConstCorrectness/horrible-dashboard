@@ -10,7 +10,7 @@ import { registry, type ModuleManifest } from '../../registry';
 import { getActiveBufferSource, openBuffer } from '../editor';
 import { openTerminal } from '../terminal';
 import { filesAgentTools } from './agentTools';
-import { createEntry, deleteEntry, joinPath, listRoots, parentDir } from './api';
+import { createEntry, deleteEntry, isVirtualPath, joinPath, listRoots, parentDir } from './api';
 import { FileTree } from './FileTree';
 import {
   getActivePath,
@@ -29,9 +29,13 @@ const FILE_URI = 'workspace-file:';
  * file's parent, or the first workspace root. */
 async function targetDir(): Promise<string | null> {
   const sel = getSelection();
-  if (sel) return sel.kind === 'dir' ? sel.path : parentDir(sel.path);
+  // A selection inside a read-only virtual root (Drive) can't host a new file, so fall
+  // through to a real root rather than issuing a create the backend will 403.
+  if (sel && !isVirtualPath(sel.path)) {
+    return sel.kind === 'dir' ? sel.path : parentDir(sel.path);
+  }
   const roots = await listRoots();
-  return roots[0]?.path ?? null;
+  return roots.find((r) => !isVirtualPath(r.path))?.path ?? null;
 }
 
 async function newFile(): Promise<void> {

@@ -1,0 +1,116 @@
+---
+sidebar_position: 19
+sidebar_label: GitHub viewer
+---
+
+# Module: GitHub viewer
+
+A pane for **browsing repositories** — yours and anyone's — without leaving the app or
+cloning anything: pick a repo, walk its tree, read its files and README, switch
+branches.
+
+This module is the *human* half of the GitHub integration. Authentication, credential
+custody, and the `github.*` agent tools belong to the
+[connectors module](connectors.mdx#github); the viewer only reads through the routes it
+exposes. Connect GitHub from the home page first — an unconnected node's viewer returns
+`409` with a message saying so.
+
+**Status:** implemented. Frontend `packages/core/src/modules/github/`; backend routes in
+`backend/modules/connectors/providers/github_routes.py`.
+
+## Contributions to the layout shell
+
+- **Panels** — `github.repo` ("GitHub", 🐙, `role: 'document'`). Deliberately **not a
+  singleton**: browsing two repositories side by side is the obvious thing to want, and
+  each pane holds its own repo, ref, and expansion state.
+- **Commands** — `github.openViewer` ("GitHub: Open repository viewer").
+- **Keybindings / settings** — none.
+
+## Layout: in-pane, not a docked region
+
+The tree is a plain CSS grid column inside the pane, not a `RegionViewDecl`.
+
+The comparison worth making is `flow.editor`, which *does* put its library in a region —
+but `flow.library` is globally scoped and pane-independent (the list of all flows). The
+GitHub tree is the opposite: it's bound to *this* pane's repo and ref. A registered
+region view is a separate instance with its own lifecycle, so keeping it in step with
+the pane's selection would need a cross-pane channel to carry state that never wanted to
+leave the pane in the first place.
+
+## Files open as editor buffers
+
+Clicking a file opens a `github:<owner>/<repo>@<ref>/<path>` buffer rather than
+rendering it in a viewer here. The editor resolves that scheme itself
+(see [editor → read-only sources](editor.mdx#read-only-sources)), so a repo file
+inherits tabs, splits, find, and CodeMirror syntax highlighting, and arrives read-only
+with no Save button. A bespoke viewer would have reimplemented all of it and inherited
+none of it.
+
+That read-only machinery is shared with the [Drive mount](file-explorer.mdx#virtual-roots) —
+one implementation, two providers.
+
+## One tree fetch, not one per folder
+
+`GET /repos/{o}/{r}/git/trees/{ref}?recursive=1` returns **every path in the repo in a
+single request**. Walking `contents/` per expanded folder would cost a round-trip on
+every click and eat into GitHub's 5000 requests/hour on a repo the user is only reading.
+Fetching once means expanding a folder is a client-side re-filter — instant.
+
+`tree.ts` turns that flat list into rows:
+
+- entries are grouped by parent directory, sorted **dirs first, then alphabetically**;
+- **missing intermediate directories are synthesized**, because a response can name
+  `a/b/c.py` without ever naming `a/b` — without this, such a file would be unreachable;
+- `visibleRows(index, expanded)` flattens to render rows with a `depth`, matching the
+  shape [file explorer](file-explorer.mdx)'s store produces so both feed the same kind of
+  virtualized list.
+
+**The fallback.** GitHub sets `truncated: true` for repos past roughly 100k entries or
+7 MB. The viewer then switches to lazy mode and fetches one directory at a time through
+`/contents`, with a note in the header saying so. Both routes ship together, so the
+fallback exists from day one rather than being discovered by the first person to open
+Chromium.
+
+## README rendering
+
+Reuses the notebook's dependency-free Markdown renderer
+(`packages/core/src/notebook/markdown.ts`) rather than adding a dependency. Its
+safety properties matter more here than where it was written: a README is **remote,
+untrusted input**, not the user's own note. It HTML-escapes before parsing and rewrites
+any link that isn't `http(s):`/`mailto:`/`#`/`/` to `#`.
+
+It has no image support, so images degrade to links — which also means **no remote image
+loads from a repository the user merely browsed**. A repo without a README shows an
+empty state, not an error; plenty of repositories don't have one.
+
+## Backend surface
+
+See the [route table](connectors.mdx#repo-viewer-routes) in the connectors doc. In
+short: repos, search, metadata, branches, tree, contents, file, readme — all cached
+(60 s for the repo list, 300 s for the rest, `?fresh=1` bypasses) and all returning
+**409** when GitHub isn't connected, **502** for an upstream failure.
+
+## Browser vs desktop
+
+| | Browser | Desktop |
+| --- | --- | --- |
+| Viewer pane | yes | yes |
+| Auth | device flow in a new tab | identical — the device flow needs no redirect URI, so nothing forks |
+| Repo files | read-only buffers | read-only buffers |
+
+Nothing here branches on platform: the backend holds the token and does the fetching in
+both layouts.
+
+## Testing
+
+`backend/tests/test_github_routes.py` covers the projection, the cache (including that
+**errors are not cached** — a transient outage shouldn't stick for a whole TTL), the
+truncated-tree signal, and the 409/502 split.
+`packages/core/src/modules/github/__tests__/tree.test.ts` covers the flat-to-nested
+build, the synthesized directories, and the sort order.
+
+## Deferred
+
+Issues, pull requests, commit history, diffs, and code search across repos. The agent
+already reaches issues and code search through `github.listIssues` / `github.searchCode`;
+this pane is the file-browsing surface only.

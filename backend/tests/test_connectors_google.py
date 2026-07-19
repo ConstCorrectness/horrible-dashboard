@@ -47,14 +47,20 @@ def _mock_httpx(monkeypatch, handler):
 # --- configuration ----------------------------------------------------------
 
 
-def test_begin_without_config_explains_byo(monkeypatch):
+def test_begin_without_config_asks_for_credentials(monkeypatch):
+    """An unconfigured node gets a *form*, not an error string: this connector can't
+    work without the user's own Cloud project, and the form is where they say so."""
     monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
     monkeypatch.delenv("GOOGLE_CLIENT_SECRET", raising=False)
     res = asyncio.run(google.build().begin({}))
-    assert "isn't configured" in res["error"]
-    # The message has to tell the user what to actually do — this connector cannot
-    # work without their own Google Cloud project.
-    assert "Desktop app" in res["error"]
+
+    assert res["step"] == "form"
+    assert [f["name"] for f in res["fields"]] == ["client_id", "client_secret"]
+    # The guidance has to say what to actually go and make, and warn about the
+    # 7-day refresh-token expiry that a Testing-status consent screen imposes.
+    help_text = " ".join(f["help"] for f in res["fields"])
+    assert "Desktop app" in help_text
+    assert "In Production" in help_text
 
 
 def test_client_secret_is_never_read_from_settings(monkeypatch):

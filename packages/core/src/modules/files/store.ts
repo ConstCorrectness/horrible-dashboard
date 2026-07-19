@@ -9,6 +9,7 @@
 import { subscribeChannel } from '../../ws';
 import {
   gitStatus,
+  isVirtualPath,
   listDir,
   listRoots,
   parentDir,
@@ -67,11 +68,11 @@ export function kindFor(path: string): 'file' | 'dir' {
   return kindOf.get(path) ?? 'file';
 }
 
-async function loadDir(path: string): Promise<void> {
+async function loadDir(path: string, fresh = false): Promise<void> {
   loading.add(path);
   emit();
   try {
-    const r = await listDir(path);
+    const r = await listDir(path, fresh);
     children.set(path, r.entries);
     for (const e of r.entries) kindOf.set(e.path, e.kind);
   } catch {
@@ -112,14 +113,18 @@ export function toggleExpanded(path: string): void {
 /** Re-list the roots and every expanded directory in place (after a watch event
  * or an explicit refresh). Keeps existing rows visible until the new listing
  * arrives, so there's no collapse/flash. */
-export function reloadExpanded(): void {
+export function reloadExpanded(fresh = false): void {
   void loadRoots();
-  for (const dir of expanded) void loadDir(dir);
+  for (const dir of expanded) void loadDir(dir, fresh);
 }
 
-/** Back-compat name used by the CRUD commands + agent tools after a mutation. */
+/** Back-compat name used by the CRUD commands + agent tools after a mutation.
+ *
+ * Passes `fresh` so an explicit refresh bypasses a virtual root's cache — the whole
+ * point of pressing Refresh is to see a change the cache would hide. Watch-driven
+ * reloads deliberately don't, since those only ever concern local files. */
 export function refreshTree(): void {
-  reloadExpanded();
+  reloadExpanded(true);
 }
 
 /** Retained for compatibility; the view now re-renders off `filesVersion`. */
@@ -266,27 +271,31 @@ export async function reloadGit(): Promise<void> {
   const dirty = new Set<string>();
   let branch: string | null = null;
   await Promise.all(
-    roots.map(async (r) => {
-      try {
-        const s = await gitStatus(r.path);
-        if (!s.is_repo) return;
-        if (branch === null) branch = s.branch;
-        for (const e of s.entries) {
-          next.set(e.path, e.status);
-          // Mark every ancestor directory up to (and including) the root.
-          let cur = e.path;
-          for (let i = 0; i < 64; i++) {
-            const p = parentDir(cur);
-            if (p === cur) break;
-            dirty.add(p);
-            cur = p;
-            if (p === r.path) break;
+    // A virtual root (Drive) is never a git repo, and asking costs a round-trip on
+    // every refresh. The backend answers cleanly, but there's no reason to ask.
+    roots
+      .filter((r) => !isVirtualPath(r.path))
+      .map(async (r) => {
+        try {
+          const s = await gitStatus(r.path);
+          if (!s.is_repo) return;
+          if (branch === null) branch = s.branch;
+          for (const e of s.entries) {
+            next.set(e.path, e.status);
+            // Mark every ancestor directory up to (and including) the root.
+            let cur = e.path;
+            for (let i = 0; i < 64; i++) {
+              const p = parentDir(cur);
+              if (p === cur) break;
+              dirty.add(p);
+              cur = p;
+              if (p === r.path) break;
+            }
           }
+        } catch {
+          /* not a repo / git missing — leave it undecorated */
         }
-      } catch {
-        /* not a repo / git missing — leave it undecorated */
-      }
-    }),
+      }),
   );
   gitByPath.clear();
   for (const [k, v] of next) gitByPath.set(k, v);

@@ -80,17 +80,27 @@ export function ConnectorPopover({
     if (!controller.signal.aborted) settle(result);
   };
 
-  const start = async () => {
+  /** Show a form step, seeding the inputs with whatever the backend prefilled. */
+  const showForm = (next: ConnectStep) => {
+    setValues(Object.fromEntries(next.fields.map((f) => [f.name, f.value ?? ''])));
+    setStep(next);
+  };
+
+  /** Advance to whatever the backend handed back, whichever kind of step it is. */
+  const advance = async (next: ConnectStep) => {
+    if (settle(next)) return;
+    if (next.step === 'form') {
+      showForm(next);
+      return;
+    }
+    await runOauth(next);
+  };
+
+  const start = async (options: Record<string, unknown> = {}) => {
     setBusy(true);
     setError(null);
     try {
-      const first = await beginConnect(connector.id);
-      if (settle(first)) return;
-      if (first.step === 'form') {
-        setStep(first);
-        return;
-      }
-      await runOauth(first);
+      await advance(await beginConnect(connector.id, options));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -103,14 +113,10 @@ export function ConnectorPopover({
     setBusy(true);
     setError(null);
     try {
-      const next = await submitConnect(connector.id, values);
-      if (settle(next)) return;
-      // A form step may hand back another form — that's how a phone → SMS-code flow
-      // works without any connector-specific code out here.
-      if (next.step === 'form') {
-        setValues({});
-        setStep(next);
-      }
+      // A form step may hand back another form (phone → SMS code), or an oauth step —
+      // which is how supplying client credentials chains straight into consent without
+      // making the user press Connect a second time.
+      await advance(await submitConnect(connector.id, values));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -146,24 +152,10 @@ export function ConnectorPopover({
 
       {error && <p className="widget-error">{error}</p>}
 
-      {connector.connected ? (
-        <>
-          <p className="home-hint">{connector.blurb}</p>
-          {connector.scopes.length > 0 && (
-            <ul className="integration-scopes">
-              {connector.scopes.map((s) => (
-                <li key={s.id}>
-                  <strong>{s.label}</strong>
-                  {s.description && <span className="home-hint"> {s.description}</span>}
-                </li>
-              ))}
-            </ul>
-          )}
-          <button onClick={() => void disconnect()} disabled={busy}>
-            {busy ? '…' : 'Disconnect'}
-          </button>
-        </>
-      ) : step?.step === 'device' ? (
+      {/* An in-flight step wins over the connected view: that's what lets an already
+          connected account be reconfigured (rotate a secret, switch Cloud project)
+          without disconnecting first. */}
+      {step?.step === 'device' ? (
         <>
           <p className="home-hint">Enter this code at {step.verification_uri}:</p>
           <code className="integration-code">{step.user_code}</code>
@@ -186,6 +178,7 @@ export function ConnectorPopover({
                 autoComplete="off"
                 onChange={(e) => setValues((v) => ({ ...v, [f.name]: e.target.value }))}
               />
+              {f.help && <span className="integration-field-help">{f.help}</span>}
             </label>
           ))}
           <button className="primary" type="submit" disabled={busy}>
@@ -196,11 +189,39 @@ export function ConnectorPopover({
         <p className="home-hint">
           Finish signing in on the tab that opened — this panel updates when you&apos;re done.
         </p>
+      ) : connector.connected ? (
+        <>
+          <p className="home-hint">{connector.blurb}</p>
+          {connector.scopes.length > 0 && (
+            <ul className="integration-scopes">
+              {connector.scopes.map((s) => (
+                <li key={s.id}>
+                  <strong>{s.label}</strong>
+                  {s.description && <span className="home-hint"> {s.description}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="integration-actions">
+            <button onClick={() => void disconnect()} disabled={busy}>
+              {busy ? '…' : 'Disconnect'}
+            </button>
+            {connector.configurable && (
+              <button onClick={() => void start({ reconfigure: true })} disabled={busy}>
+                Reconfigure
+              </button>
+            )}
+          </div>
+        </>
       ) : (
         <>
           <p className="home-hint">{connector.blurb}</p>
           <button className="primary" onClick={() => void start()} disabled={busy}>
-            {busy ? 'Starting…' : `Connect ${connector.label}`}
+            {busy
+              ? 'Starting…'
+              : connector.configurable && !connector.configured
+                ? `Set up ${connector.label}`
+                : `Connect ${connector.label}`}
           </button>
         </>
       )}

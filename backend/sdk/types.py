@@ -167,6 +167,11 @@ class Connector:
     guide: str | Callable[[], str] | None = None
     submit: ConnectorSubmit | None = None
     poll: ConnectorPoll | None = None
+    # Whether this node has the client credentials the connector needs to start a flow
+    # (an OAuth client id, sometimes a secret). Set it when the connector lets the user
+    # supply those in the UI; leaving it None means "nothing to configure". It returns a
+    # bool, never the credential — the whole point is that the secret stays server-side.
+    configured: Callable[[], bool] | None = None
 
     def resolve_guide(self) -> str | None:
         """The guide text, calling the factory if one was given."""

@@ -13,6 +13,12 @@ deployments. See docs/modules/file-explorer.md.
 
 This is the HTTP surface (list/read + create/write/rename/delete). Live watch
 events ship separately in `watcher.py` (the `files` `/ws` channel).
+
+**Virtual roots.** A path carrying a registered URI scheme (`gdrive:/…`) belongs to a
+provider, not the filesystem, and is dispatched in `providers.py` *before* `_resolve`
+ever sees it — `_resolve` anchors relative paths to a root, so letting a URI reach it
+would produce `<root>/gdrive:/abc` and a nonsense 403. The traversal boundary itself is
+unchanged and still governs every real path.
 """
 
 from __future__ import annotations
@@ -20,8 +26,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import anyio.to_thread
 from fastapi import APIRouter, HTTPException
 
+from backend.modules.files import providers
 from backend.modules.files.git import git_status
 from backend.modules.files.models import (
     CreateRequest,
@@ -152,15 +160,29 @@ def _entry(path: Path) -> FileEntry:
     )
 
 
+def _reject_if_virtual(*paths: str) -> None:
+    """Guard the write routes. Providers are read-only, and saying so with a 403 beats
+    letting the request fall through to `_resolve` and fail as "outside workspace
+    roots", which would misdescribe why."""
+    for path in paths:
+        if providers.is_virtual(path):
+            raise HTTPException(status_code=403, detail="this location is read-only")
+
+
 @router.get("/roots", response_model=list[RootInfo])
-def list_roots() -> list[RootInfo]:
-    return [RootInfo(name=root.name or str(root), path=str(root)) for root in _roots()]
+async def list_roots() -> list[RootInfo]:
+    local = [RootInfo(name=root.name or str(root), path=str(root)) for root in _roots()]
+    return local + await providers.all_roots()
 
 
 @router.get("/git-status", response_model=GitStatus)
 def git_status_route(path: str) -> GitStatus:
     """Working-tree status for a workspace root (path must be one of the roots).
     Returns `is_repo=False` if it isn't inside a git repository."""
+    # A virtual root can't be a git repo. Answer that plainly rather than erroring —
+    # the tree asks this of every root and would otherwise log a failure per refresh.
+    if providers.is_virtual(path):
+        return GitStatus(is_repo=False, root=path, branch=None, entries=[])
     target = _resolve(path)
     if not target.is_dir():
         raise HTTPException(status_code=400, detail="not a directory")
@@ -168,7 +190,10 @@ def git_status_route(path: str) -> GitStatus:
 
 
 @router.get("/list", response_model=DirListing)
-def list_dir(path: str) -> DirListing:
+async def list_dir(path: str, fresh: bool = False) -> DirListing:
+    """List a directory. `fresh=1` bypasses a provider's cache (no effect locally)."""
+    if provider := providers.provider_for(path):
+        return await provider.list(path, fresh=fresh)
     target = _resolve(path)
     if not target.is_dir():
         raise HTTPException(status_code=400, detail="not a directory")
@@ -182,11 +207,14 @@ def list_dir(path: str) -> DirListing:
 
 
 @router.get("/read", response_model=FileContent)
-def read_file(path: str) -> FileContent:
+async def read_file(path: str) -> FileContent:
+    if provider := providers.provider_for(path):
+        return await provider.read(path)
     target = _resolve(path)
     if not target.is_file():
         raise HTTPException(status_code=400, detail="not a file")
-    data = target.read_bytes()
+    # Up to 2 MB off the event loop — this route is async now that providers await.
+    data = await anyio.to_thread.run_sync(target.read_bytes)
     truncated = len(data) > MAX_READ_BYTES
     if truncated:
         data = data[:MAX_READ_BYTES]
@@ -199,6 +227,7 @@ def read_file(path: str) -> FileContent:
 
 @router.post("/create", response_model=FileEntry)
 def create(body: CreateRequest) -> FileEntry:
+    _reject_if_virtual(body.path)
     target = _resolve(body.path, must_exist=False)
     if target.exists():
         raise HTTPException(status_code=409, detail="already exists")
@@ -215,6 +244,7 @@ def create(body: CreateRequest) -> FileEntry:
 
 @router.put("/write", response_model=FileEntry)
 def write_file(body: WriteRequest) -> FileEntry:
+    _reject_if_virtual(body.path)
     target = _resolve(body.path, must_exist=False)
     if target.exists() and target.is_dir():
         raise HTTPException(status_code=400, detail="path is a directory")
@@ -228,6 +258,8 @@ def write_file(body: WriteRequest) -> FileEntry:
 
 @router.post("/rename", response_model=FileEntry)
 def rename(body: RenameRequest) -> FileEntry:
+    # Both ends: renaming *into* a read-only mount is as impossible as out of one.
+    _reject_if_virtual(body.path, body.new_path)
     source = _resolve(body.path)
     dest = _resolve(body.new_path, must_exist=False)
     if dest.exists():
@@ -242,6 +274,7 @@ def rename(body: RenameRequest) -> FileEntry:
 
 @router.post("/delete", response_model=OpResult)
 def delete(body: DeleteRequest) -> OpResult:
+    _reject_if_virtual(body.path)
     target = _resolve(body.path)
     try:
         if target.is_dir():
