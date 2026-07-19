@@ -10,6 +10,7 @@ from __future__ import annotations
 # google_sync is imported for the side effect of its `register_handler` call — the
 # library module does the same thing with its queue_handlers.
 from backend.modules.connectors.providers import (  # noqa: F401
+    drive_fs,
     github,
     github_tools,
     google,
@@ -20,8 +21,10 @@ from backend.sdk.registry import registry
 
 
 def register_connectors() -> None:
-    """Register every built-in connector and its agent tools."""
+    """Register every built-in connector, its agent tools, and any file provider it
+    mounts (Drive browses as a virtual root — see `drive_fs`)."""
     for connector in (github.build(), google.build()):
         registry.connectors[connector.id] = connector
     github_tools.register_agent_tools()
     google_tools.register_agent_tools()
+    drive_fs.register()

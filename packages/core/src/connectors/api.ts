@@ -37,6 +37,10 @@ export interface Connector {
   granted_scopes: string[];
   /** Set when a connection exists but is unusable — distinct from `!connected`. */
   error: string | null;
+  /** Takes client credentials the user can supply in the UI. */
+  configurable: boolean;
+  /** This node already has those credentials. Booleans only — never the secret. */
+  configured: boolean;
 }
 
 export interface ConnectorField {
@@ -44,6 +48,10 @@ export interface ConnectorField {
   label: string;
   secret: boolean;
   placeholder: string;
+  /** Prefill. Always empty for a `secret` field, even when one is stored. */
+  value: string;
+  /** One line of guidance rendered under the input. */
+  help: string;
 }
 
 /** One step of a connect flow. A single shape covers all three connector kinds. */

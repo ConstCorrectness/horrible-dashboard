@@ -127,6 +127,17 @@ body {
   padding: 0.15rem 0.6rem;
 }
 
+/* Stands where Save would be, so the absence of a Save button reads as a property of
+   the source rather than a missing control. */
+.editor-readonly {
+  padding: 0.15rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+}
+
 .editor-proposal {
   display: flex;
   align-items: center;
@@ -1987,6 +1998,21 @@ body {
   gap: 0.25rem;
   color: var(--text-dim);
   font-size: 0.8rem;
+}
+
+/* Guidance under a credential input — where to get the value, or that an env var
+   has pinned it and editing here would do nothing. */
+.integration-field-help {
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  opacity: 0.85;
+}
+
+.integration-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
 }
 
 .vllm-controls {

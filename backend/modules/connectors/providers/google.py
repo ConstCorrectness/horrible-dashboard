@@ -5,12 +5,18 @@ permits a small allowlist of scopes (`email`/`profile`/`openid` + YouTube) —
 `drive.readonly` is not among them. That's exactly why the game server's Google
 sign-in only ever asks for `email profile`. Anything useful needs the redirect flow.
 
-**Bring your own client.** An unverified Google app is capped at 100 hand-added test
-users, and — the sharper edge — refresh tokens issued by an app in *Testing* expire
-after **7 days**. Publishing an app that uses `drive.readonly` (a *restricted* scope)
-requires Google verification plus an annual third-party CASA security assessment. So
-v1 is explicitly BYO: you point this at your own Google Cloud project, where you are
-your own sole test user and the data never leaves your machine.
+**Bring your own client.** v1 is explicitly BYO: you point this at your own Google Cloud
+project, so the data never leaves your machine and you aren't sharing a quota with
+anyone. Supply the client id and secret in the app — see `config.py`; no env editing
+required, though `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` still win if set.
+
+**Publish the consent screen to "In Production".** This is the difference between
+configuring once and re-authorizing every week: an app left in *Testing* has all its
+refresh tokens expire after **7 days**. Publishing removes that, and you can publish
+*without* verification — you get an "unverified app" interstitial and a 100-user cap,
+neither of which matters for a personal node. Verification plus the annual third-party
+CASA assessment only become necessary to ship `drive.readonly` (a *restricted* scope)
+publicly to strangers.
 
 The client type should be **Desktop app**: Google treats that client secret as
 non-confidential and wildcards the loopback port, so the redirect URI registration
@@ -19,12 +25,11 @@ doesn't have to track our dev port.
 
 from __future__ import annotations
 
-import os
 import time
 from typing import Any
 from urllib.parse import urlencode
 
-from backend.modules.connectors import oauth, store
+from backend.modules.connectors import config, oauth, store
 from backend.modules.connectors.guides import guide_loader
 from backend.modules.connectors.store import Credential
 from backend.sdk.types import (
@@ -56,39 +61,47 @@ SCOPES = [
 ]
 
 
+ID_ENV = "GOOGLE_CLIENT_ID"
+SECRET_ENV = "GOOGLE_CLIENT_SECRET"
+
+
 def client_id() -> str:
     """Public by design, so a setting is fine."""
-    from backend.modules.settings.routes import get_value
-
-    return str(
-        os.environ.get("GOOGLE_CLIENT_ID", "")
-        or get_value("connectors.google.clientId", "")
-    )
+    return config.client_id(CONNECTOR_ID, ID_ENV)
 
 
 def client_secret() -> str:
     """`GOOGLE_CLIENT_SECRET`, else the encrypted secrets store — **never a setting**:
     `GET /api/settings` hands the whole bag to the browser."""
-    from backend.modules.database.secrets_store import get_secret_or_none
+    return config.client_secret(CONNECTOR_ID, SECRET_ENV)
 
-    return str(
-        os.environ.get("GOOGLE_CLIENT_SECRET", "")
-        or get_secret_or_none("google_client_secret")
-        or ""
+
+def _configured() -> bool:
+    return config.is_configured(CONNECTOR_ID, id_env=ID_ENV, secret_env=SECRET_ENV)
+
+
+def _configure_step() -> dict[str, Any]:
+    """The form that stands in for "not configured on this node"."""
+    return config.configure_step(
+        CONNECTOR_ID,
+        id_env=ID_ENV,
+        secret_env=SECRET_ENV,
+        id_help=(
+            "From a Google Cloud OAuth client of type Desktop app, with the Drive API "
+            "enabled. Publish the consent screen to In Production — an app left in "
+            "Testing expires its refresh tokens after 7 days."
+        ),
+        secret_help="Stored encrypted on this node and never sent to the browser.",
     )
 
 
 def _missing_config() -> dict[str, Any] | None:
-    if not client_id() or not client_secret():
-        return {
-            "error": (
-                "Google isn't configured on this node. Create a Google Cloud OAuth "
-                "client (type: Desktop app) with the Drive API enabled, then set "
-                "GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET (or the "
-                "connectors.google.clientId setting and a google_client_secret secret)."
-            )
-        }
-    return None
+    """A `form` step when the client credentials are missing, else None.
+
+    Deliberately a form and not an `{"error": …}`: an error string tells the user what
+    they'd have to go do in a terminal, whereas a form lets them do it here.
+    """
+    return None if _configured() else _configure_step()
 
 
 def _authorize_url(state: str, challenge: str) -> str:
@@ -214,12 +227,29 @@ async def _refresh(cred: Credential) -> Credential | dict[str, Any]:
     return _credential_from(data, account=cred.account)
 
 
-async def _begin(_options: dict[str, Any]) -> dict[str, Any]:
+async def _begin(options: dict[str, Any]) -> dict[str, Any]:
+    # `reconfigure` forces the credential form even when the node is already set up —
+    # that's how you rotate a client secret or point at a different Cloud project.
+    if options.get("reconfigure"):
+        return _configure_step()
     if missing := _missing_config():
         return missing
     return oauth.begin_redirect(
         CONNECTOR_ID, authorize_url=_authorize_url, exchange=_exchange
     )
+
+
+async def _submit(values: dict[str, str]) -> dict[str, Any]:
+    """Persist the client credentials, then chain straight into the OAuth step.
+
+    Chaining is what makes this feel like one flow: the user fills in the form and lands
+    on Google's consent screen, rather than having to press Connect a second time.
+    """
+    if error := config.apply_config(
+        CONNECTOR_ID, values, id_env=ID_ENV, secret_env=SECRET_ENV
+    ):
+        return {"error": error}
+    return await _begin({})
 
 
 def _status() -> ConnectorStatus:
@@ -268,8 +298,10 @@ def build() -> Connector:
         blurb="Search and read your Google Drive files.",
         status=_status,
         begin=_begin,
+        submit=_submit,
         poll=lambda: oauth.poll_flow(CONNECTOR_ID),
         disconnect=_disconnect,
         scopes=SCOPES,
         guide=guide_loader(CONNECTOR_ID),
+        configured=_configured,
     )

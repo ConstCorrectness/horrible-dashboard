@@ -124,6 +124,9 @@ export function BufferView() {
   const mergeRef = useRef(new Compartment());
   const autoRef = useRef(new Compartment());
   const lspRef = useRef(new Compartment());
+  // Read-only-ness arrives with the content (Drive files, GitHub blobs), so it's a
+  // compartment reconfigured on load rather than a mount-time extension.
+  const readOnlyRef = useRef(new Compartment());
   const revisionRef = useRef<number | undefined>(undefined);
   // The buffer content captured when a proposal opens, restored on Decline.
   const originalRef = useRef('');
@@ -131,6 +134,7 @@ export function BufferView() {
 
   const [title, setTitle] = useState(source ? '…' : 'Untitled');
   const [dirty, setDirty] = useState(false);
+  const [readOnly, setReadOnly] = useState(false);
   const [proposing, setProposing] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const autosuggestOn = useSetting<boolean>('editor.autosuggest') ?? false;
@@ -176,6 +180,7 @@ export function BufferView() {
           mergeRef.current.of([]),
           autoRef.current.of([]),
           lspRef.current.of([]),
+          readOnlyRef.current.of([]),
           EditorView.updateListener.of((u) => {
             if (u.docChanged && !isProgrammaticRef.current) {
               setDirty(true);
@@ -238,6 +243,7 @@ export function BufferView() {
         if (cancelled || !view) return;
         revisionRef.current = loaded.revision;
         setTitle(loaded.title);
+        setReadOnly(loaded.readOnly ?? false);
 
         let insertContent = loaded.content;
         let initialDirty = false;
@@ -268,6 +274,7 @@ export function BufferView() {
             // reconfigure tears down any prior session (didClose + stop) and the
             // new plugin sees the just-applied content for its didOpen.
             lspRef.current.reconfigure(lspFor(source, loaded.title, pythonPath, frameworkImports)),
+            readOnlyRef.current.reconfigure(EditorState.readOnly.of(loaded.readOnly ?? false)),
             ...(isProposing
               ? [mergeRef.current.reconfigure(unifiedMergeView({ original: originalRef.current }))]
               : []),
@@ -574,9 +581,15 @@ export function BufferView() {
           {dirty ? ' •' : ''}
         </span>
         <span className="editor-status">{status}</span>
-        <button className="editor-save" onClick={() => void save()}>
-          Save
-        </button>
+        {readOnly ? (
+          <span className="editor-readonly" title="This source can't be written back">
+            Read-only
+          </span>
+        ) : (
+          <button className="editor-save" onClick={() => void save()}>
+            Save
+          </button>
+        )}
       </div>
       {proposing && (
         <div className="editor-proposal">

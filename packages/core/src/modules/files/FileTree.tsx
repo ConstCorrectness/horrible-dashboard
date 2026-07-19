@@ -15,7 +15,7 @@ import { useAgentContext } from '../../agent-context';
 import { dialogs } from '../../dialogs';
 import { registry } from '../../registry';
 import { openBuffer } from '../editor';
-import { deleteEntry, joinPath, parentDir, renameEntry } from './api';
+import { bufferUriFor, deleteEntry, isVirtualPath, joinPath, parentDir, renameEntry } from './api';
 import { fileIcon } from './icons';
 import {
   cancelRename,
@@ -135,7 +135,7 @@ export function FileTree() {
 
   const openRow = (row: Row) => {
     if (row.kind === 'dir') toggleExpanded(row.path);
-    else openBuffer(`workspace-file:${row.path}`);
+    else openBuffer(bufferUriFor(row.path));
   };
 
   const onRowClick = (e: React.MouseEvent, row: Row) => {
@@ -244,12 +244,14 @@ export function FileTree() {
       case 'Enter':
         if (row) openRow(row);
         break;
+      // Virtual roots (Drive) are read-only — the mutating shortcuts do nothing there
+      // rather than firing a request the backend will 403.
       case 'F2':
-        if (row) startRename(row.path);
+        if (row && !isVirtualPath(row.path)) startRename(row.path);
         break;
       case 'Delete':
       case 'Backspace':
-        void deleteSelection();
+        if (!row || !isVirtualPath(row.path)) void deleteSelection();
         break;
       default:
         if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) typeaheadJump(e.key);
@@ -420,6 +422,7 @@ function FileContextMenu({
   onDelete: () => void;
 }) {
   const { x, y, row } = state;
+  const readOnly = isVirtualPath(row.path);
   const targetDir = row.kind === 'dir' ? row.path : parentDir(row.path);
 
   useEffect(() => {
@@ -451,20 +454,31 @@ function FileContextMenu({
   return createPortal(
     <div className="file-ctx-menu" style={style}>
       {row.kind === 'file' && (
-        <button onClick={run(() => openBuffer(`workspace-file:${row.path}`))}>Open</button>
+        <button onClick={run(() => openBuffer(bufferUriFor(row.path)))}>Open</button>
       )}
-      <button onClick={run(() => void registry.runCommand('files.newFile'))}>New File</button>
-      <button onClick={run(() => void registry.runCommand('files.newFolder'))}>New Folder</button>
-      <div className="file-ctx-sep" />
-      <button onClick={run(onRename)}>Rename</button>
-      <button className="danger" onClick={run(onDelete)}>
-        Delete
-      </button>
+      {/* A virtual root is read-only and has no local directory behind it, so
+          everything that writes or shells out is omitted rather than shown disabled —
+          there is no state in which they'd become available. */}
+      {!readOnly && (
+        <>
+          <button onClick={run(() => void registry.runCommand('files.newFile'))}>New File</button>
+          <button onClick={run(() => void registry.runCommand('files.newFolder'))}>
+            New Folder
+          </button>
+          <div className="file-ctx-sep" />
+          <button onClick={run(onRename)}>Rename</button>
+          <button className="danger" onClick={run(onDelete)}>
+            Delete
+          </button>
+        </>
+      )}
       <div className="file-ctx-sep" />
       <button onClick={run(() => void navigator.clipboard?.writeText(row.path))}>Copy Path</button>
-      <button onClick={run(() => void registry.runCommand('files.openTerminalHere'))}>
-        Open Terminal Here
-      </button>
+      {!readOnly && (
+        <button onClick={run(() => void registry.runCommand('files.openTerminalHere'))}>
+          Open Terminal Here
+        </button>
+      )}
       <span className="file-ctx-target" title={targetDir}>
         {basename(targetDir)}
       </span>

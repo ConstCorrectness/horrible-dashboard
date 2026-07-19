@@ -13,6 +13,7 @@ import {
   flowModule,
   gamesModule,
   gitModule,
+  githubModule,
   initAgentManifestSync,
   initAgentRelay,
   initApprovalListener,
@@ -78,6 +79,7 @@ async function boot(): Promise<void> {
   registry.register(filesModule);
   registry.register(codeModule);
   registry.register(gitModule);
+  registry.register(githubModule);
   registry.register(terminalModule);
   registry.register(replModule);
   registry.register(databaseModule);

@@ -50,6 +50,7 @@ from backend.modules.flow import router as flow_router
 from backend.modules.games import drop_games_conn, handle_games_message
 from backend.modules.games import register_agent_tools as register_games_tools
 from backend.modules.games import router as games_router
+from backend.modules.connectors import github_router as github_connector_router
 from backend.modules.connectors import google_router as google_connector_router
 from backend.modules.connectors import register_connectors
 from backend.modules.connectors import router as connectors_router
@@ -154,6 +155,7 @@ app.include_router(database_router, prefix="/api")
 app.include_router(library_router, prefix="/api")
 app.include_router(connectors_router, prefix="/api")
 app.include_router(google_connector_router, prefix="/api")
+app.include_router(github_connector_router, prefix="/api")
 app.include_router(browser_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(files_router, prefix="/api")
