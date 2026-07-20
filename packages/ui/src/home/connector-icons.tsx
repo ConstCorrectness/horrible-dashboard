@@ -36,6 +36,18 @@ const ICONS: Record<string, JSX.Element> = {
       />
     </svg>
   ),
+  huggingface: (
+    // A simplified rendition of the Hugging Face mark — the smiling face in HF yellow,
+    // without the two hands, which turn to mud at tile size. Brand-coloured rather than
+    // currentColor for the same reason as Google's: the mark *is* the colour.
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="9.5" fill="#FFD21E" />
+      <ellipse cx="8.7" cy="10.1" rx="1.15" ry="1.3" fill="#3A3B45" />
+      <ellipse cx="15.3" cy="10.1" rx="1.15" ry="1.3" fill="#3A3B45" />
+      <path d="M7.6 13.6c0 2.4 1.97 4.1 4.4 4.1s4.4-1.7 4.4-4.1z" fill="#3A3B45" />
+      <path d="M9.3 14.6h5.4a2.7 2.7 0 0 1-5.4 0z" fill="#FF9D0B" />
+    </svg>
+  ),
   key: (
     <svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
       <path d="M10.5 1a4.5 4.5 0 0 0-4.24 6L1 12.26V15h2.74l.9-.9V12.5h1.6l1.26-1.26A4.5 4.5 0 1 0 10.5 1zm1.25 3.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0z" />

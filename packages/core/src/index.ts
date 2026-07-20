@@ -183,6 +183,7 @@ export {
   startClubhouseAuth,
   type ClubhouseStatus,
 } from './modules/clubhouse';
+export { interpretabilityModule } from './modules/interpretability';
 export { observabilityModule } from './modules/observability';
 export { marketplaceModule } from './modules/marketplace';
 export { settingsModule } from './modules/settings';

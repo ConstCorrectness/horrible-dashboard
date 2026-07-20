@@ -3874,3 +3874,482 @@ kbd {
   font-size: 10px;
   font-weight: 500;
 }
+
+/* ── Interpretability: the agent's context window, made visible ───────────────
+   Colours are keyed to block kind so the composition bar, the per-block chips and
+   the legend all agree at a glance — the same hue always means the same part of
+   the prompt. */
+
+.interp-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  font-size: 12px;
+  padding: 0.5rem;
+  gap: 0.5rem;
+}
+
+.interp-empty {
+  padding: 1rem;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.interp-dim {
+  color: var(--text-dim);
+}
+
+.interp-turnbar {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.interp-turnbar select {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-raised);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.2rem 0.35rem;
+  font-size: 11px;
+}
+
+.interp-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.5rem;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.interp-header-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.interp-model {
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.interp-params {
+  font-size: 11px;
+}
+
+/* Budget bar: how full the window is. Turns red past 100% rather than clamping
+   quietly — an overflowing prompt is the single most consequential thing here. */
+.interp-budget {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.interp-budget-bar {
+  flex: 1;
+  height: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.interp-budget-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
+.interp-budget-over {
+  background: var(--danger, #f08c8c);
+}
+
+.interp-budget-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.interp-rounds {
+  display: flex;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+}
+
+.interp-round-tab {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: 4px;
+  padding: 0.15rem 0.5rem;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.interp-round-active {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.interp-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  min-height: 0;
+}
+
+.interp-composition {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.interp-bar {
+  display: flex;
+  height: 14px;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.interp-seg {
+  height: 100%;
+}
+
+.interp-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.interp-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.interp-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.interp-subhead {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 0.25rem;
+}
+
+.interp-block {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-raised);
+}
+
+.interp-block-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--text);
+  padding: 0.3rem 0.45rem;
+  cursor: pointer;
+  font-size: 11px;
+  text-align: left;
+}
+
+.interp-block-head:hover {
+  background: var(--bg-hover, rgb(255 255 255 / 4%));
+}
+
+.interp-tokens {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+}
+
+.interp-caret {
+  color: var(--text-dim);
+}
+
+.interp-content {
+  margin: 0;
+  padding: 0.5rem;
+  border-top: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 22rem;
+  overflow: auto;
+}
+
+.interp-chip {
+  border-radius: 3px;
+  padding: 0.05rem 0.35rem;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.interp-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.interp-tool-group {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-raised);
+}
+
+.interp-tool-group-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.45rem;
+  font-size: 11px;
+}
+
+.interp-tool-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.15rem 0.45rem 0.15rem 1rem;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+}
+
+/* Silent tool-budget truncation is the failure this pane exists to expose, so it
+   gets a full-width warning rather than a subtle chip. */
+.interp-warn {
+  background: rgb(255 180 84 / 14%);
+  color: #ffb454;
+  border-radius: 4px;
+  padding: 0.35rem 0.5rem;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.interp-warn-chip {
+  background: rgb(255 180 84 / 18%);
+  color: #ffb454;
+  border-radius: 3px;
+  padding: 0.05rem 0.3rem;
+  font-size: 10px;
+  font-weight: 600;
+  margin-left: 0.3rem;
+}
+
+.interp-widget {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.5rem;
+  font-size: 11px;
+}
+
+.interp-widget-top {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* One hue per context kind. */
+.interp-kind-system { background: rgb(110 168 254 / 55%); color: #6ea8fe; }
+.interp-kind-guides { background: rgb(186 130 255 / 55%); color: #ba82ff; }
+.interp-kind-history { background: rgb(120 130 150 / 55%); color: #8b96aa; }
+.interp-kind-editor { background: rgb(46 213 115 / 55%); color: #2ed573; }
+.interp-kind-user { background: rgb(255 200 87 / 55%); color: #ffc857; }
+.interp-kind-assistant { background: rgb(94 214 214 / 55%); color: #5ed6d6; }
+.interp-kind-tool_result { background: rgb(255 140 100 / 55%); color: #ff8c64; }
+.interp-kind-nudge { background: rgb(240 140 140 / 55%); color: #f08c8c; }
+.interp-kind-tools { background: rgb(160 160 180 / 55%); color: #a0a0b4; }
+
+/* Chips carry the hue as text on a tinted ground; bar segments use it as fill. */
+.interp-chip,
+.interp-legend-item .interp-swatch {
+  background: currentcolor;
+}
+
+.interp-chip {
+  background: color-mix(in srgb, currentcolor 18%, transparent);
+}
+
+/* A same-family tokenizer: better than an estimate, not as good as a match. Its own
+   colour so it never reads as either of the two states it sits between. */
+.interp-approx-chip {
+  background: rgb(110 168 254 / 18%);
+  color: #6ea8fe;
+  border-radius: 3px;
+  padding: 0.05rem 0.3rem;
+  font-size: 10px;
+  font-weight: 600;
+  margin-left: 0.3rem;
+}
+
+/* ── Interpretability: multi-agent ────────────────────────────────────────────
+   The orchestrator can hand work to a scoped specialist (agent.delegate) or to
+   another user's node (agent.ask_peer). These style the identity/scope bar and
+   the deliberately-opaque peer node. */
+
+.interp-agentbar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: 11px;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid var(--border);
+}
+
+/* The turn selector renders the delegation tree, so it needs a monospace font for
+   the indent guides to line up across rows. */
+.interp-turnbar select {
+  font-family: var(--font-mono);
+}
+
+/* A peer note is informational, not a warning — it explains an absence rather than
+   flagging a problem, so it drops the amber. */
+.interp-peer-note {
+  background: rgb(186 130 255 / 12%);
+  color: var(--text-dim);
+}
+
+.interp-kind-agent { background: rgb(94 214 214 / 55%); color: #5ed6d6; }
+.interp-kind-peer { background: rgb(186 130 255 / 55%); color: #ba82ff; }
+
+/* ── Interpretability: model architecture diagram ─────────────────────────────
+   A 2D view of the loaded model. Colours reuse the context-block hues so the two
+   panes read as one system: attention/FFN/MoE each get a stable identity. */
+
+.md-root {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  font-size: 12px;
+  height: 100%;
+  overflow: auto;
+}
+
+.md-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.md-svg {
+  width: 100%;
+  max-width: 340px;
+  height: auto;
+  align-self: center;
+}
+
+/* Boxes ----------------------------------------------------------------- */
+.md-box {
+  stroke: var(--border-strong, var(--border));
+  stroke-width: 1;
+}
+
+.md-blockframe {
+  fill: rgb(255 255 255 / 3%);
+  stroke: var(--border-strong, var(--border));
+  stroke-width: 1;
+  stroke-dasharray: 3 2;
+}
+
+.md-io { fill: rgb(120 130 150 / 22%); }
+.md-norm { fill: rgb(255 255 255 / 6%); }
+.md-attn { fill: rgb(110 168 254 / 20%); }
+.md-ffn { fill: rgb(46 213 115 / 18%); }
+.md-moe { fill: rgb(186 130 255 / 20%); }
+
+/* Head grouping: query ticks over the KV head they share. */
+.md-qhead { fill: #6ea8fe; }
+.md-kvhead { fill: #ffc857; }
+
+/* Expert bank: routed experts stand out from the dormant ones. */
+.md-expert { fill: rgb(186 130 255 / 25%); }
+.md-expert-active { fill: #ba82ff; }
+
+/* Text ------------------------------------------------------------------ */
+.md-label,
+.md-sub,
+.md-micro,
+.md-residual,
+.md-blocktitle {
+  text-anchor: middle;
+  font-family: var(--font-mono);
+  fill: var(--text);
+}
+
+.md-label { font-size: 9px; font-weight: 600; }
+.md-sub { font-size: 7.5px; fill: var(--text-dim); }
+.md-micro { font-size: 6.5px; fill: var(--text-dim); }
+.md-residual { font-size: 7.5px; fill: var(--text-dim); }
+
+.md-blocktitle {
+  text-anchor: start;
+  font-size: 8px;
+  font-weight: 600;
+  fill: var(--text-dim);
+}
+
+.md-flow line {
+  stroke: var(--text-dim);
+  stroke-width: 1;
+}
+
+.md-flow polygon {
+  fill: var(--text-dim);
+}
+
+/* Facts ----------------------------------------------------------------- */
+.md-facts {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 0.1rem 0.6rem;
+  margin: 0;
+  font-size: 11px;
+  justify-content: center;
+}
+
+.md-facts dt {
+  color: var(--text-dim);
+}
+
+.md-facts dd {
+  margin: 0;
+  font-family: var(--font-mono);
+}
+
+/* A note explains a caveat (quantization, alternating attention) rather than
+   flagging a problem, so it drops the warning amber. */
+.md-note {
+  background: rgb(110 168 254 / 12%);
+  color: var(--text-dim);
+}
+
+/* Explains an inferred value in the diagram — quieter than a note, since it
+   qualifies one number rather than the whole model. */
+.md-caveat {
+  font-size: 10px;
+  line-height: 1.4;
+  text-align: center;
+}

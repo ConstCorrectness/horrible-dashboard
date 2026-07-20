@@ -55,6 +55,7 @@ from backend.modules.connectors import google_router as google_connector_router
 from backend.modules.connectors import register_connectors
 from backend.modules.connectors import router as connectors_router
 from backend.modules.library import push_library_events
+from backend.modules.interpretability import router as interpretability_router
 from backend.modules.library import router as library_router
 from backend.modules.lsp import LspManager
 from backend.modules.lsp import router as lsp_router
@@ -156,6 +157,7 @@ app.include_router(agent_router, prefix="/api")
 app.include_router(workspace_router, prefix="/api")
 app.include_router(database_router, prefix="/api")
 app.include_router(library_router, prefix="/api")
+app.include_router(interpretability_router, prefix="/api")
 app.include_router(connectors_router, prefix="/api")
 app.include_router(google_connector_router, prefix="/api")
 app.include_router(github_connector_router, prefix="/api")

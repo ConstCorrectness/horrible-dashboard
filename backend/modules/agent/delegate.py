@@ -97,6 +97,10 @@ async def run_delegate(
                 active_groups=active_groups,
                 spec=spec,
                 mode_override=roster.resolve_mode(spec),
+                # Links this sub-turn to the turn that delegated it, so the
+                # interpretability pane can show the handoff as a tree rather than
+                # as unrelated siblings.
+                parent_turn_id=parent_turn_id,
             ),
             timeout=DELEGATE_TIMEOUT_S,
         )

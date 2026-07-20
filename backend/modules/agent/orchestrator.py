@@ -789,17 +789,26 @@ def _preload_groups(
 
 
 def _select_tools(
-    conn: WsConnection, active_groups: set[str], spec: AgentSpec | None = None
+    conn: WsConnection,
+    active_groups: set[str],
+    spec: AgentSpec | None = None,
+    stats: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """The tool list presented this round: core (spec-gated) + every dynamic tool
     whose group is active — and, for a scoped agent, allowed. Capped at
-    TOOL_BUDGET as a backstop (core is always kept first)."""
+    TOOL_BUDGET as a backstop (core is always kept first).
+
+    `stats`, when given, is filled with the pre-cap count so a caller can tell that
+    truncation happened. The interpretability pane uses it to report dropped tools;
+    without it the cap is invisible to everything but the log."""
     allowed = set(spec.tool_groups) if spec and spec.tool_groups is not None else None
     selected = _core_tools(spec)
     for t in _all_dynamic_tools(conn):
         group = _group_of(t["function"]["name"])
         if group in active_groups and (allowed is None or group in allowed):
             selected.append(t)
+    if stats is not None:
+        stats["selected"] = len(selected)
     if len(selected) > TOOL_BUDGET:
         logger.warning(
             "tool list %d exceeds budget %d; truncating dynamic tools (active: %s)",
@@ -1065,6 +1074,11 @@ async def _run_backend_tool(conn: WsConnection, turn_id: str, call: Any) -> Any:
         if not peer_id or not prompt:
             return {"error": "agent.ask_peer needs peerId and prompt"}
         origin_chain = getattr(conn, "origin_chain", None)
+        # Record the handoff off-node so the interpretability tree has no silent
+        # gap. Opaque by nature: the peer assembles its context on its own machine.
+        await _capture_peer_ask(
+            conn, parent_turn_id=turn_id, peer_id=peer_id, prompt=prompt
+        )
         return await agent_bridge.ask_peer(peer_id, prompt, origin_chain=origin_chain)
     return {"error": f"unknown backend tool {call.name}"}
 
@@ -1134,6 +1148,50 @@ async def _dispatch_call(
     return await _call_frontend_tool(conn, turn_id, name, call.arguments)
 
 
+async def _capture_context(conn: WsConnection, **fields: Any) -> None:
+    """Hand one round's assembled context to the interpretability recorder.
+
+    Imported lazily because the recorder imports `_group_of` from this module to
+    label tools by group — a module-level import would close that cycle. Wrapped
+    besides: interpretability is an observer, and an observer that can break the
+    thing it observes is a bug, not a feature."""
+    try:
+        from backend.modules.interpretability import recorder
+
+        await recorder.capture_round(
+            conn, tool_budget=TOOL_BUDGET, tokenizer_repo=_tokenizer_repo(), **fields
+        )
+    except Exception:
+        logger.debug("interpretability capture skipped", exc_info=True)
+
+
+async def _capture_peer_ask(conn: WsConnection, **fields: Any) -> None:
+    """Record an `agent.ask_peer` handoff for the interpretability tree. Same lazy
+    import and same swallow-everything contract as `_capture_context`."""
+    try:
+        from backend.modules.interpretability import recorder
+
+        await recorder.capture_peer_ask(conn, **fields)
+    except Exception:
+        logger.debug("interpretability peer capture skipped", exc_info=True)
+
+
+def _tokenizer_repo() -> str:
+    """`interpretability.modelRepo` — the HF repo that describes the loaded model.
+
+    One setting drives both halves of the pane: `tokenizer.json` for exact token
+    counts and `config.json` for the architecture diagram. The older
+    `tokenizerRepo` key is still honoured so an existing override keeps working."""
+    from backend.modules.settings.routes import _read
+
+    values = _read()
+    for key in ("interpretability.modelRepo", "interpretability.tokenizerRepo"):
+        value = values.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return ""
+
+
 async def run_agent_loop(
     conn: WsConnection,
     turn_id: str,
@@ -1151,6 +1209,7 @@ async def run_agent_loop(
     active_groups: set[str] | None = None,
     spec: AgentSpec | None = None,
     mode_override: permissions.Mode | None = None,
+    parent_turn_id: str | None = None,
 ) -> str:
     """The shared tool-calling loop: stream the provider, relay each gated tool call
     to the frontend, and repeat until the model returns a final answer (no tool
@@ -1169,11 +1228,36 @@ async def run_agent_loop(
     `tools` list is used with direct dispatch — the path flow Agent nodes use."""
     progressive = active_groups is not None
     forced_retry_used = False
+    agent_id = spec.id if spec else "main"
     async with instrumented_client(timeout=120) as client:
-        for _ in range(MAX_ROUNDS):
+        for round_no in range(MAX_ROUNDS):
             # Under progressive disclosure, inject the groups loaded last round.
+            tool_stats: dict[str, Any] = {}
             if progressive:
-                tools = _select_tools(conn, active_groups, spec)
+                tools = _select_tools(conn, active_groups, spec, tool_stats)
+            # Snapshot the exact context this round before it goes out, for the
+            # interpretability pane. Read-only and self-swallowing — a failed
+            # capture must never cost the user their turn (see recorder.py).
+            await _capture_context(
+                conn,
+                turn_id=turn_id,
+                agent_id=agent_id,
+                model=model,
+                provider=str(getattr(info, "kind", "")),
+                messages=messages,
+                tools=tools,
+                round_no=round_no,
+                tools_selected=int(tool_stats.get("selected", len(tools))),
+                active_groups=active_groups,
+                context_size=context_size,
+                temperature=temperature,
+                top_p=top_p,
+                max_tokens=max_tokens,
+                parent_turn_id=parent_turn_id,
+                agent_name=spec.name if spec else "",
+                tool_groups=spec.tool_groups if spec else None,
+                permission_mode=mode_override.value if mode_override else None,
+            )
             result = await P.chat_stream(
                 client,
                 info,

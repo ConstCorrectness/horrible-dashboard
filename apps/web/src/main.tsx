@@ -29,6 +29,7 @@ import {
   marketplaceModule,
   networkModule,
   browserModule,
+  interpretabilityModule,
   observabilityModule,
   registry,
   replModule,
@@ -72,6 +73,7 @@ async function boot(): Promise<void> {
   registry.register(scratchModule);
   registry.register(browserModule);
   registry.register(clubhouseModule);
+  registry.register(interpretabilityModule);
   registry.register(observabilityModule);
   registry.register(marketplaceModule);
   registry.register(settingsModule);

@@ -16,6 +16,8 @@ from backend.modules.connectors.providers import (  # noqa: F401
     google,
     google_sync,
     google_tools,
+    huggingface,
+    huggingface_tools,
 )
 from backend.sdk.registry import registry
 
@@ -23,8 +25,9 @@ from backend.sdk.registry import registry
 def register_connectors() -> None:
     """Register every built-in connector, its agent tools, and any file provider it
     mounts (Drive browses as a virtual root — see `drive_fs`)."""
-    for connector in (github.build(), google.build()):
+    for connector in (github.build(), google.build(), huggingface.build()):
         registry.connectors[connector.id] = connector
     github_tools.register_agent_tools()
     google_tools.register_agent_tools()
+    huggingface_tools.register_agent_tools()
     drive_fs.register()

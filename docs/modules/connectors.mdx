@@ -293,6 +293,81 @@ was a known gap called out in the original's own comments: PDFs were skipped, th
 no pagination or sync state (only the 20 most recent files), the library was hardcoded,
 and it re-filed a duplicate source on every run.
 
+## Hugging Face
+
+**Device flow**, like GitHub — but for a different reason. Hugging Face supports
+**public OAuth apps**, created without a client secret, whose device endpoint
+authenticates on the client id alone. Same payoff: no secret to ship, no redirect URI to
+register, works headless and under Tauri unchanged.
+
+Create the app from **Settings → Connected Apps → Developer Applications → Create App**
+([`/settings/connected-applications`](https://huggingface.co/settings/connected-applications)),
+choosing **no client secret**, with the `profile`, `read-repos` and `inference-api`
+scopes enabled.
+
+:::note
+The Hub's docs deep-link to `/settings/applications/new`, but every HF settings page is
+auth-gated: logged out, it serves a login form rather than the app, so it reads as a
+broken link. Give the navigation path, not the URL — that's what the setup form's help
+text now does.
+:::
+
+Configure it in the app (the tile's Set up form), or with
+`HUGGINGFACE_CLIENT_ID` / the `connectors.huggingface.clientId` setting. An app missing
+one of the scopes fails at `POST /oauth/device` with `invalid_scope`; that message is
+surfaced verbatim, because the fix is in the user's app settings.
+
+Scopes are deliberately **all read-shaped**: `profile` (name the account), `read-repos`
+(read models and datasets, private ones included), `inference-api` (run inference as the
+user, billed to their account). The Hub also offers `write-repos` and `manage-repos` —
+this connector asks for neither, so a confused agent cannot delete a model.
+`test_scopes_are_read_only` is the guard on that.
+
+The one structural difference from GitHub: **these tokens expire.** GitHub OAuth App
+user tokens live forever, so `github.py` has no refresher; Hugging Face issues
+`hf_oauth_*` access tokens that lapse (8h by default) alongside a refresh token. So
+`huggingface.py` implements `_refresh` and `token()` goes through `ensure_fresh` with
+it — without that the connection would quietly stop working part-way through a session.
+The refresh presents the client id and no secret, as a public app must.
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant H as Home tile
+    participant N as Node backend
+    participant F as Hugging Face
+    H->>N: POST /api/connectors/huggingface/connect
+    N->>F: POST /oauth/device (client_id, scope)
+    F-->>N: user_code, device_code, interval
+    N-->>H: {step:'device', user_code}
+    U->>F: enters the code at huggingface.co/oauth/device
+    loop until authorized
+        H->>N: POST /api/connectors/huggingface/poll
+        N->>F: POST /oauth/token (device_code grant)
+        F-->>N: authorization_pending | access_token + refresh_token
+    end
+    N->>F: GET /api/whoami-v2 (Bearer)
+    N->>N: encrypt + store `connector:huggingface`
+    N-->>H: {connected: true, account}
+```
+
+### Models and datasets are separate namespaces
+
+Every repo-taking tool has a `type` (`model` | `dataset`, default `model`), because
+`squad` the dataset and a model of the same name are different repos. Getting it wrong
+reads as a 404 for something that plainly exists — which is why the guide leads with it.
+
+`huggingface.readFile` bypasses `/api` entirely: file content lives on the
+`resolve` CDN path, not the JSON API. It streams and caps at 100 KB so a
+multi-gigabyte weights file can't be pulled into memory before we notice it isn't text,
+and refuses binaries outright rather than handing the model a page of replacement
+characters.
+
+**Gated repos** (Llama, Gemma, …) need the user to accept a licence on the Hub before
+any token can read them. `repoInfo` reports `gated`, and a read returns a "gated behind
+a licence" error — not something the agent can fix, and the guide says to stop rather
+than retry.
+
 ## Agent tools + guides
 
 Connector tools are **backend** `AgentTool`s (`backend/sdk`), not frontend-declared
@@ -302,6 +377,8 @@ cron run, the `dash` REPL, `agent.ask_peer`. See
 
 `github` group: `searchCode`, `searchRepos`, `listRepos`, `readFile`, `listIssues`.
 `google` group: `driveSearch`, `driveRead`, `syncDrive`.
+`huggingface` group: `searchModels`, `searchDatasets`, `listRepos`, `repoInfo`,
+`readFile`.
 
 Each connector ships a **guide** — a SKILL.md-style markdown file in
 `backend/modules/connectors/guides/<id>.md`, disclosed progressively so it costs
@@ -336,6 +413,9 @@ granted scopes and a Disconnect, or the connect flow when unconnected.
   refresh (including that concurrent callers refresh exactly once).
 - `backend/tests/test_connectors_google.py` — the PKCE authorize URL, code exchange,
   refresh, and that a client secret never resolves from settings.
+- `backend/tests/test_connectors_huggingface.py` — the device flow, that refresh
+  survives a response omitting the refresh token, that the scope set stays read-only,
+  and the dataset-namespace / binary-file / gated-repo edges of its tools.
 - `backend/tests/test_google_sync.py` — pagination, incremental runs, no duplicate
   sources, removal handling, the configurable library.
 - `backend/tests/test_drive_pdf.py` — PDF extraction against real PDF bytes, including
