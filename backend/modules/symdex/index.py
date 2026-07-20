@@ -36,6 +36,7 @@ from backend.modules.lsp import symbol_store
 from backend.modules.symdex.extract_docs import extract_docs
 from backend.modules.symdex.extract_packages import extract_packages
 from backend.modules.symdex.extract_schema import extract_schemas
+from backend.modules.symdex.extract_stdlib import STDLIB_EMBED, extract_stdlib
 from backend.modules.symdex.models import KIND_PREFIXES
 
 logger = logging.getLogger(__name__)
@@ -150,10 +151,18 @@ class SymdexIndex:
             init_db()
             probe = await self._probe_embedder()
             if probe is None:
+                # No embedder — but the *relational* projection (`code_symbols`, what
+                # editor completion actually reads) needs no vectors at all. Build it
+                # anyway, so intellisense works offline; only semantic search waits.
+                built = 0
+                for kind in kinds:
+                    if kind in ("packages", "stdlib"):
+                        built += len(await self._collect(kind, interpreter))
                 self._publish("offline", ",".join(kinds), 0, 0)
                 return {
                     "started": False,
                     "reason": "embedding provider offline (hash fallback refused)",
+                    "relational_symbols": built,
                 }
             model, dim = probe
             meta = _read_meta()
@@ -164,8 +173,13 @@ class SymdexIndex:
                     model,
                 )
                 delete_collection(_COLLECTION)
+                # Rebuild only the kinds that actually had vectors under the old model
+                # (plus whatever was asked for). A kind that was never built has nothing
+                # to invalidate, and rebuilding it here would drag the whole stdlib and
+                # every installed package into what should be a targeted repair.
+                previous = [k for k, n in meta.get("counts", {}).items() if n]
+                kinds = list(dict.fromkeys([*kinds, *previous]))
                 meta = {}
-                kinds = list(KIND_PREFIXES)
 
             counts = dict(meta.get("counts", {}))
             for kind in kinds:
@@ -205,24 +219,33 @@ class SymdexIndex:
         self, kind: str, interpreter: str | None
     ) -> list[tuple[str, str, dict[str, Any]]]:
         """Gather (id, text, metadata) jobs for one kind. Extraction is sync and
-        file/subprocess-bound, so it runs on a thread. The packages kind also
-        projects each dist's rows into the `code_symbols` prefix index."""
-        if kind == "packages":
+        file/subprocess-bound, so it runs on a thread. The packages and stdlib kinds
+        also project their rows into the `code_symbols` prefix index."""
+        if kind in ("packages", "stdlib"):
             if not interpreter:
                 from backend.modules.lsp.pyenv import resolve_python_interpreter
 
                 interpreter = await asyncio.to_thread(resolve_python_interpreter, None)
             if not interpreter:
                 return []
-            harvests = await asyncio.to_thread(extract_packages, interpreter)
+            stdlib = kind == "stdlib"
+            harvests = await asyncio.to_thread(
+                extract_stdlib if stdlib else extract_packages, interpreter
+            )
             jobs: list[tuple[str, str, dict[str, Any]]] = []
             for harvest in harvests:
+                # The relational projection is exhaustive — it's a cheap SQLite prefix
+                # scan and completion must offer everything.
                 await asyncio.to_thread(
                     symbol_store.replace_source,
-                    f"pkg:{harvest.dist}",
+                    f"{'std' if stdlib else 'pkg'}:{harvest.dist}",
                     "python",
                     [d.store_row() for d in harvest.docs],
                 )
+                # The embedding projection is bounded: for the stdlib, only the
+                # curated modules are worth the vectors (see extract_stdlib).
+                if stdlib and harvest.dist not in STDLIB_EMBED:
+                    continue
                 jobs.extend((d.id, d.text, d.metadata) for d in harvest.docs)
             return jobs
         if kind == "schema":

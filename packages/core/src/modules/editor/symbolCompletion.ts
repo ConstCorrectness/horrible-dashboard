@@ -15,6 +15,7 @@ import type {
 } from '@codemirror/autocomplete';
 
 import { apiGet, apiPost } from '../../api';
+import { applyImport } from './pythonImports';
 
 interface DbSymbol {
   symbol: string;
@@ -23,6 +24,10 @@ interface DbSymbol {
   module: string;
   /** First docstring paragraph for indexed package symbols (symdex projection). */
   doc?: string;
+  /** The module to import the symbol from. Non-empty only for indexed stdlib/package
+   * symbols that are importable on their own (never for methods) — when set, accepting
+   * the completion also inserts `from <imp> import <symbol>`. */
+  imp?: string;
 }
 
 // Map our stored `kind` to a CodeMirror completion `type` (drives the popup icon).
@@ -88,12 +93,32 @@ export function dbSymbolSource(getLang: () => string | null): CompletionSource {
     const options: Completion[] = rows.map((r) => ({
       label: r.symbol,
       type: KIND_TO_TYPE[r.kind] ?? 'text',
-      detail: r.detail || undefined,
+      // Show where it comes from — `pathlib` on `Path`, `numpy` on `ndarray` — since
+      // the index now spans the whole stdlib and many packages, and the bare name
+      // alone no longer says which one you're about to pull in.
+      detail: r.imp ? `${r.detail || r.kind} · ${r.imp}` : r.detail || undefined,
       // Indexed package symbols carry a doc snippet (symdex); CodeMirror shows
       // `info` as the lazy side panel next to the selected suggestion. Same
       // single request — the doc rides the row we already fetched.
       info: r.doc
         ? () => Object.assign(document.createElement('div'), { textContent: r.doc })
+        : undefined,
+      // An importable indexed symbol inserts its `from <module> import <name>` line
+      // too (deduped, placed after the docstring//existing imports) — the same
+      // mechanism the curated framework source uses, now driven by the real index.
+      apply: r.imp
+        ? (view, _completion, from, to) =>
+            applyImport(
+              view,
+              {
+                label: r.symbol,
+                importLine: `from ${r.imp} import ${r.symbol}`,
+                detail: r.imp ?? '',
+                pkg: (r.imp ?? '').split('.')[0],
+              },
+              from,
+              to,
+            )
         : undefined,
       boost: -50,
     }));

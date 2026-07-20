@@ -2,19 +2,20 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
-# The three corpora the index holds, each namespaced by an id prefix so a re-sync
-# of one kind replaces only its own rows: `pkg:` / `schema:` / `doc:`.
-SymdexKind = Literal["packages", "schema", "docs"]
+# The four corpora the index holds, each namespaced by an id prefix so a re-sync
+# of one kind replaces only its own rows: `pkg:` / `std:` / `schema:` / `doc:`.
+SymdexKind = Literal["packages", "stdlib", "schema", "docs"]
 
 KIND_PREFIXES: dict[str, str] = {
     "packages": "pkg:",
+    "stdlib": "std:",
     "schema": "schema:",
     "docs": "doc:",
 }
 
 
 class ReindexRequest(BaseModel):
-    kinds: list[SymdexKind] = ["packages", "schema", "docs"]
+    kinds: list[SymdexKind] = ["packages", "stdlib", "schema", "docs"]
 
 
 class SymdexStatus(BaseModel):

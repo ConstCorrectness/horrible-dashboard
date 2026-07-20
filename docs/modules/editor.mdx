@@ -316,27 +316,77 @@ code, format the selection); it is not in the completion loop, so completion has
 model latency.
 
 - **The index.** A `code_symbols` table (`symbol, lang, kind, detail, module,
-  source, freq`) in the built-in `.data/app.db` SQLite file — the same file the
-  library catalog uses, so the `app` database connection can browse it. Indexed on
+  source, freq, doc, imp`) in the built-in `.data/app.db` SQLite file — the same file
+  the library catalog uses, so the `app` database connection can browse it. Indexed on
   `(lang, symbol)` so `symbol LIKE 'req%'` is sub-millisecond
   (`backend/modules/lsp/symbol_store.py`).
-- **What's indexed.** Python **builtins + keywords** are seeded once; each open
-  buffer's symbols are **harvested with `ast`** (parse only, no import → no side
-  effects) into defs, classes, params, assigned names, and imported names
-  (`backend/modules/lsp/symbol_index.py`). The client pushes a buffer to
-  `POST /api/editor/symbols/index` on open and on a debounced idle after edits;
-  each push **replaces** that source's rows so its symbols never go stale.
+- **What's indexed.** Three corpora, all `ast`-parsed and never imported:
+  1. Python **builtins + keywords**, seeded once.
+  2. The **whole Python standard library** and the **installed framework packages**,
+     harvested by [symdex](symdex.mdx) into sources `std:<module>` / `pkg:<dist>` with
+     a real signature and first docstring paragraph. This is what makes `pathlib.Path`,
+     `json.dumps`, `torch.Tensor`, `trl.SFTTrainer`, … complete with documentation
+     offline. Built once in the background (see [Triggers](symdex.mdx#triggers--status)).
+  3. Each **open buffer's** own symbols — defs, classes, params, assigned names,
+     imported names (`backend/modules/lsp/symbol_index.py`). The client pushes a buffer
+     to `POST /api/editor/symbols/index` on open and on a debounced idle after edits;
+     each push **replaces** that source's rows so its symbols never go stale. Rows for a
+     file that no longer exists are purged at startup, so a deleted buffer's symbols
+     don't linger.
 - **The lookup.** `GET /api/editor/complete?lang=&prefix=&limit=` runs the ranked
-  prefix query (freq → shortest → alpha). On the client, `symbolCompletion.ts`
-  exposes `dbSymbolSource` (a `@codemirror/autocomplete` source merged into the
-  same popup as the LSP, `boost: -50`) and `dbGhostFetch` (the ghost-text
-  producer). The DB source **bails on member access** (`obj.attr`) — a prefix index
-  has no type info, so **member completion stays with the LSP** (L2). The DB source
-  fills in instantly (and while the LSP warms up) for plain identifier prefixes.
+  prefix query. Ranking is **tiered** — your own buffers and the builtins first, then
+  importable indexed symbols, then indexed *methods* (which a bare-prefix query is
+  almost never after) — and within a tier prefers the **shallowest import path**, so
+  `json.dumps` beats `xmlrpc.client.dumps` and `numpy.array` beats
+  `numpy.core.multiarray.array`. Rows are grouped by `(symbol, module)`, so the `Path`
+  in `pathlib` and the `Path` in `fastapi.params` stay separate suggestions instead of
+  blending into one.
+- **Accepting inserts the import.** An indexed row carries `imp`, the module the symbol
+  is importable from (empty for methods, which aren't). Accepting such a completion
+  inserts the symbol **and** its `from <module> import <name>` line, deduped and placed
+  after the docstring and existing imports — the same `applyImport` mechanism the
+  curated framework source uses, now driven by the real index.
+- **One merged source, deduped against the server.** The LSP source and the offline
+  sources are composed into a single `@codemirror/autocomplete` source
+  (`mergedSource` in `lsp.ts`) rather than registered in parallel. basedpyright ships
+  typeshed, so once warm it already offers stdlib auto-imports; the merge lets the
+  **server win any label it provides** and the indexed sources fill in only what it
+  didn't, instead of listing every stdlib symbol twice.
 
 **Division of labor:** L1.5 (DB) drives identifier-prefix completion + ghost text;
 **L2 (LSP) drives type-aware / member completion**; the framework-import source
 adds not-yet-imported library symbols; the **model does none of it**.
+
+### The cold start
+
+Spawning a language server, running `initialize`, and indexing a project takes
+seconds. Completion requests that arrive in that window used to return nothing, with
+no retry — so a freshly-opened buffer felt like it had no intellisense at all. Two
+things close that gap:
+
+- A completion request **waits** for a still-warming server, bounded by
+  `editor.completionWarmupMs` (2000ms default, 0 to never wait). The offline sources
+  have already resolved, so this only delays the *server's* contribution.
+- When the session finishes initializing, the client **re-opens the completion list**
+  if the buffer is focused and the cursor is mid-word (`session.onReady` in `lsp.ts`),
+  so a popup dismissed during the cold start comes back with the full results.
+
+### Intellisense settings
+
+Declared in the editor manifest and edited on the [settings](settings.mdx) page. All
+of them are captured when a buffer opens (the LSP extension lives in a compartment
+reconfigured on load), so a change takes effect for **buffers opened after it**.
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| `editor.indexedSymbols` | `true` | Merge the indexed stdlib/package symbols into the popup, with signatures, docstrings, and automatic import insertion. |
+| `editor.completionWarmupMs` | `2000` | How long a completion request waits for a still-starting language server before falling back to the instant indexed results. `0` never waits. |
+| `editor.changeDebounceMs` | `300` | Wait after you stop typing before pushing the buffer to the server. Lower = fresher completions and diagnostics, more traffic. |
+| `editor.diagnostics` | `true` | Render server errors/warnings in the gutter. The agent's `editor.getDiagnostics` still sees them when this is off. |
+| `editor.hover` | `true` | Show the server's type/documentation tooltip on hover. |
+| `editor.pythonPath` | `''` | Interpreter basedpyright analyzes against. Empty auto-detects a project `.venv` or system Python. |
+| `editor.frameworkImports` | `true` | The curated framework-import suggestions (see above). |
+| `editor.autosuggest` | `false` | Inline ghost-text completions from the local model. |
 
 A small **by-URI registry** (`editor/lsp-registry.ts`, keyed by the buffer's
 `workspace-file:` source URI — the same key the [agent edit tools](#agent-integration)

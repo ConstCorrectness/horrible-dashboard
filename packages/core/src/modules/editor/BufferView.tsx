@@ -58,17 +58,28 @@ function goToFile(path: string): void {
   setTimeout(() => void registry.runCommand('files.revealActiveBuffer'), 150);
 }
 
+/** The intellisense knobs a buffer reads from settings, captured when it opens (the
+ * LSP compartment is reconfigured on load, so changes take effect on reopen). */
+interface IntellisenseSettings {
+  /** `editor.pythonPath` — overrides the backend's auto-detected interpreter. */
+  pythonPath?: string;
+  /** `editor.frameworkImports` — the curated framework-import completions. */
+  frameworkImports?: boolean;
+  /** `editor.indexedSymbols` — the indexed stdlib/package symbols. */
+  indexedSymbols?: boolean;
+  /** `editor.completionWarmupMs` — cold-start wait before falling back. */
+  warmupMs?: number;
+  /** `editor.changeDebounceMs` — edit push debounce. */
+  changeDebounceMs?: number;
+  /** `editor.diagnostics` — render diagnostics in the gutter. */
+  diagnostics?: boolean;
+  /** `editor.hover` — hover tooltips. */
+  hover?: boolean;
+}
+
 /** The LSP extension for a just-loaded source, or `[]` when there's no language
- * server for it (only `workspace-file:` buffers with a known language get one).
- * `pythonPath` (the `editor.pythonPath` setting) overrides the backend's auto-detected
- * interpreter so third-party imports resolve; `frameworkImports` toggles the curated
- * framework-import completions. */
-function lspFor(
-  source: string | null,
-  title: string,
-  pythonPath?: string,
-  frameworkImports?: boolean,
-) {
+ * server for it (only `workspace-file:` buffers with a known language get one). */
+function lspFor(source: string | null, title: string, settings: IntellisenseSettings) {
   if (!source || !source.startsWith(FILE_URI)) return [];
   const language = lspLanguageId(title);
   if (!language) return [];
@@ -79,8 +90,13 @@ function lspFor(
     root: dirOf(path),
     bufferUri: source,
     openFile: goToFile,
-    pythonPathOverride: pythonPath || undefined,
-    frameworkImports,
+    pythonPathOverride: settings.pythonPath || undefined,
+    frameworkImports: settings.frameworkImports,
+    indexedSymbols: settings.indexedSymbols,
+    warmupMs: settings.warmupMs,
+    changeDebounceMs: settings.changeDebounceMs,
+    diagnostics: settings.diagnostics,
+    hover: settings.hover,
   });
 }
 
@@ -144,6 +160,12 @@ export function BufferView() {
   const pythonPath = useSetting<string>('editor.pythonPath') ?? '';
   // Curated framework-import suggestions (see pythonImports.ts); on by default.
   const frameworkImports = useSetting<boolean>('editor.frameworkImports') ?? true;
+  // The rest of the intellisense knobs, all captured on open like `pythonPath`.
+  const indexedSymbols = useSetting<boolean>('editor.indexedSymbols') ?? true;
+  const warmupMs = useSetting<number>('editor.completionWarmupMs') ?? 2000;
+  const changeDebounceMs = useSetting<number>('editor.changeDebounceMs') ?? 300;
+  const diagnosticsOn = useSetting<boolean>('editor.diagnostics') ?? true;
+  const hoverOn = useSetting<boolean>('editor.hover') ?? true;
 
   const sourceRef = useRef(source);
   sourceRef.current = source;
@@ -273,7 +295,17 @@ export function BufferView() {
             // Connect (or disconnect) a language server for this buffer. The
             // reconfigure tears down any prior session (didClose + stop) and the
             // new plugin sees the just-applied content for its didOpen.
-            lspRef.current.reconfigure(lspFor(source, loaded.title, pythonPath, frameworkImports)),
+            lspRef.current.reconfigure(
+              lspFor(source, loaded.title, {
+                pythonPath,
+                frameworkImports,
+                indexedSymbols,
+                warmupMs,
+                changeDebounceMs,
+                diagnostics: diagnosticsOn,
+                hover: hoverOn,
+              }),
+            ),
             readOnlyRef.current.reconfigure(EditorState.readOnly.of(loaded.readOnly ?? false)),
             ...(isProposing
               ? [mergeRef.current.reconfigure(unifiedMergeView({ original: originalRef.current }))]

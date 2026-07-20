@@ -90,3 +90,88 @@ def test_replace_source_swaps_rows():
 
 def test_query_empty_prefix_returns_nothing():
     assert symbol_store.query("python", "", 10) == []
+
+
+def test_query_keeps_same_name_from_different_modules_apart():
+    """`Path` exists in pathlib and elsewhere; grouping by symbol alone used to blend
+    them into one row — one module's import glued to another's signature and doc."""
+    symbol_store.replace_source(
+        "std:pathlib",
+        "python",
+        [
+            {
+                "symbol": "Path",
+                "kind": "class",
+                "module": "pathlib",
+                "imp": "pathlib",
+                "detail": "class",
+                "doc": "PurePath subclass that can make system calls.",
+            }
+        ],
+    )
+    symbol_store.replace_source(
+        "pkg:fastapi",
+        "python",
+        [
+            {
+                "symbol": "Path",
+                "kind": "function",
+                "module": "fastapi.params",
+                "imp": "fastapi.params",
+                "detail": "(default: Any)",
+                "doc": "A path param.",
+            }
+        ],
+    )
+    hits = symbol_store.query("python", "Path", 10)
+    by_imp = {h["imp"]: h for h in hits}
+    assert by_imp["pathlib"]["doc"].startswith("PurePath")
+    assert by_imp["fastapi.params"]["detail"] == "(default: Any)"
+
+
+def test_query_ranks_shallow_imports_and_buries_methods():
+    """A bare prefix wants `json.dumps`, not `xmlrpc.client.dumps` and certainly not
+    some class's `dumps` method."""
+    symbol_store.replace_source(
+        "std:json",
+        "python",
+        [{"symbol": "dumps", "kind": "function", "module": "json", "imp": "json"}],
+    )
+    symbol_store.replace_source(
+        "std:xmlrpc",
+        "python",
+        [
+            {
+                "symbol": "dumps",
+                "kind": "function",
+                "module": "xmlrpc.client",
+                "imp": "xmlrpc.client",
+            },
+            # A method: no import module, and it should not outrank the real answers.
+            {"symbol": "dumps", "kind": "method", "module": "Marshaller", "imp": ""},
+        ],
+    )
+    order = [h["imp"] for h in symbol_store.query("python", "dumps", 10)]
+    assert order[0] == "json"
+    assert order.index("xmlrpc.client") < order.index("")
+
+
+def test_orphan_buffer_rows_are_purged_on_init(tmp_path, monkeypatch):
+    """A deleted file is never re-indexed, so its symbols would linger forever."""
+    gone = tmp_path / "deleted.py"
+    alive = tmp_path / "alive.py"
+    alive.write_text("x = 1\n")
+    symbol_store.replace_source(
+        f"workspace-file:{gone}", "python", [{"symbol": "ghost_sym"}]
+    )
+    symbol_store.replace_source(
+        f"workspace-file:{alive}", "python", [{"symbol": "live_sym"}]
+    )
+
+    monkeypatch.setattr(symbol_store, "_initialized", False)
+    symbol_store.init()
+
+    assert symbol_store.query("python", "ghost", 5) == []
+    assert [h["symbol"] for h in symbol_store.query("python", "live", 5)] == [
+        "live_sym"
+    ]

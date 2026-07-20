@@ -6,11 +6,12 @@ preloaded by the [coder and dba agents](agent-chat.mdx#specialized-agents--deleg
 and the [editor](editor.mdx)'s completion layer (doc snippets on suggestions,
 with no embedding lookup on the keystroke path).
 
-## The corpus (three kinds)
+## The corpus (four kinds)
 
 | kind | id prefix | source | one document per |
 | --- | --- | --- | --- |
 | `packages` | `pkg:` | installed curated framework packages (`lsp/pyenv.py` `FRAMEWORK_PACKAGES`) in the resolved interpreter's site-packages | public module/class/function/method — `ast.unparse`d signature + first docstring paragraph |
+| `stdlib` | `std:` | the resolved interpreter's **standard library** (`extract_stdlib.py`) | same, one `PackageHarvest` per top-level module |
 | `schema` | `schema:` | every saved [database](database.mdx) connection via `driver.introspect` | table (qualified name + column list) |
 | `docs` | `doc:` | this repo's `docs/**/*.mdx` | chunk (`library/chunking.chunk_text`) |
 
@@ -19,16 +20,46 @@ only — packages are never imported** (imports run side effects and are slow);
 private modules (`_*`), `tests/`, and vendored trees are skipped, and per-package
 file/symbol caps keep even torch-sized dists bounded. The site-packages probe is
 the one subprocess, run on a thread (the Windows `--reload` loop can't spawn
-asyncio subprocesses — see `lsp/manager.py`).
+asyncio subprocesses — see `lsp/manager.py`). That probe reports **`site.getsitepackages()`
+plus the user site-packages**, not just the `sysconfig` prefix scheme — on a
+`pip install --user` layout (the Windows default for a non-venv interpreter) the prefix
+directory is nearly empty and every installed package would otherwise be invisible.
+
+### `__all__` re-exports
+
+A parse-only harvest can't see two very common cases: symbols implemented in C
+(`collections.defaultdict`, `datetime.datetime`) and symbols re-exported from a
+submodule (`pandas.DataFrame`, `typing.List`) — which are exactly the names people
+import. Both are listed in the module's `__all__`, so `_emit_reexports` takes that list
+at its word and emits any name the AST walk didn't already produce. Those rows carry no
+signature or docstring, but they carry the right **import module**, which is what makes
+completion insert `from collections import defaultdict`. (Packages that build `__all__`
+dynamically — `numpy`, `transformers` — still slip through; the curated
+[framework-import source](editor.mdx) covers the common ones.)
+
+### The stdlib's two scopes
+
+The stdlib is harvested into **both** projections but at different breadth:
+
+- The **relational** projection (`code_symbols`) covers the *whole* stdlib — it's a
+  cheap SQLite prefix scan and editor completion has to be exhaustive.
+- The **embedding** projection covers only `STDLIB_EMBED`, a curated set of ~36 modules
+  worth spending vectors on for agent retrieval. Embedding every stdlib symbol would be
+  tens of thousands of vectors against a local embedder for very little retrieval gain.
 
 ## Two projections
 
 1. **LanceDB `symdex` collection** (`database/vectorstore.py`) — the semantic
    space, searched by `symbols.searchDocs` / `GET /api/symdex/search`.
-2. **`code_symbols` in `app.db`** (`lsp/symbol_store.py`, source `pkg:<dist>`,
-   new `doc` column) — the same package symbols in the relational prefix index,
-   so `GET /editor/complete` returns signature + doc snippet from the SQLite
-   scan it already does. **Embedding lookups never sit on the keystroke path.**
+2. **`code_symbols` in `app.db`** (`lsp/symbol_store.py`, sources `pkg:<dist>` and
+   `std:<module>`, with `doc` and `imp` columns) — the same symbols in the relational
+   prefix index, so `GET /editor/complete` returns signature + doc snippet + the
+   importable module from the SQLite scan it already does. **Embedding lookups never
+   sit on the keystroke path.**
+
+The relational projection is written **even when the embedder is offline**. It needs no
+vectors, and editor completion depends on it — gating it behind a live embedding
+provider meant intellisense silently stayed empty whenever the local model wasn't up.
 
 ## The embed-model drift guard
 
@@ -38,18 +69,27 @@ offline, while a LanceDB collection's vector width is fixed at first write. The
 index therefore keeps a meta sidecar (`$HORRIBLE_DATA_DIR/symdex.meta.json`,
 `{embed_model, dim, counts}`):
 
-- **Model changed** → the next reindex is a full rebuild under the new model.
+- **Model changed** → the next reindex rebuilds the requested kinds **plus any kind
+  that actually had vectors** under the old model. A kind that was never built has
+  nothing to invalidate, and rebuilding it here would drag the whole stdlib and every
+  installed package into what should be a targeted repair.
 - **Only the hash fallback available** → reindex refuses (never poisons a
   real-model collection); search returns `status: "reindex_needed"` with empty
   results — never a `DimensionMismatch` crash.
 
 ## Triggers & status
 
-- `POST /api/symdex/reindex` `{kinds: ["packages"|"schema"|"docs"]}` — manual,
-  detached.
+- `POST /api/symdex/reindex` `{kinds: ["packages"|"stdlib"|"schema"|"docs"]}` —
+  manual, detached.
 - Auto-kick: the first `GET /api/editor/python-env` resolve with an interpreter
-  and an empty packages corpus starts a background packages build; creating or
-  editing a database connection re-kicks the `schema` kind.
+  starts a background build of **whichever of `stdlib` / `packages` is still empty**
+  (`_kick_symbol_index` in `lsp/routes.py`); creating or editing a database connection
+  re-kicks the `schema` kind.
+
+  The kick holds a **strong reference** to its task and logs the outcome.
+  `asyncio.create_task` only keeps a weak reference, so the build could be
+  garbage-collected mid-flight — and with failures swallowed, the packages corpus
+  could sit empty indefinitely with nothing to show why.
 - Progress streams on the **`symdex` `/ws` channel**
   (`{event: "index", data: {state, kind, done, total}}`); `GET /api/symdex/status`
   reports `{building, total, counts, embed_model}`.

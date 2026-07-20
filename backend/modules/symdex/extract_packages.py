@@ -50,6 +50,11 @@ class SymbolDoc:
     module: str
     doc: str
     freq: int = 1
+    # The module the symbol can be imported *from* (`from <imp> import <symbol>`),
+    # so accepting a completion can insert the import line. Distinct from `module`,
+    # which for a method holds its owning class (that's the member-scoping key, not
+    # something importable) — methods therefore carry an empty `imp`.
+    imp: str = ""
 
     def store_row(self) -> dict[str, Any]:
         return {
@@ -59,6 +64,7 @@ class SymbolDoc:
             "module": self.module,
             "doc": self.doc,
             "freq": self.freq,
+            "imp": self.imp,
         }
 
 
@@ -70,11 +76,26 @@ class PackageHarvest:
 
 def site_packages_for(interpreter: str) -> list[Path]:
     """The interpreter's site-packages dirs, probed with one short subprocess.
-    Sync (subprocess.run) — call it on a thread."""
+    Sync (subprocess.run) — call it on a thread.
+
+    Includes the **user** site-packages, not just the prefix ones. `sysconfig` only
+    reports the prefix scheme, so on a `pip install --user` layout (the Windows
+    default for a non-venv interpreter) it points at a near-empty directory and every
+    installed package — torch, transformers, the lot — is invisible to the harvest."""
     code = (
-        "import sysconfig, json\n"
+        "import sysconfig, site, json\n"
         "paths = sysconfig.get_paths()\n"
-        "print(json.dumps(sorted({paths.get('purelib', ''), paths.get('platlib', '')})))\n"
+        "dirs = {paths.get('purelib', ''), paths.get('platlib', '')}\n"
+        "try:\n"
+        "    dirs.update(site.getsitepackages())\n"
+        "except Exception:\n"
+        "    pass\n"
+        "try:\n"
+        "    if site.ENABLE_USER_SITE is not False:\n"
+        "        dirs.add(site.getusersitepackages())\n"
+        "except Exception:\n"
+        "    pass\n"
+        "print(json.dumps(sorted(d for d in dirs if d)))\n"
     )
     try:
         out = subprocess.run(
@@ -121,21 +142,50 @@ def _module_name(py_file: Path, package_root: Path, import_name: str) -> str:
     return dotted or import_name
 
 
-def _harvest_file(py_file: Path, module: str, dist: str, out: list[SymbolDoc]) -> None:
+def _harvest_file(
+    py_file: Path,
+    module: str,
+    dist: str,
+    out: list[SymbolDoc],
+    id_prefix: str = "pkg:",
+) -> None:
+    """Harvest one file's public API. `id_prefix` namespaces the emitted document
+    ids so a second corpus (the stdlib, `std:`) can reuse this walk without its
+    rows colliding with the packages corpus."""
     try:
         source = py_file.read_text(encoding="utf-8", errors="replace")
         tree = ast.parse(source)
     except (OSError, SyntaxError, ValueError):
         return
+    before = len(out)
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if node.name.startswith("_"):
                 continue
-            _emit(out, dist, module, node.name, "function", _signature(node), node)
+            _emit(
+                out,
+                dist,
+                module,
+                node.name,
+                "function",
+                _signature(node),
+                node,
+                id_prefix=id_prefix,
+            )
         elif isinstance(node, ast.ClassDef):
             if node.name.startswith("_"):
                 continue
-            _emit(out, dist, module, node.name, "class", "", node, freq=3)
+            _emit(
+                out,
+                dist,
+                module,
+                node.name,
+                "class",
+                "",
+                node,
+                freq=3,
+                id_prefix=id_prefix,
+            )
             for sub in node.body:
                 if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     if sub.name.startswith("_") and sub.name != "__init__":
@@ -150,7 +200,71 @@ def _harvest_file(py_file: Path, module: str, dist: str, out: list[SymbolDoc]) -
                         sub,
                         symbol=sub.name,
                         member_of=node.name,
+                        id_prefix=id_prefix,
                     )
+    _emit_reexports(tree, out, before, dist, module, id_prefix)
+
+
+def _emit_reexports(
+    tree: ast.Module,
+    out: list[SymbolDoc],
+    before: int,
+    dist: str,
+    module: str,
+    id_prefix: str,
+) -> None:
+    """Emit the names in a module's `__all__` that the AST walk couldn't see.
+
+    A parse-only harvest misses two very common cases: symbols implemented in C
+    (`collections.defaultdict`, `datetime.datetime`) and symbols re-exported from a
+    submodule (`pandas.DataFrame`, `typing.List`). Both are exactly the names people
+    import, and both are listed in `__all__` — so take that list at its word. These
+    rows carry no signature or docstring, but they carry the right import module,
+    which is what makes the completion insert `from collections import defaultdict`."""
+    names: list[str] = []
+    for node in tree.body:
+        targets = (
+            node.targets
+            if isinstance(node, ast.Assign)
+            else [node.target]
+            if isinstance(node, ast.AnnAssign)
+            else []
+        )
+        if not any(isinstance(t, ast.Name) and t.id == "__all__" for t in targets):
+            continue
+        if isinstance(node.value, (ast.List, ast.Tuple)):
+            names = [
+                e.value
+                for e in node.value.elts
+                if isinstance(e, ast.Constant) and isinstance(e.value, str)
+            ]
+    if not names:
+        return
+    seen = {d.symbol for d in out[before:]}
+    for name in names:
+        if name in seen or name.startswith("_"):
+            continue
+        seen.add(name)
+        out.append(
+            SymbolDoc(
+                id=f"{id_prefix}{dist}:{module}.{name}",
+                text=f"{module}.{name}",
+                metadata={
+                    "dist": dist,
+                    "module": module,
+                    "qualname": name,
+                    "kind": "variable",
+                    "signature": "",
+                    "doc": "",
+                },
+                symbol=name,
+                kind="variable",
+                detail=module,
+                module=module,
+                doc="",
+                imp=module,
+            )
+        )
 
 
 def _emit(
@@ -165,6 +279,7 @@ def _emit(
     symbol: str | None = None,
     member_of: str | None = None,
     freq: int = 1,
+    id_prefix: str = "pkg:",
 ) -> None:
     doc = _first_doc_paragraph(node)
     text = f"{kind} {module}.{qualname}{signature}"
@@ -172,7 +287,7 @@ def _emit(
         text += f"\n{doc}"
     out.append(
         SymbolDoc(
-            id=f"pkg:{dist}:{module}.{qualname}",
+            id=f"{id_prefix}{dist}:{module}.{qualname}",
             text=text,
             metadata={
                 "dist": dist,
@@ -191,6 +306,7 @@ def _emit(
             module=member_of or module,
             doc=doc,
             freq=2 if kind == "class" else freq,
+            imp="" if member_of else module,
         )
     )
 

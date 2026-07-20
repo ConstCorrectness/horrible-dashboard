@@ -171,3 +171,50 @@ def test_routes_status_shape(monkeypatch):
     assert status.status_code == 200
     body = status.json()
     assert {"building", "total", "counts", "embed_model", "reindex_needed"} <= set(body)
+
+
+def test_reexports_from_dunder_all_are_harvested(tmp_path, monkeypatch):
+    """A parse-only harvest can't see C-implemented or re-exported symbols
+    (`collections.defaultdict`, `pandas.DataFrame`) — but they're listed in `__all__`,
+    and they're exactly the names people import."""
+    site = tmp_path / "site-packages"
+    pkg = site / "mypkg"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text(
+        '"""Doc."""\n'
+        "__all__ = ['DataFrame', 'do_thing', '_hidden']\n"
+        "def do_thing(a):\n    return a\n"
+    )
+    monkeypatch.setattr(ep, "site_packages_for", lambda interp: [site])
+    monkeypatch.setattr(ep, "FRAMEWORK_PACKAGES", {"mypkg": "mypkg-dist"})
+
+    docs = {d.symbol: d for d in ep.extract_packages("ignored")[0].docs}
+    # Re-exported name the AST walk never saw, carrying the right import module.
+    assert docs["DataFrame"].imp == "mypkg"
+    # A real def is not duplicated by the __all__ pass, and keeps its signature.
+    assert docs["do_thing"].kind == "function" and "a" in docs["do_thing"].detail
+    assert "_hidden" not in docs
+
+
+def test_extract_stdlib_harvests_real_modules(tmp_path):
+    """The stdlib corpus is the whole point of the editor's offline intellisense —
+    harvest it from the running interpreter and check the shape of what lands."""
+    import sys
+
+    from backend.modules.symdex import extract_stdlib as es
+
+    harvests = {h.dist: h for h in es.extract_stdlib(sys.executable)}
+    assert "pathlib" in harvests and "json" in harvests
+
+    by_symbol = {d.symbol: d for d in harvests["pathlib"].docs}
+    assert by_symbol["Path"].imp == "pathlib"
+    assert by_symbol["Path"].id.startswith("std:")
+    assert by_symbol["Path"].doc  # a real docstring, not an empty snippet
+
+    # Methods carry no import module — you can't `from X import a_method`.
+    methods = [d for d in harvests["pathlib"].docs if d.kind == "method"]
+    assert methods and all(d.imp == "" for d in methods)
+
+    # The embed subset is a bounded slice of the (much larger) relational corpus.
+    assert es.STDLIB_EMBED < set(harvests) | es.STDLIB_EMBED
+    assert "pathlib" in es.STDLIB_EMBED

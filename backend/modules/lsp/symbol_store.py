@@ -59,15 +59,21 @@ def init() -> None:
                 module TEXT NOT NULL DEFAULT '',
                 source TEXT NOT NULL,
                 freq   INTEGER NOT NULL DEFAULT 1,
-                doc    TEXT NOT NULL DEFAULT ''
+                doc    TEXT NOT NULL DEFAULT '',
+                imp    TEXT NOT NULL DEFAULT ''
             )
             """
         )
-        # Additive migration for tables created before the symdex `doc` column.
+        # Additive migrations for tables created before the symdex `doc` column and
+        # before the auto-import `imp` column.
         cols = {r["name"] for r in conn.execute("PRAGMA table_info(code_symbols)")}
         if "doc" not in cols:
             conn.execute(
                 "ALTER TABLE code_symbols ADD COLUMN doc TEXT NOT NULL DEFAULT ''"
+            )
+        if "imp" not in cols:
+            conn.execute(
+                "ALTER TABLE code_symbols ADD COLUMN imp TEXT NOT NULL DEFAULT ''"
             )
         # The index that makes `symbol LIKE 'req%'` sub-millisecond.
         conn.execute(
@@ -77,7 +83,28 @@ def init() -> None:
             "CREATE INDEX IF NOT EXISTS idx_code_symbols_source ON code_symbols(source)"
         )
         _seed_python_static(conn)
+        _purge_orphan_buffers(conn)
     _initialized = True
+
+
+def _purge_orphan_buffers(conn: sqlite3.Connection) -> None:
+    """Drop rows harvested from `workspace-file:` buffers whose file no longer exists.
+
+    A buffer's symbols are replaced on every re-index, but a file that's deleted or
+    renamed is never re-indexed — its rows would linger forever and keep polluting
+    completion with symbols from files that are gone. Runs once per process, on the
+    same startup pass that seeds the builtins."""
+    orphans = [
+        row["source"]
+        for row in conn.execute(
+            "SELECT DISTINCT source FROM code_symbols WHERE source LIKE 'workspace-file:%'"
+        )
+        if not os.path.isfile(row["source"][len("workspace-file:") :])
+    ]
+    if orphans:
+        conn.executemany(
+            "DELETE FROM code_symbols WHERE source = ?", [(s,) for s in orphans]
+        )
 
 
 def _seed_python_static(conn: sqlite3.Connection) -> None:
@@ -123,6 +150,7 @@ def replace_source(source: str, lang: str, rows: Iterable[Mapping[str, object]])
             source,
             int(r.get("freq", 1) or 1),
             str(r.get("doc", "")),
+            str(r.get("imp", "")),
         )
         for r in rows
         if r.get("symbol")
@@ -131,8 +159,9 @@ def replace_source(source: str, lang: str, rows: Iterable[Mapping[str, object]])
         conn.execute("DELETE FROM code_symbols WHERE source = ?", (source,))
         if data:
             conn.executemany(
-                "INSERT INTO code_symbols (symbol, lang, kind, detail, module, source, freq, doc) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO code_symbols "
+                "(symbol, lang, kind, detail, module, source, freq, doc, imp) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 data,
             )
     return len(data)
@@ -148,16 +177,37 @@ def query(
         return []
     # Escape LIKE wildcards in the typed text so `_`/`%` match literally.
     like = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+    # Group by (symbol, module), not symbol alone: `Path` exists in both `pathlib` and
+    # `fastapi.params`, and collapsing them produced one blended row — pathlib's import
+    # module glued to fastapi's signature and docstring. They're different symbols and
+    # both deserve their own suggestion.
+    #
+    # Ranking is tiered, because the corpora mean different things:
+    #   0 — your own buffers and the language builtins: what you're most likely typing
+    #   1 — an importable indexed symbol (`json.dumps`, `pathlib.Path`)
+    #   2 — an indexed *method* (`Marshaller.dumps`), which a bare-prefix query is
+    #       almost never after; without this tier they buried the real answers
+    # Within a tier: *import depth* first, so `json.dumps` beats `xmlrpc.client.dumps`
+    # and `numpy.array` beats `numpy.core.multiarray.array` — a symbol you reach at the
+    # top of a package is the one people mean. Then frequency, length, alphabetical.
     sql = (
-        "SELECT symbol, MIN(kind) AS kind, MIN(detail) AS detail, "
-        "MIN(module) AS module, MAX(freq) AS freq, MAX(doc) AS doc "
+        "SELECT symbol, MIN(kind) AS kind, MIN(detail) AS detail, module, "
+        "MAX(freq) AS freq, MAX(doc) AS doc, MAX(imp) AS imp, "
+        "(length(MAX(imp)) - length(replace(MAX(imp), '.', ''))) AS depth, "
+        "CASE WHEN MIN(source) LIKE 'workspace-file:%' "
+        "       OR MIN(source) LIKE 'note:%' "
+        "       OR MIN(source) = ? THEN 0 "
+        "     WHEN MAX(imp) != '' THEN 1 ELSE 2 END AS tier "
         "FROM code_symbols WHERE lang = ? AND symbol LIKE ? ESCAPE '\\' "
     )
-    params: list[object] = [lang, like]
+    params: list[object] = [_BUILTINS_SOURCE, lang, like]
     if member_of:
         sql += "AND module = ? "
         params.append(member_of)
-    sql += "GROUP BY symbol ORDER BY freq DESC, length(symbol), symbol LIMIT ?"
+    sql += (
+        "GROUP BY symbol, module "
+        "ORDER BY tier ASC, depth ASC, freq DESC, length(symbol), symbol LIMIT ?"
+    )
     params.append(max(1, limit))
     with _conn() as conn:
         cur = conn.execute(sql, params)
@@ -168,6 +218,7 @@ def query(
                 "detail": r["detail"],
                 "module": r["module"],
                 "doc": r["doc"] or "",
+                "imp": r["imp"] or "",
             }
             for r in cur.fetchall()
         ]

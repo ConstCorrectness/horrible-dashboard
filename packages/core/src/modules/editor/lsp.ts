@@ -27,6 +27,7 @@ import {
   type Completion,
   type CompletionContext,
   type CompletionResult,
+  type CompletionSource,
 } from '@codemirror/autocomplete';
 
 import { dialogs } from '../../dialogs';
@@ -105,6 +106,8 @@ interface LspClient extends LspBufferClient {
   /** Characters that auto-open the completion list (from the server's capabilities). */
   triggerChars: string[];
   flushChanges(): void;
+  /** Resolve once the server is usable, or after `timeoutMs`; true if it became ready. */
+  waitReady(timeoutMs: number): Promise<boolean>;
   complete(context: CompletionContext): Promise<CompletionResult | null>;
   hover(pos: number): Promise<Tooltip | null>;
   definition(pos: number): Promise<void>;
@@ -489,6 +492,47 @@ class LspSession {
   private docs = new Map<string, SessionDoc>();
   private queuedOpens: (() => void)[] = [];
   private readonly unsubscribe: () => void;
+  // Resolved once `initialize` comes back (or the session dies), so a completion
+  // request that arrives during the cold start can *wait* for the server instead of
+  // silently returning nothing — spawning basedpyright and indexing a project takes
+  // seconds, and that used to be a dead window with no results and no retry.
+  private readyResolve!: () => void;
+  readonly readyPromise: Promise<void> = new Promise<void>((res) => {
+    this.readyResolve = res;
+  });
+  // Called when the session becomes ready, so open popups can re-query (see
+  // `lspExtension`). Cleared after firing — readiness happens once per session.
+  private readyListeners: (() => void)[] = [];
+
+  /** Run `fn` when the session finishes initializing (immediately if it already has). */
+  onReady(fn: () => void): void {
+    if (this.initialized || this.dead) fn();
+    else this.readyListeners.push(fn);
+  }
+
+  /** Settle the readiness promise and notify listeners. Idempotent. */
+  private settleReady(): void {
+    this.readyResolve();
+    const listeners = this.readyListeners;
+    this.readyListeners = [];
+    for (const fn of listeners) fn();
+  }
+
+  /** Resolve once the server is usable, or after `timeoutMs` — whichever comes first.
+   * Returns whether it actually became ready. */
+  async waitReady(timeoutMs: number): Promise<boolean> {
+    if (this.ready()) return true;
+    if (this.dead || timeoutMs <= 0) return false;
+    let timer: number | undefined;
+    await Promise.race([
+      this.readyPromise,
+      new Promise<void>((res) => {
+        timer = window.setTimeout(res, timeoutMs);
+      }),
+    ]);
+    if (timer !== undefined) window.clearTimeout(timer);
+    return this.ready();
+  }
 
   constructor(
     readonly key: string,
@@ -566,6 +610,9 @@ class LspSession {
     sendChannel('lsp', 'stop', { sessionId: this.sessionId });
     this.unsubscribe();
     this.dead = true;
+    // Unblock anyone waiting on the cold start — the wait is bounded anyway, but a
+    // disposed session should never make a completion request sit out its timeout.
+    this.settleReady();
   }
 
   /** Reply to a server→client request. We service `workspace/configuration` (how
@@ -599,6 +646,7 @@ class LspSession {
     if (data.sessionId !== this.sessionId) return;
     if (msg.event === 'error' || msg.event === 'exit') {
       this.dead = true;
+      this.settleReady();
       return;
     }
     if (msg.event === 'started') {
@@ -653,6 +701,7 @@ class LspSession {
       this.rpc({ jsonrpc: '2.0', method: 'initialized', params: {} });
       for (const open of this.queuedOpens) open();
       this.queuedOpens = [];
+      this.settleReady();
       return;
     }
     // A server→client *request* (a `method` plus an `id`) must be answered or the server
@@ -736,6 +785,25 @@ export interface LspOptions {
   /** Whether to offer the curated framework-import completions (the
    * `editor.frameworkImports` setting; Python only). Defaults to on. */
   frameworkImports?: boolean;
+  /** How long a completion request waits for a still-warming language server before
+   * giving up and returning only the instant sources (`editor.completionWarmupMs`).
+   * The cold start — spawn, `initialize`, project index — is seconds; without this
+   * the first completions in a freshly-opened buffer came back empty. Defaults to
+   * 2000ms; 0 disables waiting. */
+  warmupMs?: number;
+  /** Debounce before a buffer edit is pushed to the server as `didChange`
+   * (`editor.changeDebounceMs`). Lower = fresher completions, more traffic.
+   * Defaults to 300ms. */
+  changeDebounceMs?: number;
+  /** Whether to publish language-server diagnostics into the lint gutter
+   * (`editor.diagnostics`). Defaults to on. */
+  diagnostics?: boolean;
+  /** Whether hovering a symbol shows the server's tooltip (`editor.hover`).
+   * Defaults to on. */
+  hover?: boolean;
+  /** Whether to merge the indexed stdlib/package symbols (the symdex prefix index)
+   * into the completion popup (`editor.indexedSymbols`). Defaults to on. */
+  indexedSymbols?: boolean;
 }
 
 /** Build the LSP extension for one buffer. Manages a server session for its
@@ -803,6 +871,16 @@ export function lspExtension(opts: LspOptions): Extension {
         session.openDocument(uri, opts.languageId, () => this.view.state.doc.toString(), {
           onDiagnostics: (raw) => this.applyDiagnostics(raw),
         });
+        // The moment the server is usable, re-open the completion list if the user is
+        // sitting in this buffer mid-word. Waiting on `warmupMs` covers a request made
+        // *during* the cold start; this covers the popup the user already dismissed —
+        // together they close the dead window where typing produced nothing.
+        session.onReady(() => {
+          if (this.disposed || !this.view.hasFocus) return;
+          const head = this.view.state.selection.main.head;
+          const word = this.view.state.wordAt(head);
+          if (word && head > word.from) startCompletion(this.view);
+        });
       }
 
       // Session-backed state the statically-configured extensions read through `ref`.
@@ -821,6 +899,17 @@ export function lspExtension(opts: LspOptions): Extension {
 
       ready(): boolean {
         return this.session?.ready() ?? false;
+      }
+
+      /** Wait out the cold start (bounded). The session itself may not exist yet — the
+       * Python environment fetch precedes it — so poll briefly for it first. */
+      async waitReady(timeoutMs: number): Promise<boolean> {
+        const deadline = Date.now() + timeoutMs;
+        while (!this.session && !this.disposed && Date.now() < deadline) {
+          await new Promise((r) => window.setTimeout(r, 50));
+        }
+        if (!this.session || this.disposed) return false;
+        return this.session.waitReady(Math.max(0, deadline - Date.now()));
       }
 
       flushChanges(): void {
@@ -842,7 +931,11 @@ export function lspExtension(opts: LspOptions): Extension {
       /** Render the server's diagnostics for this document into the linter and stash the
        * flattened form for the agent's read tools. */
       applyDiagnostics(raw: LspDiagnostic[]): void {
+        // The agent-facing record is kept even with the gutter turned off —
+        // `editor.diagnostics` is about what the *editor* renders, and
+        // `editor.getDiagnostics` should still see the server's findings.
         recordDiagnostics(opts.bufferUri, raw.map(toAgentDiagnostic));
+        if (opts.diagnostics === false) return;
         const diags = raw.map((d) => toCmDiagnostic(this.view, d)).sort((a, b) => a.from - b.from);
         this.view.dispatch(setDiagnostics(this.view.state, diags));
       }
@@ -1165,7 +1258,7 @@ export function lspExtension(opts: LspOptions): Extension {
       update(u: ViewUpdate): void {
         if (!u.docChanged || !this.ready()) return;
         if (this.changeTimer !== undefined) window.clearTimeout(this.changeTimer);
-        this.changeTimer = window.setTimeout(() => this.sendChange(), 300);
+        this.changeTimer = window.setTimeout(() => this.sendChange(), opts.changeDebounceMs ?? 300);
       }
 
       sendChange(): void {
@@ -1195,13 +1288,22 @@ export function lspExtension(opts: LspOptions): Extension {
     },
   );
 
-  // LSP is the authoritative completion source for code buffers; it returns null
-  // when the server isn't ready or has nothing, so completion just stays quiet.
-  const completionSource = (context: CompletionContext): Promise<CompletionResult | null> =>
-    ref.plugin?.initialized ? ref.plugin.complete(context) : Promise.resolve(null);
+  const warmupMs = opts.warmupMs ?? 2000;
+
+  // LSP is the authoritative completion source for code buffers. If the server is
+  // still coming up, wait for it (bounded by `warmupMs`) rather than returning empty
+  // — the instant sources below already resolved, so this only delays the *full*
+  // result on a cold buffer, and only until the server answers.
+  const completionSource = async (context: CompletionContext): Promise<CompletionResult | null> => {
+    const p = ref.plugin;
+    if (!p || p.dead) return null;
+    if (!p.initialized && !(await p.waitReady(warmupMs))) return null;
+    if (context.aborted) return null;
+    return p.complete(context);
+  };
 
   const hover = hoverTooltip((_view, pos) =>
-    ref.plugin?.initialized ? ref.plugin.hover(pos) : null,
+    opts.hover === false || !ref.plugin?.initialized ? null : ref.plugin.hover(pos),
   );
 
   // F12 jumps to definition (same-file: move the cursor; cross-file: open it).
@@ -1264,14 +1366,47 @@ export function lspExtension(opts: LspOptions): Extension {
   // Python buffers also get the curated framework-import source (basedpyright can't
   // auto-import installed libraries) — merged into the same popup, ranked below LSP.
   const useFrameworkImports = opts.languageId === 'python' && opts.frameworkImports !== false;
-  const completionSources = useFrameworkImports
-    ? [completionSource, dbSource, frameworkImportSource(() => env.packages)]
-    : [completionSource, dbSource];
+  const fallbackSources: CompletionSource[] = [
+    ...(opts.indexedSymbols === false ? [] : [dbSource]),
+    ...(useFrameworkImports ? [frameworkImportSource(() => env.packages)] : []),
+  ];
+
+  // One merged source rather than three parallel ones, so the offline sources can be
+  // **deduped against the server's own results**. basedpyright ships typeshed, so once
+  // it's warm it already offers `defaultdict`, `Path`, … as auto-imports — listing the
+  // indexed copy beside it showed every stdlib symbol twice. The server wins any label
+  // it provides (it's type-aware and scope-aware); the indexed sources only fill in
+  // what it didn't offer, which is what makes them useful during the cold start and
+  // for third-party packages it can't auto-import.
+  const mergedSource = async (context: CompletionContext): Promise<CompletionResult | null> => {
+    const [lsp, ...rest] = await Promise.all([
+      completionSource(context),
+      ...fallbackSources.map((src) => src(context)),
+    ]);
+    const extras = rest.filter((r): r is CompletionResult => r != null);
+    if (!lsp && !extras.length) return null;
+    const seen = new Set((lsp?.options ?? []).map((o) => o.label));
+    const options = [...(lsp?.options ?? [])];
+    for (const result of extras) {
+      for (const option of result.options) {
+        if (seen.has(option.label)) continue;
+        seen.add(option.label);
+        options.push(option);
+      }
+    }
+    if (!options.length) return null;
+    // Every source anchors on the same typed word, so any non-null `from` agrees.
+    return {
+      from: lsp?.from ?? extras[0].from,
+      options,
+      validFor: /^[A-Za-z_]\w*$/,
+    };
+  };
 
   return [
-    lintGutter(),
+    ...(opts.diagnostics === false ? [] : [lintGutter()]),
     plugin,
-    autocompletion({ override: completionSources }),
+    autocompletion({ override: [mergedSource] }),
     hover,
     gotoDefinition,
     renameSymbol,

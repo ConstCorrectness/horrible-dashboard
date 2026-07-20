@@ -11,7 +11,9 @@ so opening many files in a project resolves once.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
+from typing import Any
 
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -19,6 +21,49 @@ from pydantic import BaseModel
 from backend.modules.lsp import pyenv, symbol_index, symbol_store
 
 router = APIRouter(prefix="/editor", tags=["editor"])
+
+logger = logging.getLogger(__name__)
+
+# Strong references to the detached index builds. `asyncio.create_task` only keeps a
+# weak reference, so without this the auto-kick could be garbage-collected mid-build —
+# which is one reason the packages corpus silently stayed empty.
+_kicks: set[asyncio.Task[Any]] = set()
+
+
+def _kick_symbol_index(interpreter: str) -> None:
+    """Start a background build of any completion corpus that's still empty.
+
+    The editor's completion index is only as good as these two corpora — the stdlib
+    (`os`, `pathlib`, `json`, …) and the installed framework packages. Both are built
+    once, in the background, the first time a Python buffer resolves its environment.
+    Failures are logged rather than swallowed."""
+    from backend.modules.symdex.index import symdex_index
+
+    status = symdex_index.status()
+    if status["building"]:
+        return
+    kinds = [k for k in ("stdlib", "packages") if not status["counts"].get(k)]
+    if not kinds:
+        return
+    logger.info("symdex auto-kick: building %s for %s", kinds, interpreter)
+    task = asyncio.create_task(symdex_index.reindex(kinds, interpreter))
+    _kicks.add(task)
+
+    def _done(t: asyncio.Task[Any]) -> None:
+        _kicks.discard(t)
+        try:
+            result = t.result()
+        except asyncio.CancelledError:
+            return
+        except Exception:  # noqa: BLE001 — a build failure must not be silent
+            logger.exception("symdex auto-kick failed")
+            return
+        if not result.get("started"):
+            logger.warning("symdex auto-kick did not run: %s", result.get("reason"))
+        else:
+            logger.info("symdex auto-kick finished: %s", result.get("counts"))
+
+    task.add_done_callback(_done)
 
 
 class PythonEnv(BaseModel):
@@ -42,11 +87,7 @@ async def python_env(path: str = "") -> PythonEnv:
     root = await asyncio.to_thread(pyenv.resolve_project_root, start)
     packages = await asyncio.to_thread(pyenv.installed_versions, interpreter)
     if interpreter:
-        from backend.modules.symdex.index import symdex_index
-
-        status = symdex_index.status()
-        if not status["building"] and not status["counts"].get("packages"):
-            asyncio.create_task(symdex_index.reindex(["packages"], interpreter))
+        _kick_symbol_index(interpreter)
     return PythonEnv(
         interpreter=interpreter,
         root=root or (start if start and os.path.isdir(start) else ""),
@@ -83,6 +124,9 @@ class CompletionItem(BaseModel):
     # First docstring paragraph for indexed package symbols (symdex projection);
     # empty for buffer-local symbols.
     doc: str = ""
+    # The module to import the symbol from, when accepting the completion should also
+    # insert `from <imp> import <symbol>`. Empty for methods and buffer-local symbols.
+    imp: str = ""
 
 
 class CompletionResult(BaseModel):

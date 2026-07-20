@@ -168,6 +168,45 @@ export const editorModule: ModuleManifest = {
       default: '',
     },
     {
+      key: 'editor.indexedSymbols',
+      title: 'Indexed symbol completions',
+      description:
+        'Merge the indexed Python standard library and installed packages into the completion popup, with signatures and docstrings. Accepting one inserts its import line automatically. Built once in the background; see the Indexed packages section below.',
+      type: 'boolean',
+      default: true,
+    },
+    {
+      key: 'editor.completionWarmupMs',
+      title: 'Language server warm-up wait (ms)',
+      description:
+        'How long a completion request waits for a still-starting language server before falling back to the instant indexed results. A cold buffer needs a few seconds to spawn and index; raise this on large projects, set 0 to never wait.',
+      type: 'number',
+      default: 2000,
+    },
+    {
+      key: 'editor.changeDebounceMs',
+      title: 'Edit push debounce (ms)',
+      description:
+        'How long to wait after you stop typing before sending the buffer to the language server. Lower means fresher completions and diagnostics at the cost of more traffic.',
+      type: 'number',
+      default: 300,
+    },
+    {
+      key: 'editor.diagnostics',
+      title: 'Show diagnostics',
+      description:
+        'Render language-server errors and warnings in the gutter and inline. The agent can still read diagnostics when this is off.',
+      type: 'boolean',
+      default: true,
+    },
+    {
+      key: 'editor.hover',
+      title: 'Hover tooltips',
+      description: 'Show the language server’s type and documentation tooltip on hover.',
+      type: 'boolean',
+      default: true,
+    },
+    {
       key: 'editor.frameworkImports',
       title: 'Framework import suggestions',
       description:

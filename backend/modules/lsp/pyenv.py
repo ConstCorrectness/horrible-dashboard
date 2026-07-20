@@ -27,20 +27,58 @@ from pathlib import Path
 # Import name (what the user types / the curated registry uses) → pip distribution
 # name, for the framework packages we track. Most match; the exceptions are the point.
 FRAMEWORK_PACKAGES: dict[str, str] = {
+    # Scientific / numeric core.
     "numpy": "numpy",
     "pandas": "pandas",
+    "scipy": "scipy",
+    "sympy": "sympy",
+    "sklearn": "scikit-learn",
+    "statsmodels": "statsmodels",
+    "polars": "polars",
+    "pyarrow": "pyarrow",
+    # Plotting.
     "matplotlib": "matplotlib",
+    "seaborn": "seaborn",
+    "plotly": "plotly",
+    # Deep learning.
     "torch": "torch",
+    "torchvision": "torchvision",
+    "einops": "einops",
+    # Hugging Face + fine-tuning / serving.
     "transformers": "transformers",
     "datasets": "datasets",
+    "tokenizers": "tokenizers",
+    "accelerate": "accelerate",
+    "peft": "peft",
+    "safetensors": "safetensors",
+    "huggingface_hub": "huggingface-hub",
+    "sentence_transformers": "sentence-transformers",
     "trl": "trl",
     "bitsandbytes": "bitsandbytes",
     "vllm": "vllm",
+    # LLM API clients + orchestration.
     "openai": "openai",
     "anthropic": "anthropic",
     "google.genai": "google-genai",
+    "langchain": "langchain",
+    "langchain_core": "langchain-core",
+    "langgraph": "langgraph",
+    "litellm": "litellm",
+    "ollama": "ollama",
+    "tiktoken": "tiktoken",
+    # RL / imaging / vector stores.
     "gymnasium": "gymnasium",
     "PIL": "pillow",
+    "cv2": "opencv-python",
+    "lancedb": "lancedb",
+    "chromadb": "chromadb",
+    "faiss": "faiss-cpu",
+    # Web / data plumbing the user's own buffers reach for constantly.
+    "fastapi": "fastapi",
+    "pydantic": "pydantic",
+    "httpx": "httpx",
+    "requests": "requests",
+    "sqlalchemy": "SQLAlchemy",
 }
 
 # Ancestor files that mark a project root (checked alongside `.git`/`.venv`/`venv`).
