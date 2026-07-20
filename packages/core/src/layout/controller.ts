@@ -228,6 +228,24 @@ export function openPane(viewId: string, opts?: OpenPaneOptions): string | null 
   return fresh.instanceId;
 }
 
+/**
+ * Re-point an open pane at a new instance id + params, in place — the "reuse this
+ * pane" counterpart to `openPane`. A caller that knows the pane holds nothing
+ * worth keeping (an empty editor buffer) retargets it rather than splitting off a
+ * second pane, so the area, tab position, and region strips all survive. Returns
+ * the new instance id, or null when the pane is gone or the id is already taken.
+ */
+export function retargetPane(
+  instanceId: string,
+  newInstanceId: string,
+  params?: Record<string, unknown>,
+): string | null {
+  const f = frame();
+  if (!findPaneAnywhere(f, instanceId) || findPaneAnywhere(f, newInstanceId)) return null;
+  const after = layoutStore.dispatch({ type: 'RETARGET_PANE', instanceId, newInstanceId, params });
+  return findPaneAnywhere(after.frame, newInstanceId) ? newInstanceId : null;
+}
+
 // ---------------------------------------------------------------------------
 // Regions
 // ---------------------------------------------------------------------------

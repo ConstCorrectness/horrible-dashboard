@@ -50,6 +50,14 @@ the component.
   `workspace-file:`, `gdrive:`, `github:`, `osfile:` on desktop) so the buffer layer
   doesn't care where
   content lives; an optional `language` param highlights extensionless sources (notes).
+  Reopening a source **focuses** its existing buffer rather than duplicating it (the
+  pane's instance id is derived from the source URI), and opening from a **blank,
+  unmodified** buffer **reuses that pane in place** — a placeholder editor holds
+  nothing worth preserving, so notes opened from the Recent-notes region land in the
+  editor you are looking at instead of splitting off a second one. Reuse goes through
+  the frame engine's `retargetPane` (see
+  [windowing](../architecture/windowing.mdx)), which keeps the pane's area, tab
+  position, and region strips.
   For richer cross-module use, the editor also registers an **`editor` service** on the
   registry (`registry.getService('editor')`, from `service.ts`) — `openBufferFromContent`
   (materialize content as a note or `scratch/` file), `getBufferContent` (live, or the

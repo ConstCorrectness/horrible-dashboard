@@ -113,7 +113,16 @@ All mutations are dispatches into the layout store, exposed two ways from
 - **plain controller exports** for the frame verbs — `splitAreaBy`,
   `joinAreaDirection`, `focusAreaDirection`, `movePaneTo`, `resizeAreaPx`,
   `fullscreenArea`, `toggleRegion`, `setRegionView`, `revealRegionView`,
-  `openToolInDock`, `toggleDock`.
+  `openToolInDock`, `toggleDock`, `retargetPane`.
+
+`retargetPane(instanceId, newInstanceId, params)` is the **reuse** counterpart to
+`openPane`: it re-points an already-open pane at a new identity in place, keeping
+its area, tab position, viewId, and region strips, and refuses when the new id is
+already taken (the caller then falls back to a normal focus-or-create open). It
+exists so a caller that knows a pane holds nothing worth preserving can land in it
+rather than accumulate placeholders — the editor uses it so opening a note from a
+**blank, unmodified** buffer reuses that editor instead of splitting off a second
+one. See [editor](../modules/editor.mdx).
 
 The **user's gestures**, the **keybinding commands**, and the **agent's layout
 tools** (`split_area`, `join_area`, `move_pane`, `fullscreen_area`,

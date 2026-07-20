@@ -7,6 +7,7 @@
  * + mod+s keybinding routed through the shell keybinding service (C3), agent
  * tools (C4), and the recent-notes dashboard widget (C5). See docs/modules/editor.md.
  */
+import { retargetPane } from '../../layout/controller';
 import { getLocus, subscribeLocus } from '../../locus';
 import { registry, type ModuleManifest } from '../../registry';
 import { editorAgentTools } from './agentTools';
@@ -24,15 +25,32 @@ export interface OpenBufferOptions {
 }
 
 /**
+ * The pane holding the buffer the user is looking at, when that buffer is blank
+ * and unmodified. Such a buffer is a placeholder, not work — opening a note from
+ * it should land *in* it rather than split off a second editor. Null whenever
+ * there is anything to preserve (content, unsaved edits) or it's already the
+ * target, in which case the caller does a normal focus-or-create open.
+ */
+function blankBufferPane(target: string): string | null {
+  const active = getActiveBufferSource();
+  if (!active || active === target) return null;
+  const snapshot = getBuffer(active)?.snapshot();
+  if (!snapshot || snapshot.dirty || snapshot.content.trim() !== '') return null;
+  return `editor.buffer:${active}`;
+}
+
+/**
  * Open a buffer for a source URI (`note:<id>`, `workspace-file:<path>`). The
  * instance id is derived from the source so reopening the same source focuses the
- * existing buffer instead of duplicating it.
+ * existing buffer instead of duplicating it, and a blank current buffer is reused
+ * in place instead of accumulating empty editors.
  */
 export function openBuffer(source: string, opts?: OpenBufferOptions): void {
-  registry.openPanel('editor.buffer', {
-    instanceId: `editor.buffer:${source}`,
-    params: { source, title: sourceTitle(source), language: opts?.language },
-  });
+  const instanceId = `editor.buffer:${source}`;
+  const params = { source, title: sourceTitle(source), language: opts?.language };
+  const blank = blankBufferPane(source);
+  if (blank && retargetPane(blank, instanceId, params)) return;
+  registry.openPanel('editor.buffer', { instanceId, params });
 }
 
 // The source of the most recently focused buffer, so other modules (e.g. the

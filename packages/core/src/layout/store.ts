@@ -23,7 +23,7 @@ import {
   splitArea,
   updatePaneAnywhere,
 } from './model';
-import type { AreaNode, FrameState, LayoutStoreState } from './types';
+import type { AreaNode, DockSide, FrameState, LayoutStoreState } from './types';
 
 function reduceFrame(frame: FrameState, action: LayoutAction): FrameState {
   switch (action.type) {
@@ -75,6 +75,27 @@ function reduceFrame(frame: FrameState, action: LayoutAction): FrameState {
         regions: action.regions,
       }));
       return next ?? frame;
+    }
+
+    case 'RETARGET_PANE': {
+      if (action.instanceId === action.newInstanceId) return frame;
+      // Refuse to mint a duplicate id — the caller falls back to a normal open,
+      // which focuses whatever already holds the target identity.
+      if (findPaneAnywhere(frame, action.newInstanceId)) return frame;
+      const next = updatePaneAnywhere(frame, action.instanceId, (pane) => ({
+        ...pane,
+        instanceId: action.newInstanceId,
+        params: action.params,
+      }));
+      if (!next) return frame;
+      // Docks track their active tool by instance id, so follow the rename.
+      const docks = { ...next.docks };
+      for (const side of ['left', 'right', 'bottom'] as DockSide[]) {
+        if (docks[side].activeTool === action.instanceId) {
+          docks[side] = { ...docks[side], activeTool: action.newInstanceId };
+        }
+      }
+      return { ...next, docks };
     }
 
     case 'SET_REGION': {

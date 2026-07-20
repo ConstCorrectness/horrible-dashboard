@@ -145,6 +145,49 @@ describe('pane and area actions', () => {
     expect(findPaneAnywhere(cleared.frame, inst)?.pane.regions).toBeUndefined();
   });
 
+  it('RETARGET_PANE renames in place, keeping position and regions', () => {
+    load();
+    const children = (layoutStore.getSnapshot().frame.center as { children: AreaNode[] }).children;
+    const inst = findPaneAnywhere(layoutStore.getSnapshot().frame, children[0].tabs[0].instanceId)!;
+    const region = {
+      open: true,
+      size: 300,
+      collapsed: false,
+      views: ['editor.recentNotes'],
+      activeView: 'editor.recentNotes',
+    };
+    layoutStore.dispatch({
+      type: 'SET_REGION',
+      instanceId: inst.pane.instanceId,
+      position: 'left',
+      region,
+    });
+    const next = layoutStore.dispatch({
+      type: 'RETARGET_PANE',
+      instanceId: inst.pane.instanceId,
+      newInstanceId: 'editor.buffer:note:7',
+      params: { source: 'note:7' },
+    });
+    const moved = findPaneAnywhere(next.frame, 'editor.buffer:note:7');
+    expect(findPaneAnywhere(next.frame, inst.pane.instanceId)).toBeNull();
+    expect(moved?.location).toEqual(inst.location);
+    expect(moved?.pane.viewId).toBe('editor.buffer');
+    expect(moved?.pane.params).toEqual({ source: 'note:7' });
+    expect(moved?.pane.regions?.left).toEqual(region);
+  });
+
+  it('RETARGET_PANE refuses to mint an id another pane already holds', () => {
+    load();
+    const frame = layoutStore.getSnapshot().frame;
+    const children = (frame.center as { children: AreaNode[] }).children;
+    const next = layoutStore.dispatch({
+      type: 'RETARGET_PANE',
+      instanceId: children[0].tabs[0].instanceId,
+      newInstanceId: children[1].tabs[0].instanceId,
+    });
+    expect(next.frame).toBe(frame);
+  });
+
   it('SET_FULLSCREEN validates the area and clears on null', () => {
     load();
     expect(

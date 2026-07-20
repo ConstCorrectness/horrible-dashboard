@@ -32,6 +32,17 @@ export type LayoutAction =
       params?: Record<string, unknown>;
       regions?: PaneState['regions'];
     }
+  /**
+   * Re-point a pane at a new instance id + params in place, so a caller can reuse
+   * a pane it already owns (an empty editor buffer) instead of opening a second
+   * one. Geometry, tab position, viewId, and region strips are all kept.
+   */
+  | {
+      type: 'RETARGET_PANE';
+      instanceId: string;
+      newInstanceId: string;
+      params?: Record<string, unknown>;
+    }
   /** Patch one region strip on a pane (null clears the position). */
   | { type: 'SET_REGION'; instanceId: string; position: RegionPosition; region: RegionState | null }
   // Areas
