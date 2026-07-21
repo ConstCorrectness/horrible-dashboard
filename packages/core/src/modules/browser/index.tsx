@@ -1,6 +1,7 @@
 import { registry, type ModuleManifest } from '../../registry';
 import { browserAgentTools } from './agentTools';
 import { BrowserPanel, focusActiveUrlBar } from './panels/BrowserPanel';
+import { NetworkStrip } from './panels/NetworkStrip';
 
 /**
  * The **browser** module: a dockable pane that renders web pages inline via an
@@ -24,6 +25,27 @@ export const browserModule: ModuleManifest = {
       // Non-singleton: open as many browser tabs as you like.
       // The agent reads/opens the web through these (see agentTools.ts).
       agentTools: browserAgentTools,
+      regions: [
+        {
+          id: 'browser.network',
+          label: 'Network',
+          icon: '📡',
+          position: 'right',
+          defaultSize: 360,
+        },
+      ],
+    },
+  ],
+  widgets: [
+    {
+      id: 'browser.network',
+      title: 'Browser network',
+      component: NetworkStrip,
+      // A region strip of `browser.view` (the 📡 toggle), but a real registered
+      // view so it can also be opened standalone or dragged out to its own area
+      // — where the full request inspector actually has room.
+      role: 'widget',
+      icon: '📡',
     },
   ],
   commands: [

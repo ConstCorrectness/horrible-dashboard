@@ -261,7 +261,7 @@ Accepts an invitation to speak from a moderator.
 
 ## Contributions to the Layout Shell
 
-- **Singleton Panel:** `clubhouse.account` — The unified "Clubhouse" panel. Displays the account onboarding/connection card when disconnected, and the live rooms list when connected.
+- **Singleton Panel:** `clubhouse.account` — The unified "Clubhouse" panel. Displays the account onboarding/connection card when disconnected, and the live rooms list when connected. Declares `dockable: 'right'`, so it opens in a center area by default but can also be toggled into the right dock from the rail — see [Windowing](../architecture/windowing.mdx).
 - **Commands:**
   - `clubhouse.connect` — Opens the unified Clubhouse panel.
 

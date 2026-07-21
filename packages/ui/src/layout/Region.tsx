@@ -9,6 +9,7 @@
 import {
   collapseRegion,
   layoutStore,
+  paneDrag,
   resolveView,
   setRegionView,
   toggleRegion,
@@ -101,7 +102,16 @@ export function Region({ pane, position }: { pane: PaneState; position: RegionPo
 
   const content =
     position === 'right' && region.views.length > 1 ? (
-      <div className="frame-region-content" style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0, minHeight: 0 }}>
+      <div
+        className="frame-region-content"
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          height: '100%',
+          minWidth: 0,
+          minHeight: 0,
+        }}
+      >
         {region.views.map((id, index) => {
           const decl = declFor(id);
           const title = decl?.label ?? resolveView(id)?.title ?? id;
@@ -117,9 +127,14 @@ export function Region({ pane, position }: { pane: PaneState; position: RegionPo
                 borderBottom: index < region.views.length - 1 ? '1px solid var(--border)' : 'none',
               }}
             >
-              <div className="frame-region-header" style={{ flex: 'none', background: 'var(--bg-raised)' }}>
+              <div
+                className="frame-region-header"
+                style={{ flex: 'none', background: 'var(--bg-raised)' }}
+              >
                 {decl?.icon ? <span>{decl.icon}</span> : null}
-                <span className="frame-region-title" style={{ fontWeight: 800 }}>{title}</span>
+                <span className="frame-region-title" style={{ fontWeight: 800 }}>
+                  {title}
+                </span>
                 <button
                   className="frame-region-btn"
                   title={`Collapse ${position} region (${POSITION_KEY[position]})`}
@@ -136,7 +151,10 @@ export function Region({ pane, position }: { pane: PaneState; position: RegionPo
                   ✕
                 </button>
               </div>
-              <div className="frame-region-body" style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
+              <div
+                className="frame-region-body"
+                style={{ flex: 1, minHeight: 0, overflow: 'auto' }}
+              >
                 <PaneHost
                   pane={{
                     instanceId: `${pane.instanceId}:${position}:${id}`,
@@ -150,7 +168,20 @@ export function Region({ pane, position }: { pane: PaneState; position: RegionPo
       </div>
     ) : (
       <div className="frame-region-content">
-        <div className="frame-region-header">
+        <div
+          className="frame-region-header"
+          draggable
+          title="Drag into the center to open in its own area"
+          onDragStart={(e) => {
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', activeTitle);
+            // A `view` payload, not `pane`: the strip's content is a synthetic
+            // per-host instance, not a pane the layout owns — so it opens a real
+            // one where it lands, and the strip stays put.
+            paneDrag.begin({ kind: 'view', viewId: region.activeView, title: activeTitle });
+          }}
+          onDragEnd={() => paneDrag.end()}
+        >
           {region.views.length > 1 ? (
             <div className="frame-region-tabs">
               {region.views.map((id) => (

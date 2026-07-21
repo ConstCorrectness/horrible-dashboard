@@ -218,6 +218,62 @@ describe('dock and floating actions', () => {
     expect(bottom.frame.docks.bottom.visible).toBe(false);
   });
 
+  it('SET_TOOL_SIZE remembers a width per tool and mirrors it as the dock fallback', () => {
+    load();
+    const files = freshPane('files.tree');
+    layoutStore.dispatch({ type: 'INSERT_TOOL', side: 'right', pane: files });
+    const chat = freshPane('agent.chat');
+    layoutStore.dispatch({ type: 'INSERT_TOOL', side: 'right', pane: chat });
+
+    layoutStore.dispatch({
+      type: 'SET_TOOL_SIZE',
+      side: 'right',
+      instanceId: files.instanceId,
+      size: 280,
+    });
+    const after = layoutStore.dispatch({
+      type: 'SET_TOOL_SIZE',
+      side: 'right',
+      instanceId: chat.instanceId,
+      size: 500,
+    });
+
+    const tools = after.frame.docks.right.tools;
+    // Each tool keeps its own width — the whole point of the per-tool field.
+    expect(tools.find((t) => t.instanceId === files.instanceId)?.dockSize).toBe(280);
+    expect(tools.find((t) => t.instanceId === chat.instanceId)?.dockSize).toBe(500);
+    // ...and the dock tracks the last one, so the next tool opened here inherits it.
+    expect(after.frame.docks.right.size).toBe(500);
+  });
+
+  it('SET_TOOL_SIZE is a no-op for an unknown tool or an unchanged size', () => {
+    load();
+    const tool = freshPane('files.tree');
+    layoutStore.dispatch({ type: 'INSERT_TOOL', side: 'right', pane: tool });
+    const sized = layoutStore.dispatch({
+      type: 'SET_TOOL_SIZE',
+      side: 'right',
+      instanceId: tool.instanceId,
+      size: 300,
+    });
+    expect(
+      layoutStore.dispatch({
+        type: 'SET_TOOL_SIZE',
+        side: 'right',
+        instanceId: tool.instanceId,
+        size: 300,
+      }),
+    ).toBe(sized);
+    expect(
+      layoutStore.dispatch({
+        type: 'SET_TOOL_SIZE',
+        side: 'right',
+        instanceId: 'nope#9',
+        size: 400,
+      }),
+    ).toBe(sized);
+  });
+
   it('FLOAT_PANE → DOCK_FLOATING round-trips a pane through the floating layer', () => {
     load();
     const snap = layoutStore.getSnapshot();

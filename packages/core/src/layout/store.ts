@@ -221,6 +221,47 @@ function reduceFrame(frame: FrameState, action: LayoutAction): FrameState {
       };
     }
 
+    case 'UNDOCK_PANE_TO_AREA': {
+      const target = findArea(frame.center, action.areaId);
+      if (!target) return frame;
+      const located = findPaneAnywhere(frame, action.instanceId);
+      // Already sitting in the destination — nothing to do.
+      if (
+        !located ||
+        (located.location.kind === 'area' && located.location.areaId === action.areaId)
+      )
+        return frame;
+      const res = removePaneAnywhere(frame, action.instanceId);
+      if (!res) return frame;
+      // Re-find the area: removing the pane can collapse a split and rebuild the
+      // tree, so the pre-removal node is stale.
+      if (!findArea(res.frame.center, action.areaId)) return frame;
+      const center = insertPane(res.frame.center, action.areaId, res.removed);
+      if (!center) return frame;
+      return { ...res.frame, center, focusedAreaId: action.areaId };
+    }
+
+    case 'SET_TOOL_SIZE': {
+      const dock = frame.docks[action.side];
+      const tool = dock.tools.find((t) => t.instanceId === action.instanceId);
+      if (!tool || tool.dockSize === action.size) return frame;
+      return {
+        ...frame,
+        docks: {
+          ...frame.docks,
+          [action.side]: {
+            ...dock,
+            // Mirrored into the dock so the NEXT tool opened here inherits this
+            // width instead of snapping back to the built-in default.
+            size: action.size,
+            tools: dock.tools.map((t) =>
+              t.instanceId === action.instanceId ? { ...t, dockSize: action.size } : t,
+            ),
+          },
+        },
+      };
+    }
+
     case 'FLOAT_PANE': {
       const located = findPaneAnywhere(frame, action.instanceId);
       if (!located || located.location.kind === 'floating') return frame;

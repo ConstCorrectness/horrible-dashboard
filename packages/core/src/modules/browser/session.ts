@@ -6,8 +6,15 @@
  * (navigate/click/scroll/type/key) back over the same channel — the vizdoom/visualizer
  * pattern. Agent-facing ops (content/snapshot/scrape/screenshot) are request/reply,
  * correlated by a monotonic `id`, so the same live session serves both the human panel
- * and the agent tools (one WS connection ⇒ one shared browser). The engine is gated by
- * `HORRIBLE_ENABLE_SERVER_BROWSER=1` on the backend; when off, ops reject with a notice.
+ * and the agent tools. The engine is gated by `HORRIBLE_ENABLE_SERVER_BROWSER=1` on the
+ * backend; when off, ops reject with a notice.
+ *
+ * **One WS connection ⇒ one shared browser, and one shared *page*.** Every open
+ * `browser.view` pane drives it, so two panes do not show two tabs — navigating one
+ * moves the page under the other, which keeps rendering its stale frame. Panes claim
+ * the engine with `acquireSession()` so one closing doesn't stop it for the rest;
+ * genuinely independent tabs need one `page` per pane inside a single per-profile
+ * context on the backend (see the scope note in docs/modules/browser.mdx).
  *
  * See docs/modules/browser.mdx.
  */
@@ -201,7 +208,41 @@ export const engine = {
   info: (): Promise<{ url: string; title: string }> => requestOp('info'),
 };
 
-/** Stop the backend session for this connection (releases Chromium). */
+// How many browser panes are currently mounted and relying on the shared session.
+// The engine is shared per WS connection, so ONE pane unmounting must not stop it
+// out from under the others — that left every remaining pane frozen forever on a
+// stale frame with no error, because nothing tells a pane its session died
+// (`stop_for` pops the session and sets `_closing`, killing the frame pump, while
+// the next request/reply op silently builds a replacement nobody is driving).
+let sessionRefs = 0;
+
+/**
+ * Claim the shared session for a mounting pane. Returns the matching release,
+ * which stops the engine only when the last pane lets go.
+ */
+export function acquireSession(): () => void {
+  sessionRefs += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    sessionRefs -= 1;
+    // Deferred: React StrictMode unmounts and immediately remounts in dev, which
+    // would otherwise tear the engine down and rebuild it on every mount.
+    queueMicrotask(() => {
+      if (sessionRefs <= 0) {
+        sessionRefs = 0;
+        stopSession();
+      }
+    });
+  };
+}
+
+/**
+ * Stop the backend session for this connection (releases Chromium). Prefer
+ * `acquireSession`'s release — calling this directly stops the engine for every
+ * pane sharing the connection.
+ */
 export function stopSession(): void {
   sendChannel('browser', 'stop', {});
 }

@@ -35,6 +35,13 @@ export interface PaneState {
   params?: Record<string, unknown>;
   /** Region strips keyed by position. Absent = the view declares no regions. */
   regions?: Partial<Record<RegionPosition, RegionState>>;
+  /**
+   * For a pane docked as a tool: the dock extent it was last dragged to, in px.
+   * Remembered per tool rather than per dock so two tools sharing a side (a
+   * narrow file tree and a wide agent chat) don't fight over one width. Absent
+   * until the user resizes — the dock's own `size` is the fallback.
+   */
+  dockSize?: number;
 }
 
 /**
@@ -67,7 +74,12 @@ export type LayoutNode = SplitNode | AreaNode;
 /** One fixed tool dock. Tools stack like an activity-bar list; one is visible. */
 export interface DockState {
   visible: boolean;
-  /** Px width (left/right) or height (bottom). */
+  /**
+   * Px width (left/right) or height (bottom) — the dock's fallback extent, used
+   * for tools that have no remembered `dockSize` of their own. Tracks the last
+   * size the user dragged on this side, so a freshly opened tool lands near where
+   * they left things rather than snapping back to the built-in default.
+   */
   size: number;
   /** Role `tool` panes only. */
   tools: PaneState[];

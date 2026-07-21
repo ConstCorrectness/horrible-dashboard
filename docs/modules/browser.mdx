@@ -168,15 +168,57 @@ Every request the embedded Chromium makes is now recorded as an I/O event with
   visible**, labelled with its reason. A silently aborted request is exactly what this
   pane exists to expose.
 
-**📡 Network** in the pane is the glanceable version, sitting next to the page it
-describes:
+**📡 Network** (`browser.network`) is a **registered view declared as a right-hand
+region strip** of `browser.view` — so it resizes, persists per pane instance, toggles
+from the area header or `n`, and can be **dragged out** by its region header into a
+center area of its own, where the inspector has room. The 📡 button reflects and drives
+that region rather than local state.
 
 - **Open connections** — requests currently *in flight*, pushed live on the `browser`
   channel as `connections` events. These exist only while unresolved, so they can't come
   from the I/O ring buffer, which (like the httpx seam) records on **completion**. This
   is the "why is this page hanging" view.
 - **Completed** — finished requests read from the shared telemetry store, filtered to
-  `browser`. Full headers and bodies live in the observability panel's inspector.
+  `browser`, with a text filter over method/target/resource type. Selecting one opens
+  the **same `IoInspector` the observability panel uses** — general/timing/egress
+  verdict, request and response headers, and bodies with JSON pretty-print and copy.
+  The component is shared from `packages/core/src/telemetry-view.tsx` rather than
+  duplicated: both surfaces render the same `IoEvent`, and a module reaching into
+  another module's internals is what the registry conventions forbid.
+
+:::note Scope: all browser traffic, not one tab's
+The list covers **every** embedded-browser request, not just the pane you are looking
+at. `BrowserManager` keys sessions by **WebSocket connection**
+(`backend/modules/browser/session.py`) and the app has a single shared `/ws`, so every
+`browser.view` pane drives the **same** headless Chromium and the **same page** — there
+is only one stream of traffic to show. The header says "All browser traffic" rather than
+implying otherwise.
+
+`browser.view` being non-singleton is therefore misleading today: several browser panes
+can be open, but they share one engine and one page. **Reproduced 2026-07-21:** with two
+panes open, navigating pane B moved the shared page, while pane A went on displaying its
+old URL and a stale frame — the panes do not visibly sync, they silently desync, and a
+click in pane A would land on pane B's page.
+
+Independent tabs need **one persistent context per profile with one `page` per pane** —
+not one session per pane. Two Chromium processes on the same `user_data_dir` race on the
+cookie store, and separate contexts would stop your own tabs sharing a login. That is a
+restructure of `_run`/`_loop_commands`/`_capture_frame`, which currently assume a single
+page. Per-pane network scoping is blocked behind it.
+:::
+
+:::tip Closing one pane no longer freezes the others
+The engine is shared, so `stopSession()` on one pane's unmount used to stop it for
+**all** of them: `stop_for` pops the session and sets `_closing`, which kills the frame
+pump, while the next request/reply op silently builds a replacement session no pane is
+driving. The result was every remaining browser pane frozen on a stale frame, with no
+error — `info`/`screenshot` kept working, so the engine looked healthy.
+
+Panes now claim the shared engine with `acquireSession()`
+(`packages/core/src/modules/browser/session.ts`), whose release stops Chromium only when
+the **last** browser pane lets go. The release is deferred a microtask so React
+StrictMode's dev-mode unmount/remount doesn't tear the engine down on every mount.
+:::
 
 ### Implementation notes
 

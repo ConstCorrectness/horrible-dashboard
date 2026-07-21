@@ -4353,3 +4353,74 @@ kbd {
   line-height: 1.4;
   text-align: center;
 }
+
+/* -------------------------------------------- browser network inspector ---- */
+/* The browser pane's 📡 region: a request list over the shared IoInspector.
+   Sized by the region strip (or the area it is dragged out to), so everything
+   here is fluid — no fixed width. */
+.browser-net {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  font-size: 0.72rem;
+}
+.browser-net-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.3rem 0.45rem;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+.browser-net-filter {
+  margin: 0.3rem 0.45rem;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.72rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  flex: none;
+}
+.browser-net-list {
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1;
+}
+.browser-net-section {
+  padding: 0.25rem 0.45rem;
+  color: var(--text-dim);
+}
+.browser-net-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  width: 100%;
+  padding: 0.15rem 0.45rem;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+}
+.browser-net-row--clickable {
+  cursor: pointer;
+}
+.browser-net-row--clickable:hover {
+  background: var(--bg-hover);
+}
+.browser-net-row--selected {
+  background: var(--bg-raised);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+/* Capped so the request list stays usable in a narrow strip; the inspector
+   scrolls internally. */
+.browser-net-inspector {
+  flex: none;
+  max-height: 55%;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+}

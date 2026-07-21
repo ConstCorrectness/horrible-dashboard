@@ -1,5 +1,6 @@
 /**
- * The frame: workspace tab strip on top, activity rail + tool docks around a
+ * The frame: workspace tab strip on top, an activity rail down each side + tool
+ * docks around a
  * Blender-style center area grid, with the floating layer and fullscreen-area
  * mode. Renders straight off the layout store; on mount it installs the
  * LayoutController (the seam agent tools drive), binds the debounced autosave,
@@ -22,6 +23,7 @@ import {
   setCenterMeasurer,
   splitAreaBy,
   toggleDock,
+  minibuffer,
   toggleRegion,
   workspaceStore,
   type OpenPaneOptions,
@@ -29,6 +31,7 @@ import {
 
 import { ActivityRail } from './ActivityRail';
 import { Area } from './Area';
+import { Minibuffer } from './Minibuffer';
 import { CenterGrid } from './CenterGrid';
 import { Dock } from './Dock';
 import { FloatingLayer } from './FloatingLayer';
@@ -120,6 +123,11 @@ export function Frame({
             for (const dir of NAVS) if (joinAreaDirection(areaId, dir)) break;
           },
         },
+        {
+          id: 'minibuffer.open',
+          title: 'Minibuffer: Run a command (M-x)',
+          run: () => minibuffer.open('/'),
+        },
         { id: 'dock.toggle:left', title: 'Dock: Toggle left', run: () => void toggleDock('left') },
         {
           id: 'dock.toggle:right',
@@ -175,6 +183,9 @@ export function Frame({
       ],
       keybindings: [
         { key: 'ctrl+space', command: 'area.fullscreen' },
+        // `override` so a focused editor pane can't shadow it — the minibuffer
+        // is the escape hatch and has to be reachable from anywhere.
+        { key: 'alt+x', command: 'minibuffer.open', override: true },
         ...NAVS.map((dir) => ({ key: `alt+${dir}`, command: `area.focus:${dir}` })),
         ...NAVS.map((dir) => ({ key: `alt+shift+${dir}`, command: `pane.move:${dir}` })),
         ...NAVS.map((dir) => ({ key: `mod+alt+${dir}`, command: `area.split:${dir}` })),
@@ -229,7 +240,7 @@ export function Frame({
   return (
     <div className="frame-root">
       <div className="frame-main">
-        <ActivityRail frame={frame} />
+        <ActivityRail side="left" frame={frame} />
         {fullscreen ? (
           <div className="frame-center" ref={centerRef}>
             <Area area={fullscreen} focused fullscreen />
@@ -247,7 +258,9 @@ export function Frame({
             <Dock side="right" dock={frame.docks.right} />
           </>
         )}
+        <ActivityRail side="right" frame={frame} />
       </div>
+      <Minibuffer />
     </div>
   );
 }

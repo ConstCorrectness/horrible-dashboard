@@ -1,13 +1,19 @@
 import {
   useCallback,
+  useContext,
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type FormEvent,
 } from 'react';
 
+import { PaneInstanceContext } from '../../../agent-context';
 import { hasCapability } from '../../../capabilities';
+import { toggleRegion } from '../../../layout/controller';
+import { findPaneAnywhere } from '../../../layout/model';
+import { layoutStore } from '../../../layout/store';
 import { usePaneParams } from '../../../panes';
 import { useSetting } from '../../../settings';
 import { windowControl } from '../../../window';
@@ -24,9 +30,9 @@ import {
   type HistoryEntry,
   type ReaderArticle,
 } from '../api';
-import { sendInput, stopSession } from '../session';
+import { acquireSession, sendInput } from '../session';
 import { FullBrowserView } from './FullBrowserView';
-import { NetworkStrip } from './NetworkStrip';
+
 import { SaveToLibrary } from './SaveToLibrary';
 
 /**
@@ -124,7 +130,17 @@ export function BrowserPanel() {
   // Both are full-engine-only: saving reads the live DOM for media context, and the
   // network view reflects the backend Chromium's requests. An iframe exposes neither.
   const [showSave, setShowSave] = useState(false);
-  const [showNetwork, setShowNetwork] = useState(false);
+
+  // The network inspector is this pane's right region strip, owned by the layout
+  // store — so the 📡 button reflects and drives that, not local state, and the
+  // strip survives a workspace reload like every other region.
+  const paneInstanceId = useContext(PaneInstanceContext);
+  const networkOpen = useSyncExternalStore(layoutStore.subscribe, () => {
+    if (!paneInstanceId) return false;
+    const located = findPaneAnywhere(layoutStore.getSnapshot().frame, paneInstanceId);
+    const region = located?.pane.regions?.right;
+    return Boolean(region?.open && !region.collapsed);
+  });
 
   const urlRef = useRef<HTMLInputElement>(null);
   const canPopOut = hasCapability('browser.nativeWindow');
@@ -150,8 +166,10 @@ export function BrowserPanel() {
     [useFull],
   );
 
-  // Release the backend Chromium when the pane unmounts.
-  useEffect(() => (useFull ? () => stopSession() : undefined), [useFull]);
+  // Claim the shared engine while this pane is in full mode; the release only
+  // stops Chromium once the LAST browser pane lets go. Stopping unconditionally
+  // here froze every other open browser pane on a stale frame, silently.
+  useEffect(() => (useFull ? acquireSession() : undefined), [useFull]);
 
   // Home falls back to a blank start page when unset (default).
   const homeUrl = homePage || initialUrl;
@@ -334,9 +352,9 @@ export function BrowserPanel() {
             </button>
             <button
               type="button"
-              style={{ ...btn, color: showNetwork ? 'var(--accent, #6ea8fe)' : undefined }}
-              title="Show this page’s network requests"
-              onClick={() => setShowNetwork((s) => !s)}
+              style={{ ...btn, color: networkOpen ? 'var(--accent, #6ea8fe)' : undefined }}
+              title="Show the browser’s network requests (n)"
+              onClick={() => paneInstanceId && toggleRegion(paneInstanceId, 'right')}
             >
               📡
             </button>
@@ -513,7 +531,9 @@ export function BrowserPanel() {
             <SaveToLibrary library={saveLibrary} onClose={() => setShowSave(false)} />
           )}
         </div>
-        {showNetwork && useFull && <NetworkStrip onClose={() => setShowNetwork(false)} />}
+        {/* The network inspector is a region strip of this pane now (declared in
+            the module manifest), so the frame renders and persists it — no
+            hand-rolled sidebar here. */}
       </div>
     </div>
   );

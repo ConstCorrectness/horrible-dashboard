@@ -30,7 +30,10 @@ The directory hosts Requests and Profile as right region strips, with toggle
 buttons for the others. See [Panel Groups](../architecture/panel-groups.mdx).
 
 - **Widget** `commons.directory` (Commons) — `CommonsDirectory.tsx`. The group
-  **primary** (hub). Connection status, a search box (cosine match over the index's
+  **primary** (hub). Declares `dockable: 'left'`, so it opens in a center area by
+  default but can also be toggled into the left dock from the rail, carrying its
+  region strips with it — see [Windowing](../architecture/windowing.mdx).
+  Connection status, a search box (cosine match over the index's
   vector store), and the directory / match results as profile cards (name, headline,
   tags, online dot, **trust-tier badge**) each with **Meet** / **Vouch** / **Block**
   (or **Unblock**) / **Report** actions.

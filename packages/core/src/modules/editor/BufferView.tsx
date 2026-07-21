@@ -34,7 +34,7 @@ import { usePaneParams } from '../../panes';
 import { useSetting } from '../../settings';
 import { autosuggest } from './autosuggest';
 import { registerBuffer, type BufferSnapshot } from './buffers';
-import { openBuffer, setActiveBufferSource } from './index';
+import { openBuffer, setActiveBufferSource, setActiveSaveAs } from './index';
 import { dirOf, lspExtension, lspLanguageId } from './lsp';
 import { readDiagnostics } from './lsp-registry';
 import { createNote, loadSource, saveSource } from './sources';
@@ -167,6 +167,11 @@ export function BufferView() {
   const diagnosticsOn = useSetting<boolean>('editor.diagnostics') ?? true;
   const hoverOn = useSetting<boolean>('editor.hover') ?? true;
 
+  // Save As, published to the module so `/save-as` can reach the active buffer.
+  // Assigned each render (below, once `saveAs` is defined) and cleared on unmount
+  // so a closed buffer's Save As can't outlive it.
+  const saveAsRef = useRef<() => Promise<boolean>>(() => Promise.resolve(false));
+  useEffect(() => () => setActiveSaveAs(null), []);
   const sourceRef = useRef(source);
   sourceRef.current = source;
   const instanceIdRef = useRef(instanceId);
@@ -227,6 +232,9 @@ export function BufferView() {
               const src = sourceRef.current;
               if (src) setActiveBufferSource(src);
               if (instanceIdRef.current) setActiveContextInstance(instanceIdRef.current);
+              // Same "active buffer" moment: publish this buffer's Save As so
+              // `/save-as` in the minibuffer reaches the one you're looking at.
+              setActiveSaveAs(() => saveAsRef.current());
             }
             // Publish the cursor to the code-locus bus (so the outline follows) — on
             // focus, and when the cursor changes line. Throttled to line granularity;
@@ -256,6 +264,7 @@ export function BufferView() {
       return;
     }
     setActiveBufferSource(source);
+    setActiveSaveAs(() => saveAsRef.current());
     if (instanceId) setActiveContextInstance(instanceId);
     let cancelled = false;
     setStatus('Loading…');
@@ -440,6 +449,10 @@ export function BufferView() {
       return false;
     }
   };
+
+  // Held in a ref so the focus handler above (registered once, on mount) always
+  // publishes the *current* closure rather than the one from first render.
+  saveAsRef.current = saveAs;
   // Show an agent-proposed edit as an inline diff (original vs proposed). The user
   // reviews per-chunk in the gutter, then Accepts (keep) or Declines (revert).
   const propose = (content: string) => {

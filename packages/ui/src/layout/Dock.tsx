@@ -11,6 +11,7 @@
 import {
   closePaneGuarded,
   layoutStore,
+  paneDrag,
   resolveView,
   toggleDock,
   type DockSide,
@@ -27,19 +28,27 @@ export function Dock({ side, dock }: { side: DockSide; dock: DockState }) {
   const active = dock.tools.find((t) => t.instanceId === dock.activeTool) ?? dock.tools[0];
   if (!active) return null;
   const vertical = side !== 'bottom';
+  // Per-tool remembered extent, falling back to the dock's last-used one. This is
+  // why switching the active tool can change the dock's width.
+  const size = active.dockSize ?? dock.size;
 
   const startResize = (e: React.PointerEvent) => {
     e.preventDefault();
     const startX = e.clientX;
     const startY = e.clientY;
-    const startSize = dock.size;
+    const startSize = size;
     const onMove = (me: PointerEvent) => {
       let next: number;
       if (side === 'left') next = startSize + (me.clientX - startX);
       else if (side === 'right') next = startSize - (me.clientX - startX);
       else next = startSize - (me.clientY - startY);
       next = Math.max(MIN_SIZE, Math.min(MAX_SIZE[side], next));
-      layoutStore.dispatch({ type: 'SET_DOCK', side, patch: { size: next } });
+      layoutStore.dispatch({
+        type: 'SET_TOOL_SIZE',
+        side,
+        instanceId: active.instanceId,
+        size: next,
+      });
     };
     const onUp = () => {
       window.removeEventListener('pointermove', onMove);
@@ -59,11 +68,29 @@ export function Dock({ side, dock }: { side: DockSide; dock: DockState }) {
   return (
     <aside
       className={`frame-dock frame-dock--${side}`}
-      style={vertical ? { width: dock.size } : { height: dock.size }}
+      style={vertical ? { width: size } : { height: size }}
     >
       {(side === 'right' || side === 'bottom') && handle}
       <div className="frame-dock-content">
-        <div className="frame-dock-header">
+        <div
+          className="frame-dock-header"
+          draggable
+          title="Drag into the center to undock"
+          onDragStart={(e) => {
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData(
+              'text/plain',
+              resolveView(active.viewId)?.title ?? active.viewId,
+            );
+            paneDrag.begin({
+              kind: 'pane',
+              instanceId: active.instanceId,
+              viewId: active.viewId,
+              title: resolveView(active.viewId)?.title ?? active.viewId,
+            });
+          }}
+          onDragEnd={() => paneDrag.end()}
+        >
           <div className="frame-dock-title-container">
             {resolveView(active.viewId)?.icon ? (
               <span className="frame-dock-title-icon">{resolveView(active.viewId)!.icon}</span>

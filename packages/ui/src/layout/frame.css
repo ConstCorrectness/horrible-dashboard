@@ -227,10 +227,33 @@
   gap: 4px;
   width: 44px;
   padding: 8px 0;
-  border-right: 1px solid var(--border);
   background: var(--bg);
   flex: none;
   overflow-y: auto;
+}
+.frame-rail--left {
+  border-right: 1px solid var(--border);
+}
+.frame-rail--right {
+  border-left: 1px solid var(--border);
+}
+/* A rail with nothing in it would otherwise sit as a bare 44px gutter. */
+.frame-rail:empty,
+.frame-rail--right:not(:has(.frame-rail-btn)) {
+  display: none;
+}
+/* The left rail's own tools and the bottom dock's, visually separated. */
+.frame-rail-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+}
+.frame-rail-section + .frame-rail-section {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
 }
 .frame-rail-logo {
   width: 30px;
@@ -258,10 +281,44 @@
   background: var(--bg-hover);
   color: var(--text);
 }
-.frame-rail-btn.active {
+/* The dock's visible tool. The accent bar sits on the frame-facing edge, so it
+   mirrors on the right rail. */
+.frame-rail-btn--active {
   background: var(--bg-raised);
   color: var(--accent);
   box-shadow: inset 2px 0 0 var(--accent);
+}
+.frame-rail--right .frame-rail-btn--active {
+  box-shadow: inset -2px 0 0 var(--accent);
+}
+/* In the dock's list but not showing: present, just not current. */
+.frame-rail-btn--docked {
+  color: var(--text);
+}
+/* Open out in the center grid — clicking focuses it rather than re-docking. */
+.frame-rail-btn--center {
+  color: var(--accent);
+  opacity: 0.75;
+}
+.frame-rail-btn--center::after {
+  content: '';
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.frame-rail-btn--center {
+  position: relative;
+}
+/* Declared for this side but never opened — discoverable, clearly inactive. */
+.frame-rail-btn--closed {
+  opacity: 0.45;
+}
+.frame-rail-btn--closed:hover {
+  opacity: 1;
 }
 .frame-rail-spacer {
   flex: 1;
@@ -547,6 +604,40 @@
 .frame-menu--context {
   position: fixed;
   top: auto;
+}
+/* ---------------------------------------------------------------- drag-out */
+/* Every area outlines faintly while a pane drag is in flight, so the drop zones
+   are discoverable; the one under the pointer commits to the accent. */
+.frame-area--drop-armed {
+  outline: 1px dashed var(--border);
+  outline-offset: -3px;
+}
+.frame-area--drop-over {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.frame-dock-header[draggable='true'] {
+  cursor: grab;
+}
+.frame-dock-header[draggable='true']:active {
+  cursor: grabbing;
+}
+
+/* Role sections in the area type switcher. The list spans every view now that a
+   center area can host tools too, so it needs headers to stay scannable. */
+.frame-menu-group + .frame-menu-group {
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+  padding-top: 4px;
+}
+.frame-menu-group-label {
+  padding: 4px 8px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim, var(--text-muted, #888));
 }
 .frame-menu-item {
   display: flex;
@@ -952,4 +1043,108 @@
   height: 14px;
   cursor: nwse-resize;
   background: linear-gradient(135deg, transparent 55%, var(--border) 55%);
+}
+
+/* ------------------------------------------------------------- minibuffer */
+/* The bottom-most row of the frame, under the bottom dock: status line when
+   idle, input line for M-x, and where dialogs.prompt() renders. */
+.frame-minibuffer {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: none;
+  height: 24px;
+  padding: 0 0.5rem;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+.frame-minibuffer--prompt {
+  background: var(--bg-raised);
+  color: var(--text);
+}
+.frame-minibuffer-label {
+  flex: none;
+  font-weight: 600;
+  color: var(--accent);
+}
+.frame-minibuffer-input {
+  flex: 1;
+  min-width: 0;
+  height: 18px;
+  padding: 0 0.3rem;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+.frame-minibuffer-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.frame-minibuffer-status {
+  flex: none;
+}
+.frame-minibuffer-echo {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+.frame-minibuffer-echo--error {
+  color: var(--danger, #e5534b);
+}
+.frame-minibuffer-hint {
+  flex: none;
+  color: var(--text-dim);
+}
+.frame-minibuffer-btn {
+  flex: none;
+  padding: 0 0.4rem;
+  font: inherit;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.frame-minibuffer-btn:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.frame-minibuffer-mx {
+  margin-left: auto;
+}
+/* Completions run inline along the strip rather than as a popup — the
+   minibuffer is one line tall and should stay that way. */
+.frame-minibuffer-matches {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex: 2;
+  min-width: 0;
+  overflow: hidden;
+}
+.frame-minibuffer-match {
+  flex: none;
+  padding: 0 0.35rem;
+  font: inherit;
+  white-space: nowrap;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.frame-minibuffer-match:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.frame-minibuffer-match--best {
+  color: var(--text);
+  background: var(--bg-raised);
 }

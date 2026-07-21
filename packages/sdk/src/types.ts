@@ -87,6 +87,14 @@ export interface CommandDecl {
   run: () => void | Promise<void>;
   /** When present, the command is callable by the agent orchestrator. */
   agent?: AgentCommandDecl;
+  /**
+   * Short name for the minibuffer's slash form, without the slash — `save` makes
+   * the command run as `/save`. Opt-in and global, so keep it unambiguous: two
+   * commands claiming the same slash name is a conflict the minibuffer resolves
+   * by first-registered-wins. Everything stays reachable by fuzzy title search
+   * whether or not it declares one.
+   */
+  slash?: string;
 }
 
 /**
@@ -125,17 +133,33 @@ export interface PanelDecl {
   title: string;
   component: ComponentType;
   /**
-   * How this pane participates in the frame layout: `document` panes tab into
-   * center areas, `widget` panes take a center area of their own, `tool` panes
-   * live in the docks. See docs/architecture/windowing.mdx.
+   * Where this pane opens by *default*: `document` panes tab into center areas,
+   * `widget` panes take a center area of their own, `tool` panes go to a dock.
+   * This is a default, not a restriction — see `dockable`.
+   * See docs/architecture/windowing.mdx.
    */
   role: PaneRole;
+  /**
+   * Docks this view may be toggled into from a rail, beyond wherever `role` puts
+   * it by default. Omit and the view is dockable only if `role: 'tool'` (in which
+   * case `defaultDock` names the side) — so declaring this is how a `widget` or
+   * `document` view earns a rail glyph while still opening in the center.
+   * The first entry is the preferred side.
+   */
+  dockable?: DockSide | DockSide[];
   /** Region strips (Blender N/T-panel style) this view hosts inside its area. */
   regions?: RegionViewDecl[];
   /** Glyph for the activity rail / area-header type switcher. */
   icon?: string;
   /** For role `tool`: which dock it opens in by default. Defaults to `left`. */
   defaultDock?: DockSide;
+  /**
+   * For role `tool`: the dock extent (px width for left/right, height for bottom)
+   * this view opens at the first time. Thereafter the pane remembers whatever the
+   * user dragged it to (`PaneState.dockSize`), so this is only the starting point.
+   * Omit to inherit the dock's current size.
+   */
+  defaultDockSize?: number;
   /**
    * When true, only one Pane instance running this view can exist in a workspace —
    * opening it again focuses the existing one. When false/omitted, each open
@@ -161,17 +185,33 @@ export interface WidgetDecl {
   component: ComponentType;
   requiredCapabilities?: Capability[];
   /**
-   * How this pane participates in the frame layout: `document` panes tab into
-   * center areas, `widget` panes take a center area of their own, `tool` panes
-   * live in the docks. See docs/architecture/windowing.mdx.
+   * Where this pane opens by *default*: `document` panes tab into center areas,
+   * `widget` panes take a center area of their own, `tool` panes go to a dock.
+   * This is a default, not a restriction — see `dockable`.
+   * See docs/architecture/windowing.mdx.
    */
   role: PaneRole;
+  /**
+   * Docks this view may be toggled into from a rail, beyond wherever `role` puts
+   * it by default. Omit and the view is dockable only if `role: 'tool'` (in which
+   * case `defaultDock` names the side) — so declaring this is how a `widget` or
+   * `document` view earns a rail glyph while still opening in the center.
+   * The first entry is the preferred side.
+   */
+  dockable?: DockSide | DockSide[];
   /** Region strips (Blender N/T-panel style) this view hosts inside its area. */
   regions?: RegionViewDecl[];
   /** Glyph for the activity rail / area-header type switcher. */
   icon?: string;
   /** For role `tool`: which dock it opens in by default. Defaults to `left`. */
   defaultDock?: DockSide;
+  /**
+   * For role `tool`: the dock extent (px width for left/right, height for bottom)
+   * this view opens at the first time. Thereafter the pane remembers whatever the
+   * user dragged it to (`PaneState.dockSize`), so this is only the starting point.
+   * Omit to inherit the dock's current size.
+   */
+  defaultDockSize?: number;
   /** Actions/state-reads this widget exposes to the agent orchestrator. */
   agentTools?: AgentToolDecl[];
   /** When set, this pane is network-aware: it syncs over the `collab` channel. */
@@ -243,11 +283,15 @@ export interface WsMessage {
 }
 
 /**
- * How a pane participates in the frame layout. `document` panes live in center
+ * A pane's *default* placement in the frame. `document` panes live in center
  * areas and stack as tabs; `tool` panes live in the shell docks (left/right/
  * bottom), one visible per dock; `widget` panes live in center areas one-per-area
- * with no tab strip. Zones are strict: tools never open in the center, documents
- * and widgets never dock. See docs/architecture/windowing.mdx.
+ * with no tab strip.
+ *
+ * Roles are no longer strict zones. Any view can be moved into a center area,
+ * and a view opts into being dock/rail-toggleable with `dockable` (implied for
+ * `role: 'tool'`). The role only decides where an `openPanel` with no further
+ * instruction puts it. See docs/architecture/windowing.mdx.
  */
 export type PaneRole = 'document' | 'tool' | 'widget';
 

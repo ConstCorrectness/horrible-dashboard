@@ -17,7 +17,7 @@ import {
 import { workspaceStore } from '../workspace-store';
 import { createEmptyFrame } from './model';
 import { seedFromPreset, type FramePreset } from './presets';
-import { regionsFor } from './controller';
+import { regionsFor, resolveView } from './controller';
 import { deserialize, serialize } from './serialize';
 import { layoutStore } from './store';
 import type { FrameState } from './types';
@@ -37,7 +37,11 @@ function presetFor(id: string | null): FramePreset | undefined {
 }
 
 function seed(preset: FramePreset): FrameState {
-  return seedFromPreset(preset, { knownViews: knownViews(), regionsFor });
+  return seedFromPreset(preset, {
+    knownViews: knownViews(),
+    regionsFor,
+    dockSizeFor: (viewId) => resolveView(viewId)?.defaultDockSize,
+  });
 }
 
 /** A workspace's frame: its stored blob if it is one of ours, else its preset

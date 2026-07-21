@@ -23,6 +23,12 @@ export type LayoutAction =
   | { type: 'INSERT_PANE'; areaId: string; pane: PaneState; activate?: boolean }
   | { type: 'REMOVE_PANE'; instanceId: string }
   | { type: 'MOVE_PANE'; instanceId: string; targetAreaId: string }
+  /**
+   * Move a pane into a center area from *wherever* it lives — a dock, the
+   * floating layer, or another area. The drag-out verb: `MOVE_PANE` only walks
+   * the center tree, so it can't carry a docked tool out.
+   */
+  | { type: 'UNDOCK_PANE_TO_AREA'; instanceId: string; areaId: string }
   | { type: 'SET_ACTIVE_TAB'; areaId: string; index: number }
   /** Swap a pane's view in place (change-pane-type); geometry/instanceId kept. */
   | {
@@ -58,6 +64,12 @@ export type LayoutAction =
   | { type: 'SET_DOCK'; side: DockSide; patch: Partial<Pick<DockState, 'visible' | 'size'>> }
   | { type: 'INSERT_TOOL'; side: DockSide; pane: PaneState; activate?: boolean }
   | { type: 'SET_ACTIVE_TOOL'; side: DockSide; instanceId: string }
+  /**
+   * Resize one docked tool. Writes the tool's own remembered `dockSize` AND the
+   * dock's fallback `size`, so the next tool opened on this side inherits the
+   * width the user just chose.
+   */
+  | { type: 'SET_TOOL_SIZE'; side: DockSide; instanceId: string; size: number }
   // Floating layer
   | {
       type: 'FLOAT_PANE';

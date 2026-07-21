@@ -36,7 +36,13 @@ export { onSocketOpen, sendChannel, subscribeChannel, type WsMessage } from './w
 // registry / controller, never the store directly).
 export { layoutStore } from './layout/store';
 export type { LayoutAction } from './layout/actions';
-export { findArea, firstArea, MIN_FRACTION } from './layout/model';
+export { findArea, firstArea, listPanes, MIN_FRACTION } from './layout/model';
+export { railEntries, RAIL_SECTIONS } from './layout/rail';
+export type { RailEntry, RailSide, RailState } from './layout/rail';
+export { dropPaneOnArea, paneDrag } from './layout/drag';
+export type { DragPayload } from './layout/drag';
+export { matchCommands, minibuffer, resolveCommand } from './minibuffer';
+export type { MinibufferState } from './minibuffer';
 export type {
   AreaNode,
   DockState,
@@ -59,10 +65,13 @@ export {
   focusInstance,
   fullscreenArea,
   fullscreenFocusedArea,
+  dockSidesOf,
   installFrameController,
+  isDockable,
   joinAreaDirection,
   movePaneDirection,
   openPane as openFramePane,
+  openPaneInArea,
   openToolInDock,
   regionsFor,
   resizeAreaPx,

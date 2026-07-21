@@ -54,6 +54,7 @@ export const codeModule: ModuleManifest = {
       id: 'code.findSymbol',
       title: 'Code: Find symbol (quick open)',
       run: () => symbolSearchModal.set(true),
+      slash: 'find',
     },
   ],
   // Quick-open the symbol-search modal. mod+p (VS Code quick-open); the app's command

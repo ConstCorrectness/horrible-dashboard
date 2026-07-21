@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { dialogsStore, type ActiveDialog } from '@horrible/core';
 
 function useActiveDialog(): ActiveDialog | null {
@@ -9,57 +9,7 @@ function useActiveDialog(): ActiveDialog | null {
   );
 }
 
-/** The text-input dialog: replaces window.prompt. */
-function PromptDialog({ dialog }: { dialog: Extract<ActiveDialog, { kind: 'prompt' }> }) {
-  const [value, setValue] = useState(dialog.defaultValue ?? '');
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  // Re-seed and focus when a new prompt becomes active (the component is reused
-  // across queued dialogs by React keying below).
-  useEffect(() => {
-    const input = inputRef.current;
-    if (!input) return;
-    input.focus();
-    input.select();
-  }, []);
-
-  const submit = () => dialogsStore.resolvePrompt(dialog.id, value);
-  const cancel = () => dialogsStore.resolvePrompt(dialog.id, null);
-
-  return (
-    <form
-      className="dialog-card"
-      onSubmit={(e) => {
-        e.preventDefault();
-        submit();
-      }}
-    >
-      <div className="dialog-title">{dialog.title}</div>
-      {dialog.message && <div className="dialog-message">{dialog.message}</div>}
-      <input
-        ref={inputRef}
-        className="dialog-input"
-        value={value}
-        placeholder={dialog.placeholder}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Escape') {
-            e.preventDefault();
-            cancel();
-          }
-        }}
-      />
-      <div className="dialog-actions">
-        <button type="button" className="dialog-btn" onClick={cancel}>
-          {dialog.cancelLabel ?? 'Cancel'}
-        </button>
-        <button type="submit" className="dialog-btn dialog-btn-primary">
-          {dialog.confirmLabel ?? 'OK'}
-        </button>
-      </div>
-    </form>
-  );
-}
+/* The text-input dialog moved to the minibuffer (see Minibuffer.tsx). */
 
 /** The yes/no dialog: replaces window.confirm. */
 function ConfirmDialog({ dialog }: { dialog: Extract<ActiveDialog, { kind: 'confirm' }> }) {
@@ -134,10 +84,18 @@ function dismissActive(dialog: ActiveDialog): void {
   else dialogsStore.resolveChoice(dialog.id, dialog.cancelValue ?? null);
 }
 
+/**
+ * Modal dialogs. `prompt` is deliberately **not** rendered here: the minibuffer
+ * serves it inline along the bottom of the frame (emacs-style), and rendering it
+ * in both places would show two competing inputs for one pending promise.
+ * `confirm`/`choice` stay modal — a destructive Save / Don't Save / Cancel
+ * should interrupt, not be a line you can ignore.
+ */
 export function Dialogs() {
-  const dialog = useActiveDialog();
+  const active = useActiveDialog();
+  const dialog = active?.kind === 'prompt' ? null : active;
 
-  // Escape always cancels the active dialog (confirm + prompt-outside-input).
+  // Escape always cancels the active dialog.
   useEffect(() => {
     if (!dialog) return;
     const onKey = (e: KeyboardEvent) => {
@@ -161,9 +119,7 @@ export function Dialogs() {
         dismissActive(dialog);
       }}
     >
-      {dialog.kind === 'prompt' ? (
-        <PromptDialog key={dialog.id} dialog={dialog} />
-      ) : dialog.kind === 'confirm' ? (
+      {dialog.kind === 'confirm' ? (
         <ConfirmDialog key={dialog.id} dialog={dialog} />
       ) : (
         <ChoiceDialog key={dialog.id} dialog={dialog} />

@@ -20,6 +20,8 @@ export const commonsModule: ModuleManifest = {
       component: CommonsDirectory,
       role: 'widget',
       icon: '🌐',
+      // List-shaped, and it carries its own region strips into the dock.
+      dockable: 'left',
       regions: [
         { id: 'commons.requests', label: 'Requests', icon: '↙', position: 'right' },
         { id: 'commons.profile', label: 'Profile', icon: '◉', position: 'right' },

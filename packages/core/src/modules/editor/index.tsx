@@ -9,6 +9,7 @@
  */
 import { retargetPane } from '../../layout/controller';
 import { getLocus, subscribeLocus } from '../../locus';
+import { minibuffer } from '../../minibuffer';
 import { registry, type ModuleManifest } from '../../registry';
 import { editorAgentTools } from './agentTools';
 import { BufferView } from './BufferView';
@@ -65,6 +66,24 @@ export function getActiveBufferSource(): string | null {
 /** Internal: BufferView reports its source when it mounts/loads/focuses. */
 export function setActiveBufferSource(source: string | null): void {
   activeBufferSource = source;
+}
+
+// The active buffer's Save As, published the same way BrowserPanel publishes its
+// URL-bar focuser: the implementation needs the live CodeMirror view, which only
+// the mounted component has, but `/save-as` has to reach it from the minibuffer.
+let activeSaveAs: (() => Promise<boolean>) | null = null;
+
+/** Internal: BufferView registers its Save As while it is the active buffer. */
+export function setActiveSaveAs(fn: (() => Promise<boolean>) | null): void {
+  activeSaveAs = fn;
+}
+
+async function saveActiveAs(): Promise<void> {
+  if (!activeSaveAs) {
+    minibuffer.say('Save As needs an open editor buffer', 'error');
+    return;
+  }
+  await activeSaveAs();
 }
 
 async function newNote(): Promise<void> {
@@ -138,9 +157,10 @@ export const editorModule: ModuleManifest = {
     },
   ],
   commands: [
-    { id: 'editor.newNote', title: 'Editor: New note', run: newNote },
-    { id: 'editor.save', title: 'Editor: Save', run: saveActive },
-    { id: 'editor.saveAll', title: 'Editor: Save all', run: saveAll },
+    { id: 'editor.newNote', title: 'Editor: New note', run: newNote, slash: 'new' },
+    { id: 'editor.save', title: 'Editor: Save', run: saveActive, slash: 'save' },
+    { id: 'editor.saveAs', title: 'Editor: Save as…', run: saveActiveAs, slash: 'save-as' },
+    { id: 'editor.saveAll', title: 'Editor: Save all', run: saveAll, slash: 'save-all' },
     {
       id: 'editor.visualizeBuffer',
       title: 'Editor: Open in visualizer',

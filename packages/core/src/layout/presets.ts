@@ -53,6 +53,13 @@ export interface SeedOptions {
   knownViews: ReadonlySet<string>;
   /** Initial region strips for a view (from its declarations), if any. */
   regionsFor?: (viewId: string) => Partial<Record<RegionPosition, RegionState>> | undefined;
+  /**
+   * A view's declared starting dock extent (`defaultDockSize`), if any. Kept as a
+   * callback for the same reason `regionsFor` is: this module stays free of the
+   * registry. Without it a preset-seeded tool would ignore the width its module
+   * declared, and only tools opened from the rail would honor it.
+   */
+  dockSizeFor?: (viewId: string) => number | undefined;
 }
 
 /** Materialize a preset into a FrameState. Unknown views are skipped silently. */
@@ -110,7 +117,17 @@ export function seedFromPreset(preset: FramePreset, opts: SeedOptions): FrameSta
       docks[side] = base;
       continue;
     }
-    const tools = decl.tools.map((v) => makePane(v)).filter((p): p is PaneState => p !== null);
+    const tools = decl.tools
+      .map((v) => {
+        const pane = makePane(v);
+        if (!pane) return null;
+        // An explicit preset `size` is the author's call for the whole dock and
+        // wins; otherwise the view's own declared width applies.
+        const declared = decl.size === undefined ? opts.dockSizeFor?.(v) : undefined;
+        if (declared !== undefined) pane.dockSize = declared;
+        return pane;
+      })
+      .filter((p): p is PaneState => p !== null);
     const active = tools.find((t) => t.viewId === decl.activeTool) ?? tools[0];
     docks[side] = {
       visible: (decl.visible ?? true) && tools.length > 0,

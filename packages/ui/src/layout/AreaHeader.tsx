@@ -1,6 +1,7 @@
 /**
  * The Blender-style header strip of a center area: a type switcher (icon
- * dropdown of views legal for the area's role), the tab row for document areas,
+ * dropdown of every view the area can host, grouped by role), the tab row for
+ * document areas,
  * region toggles for the active pane, and the area menu (split/join/fullscreen/
  * collapse/float/close). Collapsible per-area for chrome-less dashboards.
  */
@@ -17,6 +18,7 @@ import {
   splitAreaBy,
   toggleRegion,
   type AreaNode,
+  type PaneRole,
   type PaneState,
   type RegionPosition,
 } from '@horrible/core';
@@ -24,15 +26,28 @@ import {
 const REGION_GLYPH: Record<RegionPosition, string> = { left: '◧', right: '◨', bottom: '⬓' };
 const REGION_KEY: Record<RegionPosition, string> = { left: 't', right: 'n', bottom: 'b' };
 
-/** Views that can replace this area's content (documents+widgets; never tools). */
+const GROUP_LABEL: Record<PaneRole, string> = {
+  document: 'Documents',
+  widget: 'Widgets',
+  tool: 'Tools',
+};
+const GROUP_ORDER: PaneRole[] = ['document', 'widget', 'tool'];
+
+/**
+ * Views that can replace this area's content, grouped by role. A center area now
+ * accepts tools too (they are only *defaulted* to a dock), so the list is long
+ * enough that it is sectioned rather than filtered — documents first, tools last.
+ */
 function switchableViews(area: AreaNode) {
   const role = area.tabs.length ? roleOf(area.tabs[0].viewId) : null;
-  return [...registry.panels, ...registry.widgets].filter((v) => {
-    const r = roleOf(v.id);
-    if (r === 'tool') return false;
+  const views = [...registry.panels, ...registry.widgets].filter((v) => {
     // A tabbed document area only switches among documents; a widget (or empty)
-    // area takes either kind — switching just replaces its single pane.
-    return role === 'document' && area.tabs.length > 1 ? r === 'document' : true;
+    // area takes any kind — switching just replaces its single pane.
+    return role === 'document' && area.tabs.length > 1 ? roleOf(v.id) === 'document' : true;
+  });
+  return GROUP_ORDER.flatMap((group) => {
+    const members = views.filter((v) => roleOf(v.id) === group);
+    return members.length ? [{ group, members }] : [];
   });
 }
 
@@ -89,15 +104,20 @@ export function AreaHeader({ area }: { area: AreaNode }) {
         </button>
         {switcherOpen && (
           <div className="frame-menu" onMouseDown={(e) => e.stopPropagation()}>
-            {switchableViews(area).map((v) => (
-              <button
-                key={v.id}
-                className={`frame-menu-item${v.id === active?.viewId ? ' active' : ''}`}
-                onClick={() => changeType(v.id)}
-              >
-                <span className="frame-menu-icon">{v.icon ?? v.title[0]}</span>
-                {v.title}
-              </button>
+            {switchableViews(area).map(({ group, members }) => (
+              <div key={group} className="frame-menu-group">
+                <div className="frame-menu-group-label">{GROUP_LABEL[group]}</div>
+                {members.map((v) => (
+                  <button
+                    key={v.id}
+                    className={`frame-menu-item${v.id === active?.viewId ? ' active' : ''}`}
+                    onClick={() => changeType(v.id)}
+                  >
+                    <span className="frame-menu-icon">{v.icon ?? v.title[0]}</span>
+                    {v.title}
+                  </button>
+                ))}
+              </div>
             ))}
           </div>
         )}

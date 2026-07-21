@@ -62,6 +62,25 @@ export function roleOf(viewId: string): PaneRole {
 }
 
 /**
+ * The docks a view may be toggled into, preferred side first.
+ *
+ * Derived rather than stored so `role: 'tool'` keeps implying "dockable on
+ * `defaultDock`" — every existing tool declaration stays correct untouched, and
+ * only a view that wants a *second* home (a widget earning a rail glyph) has to
+ * say `dockable`. An empty result means the view is center-only.
+ */
+export function dockSidesOf(viewId: string): DockSide[] {
+  const decl = resolveView(viewId);
+  if (!decl) return [];
+  if (decl.dockable) return [decl.dockable].flat();
+  return roleOf(viewId) === 'tool' ? [decl.defaultDock ?? 'left'] : [];
+}
+
+export function isDockable(viewId: string): boolean {
+  return dockSidesOf(viewId).length > 0;
+}
+
+/**
  * Initial region-strip state for a view, from its `regions` declarations —
  * grouped by position, opened where any view declares `defaultOpen`.
  */
@@ -114,10 +133,15 @@ export function focusInstance(located: LocatedPane): void {
   }
 }
 
-/** Open (or focus) a tool in its dock. Returns the instance id, or null. */
+/**
+ * Open (or focus) a dockable view in a dock. Returns the instance id, or null
+ * when the view isn't dockable at all, or not on the side asked for.
+ */
 export function openToolInDock(viewId: string, dock?: DockSide): string | null {
   const decl = resolveView(viewId);
-  if (!decl || roleOf(viewId) !== 'tool') return null;
+  const sides = dockSidesOf(viewId);
+  if (!decl || sides.length === 0) return null;
+  if (dock && !sides.includes(dock)) return null;
   const existing = listPanes(frame()).find(
     (p) => p.pane.viewId === viewId && p.location.kind === 'dock',
   );
@@ -125,12 +149,15 @@ export function openToolInDock(viewId: string, dock?: DockSide): string | null {
     focusInstance(existing);
     return existing.pane.instanceId;
   }
-  const side = dock ?? decl.defaultDock ?? 'left';
+  const side = dock ?? sides[0];
   const pane: PaneState = {
     instanceId: makeInstanceId(viewId, frame().paneSeq),
     viewId,
     regions: regionsFor(viewId),
   };
+  // Only a declared starting width is seeded here; without one the pane stays
+  // `dockSize`-less and renders at the dock's own (last-used) size.
+  if (decl.defaultDockSize !== undefined) pane.dockSize = decl.defaultDockSize;
   layoutStore.dispatch({ type: 'INSERT_TOOL', side, pane });
   return pane.instanceId;
 }
@@ -226,6 +253,45 @@ export function openPane(viewId: string, opts?: OpenPaneOptions): string | null 
   };
   layoutStore.dispatch({ type: 'INSERT_PANE', areaId: after.frame.focusedAreaId!, pane: fresh });
   return fresh.instanceId;
+}
+
+/**
+ * Open a view in one specific center area, bypassing role routing. The explicit
+ * counterpart to `openPane`: the caller has already chosen the destination (the
+ * empty-area view picker, and later a drag dropped onto an area), so a `tool`
+ * must land there rather than being routed off to its dock.
+ * Returns the instance id, or null when the area or view is unknown.
+ */
+export function openPaneInArea(
+  viewId: string,
+  areaId: string,
+  params?: Record<string, unknown>,
+): string | null {
+  const f = frame();
+  if (!resolveView(viewId) || !findArea(f.center, areaId)) return null;
+  // Same identity rule as openPane: a singleton focuses instead of duplicating.
+  const isPanel = registry.panels.some((p) => p.id === viewId);
+  const singleton = isPanel
+    ? Boolean(registry.panels.find((p) => p.id === viewId)?.singleton)
+    : true;
+  if (singleton) {
+    // By VIEW id, not instance id: a preset-seeded singleton carries a `#n`
+    // suffix, so an instance-id lookup would miss it and open a duplicate.
+    const existing =
+      findPaneAnywhere(f, viewId) ?? listPanes(f).find((p) => p.pane.viewId === viewId);
+    if (existing) {
+      focusInstance(existing);
+      return existing.pane.instanceId;
+    }
+  }
+  const pane: PaneState = {
+    instanceId: singleton ? viewId : makeInstanceId(viewId, f.paneSeq),
+    viewId,
+    params,
+    regions: regionsFor(viewId),
+  };
+  layoutStore.dispatch({ type: 'INSERT_PANE', areaId, pane });
+  return pane.instanceId;
 }
 
 /**
@@ -394,8 +460,7 @@ export function splitAreaBy(
   const area = findArea(f.center, areaId)!;
   const sourceView = viewId ?? area.tabs[area.activeTab]?.viewId;
   const decl = sourceView ? resolveView(sourceView) : undefined;
-  // Tools never live in the center grid — an empty split is still allowed.
-  const paneView = decl && roleOf(sourceView!) !== 'tool' ? sourceView! : undefined;
+  const paneView = decl ? sourceView! : undefined;
   // Two steps (split, then insert from the fresh snapshot) so the pane's
   // instance id allocates from a seq the split has already advanced past.
   const before = layoutStore.getSnapshot();
@@ -654,9 +719,9 @@ export function installFrameController(): void {
       const decl = resolveView(viewId);
       const located = findPaneAnywhere(frame(), instanceId);
       if (!decl || !located) return false;
-      // Strict zones: the replacement must be legal where the pane sits.
-      const role = roleOf(viewId);
-      if (located.location.kind === 'dock' ? role !== 'tool' : role === 'tool') return false;
+      // A dock only accepts views that opted into docking; the center accepts
+      // anything (a tool dragged out of a dock has to be able to live there).
+      if (located.location.kind === 'dock' && !isDockable(viewId)) return false;
       layoutStore.dispatch({
         type: 'SET_PANE_VIEW',
         instanceId,

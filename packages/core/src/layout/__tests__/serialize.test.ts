@@ -57,6 +57,57 @@ describe('serialize round-trip', () => {
   });
 });
 
+describe('per-tool dock size', () => {
+  it("seeds a view's declared defaultDockSize, unless the preset sets the dock size", () => {
+    const sized = seedFromPreset(
+      {
+        ...preset,
+        frame: {
+          ...preset.frame,
+          // No explicit dock size, so the view's own declared width applies.
+          docks: { left: { tools: ['files.tree'] }, right: { tools: ['code.outline'] } },
+        },
+      },
+      { knownViews: KNOWN, dockSizeFor: (v) => (v === 'files.tree' ? 300 : undefined) },
+    );
+    expect(sized.docks.left.tools[0].dockSize).toBe(300);
+    expect(sized.docks.right.tools[0].dockSize).toBeUndefined();
+
+    // An explicit preset size is the author's call for the whole dock and wins.
+    const overridden = seedFromPreset(preset, {
+      knownViews: KNOWN,
+      dockSizeFor: () => 300,
+    });
+    expect(overridden.docks.left.tools[0].dockSize).toBeUndefined();
+    expect(overridden.docks.left.size).toBe(260);
+  });
+
+  it("round-trips a docked tool's remembered width", () => {
+    const frame = JSON.parse(JSON.stringify(seeded())) as FrameState;
+    frame.docks.left.tools[0].dockSize = 340;
+    const back = deserialize(serialize(frame), KNOWN)!;
+    expect(back.docks.left.tools[0].dockSize).toBe(340);
+  });
+
+  it('reads a blob written before per-tool sizing, leaving the field absent', () => {
+    // A pre-change blob is exactly a seeded frame with no `dockSize` anywhere:
+    // docks carry a size, panes carry none. It must survive at the same version.
+    const frame = seeded();
+    expect(frame.docks.left.tools[0].dockSize).toBeUndefined();
+    const back = deserialize(serialize(frame), KNOWN)!;
+    expect(back.docks.left.tools[0].dockSize).toBeUndefined();
+    // The dock's own size still drives the render, so nothing resizes on upgrade.
+    expect(back.docks.left.size).toBe(260);
+  });
+
+  it('rejects a corrupt dockSize rather than rendering a broken dock', () => {
+    const frame = JSON.parse(JSON.stringify(seeded())) as FrameState;
+    frame.docks.left.tools[0].dockSize = 4;
+    const back = deserialize(serialize(frame), KNOWN)!;
+    expect(back.docks.left.tools[0].dockSize).toBeUndefined();
+  });
+});
+
 describe('deserialize rejects non-frame blobs', () => {
   it('rejects a legacy dockview layout', () => {
     expect(deserialize({ grid: { root: {} }, panels: { a: {} } }, KNOWN)).toBeNull();

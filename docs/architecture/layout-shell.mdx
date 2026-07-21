@@ -59,7 +59,7 @@ The shell has two top-level **views** (switched by the shell's own
   never loads it.
 - **`workspace`** — the **frame**: a hybrid VS Code/Blender layout engine.
   Documents tab into a Blender-style center grid of splittable **areas**, tools
-  live in three fixed **docks** behind a VS Code-style **activity rail**, and
+  live in three fixed **docks** behind VS Code-style **activity rails**, and
   widgets take areas of their own. Several **workflow workspaces** exist —
   predefined frame presets like **Dashboard**, **Scripting**, and **Coding
   Harnesses** plus any custom ones; each persists its complete frame (docks +
@@ -72,9 +72,13 @@ A persistent **workspace tab strip** across the top (home/logo at its left, one
 tab per workspace preset + a `＋` for custom ones) is the only chrome shared by
 both views — the single workspace switcher (Blender-style). Clicking a tab
 enters the workspace view and activates that workspace. Inside the workspace
-view, the frame adds the **activity rail** (one glyph per tool view; click opens
-it in its dock, click again hides the dock; command palette at the bottom).
-Individual panes are opened from the palette, the rail (tools), or each area's
+view, the frame adds an **activity rail down each side**, each driving the dock
+on that side (click opens a tool in its dock, click again hides the dock; the
+left rail also carries the bottom dock's tools and the command palette), and a
+**minibuffer** along the very bottom — status line when idle, `alt+x` for slash
+commands, and where `dialogs.prompt()` renders (see
+[windowing.mdx](windowing.mdx#the-minibuffer)).
+Individual panes are opened from the palette, a rail (tools), or each area's
 type switcher. The Frame stays mounted across view switches so its layout
 survives a trip home.
 
@@ -143,6 +147,7 @@ Key specs are `+`-separated modifier tokens plus the key — `mod+k`,
 | `mod+b` / `mod+alt+b` / `mod+j` | toggle the left / right / bottom dock |
 | `mod+1..9` | switch workspace by position |
 | `mod+k` | command palette (override-global) |
+| `alt+x` | minibuffer / M-x — slash commands (override-global) |
 
 ## Platform capability service
 

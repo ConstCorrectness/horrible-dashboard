@@ -1,5 +1,5 @@
 /**
- * In-pane network inspector: what this page is talking to, right now.
+ * The browser's network inspector: what the embedded Chromium is talking to.
  *
  * Two halves, because they answer different questions and come from different places:
  *
@@ -12,12 +12,26 @@
  *   egress guard blocked, which is the whole point: a silently aborted request is
  *   exactly what you'd otherwise never see.
  *
- * The full inspector (headers, bodies) lives in the observability panel; this strip is
- * the glanceable version that sits next to the page it describes.
+ * Selecting a completed request opens the **same** `IoInspector` the observability
+ * panel uses — headers, bodies with JSON pretty-print, timing, egress verdict. The
+ * component is shared from `telemetry-view` rather than duplicated, since both
+ * surfaces render the same `IoEvent` type.
+ *
+ * **Scope:** this lists *all* embedded-browser traffic, not just one pane's. The
+ * backend keys browser sessions by WebSocket connection (`BrowserSession` in
+ * backend/modules/browser/session.py) and the app has one shared `/ws`, so every
+ * browser pane drives the same headless Chromium — there is only one stream of
+ * traffic to show. The header says "All browser traffic" rather than implying
+ * otherwise. Per-pane scoping needs per-pane browser sessions first.
+ *
+ * Registered as a view (`browser.network`) and declared as a right-hand region of
+ * `browser.view`, so it persists per pane instance, resizes, and can be dragged
+ * out to an area of its own where the inspector has room.
  */
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 
 import { telemetryStore, type IoEvent } from '../../../telemetry';
+import { IoInspector, ioEventKey, ioStatusClass } from '../../../telemetry-view';
 import { subscribeConnections, type BrowserConnection } from '../session';
 
 function host(url: string): string {
@@ -45,67 +59,52 @@ const cell: React.CSSProperties = {
   textOverflow: 'ellipsis',
 };
 
-export function NetworkStrip({ onClose }: { onClose: () => void }) {
+export function NetworkStrip() {
   const [conns, setConns] = useState<BrowserConnection[]>([]);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
   const events = useSyncExternalStore(telemetryStore.subscribe, telemetryStore.getSnapshot);
 
   useEffect(() => subscribeConnections(setConns), []);
 
-  const done = useMemo(
-    () =>
-      events
-        .filter((e: IoEvent) => e.source === 'browser')
-        .slice(-100)
-        .reverse(),
-    [events],
-  );
+  const done = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return events
+      .filter((e: IoEvent) => e.source === 'browser')
+      .filter(
+        (e) => !q || `${e.method} ${e.target} ${e.resource_type ?? ''}`.toLowerCase().includes(q),
+      )
+      .slice(-200)
+      .reverse();
+  }, [events, query]);
+
   const blocked = done.filter((e) => e.verdict === 'blocked').length;
+  // Resolved against the unfiltered list: a selection must survive the filter
+  // changing out from under it.
+  const selected = events.find((e) => ioEventKey(e) === selectedKey) ?? null;
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        width: 320,
-        flex: '0 0 auto',
-        borderLeft: '1px solid var(--border)',
-        fontSize: '0.72rem',
-        minHeight: 0,
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '0.3rem 0.45rem',
-          borderBottom: '1px solid var(--border)',
-        }}
-      >
-        <strong style={{ fontSize: '0.78rem' }}>Network</strong>
+    <div className="browser-net">
+      <div className="browser-net-head">
+        <strong>All browser traffic</strong>
         <span style={{ color: 'var(--text-dim)' }}>
           {conns.length} open · {done.length} done
           {blocked > 0 && <span className="io-status-blocked"> · {blocked} blocked</span>}
         </span>
-        <button
-          type="button"
-          onClick={onClose}
-          style={{ background: 'none', border: 'none', cursor: 'pointer' }}
-        >
-          ×
-        </button>
       </div>
 
-      <div style={{ overflowY: 'auto', minHeight: 0 }}>
-        {conns.length > 0 && (
-          <div style={{ padding: '0.25rem 0.45rem', color: 'var(--text-dim)' }}>In flight</div>
-        )}
+      <input
+        className="browser-net-filter"
+        type="search"
+        placeholder="Filter requests…"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+      />
+
+      <div className="browser-net-list">
+        {conns.length > 0 && <div className="browser-net-section">In flight</div>}
         {conns.map((c) => (
-          <div
-            key={c.id}
-            style={{ display: 'flex', gap: '0.4rem', padding: '0.15rem 0.45rem' }}
-            title={c.url}
-          >
+          <div key={c.id} className="browser-net-row" title={c.url}>
             {/* A pulsing dot is the honest signal here: elapsedMs is a snapshot from
                 the last push, not a live timer, so animating it would be a lie. */}
             <span className="io-status-blocked">●</span>
@@ -114,14 +113,16 @@ export function NetworkStrip({ onClose }: { onClose: () => void }) {
           </div>
         ))}
 
-        {done.length > 0 && (
-          <div style={{ padding: '0.25rem 0.45rem', color: 'var(--text-dim)' }}>Completed</div>
-        )}
+        {done.length > 0 && <div className="browser-net-section">Completed</div>}
         {done.map((e) => (
-          <div
-            key={String(e.id)}
-            style={{ display: 'flex', gap: '0.4rem', padding: '0.15rem 0.45rem' }}
+          <button
+            key={ioEventKey(e)}
+            type="button"
+            className={`browser-net-row browser-net-row--clickable${
+              ioEventKey(e) === selectedKey ? ' browser-net-row--selected' : ''
+            }`}
             title={`${e.method} ${e.target}${e.error ? ` — ${e.error}` : ''}`}
+            onClick={() => setSelectedKey(ioEventKey(e))}
           >
             <span
               style={{ width: 58, ...cell, color: 'var(--text-dim)' }}
@@ -131,26 +132,26 @@ export function NetworkStrip({ onClose }: { onClose: () => void }) {
             </span>
             <span style={{ ...cell, flex: 1 }}>{leaf(e.target)}</span>
             <span style={{ width: 62, ...cell, color: 'var(--text-dim)' }}>{host(e.target)}</span>
-            <span
-              className={
-                e.verdict === 'blocked'
-                  ? 'io-status-blocked'
-                  : e.error || (e.status ?? 0) >= 400
-                    ? 'io-status-bad'
-                    : 'io-status-ok'
-              }
-            >
+            <span className={ioStatusClass(e)}>
               {e.verdict === 'blocked' ? '⃠' : e.error ? '!' : (e.status ?? '')}
             </span>
-          </div>
+          </button>
         ))}
 
         {conns.length === 0 && done.length === 0 && (
           <div className="dashboard-hint" style={{ padding: '0.45rem' }}>
-            No requests yet. Navigate and every request this page makes appears here.
+            {query
+              ? 'No requests match the filter.'
+              : 'No requests yet. Navigate and every request this page makes appears here.'}
           </div>
         )}
       </div>
+
+      {selected && (
+        <div className="browser-net-inspector">
+          <IoInspector event={selected} onClose={() => setSelectedKey(null)} />
+        </div>
+      )}
     </div>
   );
 }

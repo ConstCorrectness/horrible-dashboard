@@ -100,6 +100,11 @@ export function deserialize(
       if (p.params && typeof p.params === 'object') {
         pane.params = p.params as Record<string, unknown>;
       }
+      // Optional and additive: a blob written before per-tool sizing simply has
+      // none, and the pane falls back to its dock's size. No version bump needed.
+      if (typeof p.dockSize === 'number' && Number.isFinite(p.dockSize) && p.dockSize >= 48) {
+        pane.dockSize = p.dockSize;
+      }
       const regions = readRegions(p.regions);
       if (regions) pane.regions = regions;
       return pane;

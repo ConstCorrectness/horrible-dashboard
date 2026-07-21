@@ -13,6 +13,9 @@ export const clubhouseModule: ModuleManifest = {
       component: ClubhouseWidget,
       role: 'widget',
       icon: '🎙',
+      // Account tile: reads fine as a narrow companion, so it earns a rail glyph
+      // while still opening in the center by default.
+      dockable: 'right',
       singleton: true,
       agentTools: [
         {

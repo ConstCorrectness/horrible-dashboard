@@ -9,7 +9,8 @@ The `workspace` view (see [layout-shell.mdx](layout-shell.mdx)) is the **frame**
 a custom layout engine that hybridizes VS Code and Blender:
 
 - a **workspace tab strip** across the top (Blender-style, the single switcher);
-- a VS Code-style **activity rail** plus three fixed **tool docks**
+- VS Code-style **activity rails** down both sides, three fixed **tool docks**, and
+  an emacs-style **minibuffer** along the bottom
   (left/right/bottom);
 - a Blender-style **center grid** of recursively split **areas**;
 - per-pane **region strips** (the successor of panel groups — see
@@ -30,21 +31,40 @@ a custom layout engine that hybridizes VS Code and Blender:
   test`). `packages/ui/src/layout/` renders it: `Frame`, `WorkspaceTabs`,
   `ActivityRail`, `Dock`, `CenterGrid`, `Area`, `AreaHeader`, `Region`,
   `PaneHost`, `CornerGrip`, `FloatingLayer`, `Sash`.
-- **Three pane roles, strict zones.** Every view (panel or widget declaration)
-  declares `role: 'document' | 'tool' | 'widget'`:
+- **Three pane roles = default placement.** Every view (panel or widget
+  declaration) declares `role: 'document' | 'tool' | 'widget'`, which says where
+  an `openPanel` with no further instruction puts it:
   - **document** — lives in center areas; documents **stack as tabs** (editor
     buffers, notebooks, the SQL console, scratch, the games lobby/board…);
-  - **tool** — lives **only in the docks** (file explorer, outline, terminal,
+  - **tool** — opens in a dock (file explorer, outline, terminal,
     REPL, agent chat, observability…); `defaultDock` picks its side. A dock shows
     **exactly one tool at a time** — its title in the dock header, no in-dock tab
-    strip. The **activity rail is the single tool switcher**: a dock may hold
+    strip. The **activity rails are the single tool switcher**: a dock may hold
     several tools in its list, and clicking a rail glyph makes that one active
     (and reveals the dock);
   - **widget** — takes a center **area of its own**, no tab strip (dashboard
     widgets, clubhouse, commons…).
 
-  Tools never open in the center; documents and widgets never dock. `openPanel`
-  routes by role, so callers don't care.
+  **Roles are defaults, not zones.** A center area can host any view — including
+  a tool — so `changePaneType`, the area type switcher, and the empty-area picker
+  all offer the full list (grouped by role, tools last). `openPanel` still routes
+  by role, so callers that don't care don't have to; `openPaneInArea` is the
+  explicit escape hatch for a caller that has already chosen the destination.
+
+  A **dock**, by contrast, only accepts views that opted in. `dockable`
+  (`DockSide | DockSide[]`, preferred side first) is what earns a view a rail
+  glyph; `role: 'tool'` implies `dockable: [defaultDock ?? 'left']`, so every
+  existing tool is dockable without declaring anything. A `widget` that declares
+  `dockable` becomes rail-toggleable **while still opening in the center** — that
+  is the whole point of splitting the two axes.
+
+  Note that a narrow companion view is often better modeled as a **region strip**
+  of its host pane than as a dockable view: most of the obvious candidates
+  (`editor.recentNotes`, `network.chat`, `observability.logs`, `commons.requests`,
+  `interpretability.context`, `training.metrics`) already are regions, and giving
+  them a second home in a dock would just be a competing surface for the same
+  content. `dockable` is for views with no host to hang off — currently
+  `clubhouse.account` and `commons.directory`.
 - **Workspaces are full frames (Blender model).** A workspace persists
   *everything*: the center tree, dock visibility/sizes/contents, floating panes,
   region state, focus, fullscreen. Switching workspaces switches the whole
@@ -71,11 +91,78 @@ flowchart TD
 - **SplitNode** — a row/column of children with fractional sizes (drag the sash).
 - **AreaNode** — a leaf rectangle. Invariant: its tabs are all documents (tab
   strip), exactly one widget (no strip), or empty (view picker).
-- **PaneState** — one live pane instance (`${viewId}#${n}`); carries its params
-  and its **persisted per-instance region strips**.
+- **PaneState** — one live pane instance (`${viewId}#${n}`); carries its params,
+  its **persisted per-instance region strips**, and — when docked — its
+  **remembered `dockSize`**.
 - **DockState** — a fixed tool dock: visible flag, px size, stacked tools, one
-  active.
+  active. The px `size` is a **fallback**: a docked tool that the user has
+  resized carries its own `dockSize`, so a narrow file tree and a wide agent chat
+  can share a side without fighting over one width, and re-opening a tool
+  restores the width it was left at. Resizing also mirrors into the dock's
+  `size`, so the next tool opened there inherits the width just chosen rather
+  than snapping to the built-in default. A view can declare a starting width with
+  `defaultDockSize` (`agent.chat` opens at 420); switching the active tool
+  therefore changes the dock's extent.
 - **FloatingPane** — an in-window card over the center grid (fractional rect).
+
+### The minibuffer
+
+The bottom-most row of the frame, **under** the bottom dock — emacs's minibuffer
+and echo area, not a fourth dock. State and command matching live in
+`core/src/minibuffer.ts` (pure, unit-tested); the strip is
+`packages/ui/src/layout/Minibuffer.tsx`. Three states, in priority order:
+
+| State | When | What it shows |
+| --- | --- | --- |
+| **prompt** | a `dialogs.prompt()` is pending | the prompt inline — label, prefilled input, OK/Cancel |
+| **input** | `alt+x` (M-x) | slash-command entry with live completions |
+| **status** | idle | `workspace › focused pane`, plus the echo area |
+
+**Slash commands** resolve against the same `registry.commands` the palette uses,
+so nothing is registered twice. A command opts into a short name with
+`slash: 'save'` (runs as `/save`); the leading slash is optional, so `/save` and
+`save` are the same query. Anything without a `slash` stays reachable by fuzzy
+title/id search. Ranking is exact-slash → slash-prefix → exact verb → verb-prefix
+→ id substring → title substring, ties broken by registration order — which is
+what makes **first-registered-wins** the rule for two commands claiming one slash
+name. Current names: `/save`, `/save-as`, `/save-all`, `/new`, `/find`.
+
+**Prompts render here, not in a modal.** `dialogs.prompt()` already existed and is
+what editor Save As calls, so serving it in the minibuffer gave "save as, right
+here" with no new API and every existing caller for free. `<Dialogs />`
+deliberately skips `kind === 'prompt'` — rendering it in both places would show
+two competing inputs for one pending promise. `confirm`/`choice` stay modal: a
+destructive Save / Don't Save / Cancel should interrupt, not be a line you can
+ignore.
+
+The `alt+x` binding is declared `override: true` so a focused editor pane can't
+shadow it — the minibuffer is the escape hatch and has to be reachable anywhere.
+
+### Activity rails
+
+There is one rail per side, each driving the dock on that side — a left-edge
+glyph toggling a right-side pane was the confusing part of the single-rail
+design. `railEntries` (core/layout/rail.ts) derives the glyphs as pure data over
+`FrameState`; `ActivityRail` (packages/ui) only renders and routes clicks.
+
+A rail lists what is actually docked on its side — by where a pane *is*, not
+where it declared it wanted to be, so a tool that ended up somewhere unusual
+still has a switcher — plus any view declaring `dockable` for that side which
+isn't docked anywhere yet, shown dimmed so a module stays discoverable before it
+has ever been opened. Each glyph carries one of four states:
+
+| State | Meaning | Click |
+| --- | --- | --- |
+| `active` | the dock's visible tool | hide the dock |
+| `docked` | in the dock's list, not showing | reveal it |
+| `center` | open out in a center area or floating | **focus it** — never re-docks or opens a second copy |
+| `closed` | not open anywhere | open it in this dock |
+
+The **left rail also carries the bottom dock**, in a second section below its
+own. The bottom edge is reserved for the minibuffer rather than a third rail,
+and a rail is the only tool switcher a dock has — without this the bottom dock's
+tools (terminal, REPL) could be revealed by keybinding but never switched
+between.
 
 View types vs pane instances work as before: widgets are singleton-by-view-id,
 panels honor their `singleton` flag, and multi-instance panes get `#n` suffixes.
@@ -99,8 +186,24 @@ existing instance instead of duplicating.
   focused area (Esc exits), `mod+b`/`mod+alt+b`/`mod+j` toggle the docks,
   `mod+1..9` switch workspaces, and `t`/`n`/`b` toggle the focused pane's region
   strips.
-- **No pointer tab drag-docking** (deliberate v1 choice): panes move between
-  areas via keyboard, the area menu, and the agent's `move_pane`.
+- **Drag-out** (`layout/drag.ts` + the gestures in packages/ui): drag a **rail
+  glyph**, a **dock header**, or a **region strip's header** onto any center area
+  to pull that view out into its own space. A region strip drags as a `view`
+  payload, so it **opens a copy** in the target area and stays put on its host —
+  its content is a synthetic per-host instance, not a pane the layout owns. Every area outlines while a drag is in flight and the one under the
+  pointer highlights, so the drop zones are discoverable. Two payload kinds: a
+  `pane` that already exists **moves** (out of the dock, never copied), a `view`
+  that isn't open yet is **opened** where it lands. Once a view is out in the
+  center its rail glyph switches to the `center` state — clicking it focuses the
+  pane rather than re-docking or opening a second copy.
+
+  The payload rides in a small observable atom rather than `dataTransfer`,
+  because `dataTransfer.getData` is unreadable during `dragover`: a drop target
+  has to decide whether to accept the drop *while the drag is over it*, which the
+  HTML5 API alone can't answer.
+
+  Still no **tab** drag-docking between center areas (panes move between areas
+  via keyboard, the area menu, and the agent's `move_pane`).
 
 ## The controller: one set of verbs, three callers
 
@@ -173,12 +276,15 @@ would (`await __horribleFrame.exec('get_layout', {})`). Not set in production.
 ## Status
 
 Implemented: the full frame (tab strip, activity rail, three docks, center area
-grid, floating layer, fullscreen-area), three roles with strict zones,
+grid, floating layer, fullscreen-area, minibuffer), three roles as default
+placement with opt-in `dockable`, per-tool remembered dock sizes, drag-out from
+rails, docks, and region strips,
 engine-native **persisted regions**, corner-drag split/join, the keyboard-first
 command set, role-routed opening, frame presets for all built-in workflows, the
 versioned serialization schema, the rewritten agent layout tools, and the full
 phase-2 native shell — all three capabilities (`window.fullscreen` native
 OS-window fullscreen; `chrome.workspaceTabs` undecorated window with the tab
 strip as its titlebar; `window.perWorkspace` a workspace in its own OS window).
-Not yet: pointer tab drag-docking (deliberate), region view cycling on
-repeat-press, and workspace reorder/import-export.
+Not yet: pointer **tab** drag-docking between center areas (deliberate; drag-out
+from the rails, docks, and region strips *is* implemented), region view cycling
+on repeat-press, and workspace reorder/import-export.
