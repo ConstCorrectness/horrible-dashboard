@@ -153,6 +153,17 @@ dict), `cells_changed` `{notebook}`, `mode` `{mode}`, `graph`
 
 - **Panels** — `notebook.browser` (singleton, left: file catalog + create) and
   `notebook.editor` (non-singleton, center: the cell UI, params `{path}`).
+- **Opening a notebook** — always through `openNotebook(path)`
+  (`modules/notebook/open.ts`), never a bare `openPanel`. It calls
+  [`openDocument`](../architecture/windowing.mdx) with the instance id
+  `notebook.editor:<path>`, so picking a notebook from the browser **focuses**
+  the pane already showing it, or **takes over** an open notebook pane in place
+  when that pane has no unsaved edits — rather than splitting the area and
+  leaving two "Notebook" documents open. Notebook cells sync to the kernel
+  session as you type, so a clean pane holds nothing to lose; the reuse
+  predicate is therefore "any clean notebook pane". To get two notebooks
+  side by side, split the area first and open the second from the empty area's
+  view picker.
 - **Commands** — `notebook.open` (open the catalog).
 - **Regions** — `notebook.editor` hosts the notebook browser as a left region strip (`k`); the browser is also a left-dock tool.
 - **Layout preset** — `notebook`.

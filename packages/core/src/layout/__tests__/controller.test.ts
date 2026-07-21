@@ -10,7 +10,15 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { registry } from '../../registry';
-import { dockSidesOf, isDockable, openPaneInArea, openToolInDock, roleOf } from '../controller';
+import { setPaneDirty } from '../close-guards';
+import {
+  dockSidesOf,
+  isDockable,
+  openDocument,
+  openPaneInArea,
+  openToolInDock,
+  roleOf,
+} from '../controller';
 import { collectAreas, findPaneAnywhere } from '../model';
 import { seedFromPreset, type FramePreset } from '../presets';
 import { layoutStore } from '../store';
@@ -29,6 +37,8 @@ beforeAll(() => {
     title: 'Dockable test',
     panels: [
       { id: 't.doc', title: 'Doc', component: Stub, role: 'document', singleton: true },
+      // The notebook/browser shape: one pane per thing, identified by params.
+      { id: 't.multiDoc', title: 'Multi doc', component: Stub, role: 'document' },
       // A tool with no defaultDock: the derivation must fall back to `left`.
       { id: 't.tool', title: 'Tool', component: Stub, role: 'tool', singleton: true },
       {
@@ -142,5 +152,46 @@ describe('openPaneInArea', () => {
   it('rejects an unknown area or view', () => {
     expect(openPaneInArea('t.tool', 'nope')).toBeNull();
     expect(openPaneInArea('nope.missing', 'a0')).toBeNull();
+  });
+});
+
+describe('openDocument', () => {
+  const docPanes = () =>
+    collectAreas(layoutStore.getSnapshot().frame.center)
+      .flatMap((a) => a.tabs)
+      .filter((p) => p.viewId === 't.multiDoc');
+
+  const open = (thing: string) =>
+    openDocument('t.multiDoc', `t.multiDoc:${thing}`, { thing }, () => true);
+
+  it('focuses the pane that already holds the same thing', () => {
+    expect(open('a')).toBe('t.multiDoc:a');
+    expect(open('a')).toBe('t.multiDoc:a');
+    expect(docPanes()).toHaveLength(1);
+  });
+
+  it('takes over a clean pane in place instead of splitting a second one', () => {
+    open('a');
+    const before = collectAreas(layoutStore.getSnapshot().frame.center).length;
+    expect(open('b')).toBe('t.multiDoc:b');
+    expect(docPanes().map((p) => p.instanceId)).toEqual(['t.multiDoc:b']);
+    expect(collectAreas(layoutStore.getSnapshot().frame.center)).toHaveLength(before);
+    expect(findPaneAnywhere(layoutStore.getSnapshot().frame, 't.multiDoc:b')?.pane.params).toEqual({
+      thing: 'b',
+    });
+  });
+
+  it('leaves a dirty pane alone and opens a new one', () => {
+    open('a');
+    setPaneDirty('t.multiDoc:a', true);
+    expect(open('b')).toBe('t.multiDoc:b');
+    expect(docPanes()).toHaveLength(2);
+    setPaneDirty('t.multiDoc:a', false);
+  });
+
+  it('without a reuse rule always opens a new pane', () => {
+    openDocument('t.multiDoc', 't.multiDoc:a', { thing: 'a' });
+    openDocument('t.multiDoc', 't.multiDoc:b', { thing: 'b' });
+    expect(docPanes()).toHaveLength(2);
   });
 });

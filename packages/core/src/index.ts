@@ -70,6 +70,7 @@ export {
   isDockable,
   joinAreaDirection,
   movePaneDirection,
+  openDocument,
   openPane as openFramePane,
   openPaneInArea,
   openToolInDock,
@@ -87,6 +88,7 @@ export {
 } from './layout/controller';
 export {
   anyPaneDirty,
+  isPaneDirty,
   registerCloseGuard,
   runCloseGuard,
   setPaneDirty,
@@ -160,6 +162,7 @@ export {
 export { dashboardModule } from './modules/dashboard';
 export { layoutsModule } from './modules/layouts';
 export { scratchModule } from './modules/scratch';
+export { mcpModule } from './modules/mcp';
 export { browserModule } from './modules/browser';
 export { stubModule } from './modules/stub';
 export { databaseModule } from './modules/database';

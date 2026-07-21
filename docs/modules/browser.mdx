@@ -200,6 +200,13 @@ panes open, navigating pane B moved the shared page, while pane A went on displa
 old URL and a stale frame — the panes do not visibly sync, they silently desync, and a
 click in pane A would land on pane B's page.
 
+The `browser.open` **agent tool** therefore routes through
+[`openDocument`](../architecture/windowing.mdx) rather than `openPanel`: it reuses an
+open browser pane instead of splitting a new one per navigation. An agent browsing five
+pages is one session, so five panes would have been five views of the same page — four
+of them stale. This narrows the desync to panes the *user* opened deliberately; it does
+not fix the underlying single-page engine.
+
 Independent tabs need **one persistent context per profile with one `page` per pane** —
 not one session per pane. Two Chromium processes on the same `user_data_dir` race on the
 cookie store, and separate contexts would stop your own tabs sharing a login. That is a

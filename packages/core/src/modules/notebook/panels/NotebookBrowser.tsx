@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
-import { registry } from '../../../registry';
 import { createNotebook, envStatus, listNotebooks, type NotebookFile } from '../api';
+import { openNotebook } from '../open';
 
 const dim = { color: 'var(--text-dim)' } as const;
 
@@ -32,7 +32,7 @@ export function NotebookBrowser() {
   }, [refresh]);
 
   const open = useCallback((path: string) => {
-    registry.openPanel('notebook.editor', { params: { path } });
+    openNotebook(path);
   }, []);
 
   const create = useCallback(async () => {

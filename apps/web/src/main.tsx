@@ -34,6 +34,7 @@ import {
   registry,
   replModule,
   scratchModule,
+  mcpModule,
   setWindowControl,
   settingsModule,
   stubModule,
@@ -71,6 +72,7 @@ async function boot(): Promise<void> {
   registry.register(layoutsModule);
   registry.register(agentModule);
   registry.register(scratchModule);
+  registry.register(mcpModule);
   registry.register(browserModule);
   registry.register(clubhouseModule);
   registry.register(interpretabilityModule);

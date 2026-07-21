@@ -721,6 +721,11 @@ def _group_description(group: str) -> str:
 
     if connector := _plugins.connectors.get(group):
         return connector.blurb
+    # MCP servers describe themselves; their groups are named `mcp-<id>`.
+    from backend.modules.mcp import bridge as _mcp
+
+    if described := _mcp.group_description(group):
+        return described
     return f"{group} tools"
 
 
@@ -735,7 +740,10 @@ def _group_guide(group: str) -> str | None:
 
     if connector := _plugins.connectors.get(group):
         return connector.resolve_guide()
-    return None
+    # An MCP server's `instructions` + prompt/resource catalog, assembled by the bridge.
+    from backend.modules.mcp import bridge as _mcp
+
+    return _mcp.group_guide(group)
 
 
 def _guides_text(groups: set[str]) -> str | None:

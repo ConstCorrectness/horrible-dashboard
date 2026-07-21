@@ -242,6 +242,7 @@ async def capture_round(
             permission_mode=permission_mode,
         )
         turn.rounds.append(snapshot)
+        _persist(turn)
         await _push(conn, "round", {"turnId": turn_id, "round": snapshot.model_dump()})
     except Exception:
         logger.exception("interpretability: round capture failed (turn %s)", turn_id)
@@ -277,11 +278,27 @@ async def capture_peer_ask(
         if len(_turns) == _turns.maxlen:
             _prompt_end.pop(_turns[0].turnId, None)
         _turns.append(turn)
+        # Persisted like any other turn, so a stored tree keeps its peer leaves
+        # instead of showing a parent whose delegation vanished.
+        _persist(turn)
         await _push(conn, "peer", {"turn": turn.model_dump()})
     except Exception:
         logger.exception(
             "interpretability: peer capture failed (parent %s)", parent_turn_id
         )
+
+
+def _persist(turn: TurnSnapshot) -> None:
+    """Write a turn through to the durable store.
+
+    The ring above stays the pane's source of truth; this is what makes a turn
+    answerable tomorrow, and what the MCP export reads. Import is local so the
+    interpretability module keeps working if the app database is unavailable — and
+    `store.save_turn` swallows its own errors, so observation can never break a turn.
+    """
+    from backend.modules.interpretability import store
+
+    store.save_turn(turn)
 
 
 def _upsert_turn(turn_id: str, **fields: Any) -> TurnSnapshot:
@@ -321,6 +338,10 @@ def finish_turn(turn_id: str, model_context_length: int | None = None) -> None:
     for turn in _turns:
         if turn.turnId == turn_id:
             turn.modelContextLength = model_context_length
+            # Re-persist so the stored copy carries the true window too — it's only
+            # known once the turn ends, and it's the number that says whether the
+            # prompt actually fit.
+            _persist(turn)
             return
 
 

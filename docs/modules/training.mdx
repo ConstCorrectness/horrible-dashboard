@@ -247,7 +247,7 @@ events, plus `metrics` / `model_graph` / `model_stats` / `frame` / `run_output` 
 | Contribution | Value |
 | --- | --- |
 | Panel `training.projects` | singleton hub (left): provider search → create project, project list with live venv/data status, open-notebook buttons |
-| Panel `training.notebook` | non-singleton notebook pane (center), params `{projectId, notebook}`; CodeMirror cells, run/interrupt/restart toolbar, nbformat output renderers (stream+ANSI, results, images, HTML, tracebacks) |
+| Panel `training.notebook` | non-singleton notebook pane (center), params `{projectId, notebook}`, opened via `openTrainingNotebook()` so it focuses/reuses rather than splitting (see [windowing](../architecture/windowing.mdx)); CodeMirror cells, run/interrupt/restart toolbar, nbformat output renderers (stream+ANSI, results, images, HTML, tracebacks) |
 | Widget `training.metrics` | live metric charts (uPlot, one per metric of the selected run; ring-buffer backfill via `watch_run`, ≤20 wire events/s per run with every point kept server-side) |
 | Widget `training.modelgraph` | model architecture graph (dagre SVG; fx/module-tree, grad-norm heatmap) |
 | Widget `training.rollout` | live gym/render frame stream with fps readout |

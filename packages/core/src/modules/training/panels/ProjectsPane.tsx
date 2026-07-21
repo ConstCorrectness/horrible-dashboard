@@ -13,7 +13,7 @@ import {
   type ProviderInfo,
 } from '../api';
 import { onTrainingEvent } from '../client';
-import { registry } from '../../../registry';
+import { openTrainingNotebook } from '../open';
 
 const dim = { color: 'var(--text-dim)' } as const;
 
@@ -158,13 +158,7 @@ export function ProjectsPane() {
                 <span style={{ fontSize: '0.7rem', ...dim }}>
                   {p.venv_ready ? 'venv ✓' : 'venv…'} · {p.data_ready ? 'data ✓' : 'data…'}
                 </span>
-                <button
-                  onClick={() =>
-                    registry.openPanel('training.notebook', {
-                      params: { projectId: p.id, notebook: 'main.ipynb' },
-                    })
-                  }
-                >
+                <button onClick={() => openTrainingNotebook(p.id, 'main.ipynb')}>
                   Open notebook
                 </button>
                 <button

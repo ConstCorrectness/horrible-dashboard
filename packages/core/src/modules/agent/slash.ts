@@ -2,10 +2,12 @@
  * Chat slash commands: `/`-prefixed inputs that run **locally** in the chat widget
  * (no model turn) and render their output as an ephemeral system message. `/tools`
  * introspects the agent's live tool catalog over the WS; the rest are quick local
- * utilities. New subsystems (MCP, skills) get an honest placeholder until they land.
+ * utilities; `/mcp` reads the MCP module's own client so it never drifts from the
+ * servers pane. Subsystems that haven't landed yet (skills) keep an honest placeholder.
  * See docs/modules/agent-chat.md.
  */
 import { registry } from '../../registry';
+import { listServers as listMcpServers, summarize as summarizeMcpServers } from '../mcp/api';
 import { getAgentRoster } from './api';
 import { requestAgentTools } from './orchestrator-client';
 import { getSetting, resetSetting, setSetting } from '../../settings';
@@ -101,8 +103,23 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   },
   {
     name: 'mcp',
-    description: 'List connected MCP servers.',
-    run: () => 'No MCP servers configured yet.',
+    description: 'List connected MCP servers (/mcp, /mcp open).',
+    // Reads the same client the MCP pane and the `mcp.*` palette commands use, so
+    // the three surfaces can never disagree about what's connected. `/mcp open`
+    // hands off to the command rather than opening the panel itself — UI calls
+    // commands, never the reverse.
+    run: async (args) => {
+      if (args.trim() === 'open') {
+        await registry.runCommand('mcp.openServers');
+        return 'Opened the MCP servers pane.';
+      }
+      try {
+        const { servers } = await listMcpServers();
+        return summarizeMcpServers(servers);
+      } catch (e) {
+        return `Could not reach the MCP module: ${e instanceof Error ? e.message : String(e)}`;
+      }
+    },
   },
   {
     name: 'skills',

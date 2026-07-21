@@ -134,6 +134,10 @@ layout shell and how it behaves in the browser vs the desktop app:
   session that wrote it (click through to the conversation), plus an agent-commit
   history/diff review.
 - [Database](modules/database.mdx)
+- [MCP](modules/mcp.mdx) — **Client phase implemented.** Connect third-party
+  [Model Context Protocol](https://modelcontextprotocol.io) servers over stdio/http/sse;
+  each becomes an `mcp-<id>` agent tool group, so its tools inherit progressive
+  disclosure and the permission gate, and its prompts become the group's guide.
 - [Symdex](modules/symdex.mdx) — the shared symbol/docs embedding index: package
   APIs, database schemas, and project docs, feeding both the `symbols.*` agent
   tools and the editor's completion doc snippets.

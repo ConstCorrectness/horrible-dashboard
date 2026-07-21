@@ -59,6 +59,9 @@ from backend.modules.interpretability import router as interpretability_router
 from backend.modules.library import router as library_router
 from backend.modules.lsp import LspManager
 from backend.modules.lsp import router as lsp_router
+from backend.modules.mcp import router as mcp_router
+from backend.modules.mcp import server as mcp_export
+from backend.modules.mcp.client import manager as mcp_manager
 from backend.modules.network import (
     chat_manager,
     collab_manager,
@@ -118,10 +121,20 @@ async def lifespan(app: FastAPI):
     await start_network()
     await plugin_registry.run_startup()  # backend plugins' startup hooks
     queue.start()
+    # Connect enabled MCP servers and bridge their tools into the agent. Failures
+    # are recorded as per-server status, so a broken server never blocks boot.
+    await mcp_manager.start_enabled()
     try:
-        yield
+        # Required whenever the exported MCP server is mounted: Starlette does not
+        # give lifespan events to mounted sub-apps, so without this its session
+        # manager never starts and every request 500s. No-op when export is disabled.
+        async with mcp_export.session_lifespan():
+            yield
     finally:
         queue.stop()
+        # MCP servers are child processes (stdio transport); leaving them behind on
+        # reload would strand orphaned node/python servers.
+        await mcp_manager.stop_all()
         await plugin_registry.run_shutdown()
         # Kernels are child processes; leaving them behind on reload/shutdown
         # would strand orphaned ipykernels.
@@ -175,6 +188,11 @@ app.include_router(flow_router, prefix="/api")
 app.include_router(network_router, prefix="/api")
 app.include_router(training_router, prefix="/api")
 app.include_router(lsp_router, prefix="/api")
+app.include_router(mcp_router, prefix="/api")
+# The MCP server this node *exports* (read-only trajectories + telemetry). Mounts only
+# when HORRIBLE_ENABLE_MCP_SERVER=1 — it serves the user's prompts and the node's I/O
+# metadata, so it stays behind an explicit opt-in. See backend/modules/mcp/server.py.
+mcp_export.mount(app)
 app.include_router(games_router, prefix="/api")
 app.include_router(code_router, prefix="/api")
 app.include_router(git_router, prefix="/api")

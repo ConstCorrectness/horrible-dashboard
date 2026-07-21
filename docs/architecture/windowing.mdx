@@ -216,7 +216,7 @@ All mutations are dispatches into the layout store, exposed two ways from
 - **plain controller exports** for the frame verbs — `splitAreaBy`,
   `joinAreaDirection`, `focusAreaDirection`, `movePaneTo`, `resizeAreaPx`,
   `fullscreenArea`, `toggleRegion`, `setRegionView`, `revealRegionView`,
-  `openToolInDock`, `toggleDock`, `retargetPane`.
+  `openToolInDock`, `toggleDock`, `retargetPane`, `openDocument`.
 
 `retargetPane(instanceId, newInstanceId, params)` is the **reuse** counterpart to
 `openPane`: it re-points an already-open pane at a new identity in place, keeping
@@ -226,6 +226,26 @@ exists so a caller that knows a pane holds nothing worth preserving can land in 
 rather than accumulate placeholders — the editor uses it so opening a note from a
 **blank, unmodified** buffer reuses that editor instead of splitting off a second
 one. See [editor](../modules/editor.mdx).
+
+`openDocument(viewId, instanceId, params, canReuse?)` packages that rule as the
+one way a module opens "a thing" (a notebook, a project, a URL) in a
+**non-singleton** document pane. It resolves in three steps:
+
+1. **Already open** — a pane with that `instanceId` exists → focus it. This is
+   why the `instanceId` must be derived from the thing's identity
+   (`notebook.editor:<path>`), not left to the `#n` counter: without it, opening
+   the same notebook twice yields two panes.
+2. **Reusable pane open** — a pane of the same view that isn't dirty
+   (`setPaneDirty` / `isPaneDirty`) and that the caller's `canReuse` accepts →
+   `retargetPane` into it, so the area, tab position and region strips survive.
+   Only the module can judge reuse, so the predicate is its call; a module whose
+   panes autosave (notebook, training notebook, browser) passes `() => true`,
+   meaning "any clean pane of mine".
+3. **Otherwise** — a normal role-routed `openPane`.
+
+Omitting `canReuse` opts out of step 2 and gives identity-only behavior. A pane
+that genuinely wants one instance per invocation (a terminal) uses neither and
+calls `openPanel` directly.
 
 The **user's gestures**, the **keybinding commands**, and the **agent's layout
 tools** (`split_area`, `join_area`, `move_pane`, `fullscreen_area`,

@@ -23,7 +23,7 @@
  */
 import type { AgentToolDecl } from '@horribledashboard/sdk';
 
-import { registry } from '../../registry';
+import { openDocument } from '../../layout/controller';
 import { engineStatus, readerMode } from './api';
 import {
   captureAllMedia,
@@ -103,7 +103,9 @@ export const browserAgentTools: AgentToolDecl[] = [
     specifierTemplate: '{url}',
     handler: (args) => {
       const url = String(args.url);
-      registry.openPanel('browser.view', { params: { url } });
+      // Reuse an open browser pane rather than splitting a new one per
+      // navigation — the agent browsing five pages is one session, not five panes.
+      openDocument('browser.view', `browser.view:${url}`, { url }, () => true);
       return { ok: true, url };
     },
   },

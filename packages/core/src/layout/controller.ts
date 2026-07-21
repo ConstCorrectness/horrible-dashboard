@@ -14,7 +14,7 @@ import {
   type SplitDirection,
   type WidgetDecl,
 } from '../registry';
-import { runCloseGuard } from './close-guards';
+import { isPaneDirty, runCloseGuard } from './close-guards';
 import { setRegionCommandHandler } from './region-bus';
 import {
   areaOfInstance,
@@ -310,6 +310,49 @@ export function retargetPane(
   if (!findPaneAnywhere(f, instanceId) || findPaneAnywhere(f, newInstanceId)) return null;
   const after = layoutStore.dispatch({ type: 'RETARGET_PANE', instanceId, newInstanceId, params });
   return findPaneAnywhere(after.frame, newInstanceId) ? newInstanceId : null;
+}
+
+/**
+ * Open one *thing* (a notebook, a repo, a URL) in a non-singleton document pane,
+ * without accumulating panes. Three steps, in order:
+ *
+ *  1. That exact thing is already open (`instanceId` derived from its identity —
+ *     a path, an id) → focus it.
+ *  2. A pane of the same view is open and holds nothing worth keeping → retarget
+ *     it in place, so the area, tab position and region strips survive.
+ *  3. Otherwise open a fresh pane the usual (role-routed) way.
+ *
+ * "Nothing worth keeping" is a pane that isn't dirty (`setPaneDirty`) and that
+ * the caller's `canReuse` accepts — the module decides, since only it knows what
+ * its params mean. Omit `canReuse` to get identity-only behaviour (step 1 + 3).
+ * Returns the live instance id, or null.
+ */
+export function openDocument(
+  viewId: string,
+  instanceId: string,
+  params?: Record<string, unknown>,
+  canReuse?: (pane: PaneState) => boolean,
+): string | null {
+  const existing = findPaneAnywhere(frame(), instanceId);
+  if (existing) {
+    focusInstance(existing);
+    return instanceId;
+  }
+  if (canReuse) {
+    const reusable = listPanes(frame()).find(
+      (p) =>
+        p.pane.viewId === viewId &&
+        p.location.kind === 'area' &&
+        !isPaneDirty(p.pane.instanceId) &&
+        canReuse(p.pane),
+    );
+    if (reusable && retargetPane(reusable.pane.instanceId, instanceId, params)) {
+      const moved = findPaneAnywhere(frame(), instanceId);
+      if (moved) focusInstance(moved);
+      return instanceId;
+    }
+  }
+  return openPane(viewId, { instanceId, params });
 }
 
 // ---------------------------------------------------------------------------

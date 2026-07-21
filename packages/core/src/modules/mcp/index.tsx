@@ -1,0 +1,73 @@
+/**
+ * MCP module: connect this node to third-party MCP servers.
+ *
+ * The human surface only. The backend (`backend/modules/mcp/`) owns the sessions and
+ * projects each server into the agent as an `mcp-<id>` tool group — see
+ * docs/modules/mcp.mdx.
+ *
+ * Note the division of labour with the chat's `/mcp` slash command: both read
+ * `./api`, so the palette command opens the pane and `/mcp` prints the same summary
+ * inline without a model turn. Neither reimplements the other.
+ */
+import { registry, type ModuleManifest } from '../../registry';
+import { listServers, summarize } from './api';
+import { McpServersPane } from './panels/McpServersPane';
+
+export const mcpModule: ModuleManifest = {
+  id: 'mcp',
+  title: 'MCP',
+  panels: [
+    {
+      id: 'mcp.servers',
+      title: 'MCP Servers',
+      component: McpServersPane,
+      // A tool pane, docked beside the other configuration surfaces: you consult it
+      // while working, you don't work *in* it.
+      role: 'tool',
+      icon: '🔌',
+      defaultDock: 'left',
+      singleton: true,
+    },
+  ],
+  settings: [
+    {
+      // The exported server's *degree* of disclosure. The server itself is gated by
+      // HORRIBLE_ENABLE_MCP_SERVER (an env var, so it can't be flipped by anything
+      // that can merely write settings); this narrower switch controls whether an
+      // already-authorized caller sees prompt text or only its shape and token cost.
+      key: 'mcp.server.exposeContent',
+      title: 'Expose prompt content over the MCP server',
+      description:
+        'When the exported MCP server is enabled, include context block text in ' +
+        'turn detail. Off means callers see token counts and structure but not your ' +
+        'prompts, editor buffers, or tool results. Telemetry bodies and headers are ' +
+        'never exported either way.',
+      type: 'boolean',
+      default: false,
+    },
+  ],
+  commands: [
+    {
+      id: 'mcp.openServers',
+      title: 'MCP: Open servers',
+      run: () => registry.openPanel('mcp.servers'),
+    },
+    {
+      id: 'mcp.addServer',
+      title: 'MCP: Add server',
+      // The form lives in the pane; the command is the discoverable entry point to it.
+      run: () => registry.openPanel('mcp.servers'),
+    },
+    {
+      id: 'mcp.status',
+      title: 'MCP: Show server status',
+      run: async () => {
+        const { servers } = await listServers();
+        return summarize(servers);
+      },
+    },
+  ],
+};
+
+export { listServers, summarize } from './api';
+export type { McpServer, McpServerInput, McpState, McpTool, McpTransport } from './api';

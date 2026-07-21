@@ -56,6 +56,12 @@ export function anyPaneDirty(): boolean {
   return dirtyPanes.size > 0;
 }
 
+/** Whether one pane instance has unsaved changes — the "is this pane safe to
+ * take over?" test behind `openDocument`'s reuse rule. */
+export function isPaneDirty(instanceId: string): boolean {
+  return dirtyPanes.has(instanceId);
+}
+
 if (typeof window !== 'undefined') {
   window.addEventListener('beforeunload', (e: BeforeUnloadEvent) => {
     if (!anyPaneDirty()) return;

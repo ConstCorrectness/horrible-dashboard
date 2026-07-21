@@ -285,13 +285,38 @@ event per round as it happens; the HTTP routes back-fill the pane on open.
 
 No platform branching — the pane is the same component in both layouts.
 
+## Durable turns (`agent_turns`)
+
+The recorder writes each turn through to an `agent_turns` table in `app.db`
+(`store.py`) as well as into its ring. The two serve different jobs and neither
+replaces the other:
+
+| | Ring (`recorder.py`) | Table (`store.py`) |
+| --- | --- | --- |
+| Holds | 25 turns | 5000 turns (pruned) |
+| Survives restart | no | yes |
+| Read by | the pane | historical queries, the [MCP export](mcp.mdx#the-server-we-export) |
+
+The pane never reads the database, so a slow or failed write cannot stall a turn. Every
+store call swallows and logs its own errors for the same reason: **observation must not
+break the thing it observes**, which is the same rule `capture_round` already follows.
+
+Rounds are stored as a JSON blob rather than a child table — they are only ever read
+whole, and a relational `rounds` table would need a migration every time
+`RoundSnapshot` gains a field.
+
+One subtlety worth knowing when querying it: `total_tokens` is the **last** round's
+total, not the sum across rounds. Rounds are cumulative — each resends the whole
+conversation plus whatever the loop appended — so summing them would multiply-count the
+same context and report a turn as costing several times what it did.
+
 ## Limits
 
-- **Retention is in-process.** 25 turns, cleared on backend restart. Nothing is
-  persisted to `app.db`; replay/diff across sessions would need that. The ring counts
-  delegated sub-turns and peer nodes as entries, so a heavily-delegating session fills
-  it faster; an orphaned child (parent already evicted) is promoted to a root rather
-  than dropped.
+- **The pane's ring is in-process.** 25 turns, cleared on backend restart. The ring
+  counts delegated sub-turns and peer nodes as entries, so a heavily-delegating session
+  fills it faster; an orphaned child (parent already evicted) is promoted to a root
+  rather than dropped. Turns **are** now also persisted to `app.db` (see below), so what
+  the *pane* shows is bounded while the underlying history is not.
 - **A peer's context is never visible here.** By design — see above.
 - **Block previews are clipped** to 4000 characters for transport. Token counts
   always describe the *full* text, and clipped blocks say so.
