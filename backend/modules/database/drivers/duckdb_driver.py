@@ -17,6 +17,7 @@ from backend.modules.database.drivers.base import (
 )
 
 provider = "duckdb"
+dialect = "sql"
 
 
 def _import_duckdb():  # type: ignore[no-untyped-def]

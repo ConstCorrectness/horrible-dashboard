@@ -19,9 +19,25 @@ import {
   type QueryResult,
   type SchemaResponse,
 } from './api';
-import { SqlEditor } from './SqlEditor';
+import { QueryEditor } from './QueryEditor';
 
 const MAX_HISTORY = 25;
+
+/** Starter query for a connection, per dialect. */
+function starterQuery(dialect: string): string {
+  return dialect === 'json' ? '{ "op": "collections" }' : '';
+}
+
+/**
+ * What clicking a table/collection in the sidebar inserts. SQL gets a SELECT;
+ * vector stores get a scan, which is the closest equivalent — a `search` would
+ * need query text the click can't supply.
+ */
+function tableClickQuery(dialect: string, name: string): string {
+  return dialect === 'json'
+    ? `{ "op": "list", "collection": "${name}", "limit": 20 }`
+    : `SELECT * FROM ${name} LIMIT 100;`;
+}
 
 function errText(err: unknown): string {
   if (err instanceof ApiError) return err.message;
@@ -57,12 +73,21 @@ export function DatabaseConsole() {
   const [managerOpen, setManagerOpen] = useState(false);
 
   const activeConnInfo = connections.find((c) => c.id === activeConn);
+  const dialect = activeConnInfo?.dialect ?? 'sql';
 
-  // Expose the active connection + its schema so the agent writes correct SQL.
+  // Expose the active connection + its schema so the agent writes a correct query.
+  // `dialect` matters as much as the table list here: without it the agent writes
+  // SQL at a vector store and gets a parse error it can't diagnose.
   useAgentContext(() => ({
     activeConnection: activeConn,
     provider: activeConnInfo?.provider ?? null,
-    tables:
+    dialect,
+    queryFormat:
+      dialect === 'json'
+        ? 'Vector store: send a JSON body like {"op":"search","collection":"…","query":"…","limit":5}. ' +
+          'Ops: search, list, get, count, collections, describe, peek (read) / upsert, delete (write).'
+        : 'SQL.',
+    [dialect === 'json' ? 'collections' : 'tables']:
       schema?.tables.map((t) => ({
         name: t.schema_name ? `${t.schema_name}.${t.name}` : t.name,
         columns: t.columns.map((c) => c.name),
@@ -100,6 +125,13 @@ export function DatabaseConsole() {
     if (activeConn) void loadSchema(activeConn);
   }, [activeConn, loadSchema]);
 
+  // Seed a starter query when switching dialects with nothing to lose. A JSON body
+  // is much less guessable than SELECT, so an empty editor there is a dead end —
+  // but never clobber a query the user is in the middle of writing.
+  useEffect(() => {
+    setSql((prev) => (prev.trim() ? prev : starterQuery(dialect)));
+  }, [dialect]);
+
   const execute = useCallback(async () => {
     const trimmed = sql.trim();
     if (!trimmed || running) return;
@@ -123,7 +155,7 @@ export function DatabaseConsole() {
   }, [sql, running, activeConn, readOnly, rowLimit]);
 
   const onTableClick = (qualifiedName: string) => {
-    setSql(`SELECT * FROM ${qualifiedName} LIMIT 100;`);
+    setSql(tableClickQuery(dialect, qualifiedName));
   };
 
   const statusLine = useMemo(() => {
@@ -159,7 +191,14 @@ export function DatabaseConsole() {
         <button className="dbc-btn" onClick={() => setManagerOpen(true)}>
           Manage…
         </button>
-        <label className="dbc-checkbox" title="Reject anything but a single SELECT/WITH/EXPLAIN">
+        <label
+          className="dbc-checkbox"
+          title={
+            dialect === 'json'
+              ? 'Reject write ops (upsert, delete, drop_collection)'
+              : 'Reject anything but a single SELECT/WITH/EXPLAIN'
+          }
+        >
           <input
             type="checkbox"
             checked={readOnly}
@@ -217,11 +256,12 @@ export function DatabaseConsole() {
         </aside>
 
         <div className="dbc-main">
-          <SqlEditor
+          <QueryEditor
             value={sql}
             onChange={setSql}
             onRun={() => void execute()}
             provider={activeConnInfo?.provider ?? null}
+            dialect={dialect}
             schema={schema}
           />
           <div className="dbc-run-bar">

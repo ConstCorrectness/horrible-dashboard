@@ -20,27 +20,37 @@ dashboard's own local vector store as the built-in **`app`** connection.
   tasks) is always present and read-only; you add your own connections for external
   databases. Connections persist in `.data/connections.json`.
 
-  :::note `app` is the app database, not the vector store
-  The vector store is **LanceDB**, a *directory* under `.data/lancedb` — there is no
-  SQLite file for the SQL console to open, so the `app` connection points at `app.db`
-  instead. The two used to be the same file (the vector store was SQLite before the
-  LanceDB migration), which is why `vectorstore.get_db_path()` and
-  `app_db.get_app_db_path()` are now deliberately separate functions. Browse LanceDB
-  collections via the vector-store panel, not the SQL console.
+  :::note `app` is the app database; `vectors` is the vector store
+  Two built-ins, because the node keeps its data in two different shapes. `app` is the
+  SQLite file `.data/app.db`. The vector store is **LanceDB**, a *directory* under
+  `.data/lancedb` — no SQLite file for a SQL driver to open — so it is exposed as the
+  separate `vectors` connection using the JSON dialect. The two used to be the same
+  file (the vector store was SQLite before the LanceDB migration), which is why
+  `vectorstore.get_db_path()` and `app_db.get_app_db_path()` are deliberately separate
+  functions.
   :::
-- **SQL console** — write SQL, run it with **Run** or **Ctrl/Cmd+Enter**, and get a
+- **Query console** — write a query, run it with **Run** or **Ctrl/Cmd+Enter**, and get a
   results grid with column headers, a status line (`N rows · M ms`, truncation flag),
   and inline error output. Recent queries are kept in a history dropdown. A **Read-only**
-  toggle restricts a run to a single `SELECT`/`WITH`/`EXPLAIN` statement.
-- **Schema-aware autocomplete** — the editor is CodeMirror with `@codemirror/lang-sql`
-  (`SqlEditor.tsx`): keyword completion in the connection's dialect (postgres, mysql,
-  sqlite; duckdb uses the PostgreSQL dialect as its nearest match) plus table and column
-  completion fed live from the same `/database/connections/{id}/schema` introspection the
-  sidebar shows — schema-qualified names (`public.users`) included, with the dominant
-  schema as the unqualified default. The mapping lives in the pure helper
-  `sqlSchema.ts:schemaToSqlConfig`.
+  toggle restricts a run to a single `SELECT`/`WITH`/`EXPLAIN` statement (SQL) or to the
+  read ops (JSON).
+- **Dialect-aware editor** — the editor (`QueryEditor.tsx`) is one CodeMirror that
+  reconfigures itself per connection through compartments, so switching connections never
+  remounts it (which would drop undo history mid-edit):
+  - *SQL connections* get `@codemirror/lang-sql`: keyword completion in the connection's
+    dialect (postgres, mysql, sqlite; duckdb uses the PostgreSQL dialect as its nearest
+    match, oracle falls back to StandardSQL) plus table and column completion fed live
+    from the same `/database/connections/{id}/schema` introspection the sidebar shows —
+    schema-qualified names (`public.users`) included, with the dominant schema as the
+    unqualified default. The mapping lives in the pure helper
+    `sqlSchema.ts:schemaToSqlConfig`.
+  - *Vector connections* get JSON highlighting (via `lang-javascript` — JSON is a subset
+    of JS, so this needs no extra language package) and completion for the op names, the
+    body keys, and the store's real collection names.
 - **Schema sidebar** — an introspected tree of tables → columns (with types and PK
-  markers). Click a table to drop a `SELECT * FROM <table> LIMIT 100` into the editor.
+  markers), or collections → fields for vector stores. Clicking one inserts the
+  dialect-appropriate starter: `SELECT * FROM <table> LIMIT 100` or
+  `{"op": "list", "collection": "<name>", "limit": 20}`.
 - **No synthetic data** — the pane only ever shows real rows returned from a real
   connection.
 
@@ -52,34 +62,118 @@ uniform `test` / `run_query` / `introspect` contract. Routes run drivers via
 libraries are imported lazily, so a missing optional dependency yields a clear error
 rather than breaking boot.
 
-| Provider | Driver | Dependency | Notes |
-| --- | --- | --- | --- |
-| `sqlite` | `sqlite_driver` | stdlib | Backs the built-in `app` connection (`.data/app.db`) and any `.sqlite`/`.db` file. |
-| `postgres` | `postgres_driver` | `psycopg[binary]` | Connect to any Postgres; **pgvector** `vector` columns and `bytea` blobs are summarized in the grid. |
-| `duckdb` | `duckdb_driver` | `duckdb` | Local analytical/columnar querying (file or in-memory). |
-| `mysql` | `mysql_driver` | `pymysql` | MySQL / MariaDB. |
+Every driver declares a **dialect** — which query surface it speaks:
+
+- **`sql`** — the query text is SQL, handed to a real SQL engine.
+- **`json`** — the query text is a JSON operation body against a vector store. These
+  stores have no SQL dialect (a collection, a metadata filter and a query vector is
+  genuinely all they take), so the console sends their native shape rather than
+  faking SQL over them. See [Querying vector stores](#querying-vector-stores).
+
+Both dialects return the **same** columns/rows result, so the grid, the status line
+and the agent's reader are dialect-agnostic — only the input surface differs.
+
+| Provider | Driver | Dialect | Dependency | Notes |
+| --- | --- | --- | --- | --- |
+| `sqlite` | `sqlite_driver` | `sql` | stdlib | Backs the built-in `app` connection (`.data/app.db`) and any `.sqlite`/`.db` file. |
+| `postgres` | `postgres_driver` | `sql` | `psycopg[binary]` | Connect to any Postgres; **pgvector** `vector` columns and `bytea` blobs are summarized in the grid. |
+| `duckdb` | `duckdb_driver` | `sql` | `duckdb` | Local analytical/columnar querying (file or in-memory). |
+| `mysql` | `mysql_driver` | `sql` | `pymysql` | MySQL / MariaDB. |
+| `oracle` | `oracle_driver` | `sql` | `oracledb` (extra `oracle`) | Oracle Database incl. **23ai**. Thin mode — no Instant Client. 23ai AI Vector Search is plain SQL (`VECTOR`, `VECTOR_DISTANCE()`), so it needs no special casing. |
+| `lancedb` | `lancedb_driver` | `json` | `lancedb` (core dep) | Backs the built-in `vectors` connection — the node's own vector store. |
+| `chroma` | `chroma_driver` | `json` | `chromadb` (extra `chroma`) | Embedded (`path`) or HTTP server (`host`). |
+| `qdrant` | `qdrant_driver` | `json` | `qdrant-client` (extra `qdrant`) | Server (`url`/`host`) or embedded (`path`). |
+| `weaviate` | `weaviate_driver` | `json` | `weaviate-client` (extra `weaviate`) | Local instance or Weaviate Cloud. |
+
+Install the vector-store clients with `uv sync --extra chroma` (or `qdrant`,
+`weaviate`, or `vectordb` for all three); Oracle with `uv sync --extra oracle`. Each is
+lazy-imported, so the provider is always listed and only fails — with an install hint —
+when you actually run a query against it.
 
 Result cells are coerced to JSON-safe values: binary blobs and long numeric arrays
-(embeddings, pgvector) are summarized (e.g. `<1536 bytes>`, `[384 numbers]`), and
-dates/decimals are stringified.
+(embeddings, pgvector, Oracle 23ai `VECTOR` columns, which arrive as `array.array`) are
+summarized (e.g. `<1536 bytes>`, `[384 numbers]`), and dates/decimals are stringified.
+
+## Querying vector stores
+
+A `json`-dialect query is one JSON object. The shape is uniform across all four stores
+(`drivers/vector_base.py`), so one editor and one set of snippets work everywhere:
+
+```json
+{"op": "search", "collection": "library", "query": "how does docking work", "limit": 5}
+{"op": "search", "collection": "library", "vector": [0.1, 0.2], "where": {"kind": "note"}}
+{"op": "list",   "collection": "library", "limit": 50, "offset": 100}
+{"op": "get",    "collection": "library", "ids": ["abc", "def"]}
+{"op": "count",  "collection": "library"}
+{"op": "collections"}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `op` | Required. Read: `search`, `get`, `list`, `count`, `peek`, `collections`, `describe`. Write: `upsert`, `delete`, `create_collection`, `drop_collection`. |
+| `collection` | Target collection (required by every op except `collections`). |
+| `query` | Text to embed and search with. |
+| `vector` | Explicit query vector, instead of `query`. |
+| `where` | Metadata equality filter, e.g. `{"kind": "note"}`. |
+| `ids` | Document ids for `get` / `delete`. |
+| `limit` / `offset` | Paging. `limit` is capped by the `database.rowLimit` setting. |
+| `select` | Restrict/order the result columns. |
+| `metric` | Distance-metric override where the store takes one per query (LanceDB). |
+
+Read-only mode applies here too: it allows the read ops only. A body it can't parse is
+treated as **not** read-only — an op we can't identify is one we can't vouch for.
+
+Results are flattened into the normal grid: `id`, `score`, `text`, then each metadata
+key as its own column (a metadata key colliding with a reserved name is prefixed
+`meta.`), with the raw vector last. Hoisting metadata to columns is the point — a single
+JSON blob cell would defeat filtering and eyeballing.
+
+:::warning `score` is only shown when the metric allows it
+Chroma and LanceDB both default to squared **L2** distance, where `1 - distance` yields
+negative, meaningless "scores" that still sort plausibly — the worst kind of wrong. A
+similarity is therefore derived **only** for cosine spaces (read from the collection's
+own configuration); otherwise the grid shows the raw `distance` and no `score`. Ranking
+is correct either way — ascending distance is descending similarity.
+
+The `vectors` connection defaults to `cosine` to match `vectorstore.py`, which searches
+the node's own tables with `.metric("cosine")`. Override per query with `"metric"`.
+:::
+
+:::note Metadata filters may be applied client-side
+LanceDB stores `metadata` as a JSON *string*, so its keys are not physical columns and
+Lance cannot push a filter on them down — a `where` on a column you can plainly see in
+the grid would fail with `No field named …`. The driver therefore splits `where`:
+physical columns are pushed down, metadata keys are filtered in Python over a bounded
+over-fetched window, and the status line says so when that happens. It is not a cheap
+deep paginator.
+:::
 
 ## The node's two local stores
 
 The dashboard keeps its own data in **two** places, and they are not the same thing:
 
-| Store | Path | Shape | Reached by |
+| Store | Path | Shape | Console connection |
 | --- | --- | --- | --- |
-| **App database** | `.data/app.db` | SQLite file — `library_sources`, `browser_history`, `browser_bookmarks`, `code_symbols`, `async_tasks` | the built-in `app` connection; `app_db.get_app_db_path()` |
-| **Vector store** | `.data/lancedb` | LanceDB *directory*, one table per collection | `vectorstore.py`; the vector-store panel |
+| **App database** | `.data/app.db` | SQLite file — `library_sources`, `browser_history`, `browser_bookmarks`, `code_symbols`, `async_tasks` | built-in `app` (`sqlite`, `sql` dialect) |
+| **Vector store** | `.data/lancedb` | LanceDB *directory*, one table per collection | built-in `vectors` (`lancedb`, `json` dialect) |
 
-The **app database** is ordinary SQL you can query in the console
-(`SELECT id, library, status FROM library_sources`), because it is a real SQLite file.
+Both are built-in, synthesized rather than stored, and neither can be edited or deleted.
 
-The **vector store** is not. LanceDB is a directory of its own format, so it has no
-SQLite file to attach and is reached through `vectorstore.py`
-(`upsert_document` / `search_documents` / `list_documents`) rather than the console.
-Sibling tables (`<collection>__clip`, the CLIP vectors) are hidden from the global
-sweeps so they don't show up as fake collections — see [library](library.mdx).
+The **app database** is ordinary SQL (`SELECT id, library, status FROM library_sources`),
+because it is a real SQLite file.
+
+The **vector store** is reached through the `vectors` connection using the JSON dialect
+above (`{"op": "collections"}` to start). It is *not* SQL-attachable: LanceDB is a
+directory of its own format, so there is no file for a SQL driver to open — which is
+exactly why it needed a `json`-dialect driver to become queryable at all. Writes still
+belong to `vectorstore.py` (`upsert_document` / `search_documents`), which owns the
+embedder and each collection's fixed vector width; the console's LanceDB driver
+deliberately refuses `upsert`.
+
+Sibling tables (`<collection>__clip`, the CLIP vectors) are hidden from the app's global
+sweeps so they don't show up as fake collections — see [library](library.mdx) — but the
+console **does** list them: an inspector's job is to show what is actually on disk, and
+a CLIP table you can't see is a CLIP table you can't debug.
 
 :::warning These were one file once
 Before the LanceDB migration the vector store *was* SQLite, and a single `get_db_path()`
@@ -113,7 +207,7 @@ endpoint. See [symdex](symdex.mdx#build-cost).
 
 ## Contributions to the Layout Shell
 
-- **Widget**: `database.console` — the connection bar + schema sidebar + SQL console.
+- **Widget**: `database.console` — the connection bar + schema sidebar + query console.
 - **Command**: `database.open` (`Database: Open Console`) — opens the console in the
   workspace center.
 - **Settings**: `database.defaultConnection` (default `app`) and `database.rowLimit`
@@ -132,7 +226,7 @@ Mounted under `/api/database`.
 | `POST` | `/connections/test` | Probe an unsaved connection (form still holds the password). |
 | `POST` | `/connections/{id}/test` | Probe a stored connection (server-side credentials). |
 | `GET` | `/connections/{id}/schema` | Introspected tables/columns. |
-| `POST` | `/query` | Run SQL against a connection. `read_only` rejects non-`SELECT`. Returns columns, rows, rowcount, `elapsed_ms`, `truncated`. |
+| `POST` | `/query` | Run a query against a connection. The `sql` field carries SQL for `sql`-dialect connections and a JSON operation body for `json`-dialect ones (the field keeps its name for wire compatibility). `read_only` rejects non-`SELECT` / write ops respectively. Returns columns, rows, rowcount, `elapsed_ms`, `truncated`. |
 | `GET` | `/status` | App vector store stats + active embedding provider/model. |
 | `POST` | `/pull` | Stream an Ollama `all-minilm` embedding-model download (NDJSON). |
 | `GET` | `/collections` | App vector store collection names. |
@@ -147,9 +241,9 @@ The widget registers these tools with the agent orchestrator:
 
 | Tool Name | Description | Parameters | Side Effect |
 | --- | --- | --- | --- |
-| `database.listConnections` | List connections the agent can query. | none | No |
-| `database.describe` | Schema (tables/columns) for a connection, so the agent writes correct SQL. | `connection_id` (str, opt) | No |
-| `database.query` | Run a **read-only** `SELECT` against a connection. | `sql` (str), `connection_id` (str, opt) | No |
+| `database.listConnections` | List connections the agent can query, each with its `dialect`. | none | No |
+| `database.describe` | Schema **and dialect** for a connection, so the agent writes the right kind of query. | `connection_id` (str, opt) | No |
+| `database.query` | Run a **read-only** query: a `SELECT` for SQL connections, a JSON read op for vector connections. | `sql` (str), `connection_id` (str, opt) | No |
 | `database.execute` | Run a writing statement (INSERT/UPDATE/DELETE/DDL); permission-gated. | `sql` (str), `connection_id` (str, opt) | Yes |
 | `database.semanticSearch` | Vector search a collection in the app vector store. | `collection` (str), `text` (str), `limit` (int, opt) | No |
 
@@ -162,9 +256,27 @@ agent can target the right database:
 {
   activeConnection: "app",
   provider: "sqlite",
+  dialect: "sql",
+  queryFormat: "SQL.",
   tables: [{ name: "documents", columns: ["id", "collection", "text", "embedding"] }]
 }
 ```
+
+On a vector connection the same hook reports the dialect and the op vocabulary instead,
+and names the list `collections`:
+
+```typescript
+{
+  activeConnection: "vectors",
+  provider: "lancedb",
+  dialect: "json",
+  queryFormat: 'Vector store: send a JSON body like {"op":"search",…}. Ops: search, list, …',
+  collections: [{ name: "symdex", columns: ["id", "text", "metadata", "vector"] }]
+}
+```
+
+`dialect` matters as much as the table list: without it the agent writes SQL at a vector
+store and gets a parse error it can't diagnose.
 
 ## Security
 
@@ -176,4 +288,4 @@ side-effect gated. Connection credentials are stored as plaintext in the gitigno
 ## Browser vs Desktop
 
 Identical in both layouts — the frontend talks to the local FastAPI server, which owns
-the driver connections and the SQLite vector store.
+the driver connections and the local stores.

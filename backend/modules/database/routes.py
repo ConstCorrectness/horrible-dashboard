@@ -8,7 +8,7 @@ from fastapi.responses import StreamingResponse
 from backend.modules.agent import providers as P
 from backend.modules.agent.routes import _load_config
 from backend.modules.database.connections import (
-    BUILTIN_APP_ID,
+    BUILTIN_IDS,
     add_connection,
     delete_connection,
     get_connection,
@@ -17,8 +17,13 @@ from backend.modules.database.connections import (
     resolve_config,
     update_connection,
 )
-from backend.modules.database.drivers import PROVIDERS, DriverError, get_driver
-from backend.modules.database.drivers.base import looks_read_only
+from backend.modules.database.drivers import (
+    PROVIDERS,
+    DriverError,
+    get_dialect,
+    get_driver,
+)
+from backend.modules.database.drivers.base import query_is_read_only
 from backend.modules.database.vectorstore import (
     init_db,
     get_db_stats,
@@ -59,10 +64,16 @@ router = APIRouter(prefix="/database", tags=["database"])
 # ---------------------------------------------------------------------------
 
 
+def _as_info(record: dict[str, Any]) -> ConnectionInfo:
+    """Redact secrets and stamp the provider's query dialect onto a connection."""
+    safe = redact(record)
+    return ConnectionInfo(**safe, dialect=get_dialect(str(safe.get("provider") or "")))
+
+
 @router.get("/connections", response_model=ConnectionsResponse)
 async def get_connections() -> ConnectionsResponse:
     return ConnectionsResponse(
-        connections=[ConnectionInfo(**redact(c)) for c in list_connections()],
+        connections=[_as_info(c) for c in list_connections()],
         providers=[ProviderInfo(**p) for p in PROVIDERS],
     )
 
@@ -80,27 +91,27 @@ def _rekick_schema_index() -> None:
 async def create_connection(body: ConnectionInput) -> ConnectionInfo:
     record = add_connection(body.name, body.provider, body.config)
     _rekick_schema_index()
-    return ConnectionInfo(**redact(record))
+    return _as_info(record)
 
 
 @router.put("/connections/{conn_id}", response_model=ConnectionInfo)
 async def edit_connection(conn_id: str, body: ConnectionInput) -> ConnectionInfo:
-    if conn_id == BUILTIN_APP_ID:
+    if conn_id in BUILTIN_IDS:
         raise HTTPException(
-            status_code=400, detail="The built-in connection is read-only"
+            status_code=400, detail=f"The built-in connection '{conn_id}' is read-only"
         )
     record = update_connection(conn_id, body.name, body.provider, body.config)
     if record is None:
         raise HTTPException(status_code=404, detail=f"No connection '{conn_id}'")
     _rekick_schema_index()
-    return ConnectionInfo(**redact(record))
+    return _as_info(record)
 
 
 @router.delete("/connections/{conn_id}")
 async def remove_connection(conn_id: str) -> dict[str, Any]:
-    if conn_id == BUILTIN_APP_ID:
+    if conn_id in BUILTIN_IDS:
         raise HTTPException(
-            status_code=400, detail="The built-in connection is read-only"
+            status_code=400, detail=f"The built-in connection '{conn_id}' is read-only"
         )
     if not delete_connection(conn_id):
         raise HTTPException(status_code=404, detail=f"No connection '{conn_id}'")
@@ -168,11 +179,16 @@ async def run_query(req: QueryRequest) -> QueryResultModel:
         raise HTTPException(
             status_code=404, detail=f"No connection '{req.connection_id}'"
         )
-    if req.read_only and not looks_read_only(req.sql):
-        raise HTTPException(
-            status_code=400,
-            detail="Read-only mode allows a single SELECT/WITH/EXPLAIN statement only.",
+    dialect = get_dialect(conn["provider"])
+    if req.read_only and not query_is_read_only(req.sql, dialect):
+        detail = (
+            "Read-only mode allows read ops only "
+            "(search, get, list, count, peek, collections, describe) — e.g. "
+            '{"op": "search", "collection": "…"}.'
+            if dialect == "json"
+            else "Read-only mode allows a single SELECT/WITH/EXPLAIN statement only."
         )
+        raise HTTPException(status_code=400, detail=detail)
     driver = get_driver(conn["provider"])
     try:
         result = await asyncio.to_thread(

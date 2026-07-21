@@ -48,7 +48,7 @@ export const databaseModule: ModuleManifest = {
         {
           name: 'database.listConnections',
           description:
-            'List the database connections the user can query. Returns each connection id, name, and provider. The built-in "app" connection is the dashboard\'s own local vector store.',
+            'List the database connections the user can query. Returns each connection id, name, provider, and dialect. Two built-ins are always present: "app" is the dashboard\'s own SQLite database (SQL), and "vectors" is its LanceDB vector store (JSON dialect). Check "dialect" before writing a query — "sql" takes SQL, "json" takes a vector-store operation body.',
           params: { type: 'object', properties: {} },
           handler: async () => {
             const { connections } = await listConnections();
@@ -56,6 +56,7 @@ export const databaseModule: ModuleManifest = {
               id: c.id,
               name: c.name,
               provider: c.provider,
+              dialect: c.dialect,
               builtin: c.builtin,
             }));
           },
@@ -63,7 +64,7 @@ export const databaseModule: ModuleManifest = {
         {
           name: 'database.describe',
           description:
-            'Describe a connection\'s schema (tables and their columns/types) so you can write correct SQL. Defaults to the built-in "app" connection.',
+            'Describe a connection\'s schema so you can write a correct query. For SQL connections these are tables and their columns/types; for vector stores they are collections and their fields. Also returns the connection\'s dialect. Defaults to the built-in "app" connection.',
           params: {
             type: 'object',
             properties: {
@@ -75,13 +76,20 @@ export const databaseModule: ModuleManifest = {
           },
           handler: async (args) => {
             const { connection_id } = args as { connection_id?: string };
-            return { schema: await describe(connection_id ?? 'app') };
+            const id = connection_id ?? 'app';
+            // The dialect decides whether the agent should write SQL or a JSON body,
+            // so it travels with the schema rather than needing a second call.
+            const { connections } = await listConnections();
+            return {
+              dialect: connections.find((c) => c.id === id)?.dialect ?? 'sql',
+              schema: await describe(id),
+            };
           },
         },
         {
           name: 'database.query',
           description:
-            'Run a read-only SQL query (a single SELECT/WITH/EXPLAIN statement) against a connection and return columns and rows. Defaults to the built-in "app" connection.',
+            'Run a read-only query against a connection and return columns and rows. For "sql"-dialect connections pass a single SELECT/WITH/EXPLAIN statement. For "json"-dialect (vector store) connections pass a JSON operation body instead, e.g. {"op":"search","collection":"library","query":"some text","limit":5} — read ops are search, get, list, count, peek, collections, describe. Call database.listConnections or database.describe first if you do not know the dialect. Defaults to the built-in "app" connection.',
           params: {
             type: 'object',
             properties: {

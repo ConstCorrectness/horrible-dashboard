@@ -16,6 +16,7 @@ from backend.modules.database.drivers.base import (
 )
 
 provider = "mysql"
+dialect = "sql"
 
 
 def _import_pymysql():  # type: ignore[no-untyped-def]

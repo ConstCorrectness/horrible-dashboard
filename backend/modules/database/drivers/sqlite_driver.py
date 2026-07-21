@@ -20,6 +20,7 @@ from backend.modules.database.drivers.base import (
 
 
 provider = "sqlite"
+dialect = "sql"
 
 
 def _connect(config: dict[str, Any], *, read_only: bool = False) -> sqlite3.Connection:

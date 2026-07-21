@@ -12,6 +12,9 @@ class ProviderInfo(BaseModel):
     id: str
     label: str
     fields: list[str]
+    # "sql" or "json" — which editor + query shape the console uses for this provider.
+    # Vector stores are "json"; see backend/modules/database/drivers/base.py.
+    dialect: str = "sql"
 
 
 class ConnectionInfo(BaseModel):
@@ -22,6 +25,9 @@ class ConnectionInfo(BaseModel):
     provider: str
     config: dict[str, Any]
     builtin: bool = False
+    # Denormalized from the provider so the console can switch editor modes without
+    # cross-referencing the providers list on every connection change.
+    dialect: str = "sql"
 
 
 class ConnectionInput(BaseModel):
@@ -44,6 +50,9 @@ class ConnectionTestResult(BaseModel):
 
 class QueryRequest(BaseModel):
     connection_id: str = "app"
+    # The query text. SQL for sql-dialect providers; a JSON operation body for
+    # json-dialect (vector) providers. The field keeps its name for wire
+    # compatibility — see drivers/vector_base.py for the JSON shape.
     sql: str
     params: list[Any] | None = None
     read_only: bool = False

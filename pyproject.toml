@@ -61,6 +61,20 @@ browser-engine = ["playwright>=1.4"]
 # once on first use. Lazy-imported and gated by the `library.clipEnabled` setting —
 # without the extra, media stays text-proxy-only: `uv sync --extra clip`.
 clip = ["onnxruntime>=1.18", "tokenizers>=0.20"]
+# Oracle Database (including 23ai AI Vector Search) for the database module. Thin mode
+# is pure Python — no Oracle Instant Client — so this is a small, portable wheel; it's
+# still an extra because most nodes never point at an Oracle instance:
+# `uv sync --extra oracle`.
+oracle = ["oracledb>=2.5"]
+# Vector stores the database console can query natively (json dialect). Each is
+# lazy-imported by its driver, so the console lists the provider either way and only
+# fails — with an install hint — when you actually run a query against one.
+# LanceDB needs no extra: it's already a core dep (it *is* the node's vector store).
+chroma = ["chromadb>=0.5"]
+qdrant = ["qdrant-client>=1.9"]
+weaviate = ["weaviate-client>=4.6"]
+# Everything above in one shot, for a node that inspects several stores.
+vectordb = ["chromadb>=0.5", "qdrant-client>=1.9", "weaviate-client>=4.6"]
 
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]

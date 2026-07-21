@@ -10,10 +10,14 @@ import { apiDelete, apiGet, apiPost, apiPut } from '../../api';
 
 export type ConnectionConfig = Record<string, string | number | boolean>;
 
+/** Which query surface a provider speaks: SQL, or a vector-store JSON body. */
+export type QueryDialect = 'sql' | 'json';
+
 export interface ProviderInfo {
   id: string;
   label: string;
   fields: string[];
+  dialect: QueryDialect;
 }
 
 export interface ConnectionInfo {
@@ -22,6 +26,8 @@ export interface ConnectionInfo {
   provider: string;
   config: ConnectionConfig;
   builtin: boolean;
+  /** Denormalized from the provider so the console can switch editor modes directly. */
+  dialect: QueryDialect;
 }
 
 export interface ConnectionsResponse {
@@ -57,6 +63,10 @@ export interface QueryResult {
 
 export interface QueryRequest {
   connection_id: string;
+  /**
+   * The query text: SQL for `sql`-dialect connections, a JSON operation body for
+   * `json`-dialect (vector) ones. The field keeps its name for wire compatibility.
+   */
   sql: string;
   params?: unknown[] | null;
   read_only?: boolean;

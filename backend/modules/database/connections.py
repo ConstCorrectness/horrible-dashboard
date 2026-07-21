@@ -6,8 +6,11 @@ settings store). The built-in ``app`` connection — the node's own SQLite datab
 synthesized first and cannot be edited or removed. Credentials are stored as-is in the
 gitignored ``.data/`` dir (plaintext for v1; encryption is a tracked follow-up).
 
-Note it points at ``app.db``, **not** the LanceDB vector store: LanceDB is a directory,
-not a SQLite file, so there is nothing for the SQL console to open. See ``app_db.py``.
+Note ``app`` points at ``app.db``, **not** the LanceDB vector store: LanceDB is a
+directory, not a SQLite file, so there is nothing for a *SQL* connection to open (see
+``app_db.py`` — the two were one path before the LanceDB migration, and conflating
+them is the classic bug here). The vector store is reachable instead through the
+second built-in, ``vectors``, a ``lancedb`` json-dialect connection.
 """
 
 from __future__ import annotations
@@ -25,6 +28,10 @@ from backend.modules.database.app_db import get_app_db_path
 _SECRET_FIELDS = {"password", "dsn"}
 
 BUILTIN_APP_ID = "app"
+BUILTIN_VECTORS_ID = "vectors"
+
+# Built-in connections are synthesized, not stored, so they can't be edited or deleted.
+BUILTIN_IDS = frozenset({BUILTIN_APP_ID, BUILTIN_VECTORS_ID})
 
 
 def _store_path() -> Path:
@@ -58,9 +65,28 @@ def _builtin_app() -> dict[str, Any]:
     }
 
 
+def _builtin_vectors() -> dict[str, Any]:
+    """The node's own LanceDB vector store, as a queryable connection.
+
+    This is the counterpart to ``app``: same data dir, but the vector half — library
+    chunks, symdex, CLIP siblings. It's a ``lancedb`` (json-dialect) connection, which
+    is what makes it reachable from the console at all; a SQL connection never could,
+    since LanceDB is a directory of datasets rather than a database file.
+    """
+    from backend.modules.database.drivers.lancedb_driver import default_path  # noqa: PLC0415
+
+    return {
+        "id": BUILTIN_VECTORS_ID,
+        "name": "App (vector store)",
+        "provider": "lancedb",
+        "config": {"path": default_path(), "builtin": True},
+        "builtin": True,
+    }
+
+
 def list_connections() -> list[dict[str, Any]]:
-    """Built-in app connection first, then user connections."""
-    return [_builtin_app(), *_read()]
+    """Built-in connections first (app database, then vector store), then user ones."""
+    return [_builtin_app(), _builtin_vectors(), *_read()]
 
 
 def get_connection(conn_id: str) -> dict[str, Any] | None:
@@ -72,6 +98,8 @@ def resolve_config(conn: dict[str, Any]) -> dict[str, Any]:
     live app-database path, even if the data dir moved since it was created)."""
     if conn.get("id") == BUILTIN_APP_ID:
         return {"path": str(get_app_db_path()), "builtin": True}
+    if conn.get("id") == BUILTIN_VECTORS_ID:
+        return dict(_builtin_vectors()["config"])
     return dict(conn.get("config") or {})
 
 

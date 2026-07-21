@@ -17,6 +17,7 @@ from backend.modules.database.drivers.base import (
 )
 
 provider = "postgres"
+dialect = "sql"
 
 
 def _import_psycopg():  # type: ignore[no-untyped-def]

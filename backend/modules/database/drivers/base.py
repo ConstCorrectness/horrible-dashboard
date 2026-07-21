@@ -4,15 +4,32 @@ A driver is a thin, synchronous adapter around one DB client library. Routes cal
 drivers via ``asyncio.to_thread`` so the (blocking) client never stalls the event
 loop. Drivers lazy-import their client library inside methods, so a provider whose
 optional dependency is missing fails with a clear message instead of breaking boot.
+
+Drivers come in two **dialects**, declared by the module-level ``dialect``:
+
+``sql``
+    The query text is SQL, handed to a real SQL engine (sqlite, postgres, duckdb,
+    mysql, oracle).
+``json``
+    The query text is a JSON body describing one operation against a vector store
+    (chroma, lancedb, qdrant, weaviate). These stores have no SQL dialect — a
+    collection, a metadata filter and a query vector is genuinely all they take —
+    so the console sends their native shape rather than pretending otherwise. See
+    ``vector_base.py`` for the shared body. Results still come back as
+    columns + rows, so the results grid is dialect-agnostic.
 """
 
 from __future__ import annotations
 
+import array as _array
 import datetime as _dt
+import json
 import math
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
+
+Dialect = Literal["sql", "json"]
 
 # Hard cap on rows returned to the client for a single query. The driver fetches one
 # extra row to detect (and flag) truncation without counting the whole result set.
@@ -72,6 +89,7 @@ class Driver(Protocol):
     """Uniform contract every provider implements."""
 
     provider: str
+    dialect: Dialect
 
     def test(self, config: dict[str, Any]) -> None:
         """Open a connection and run a trivial probe. Raise DriverError on failure."""
@@ -107,7 +125,9 @@ def jsonable(value: Any) -> Any:
         return str(value)
     if isinstance(value, (_dt.datetime, _dt.date, _dt.time)):
         return value.isoformat()
-    if isinstance(value, (list, tuple)):
+    # array.array is how oracledb hands back a 23ai VECTOR column; treat it as the
+    # numeric sequence it is so it gets summarized rather than repr'd into the grid.
+    if isinstance(value, (list, tuple, _array.array)):
         seq = list(value)
         if len(seq) > _ARRAY_SUMMARY_THRESHOLD and all(
             isinstance(x, (int, float)) for x in seq
@@ -131,3 +151,33 @@ def looks_read_only(sql: str) -> bool:
         return False
     head = stripped.split(None, 1)[0].lower()
     return head in {"select", "with", "explain", "show", "table", "values"}
+
+
+# Vector-store ops that only read. Anything absent (upsert/delete/create/drop, or an
+# op a future driver adds) is treated as a write, so read-only mode fails closed.
+READ_ONLY_OPS = frozenset(
+    {"search", "get", "list", "count", "peek", "collections", "describe"}
+)
+
+
+def json_query_is_read_only(query: str) -> bool:
+    """Read-only check for a ``json``-dialect query body.
+
+    Unparseable input is *not* read-only: a body we can't understand is one whose
+    op we can't vouch for, and read-only mode is a safety gate, not a hint.
+    """
+    try:
+        body = json.loads(query)
+    except ValueError:
+        return False
+    if not isinstance(body, dict):
+        return False
+    op = body.get("op")
+    return isinstance(op, str) and op.strip().lower() in READ_ONLY_OPS
+
+
+def query_is_read_only(query: str, dialect: Dialect = "sql") -> bool:
+    """Dialect-aware read-only gate used by the routes and the agent's query tool."""
+    return (
+        json_query_is_read_only(query) if dialect == "json" else looks_read_only(query)
+    )
