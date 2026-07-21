@@ -29,6 +29,7 @@ import { openHarnessFor } from '../selected-game';
 import { ChallengeDraftCard, IncomingOfferCard } from './ChallengeCards';
 import { gameAccent, gameIcon } from '../game-identity';
 import { FirstRunHero } from './FirstRunHero';
+import { GamesHero } from './GamesHero';
 import { GamesMui } from '../mui-theme';
 
 // Practice-bot difficulty tiers (server-hosted opponents). Values match the
@@ -225,45 +226,8 @@ export function PlaySection({
 
       {!selectedGame ? (
         <>
-          {/* Welcome Section */}
-          <Card
-            className="games-welcome-card"
-            sx={{
-              p: 2.5,
-              mb: 2,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 1,
-              background: 'color-mix(in srgb, var(--accent) 4%, transparent)',
-            }}
-          >
-            <Typography variant="subtitle1" sx={{ fontWeight: 800, color: 'primary.main' }}>
-              🕹️ Games Library & Marketplace
-            </Typography>
-            <Typography
-              variant="body2"
-              color="text.secondary"
-              sx={{ lineHeight: 1.6, fontSize: '0.82rem' }}
-            >
-              Welcome to the Agent Arcade! You can select any game from the library sidebar on the
-              left to configure your agent's strategy, test your custom tool code, or enter
-              competitive queues.
-            </Typography>
-            <Typography
-              variant="body2"
-              color="text.secondary"
-              sx={{ lineHeight: 1.6, fontSize: '0.82rem' }}
-            >
-              In the future, creators will be able to develop custom reinforcement learning
-              environments, list them here, and even monetize them in the dashboard's game shop.
-            </Typography>
-            <Typography
-              variant="body2"
-              sx={{ fontWeight: 700, mt: 1, color: 'primary.main', fontSize: '0.8rem' }}
-            >
-              ← Please select a game from the Games Library on the left to play.
-            </Typography>
-          </Card>
+          {/* The empty state: a cycling hero for the catalog with Quick Play on it. */}
+          <GamesHero games={games} setSelectedGame={setSelectedGame} />
 
           {/* Server Browser Table Header */}
           <div

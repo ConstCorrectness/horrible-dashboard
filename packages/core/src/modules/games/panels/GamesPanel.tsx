@@ -28,13 +28,19 @@ import { LobbyPanel } from './LobbyPanel';
 
 const SECTIONS: GamesSection[] = ['play', 'board', 'build'];
 
+/* Longhand border properties, not the `border` shorthand: `activeTab` below spreads
+   this and overrides only the colour, and React warns on every switch between the two
+   ("Removing a style property during rerender (borderColor) when a conflicting
+   property is set (border)…") when a shorthand and its longhand are mixed. */
 const tab: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 6,
   padding: '0.3rem 0.7rem',
   borderRadius: 999,
-  border: '1px solid transparent',
+  borderWidth: '1px',
+  borderStyle: 'solid',
+  borderColor: 'transparent',
   background: 'transparent',
   color: 'var(--text-dim)',
   fontSize: '0.78rem',

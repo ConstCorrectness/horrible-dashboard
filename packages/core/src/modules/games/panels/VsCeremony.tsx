@@ -10,14 +10,14 @@ import type { Build } from '../agentBuild';
  * covers the whole app regardless of the builder pane's size. See docs/modules/games.mdx
  * ("build your agent") and AgentBuilderPanel.tsx.
  *
- * Warm (ember) = you, cool (cyan) = opponent — the same VS colour logic the live board
- * uses. This overlay deliberately commits to a dark, single look (a match-intro screen),
- * so it doesn't theme to light.
+ * Accent = you, cyan = opponent — the same VS colour logic the live board uses. This
+ * overlay deliberately commits to a dark, single look (a match-intro screen), so it
+ * doesn't theme to light.
  *
  * The portal mounts on `document.body`, i.e. **outside** the `.games-theme` subtree, so
- * the games palette would not reach it by inheritance — the root below carries the class
- * itself. That's what lets the ember be `var(--accent)` rather than a second hardcoded
- * orange drifting from the module's.
+ * the class is carried on the root below to pick up the module's display type. `--accent`
+ * itself now comes from `:root` either way, so "you" tracks the global theme rather than
+ * drifting to a second hardcoded hex.
  */
 
 // You = the module's voltage. Aligning these means "you" reads the same here as it does

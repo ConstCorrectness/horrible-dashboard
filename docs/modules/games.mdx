@@ -145,8 +145,39 @@ grow an Episodes pane on its own; **Layout: Reset to preset** re-seeds the frame
 above.
 :::
 
-The **Play view is gamified**: each catalog game renders as a card with a
-**▶ Play** button (self-play table, auto-connect) and a **🎯 challenges
+**With no game selected, the Play view leads with a Quick Play hero**
+(`GamesHero.tsx`): a full-bleed slideshow that cycles the catalog, showing one
+game's artwork, name and tagline at a time with a single **▶ Quick Play** button on
+it. It replaced a text card whose closing line was "← Please select a game from the
+Games Library on the left to play" — an empty state whose whole content was
+instructions for using a different part of the screen. The hero *is* the game list,
+one game at a time, and the button starts the one you're looking at.
+
+Three things about it are load-bearing:
+
+- **Quick Play means self-play against your own agent** (`playVsOwnAgent`). That is
+  the only start flow needing neither a sign-in nor the central game server, so the
+  loudest button in the module can't be a dead end for a first-time player. Ranked,
+  practice bots and open tables are one click further in, on the selected game's
+  card. Every start still routes through `matchmaking.ts` — the hero is a new
+  caller, not a new path — and it performs the same `setSelectedGame` +
+  `setActiveGame` handshake the sidebar does, so the harness and board follow.
+- **There is no game art in the repo yet.** `GAME_HERO` in `game-identity.ts` is
+  deliberately empty, and each slide composes its background from the game's
+  identification accent and glyph (accent wash + oversized mark + scrim — the same
+  recipe as the library cards, so a hero and its card read as the same game). Real
+  artwork drops in as a one-line entry per game with no component change, and games
+  with art coexist with games without it. When it lands it must be **self-hosted**
+  (`packages/ui/src/assets/`), never a CDN URL — same offline-first rule as the
+  webfonts.
+- **The motion is guarded.** Under `prefers-reduced-motion: reduce` the hero stops
+  completely rather than slowing down — the auto-advance never starts and the
+  crossfade is off — because it is decorative motion that would otherwise loop
+  unattended forever. The dots stay live, so the whole catalog is still reachable by
+  hand. Auto-advance also pauses on hover and focus, since the dots are targets.
+
+Below the hero, the **Play view is gamified**: each catalog game renders as a card
+with a **▶ Play** button (self-play table, auto-connect) and a **🎯 challenges
 shortcut** that opens the Challenges panel *pre-set to that game*
 (`challenge-focus.ts`, a claim-on-mount hand-off). The ranked hero and challenge
 offers are **[MUI](https://mui.com/material-ui/react-card/) cards** (`Card` /
@@ -168,32 +199,38 @@ label** (`phase-label.ts`): arena "round 2/3 · ⚙️ simulating", bug hunt
 is thinking it names the model doing the thinking plus a **watch reasoning →**
 link that opens the Games Log.
 
-## Look and feel — the warm arcade
+## Look and feel
 
-Games runs its **own palette**, scoped to the module: warm near-black (`#0d0a08`),
-a single orange voltage (`#f97316`), hairline borders, small radii, editorial serif
-display type, and a film-grain wash. The workspace chrome around the pane keeps the
-app's cool blue-grey look — the contrast is the point, the pane should feel like
-somewhere you *went*. (AgentTown's wood/cream set is the precedent for a
-games-local palette.)
+Games is **hairline borders, small radii, editorial serif display type, and a
+film-grain wash — on the app's own palette**. It briefly ran a module-local warm
+"arcade" palette (near-black `#0d0a08`, an orange voltage `#f97316`) that
+`.games-theme` layered over the app's cool blue-grey; that was **removed**. The
+texture and the type stayed, the colour did not.
 
-The mechanism is one class. `GamesPanel`'s root carries `.games-theme`, which
-**redeclares the app's own token names** (`--bg`, `--accent`, `--border`, …) rather
-than inventing games-specific ones, so every panel in the subtree retints by plain
-CSS inheritance — no per-selector sweep. Two consequences worth knowing before you
-touch it:
+The reason is that per-module palettes and a **global theme switcher** are the same
+job done twice, and the module-local version is the weaker one: it can't be turned
+off, it doesn't follow the user's chosen theme, and it forces every JS-side consumer
+(`mui-theme.tsx`) to duplicate the hexes. A "warm arcade" look, if it comes back,
+belongs in the global theme system as a theme the user can select.
+
+`GamesPanel`'s root still carries `.games-theme`, but it now declares only the
+module's **type** (`--games-display`, `--games-body`) and the pane background — the
+colour tokens (`--bg`, `--accent`, `--border`, …) come from `:root`
+(`packages/ui/src/styles.css`) by plain inheritance, like every other pane. Two
+consequences worth knowing before you touch it:
 
 - **`mui-theme.tsx` can't inherit.** MUI's theme is a JS object built at module
-  scope and cannot read CSS custom properties, so its `TOKENS` duplicate the palette
-  as literals. Change one, change the other.
+  scope and cannot read CSS custom properties, so its `TOKENS` duplicate the `:root`
+  values as literals. Change one, change the other — and a global theme switcher will
+  have to drive this object explicitly, since a runtime `:root` change won't reach it.
 - **Portals escape the subtree.** `VsCeremony` renders through `createPortal` onto
   `document.body`, outside `.games-theme`, so it carries the class on its own root.
   Anything else that portals out needs the same.
 
 **One voltage, plus identification.** `--accent` is the only colour for things you
 can click — buttons, focus rings, active states. The per-game colours in
-`game-identity.ts` (`GAME_ACCENT`) are *identification*, not decoration: muted and
-warm-biased, so eleven games stay tellable apart in the shelf without out-shouting
+`game-identity.ts` (`GAME_ACCENT`) are *identification*, not decoration: low-chroma,
+so eleven games stay tellable apart in the shelf without out-shouting
 the buttons. They're used for small marks (a focus ring, an icon chip) and — the one
 deliberate exception — as the tint of each **game card in the Play section's library
 sidebar**, where the whole point is a rich, distinct-per-game card (`LobbyPanel`'s
@@ -222,7 +259,7 @@ accessibility regression, and it was deliberately not imported.
 First-run players get a **first-run hero** at the top of the hub's Play tab (until
 the `games.onboarded` setting flips — there is no separate wizard panel). It is the
 loudest surface in the module by design, and the headline is doing the teaching:
-each step gets its own serif line landing on an italic orange accent word, because
+each step gets its own serif line landing on an italic accent-coloured word, because
 the premise — *you engineer the agent, you don't play* — has to land before the
 sign-in button means anything. Inline steps (`FirstRunHero.tsx`):
 

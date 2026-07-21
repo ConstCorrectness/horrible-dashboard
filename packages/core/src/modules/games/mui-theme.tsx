@@ -15,31 +15,31 @@ import ScopedCssBaseline from '@mui/material/ScopedCssBaseline';
  */
 
 /**
- * The games palette, as literals.
+ * The app palette, as literals.
  *
  * MUI's theme is a JS object built once at module scope — it cannot read the CSS
- * custom properties that `.games-theme` inherits down the tree, so these values have
- * to be duplicated here. They mirror the `.games-theme` block in games.css (the warm
- * arcade palette), NOT the app's cool `:root`: every consumer of `GamesMui`
- * (PlaySection, ProfilePanel, PlazaPanel, ChallengeCards) lives inside the games
- * pane, so the games palette is the correct source. **Change one, change the other.**
+ * custom properties the rest of the app styles with, so these values are duplicated
+ * from packages/ui/src/styles.css `:root`. **Change one, change the other.**
+ *
+ * This duplication is the thing a global theme system has to solve: the moment
+ * `:root` can change at runtime these literals go stale, so the theme switcher needs
+ * to drive this object too (read the computed vars off the document element and
+ * rebuild the theme on change) rather than leaving it pinned at module scope.
  */
 const TOKENS = {
-  bg: '#0d0a08',
-  bgRaised: '#14110d',
-  bgHover: '#1e1913',
-  border: 'rgba(250, 250, 250, 0.12)',
-  text: '#fafafa',
-  textDim: 'rgba(250, 250, 250, 0.55)',
-  accent: '#f97316',
+  bg: '#14161a',
+  bgRaised: '#1d2026',
+  bgHover: '#262a32',
+  border: '#2e333d',
+  text: '#d7dae0',
+  textDim: '#8a909c',
+  accent: '#6ea8fe',
 };
 
 const gamesTheme = createTheme({
   palette: {
     mode: 'dark',
-    // contrastText is pinned rather than left to MUI's luminance calculation: orange
-    // sits near its light/dark threshold, and near-black on orange is the intent.
-    primary: { main: TOKENS.accent, contrastText: TOKENS.bg },
+    primary: { main: TOKENS.accent },
     background: { default: TOKENS.bg, paper: TOKENS.bgRaised },
     text: { primary: TOKENS.text, secondary: TOKENS.textDim },
     divider: TOKENS.border,

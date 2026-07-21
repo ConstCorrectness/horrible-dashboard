@@ -3,30 +3,23 @@
  * module manifest (see index.tsx), like flow.css. Colors come from the shared
  * CSS variables so both themes work. */
 
-/* ---- The games palette -------------------------------------------------------
+/* ---- The games shell ---------------------------------------------------------
  *
- * Games is a warm "arcade world" inside a cool blue-grey app: near-black warmed
- * toward brown, one orange voltage, editorial serif display type. It is scoped to
- * this class rather than :root so the workspace chrome around the pane keeps the
- * app's own look — AgentTown (further down this file) already sets the precedent
- * for a games-local palette.
+ * Games deliberately does NOT redeclare the app's color tokens. It used to carry a
+ * warm "arcade world" palette (near-black warmed toward brown, one orange voltage)
+ * scoped to this class; that was removed so the pane inherits `:root`
+ * (packages/ui/src/styles.css) like every other pane and follows the global theme
+ * when the user switches it. Everything else the restyle brought — the display
+ * type, the film grain, the rich lobby cards, the per-game `--tile-accent`
+ * identities — is unchanged and rides on the inherited palette.
  *
- * These are redeclarations of the app's own token names (packages/ui/src/styles.css
- * :root), so everything below — and every panel inside the pane — retints by plain
- * CSS inheritance. Do not rename them to games-specific tokens; the inheritance IS
- * the mechanism. `mui-theme.tsx` cannot read CSS variables and duplicates these as
- * literals: change one, change the other.
+ * If a games-local palette is ever wanted again, it belongs in the global theme
+ * system as a selectable theme, not as a token redeclaration here: this class
+ * shadowing `--accent` et al. is invisible to `mui-theme.tsx`, which cannot read CSS
+ * variables and had to duplicate every value as a literal.
  */
 
 .games-theme {
-  --bg: #0d0a08;
-  --bg-raised: #14110d;
-  --bg-hover: #1e1913;
-  --border: rgba(250, 250, 250, 0.12);
-  --text: #fafafa;
-  --text-dim: rgba(250, 250, 250, 0.55);
-  --accent: #f97316;
-
   /* Editorial display for ceremony (hero headline, fighter names); body text stays
      in the UI sans. See packages/ui/src/fonts/fonts.css. */
   --games-display: 'Instrument Serif', Georgia, 'Times New Roman', serif;
@@ -49,6 +42,238 @@
   pointer-events: none;
   opacity: 0.05;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ---- The Quick Play hero (Play section empty state) --------------------------
+ *
+ * A full-bleed slideshow of the catalog with one primary action on it, replacing the
+ * text card that used to point at the sidebar. See GamesHero.tsx.
+ *
+ * The art layer is built from the game's `--hero-accent` (its identification colour)
+ * whenever there's no real artwork, using the same wash + oversized glyph + scrim
+ * recipe as the library cards, so a hero and its card read as the same game. A real
+ * image, when one exists, is set as `background-image` on the same element and the
+ * gradients simply don't render — no separate "has art" layout.
+ */
+.games-hero {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--hero-accent, var(--accent)) 35%, transparent);
+  /* Wide and short, like a store hero — but floored in px so a narrow dock doesn't
+     collapse it to a strip with a button hanging off the edge. */
+  min-height: max(190px, 26cqi);
+  display: flex;
+  align-items: flex-end;
+  margin-bottom: 1rem;
+}
+
+.games-hero-art {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-color: var(--bg-raised);
+  background-size: cover;
+  background-position: center;
+  /* The procedural fallback. Overridden wholesale when a hero image is set inline. */
+  background-image:
+    radial-gradient(
+      circle at 82% 18%,
+      color-mix(in srgb, var(--hero-accent, var(--accent)) 55%, transparent),
+      transparent 64%
+    ),
+    linear-gradient(
+      158deg,
+      color-mix(in srgb, var(--hero-accent, var(--accent)) 38%, var(--bg-raised)) 0%,
+      var(--bg-raised) 92%
+    );
+}
+
+/* Crossfade. The element is keyed by game id in React, so each slide mounts fresh
+   and replays this once — no transition bookkeeping between two stacked layers. */
+.games-hero-art.fading {
+  animation: games-hero-in 0.55s ease both;
+}
+
+@keyframes games-hero-in {
+  from {
+    opacity: 0;
+    transform: scale(1.04);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.games-hero-glyph {
+  position: absolute;
+  right: 1.5rem;
+  top: 50%;
+  transform: translateY(-50%) rotate(-8deg);
+  font-size: clamp(5rem, 22cqi, 11rem);
+  line-height: 1;
+  opacity: 0.22;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Legibility floor for the body text, dark at the bottom-left where it sits. */
+.games-hero-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background:
+    linear-gradient(to top, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0.35) 45%, rgba(0, 0, 0, 0) 78%),
+    linear-gradient(to right, rgba(0, 0, 0, 0.7) 0%, rgba(0, 0, 0, 0) 60%);
+}
+
+.games-hero-body {
+  position: relative;
+  z-index: 2;
+  padding: 1.1rem 1.25rem 1.15rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  max-width: 34rem;
+}
+
+.games-hero-eyebrow {
+  margin: 0;
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+/* Sized in container query units against `.games-lobby-content`, not vw: this is a
+   pane in a resizable dock, so viewport units would size the headline off the
+   window while the pane sits 400px wide. Same rule as the first-run hero. */
+.games-hero-title {
+  margin: 0;
+  font-family: var(--games-display);
+  font-weight: 400;
+  font-size: clamp(1.7rem, 6cqi, 3rem);
+  line-height: 1.05;
+  color: #fff;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.55);
+}
+
+.games-hero-tagline {
+  margin: 0.15rem 0 0;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.82);
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+}
+
+.games-hero-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.8rem;
+  flex-wrap: wrap;
+}
+
+/* The one voltage. Same token derivation as `.games-play-btn`, scaled up — this is
+   the loudest control in the section and the only one on the hero. */
+.games-hero-play {
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--accent) 82%, white) 0%,
+    var(--accent) 100%
+  );
+  color: var(--bg);
+  border: none;
+  border-radius: 8px;
+  padding: 0.5rem 1.1rem;
+  font-weight: 800;
+  font-size: 0.88rem;
+  cursor: pointer;
+  box-shadow: 0 3px 12px color-mix(in srgb, var(--accent) 35%, transparent);
+  transition:
+    filter 0.15s ease,
+    transform 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.games-hero-play:hover {
+  filter: brightness(1.1);
+  transform: scale(1.03);
+  box-shadow: 0 5px 18px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* Secondary: the way to the game's other modes (ranked, bots, open tables). Ghost
+   on the art rather than a second filled button — one voltage per surface. */
+.games-hero-details {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 8px;
+  padding: 0.5rem 0.85rem;
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.8rem;
+  cursor: pointer;
+  backdrop-filter: blur(3px);
+  transition: background-color 0.15s ease;
+}
+
+.games-hero-details:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+/* In the actions row, pushed to its end — NOT absolutely positioned in a corner.
+   The dot count follows the catalog, so a floating row wraps into the headline once
+   there are enough games (it clipped the eyebrow at a narrow dock width). In the
+   flow it occupies real space, wraps with the actions, and grows the hero rather
+   than landing on top of the type. */
+.games-hero-dots {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin-left: auto;
+  padding-left: 0.5rem;
+}
+
+.games-hero-dot {
+  width: 7px;
+  height: 7px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.35);
+  cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    transform 0.15s ease;
+}
+
+.games-hero-dot:hover {
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.games-hero-dot.active {
+  background: #fff;
+  transform: scale(1.35);
+}
+
+/* The hero is decorative motion that runs unattended, so it stops completely rather
+   than slowing down — GamesHero also halts the auto-advance at the same breakpoint,
+   leaving the dots as the way through the catalog. */
+@media (prefers-reduced-motion: reduce) {
+  .games-hero-art.fading {
+    animation: none;
+  }
+
+  .games-hero-play:hover,
+  .games-hero-dot.active {
+    transform: none;
+  }
 }
 
 /* ---- Games Library sidebar (Lobby panel) — colorful tiles, not flat rows ---- */
@@ -302,8 +527,8 @@
 /* The per-game rating cards are now MUI <Card>s (see ProfilePanel.tsx); the
  * `.games-cards` grid above is still their responsive container. */
 
-/* The primary voltage. Derived from --accent rather than hardcoded, so it follows
-   the palette; near-black text on orange is the intended contrast. */
+/* The primary voltage. Fully derived from --accent/--bg rather than hardcoded, so it
+   follows whatever the global theme sets; bg-on-accent is the intended contrast. */
 .games-play-btn {
   flex: 1;
   background: linear-gradient(
@@ -1511,8 +1736,8 @@
   border-color: #d4a72c;
 }
 
-/* Muted ice rather than the app's blue accent: the tier ladder is a semantic family
-   of its own, and orange here would collide with the interactive voltage. */
+/* Muted ice rather than --accent: the tier ladder is a semantic family of its own,
+   and the accent here would collide with the interactive voltage. */
 .games-tier-chip[data-tier='diamond'],
 .games-tier-chip[data-tier='platinum'] {
   border-color: #7f9cb5;
@@ -2156,8 +2381,15 @@
     display: none;
   }
 
-  .games-welcome-card {
-    padding: 0.7rem !important;
+  /* Hero: the tagline is the first thing to go, then the secondary action — the
+     headline and Quick Play have to survive at every width. */
+  .games-hero-tagline,
+  .games-hero-details {
+    display: none;
+  }
+
+  .games-hero-body {
+    padding: 0.8rem 0.9rem 0.9rem;
   }
 
   /* Server browser: drop the Players/Ping columns, keep Server/Status/Action. */

@@ -7,13 +7,13 @@
  * live here once and every panel imports them.
  *
  * **The accents are identification, not decoration, and not the interactive voltage.**
- * The games palette runs a single accent (`--accent`, orange) for everything you can
- * click: buttons, focus rings, active states. These colours exist only so a game is
- * recognizable at a glance in a shelf of eleven — so they're used *only* for small
- * marks (a tile edge, an icon chip) and are deliberately muted and warm-biased to sit
- * on the warm near-black without competing with the voltage. A saturated cool blue
- * here would out-shout the buttons and break the one-voltage rule. Keep new entries in
- * the same register: low chroma, warm-leaning, nothing that reads as "press me".
+ * The app runs a single accent (`--accent`) for everything you can click: buttons,
+ * focus rings, active states. These colours exist only so a game is recognizable at a
+ * glance in a shelf of eleven — so they're used *only* for small marks (a card edge,
+ * an icon chip) and are deliberately low-chroma so they never compete with the
+ * voltage. A saturated accent-adjacent hue here would out-shout the buttons and break
+ * the one-voltage rule. Keep new entries in the same register: low chroma, nothing
+ * that reads as "press me".
  *
  * See `.games-theme` in games.css.
  */
@@ -80,4 +80,26 @@ export function gameTagline(id: string): string {
 /** The identification accent for a game id, falling back to the module voltage. */
 export function gameAccent(id: string): string {
   return GAME_ACCENT[id] ?? 'var(--accent)';
+}
+
+/**
+ * Hero artwork per game — the full-bleed background behind the Quick Play hero
+ * (`GamesHero`). **Empty on purpose: there is no game art in the repo yet.**
+ *
+ * With no entry, the hero composes a background procedurally from the game's accent
+ * and glyph (an accent wash + oversized mark + scrim, the same recipe as the library
+ * cards), so the slideshow works today and every new game gets a usable hero for
+ * free. Dropping a real image in later is a one-line entry here — no component
+ * change, and games with art can coexist with games without it.
+ *
+ * When art does land: **self-host it** (`packages/ui/src/assets/games/`, imported so
+ * Vite fingerprints it), never a CDN URL. The app is offline-first and ships as a
+ * Tauri desktop build — the same rule the webfonts follow. Landscape, and dark or
+ * dimmable: white display type and the scrim sit on top of it.
+ */
+export const GAME_HERO: Record<string, string> = {};
+
+/** The hero image URL for a game id, or null to compose one from its identity. */
+export function gameHeroImage(id: string): string | null {
+  return GAME_HERO[id] ?? null;
 }
