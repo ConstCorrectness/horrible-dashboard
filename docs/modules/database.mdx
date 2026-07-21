@@ -94,6 +94,23 @@ embedding model probe → deterministic local hash fallback so it works offline)
 `embeddings.py`. The vector store also backs **agent-commons** matchmaking — see
 [network](network.mdx).
 
+:::tip Bulk writes: use the batch APIs
+`get_embeddings(texts)` and `upsert_documents(collection, rows)` are the paths any
+index build should take. Their single-document siblings are fine for one-off writes but
+pathological in a loop, because **both costs are per-call, not per-row**:
+
+- `merge_insert` is a whole-table operation — ~1.5s on a 5k-row table whether you hand
+  it 1 row or 256.
+- `get_embedding` resolves the model (`GET /api/tags`) and builds a fresh HTTP client
+  on every call.
+
+Looping the single-document versions over ~40k symbols took **hours**, with the
+embedder itself accounting for well under a minute of it. `get_embeddings` resolves the
+model once (cached, 60s TTL), reuses one client, and sends a batched `/api/embed` —
+falling back to bounded-concurrency single requests when the provider has no batch
+endpoint. See [symdex](symdex.mdx#build-cost).
+:::
+
 ## Contributions to the Layout Shell
 
 - **Widget**: `database.console` — the connection bar + schema sidebar + SQL console.

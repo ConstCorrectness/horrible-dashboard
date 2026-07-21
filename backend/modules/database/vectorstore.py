@@ -56,6 +56,59 @@ def _table_dim(tbl: Any) -> int | None:
         return None
 
 
+def upsert_documents(
+    collection: str,
+    rows: list[tuple[str, str, dict[str, Any], list[float]]],
+) -> None:
+    """Upsert many documents in **one** write.
+
+    `merge_insert` is a whole-table operation — LanceDB rewrites data files and
+    recomputes the merge on every call — so its cost is a function of table size, not
+    of how many rows you hand it. Measured on a ~5k-row table it was **~1.5s per
+    call**, which is why a bulk index built one row at a time crawled: the embedder
+    answered in 65ms and then the process sat in Arrow for two seconds. Batching turns
+    N whole-table merges into one, and the per-document cost effectively disappears.
+
+    Rows are `(doc_id, text, metadata, embedding)`. Same width check as the single-row
+    path, applied once to the batch.
+    """
+    if not rows:
+        return
+    db = _get_db()
+    now = time.time()
+    data = [
+        {
+            "id": doc_id,
+            "text": text,
+            "metadata": json.dumps(metadata),
+            "vector": embedding,
+            "created_at": now,
+        }
+        for doc_id, text, metadata, embedding in rows
+    ]
+    widths = {len(embedding) for _i, _t, _m, embedding in rows}
+    if len(widths) > 1:
+        raise DimensionMismatch(
+            f"batch mixes vector widths {sorted(widths)}; a collection holds one width"
+        )
+    width = widths.pop()
+
+    if collection in db.table_names():
+        tbl = db.open_table(collection)
+        expected = _table_dim(tbl)
+        if expected is not None and width != expected:
+            raise DimensionMismatch(
+                f"collection {collection!r} holds {expected}-dim vectors but got "
+                f"{width}. A collection's width is fixed when it is created; "
+                "delete and re-ingest it to switch embedding model."
+            )
+        tbl.merge_insert(
+            "id"
+        ).when_matched_update_all().when_not_matched_insert_all().execute(data)
+    else:
+        db.create_table(collection, data=data)
+
+
 def upsert_document(
     doc_id: str,
     collection: str,

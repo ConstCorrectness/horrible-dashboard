@@ -11,6 +11,7 @@ incremental-on-save is a follow-up. See docs/modules/code.mdx.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -18,18 +19,21 @@ from typing import Any
 from backend.modules.code.index import _walk_source_files, code_index
 from backend.modules.code.locus import code_events
 from backend.modules.code.models import Symbol
-from backend.modules.database.embeddings import get_embedding
+from backend.modules.database.embeddings import get_embedding, get_embeddings
 from backend.modules.database.vectorstore import (
     delete_collection,
     init_db,
     list_documents,
     search_documents,
-    upsert_document,
+    upsert_documents,
 )
 
 logger = logging.getLogger(__name__)
 
 _COLLECTION = "code"
+
+# Documents per embed+write round; see `symdex/index.py` for why this is chunked.
+EMBED_CHUNK = 256
 _MAX_EMBED_CHARS = 2000
 
 
@@ -90,23 +94,40 @@ class SemanticIndex:
 
             total = len(jobs)
             self._publish("building", 0, total)
-            for i, (path, sym, text) in enumerate(jobs, start=1):
-                embedding, _method = await get_embedding(text)
-                upsert_document(
-                    f"code:{path}#{sym.range.start.line}",
-                    _COLLECTION,
-                    text,
-                    {
-                        "path": str(path),
-                        "name": sym.name,
-                        "kind": sym.kind,
-                        "container": sym.container,
-                        "range": sym.range.model_dump(),
-                    },
-                    embedding,
+            # Chunked embed + write. Both costs are per-*call*, not per-row: a LanceDB
+            # `merge_insert` rewrites the table whatever you hand it (~1.5s on a 5k-row
+            # table), and model discovery used to run once per document. Indexing a
+            # repo's symbols one at a time made this a multi-hour job; see
+            # `symdex/index.py`, which has the same shape.
+            done = 0
+            for start in range(0, total, EMBED_CHUNK):
+                chunk = jobs[start : start + EMBED_CHUNK]
+                vectors, _method = await get_embeddings(
+                    [text for _p, _s, text in chunk]
                 )
-                if i % 20 == 0 or i == total:
-                    self._publish("building", i, total)
+                if len(vectors) != len(chunk):
+                    raise RuntimeError("embedding provider returned a short batch")
+                await asyncio.to_thread(
+                    upsert_documents,
+                    _COLLECTION,
+                    [
+                        (
+                            f"code:{path}#{sym.range.start.line}",
+                            text,
+                            {
+                                "path": str(path),
+                                "name": sym.name,
+                                "kind": sym.kind,
+                                "container": sym.container,
+                                "range": sym.range.model_dump(),
+                            },
+                            vector,
+                        )
+                        for (path, sym, text), vector in zip(chunk, vectors)
+                    ],
+                )
+                done += len(chunk)
+                self._publish("building", done, total)
             self._publish("ready", total, total)
             return {"started": True, "indexed": total}
         except Exception as exc:  # noqa: BLE001 — a reindex failure shouldn't crash callers

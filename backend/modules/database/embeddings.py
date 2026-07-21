@@ -1,6 +1,9 @@
+import asyncio
 import logging
 import hashlib
 import math
+import time
+
 import httpx
 from backend.modules.agent.routes import _load_config
 from backend.modules.agent import providers as P
@@ -56,85 +59,186 @@ def get_local_fallback_embedding(text: str) -> list[float]:
     return vector
 
 
+# Resolved (model, endpoint, dialect, kind) cache. Model discovery costs a
+# `GET /api/tags` round-trip, and `get_embedding` did it on **every single call** — in
+# a bulk index that's one discovery request per document, for an answer that never
+# changes mid-run. Cached with a short TTL so a newly pulled embedding model is still
+# picked up within a minute.
+_MODEL_CACHE_TTL_S = 60.0
+_model_cache: tuple[float, str, str, str, str] | None = None
+
+# How many embeddings to request concurrently when the provider has no batch endpoint.
+# The server processes one at a time per slot, but overlapping the request/response
+# round-trips still removes most of the per-call latency.
+EMBED_CONCURRENCY = 8
+
+
+def _select_embedding_model(available: list[str], default: str) -> str:
+    """The best dedicated embedding model among those pulled, else `default`."""
+    for kw in ("all-minilm", "nomic-embed", "bge-", "embed"):
+        matched = next((m for m in available if kw in m.lower()), None)
+        if matched:
+            return matched
+    return default
+
+
+async def _resolve_model(client: httpx.AsyncClient) -> tuple[str, str, str, str] | None:
+    """(model, endpoint, dialect, kind) for embedding, or None with no agent config.
+    Cached for `_MODEL_CACHE_TTL_S` so bulk indexing doesn't re-probe per document."""
+    global _model_cache
+    now = time.monotonic()
+    if _model_cache and now - _model_cache[0] < _MODEL_CACHE_TTL_S:
+        return _model_cache[1:]
+    config = _load_config()
+    if not config:
+        return None
+    info = P.provider_for(config.provider)
+    endpoint = config.endpoint or info.default_endpoint
+    model = config.model
+    try:
+        model = _select_embedding_model(
+            await P.list_models(client, info, endpoint), model
+        )
+    except Exception as exc:  # noqa: BLE001 — discovery is best-effort
+        logger.debug(f"Failed to query available models list: {exc}")
+    _model_cache = (now, model, endpoint, info.dialect, info.kind)
+    return _model_cache[1:]
+
+
+async def _embed_batch(
+    client: httpx.AsyncClient,
+    texts: list[str],
+    model: str,
+    endpoint: str,
+    dialect: str,
+    kind: str,
+) -> list[list[float]] | None:
+    """One request for many texts, or None if the provider has no batch endpoint.
+    Ollama's `/api/embed` and the OpenAI-compatible `/v1/embeddings` both take an
+    array `input` and return results in order."""
+    try:
+        if dialect == "ollama":
+            res = await client.post(
+                f"{endpoint}/api/embed", json={"model": model, "input": texts}
+            )
+            res.raise_for_status()
+            out = res.json().get("embeddings")
+        else:
+            res = await client.post(
+                f"{endpoint}/v1/embeddings", json={"model": model, "input": texts}
+            )
+            res.raise_for_status()
+            out = [d.get("embedding") for d in res.json().get("data", [])]
+        if isinstance(out, list) and len(out) == len(texts):
+            return [[float(x) for x in vec] for vec in out]
+    except Exception as exc:  # noqa: BLE001 — fall back to per-text requests
+        logger.debug(f"Batch embedding unavailable ({exc}); using per-text requests.")
+    return None
+
+
+async def get_embeddings(texts: list[str]) -> tuple[list[list[float]], str]:
+    """Embed many texts in as few round-trips as possible.
+
+    The bulk path behind index builds. Three things it does that calling
+    `get_embedding` in a loop does not: resolve the model **once** (not one
+    `GET /api/tags` per text), reuse **one** HTTP client (not a fresh connection pool
+    per text), and send a **batch** request when the provider supports one — falling
+    back to bounded-concurrency single requests when it doesn't.
+
+    Returns `(vectors, method)` with vectors in input order. Like `get_embedding`, it
+    degrades to the deterministic hash embedding rather than raising, and the returned
+    method says which was used so callers can refuse to persist a fallback.
+    """
+    if not texts:
+        return [], "noop"
+    # A batch is inherently a long request — a few hundred short texts at ~65ms each is
+    # tens of seconds of honest work. This must not be a per-request timeout budget: a
+    # timeout here degrades to the hash fallback, which the index build correctly
+    # refuses to persist, so it would abandon the whole build.
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        resolved = await _resolve_model(client)
+        if resolved is None:
+            logger.info("Agent config not found; using local fallback embedding.")
+            return [get_local_fallback_embedding(t) for t in texts], "local-fallback"
+        model, endpoint, dialect, kind = resolved
+        method = f"{'ollama' if dialect == 'ollama' else kind}/{model}"
+
+        batched = await _embed_batch(client, texts, model, endpoint, dialect, kind)
+        if batched is not None:
+            return batched, method
+
+        # No batch endpoint — overlap the individual requests instead.
+        sem = asyncio.Semaphore(EMBED_CONCURRENCY)
+
+        async def one(text: str) -> list[float] | None:
+            async with sem:
+                return await _embed_one(client, text, model, endpoint, dialect)
+
+        try:
+            results = await asyncio.gather(*(one(t) for t in texts))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Batch embedding failed ({exc}); using local fallback.")
+            results = [None] * len(texts)
+        if any(r is None for r in results):
+            logger.warning(
+                f"Failed to fetch remote embeddings from {kind}; "
+                "falling back to local deterministic hash embedding."
+            )
+            return [get_local_fallback_embedding(t) for t in texts], "local-fallback"
+        return [r for r in results if r is not None], method
+
+
+async def _embed_one(
+    client: httpx.AsyncClient, text: str, model: str, endpoint: str, dialect: str
+) -> list[float] | None:
+    """A single embedding over an existing client, or None on failure."""
+    try:
+        if dialect == "ollama":
+            res = await client.post(
+                f"{endpoint}/api/embeddings", json={"model": model, "prompt": text}
+            )
+            res.raise_for_status()
+            emb = res.json().get("embedding")
+            if emb and isinstance(emb, list):
+                return [float(x) for x in emb]
+            return None
+        res = await client.post(
+            f"{endpoint}/v1/embeddings", json={"model": model, "input": text}
+        )
+        res.raise_for_status()
+        data = res.json().get("data", [])
+        if data:
+            emb = data[0].get("embedding")
+            if emb and isinstance(emb, list):
+                return [float(x) for x in emb]
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(f"Single embedding failed: {exc}")
+    return None
+
+
 async def get_embedding(text: str) -> tuple[list[float], str]:
     """
     Generate an embedding vector for the text using the configured agent model,
     falling back to the local deterministic hash embedding if remote server is offline.
+
+    Single-text convenience over the same cached model resolution the batch path uses,
+    so it no longer re-probes `GET /api/tags` on every call. For more than one text
+    prefer `get_embeddings`, which batches the requests too.
+
     Returns:
         tuple[embedding_list, model_or_method_name]
     """
-    config = _load_config()
-    if not config:
-        logger.info("Agent config not found; using local fallback embedding.")
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resolved = await _resolve_model(client)
+        if resolved is None:
+            logger.info("Agent config not found; using local fallback embedding.")
+            return get_local_fallback_embedding(text), "local-fallback"
+        model, endpoint, dialect, kind = resolved
+        vector = await _embed_one(client, text, model, endpoint, dialect)
+        if vector is not None:
+            return vector, f"{'ollama' if dialect == 'ollama' else kind}/{model}"
+        logger.warning(
+            f"Failed to fetch remote embedding from {kind}; "
+            "falling back to local deterministic hash embedding."
+        )
         return get_local_fallback_embedding(text), "local-fallback"
-
-    info = P.provider_for(config.provider)
-    endpoint = config.endpoint or info.default_endpoint
-
-    # Base fallback is the user's configured agent model
-    model = config.model
-
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        # Check if there is a dedicated embedding model already pulled
-        try:
-            available_models = await P.list_models(client, info, endpoint)
-            # Prioritize standard dedicated embedding models
-            embedding_keywords = ["all-minilm", "nomic-embed", "bge-", "embed"]
-            for kw in embedding_keywords:
-                matched = next((m for m in available_models if kw in m.lower()), None)
-                if matched:
-                    model = matched
-                    logger.info(
-                        f"Detected and selected dedicated embedding model: {model}"
-                    )
-                    break
-        except Exception as e:
-            logger.debug(f"Failed to query available models list: {e}")
-
-        try:
-            if info.dialect == "ollama":
-                # Try standard Ollama embeddings endpoint first
-                try:
-                    url = f"{endpoint}/api/embeddings"
-                    res = await client.post(url, json={"model": model, "prompt": text})
-                    res.raise_for_status()
-                    emb = res.json().get("embedding")
-                    if emb and isinstance(emb, list):
-                        return [float(x) for x in emb], f"ollama/{model}"
-                except httpx.HTTPError:
-                    # Try newer `/api/embed` endpoint
-                    url = f"{endpoint}/api/embed"
-                    res = await client.post(url, json={"model": model, "input": text})
-                    res.raise_for_status()
-                    embeddings = res.json().get("embeddings")
-                    if (
-                        embeddings
-                        and isinstance(embeddings, list)
-                        and len(embeddings) > 0
-                    ):
-                        return [float(x) for x in embeddings[0]], f"ollama/{model}"
-                    # Maybe it returns a flat "embedding" key
-                    emb = res.json().get("embedding")
-                    if emb and isinstance(emb, list):
-                        return [float(x) for x in emb], f"ollama/{model}"
-                    raise
-            else:
-                # OpenAI / vLLM compatible embeddings endpoint
-                url = f"{endpoint}/v1/embeddings"
-                res = await client.post(url, json={"model": model, "input": text})
-                res.raise_for_status()
-                data = res.json().get("data", [])
-                if data and isinstance(data, list) and len(data) > 0:
-                    emb = data[0].get("embedding")
-                    if emb and isinstance(emb, list):
-                        return [float(x) for x in emb], f"{info.kind}/{model}"
-
-            raise RuntimeError("Embeddings response format not recognized.")
-        except Exception as exc:
-            logger.warning(
-                f"Failed to fetch remote embedding from {info.kind} ({exc}); "
-                "falling back to local deterministic hash embedding."
-            )
-            return get_local_fallback_embedding(
-                text
-            ), f"local-fallback (error: {type(exc).__name__})"

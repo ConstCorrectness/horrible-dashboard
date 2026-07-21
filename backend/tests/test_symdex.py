@@ -104,9 +104,21 @@ def _fake_embedder(model: str, dim: int):
     return fake
 
 
+def _patch_embedder(monkeypatch, model: str, dim: int) -> None:
+    """Patch **both** embedding entry points. The build loop uses the batch
+    `get_embeddings`; `_probe_embedder` still uses the single `get_embedding`, so
+    patching only one leaves the other reaching for a real provider."""
+    monkeypatch.setattr(index_mod, "get_embedding", _fake_embedder(model, dim))
+
+    async def fake_batch(texts: list[str]):
+        return [[0.1] * dim for _ in texts], model
+
+    monkeypatch.setattr(index_mod, "get_embeddings", fake_batch)
+
+
 def test_reindex_and_search_roundtrip(monkeypatch, tmp_path):
     idx = SymdexIndex()
-    monkeypatch.setattr(index_mod, "get_embedding", _fake_embedder("ollama/embedA", 4))
+    _patch_embedder(monkeypatch, "ollama/embedA", 4)
     docs_dir = tmp_path / "docs"
     docs_dir.mkdir()
     (docs_dir / "a.mdx").write_text("# Alpha\nsome text")
@@ -130,12 +142,12 @@ def test_model_change_forces_full_rebuild(monkeypatch, tmp_path):
     docs_dir.mkdir()
     (docs_dir / "a.mdx").write_text("# Alpha\nsome text")
     monkeypatch.setattr(index_mod, "extract_docs", lambda: extract_docs(docs_dir))
-    monkeypatch.setattr(index_mod, "get_embedding", _fake_embedder("ollama/embedA", 4))
+    _patch_embedder(monkeypatch, "ollama/embedA", 4)
     asyncio.run(idx.reindex(["docs"]))
 
     # New model with a NEW dimension: without the guard this would crash with
     # DimensionMismatch; with it, the collection is rebuilt under the new model.
-    monkeypatch.setattr(index_mod, "get_embedding", _fake_embedder("ollama/embedB", 8))
+    _patch_embedder(monkeypatch, "ollama/embedB", 8)
     result = asyncio.run(idx.reindex(["docs"]))
     assert result["embed_model"] == "ollama/embedB"
     found = asyncio.run(idx.search("alpha"))
@@ -148,13 +160,11 @@ def test_fallback_embedder_refused_and_search_degrades(monkeypatch, tmp_path):
     docs_dir.mkdir()
     (docs_dir / "a.mdx").write_text("# Alpha\nsome text")
     monkeypatch.setattr(index_mod, "extract_docs", lambda: extract_docs(docs_dir))
-    monkeypatch.setattr(index_mod, "get_embedding", _fake_embedder("ollama/embedA", 4))
+    _patch_embedder(monkeypatch, "ollama/embedA", 4)
     asyncio.run(idx.reindex(["docs"]))
 
     # Provider goes offline: the hash fallback must neither write nor crash.
-    monkeypatch.setattr(
-        index_mod, "get_embedding", _fake_embedder("local-fallback", 384)
-    )
+    _patch_embedder(monkeypatch, "local-fallback", 384)
     refused = asyncio.run(idx.reindex(["docs"]))
     assert refused["started"] is False and "offline" in refused["reason"]
 
@@ -218,3 +228,78 @@ def test_extract_stdlib_harvests_real_modules(tmp_path):
     # The embed subset is a bounded slice of the (much larger) relational corpus.
     assert es.STDLIB_EMBED < set(harvests) | es.STDLIB_EMBED
     assert "pathlib" in es.STDLIB_EMBED
+
+
+def test_reindex_batches_embeddings_and_writes(monkeypatch, tmp_path):
+    """The build must not be one embed call and one whole-table write per document —
+    that's what turned a ~40k-symbol index into an hours-long build (a `merge_insert`
+    costs ~1.5s regardless of row count, and model discovery ran per document)."""
+    idx = SymdexIndex()
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    # Enough pages to produce well over one chunk's worth of documents (~4 each).
+    for i in range(100):
+        (docs_dir / f"p{i}.mdx").write_text(f"# Page {i}\n\n" + "word " * 600)
+    monkeypatch.setattr(index_mod, "extract_docs", lambda: extract_docs(docs_dir))
+
+    embed_calls: list[int] = []
+    write_calls: list[int] = []
+
+    async def fake_batch(texts: list[str]):
+        embed_calls.append(len(texts))
+        return [[0.1] * 4 for _ in texts], "ollama/embedA"
+
+    monkeypatch.setattr(index_mod, "get_embedding", _fake_embedder("ollama/embedA", 4))
+    monkeypatch.setattr(index_mod, "get_embeddings", fake_batch)
+
+    real_upsert = index_mod.upsert_documents
+
+    def counting_upsert(collection, rows):
+        write_calls.append(len(rows))
+        return real_upsert(collection, rows)
+
+    monkeypatch.setattr(index_mod, "upsert_documents", counting_upsert)
+
+    result = asyncio.run(idx.reindex(["docs"]))
+    total = result["counts"]["docs"]
+    assert total > index_mod.EMBED_CHUNK  # the batching actually gets exercised
+
+    # Every document embedded and written exactly once, but in chunk-sized calls.
+    assert sum(embed_calls) == total and sum(write_calls) == total
+    expected_calls = -(-total // index_mod.EMBED_CHUNK)  # ceil
+    assert len(embed_calls) == expected_calls
+    assert len(write_calls) == expected_calls
+    assert max(embed_calls) <= index_mod.EMBED_CHUNK
+
+
+def test_symbols_without_docstrings_are_not_embedded(tmp_path, monkeypatch):
+    """Only the relational projection is exhaustive. A symbol with no docstring embeds
+    to its own name restated ("class mypkg.Thing") — no semantic signal, and 58% of a
+    real corpus, so it more than doubled build time while diluting the vector space."""
+    site = tmp_path / "site-packages"
+    pkg = site / "mypkg"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text(
+        '"""Top doc."""\n'
+        "def documented(a):\n"
+        '    """This one explains itself."""\n'
+        "    return a\n"
+        "def undocumented(b):\n"
+        "    return b\n"
+    )
+    monkeypatch.setattr(ep, "site_packages_for", lambda interp: [site])
+    monkeypatch.setattr(ep, "FRAMEWORK_PACKAGES", {"mypkg": "mypkg-dist"})
+    monkeypatch.setattr(index_mod, "extract_packages", ep.extract_packages)
+
+    idx = SymdexIndex()
+    jobs = asyncio.run(idx._collect("packages", "ignored-interpreter"))
+    embedded = {j[0].rsplit(".", 1)[-1] for j in jobs}
+    assert "documented" in embedded
+    assert "undocumented" not in embedded
+
+    # ...but the relational index still has both, so completion offers them.
+    from backend.modules.lsp import symbol_store
+
+    assert [h["symbol"] for h in symbol_store.query("python", "undocument", 5)] == [
+        "undocumented"
+    ]

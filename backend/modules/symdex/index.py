@@ -23,14 +23,14 @@ import time
 from pathlib import Path
 from typing import Any
 
-from backend.modules.database.embeddings import get_embedding
+from backend.modules.database.embeddings import get_embedding, get_embeddings
 from backend.modules.database.vectorstore import (
     delete_collection,
     delete_documents_with_prefix,
     init_db,
     list_documents,
     search_documents,
-    upsert_document,
+    upsert_documents,
 )
 from backend.modules.lsp import symbol_store
 from backend.modules.symdex.extract_docs import extract_docs
@@ -43,6 +43,12 @@ logger = logging.getLogger(__name__)
 
 _COLLECTION = "symdex"
 _FALLBACK_PREFIX = "local-fallback"
+
+# Documents per embed+write round. Large enough that the fixed per-call costs (one
+# whole-table `merge_insert`, one model resolution, one HTTP round-trip) are amortized
+# across many symbols; small enough that progress still streams and a provider dropping
+# out costs at most one chunk of work.
+EMBED_CHUNK = 256
 
 
 def _meta_path() -> Path:
@@ -187,15 +193,35 @@ class SymdexIndex:
                 delete_documents_with_prefix(_COLLECTION, KIND_PREFIXES[kind])
                 total = len(jobs)
                 self._publish("building", kind, 0, total)
-                for i, (doc_id, text, metadata) in enumerate(jobs, start=1):
-                    embedding, method = await get_embedding(text)
-                    if _is_fallback(method) or len(embedding) != dim:
+                # Chunked, not per-document: one embedding round-trip and one LanceDB
+                # write per chunk. Both of those costs are per-*call*, not per-row —
+                # a per-document loop paid a whole-table `merge_insert` (~1.5s on a 5k
+                # table) and a fresh model-discovery probe for every single symbol,
+                # which is what turned a ~40k-symbol build into hours.
+                done = 0
+                for start in range(0, total, EMBED_CHUNK):
+                    chunk = jobs[start : start + EMBED_CHUNK]
+                    vectors, method = await get_embeddings(
+                        [text for _i, text, _m in chunk]
+                    )
+                    if (
+                        _is_fallback(method)
+                        or len(vectors) != len(chunk)
+                        or any(len(v) != dim for v in vectors)
+                    ):
                         # Provider dropped mid-build: stop rather than poison.
-                        self._publish("failed", kind, i - 1, total)
+                        self._publish("failed", kind, done, total)
                         return {"started": True, "error": "embedding provider lost"}
-                    upsert_document(doc_id, _COLLECTION, text, metadata, embedding)
-                    if i % 20 == 0 or i == total:
-                        self._publish("building", kind, i, total)
+                    await asyncio.to_thread(
+                        upsert_documents,
+                        _COLLECTION,
+                        [
+                            (doc_id, text, metadata, vector)
+                            for (doc_id, text, metadata), vector in zip(chunk, vectors)
+                        ],
+                    )
+                    done += len(chunk)
+                    self._publish("building", kind, done, total)
                 counts[kind] = total
                 self._publish("ready", kind, total, total)
 
@@ -246,7 +272,14 @@ class SymdexIndex:
                 # curated modules are worth the vectors (see extract_stdlib).
                 if stdlib and harvest.dist not in STDLIB_EMBED:
                     continue
-                jobs.extend((d.id, d.text, d.metadata) for d in harvest.docs)
+                # ...and only symbols that actually carry a docstring. Without one the
+                # embeddable text degenerates to the name restated as a sentence
+                # ("class numpy.linalg.LinAlgError"), which adds nothing semantic —
+                # you find that by prefix, and the relational index already does,
+                # instantly. It isn't free either: 58% of the corpus has no docstring,
+                # so embedding them more than doubled build time while diluting the
+                # vector space with near-duplicate name-only rows.
+                jobs.extend((d.id, d.text, d.metadata) for d in harvest.docs if d.doc)
             return jobs
         if kind == "schema":
             schemas = await asyncio.to_thread(extract_schemas)

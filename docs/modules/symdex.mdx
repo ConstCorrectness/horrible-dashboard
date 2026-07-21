@@ -47,6 +47,34 @@ The stdlib is harvested into **both** projections but at different breadth:
   worth spending vectors on for agent retrieval. Embedding every stdlib symbol would be
   tens of thousands of vectors against a local embedder for very little retrieval gain.
 
+## Build cost
+
+A full build is ~46k symbols. Getting that from *hours* down to minutes was mostly
+about noticing that the embedder was never the bottleneck — it answers in ~65ms, but
+the requests were going out ~2s apart.
+
+| what | before | after |
+| --- | --- | --- |
+| LanceDB write | one `merge_insert` **per document** (~1.5s) | one per **256-doc chunk** (~6ms/doc) |
+| model discovery | one `GET /api/tags` **per document** | once per build (60s TTL cache) |
+| HTTP client | a new `AsyncClient` per document | one shared client per batch |
+| embed request | one per document | one batched `/api/embed`, or 8-way concurrent |
+| documents embedded | all ~40k | only those **with a docstring** (~17k) |
+
+`merge_insert` is the one to internalize: it's a **whole-table** operation, so its cost
+tracks table size, not the number of rows you pass it. Handing it one row at a time is
+the worst possible use of it — measured at ~1.5s per call on a 5k-row table, which is
+16 hours for a 40k-symbol build spent entirely in Arrow.
+
+The docstring filter is a quality decision as much as a speed one: 58% of harvested
+symbols have no docstring, and their embeddable text degenerates to the name restated
+as a sentence (`"class numpy.linalg.LinAlgError"`). That's no semantic signal — you
+find those by prefix, which the relational index already does instantly — and it
+dilutes the vector space with near-duplicate rows.
+
+The same chunked shape is used by [`code/semantic.py`](code.mdx), which had the
+identical per-document loop.
+
 ## Two projections
 
 1. **LanceDB `symdex` collection** (`database/vectorstore.py`) — the semantic
