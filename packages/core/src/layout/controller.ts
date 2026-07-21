@@ -266,9 +266,19 @@ export function openPaneInArea(
   viewId: string,
   areaId: string,
   params?: Record<string, unknown>,
+  instanceId?: string,
 ): string | null {
   const f = frame();
   if (!resolveView(viewId) || !findArea(f.center, areaId)) return null;
+  // A caller-supplied instance id is the identity: focus it if it's already open,
+  // the same focus-or-create rule `openPane` applies.
+  if (instanceId) {
+    const existing = findPaneAnywhere(f, instanceId);
+    if (existing) {
+      focusInstance(existing);
+      return instanceId;
+    }
+  }
   // Same identity rule as openPane: a singleton focuses instead of duplicating.
   const isPanel = registry.panels.some((p) => p.id === viewId);
   const singleton = isPanel
@@ -285,7 +295,7 @@ export function openPaneInArea(
     }
   }
   const pane: PaneState = {
-    instanceId: singleton ? viewId : makeInstanceId(viewId, f.paneSeq),
+    instanceId: instanceId ?? (singleton ? viewId : makeInstanceId(viewId, f.paneSeq)),
     viewId,
     params,
     regions: regionsFor(viewId),
@@ -480,6 +490,24 @@ export function toggleRegionView(regionViewId: string): void {
 // ---------------------------------------------------------------------------
 // Areas
 // ---------------------------------------------------------------------------
+
+/**
+ * The center area already hosting a pane of `viewId`, preferring the focused one.
+ * Lets a module that opens many documents of one kind (editor buffers) stack them
+ * as tabs in the area it already owns, instead of splitting off a new area each
+ * time — `openPane`'s default, which is right for a *first* document but wrong for
+ * the second file opened from the tree.
+ */
+export function areaHostingView(viewId: string): string | null {
+  const f = frame();
+  const hosts = listPanes(f).filter((p) => p.pane.viewId === viewId && p.location.kind === 'area');
+  if (hosts.length === 0) return null;
+  const focused = hosts.find(
+    (p) => p.location.kind === 'area' && p.location.areaId === f.focusedAreaId,
+  );
+  const pick = focused ?? hosts[0];
+  return pick.location.kind === 'area' ? pick.location.areaId : null;
+}
 
 /** The area containing a pane instance, or the area itself when given its id. */
 function areaIdFor(areaOrInstanceId: string): string | null {

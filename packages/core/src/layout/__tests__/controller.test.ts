@@ -12,6 +12,7 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { registry } from '../../registry';
 import { setPaneDirty } from '../close-guards';
 import {
+  areaHostingView,
   dockSidesOf,
   isDockable,
   openDocument,
@@ -152,6 +153,36 @@ describe('openPaneInArea', () => {
   it('rejects an unknown area or view', () => {
     expect(openPaneInArea('t.tool', 'nope')).toBeNull();
     expect(openPaneInArea('nope.missing', 'a0')).toBeNull();
+  });
+
+  it('honours a caller-supplied instance id, focusing it on a second open', () => {
+    const empty = collectAreas(layoutStore.getSnapshot().frame.center).find(
+      (a) => a.tabs.length === 0,
+    )!;
+    expect(openPaneInArea('t.multiDoc', empty.id, { n: 1 }, 'doc:a')).toBe('doc:a');
+    // Same identity again: focus, don't add a second tab.
+    expect(openPaneInArea('t.multiDoc', empty.id, { n: 1 }, 'doc:a')).toBe('doc:a');
+    expect(openPaneInArea('t.multiDoc', empty.id, { n: 2 }, 'doc:b')).toBe('doc:b');
+    const area = collectAreas(layoutStore.getSnapshot().frame.center).find(
+      (a) => a.id === empty.id,
+    )!;
+    expect(area.tabs.map((t) => t.instanceId)).toEqual(['doc:a', 'doc:b']);
+  });
+});
+
+describe('areaHostingView', () => {
+  it('finds the area a view already occupies, so siblings can tab into it', () => {
+    const seeded = findPaneAnywhere(layoutStore.getSnapshot().frame, 't.doc#0')!;
+    expect(seeded.location).toMatchObject({ kind: 'area' });
+    const areaIdOfSeeded = (seeded.location as { areaId: string }).areaId;
+    expect(areaHostingView('t.doc')).toBe(areaIdOfSeeded);
+  });
+
+  it('is null when the view is nowhere in the center', () => {
+    expect(areaHostingView('t.multiDoc')).toBeNull();
+    // A docked tool is not a center area, so it must not be offered as a host.
+    openToolInDock('t.rightTool');
+    expect(areaHostingView('t.rightTool')).toBeNull();
   });
 });
 

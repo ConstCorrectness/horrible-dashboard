@@ -536,6 +536,60 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Tab row: only rendered once an area holds more than one pane, so a single-pane
+   area keeps the plain title strip. */
+.frame-area-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.frame-area-tabs::-webkit-scrollbar {
+  display: none;
+}
+.frame-area-tab {
+  display: flex;
+  align-items: center;
+  border-radius: 5px;
+  background: transparent;
+  max-width: 180px;
+}
+.frame-area-tab.active {
+  background: var(--bg-elev, rgba(127, 127, 127, 0.16));
+}
+.frame-area-tab-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 3px 2px 3px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.frame-area-tab.active .frame-area-tab-btn {
+  color: var(--text);
+}
+.frame-area-tab-close {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1;
+  padding: 3px 6px 3px 2px;
+  cursor: pointer;
+  opacity: 0;
+}
+.frame-area-tab:hover .frame-area-tab-close,
+.frame-area-tab.active .frame-area-tab-close {
+  opacity: 1;
+}
+.frame-area-tab-close:hover {
+  color: var(--text);
+}
 .frame-area-header-actions {
   display: flex;
   align-items: center;

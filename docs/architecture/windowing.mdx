@@ -179,7 +179,10 @@ existing instance instead of duplicating.
 - **Area header** (Blender-style, collapsible per-area for chrome-less
   dashboards): a view **type switcher** (role-filtered dropdown), the document
   tab row, region toggle buttons, and the area menu
-  (split/join/fullscreen/float/hide-header/close).
+  (split/join/fullscreen/float/hide-header/close). The tab row appears **only
+  once an area holds more than one pane** — a single-pane area shows its plain
+  title instead. Each tab switches on click and carries its own close button
+  (guarded, so a dirty buffer can still prompt).
 - **Keyboard-first** (see the table in [layout-shell.mdx](layout-shell.mdx)):
   `alt+arrows` move focus between areas, `alt+shift+arrows` move the active
   pane, `mod+alt+arrows` split, `mod+alt+j` join, `ctrl+space` fullscreens the
@@ -216,7 +219,15 @@ All mutations are dispatches into the layout store, exposed two ways from
 - **plain controller exports** for the frame verbs — `splitAreaBy`,
   `joinAreaDirection`, `focusAreaDirection`, `movePaneTo`, `resizeAreaPx`,
   `fullscreenArea`, `toggleRegion`, `setRegionView`, `revealRegionView`,
-  `openToolInDock`, `toggleDock`, `retargetPane`, `openDocument`.
+  `openToolInDock`, `toggleDock`, `retargetPane`, `openDocument`, `areaHostingView`.
+
+`areaHostingView(viewId)` returns the center area a view already occupies (the
+focused one when several qualify), so a module that opens **many documents of one
+kind** can stack them as tabs in the area it already owns. `openPane`'s default is
+to split — right for a *first* document, wrong for the second, which is why
+clicking a second file in the tree used to carve the frame in half. The editor
+pairs it with `openPaneInArea(viewId, areaId, params, instanceId)`, whose optional
+`instanceId` applies the same focus-or-create identity rule `openPane` uses.
 
 `retargetPane(instanceId, newInstanceId, params)` is the **reuse** counterpart to
 `openPane`: it re-points an already-open pane at a new identity in place, keeping

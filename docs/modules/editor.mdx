@@ -64,7 +64,11 @@ the component.
   editor you are looking at instead of splitting off a second one. Reuse goes through
   the frame engine's `retargetPane` (see
   [windowing](../architecture/windowing.mdx)), which keeps the pane's area, tab
-  position, and region strips.
+  position, and region strips. When there is nothing to reuse but the editor is
+  already on screen, the new buffer opens as **another tab in that same area**
+  (`areaHostingView` + `openPaneInArea`) — role-routed `openPane` would split off a
+  fresh area instead, which meant every file clicked in the tree carved the frame
+  up further. Only a *first* editor buffer takes new space.
   For richer cross-module use, the editor also registers an **`editor` service** on the
   registry (`registry.getService('editor')`, from `service.ts`) — `openBufferFromContent`
   (materialize content as a note or `scratch/` file), `getBufferContent` (live, or the

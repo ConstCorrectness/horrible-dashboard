@@ -51,6 +51,13 @@ function switchableViews(area: AreaNode) {
   });
 }
 
+/** A pane's display name: its own `title` param (a file name) before the view's. */
+function paneTitle(pane: PaneState): string {
+  return (
+    (pane.params?.title as string | undefined) ?? resolveView(pane.viewId)?.title ?? pane.viewId
+  );
+}
+
 function useCloseOnOutside(open: boolean, close: () => void) {
   useEffect(() => {
     if (!open) return;
@@ -123,11 +130,37 @@ export function AreaHeader({ area }: { area: AreaNode }) {
         )}
       </div>
 
-      <span className="frame-area-title">
-        {active
-          ? ((active.params?.title as string | undefined) ?? activeDecl?.title ?? active.viewId)
-          : 'Empty area'}
-      </span>
+      {area.tabs.length > 1 ? (
+        <div className="frame-area-tabs" role="tablist">
+          {area.tabs.map((pane, index) => (
+            <div
+              key={pane.instanceId}
+              className={`frame-area-tab${index === area.activeTab ? ' active' : ''}`}
+            >
+              <button
+                role="tab"
+                aria-selected={index === area.activeTab}
+                className="frame-area-tab-btn"
+                title={paneTitle(pane)}
+                onClick={() =>
+                  layoutStore.dispatch({ type: 'SET_ACTIVE_TAB', areaId: area.id, index })
+                }
+              >
+                {paneTitle(pane)}
+              </button>
+              <button
+                className="frame-area-tab-close"
+                title={`Close ${paneTitle(pane)}`}
+                onClick={() => closeTab(pane)}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <span className="frame-area-title">{active ? paneTitle(active) : 'Empty area'}</span>
+      )}
 
       <div className="frame-area-header-actions">
         {active &&
