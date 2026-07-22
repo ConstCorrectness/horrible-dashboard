@@ -65,6 +65,14 @@ export type LayoutAction =
   | { type: 'INSERT_TOOL'; side: DockSide; pane: PaneState; activate?: boolean }
   | { type: 'SET_ACTIVE_TOOL'; side: DockSide; instanceId: string }
   /**
+   * Move an open pane into a dock from wherever it lives (another dock, a center
+   * area, the floating layer) — the rail-customization drop verb. The moved pane
+   * becomes the target dock's active tool; the dock's visibility is preserved
+   * unless the pane was the visible tool where it came from, in which case the
+   * target reveals it (the user was looking at it — keep it on screen).
+   */
+  | { type: 'MOVE_TOOL'; instanceId: string; side: DockSide }
+  /**
    * Resize one docked tool. Writes the tool's own remembered `dockSize` AND the
    * dock's fallback `size`, so the next tool opened on this side inherits the
    * width the user just chose.

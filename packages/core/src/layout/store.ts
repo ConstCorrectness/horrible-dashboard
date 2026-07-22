@@ -221,6 +221,32 @@ function reduceFrame(frame: FrameState, action: LayoutAction): FrameState {
       };
     }
 
+    case 'MOVE_TOOL': {
+      const located = findPaneAnywhere(frame, action.instanceId);
+      if (!located) return frame;
+      if (located.location.kind === 'dock' && located.location.dock === action.side) return frame;
+      const wasShowing =
+        (located.location.kind === 'dock' &&
+          frame.docks[located.location.dock].visible &&
+          frame.docks[located.location.dock].activeTool === action.instanceId) ||
+        located.location.kind !== 'dock';
+      const res = removePaneAnywhere(frame, action.instanceId);
+      if (!res) return frame;
+      const dock = res.frame.docks[action.side];
+      return {
+        ...res.frame,
+        docks: {
+          ...res.frame.docks,
+          [action.side]: {
+            ...dock,
+            tools: [...dock.tools, res.removed],
+            activeTool: res.removed.instanceId,
+            visible: dock.visible || wasShowing,
+          },
+        },
+      };
+    }
+
     case 'UNDOCK_PANE_TO_AREA': {
       const target = findArea(frame.center, action.areaId);
       if (!target) return frame;

@@ -7,9 +7,10 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { registry } from '../../registry';
 import { openPaneInArea, openToolInDock } from '../controller';
-import { collectAreas } from '../model';
+import { collectAreas, findPaneAnywhere } from '../model';
 import { seedFromPreset, type FramePreset } from '../presets';
-import { RAIL_SECTIONS, railEntries } from '../rail';
+import { hideRailView, moveViewToDock, RAIL_SECTIONS, railEntries } from '../rail';
+import { resetRailPrefs, setViewHidden } from '../rail-prefs';
 import { layoutStore } from '../store';
 
 const Stub = () => null;
@@ -62,6 +63,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  resetRailPrefs();
   layoutStore.resetForTests();
   layoutStore.dispatch({
     type: 'LOAD_WORKSPACE',
@@ -137,5 +139,61 @@ describe('rail states', () => {
       if (e.state === 'closed') expect(e.instanceId).toBeUndefined();
       else expect(e.instanceId).toBeTruthy();
     }
+  });
+});
+
+describe('rail customization', () => {
+  it('hides a glyph everywhere and brings it back', () => {
+    setViewHidden('r.right', true);
+    for (const side of ['left', 'right', 'bottom'] as const) {
+      expect(railEntries(frame(), side).map((e) => e.viewId)).not.toContain('r.right');
+    }
+    setViewHidden('r.right', false);
+    expect(railEntries(frame(), 'right').map((e) => e.viewId)).toContain('r.right');
+  });
+
+  it('hideRailView closes a currently docked instance', async () => {
+    const inst = frame().docks.left.tools[0].instanceId;
+    hideRailView('r.left');
+    // The guarded close is async (no guard registered here — one tick).
+    await new Promise((r) => setTimeout(r, 0));
+    expect(findPaneAnywhere(frame(), inst)).toBeNull();
+    expect(railEntries(frame(), 'left').map((e) => e.viewId)).not.toContain('r.left');
+  });
+
+  it('moveViewToDock rehomes a closed view to another rail', () => {
+    expect(moveViewToDock('r.right', 'left')).toBe(true);
+    expect(railEntries(frame(), 'left').map((e) => e.viewId)).toContain('r.right');
+    expect(railEntries(frame(), 'right').map((e) => e.viewId)).not.toContain('r.right');
+    // Clicking it now opens on the overridden side.
+    expect(openToolInDock('r.right', 'left')).toBeTruthy();
+    expect(frame().docks.left.tools.some((t) => t.viewId === 'r.right')).toBe(true);
+  });
+
+  it('moveViewToDock moves an open docked tool between docks', () => {
+    const inst = frame().docks.left.tools[0].instanceId;
+    expect(moveViewToDock('r.left', 'right')).toBe(true);
+    expect(findPaneAnywhere(frame(), inst)?.location).toEqual({ kind: 'dock', dock: 'right' });
+    // It was the left dock's visible tool, so it arrives revealed and active.
+    expect(stateOf(railEntries(frame(), 'right'), 'r.left')).toBe('active');
+  });
+
+  it('moveViewToDock at an index reorders the rail', () => {
+    // Natural right-rail order is declaration order: r.right then r.promoted.
+    expect(railEntries(frame(), 'right').map((e) => e.viewId)).toEqual(['r.right', 'r.promoted']);
+    expect(moveViewToDock('r.promoted', 'right', 0)).toBe(true);
+    expect(railEntries(frame(), 'right').map((e) => e.viewId)).toEqual(['r.promoted', 'r.right']);
+  });
+
+  it('refuses to rehome a view that is not dockable at all', () => {
+    expect(moveViewToDock('r.doc', 'left')).toBe(false);
+    expect(railEntries(frame(), 'left').map((e) => e.viewId)).not.toContain('r.doc');
+  });
+
+  it('reset drops every customization', () => {
+    setViewHidden('r.right', true);
+    moveViewToDock('r.promoted', 'left');
+    resetRailPrefs();
+    expect(railEntries(frame(), 'right').map((e) => e.viewId)).toEqual(['r.right', 'r.promoted']);
   });
 });

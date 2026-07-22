@@ -311,3 +311,65 @@ describe('dock and floating actions', () => {
     expect((next.frame.center as AreaNode).tabs).toHaveLength(0);
   });
 });
+
+describe('MOVE_TOOL (rail customization drop verb)', () => {
+  it('moves a docked tool to another dock and makes it active there', () => {
+    load();
+    const files = freshPane('files.tree');
+    layoutStore.dispatch({ type: 'INSERT_TOOL', side: 'left', pane: files });
+    const next = layoutStore.dispatch({
+      type: 'MOVE_TOOL',
+      instanceId: files.instanceId,
+      side: 'right',
+    });
+    expect(findPaneAnywhere(next.frame, files.instanceId)?.location).toEqual({
+      kind: 'dock',
+      dock: 'right',
+    });
+    expect(next.frame.docks.right.activeTool).toBe(files.instanceId);
+    // It was the left dock's visible tool, so the right dock reveals it.
+    expect(next.frame.docks.right.visible).toBe(true);
+  });
+
+  it('keeps a hidden target dock hidden when the tool was stacked out of sight', () => {
+    load();
+    const files = freshPane('files.tree');
+    layoutStore.dispatch({ type: 'INSERT_TOOL', side: 'left', pane: files });
+    const scratch = freshPane('scratch.note');
+    layoutStore.dispatch({ type: 'INSERT_TOOL', side: 'left', pane: scratch });
+    // files.tree is now stacked behind scratch.note; bottom dock is hidden.
+    const next = layoutStore.dispatch({
+      type: 'MOVE_TOOL',
+      instanceId: files.instanceId,
+      side: 'bottom',
+    });
+    expect(findPaneAnywhere(next.frame, files.instanceId)?.location).toEqual({
+      kind: 'dock',
+      dock: 'bottom',
+    });
+    expect(next.frame.docks.bottom.visible).toBe(false);
+    expect(next.frame.docks.bottom.activeTool).toBe(files.instanceId);
+  });
+
+  it('re-docks a pane living in a center area, revealing the dock', () => {
+    load();
+    const children = (layoutStore.getSnapshot().frame.center as { children: AreaNode[] }).children;
+    const inst = children[0].tabs[0].instanceId;
+    const next = layoutStore.dispatch({ type: 'MOVE_TOOL', instanceId: inst, side: 'right' });
+    expect(findPaneAnywhere(next.frame, inst)?.location).toEqual({ kind: 'dock', dock: 'right' });
+    expect(next.frame.docks.right.visible).toBe(true);
+  });
+
+  it('no-ops for the same side or an unknown instance', () => {
+    load();
+    const files = freshPane('files.tree');
+    layoutStore.dispatch({ type: 'INSERT_TOOL', side: 'left', pane: files });
+    const snap = layoutStore.getSnapshot();
+    expect(
+      layoutStore.dispatch({ type: 'MOVE_TOOL', instanceId: files.instanceId, side: 'left' }),
+    ).toBe(snap);
+    expect(layoutStore.dispatch({ type: 'MOVE_TOOL', instanceId: 'nope#9', side: 'right' })).toBe(
+      snap,
+    );
+  });
+});

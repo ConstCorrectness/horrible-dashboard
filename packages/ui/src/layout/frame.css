@@ -237,9 +237,10 @@
 .frame-rail--right {
   border-left: 1px solid var(--border);
 }
-/* A rail with nothing in it would otherwise sit as a bare 44px gutter. */
+/* A rail with nothing in it would otherwise sit as a bare 44px gutter — but
+   while a dockable drag is armed it must stay up as a drop target. */
 .frame-rail:empty,
-.frame-rail--right:not(:has(.frame-rail-btn)) {
+.frame-rail--right:not(:has(.frame-rail-btn)):not(.frame-rail--drop-armed) {
   display: none;
 }
 /* The left rail's own tools and the bottom dock's, visually separated. */
@@ -322,6 +323,35 @@
 }
 .frame-rail-spacer {
   flex: 1;
+}
+/* ------------------------------------------------- rail customization */
+/* While a dockable drag is in flight the sections read as drop targets — an
+   empty section (e.g. a bare bottom-dock slot) still needs a visible extent. */
+.frame-rail--drop-armed .frame-rail-section {
+  min-height: 36px;
+  border-radius: 7px;
+  outline: 1px dashed var(--border);
+  outline-offset: -2px;
+}
+/* Insertion point between glyphs while dragging over a section. */
+.frame-rail-drop-line {
+  width: 28px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  flex: none;
+}
+/* The rails' context menu is cursor-positioned (inline left/top). */
+.frame-rail-menu {
+  min-width: 160px;
+}
+.frame-menu-separator {
+  margin: 4px 0;
+  border-top: 1px solid var(--border);
+}
+/* Checklist rows: the check column stays aligned for unchecked entries. */
+.frame-menu-item--unchecked {
+  padding-left: 22px;
 }
 
 /* -------------------------------------------------------------------- docks */

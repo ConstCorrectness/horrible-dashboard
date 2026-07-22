@@ -144,7 +144,8 @@ shadow it — the minibuffer is the escape hatch and has to be reachable anywher
 There is one rail per side, each driving the dock on that side — a left-edge
 glyph toggling a right-side pane was the confusing part of the single-rail
 design. `railEntries` (core/layout/rail.ts) derives the glyphs as pure data over
-`FrameState`; `ActivityRail` (packages/ui) only renders and routes clicks.
+`FrameState` + the user's rail prefs; `ActivityRail` (packages/ui) only renders
+and routes clicks and gestures.
 
 A rail lists what is actually docked on its side — by where a pane *is*, not
 where it declared it wanted to be, so a tool that ended up somewhere unusual
@@ -164,6 +165,32 @@ own. The bottom edge is reserved for the minibuffer rather than a third rail,
 and a rail is the only tool switcher a dock has — without this the bottom dock's
 tools (terminal, REPL) could be revealed by keybinding but never switched
 between.
+
+#### Rail customization
+
+The rails are user-customizable, VS Code activity-bar style
+(`core/layout/rail-prefs.ts`):
+
+- **Move**: drag a glyph onto another rail section (left ↔ right ↔ the left
+  rail's bottom-dock section) to rehome it there, or within its own section to
+  reorder; an insertion line previews the drop, and empty sections stay up as
+  targets while a dockable drag is in flight. Right-clicking a glyph offers the
+  same moves as menu items. If the view is open in a dock, the pane moves with
+  the glyph (the `MOVE_TOOL` action); a center pane is re-docked.
+- **Hide**: right-click a glyph → *Hide*, or right-click the rail background
+  for a visibility checklist (check to show, uncheck to hide). Hiding a view
+  that is currently docked closes it first (guarded) — a tool with no glyph
+  would be unswitchable. *Reset rail layout* (also the `rail.reset` command,
+  the escape hatch when a rail has been hidden entirely) drops all
+  customization.
+
+Preferences are three overrides per view — home dock (`side`), `hidden`, and
+per-dock `order` — stored **globally, not per-workspace** (where your tools
+live is a habit, not a layout) as one JSON blob riding the settings store under
+`frame.railPrefs`, which buys boot hydration, live reactivity, and server-side
+persistence for free. A side override reorders `dockSidesOf`, so role routing
+and `openToolInDock` follow the user's placement; it never *makes* a view
+dockable — declarations still decide that.
 
 View types vs pane instances work as before: widgets are singleton-by-view-id,
 panels honor their `singleton` flag, and multi-instance panes get `#n` suffixes.

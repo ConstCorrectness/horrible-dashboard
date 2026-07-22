@@ -20,6 +20,7 @@ import {
   movePaneDirection,
   openFramePane,
   registry,
+  resetRailPrefs,
   setCenterMeasurer,
   splitAreaBy,
   toggleDock,
@@ -127,6 +128,13 @@ export function Frame({
           id: 'minibuffer.open',
           title: 'Minibuffer: Run a command (M-x)',
           run: () => minibuffer.open('/'),
+        },
+        {
+          // Also the escape hatch for a fully-hidden rail (its context menu is
+          // unreachable once every glyph on it is hidden).
+          id: 'rail.reset',
+          title: 'Rails: Reset customization',
+          run: () => resetRailPrefs(),
         },
         { id: 'dock.toggle:left', title: 'Dock: Toggle left', run: () => void toggleDock('left') },
         {

@@ -15,6 +15,7 @@ import {
   type WidgetDecl,
 } from '../registry';
 import { isPaneDirty, runCloseGuard } from './close-guards';
+import { getRailPrefs } from './rail-prefs';
 import { setRegionCommandHandler } from './region-bus';
 import {
   areaOfInstance,
@@ -68,12 +69,23 @@ export function roleOf(viewId: string): PaneRole {
  * `defaultDock`" — every existing tool declaration stays correct untouched, and
  * only a view that wants a *second* home (a widget earning a rail glyph) has to
  * say `dockable`. An empty result means the view is center-only.
+ *
+ * A user side override (rail customization — a glyph dragged to another rail)
+ * moves that side to the front, so `openToolInDock` and role routing follow the
+ * user's placement. It never *makes* a view dockable: declarations decide that.
  */
 export function dockSidesOf(viewId: string): DockSide[] {
   const decl = resolveView(viewId);
   if (!decl) return [];
-  if (decl.dockable) return [decl.dockable].flat();
-  return roleOf(viewId) === 'tool' ? [decl.defaultDock ?? 'left'] : [];
+  const declared: DockSide[] = decl.dockable
+    ? [decl.dockable].flat()
+    : roleOf(viewId) === 'tool'
+      ? [decl.defaultDock ?? 'left']
+      : [];
+  if (declared.length === 0) return declared;
+  const override = getRailPrefs().side[viewId];
+  if (!override) return declared;
+  return [override, ...declared.filter((s) => s !== override)];
 }
 
 export function isDockable(viewId: string): boolean {

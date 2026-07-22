@@ -38,8 +38,10 @@ export { onSocketOpen, sendChannel, subscribeChannel, type WsMessage } from './w
 export { layoutStore } from './layout/store';
 export type { LayoutAction } from './layout/actions';
 export { findArea, firstArea, listPanes, MIN_FRACTION } from './layout/model';
-export { railEntries, RAIL_SECTIONS } from './layout/rail';
+export { hideRailView, moveViewToDock, railEntries, RAIL_SECTIONS } from './layout/rail';
 export type { RailEntry, RailSide, RailState } from './layout/rail';
+export { getRailPrefs, railPrefsStore, resetRailPrefs, setViewHidden } from './layout/rail-prefs';
+export type { RailPrefs } from './layout/rail-prefs';
 export { dropPaneOnArea, paneDrag } from './layout/drag';
 export type { DragPayload } from './layout/drag';
 export { matchCommands, minibuffer, resolveCommand } from './minibuffer';
