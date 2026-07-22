@@ -53,6 +53,38 @@ export const layoutsModule: ModuleManifest = {
       },
     },
     {
+      id: 'research',
+      name: 'Research',
+      icon: '🔬',
+      // Discovery on the left (console/arxiv/browser tab together), reading on
+      // the right (viewers above the library) — opening a paper never steals
+      // the console. The researcher agent docks right, one keystroke away.
+      frame: {
+        center: {
+          split: 'row',
+          sizes: [0.58, 0.42],
+          children: [
+            {
+              tabs: ['research.console', 'research.arxiv', 'browser.view'],
+              active: 0,
+            },
+            {
+              split: 'column',
+              sizes: [0.65, 0.35],
+              children: [
+                { tabs: ['research.pdfViewer', 'research.pageViewer'] },
+                { pane: 'library.panel' },
+              ],
+            },
+          ],
+        },
+        docks: {
+          right: { tools: ['agent.chat'], size: 360 },
+          bottom: { tools: ['observability.io'], visible: false },
+        },
+      },
+    },
+    {
       id: 'harness',
       name: 'Coding Harnesses',
       icon: '🛠',

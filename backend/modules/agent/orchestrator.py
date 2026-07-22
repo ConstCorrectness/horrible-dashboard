@@ -550,6 +550,11 @@ _GROUP_DESCRIPTIONS: dict[str, str] = {
         "Semantic + exact lookup over the symbol/docs index: installed package "
         "APIs (signatures, docstrings), database schemas, and this app's docs."
     ),
+    "research": (
+        "Deep-research runs (durable multi-agent investigations ending in cited "
+        "reports), plus capturing pages and PDFs into the knowledge library."
+    ),
+    "arxiv": "Search arXiv, read abstracts, and download papers into the library.",
 }
 
 # Keywords that auto-preload a group for a turn (so common asks stay one-shot). A
@@ -658,6 +663,19 @@ _GROUP_KEYWORDS: dict[str, tuple[str, ...]] = {
         "how do i use",
         "what does",
     ),
+    "research": (
+        "research",
+        "deep research",
+        "investigate",
+        "report",
+        "cite",
+        "citation",
+        "sources",
+        "capture",
+        "save page",
+        "save pdf",
+    ),
+    "arxiv": ("arxiv", "paper", "preprint", "abstract", "publication"),
 }
 
 

@@ -59,13 +59,19 @@ DBA_PROMPT = (
 RESEARCHER_PROMPT = (
     "You are the research agent for horrible-dashboard. You specialize in finding "
     "and collecting information: browsing the web (browser tools), searching the "
-    "user's knowledge libraries (library tools), and searching connected GitHub "
-    "and Google Drive accounts.\n"
+    "user's knowledge libraries (library tools), searching arXiv (arxiv tools), "
+    "and searching connected GitHub and Google Drive accounts.\n"
     "Rules:\n"
     "- Ground answers in what the tools return — quote or cite the source page/"
     "repo/document, do not answer from memory when a lookup is one call away.\n"
-    "- Use browser.save to file pages worth keeping into a library when asked to "
-    "remember or collect something.\n"
+    "- Use browser.save / research.capture / research.savePdf / arxiv.download to "
+    "file things worth keeping into a library when asked to remember or collect "
+    "something.\n"
+    "- Answer directly for questions a few lookups can settle. For broad or "
+    'multi-facet questions ("survey X", "compare approaches to Y", "write a '
+    'report on Z"), start a durable deep-research run with research.start — it '
+    "investigates in the background and files a cited report; give the user the "
+    "run id and point them at the Deep Research console rather than blocking.\n"
     "- Summarize findings concisely; link the sources.\n" + _SHARED_RULES
 )
 
@@ -105,11 +111,11 @@ def _builtin_agents() -> dict[str, AgentSpec]:
         "researcher": AgentSpec(
             id="researcher",
             name="Researcher",
-            description="Web browsing, library RAG, and connected GitHub/Google "
-            "accounts.",
+            description="Web browsing, library RAG, arXiv, deep-research runs, "
+            "and connected GitHub/Google accounts.",
             system_prompt=RESEARCHER_PROMPT,
-            tool_groups=["browser", "library", "github", "google"],
-            preload_groups=["browser", "library"],
+            tool_groups=["browser", "library", "github", "google", "research", "arxiv"],
+            preload_groups=["research", "library", "arxiv"],
         ),
     }
 

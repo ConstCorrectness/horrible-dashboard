@@ -75,19 +75,38 @@ export async function isSavable(item: MediaItem): Promise<boolean> {
   return isDescribed(item) || (await clipEnabled());
 }
 
-/** Save the page currently open in the engine as a `blog` source (text + metadata). */
+/**
+ * Save the page currently open in the engine.
+ *
+ * Preferred path: the `capture` op archives the live post-JS DOM as one
+ * self-contained HTML artifact (stored server-side), and the source is filed as
+ * a `page` pointing at it — openable offline in the Page Viewer. If capture
+ * fails (older backend, mid-navigation), fall back to the original text-only
+ * `blog`-by-URL ingest so saving still degrades to something useful.
+ */
 export async function capturePage(opts: CaptureOptions = {}): Promise<SourceModel> {
-  const content = await engine.content();
-  // Ingest as `blog` rather than `note`: the backend re-fetches and extracts, which
-  // keeps a captured page identical to one added by URL in the Library panel.
-  return ingestSource({
-    type: 'blog',
-    url: content.url,
-    title: content.title,
-    author: content.author ?? undefined,
-    library: opts.library,
-    tags: opts.tags,
-  });
+  try {
+    const cap = await engine.capture();
+    return await ingestSource({
+      type: 'page',
+      url: cap.url,
+      title: cap.title,
+      author: cap.author ?? undefined,
+      artifact_id: cap.artifact_id,
+      library: opts.library,
+      tags: opts.tags,
+    });
+  } catch {
+    const content = await engine.content();
+    return ingestSource({
+      type: 'blog',
+      url: content.url,
+      title: content.title,
+      author: content.author ?? undefined,
+      library: opts.library,
+      tags: opts.tags,
+    });
+  }
 }
 
 /** List the media on the live page, with the text that describes each item. */

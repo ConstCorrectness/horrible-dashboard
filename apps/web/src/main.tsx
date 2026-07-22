@@ -34,6 +34,7 @@ import {
   observabilityModule,
   registry,
   replModule,
+  researchModule,
   scratchModule,
   mcpModule,
   setWindowControl,
@@ -92,6 +93,7 @@ async function boot(): Promise<void> {
   registry.register(replModule);
   registry.register(databaseModule);
   registry.register(libraryModule);
+  registry.register(researchModule);
   registry.register(trainingModule);
   registry.register(notebookModule);
   registry.register(visualizerModule);

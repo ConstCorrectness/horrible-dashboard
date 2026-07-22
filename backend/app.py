@@ -54,7 +54,15 @@ from backend.modules.connectors import github_router as github_connector_router
 from backend.modules.connectors import google_router as google_connector_router
 from backend.modules.connectors import register_connectors
 from backend.modules.connectors import router as connectors_router
+from backend.modules.artifacts import router as artifacts_router
+from backend.modules.arxiv import register_arxiv_tools
+from backend.modules.arxiv import router as arxiv_router
+from backend.modules.research import register_research_tools
+from backend.modules.research import router as research_router
+from backend.modules.research.broadcast import push_research_events
+from backend.modules.research.runner import research_runner
 from backend.modules.library import push_library_events
+from backend.modules.library import queue_handlers as _library_queue_handlers  # noqa: F401 — registers the ingest task handlers on import (see its docstring)
 from backend.modules.interpretability import router as interpretability_router
 from backend.modules.library import router as library_router
 from backend.modules.lsp import LspManager
@@ -121,6 +129,9 @@ async def lifespan(app: FastAPI):
     await start_network()
     await plugin_registry.run_startup()  # backend plugins' startup hooks
     queue.start()
+    # Deep-research runner: resumes any run that was in flight when the process
+    # last died (steps stuck `running` reset to `pending`), then works the queue.
+    research_runner.start()
     # Connect enabled MCP servers and bridge their tools into the agent. Failures
     # are recorded as per-server status, so a broken server never blocks boot.
     await mcp_manager.start_enabled()
@@ -131,6 +142,7 @@ async def lifespan(app: FastAPI):
         async with mcp_export.session_lifespan():
             yield
     finally:
+        research_runner.stop()
         queue.stop()
         # MCP servers are child processes (stdio transport); leaving them behind on
         # reload would strand orphaned node/python servers.
@@ -170,6 +182,9 @@ app.include_router(agent_router, prefix="/api")
 app.include_router(workspace_router, prefix="/api")
 app.include_router(database_router, prefix="/api")
 app.include_router(library_router, prefix="/api")
+app.include_router(artifacts_router, prefix="/api")
+app.include_router(research_router, prefix="/api")
+app.include_router(arxiv_router, prefix="/api")
 app.include_router(interpretability_router, prefix="/api")
 app.include_router(connectors_router, prefix="/api")
 app.include_router(google_connector_router, prefix="/api")
@@ -214,6 +229,14 @@ register_connectors()
 # Register the symdex module's backend agent tools (grouped under `symbols`): the
 # semantic symbol/docs/schema retrieval the coder and dba agents preload.
 register_symdex_tools()
+
+# Register the research module's backend agent tools (grouped under `research`):
+# page capture and PDF filing that work with no browser pane attached.
+register_research_tools()
+
+# Register the arXiv backend agent tools (grouped under `arxiv`): search/get are
+# read-only; download files a paper into the library.
+register_arxiv_tools()
 
 # Discover and mount backend plugins (bundled, HORRIBLE_PLUGINS_DIR, and pip entry
 # points). Ships empty; each plugin's routes mount under /api + its prefix. Agent
@@ -260,6 +283,8 @@ async def ws(websocket: WebSocket) -> None:
     files_task = asyncio.create_task(push_file_events(conn))
     # Fan library ingestion status (queued→…→ready/failed) to this browser.
     library_task = asyncio.create_task(push_library_events(conn))
+    # Fan deep-research run/step progress + synthesis deltas to this browser.
+    research_task = asyncio.create_task(push_research_events(conn))
     # Fan code-locus updates (dash/agent-set, and cross-window sync) to this browser.
     code_task = asyncio.create_task(push_code_events(conn))
     # Fan symdex index progress (packages/schema/docs builds) to this browser.
@@ -325,6 +350,7 @@ async def ws(websocket: WebSocket) -> None:
         telemetry_task.cancel()
         files_task.cancel()
         library_task.cancel()
+        research_task.cancel()
         code_task.cancel()
         symdex_task.cancel()
         network_unsub()  # type: ignore[operator]

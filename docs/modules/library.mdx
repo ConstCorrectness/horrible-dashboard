@@ -23,9 +23,11 @@ Ingested content is structured as **sources** (the human-facing catalog) and
 **chunks** (the embedded units), so retrieval returns passages that can be grouped
 back to their source for citation.
 
-- A **source** is one ingested item — a `blog`, a `note`, or a media asset
-  (`image` / `video`). Catalog rows live in the `library_sources` table in the app's
-  SQLite database (`$HORRIBLE_DATA_DIR/app.db`).
+- A **source** is one ingested item — a `blog`, a `note`, a media asset
+  (`image` / `video`), or an artifact-backed blob (`page` / `pdf` — see
+  [below](#artifact-backed-sources-page-and-pdf)). Catalog rows live in the
+  `library_sources` table in the app's SQLite database
+  (`$HORRIBLE_DATA_DIR/app.db`).
 - Each source is split into overlapping **chunks**; every chunk is a row in the vector
   store — **LanceDB**, under `$HORRIBLE_DATA_DIR/lancedb` — keyed
   `"<source_id>#<chunk_index>"`, in the table named for the **library** (so
@@ -189,16 +191,29 @@ the agent can answer "what's in my library?" and cite what it retrieves.
 - `library.chunkSize` (default `1000`) — target chunk size, read by the backend
   ingest pipeline via the settings store.
 
+## Artifact-backed sources: `page` and `pdf`
+
+Two source types added with the [research](research.mdx) module are backed by the
+**artifact store** rather than a URL or inline text: their catalog rows carry an
+`artifact_id` pointing at a stored blob under `$HORRIBLE_DATA_DIR/artifacts/`.
+
+- `pdf` — a stored PDF (uploaded via `POST /api/artifacts/upload`, fetched by URL
+  via `POST /api/research/pdf`, or synced from ArXiv). Ingestion extracts text
+  with pypdf (`artifacts/pdftext.py` — moved from the Drive provider so both
+  share one extractor) and chunks/embeds it like a blog.
+- `page` — a self-contained captured HTML page (the browser's Save button or
+  `POST /api/research/capture`). Ingestion runs the article extractor over the
+  stored HTML — no re-fetch, the archive is the source.
+
+`POST /api/library/sources` validates that the referenced artifact exists and its
+kind matches the source type; search hits and `SourceModel`s carry `artifact_id`
+so a result opens directly in the PDF/page viewer. Blog ingest itself was also
+hardened in the same change: it now fetches through the browser module's SSRF
+guard (`fetch_readable`) instead of a bare HTTP client.
+
 ## Deferred
 
-- **PDF/EPUB parsing** as a first-class source `type` + a **file-upload dropzone** and
-  `POST /library/upload` multipart route. The `type` enum and pipeline are built to
-  absorb `pdf`/`epub` by adding an extractor branch.
-
-  Partially overtaken: the [connectors](connectors.mdx#drive--library-sync) module
-  already extracts PDF text (`pypdf`, in `providers/drive_api.py`) to sync Drive PDFs
-  in as `note` sources. That's the extractor a `pdf` source type would reuse — what's
-  missing is the upload route and the `type` branch, not the parsing.
+- **EPUB parsing** as a source `type` — the pipeline absorbs it by adding an
+  extractor branch, same as `pdf` did.
 - **Browser clipper extension** (Obsidian-web-clipper style): a separate
   distributable that POSTs to `/api/library/sources` — that endpoint is its contract.
-- **Embedded browser** for in-app clipping.

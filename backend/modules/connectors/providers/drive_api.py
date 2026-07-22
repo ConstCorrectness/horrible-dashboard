@@ -11,7 +11,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from backend.modules.artifacts.pdftext import extract_pdf_text
 from backend.modules.connectors.providers import google
+
+__all__ = ["extract_pdf_text"]  # moved to artifacts.pdftext; re-exported for callers
 
 logger = logging.getLogger(__name__)
 
@@ -156,36 +159,3 @@ async def extract_text(file_id: str, mime: str, name: str = "") -> str | dict[st
         return extract_pdf_text(data, name=name)
 
     return {"error": f"can't read {mime} as text"}
-
-
-def extract_pdf_text(data: bytes, *, name: str = "") -> str | dict[str, Any]:
-    """Text from PDF bytes.
-
-    Uses `pypdf` (BSD) rather than PyMuPDF: PyMuPDF is AGPL-3.0, which is viral for
-    network-served software and would be a licensing decision, not a parsing one.
-    Imported lazily so nothing pays for it on a text-only sync.
-    """
-    import io
-
-    from pypdf import PdfReader
-    from pypdf.errors import PyPdfError
-
-    try:
-        reader = PdfReader(io.BytesIO(data))
-        if reader.is_encrypted:
-            # An empty-password decrypt covers PDFs that are "protected" but readable.
-            try:
-                if not reader.decrypt(""):
-                    return {"error": f"{name or 'PDF'} is password-protected"}
-            except (PyPdfError, NotImplementedError):
-                return {"error": f"{name or 'PDF'} is password-protected"}
-        pages = [page.extract_text() or "" for page in reader.pages]
-    except (PyPdfError, ValueError, OSError) as exc:
-        return {"error": f"couldn't parse {name or 'PDF'}: {exc}"}
-
-    text = "\n\n".join(p.strip() for p in pages if p.strip()).strip()
-    if not text:
-        # A scanned PDF is images with no text layer. Say so — it isn't an empty doc,
-        # and pretending otherwise files a blank source into the library.
-        return {"error": f"{name or 'PDF'} has no extractable text (probably scanned)"}
-    return text[:MAX_TEXT_CHARS]

@@ -34,6 +34,7 @@
     "@xyflow/react": "^12.11.1",
     "agora-rtc-sdk-ng": "^4.24.4",
     "codemirror": "^6.0.2",
+    "pdfjs-dist": "^4.10.38",
     "pubnub": "^11.0.2",
     "three": "^0.184.0",
     "uplot": "^1.6.32"

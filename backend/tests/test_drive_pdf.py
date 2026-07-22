@@ -68,9 +68,11 @@ def test_empty_bytes_are_an_error():
 
 
 def test_long_pdf_text_is_truncated(monkeypatch):
-    from backend.modules.connectors.providers import drive_api
+    # The implementation lives in artifacts.pdftext now; the cap is read from that
+    # module's global at call time.
+    from backend.modules.artifacts import pdftext
 
-    monkeypatch.setattr(drive_api, "MAX_TEXT_CHARS", 10)
-    result = drive_api.extract_pdf_text(make_pdf("abcdefghijklmnopqrstuvwxyz"))
+    monkeypatch.setattr(pdftext, "MAX_TEXT_CHARS", 10)
+    result = extract_pdf_text(make_pdf("abcdefghijklmnopqrstuvwxyz"))
     assert isinstance(result, str)
     assert len(result) == 10

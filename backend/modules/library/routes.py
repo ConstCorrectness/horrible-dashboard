@@ -26,8 +26,10 @@ from backend.modules.library.clip import CLIP_DIM
 from backend.modules.library.clip import MODEL_REPO as CLIP_MODEL_REPO
 from backend.modules.library.clip import clip_enabled, clip_installed
 from backend.modules.library.clip import encode_text as clip_encode_text
+from backend.modules.artifacts.store import get_artifact
 from backend.modules.tasks import enqueue_task
 from backend.modules.library.models import (
+    ARTIFACT_TYPES,
     MEDIA_TYPES,
     ChunkModel,
     ChunksResponse,
@@ -64,6 +66,22 @@ async def add_source(req: IngestRequest) -> SourceModel:
         if not (req.url and req.url.strip()):
             raise HTTPException(status_code=400, detail="url is required for a blog")
         title = req.title or req.url
+    elif req.type in ARTIFACT_TYPES:
+        if not req.artifact_id:
+            raise HTTPException(
+                status_code=400, detail=f"artifact_id is required for a {req.type}"
+            )
+        artifact = get_artifact(req.artifact_id)
+        if artifact is None:
+            raise HTTPException(status_code=400, detail="artifact not found")
+        if artifact["kind"] != req.type:
+            raise HTTPException(
+                status_code=400,
+                detail=f"artifact is a {artifact['kind']}, not a {req.type}",
+            )
+        title = (
+            req.title or (artifact["meta"] or {}).get("title") or artifact["filename"]
+        )
     elif req.type in MEDIA_TYPES:
         if not (req.asset and req.asset.src.strip()):
             raise HTTPException(
@@ -91,6 +109,7 @@ async def add_source(req: IngestRequest) -> SourceModel:
         author=req.author,
         tags=req.tags,
         asset=req.asset.model_dump() if req.asset else None,
+        artifact_id=req.artifact_id,
     )
     # Queue the document for background ingestion via the task queue
     enqueue_task(
@@ -108,6 +127,14 @@ def list_sources(
 ) -> SourcesListResponse:
     rows = store.list_sources(library=library, type=type, tag=tag)
     return SourcesListResponse(sources=[SourceModel(**r) for r in rows])
+
+
+@router.get("/sources/{source_id}", response_model=SourceModel)
+def get_source(source_id: str) -> SourceModel:
+    source = store.get_source(source_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="source not found")
+    return SourceModel(**source)
 
 
 @router.get("/libraries", response_model=LibrariesResponse)
@@ -273,6 +300,7 @@ async def search(req: LibrarySearchRequest) -> LibrarySearchResponse:
                 top_score=score,
                 chunks=[],
                 asset=MediaAsset(**meta["asset"]) if meta.get("asset") else None,
+                artifact_id=meta.get("artifact_id"),
                 matched_by=[],
             )
             groups[source_id] = group

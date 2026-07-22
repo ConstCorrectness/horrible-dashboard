@@ -45,6 +45,15 @@ export interface PageContent {
   text: string;
 }
 
+/** Result of the `capture` op: the stored self-contained page + its extraction. */
+export interface PageCapture {
+  artifact_id: string;
+  url: string;
+  title: string;
+  author: string | null;
+  text: string;
+}
+
 /**
  * One image/video found on the live page, with the text that describes it.
  * `context` is the surrounding prose (figcaption, nearest heading) — the app has no
@@ -198,6 +207,9 @@ export function requestOp<T = unknown>(
 export const engine = {
   navigate: (url: string) => requestOp<null>('navigate', { url }),
   content: (): Promise<PageContent> => requestOp<PageContent>('content'),
+  /** Capture the live page as a self-contained HTML artifact (server-stored).
+   * Generous timeout: the backend fetches and inlines every subresource. */
+  capture: (): Promise<PageCapture> => requestOp<PageCapture>('capture', {}, 120_000),
   snapshot: (): Promise<{ url: string; title: string; elements: SnapshotElement[] }> =>
     requestOp('snapshot'),
   scrape: (selector: string) => requestOp('scrape', { selector }),

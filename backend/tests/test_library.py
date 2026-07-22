@@ -142,7 +142,8 @@ def test_blog_ingest_uses_extracted_metadata(data_dir, monkeypatch):
         body = "\n\n".join(f"Blog paragraph {i} body." for i in range(20))
         return Article(title="Fetched Title", author="Jane Doe", text=body, url=url)
 
-    monkeypatch.setattr("backend.modules.library.ingest.fetch_article", fake_fetch)
+    # Blog ingest now fetches through the SSRF guard (browser.fetch.fetch_readable).
+    monkeypatch.setattr("backend.modules.library.ingest.fetch_readable", fake_fetch)
 
     source = store.create_source(
         library="default",

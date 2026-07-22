@@ -1,9 +1,8 @@
 """The ingest pipeline: source → (fetch) → chunk → embed → store, with live status.
 
-Runs as a detached background task (`asyncio.create_task` in the route), so a slow
-fetch/embed never blocks the request or the `/ws` receive loop
-(see the ws-ui-driving-handler-must-detach note). Every status transition is
-broadcast on the `library` channel so the panel updates live.
+Runs on the shared task queue (`enqueue_task("ingest_source", ...)` in the route),
+so a slow fetch/embed never blocks the request or the `/ws` receive loop. Every
+status transition is broadcast on the `library` channel so the panel updates live.
 
 Media sources land in **two** spaces when CLIP is enabled: proxy text into the
 library's own table (the app embedder), and a CLIP image vector into the
@@ -15,7 +14,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from backend.modules.browser.fetch import safe_fetch_bytes
+from backend.modules.artifacts.pdftext import extract_pdf_text_from_path
+from backend.modules.artifacts.store import artifact_path
+from backend.modules.browser.fetch import fetch_readable, safe_fetch_bytes
 from backend.modules.database.embeddings import get_embedding
 from backend.modules.database.vectorstore import (
     clip_collection,
@@ -27,7 +28,7 @@ from backend.modules.library.broadcast import publish_source
 from backend.modules.library.chunking import chunk_text
 from backend.modules.library.clip import MODEL_REPO as CLIP_MODEL_REPO
 from backend.modules.library.clip import clip_enabled, encode_image
-from backend.modules.library.extract import fetch_article
+from backend.modules.library.extract import extract_article
 from backend.modules.library.models import MEDIA_TYPES, IngestRequest
 from backend.modules.settings.routes import get_value
 
@@ -133,7 +134,38 @@ async def ingest_source(source_id: str, req: IngestRequest) -> None:
         if req.type == "blog":
             store.set_status(source_id, "fetching")
             _emit(source_id)
-            article = await fetch_article(req.url or "")
+            # Through the browser module's SSRF guard — blog ingest fetches an
+            # arbitrary user-supplied URL server-side, exactly the sink the guard
+            # exists for.
+            article = await fetch_readable(req.url or "")
+            title = req.title or article.title
+            author = req.author or article.author
+            text = article.text
+            store.update_meta(source_id, title=title, author=author)
+        elif req.type == "pdf":
+            store.set_status(source_id, "fetching")
+            _emit(source_id)
+            path = artifact_path(req.artifact_id or "")
+            if path is None or not path.is_file():
+                store.set_status(source_id, "failed", error="artifact blob missing")
+                _emit(source_id)
+                return
+            extracted = extract_pdf_text_from_path(path, name=title or "")
+            if isinstance(extracted, dict):
+                store.set_status(source_id, "failed", error=extracted["error"])
+                _emit(source_id)
+                return
+            text = extracted
+        elif req.type == "page":
+            store.set_status(source_id, "fetching")
+            _emit(source_id)
+            path = artifact_path(req.artifact_id or "")
+            if path is None or not path.is_file():
+                store.set_status(source_id, "failed", error="artifact blob missing")
+                _emit(source_id)
+                return
+            html = path.read_text(encoding="utf-8", errors="replace")
+            article = extract_article(html, req.url or "")
             title = req.title or article.title
             author = req.author or article.author
             text = article.text
@@ -198,6 +230,8 @@ async def ingest_source(source_id: str, req: IngestRequest) -> None:
                 # result has to be able to render the image and link back to the page
                 # it came from without a second lookup.
                 "asset": req.asset.model_dump() if req.asset else None,
+                # page/pdf hits open their stored blob in a viewer directly.
+                "artifact_id": req.artifact_id,
                 # Which model actually produced this vector. `get_embedding`
                 # auto-selects one and silently falls back to a hash when the provider
                 # is offline, so without this there's no way to tell a real embedding

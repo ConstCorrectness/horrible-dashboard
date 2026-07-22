@@ -67,6 +67,10 @@ def init_library_db() -> None:
         }
         if "asset" not in columns:
             conn.execute("ALTER TABLE library_sources ADD COLUMN asset TEXT")
+        # `artifact_id` (blob reference for page/pdf sources) arrived later still;
+        # same probe-then-ALTER dance.
+        if "artifact_id" not in columns:
+            conn.execute("ALTER TABLE library_sources ADD COLUMN artifact_id TEXT")
 
 
 def _row(r: Any) -> dict[str, Any]:
@@ -83,6 +87,7 @@ def _row(r: Any) -> dict[str, Any]:
         "chunk_count": r["chunk_count"],
         "added_at": str(r["added_at"]),
         "asset": json.loads(r["asset"]) if r["asset"] else None,
+        "artifact_id": r["artifact_id"],
     }
 
 
@@ -95,6 +100,7 @@ def create_source(
     author: str | None,
     tags: list[str],
     asset: dict[str, Any] | None = None,
+    artifact_id: str | None = None,
 ) -> dict[str, Any]:
     """Insert a new source in `queued` status and return it."""
     init_library_db()
@@ -103,8 +109,8 @@ def create_source(
         conn.execute(
             """
             INSERT INTO library_sources
-                (id, library, type, title, url, author, tags, status, asset)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?)
+                (id, library, type, title, url, author, tags, status, asset, artifact_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)
             """,
             (
                 source_id,
@@ -115,6 +121,7 @@ def create_source(
                 author,
                 json.dumps(tags),
                 json.dumps(asset) if asset else None,
+                artifact_id,
             ),
         )
     source = get_source(source_id)

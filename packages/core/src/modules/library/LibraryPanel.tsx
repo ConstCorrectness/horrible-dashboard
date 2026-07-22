@@ -31,6 +31,8 @@ const SOURCE_ICON: Record<SourceType, string> = {
   note: '📝',
   image: '🖼',
   video: '🎬',
+  page: '📄',
+  pdf: '📕',
 };
 
 const STATUS_LABEL: Record<SourceStatus, string> = {

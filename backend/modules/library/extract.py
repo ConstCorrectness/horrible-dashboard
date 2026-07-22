@@ -1,10 +1,15 @@
-"""Fetch a web page and extract its main article text + metadata.
+"""Extract a web page's main article text + metadata (pure — no network).
 
 Uses `trafilatura` (the same engine behind many read-it-later/clipper tools) for
 main-content extraction, dropping nav/boilerplate. `trafilatura` is imported lazily
 inside the extractor — like the kaggle provider's client — so a missing/broken
-install can't break backend boot, and code paths that mock `fetch_article` (tests)
-never import it. A regex tag-strip is the last-resort fallback.
+install can't break backend boot, and code paths that never extract don't import
+it. A regex tag-strip is the last-resort fallback.
+
+Fetching lives elsewhere on purpose: blog ingest goes through the browser module's
+SSRF guard (`browser.fetch.fetch_readable`), which imports `extract_article` from
+here. This module fetching for itself is exactly the unguarded URL sink that guard
+was built to close.
 """
 
 from __future__ import annotations
@@ -12,12 +17,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-import httpx
-
-_UA = (
-    "Mozilla/5.0 (compatible; horrible-dashboard/0.1; +https://github.com/)"
-    " library-ingest"
-)
 _TAG_RE = re.compile(r"<[^>]+>")
 _TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 _WS_RE = re.compile(r"[ \t]+")
@@ -29,17 +28,6 @@ class Article:
     author: str | None
     text: str
     url: str
-
-
-async def fetch_article(url: str) -> Article:
-    """GET `url` and return its extracted article. Raises on HTTP/network error."""
-    async with httpx.AsyncClient(
-        follow_redirects=True, timeout=20.0, headers={"User-Agent": _UA}
-    ) as client:
-        resp = await client.get(url)
-        resp.raise_for_status()
-        html = resp.text
-    return extract_article(html, url)
 
 
 def extract_article(html: str, url: str) -> Article:

@@ -168,6 +168,7 @@ export { browserModule } from './modules/browser';
 export { stubModule } from './modules/stub';
 export { databaseModule } from './modules/database';
 export { libraryModule } from './modules/library';
+export { researchModule } from './modules/research';
 export { trainingModule } from './modules/training';
 export { notebookModule } from './modules/notebook';
 export { visualizerModule } from './modules/visualizer';

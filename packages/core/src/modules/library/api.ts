@@ -6,7 +6,7 @@
  */
 import { apiDelete, apiGet, apiPost } from '../../api';
 
-export type SourceType = 'blog' | 'note' | 'image' | 'video';
+export type SourceType = 'blog' | 'note' | 'image' | 'video' | 'page' | 'pdf';
 export type SourceStatus = 'queued' | 'fetching' | 'chunking' | 'embedding' | 'ready' | 'failed';
 
 /**
@@ -42,6 +42,8 @@ export interface SourceModel {
   chunk_count: number;
   added_at: string;
   asset?: MediaAsset | null;
+  /** Present on `page`/`pdf` sources: the stored blob a viewer opens. */
+  artifact_id?: string | null;
 }
 
 export interface IngestRequest {
@@ -54,6 +56,8 @@ export interface IngestRequest {
   tags?: string[];
   /** Required for `image`/`video`; ignored otherwise. */
   asset?: MediaAsset;
+  /** Required for `page`/`pdf`: the artifact-store blob to ingest. */
+  artifact_id?: string;
 }
 
 export interface LibraryInfo {
@@ -88,6 +92,8 @@ export interface SearchGroup {
   chunks: SearchChunk[];
   /** Present on image/video hits: what matched is proxy text, what you want is this. */
   asset?: MediaAsset | null;
+  /** Present on page/pdf hits: the stored blob a viewer opens directly. */
+  artifact_id?: string | null;
   /**
    * Which space(s) matched. A `clip`-only hit means the *picture* matched while its
    * words didn't — and it has no `chunks`, because no passage was involved.

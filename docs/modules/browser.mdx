@@ -114,8 +114,15 @@ searchable. The human button and the agent's `browser.save` both go through
 `packages/core/src/modules/browser/capture.ts`, so a page saved by hand and one saved by
 the agent are the same kind of source.
 
-- **The page** → a `blog` source: the backend re-fetches and extracts it, identical to
-  adding the URL in the Library panel.
+- **The page** → a `page` source: the new `capture` op archives the live
+  **post-JS DOM** as one self-contained HTML artifact (images/CSS inlined as
+  `data:` URIs, scripts stripped, stored server-side in the
+  [artifact store](research.mdx#the-artifact-store)) and the source points at it —
+  openable offline in the research module's Page Viewer. Subresources are fetched
+  with the session's own cookies, under the same per-hop public-host egress
+  policy as navigation. If the op fails (older backend, mid-navigation), Save
+  falls back to the previous behavior — a `blog` source the backend re-fetches
+  and text-extracts.
 - **Images / videos** → `image` / `video` sources.
 
 ### Why media is stored by reference and description
@@ -264,9 +271,10 @@ resolve the host and reject if any IP is loopback / private / link-local / multi
 reserved (blocks `localhost`, `169.254.169.254`, RFC1918, …); follow redirects manually
 and re-validate each `Location`; cap response size and content type. A TOCTOU
 DNS-rebind is mitigated but not fully eliminated (full protection needs pinning the
-validated IP into the connection). The existing `library` blog ingest has the same
-sink with **no** guard today — a worthwhile follow-up is to route it through
-`safe_fetch_html`.
+validated IP into the connection). The `library` blog ingest — which used to be the
+one unguarded copy of this sink — now routes through the same guard
+(`fetch_readable`), as do the research module's capture and PDF fetches; `fetch.py`
+is the single egress policy for every server-side URL fetch.
 
 ## Full engine (real Chromium)
 

@@ -1,9 +1,11 @@
 """API-boundary models for the knowledge library module.
 
-A **source** is one ingested item (a blog post, a note, or a media asset — an image
-or a video; PDF/EPUB later). Each source is chunked and every chunk is stored as a
-row in the shared vector store (collection = the library name), so semantic search
-reuses the existing engine. See docs/modules/library.mdx.
+A **source** is one ingested item (a blog post, a note, a media asset — an image
+or a video — or a stored blob: a ``pdf`` or a captured ``page``, whose bytes live
+in the artifact store and are addressed by ``artifact_id``). Each source is chunked
+and every chunk is stored as a row in the shared vector store (collection = the
+library name), so semantic search reuses the existing engine. EPUB later. See
+docs/modules/library.mdx.
 
 **Media are embedded by proxy.** The app's embedder is text-only
 (``database/embeddings.py``), so an image or video is embedded via the words that
@@ -21,11 +23,14 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-SourceType = Literal["blog", "note", "image", "video"]
+SourceType = Literal["blog", "note", "image", "video", "page", "pdf"]
 SourceStatus = Literal["queued", "fetching", "chunking", "embedding", "ready", "failed"]
 
 # Source types whose content is a referenced binary rather than inline text.
 MEDIA_TYPES: frozenset[str] = frozenset({"image", "video"})
+
+# Source types whose content is a blob in the artifact store (`artifact_id`).
+ARTIFACT_TYPES: frozenset[str] = frozenset({"page", "pdf"})
 
 
 class MediaAsset(BaseModel):
@@ -64,14 +69,17 @@ class SourceModel(BaseModel):
     chunk_count: int = 0
     added_at: str
     asset: MediaAsset | None = None
+    artifact_id: str | None = None
 
 
 class IngestRequest(BaseModel):
     """Add a source.
 
     `blog` needs `url`; `note` needs `text` (+ a `title`); `image`/`video` need
-    `asset` (whose `src` addresses the media). For media, `text` is optional extra
-    description that is embedded alongside the asset's own text proxy.
+    `asset` (whose `src` addresses the media); `page`/`pdf` need `artifact_id`
+    (a blob already in the artifact store — HTML captured by the browser, or an
+    uploaded/downloaded PDF). For media, `text` is optional extra description that
+    is embedded alongside the asset's own text proxy.
     """
 
     type: SourceType
@@ -82,6 +90,7 @@ class IngestRequest(BaseModel):
     author: str | None = None
     tags: list[str] = Field(default_factory=list)
     asset: MediaAsset | None = None
+    artifact_id: str | None = None
 
 
 class SourcesListResponse(BaseModel):
@@ -133,6 +142,8 @@ class SearchGroup(BaseModel):
     # Present for image/video hits: what matched is proxy text, but what the caller
     # wants back is the asset itself.
     asset: MediaAsset | None = None
+    # Present for page/pdf hits: the stored blob a viewer opens directly.
+    artifact_id: str | None = None
     # Which space(s) this hit came from — `text` (the app embedder, over prose or a
     # media asset's proxy text) and/or `clip` (the image itself). A `clip`-only hit
     # means the picture matched while its words did not, which is worth telling the

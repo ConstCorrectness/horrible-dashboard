@@ -34,7 +34,7 @@ import time
 from functools import partial
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 from backend.modules.browser.fetch import UnsafeUrlError, _check_host_public
 from backend.modules.telemetry.instrument import record_browser_request
@@ -531,6 +531,8 @@ class BrowserSession:
             return None
         if op == "content":
             return self._content(page)
+        if op == "capture":
+            return self._capture_page(page)
         if op == "snapshot":
             return page.evaluate(_SNAPSHOT_JS)
         if op == "media":
@@ -574,6 +576,102 @@ class BrowserSession:
             "author": article.author,
             "text": article.text,
         }
+
+    def _capture_page(self, page: Any) -> dict[str, Any]:
+        """Capture the live page as one self-contained HTML artifact.
+
+        `page.content()` serializes the **post-JS** DOM (what the user actually
+        sees, SPAs included); subresources are then fetched with the session's own
+        cookies via the context's request API and inlined by `research.capture`.
+        The artifact is stored server-side — shipping ~25 MB of HTML over `/ws`
+        to the frontend and back would buy nothing.
+        """
+        from backend.modules.artifacts.store import store_bytes
+        from backend.modules.library.extract import extract_article
+        from backend.modules.research.capture import (
+            STYLESHEET_KIND,
+            build_page,
+            filename_for_title,
+            list_css_urls,
+            list_resources,
+        )
+
+        html = page.content()
+        url = page.url
+        resources: dict[str, tuple[bytes, str]] = {}
+        plan = list_resources(html, url)
+        for res_url in plan:
+            fetched = self._fetch_subresource(page, res_url)
+            if fetched is not None:
+                resources[res_url] = fetched
+        # One level of indirection: assets referenced by the fetched stylesheets.
+        for res_url, kind in plan.items():
+            if kind != STYLESHEET_KIND or res_url not in resources:
+                continue
+            css_text = resources[res_url][0].decode("utf-8", errors="replace")
+            for nested in list_css_urls(css_text, res_url):
+                if nested not in resources:
+                    fetched = self._fetch_subresource(page, nested)
+                    if fetched is not None:
+                        resources[nested] = fetched
+
+        page_html = build_page(html, url, resources)
+        article = extract_article(html, url)
+        title = article.title or page.title() or url
+        artifact = store_bytes(
+            page_html.encode("utf-8"),
+            kind="page",
+            mime="text/html",
+            filename=filename_for_title(title),
+            origin_url=url,
+            meta={"title": title, "engine": "chromium"},
+        )
+        return {
+            "artifact_id": artifact["id"],
+            "url": url,
+            "title": title,
+            "author": article.author,
+            "text": article.text,
+        }
+
+    def _fetch_subresource(self, page: Any, url: str) -> tuple[bytes, str] | None:
+        """Fetch one capture subresource with the session's cookies, under the same
+        egress policy as navigation: scheme + public-host check on **every** redirect
+        hop (`max_redirects=0`, manual walk — the context request API doesn't route
+        through the page's interception, so it must enforce the policy itself).
+        Any failure returns None; the resource simply stays a URL in the archive.
+        """
+        from backend.modules.research.capture import PER_RESOURCE_CAP
+
+        current = url
+        for _ in range(5):
+            parts = urlsplit(current)
+            if parts.scheme not in ("http", "https"):
+                return None
+            try:
+                _check_host_public(parts.hostname or "")
+            except UnsafeUrlError:
+                return None
+            try:
+                resp = page.context.request.get(
+                    current, max_redirects=0, timeout=10_000
+                )
+            except Exception:  # noqa: BLE001 — a dead asset must not fail capture
+                return None
+            if 300 <= resp.status < 400:
+                location = resp.headers.get("location")
+                if not location:
+                    return None
+                current = urljoin(current, location)
+                continue
+            if not resp.ok:
+                return None
+            body = resp.body()
+            if len(body) > PER_RESOURCE_CAP:
+                return None
+            mime = (resp.headers.get("content-type") or "").split(";")[0].strip()
+            return body, mime
+        return None
 
     def _scrape(self, page: Any, selector: str) -> dict[str, Any]:
         if not selector:
