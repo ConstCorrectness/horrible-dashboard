@@ -20,6 +20,7 @@ import {
   initBackendOrigin,
   initCapabilities,
   initCommons,
+  installExternalLinkBridge,
   layoutsModule,
   libraryModule,
   loadPlugins,
@@ -65,6 +66,9 @@ async function boot(): Promise<void> {
   if (isTauri()) {
     initCapabilities(DESKTOP_CAPABILITIES);
     setWindowControl(createTauriWindowControl());
+    // The webview can't spawn browser windows (window.open / target="_blank" are
+    // silent no-ops), so route external-link clicks to the system browser.
+    installExternalLinkBridge();
   } else {
     initCapabilities(BROWSER_CAPABILITIES);
   }

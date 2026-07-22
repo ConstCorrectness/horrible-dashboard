@@ -298,6 +298,20 @@ workspace via an initialization-script global (`window.__HORRIBLE_WORKSPACE__`),
 all windows sharing one backend. See the capability table in
 [layout-shell.mdx](layout-shell.mdx).
 
+**External links.** The Tauri webview cannot spawn browser windows — `window.open`,
+`target="_blank"`, and "open link in new window" are all silent no-ops — so the
+shell exposes an **`open_external`** command (`window.rs`, http/https only) that
+hands a URL to the user's default browser via the `open` crate. The shared helper
+`openExternal(url)` (`packages/core/src/external.ts`) branches on the runtime:
+browser layout → `window.open`, desktop → the command. The desktop boot also
+installs a document-level **external-link bridge** (`installExternalLinkBridge`,
+capture-phase click handler) so every plain `<a href="https://…">` in the app
+routes to the system browser without per-component work. OAuth flows (games
+sign-in, connectors) call `openExternal` directly — the system browser carries the
+user's existing sessions, and Google refuses OAuth inside embedded webviews
+(RFC 8252). Distinct from `browser_open_url`, which deliberately opens an
+app-owned webview window as the embedded browser's un-iframable-site escape hatch.
+
 ## Dev affordance
 
 In dev builds the Frame exposes `window.__horribleFrame = { store, registry,

@@ -6,6 +6,7 @@ export {
   type Capability,
 } from './capabilities';
 export { ApiError, apiDelete, apiGet, apiPost, apiPut } from './api';
+export { installExternalLinkBridge, isDesktopShell, openExternal } from './external';
 export {
   Avatar3D,
   DEFAULT_AVATAR_MOOD,

@@ -11,6 +11,7 @@ import {
 
 import { PaneInstanceContext } from '../../../agent-context';
 import { hasCapability } from '../../../capabilities';
+import { openExternal } from '../../../external';
 import { toggleRegion } from '../../../layout/controller';
 import { findPaneAnywhere } from '../../../layout/model';
 import { layoutStore } from '../../../layout/store';
@@ -376,7 +377,7 @@ export function BrowserPanel() {
             style={btn}
             disabled={!current}
             title="Open in new tab"
-            onClick={() => current && window.open(current, '_blank', 'noopener')}
+            onClick={() => current && void openExternal(current)}
           >
             ⧉
           </button>

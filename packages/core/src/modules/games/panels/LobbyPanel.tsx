@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 
+import { isDesktopShell, openExternal } from '../../../external';
 import { registry } from '../../../registry';
 import { gameAccent, gameIcon, gameTagline } from '../game-identity';
 import { useGames, gamesDisconnect, ensureConnected } from '../game-ws';
@@ -94,18 +95,23 @@ function SidebarProfile() {
   };
 
   // Redirect flow first (authorize on the provider, no code typing), falling back to
-  // the device flow when the web flow isn't configured on this game server. The popup
-  // is opened synchronously so it isn't blocked, then pointed at whichever page the
-  // flow that actually starts needs (consent page, or the provider's device page).
+  // the device flow when the web flow isn't configured on this game server. In the
+  // browser the popup is opened synchronously so it isn't blocked, then pointed at
+  // whichever page the flow that actually starts needs (consent page, or the
+  // provider's device page). Under the desktop shell the webview can't open windows
+  // at all, so URLs go straight to the system browser — which is also what OAuth
+  // wants there (existing sessions; Google rejects embedded webviews).
   const signIn = async (provider: SignInProvider) => {
     setBusy(provider);
     setErr('');
-    const popup = window.open('', 'games-oauth', 'popup,width=600,height=760');
+    const popup = isDesktopShell()
+      ? null
+      : window.open('', 'games-oauth', 'popup,width=600,height=760');
     let navigated = false;
     const point = (url: string) => {
       navigated = true;
       if (popup && !popup.closed) popup.location.href = url;
-      else window.open(url, '_blank', 'noopener');
+      else void openExternal(url);
     };
     try {
       let display: string;

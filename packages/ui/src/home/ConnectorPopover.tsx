@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   beginConnect,
   disconnectConnector,
+  openExternal,
   pollUntilDone,
   submitConnect,
   type Connector,
@@ -69,7 +70,9 @@ export function ConnectorPopover({
   /** Drive an oauth flow to completion: show the step, then poll. */
   const runOauth = async (first: ConnectStep) => {
     setStep(first);
-    if (first.authorize_url) window.open(first.authorize_url, '_blank', 'noopener,noreferrer');
+    // openExternal, not window.open: under the desktop shell the webview can't
+    // spawn browser windows, and OAuth belongs in the system browser anyway.
+    if (first.authorize_url) void openExternal(first.authorize_url);
     const controller = new AbortController();
     cancelled.current = controller;
     const result = await pollUntilDone(connector.id, {

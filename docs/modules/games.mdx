@@ -1099,6 +1099,13 @@ never handed to the browser). Two OAuth flows produce it:
 - **Dev token** (fallback) — when not signed in, the token *is* the account id, so
   local play and tests need no OAuth. Disable it with `GAMES_ALLOW_DEV_AUTH=0` to
   require real sign-in.
+- **On the desktop shell** the consent page opens in the **system browser** (via the
+  shell's `open_external` command — see
+  [windowing.mdx](../architecture/windowing.mdx)) rather than a popup: the Tauri
+  webview can't open windows at all, and the system browser is what OAuth wants
+  anyway (your existing GitHub/Google session; Google rejects embedded webviews).
+  Authorize in the browser, then return to the app — the node's poll picks the
+  token up the same way.
 
 If a cached JWT token is rejected by the game server during connection authentication, the node's client automatically signs out (deleting `.data/games_token.json`) to clear the stale token and prevent infinite loop failures. Connection and authentication errors from the game server are surfaced as toast notifications in the UI — with two exceptions to keep spectating quiet: `not_your_turn` errors are suppressed entirely (a move landing after the referee's clock resolved the turn is normal agent-protocol churn, most common in tick-based games and self-play, and the server already handles it by ignoring the move), and identical error toasts arriving within a 10-second burst collapse into one.
 

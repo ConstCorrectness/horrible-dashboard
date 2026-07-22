@@ -171,6 +171,22 @@ pub async fn window_open_workspace(app: AppHandle, workspace_id: String) -> Resu
 /// `file:`/custom-scheme local resources. Each call gets a fresh `browser-<n>`
 /// label (external site, so no app permissions are needed on the new window).
 /// Async for the same main-thread `build()` reason as `window_open_workspace`.
+/// Open `url` in the user's **default system browser** — the external-link path
+/// (OAuth consent pages, docs links, the sign-in card's fallback link). Distinct
+/// from `browser_open_url` below, which opens an app-owned webview window: OAuth
+/// must run in the real browser (existing sessions and password managers work,
+/// and Google rejects embedded webviews outright — RFC 8252). Only `http`/`https`
+/// URLs are accepted, so this can never be steered at local files or custom
+/// schemes.
+#[tauri::command]
+pub fn open_external(url: String) -> Result<(), String> {
+    let parsed = tauri::Url::parse(&url).map_err(|e| e.to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(format!("refusing to open non-http(s) URL: {url}"));
+    }
+    open::that_detached(&url).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn browser_open_url(app: AppHandle, url: String) -> Result<(), String> {
     let parsed = tauri::Url::parse(&url).map_err(|e| e.to_string())?;
