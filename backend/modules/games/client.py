@@ -66,6 +66,27 @@ def _settings() -> tuple[str, str, str]:
     return url, token, policy
 
 
+def _resolve_policy_name(game_id: str | None) -> str:
+    """The move-policy name for `game_id`, resolved in order:
+    (1) the player's explicit per-game override (`games.policy.<game_id>`),
+    (2) the game's declared `default_policy` (GameSpec — the source of truth),
+    (3) the legacy global `games.policy` setting (for uncatalogued games / town).
+
+    Policy is a property of the game now, so a VizDoom seat defaults to `bot` and a
+    RAG Race seat to `agent` without the player flipping a single global switch."""
+    if game_id:
+        override = get_value(f"games.policy.{game_id}", None)
+        if override:
+            return str(override)
+        try:
+            from backend.games_engine.base import get_game
+
+            return str(get_game(game_id).default_policy)
+        except Exception:
+            logger.debug("no catalog default_policy for %s", game_id, exc_info=True)
+    return str(get_value("games.policy", "random") or "random")
+
+
 class _PlayerConn:
     """One authenticated seat: a socket to the server plus an auto-play loop."""
 
@@ -122,14 +143,16 @@ class _PlayerConn:
     def set_policy(self, policy: Policy | None) -> None:
         self._policy = policy
 
-    def _refresh_policy_from_setting(self) -> None:
-        """Re-read `games.policy` and rebuild this seat's policy if it changed.
+    def _refresh_policy_from_setting(self, game_id: str | None = None) -> None:
+        """Resolve this seat's move policy for `game_id` and rebuild it if it changed.
         No-op unless this seat follows the setting (the primary). Called at each
         match boundary (and each town tick) so a switch lands between games, never
-        mid-match. `manual` => no auto-play policy (the agent tool / UI drives)."""
+        mid-match. Resolution is per-game (see `_resolve_policy_name`): the game's
+        declared default wins over the legacy global setting. `manual` => no auto-play
+        policy (the agent tool / UI drives)."""
         if not self._follow_setting:
             return
-        name = str(get_value("games.policy", "random") or "random")
+        name = _resolve_policy_name(game_id)
         if name == self._policy_name:
             return
         self._policy_name = name
@@ -282,9 +305,10 @@ class _PlayerConn:
         elif mtype == models.MATCH_INFO:
             self._match = msg
             self._my_seat = None
-            # A new match is the safe boundary to pick up a games.policy switch made
-            # since the last game — never mid-match.
-            self._refresh_policy_from_setting()
+            # A new match is the safe boundary to pick up a policy switch made
+            # since the last game — never mid-match. Resolve for THIS game so a
+            # per-game default/override lands (a VizDoom table gets `bot`, etc.).
+            self._refresh_policy_from_setting(str(msg.get("game_id") or "") or None)
             # Declare what plays at this seat (harness version + model) so the
             # replay records it — detached; a failure never blocks the match.
             asyncio.create_task(self._declare_loadout_meta(msg))

@@ -106,5 +106,6 @@ SPEC = register_game(
         min_players=2,
         max_players=2,
         factory=TicTacToe,
+        default_policy="agent",
     )
 )

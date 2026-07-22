@@ -128,5 +128,6 @@ SPEC = register_game(
         min_players=2,
         max_players=2,
         factory=ConnectFour,
+        default_policy="agent",
     )
 )

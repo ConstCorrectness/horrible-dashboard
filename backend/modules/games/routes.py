@@ -5,6 +5,7 @@ these endpoints are for the lobby panel's initial render.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter
@@ -28,6 +29,7 @@ from backend.modules.games.models import (
     DryRunResponse,
     GameInfo,
     GamesStatus,
+    SampleObservationResponse,
     SaveVersionRequest,
     SetKeyRequest,
     LoadoutModel,
@@ -39,6 +41,8 @@ from backend.modules.games.models import (
 )
 from backend.modules.settings.routes import get_value
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/games", tags=["games"])
 
 
@@ -49,6 +53,11 @@ def _catalog() -> list[GameInfo]:
             name=spec.name,
             min_players=spec.min_players,
             max_players=spec.max_players,
+            decision_class=spec.decision_class,
+            default_policy=spec.default_policy,
+            allowed_policies=list(spec.allowed_policies),
+            obs_kind=spec.obs_kind,
+            pacing=spec.pacing,
         )
         for spec in list_games()
     ]
@@ -277,6 +286,27 @@ async def dry_run_route(body: DryRunRequest) -> DryRunResponse:
         return DryRunResponse(ok=False, error=reason)
 
 
+@router.get("/sample-observation", response_model=SampleObservationResponse)
+def sample_observation_route(game_id: str, seed: int = 0) -> SampleObservationResponse:
+    """A realistic opening position for `game_id` — what the Build panel's
+    observation inspector shows so a player can see the obs + legal actions they're
+    programming against. Cheap (no loadout / model / agent run); resample by seed."""
+    from backend.modules.games import dryrun
+
+    try:
+        obs, legal = dryrun.sample_observation(game_id, seed)
+        return SampleObservationResponse(
+            ok=True, game_id=game_id, observation=obs, legal_actions=legal
+        )
+    except KeyError:
+        return SampleObservationResponse(
+            ok=False, game_id=game_id, error=f"unknown game {game_id!r}"
+        )
+    except Exception as exc:  # engine failed to produce a position — surface it
+        logger.debug("sample_observation failed for %s", game_id, exc_info=True)
+        return SampleObservationResponse(ok=False, game_id=game_id, error=str(exc))
+
+
 # ---- sign-in (GitHub/Google device flows, proxied to the game server) ------
 
 
@@ -298,6 +328,13 @@ async def google_start_route() -> dict[str, Any]:
 @router.post("/auth/google/poll")
 async def google_poll_route(body: DevicePollRequest) -> dict[str, Any]:
     return await server_auth.google_poll(body.device_code)
+
+
+@router.get("/auth/providers")
+async def auth_providers_route() -> dict[str, Any]:
+    """Which sign-in flows the connected game server supports
+    (`{provider: {device, web}}`); `{}` when unknown (older/unreachable server)."""
+    return await server_auth.auth_providers()
 
 
 @router.post("/auth/{provider}/web/start")

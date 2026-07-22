@@ -336,5 +336,6 @@ SPEC = register_game(
         min_players=2,
         max_players=2,
         factory=Holdem,
+        default_policy="agent",
     )
 )

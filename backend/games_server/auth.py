@@ -323,6 +323,21 @@ def _github_client_secret() -> str:
     )
 
 
+def providers_available() -> dict[str, dict[str, bool]]:
+    """Which sign-in flows this server can actually run, from its configured OAuth
+    credentials — so a client can disable (and explain) a provider button up front
+    instead of discovering the gap after it has already opened a popup.
+
+    GitHub's device flow needs only the client id; its web flow (and both Google
+    flows — Google's device token poll requires the secret too) need id + secret."""
+    gh_id, gh_secret = bool(_github_client_id()), bool(_github_client_secret())
+    g_ok = bool(_google_client_id()) and bool(_google_client_secret())
+    return {
+        "github": {"device": gh_id, "web": gh_id and gh_secret},
+        "google": {"device": g_ok, "web": g_ok},
+    }
+
+
 def web_config_error(provider: str) -> str | None:
     """A human message if `provider`'s web flow isn't configured, else None — so the
     UI fails fast at start rather than after a round-trip to the provider."""

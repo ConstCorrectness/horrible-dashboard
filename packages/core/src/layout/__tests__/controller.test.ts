@@ -16,6 +16,7 @@ import {
   dockSidesOf,
   isDockable,
   openDocument,
+  openPane,
   openPaneInArea,
   openToolInDock,
   roleOf,
@@ -167,6 +168,16 @@ describe('openPaneInArea', () => {
       (a) => a.id === empty.id,
     )!;
     expect(area.tabs.map((t) => t.instanceId)).toEqual(['doc:a', 'doc:b']);
+  });
+});
+
+describe('openPane', () => {
+  it('focuses a preset-seeded singleton rather than splitting a duplicate', () => {
+    // The seeded instance carries a `#n` suffix, so the instance-id lookup
+    // alone misses it — the games "Join splits the window" bug.
+    expect(openPane('t.doc')).toBe('t.doc#0');
+    const panes = collectAreas(layoutStore.getSnapshot().frame.center).flatMap((a) => a.tabs);
+    expect(panes.filter((p) => p.viewId === 't.doc')).toHaveLength(1);
   });
 });
 

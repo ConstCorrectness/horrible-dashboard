@@ -13,8 +13,17 @@ export interface GamesStatus {
   display_name: string | null;
   server_url: string;
   policy: string;
-  games: { id: string; name: string }[];
+  games: GameCatalogEntry[];
 }
+
+/** How a game's seat decides — the load-bearing axis (see docs/modules/games.mdx):
+ * a `policy` game is a pure `obs → action` mapping (an LLM is optional-to-harmful);
+ * a `reasoner` game needs the LLM harness (prompt + tools + model). */
+export type DecisionClass = 'policy' | 'reasoner';
+
+/** The four move-policy names, matching the backend `make_policy` vocabulary
+ * (`manual` = no automatic policy). */
+export type MovePolicy = 'random' | 'agent' | 'manual' | 'bot';
 
 export interface LeaderRow {
   account_id: string;
@@ -40,6 +49,14 @@ interface DeviceStart {
 export interface GameCatalogEntry {
   id: string;
   name: string;
+  /** Decision class + presentation metadata from the backend `GameSpec`. Optional
+   * so an older node (or the offline fallback) still type-checks; consumers default
+   * via `decisionClassOf` / the identity helpers. */
+  decision_class?: DecisionClass;
+  default_policy?: MovePolicy;
+  allowed_policies?: MovePolicy[];
+  obs_kind?: 'json' | 'frames';
+  pacing?: 'turn' | 'realtime';
 }
 
 export function fetchStatus(): Promise<GamesStatus> {
@@ -112,6 +129,37 @@ export function validateLoadout(loadout: Loadout): Promise<LoadoutValidation> {
 /** The starter `my_agent` source to seed the editor for a fresh agent on a game. */
 export function getAgentStarter(gameId: string): Promise<{ game_id: string; agent_code: string }> {
   return apiGet(`/games/agent-starter/${encodeURIComponent(gameId)}`);
+}
+
+/** A realistic opening position for a game — the observation + legal actions the
+ * Build panel's inspector shows so a player can see what they program against.
+ * Cheap (no loadout / model / agent run); resample with a different `seed`. */
+export interface SampleObservation {
+  ok: boolean;
+  error: string | null;
+  game_id: string;
+  observation: Record<string, unknown>;
+  legal_actions: { id: string; label?: string }[];
+}
+
+export function fetchSampleObservation(gameId: string, seed = 0): Promise<SampleObservation> {
+  return apiGet(`/games/sample-observation?game_id=${encodeURIComponent(gameId)}&seed=${seed}`);
+}
+
+/** Compile and run one tool/bot body against a supplied observation — the editor's
+ * "test" path, reused by the tutorial to validate a step's bot on a sample position. */
+export interface TestToolResult {
+  ok: boolean;
+  error: string | null;
+  result: unknown;
+}
+
+export function testTool(
+  code: string,
+  obs: Record<string, unknown>,
+  args: Record<string, unknown> = {},
+): Promise<TestToolResult> {
+  return apiPost('/games/test-tool', { code, obs, args });
 }
 
 /** A shipped starter harness for a game: a titled, blurbed loadout whose `tools`
@@ -200,6 +248,18 @@ export function publishReplay(replayId: string): Promise<{ ok?: boolean; error?:
 
 /** OAuth providers the game server can sign a player in with (both device flow). */
 export type SignInProvider = 'github' | 'google';
+
+/** Which sign-in flows the game server supports for a provider. A missing provider
+ * (or a `{}` response) means the server couldn't say — treat as available and let the
+ * click-time error handle it. */
+export interface AuthProviderFlows {
+  device?: boolean;
+  web?: boolean;
+}
+
+export function fetchAuthProviders(): Promise<Partial<Record<SignInProvider, AuthProviderFlows>>> {
+  return apiGet('/games/auth/providers');
+}
 
 const PROVIDER_FALLBACK_URL: Record<SignInProvider, string> = {
   github: 'https://github.com/login/device',

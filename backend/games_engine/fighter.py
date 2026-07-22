@@ -250,5 +250,8 @@ SPEC = register_game(
         max_players=2,
         factory=Fighter,
         move_timeout_s=1.0,  # a tick clock; timeout auto-plays `idle` (legal[0])
+        decision_class="policy",
+        default_policy="bot",
+        pacing="realtime",
     )
 )

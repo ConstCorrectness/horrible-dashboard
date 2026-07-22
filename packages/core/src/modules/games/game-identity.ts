@@ -67,6 +67,39 @@ export const GAME_TAGLINES: Record<string, string> = {
   vizdoom_duel: 'Networked 1v1 Doom deathmatch',
 };
 
+/**
+ * Decision class per game id — the fallback when only an id is known (the catalog
+ * entry carries the authoritative `decision_class` from the backend `GameSpec`). A
+ * `policy` game is an `obs → action` mapping (bot-shaped); a `reasoner` game needs
+ * the LLM harness. Keep this in sync with each engine's `register_game`.
+ */
+export const GAME_DECISION_CLASS: Record<string, 'policy' | 'reasoner'> = {
+  tictactoe: 'policy',
+  connect_four: 'policy',
+  holdem: 'policy',
+  arena: 'policy',
+  fighter: 'policy',
+  vizdoom_toy: 'policy',
+  vizdoom_duel: 'policy',
+  rag_race: 'reasoner',
+  code_golf: 'reasoner',
+  test_duel: 'reasoner',
+  bug_hunt: 'reasoner',
+  tabular_fe: 'reasoner',
+};
+
+/** The decision class for a game id (fallback map; prefer the catalog entry's own
+ * `decision_class` when you have it). Uncatalogued games default to `policy`. */
+export function decisionClassOf(id: string): 'policy' | 'reasoner' {
+  return GAME_DECISION_CLASS[id] ?? 'policy';
+}
+
+/** A short badge for a decision class — the glyph + label shown on game cards and
+ * in the builder header so the policy-vs-reasoner split is legible at a glance. */
+export function decisionClassBadge(cls: 'policy' | 'reasoner'): { icon: string; label: string } {
+  return cls === 'reasoner' ? { icon: '🧠', label: 'Reasoner' } : { icon: '⚙', label: 'Policy' };
+}
+
 /** The icon for a game id, falling back to the die for anything uncatalogued. */
 export function gameIcon(id: string): string {
   return GAME_ICONS[id] ?? '🎲';

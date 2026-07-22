@@ -2665,6 +2665,16 @@
   background: var(--border);
 }
 
+/* An unavailable provider (the game server reports neither sign-in flow) renders
+   disabled with the reason in its tooltip — visibly so, not just unresponsively. */
+.games-sidebar-profile-signin-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.games-sidebar-profile-signin-btn:disabled:hover {
+  background: var(--bg-hover, #262a32);
+}
+
 .games-console-tile {
   background: rgba(255, 255, 255, 0.01);
   border: 1px solid var(--border);

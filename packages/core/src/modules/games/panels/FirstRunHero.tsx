@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 
-import { registry } from '../../../registry';
+import { openDrawer } from '../client-drawer';
 import { setSetting } from '../../../settings';
 import { useGames } from '../game-ws';
 import { fetchStatus, signInWith, type SignInProvider } from '../games-api';
@@ -111,7 +111,7 @@ export function FirstRunHero() {
 
   const startPlacement = () => {
     openGamesSection('board');
-    registry.openPanel('games.log');
+    openDrawer('log');
     void findRankedMatch('tictactoe', 'standard', true);
     setQueued(true);
   };

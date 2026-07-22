@@ -193,5 +193,8 @@ SPEC = register_game(
         max_players=2,
         factory=ArenaGame,
         move_timeout_s=EDIT_TIMEOUT_S,
+        decision_class="policy",
+        default_policy="bot",
+        pacing="realtime",
     )
 )

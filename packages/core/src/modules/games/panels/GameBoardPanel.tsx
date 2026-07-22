@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import Typography from '@mui/material/Typography';
 
 import { registry } from '../../../registry';
+import { openDrawer } from '../client-drawer';
 import { gameAccent, gameIcon } from '../game-identity';
 import {
   gamesQueueLeave,
@@ -469,11 +470,7 @@ export function GameBoardPanel() {
           {phase ? ` · ${phase}` : ''}
         </span>
         {myThinking && (
-          <button
-            type="button"
-            style={{ fontSize: '0.7rem' }}
-            onClick={() => registry.openPanel('games.log')}
-          >
+          <button type="button" style={{ fontSize: '0.7rem' }} onClick={() => openDrawer('log')}>
             watch reasoning →
           </button>
         )}

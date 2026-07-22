@@ -51,6 +51,34 @@ class GameSpec:
     # set) need minutes. None = use the referee's default.
     move_timeout_s: float | None = None
 
+    # --- How a player's seat decides, and how the UI should present it. ---
+    # `decision_class` is the load-bearing axis (see docs/modules/games.mdx):
+    #   "policy"   — the agent IS a mapping obs → action (MDP/Markov sense); a pure
+    #                `bot(obs)` function is the natural interface and an LLM is
+    #                optional-to-harmful (can't hold a real-time cadence).
+    #   "reasoner" — the task *is* language; the system prompt + tools + model are
+    #                the gameplay levers.
+    # This gates which move policies are *valid* at runtime, so it lives here (the
+    # backend is the source of truth), not just as frontend chrome.
+    decision_class: Literal["policy", "reasoner"] = "policy"
+    # The move policy this game defaults to, and the set a player may choose from.
+    # Vocabulary matches the UI enum (random | agent | manual | bot); `manual` means
+    # "no automatic policy" (the human/agent-tool drives), handled by callers.
+    default_policy: str = "random"
+    allowed_policies: tuple[str, ...] = ("random", "agent", "manual", "bot")
+    # Shape of the per-seat observation and the match pacing — display badges the
+    # Build UI and game cards use (e.g. render a `frames` obs as an image, warn that
+    # a `realtime` game can't afford a 6-round tool loop).
+    obs_kind: Literal["json", "frames"] = "json"
+    pacing: Literal["turn", "realtime"] = "turn"
+    # Optional canned (observation, legal_actions) for the Build panel's inspector,
+    # so previewing a position never has to instantiate the engine. Required for games
+    # that are unsafe/expensive to spin up just for a sample — notably the native
+    # ViZDoom engines, whose solo init can crash the process. `seed -> (obs, legal)`.
+    sample_obs: Callable[[int], tuple[dict[str, Any], list[dict[str, Any]]]] | None = (
+        None
+    )
+
     def new(self, **kwargs: Any) -> "GameState":
         return self.factory(**kwargs)
 

@@ -63,40 +63,42 @@ per-move clock on the server auto-plays a safe default if a node is slow.
 
 ## The Games pane
 
-The module's entry point is the **Games pane** ("Games", `games.lobby`, a
-`document`, `GamesPanel`) — **the whole play loop in one pane**, with three
-internal sections you switch between on its tab strip:
+The module's entry point is the **Games client** ("Games", `games.lobby`, a
+`document`, `GamesPanel`) — **the whole thing in one pane**, shaped like a console
+title (a main menu with sections) rather than a scatter of tiled documents. The
+menu (`hub-section.ts` owns the section store, `GamesSection`):
 
 | Section | What it is |
 | --- | --- |
-| 🕹 **Play** | Pick a game, find a match, sign in (`LobbyPanel`). |
+| 🕹 **Play** | Pick a game, find a match / practice, sign in (`LobbyPanel`). |
 | ▦ **Game Board** | The live match (`GameBoardPanel`). |
-| 🛠 **Build your agent** | The code editor + loadout (`AgentBuilderPanel`). |
+| 🛠 **Build** | The agent editor + loadout (`AgentBuilderPanel`). |
+| 📼 **Replays** | Browse and watch replays (`ReplayBrowserPanel`). |
+| 🪪 **Career** | Profile · Ladder · Challenges, as sub-tabs. |
+| 🏛 **Social** | Plaza · AgentTown, as sub-tabs. |
 
-These were three separate panes (`games.lobby` / `games.board` / `games.loadout`)
-tiled beside each other. Merging them means picking a game, engineering the agent,
-and watching it play are one surface rather than three panes to arrange — and the
-frame only has to place one pane. `hub-section.ts` owns the section store:
-`openGamesSection('board' | 'build' | 'play')` is the single entry point every
-hand-off goes through (`revealBoard()` on a live match, `openHarnessFor(gameId)`
-from a game card, the `games.openBoard` / `games.openLoadout` commands).
+Play / Board / Build were once three separate panes; the auxiliary surfaces
+(Ladder, Challenges, Replays, Players, Profile, Plaza, Town) were once separate
+`tool`/`document` panes opened onto the activity rail. The client **folds them all
+into one window** — Career and Social use an internal sub-tab strip (`SubTabbed`) to
+hold several self-contained panels; the standalone panels stay registered so a power
+user can still pop one out onto the rail. `openGamesSection(section)` is the single
+entry point every hand-off goes through (`revealBoard()` on a live match,
+`openHarnessFor(gameId)` from a game card, the `games.openBoard` / `games.openLoadout`
+commands).
 
 Sections are **mounted lazily and never unmounted** once visited (hidden with
 `display: none`): the builder holds unsaved code and the board holds canvas state,
 and neither should be lost by looking at the other.
 
-The pane used to fold **Ladder**, **Challenges**, **Replays**, **Players**, and
-**Profile** in as an internal tab strip, but that got too cluttery — they're now
-**standalone `tool` panels on the left activity rail** (`games.ladder`,
-`games.challenges`, `games.replays`, `games.players`, `games.profile`), each also
-reachable from the command palette (`games.openLeaderboard`, `games.openChallenges`,
-`games.openReplays`, `games.openRoster`, `games.openProfile`).
-
-The two **spectator surfaces** are their own `document` panes, because you watch
-them *alongside* the Games pane rather than instead of it: the **Games Log**
-(`games.log`) and **Episodes** (`games.episodes`) — both below. **AgentTown**
-(`games.town`) is likewise a separate document — the social fish tank is its own
-surface (see below).
+The two **spectator surfaces** — the **Games Log** and **Episodes** (both below) —
+live in an in-client **bottom drawer** (`ClientDrawer` in `GamesPanel`, state in
+`client-drawer.ts`), not as tiled sibling documents. It's collapsed by default and
+pops open on a live match (`revealBoard()` calls `setDrawerTab('log')`) or from a
+board button (`openDrawer('log')`); its two tabs mount `GamesLogPanel` and
+`EpisodePanel`. The `games.log` / `games.episodes` panels stay registered too, so
+they can still be opened standalone. **AgentTown** (`games.town`) is also reachable
+as the Social section's second sub-tab and as a standalone document.
 
 **Connection is implicit.** There are no Connect buttons: **▶ Play** (self-play
 vs your own agent), **Find match** (ranked), and **Join/Watch** each call
@@ -110,8 +112,8 @@ The **Game Board section opens automatically when a match goes live** — when y
 start or join a table, and whenever the server sends the first
 `public_state`/`your_turn` for a game (so the board also pops on the *other*
 player's node the moment a match begins). This is driven by `revealBoard()` in
-`game-ws.ts`, which now just calls `openGamesSection('board')`: one pane, one
-section switch, so the board can't appear twice.
+`game-ws.ts`, which switches to the board section and pops the log drawer: one pane,
+one section switch, so the board can't appear twice.
 
 ### Coding Harnesses workspace
 
@@ -126,13 +128,13 @@ dock.
 
 **DashArena** (`dasharena`, 🏟 in the workspace tab strip) is the game-tuned
 preset, contributed by the games module itself (`ModuleManifest.frames` in
-`modules/games/index.tsx`): the **Games** pane takes the stage, with the two live
-spectator surfaces stacked beside it — the **Games Log** (`games.log`) above and
-the **Episode** visualizer (`games.episodes`) below. The auxiliary `tool` panels —
-Ladder, Replays, Players, Profile, Challenges — aren't pre-placed; they're summoned
-on demand from the left **activity rail** (each is a `role: 'tool'` view, so it
-appears there automatically). Where Coding Harnesses is tuned for authoring,
-DashArena is tuned for watching your agent compete.
+`modules/games/index.tsx`): its center is **just the Games client**
+(`{ pane: 'games.lobby' }`), filling the whole window. The client is itself a
+console — Play / Board / Build / Replays / Career / Social with the Log/Episodes
+drawer — so there's nothing to tile beside it. The standalone Log/Episodes panels
+stay registered so a power user can still pop one out onto the rail. Where Coding
+Harnesses tiles the surfaces for authoring, DashArena is the single-window client
+tuned for playing and watching.
 
 :::note Layouts saved before the merge
 `games.board`, `games.loadout`, and `games.thoughts` no longer exist as panes, so a
@@ -389,12 +391,37 @@ the trajectory logic is unit-testable without a backend (`__tests__/episode.test
 are terminal in these games, so `applyReturns` mirrors each seat's return onto its
 own final step.
 
+## Decision class — policy vs. reasoner games
+
+The load-bearing distinction: **the agent _is_ the policy** — a mapping
+`observation → action` in the MDP/Markov sense — and an **LLM reasoner is one
+possible component of it**, mandatory for some games and absent from others. Every
+game declares a `decision_class` on its `GameSpec` (`games_engine/base.py`, the
+backend is the source of truth):
+
+- **`policy`** games (ViZDoom, Tic-Tac-Toe, Connect Four, Arena, Fighter) — a pure
+  `bot(obs) → action` function is the natural interface; an LLM is optional and, for
+  a real-time game, a liability (it can't hold the tick cadence).
+- **`reasoner`** games (RAG Race, Code Golf, Bug Hunt, Test Duel, Tabular FE) — the
+  observation _is_ a language task; the system prompt + tools + model _are_ the
+  gameplay levers.
+
+`GameSpec` also carries `default_policy`, `obs_kind` (`json` | `frames`), and
+`pacing` (`turn` | `realtime`), all surfaced to the frontend through `GameInfo` /
+`/games/status` and shown as badges. The [Build view](#agent-harness--the-skill-game)
+branches on the decision class, and the tutorial track differs by it.
+
 ## Move policy
 
-The `games.policy` setting controls how a node picks its move:
+A node's **move policy** is now a property of the **game**, not a single global
+switch. Resolution (`_resolve_policy_name` in `client.py`): the player's explicit
+per-game override (`games.policy.<game_id>`) → the game's declared `default_policy`
+→ the legacy global `games.policy` (kept only as a fallback for uncatalogued games).
+So a ViZDoom seat defaults to `bot` and a RAG Race seat to `agent` with no switch
+flipping. The four policy names:
 
-- **`random`** (default) — a built-in random legal move. No model needed, so the
-  pipeline is watchable even with no local LLM running.
+- **`random`** — a built-in random legal move. No model needed, so the pipeline is
+  watchable even with no local LLM running.
 - **`agent`** — runs a real tool-calling loop with your [agent harness](#agent-harness--the-skill-game):
   your custom tools plus `game.chooseAction`. The agent may analyze with your tools,
   then commits a legal move; any failure falls back to random.
@@ -403,15 +430,14 @@ The `games.policy` setting controls how a node picks its move:
   `game.getObservation` / `game.chooseAction` agent tools (grouped under `games`), or
   a future in-board control does.
 
-Switching the setting takes effect **between games, not mid-match**: the primary
-seat re-reads `games.policy` at each match boundary (the `match_info` event) and
-rebuilds its policy if it changed, so a switch never disturbs a game in progress
-and no reconnect is needed. AgentTown, having no match boundary, honors a switch on
-its next tick. The self-play sparring seat below never follows the setting — it
-stays `random` so the demo keeps running. Besides the settings page, the hub's
-**Play section** (`PlaySection`, shown once a game is selected) carries a **Move
-policy** toggle right beside Play Mode — the same `games.policy` setting, so you can
-flip it inline between games without leaving the board.
+Switching takes effect **between games, not mid-match**: the primary seat re-resolves
+its policy for the specific game at each match boundary (the `match_info` event, which
+carries the `game_id`) and rebuilds if it changed, so a switch never disturbs a game
+in progress and no reconnect is needed. AgentTown, having no match boundary, honors a
+switch on its next tick. The self-play sparring seat below never follows the setting —
+it stays `random` so the demo keeps running. The Play section's **Move policy** toggle
+(shown once a game is selected) writes the per-game override key, so flipping it there
+changes _this_ game's policy without clobbering another's.
 
 **Self-play** (what ▶ Play connects as) seats a second "sparring" partner from the
 same node so a full match runs with a single user — handy for demos. The server
@@ -580,22 +606,43 @@ its harness version + model label (`loadout_meta`), which lands on opponent seat
 badges and in the replay — a declaration the loser can scrutinize, which is also how
 `model_class: "local"` challenge terms are policed socially.
 
-Edit harnesses in the **Agent Harness** panel (`games.openLoadout`, which opens it as its
-own standalone pane; the hub's `h` region key instead docks it inside the hub shell).
-The panel reads top-down as the two things that actually are the skill —
-**strategy context** and **custom tools** — with everything else folded:
-each tool is a collapsible card (summary: name · description · ⚠/✓ status chip),
-the dry-run's step trace folds behind its result line, and an **Advanced** fold
-(summary shows the resolved model + active version) holds the version bar, the
-model config, and the sample-observation JSON. The panel carries
-a collapsible **How the harness works** explainer (the loop, multi-tool semantics, the
-`run(args, obs)` contract); tool names are validated live (identifier rule, the
-reserved `game.*` prefix, duplicates); **Save** additionally runs the loadout through
-`POST /games/loadout/validate`, pins each compile error to its tool card, and
-**force-opens the offending cards** (a broken tool would otherwise be *silently*
-absent in a match) — saving is never blocked, a work-in-progress harness is
-normal. Loadouts persist server-side
-(`.data/games_loadouts.json`), keyed by game with a `default` fallback.
+Edit agents in the **Build** section of the Games client (`games.openLoadout` →
+`openGamesSection('build')`; `AgentBuilderPanel`). The view **branches on the game's
+decision class** so it never shows knobs that don't run:
+
+- A header **badge** (⚙ Policy game / 🧠 Reasoner game) and a **harness pipeline
+  strip** (`HarnessPipeline`) that draws `Observation → [what the current move policy
+  actually runs] → Action` — under `bot` just `bot(obs)` (no model, no prompt); under
+  `agent` the `context → tools → model` path; `random`/`manual` use none of the
+  harness. This is the direct answer to "do my tools / system prompt run every tick?".
+- An always-visible **observation inspector** (`ObservationInspector`, fed by
+  `GET /games/sample-observation` — cheap, no loadout/model/agent run): the real
+  opening observation and legal actions the policy is handed, so you can see what
+  you're programming against. `frames` games (ViZDoom) render the frame as an image
+  and pull out the HUD; other games show the observation JSON. (ViZDoom supplies a
+  **canned** `sample_obs` on its `GameSpec` because its native engine can crash on a
+  solo init — previewing must never instantiate it.)
+- The **editor follows the effective move policy**: under `bot` it edits the game's
+  `bot(obs)` tool (`<game_id>.bot`, a `def run(args, obs)` returning a legal id) with
+  the model/prompt hidden; under `agent` it's the full reasoner harness — the
+  `my_agent(obs, config)` entrypoint, the **strategy context** (system prompt), and
+  **custom tools** (collapsible cards, name · description · ⚠/✓ status chip).
+
+Tool names are validated live (identifier rule, the reserved `game.*` prefix,
+duplicates); **Save** runs the loadout through `POST /games/loadout/validate` and
+surfaces compile errors — saving is never blocked, a work-in-progress harness is
+normal. Loadouts persist server-side (`.data/games_loadouts.json`), keyed by game
+with a `default` fallback.
+
+**Bootcamp — the per-game tutorial.** A collapsible track (`BootcampSection`, data in
+`tutorials.ts`) walks a new player from a reflex to a working agent, with the
+progression matched to the decision class. **ViZDoom Duel is the flagship**: step 1 a
+bot that attacks and sweeps, step 2 one that reads `obs["hud"]["ammo"]` to gate
+firing. Each step drops its starter code into the right editor slot; a `bot` step can
+be **tested on a sampled position** (`POST /games/test-tool` against
+`GET /games/sample-observation`), reporting the action it chose — the validation half
+of the loop, before ever starting a match. Reasoner games get a default-agent →
+add-retrieval track instead.
 
 Tool code can also be edited in the **editor module**: when the editor is loaded, each
 tool gets an **Edit in editor ↗** button that opens its body as a real Python buffer
@@ -1028,11 +1075,22 @@ never handed to the browser). Two OAuth flows produce it:
   "TVs and Limited Input devices" client won't work for redirect). Pin the public base
   with `GAMES_PUBLIC_URL` if the server can't infer it (behind a proxy the inbound
   scheme can read as http).
-- **Device flow — headless fallback** (the lobby's *use a code* link). The original
-  RFC 8628 flow: the server returns a `user_code` you enter at the provider's device
-  page, and the node polls. No client secret **for GitHub** and no callback server, so
-  it works when a popup is blocked or under a headless/CI node. Google's device flow
-  still needs its client secret and a **"TVs and Limited Input devices"** client.
+- **Device flow — the automatic fallback.** The original RFC 8628 flow: the server
+  returns a `user_code` you enter at the provider's device page, and the node polls.
+  No client secret **for GitHub** and no callback server. The lobby's sign-in button
+  **falls back to it automatically** when the redirect flow can't start on this game
+  server (missing client secret) — the popup it already opened is pointed at the
+  provider's device page and the code shows in the card — so a GitHub app configured
+  with only a client id still signs in. Google's device flow still needs its client
+  secret and a **"TVs and Limited Input devices"** client.
+- **Availability is checked up front.** `GET /auth/providers` on the game server
+  reports which flows each provider is configured for (`{provider: {device, web}}`),
+  proxied by the node at `GET /api/games/auth/providers`. A provider the server
+  positively supports with *neither* flow renders its lobby button **disabled with
+  the reason in the tooltip** (e.g. "no GitHub OAuth configured —
+  `games.github.clientId`") instead of opening a popup that immediately closes. An
+  older server without the endpoint (or an unreachable one) reports unknown, and the
+  buttons stay enabled with click-time errors.
 - Accounts key `github:<id>` / `google:<sub>` either way, so **two different Gmail
   accounts are two distinct players** (handy for testing across your own machines).
   Configure `games.github.clientId` / `games.google.clientId` on the server host (or
@@ -1172,6 +1230,10 @@ tool at a time — the rail switches between them, there is no in-dock tab strip
   through one agent turn against a sample engine position; returns the full trace
   (`backend/modules/games/dryrun.py`).
 - `/api/games/auth/{github,google}/{start,poll}` — proxy the device-flow sign-ins.
+- `/api/games/auth/providers` — which sign-in flows the game server supports
+  (`{provider: {device, web}}`; `{}` = unknown), for disabling lobby buttons up front.
+- `/api/games/sample-observation?game_id=&seed=` — a realistic opening observation +
+  legal actions (the Build view's inspector; no loadout/model/agent run).
 - `/api/games/leaderboard?game_id=` — proxy the server's ladder.
 - `/api/games/challenges/leaderboard?game_id=` — proxy the challenge leaderboard.
 - `games` channel `run_challenges` — run the challenge track; a `challenge_report` comes back.

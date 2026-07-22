@@ -29,8 +29,15 @@ def sample_observation(
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """A realistic opening position: instantiate the engine, resolve chance/work
     until a seat can act, and return that seat's (observation, legal actions in
-    wire shape). Raises KeyError for an unknown game."""
-    state = get_game(game_id).new()
+    wire shape). Raises KeyError for an unknown game.
+
+    A game may supply a canned `sample_obs` on its GameSpec to avoid instantiation
+    entirely — used by the native ViZDoom engines, whose solo init can crash the
+    process, so previewing an observation must never spin them up."""
+    spec = get_game(game_id)
+    if spec.sample_obs is not None:
+        return spec.sample_obs(seed)
+    state = spec.new()
     rng = random.Random(seed)
     for _ in range(_MAX_SETUP_STEPS):
         player = state.current_player()

@@ -225,5 +225,7 @@ SPEC = register_game(
         max_players=2,
         factory=BugHunt,
         move_timeout_s=MOVE_TIMEOUT_S,
+        decision_class="reasoner",
+        default_policy="agent",
     )
 )

@@ -12,14 +12,17 @@ import { useSyncExternalStore } from 'react';
 import { toastsStore } from '../../toasts';
 import { sendChannel, subscribeChannel } from '../../ws';
 import { resetArenaView } from './arena-view';
+import { setDrawerTab } from './client-drawer';
 import { openGamesSection } from './hub-section';
 import { sfx } from './sfx';
 
 /** Pop the Game Board when a match becomes live: the board is a section of the
- * single Games pane, so this switches that pane's section (opening it if needed)
- * rather than revealing a separate board pane. */
+ * single Games client, so this switches that pane's section (opening it if needed),
+ * and ensures the in-client log drawer is open so the agent's reasoning streams
+ * alongside — rather than revealing separate board / log panes. */
 export function revealBoard(): void {
   openGamesSection('board');
+  setDrawerTab('log');
 }
 
 export interface TableInfo {

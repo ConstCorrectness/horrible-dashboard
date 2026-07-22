@@ -222,10 +222,15 @@ export function openPane(viewId: string, opts?: OpenPaneOptions): string | null 
   // uses its view id as instance id, matching the legacy engine's scheme.
   const wantedId = opts?.instanceId ?? (singleton ? viewId : undefined);
   if (wantedId) {
-    const existing = findPaneAnywhere(f, wantedId);
+    // By instance id first, then — for singletons — by VIEW id: a preset-seeded
+    // singleton carries a `#n` suffix, so the instance-id lookup alone would
+    // miss it and split off a duplicate (same rule as openPaneInArea).
+    const existing =
+      findPaneAnywhere(f, wantedId) ??
+      (singleton ? listPanes(f).find((p) => p.pane.viewId === viewId) : undefined);
     if (existing) {
       focusInstance(existing);
-      return wantedId;
+      return existing.pane.instanceId;
     }
   }
 

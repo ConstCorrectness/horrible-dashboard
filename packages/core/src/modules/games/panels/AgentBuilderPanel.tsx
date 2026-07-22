@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 
-import { registry } from '../../../registry';
+import { useSetting } from '../../../settings';
+import { openDrawer } from '../client-drawer';
 import {
   gradedStat,
   power as buildPower,
@@ -9,6 +10,7 @@ import {
   STAT_LABEL,
   type StatKey,
 } from '../agentBuild';
+import { decisionClassBadge, decisionClassOf } from '../game-identity';
 import {
   fetchGamesCatalog,
   fetchLoadoutTemplates,
@@ -19,11 +21,15 @@ import {
   type GameCatalogEntry,
   type Loadout,
   type LoadoutTemplate,
+  type MovePolicy,
 } from '../games-api';
 import { setGamesSection } from '../hub-section';
 import { playVsOwnAgent } from '../matchmaking';
 import { setActiveGame, useActiveGame } from '../selected-game';
+import { BootcampSection } from './BootcampSection';
 import { CodeEditor } from './CodeEditor';
+import { HarnessPipeline } from './HarnessPipeline';
+import { ObservationInspector } from './ObservationInspector';
 import { ToolsEditor } from './ToolsEditor';
 import { VsCeremony } from './VsCeremony';
 
@@ -133,9 +139,54 @@ export function AgentBuilderPanel() {
   const graded = gradedStat(gameId);
   const power = useMemo(() => (build ? buildPower(build) : 0), [build]);
 
+  // The game's decision class + presentation, from the catalog (fallback: the id map).
+  // A `policy` game is a bot(obs) mapping (no model); a `reasoner` game is the LLM
+  // harness — the Build view branches on this so it never shows knobs that don't run.
+  const entry = games.find((g) => g.id === gameId);
+  const decisionClass = entry?.decision_class ?? decisionClassOf(gameId);
+  const obsKind = entry?.obs_kind;
+  const badge = decisionClassBadge(decisionClass);
+  // The effective move policy for THIS game (per-game override → catalog default),
+  // used to drive the pipeline strip. Mirrors PlaySection's resolution.
+  const policyOverride = useSetting<string>(`games.policy.${gameId}`);
+  const policy: MovePolicy = (policyOverride ??
+    entry?.default_policy ??
+    (decisionClass === 'reasoner' ? 'agent' : 'bot')) as MovePolicy;
+
   const patch = useCallback(
     (p: Partial<Loadout>) => setLoadout((lo) => (lo ? { ...lo, ...p } : lo)),
     [],
+  );
+
+  // Policy games decide with a bot tool named `<game>.bot` (or `bot`): a pure
+  // `def run(args, obs)` that returns a legal action id — this is the "bot(obs)"
+  // the code-first view edits, distinct from the reasoner path's `agent_code`.
+  const botTool = loadout?.tools.find((t) => t.name === `${gameId}.bot` || t.name === 'bot');
+  const setBotCode = useCallback(
+    (code: string) => {
+      setLoadout((lo) => {
+        if (!lo) return lo;
+        const name =
+          lo.tools.find((t) => t.name === `${gameId}.bot` || t.name === 'bot')?.name ??
+          `${gameId}.bot`;
+        const has = lo.tools.some((t) => t.name === name);
+        const tools = has
+          ? lo.tools.map((t) => (t.name === name ? { ...t, code } : t))
+          : [
+              ...lo.tools,
+              {
+                name,
+                description:
+                  "Returns this tick's action id (bot policy — runs every tick, no model).",
+                code,
+                parameters: {},
+                required: [],
+              },
+            ];
+        return { ...lo, tools };
+      });
+    },
+    [gameId],
   );
 
   // Load a shipped template's tool definitions as a starting point. Additive on
@@ -190,7 +241,7 @@ export function AgentBuilderPanel() {
   const enterArena = useCallback(() => {
     setVsOpen(false);
     void playVsOwnAgent(gameId);
-    registry.openPanel('games.log');
+    openDrawer('log');
   }, [gameId]);
 
   if (!loadout || !build || !st) {
@@ -204,235 +255,349 @@ export function AgentBuilderPanel() {
   return (
     <div
       style={{
-        display: 'grid',
-        // Two columns when there's room; stacks to one when the pane is narrow
-        // (container-driven via auto-fit, no viewport media query needed).
-        gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))',
+        display: 'flex',
+        flexDirection: 'column',
         gap: 14,
         padding: 14,
         height: '100%',
         boxSizing: 'border-box',
-        alignItems: 'start',
         overflow: 'auto',
       }}
     >
-      {/* Editor column */}
-      <div style={{ ...card, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            padding: '0.5rem 0.7rem',
-            borderBottom: '1px solid var(--border, #33343a)',
-          }}
-        >
-          <button
-            type="button"
-            onClick={() => setGamesSection('play')}
-            title="Back to Play"
-            style={{ ...btn, padding: '0.2rem 0.5rem' }}
-          >
-            ← Play
-          </button>
-          <span style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: '0.8rem' }}>
-            my_agent.py
-          </span>
-          <span style={{ ...sectionLbl, color: 'var(--text-faint, #666)' }}>· {gameId}</span>
-        </div>
-        <div style={{ padding: 10, flex: 1, minHeight: 0 }}>
-          <CodeEditor
-            value={loadout.agent_code}
-            onChange={(v) => patch({ agent_code: v })}
-            language="python"
-            minHeight="320px"
-            placeholder={'def my_agent(obs, config):\n    return obs["legal_actions"][0]["id"]'}
-          />
-        </div>
-        {agentError && (
-          <div
+      {/* Decision-class header + the harness pipeline + a live observation, so the
+          build reads against reality: what your policy sees, what runs, what it returns. */}
+      <div style={{ ...card, padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span
             style={{
-              margin: '0 10px 10px',
-              padding: '0.5rem 0.6rem',
-              borderRadius: 6,
               fontFamily: 'var(--font-mono, monospace)',
               fontSize: '0.72rem',
-              color: 'var(--danger, #f87171)',
-              background: 'color-mix(in srgb, var(--danger, #f87171) 12%, transparent)',
-              border: '1px solid color-mix(in srgb, var(--danger, #f87171) 40%, transparent)',
+              padding: '0.2rem 0.5rem',
+              borderRadius: 999,
+              border: '1px solid var(--border)',
+              color: 'var(--text)',
             }}
           >
-            {agentError}
-          </div>
-        )}
-        <button
-          type="button"
-          onClick={() => setShowContext((s) => !s)}
-          style={{
-            ...btn,
-            border: 'none',
-            borderTop: '1px solid var(--border, #33343a)',
-            borderRadius: 0,
-            textAlign: 'left',
-            color: 'var(--text-dim)',
-          }}
-        >
-          {showContext ? '▾' : '▸'} Context (system prompt) — the default agent’s instructions
-        </button>
-        {showContext && (
-          <div style={{ padding: 10 }}>
-            <textarea
-              value={loadout.context}
-              onChange={(e) => patch({ context: e.target.value })}
-              placeholder="System prompt for the default agent (your context + tools drive the model)…"
-              style={{
-                width: '100%',
-                minHeight: 90,
-                resize: 'vertical',
-                boxSizing: 'border-box',
-                padding: '0.5rem',
-                fontSize: '0.8rem',
-                fontFamily: 'inherit',
-                background: 'var(--bg, #1c1c1c)',
-                color: 'var(--text)',
-                border: '1px solid var(--border, #33343a)',
-                borderRadius: 6,
-              }}
-            />
-          </div>
-        )}
-        <button
-          type="button"
-          onClick={() => setShowTools((s) => !s)}
-          style={{
-            ...btn,
-            border: 'none',
-            borderTop: '1px solid var(--border, #33343a)',
-            borderRadius: 0,
-            textAlign: 'left',
-            color: 'var(--text-dim)',
-          }}
-        >
-          {showTools ? '▾' : '▸'} Tools ({loadout.tools.length}) — Python your agent can call
-        </button>
-        {showTools && (
-          <div style={{ padding: 10 }}>
-            <ToolsEditor
-              tools={loadout.tools}
-              templates={templates}
-              onChange={(tools) => patch({ tools })}
-              onApplyTemplate={applyTemplate}
-            />
-          </div>
-        )}
+            {badge.icon} {badge.label} game
+          </span>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
+            {decisionClass === 'policy'
+              ? 'Your agent is a bot(obs) → action mapping. An LLM is optional here.'
+              : 'The LLM harness is the game: your system prompt, tools, and model.'}
+          </span>
+        </div>
+        <HarnessPipeline policy={policy} />
+        <ObservationInspector gameId={gameId} obsKind={obsKind} />
+        <BootcampSection
+          gameId={gameId}
+          decisionClass={decisionClass}
+          onLoadBot={setBotCode}
+          onLoadAgent={(code) => patch({ agent_code: code })}
+        />
       </div>
 
-      {/* Loadout column */}
-      <aside style={{ ...card, display: 'flex', flexDirection: 'column' }}>
-        {/* game picker */}
-        <div style={{ padding: 12, borderBottom: '1px solid var(--border, #33343a)' }}>
-          <div style={{ ...sectionLbl, marginBottom: 8 }}>
-            Match — grades{' '}
-            <span style={{ color: 'var(--gold, #f5b942)' }}>{STAT_LABEL[graded]} ★</span>
-          </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {games.map((g) => (
-              <button
-                key={g.id}
-                type="button"
-                onClick={() => {
-                  setGameId(g.id);
-                  setActiveGame(g.id);
-                }}
-                style={{
-                  ...btn,
-                  fontSize: '0.72rem',
-                  padding: '0.3rem 0.55rem',
-                  ...(g.id === gameId
-                    ? {
-                        borderColor: 'var(--accent, #6ea8fe)',
-                        background: 'color-mix(in srgb, var(--accent, #6ea8fe) 12%, transparent)',
-                        color: 'var(--text)',
-                      }
-                    : { color: 'var(--text-dim)' }),
-                }}
-              >
-                {g.name}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* ability readout */}
-        <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border, #33343a)' }}>
-          <div style={{ ...sectionLbl, marginBottom: 8 }}>
-            Loadout <span style={{ color: 'var(--text-faint, #666)' }}>· from your code</span>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-            <Slot on={build.context} name="Context" sub="system prompt" />
-            <Slot on={build.tools > 0} name="Tools" sub={`${build.tools} custom`} />
-            <Slot on={build.rag} name="RAG" sub="retrieve()" />
-            <Slot on={build.memory} name="Memory" sub="config.memory" />
-            <Slot on={!!build.model} name="Model" sub={build.model ?? 'default'} />
-          </div>
-        </div>
-
-        {/* stats */}
-        <div style={{ padding: '10px 12px', display: 'grid', gap: 8 }}>
-          <div style={sectionLbl}>Agent stats</div>
-          {(Object.keys(STAT_LABEL) as StatKey[]).map((k) => (
-            <StatBar key={k} label={STAT_LABEL[k]} value={st[k]} graded={k === graded} />
-          ))}
-        </div>
-
-        {/* power + actions */}
-        <div
-          style={{
-            marginTop: 'auto',
-            padding: 12,
-            borderTop: '1px solid var(--border, #33343a)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 12,
-          }}
-        >
-          <div style={{ fontFamily: 'var(--font-mono, monospace)' }}>
-            <div style={{ ...sectionLbl }}>Power</div>
-            <div style={{ fontSize: '1.5rem', color: 'var(--gold, #f5b942)', lineHeight: 1 }}>
-              {power}
-            </div>
-          </div>
-          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-            <button type="button" onClick={save} style={btn}>
-              Save
-            </button>
+      <div
+        style={{
+          display: 'grid',
+          // Two columns when there's room; stacks to one when the pane is narrow
+          // (container-driven via auto-fit, no viewport media query needed).
+          gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))',
+          gap: 14,
+          alignItems: 'start',
+        }}
+      >
+        {/* Editor column */}
+        <div style={{ ...card, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '0.5rem 0.7rem',
+              borderBottom: '1px solid var(--border, #33343a)',
+            }}
+          >
             <button
               type="button"
-              onClick={lockIn}
-              style={{
-                ...btn,
-                border: 'none',
-                fontWeight: 700,
-                color: '#0b0b0b',
-                background: 'var(--accent, #6ea8fe)',
-              }}
+              onClick={() => setGamesSection('play')}
+              title="Back to Play"
+              style={{ ...btn, padding: '0.2rem 0.5rem' }}
             >
-              Lock in ▸
+              ← Play
             </button>
+            <span style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: '0.8rem' }}>
+              {policy === 'bot' ? `${gameId}.bot` : 'my_agent.py'}
+            </span>
+            <span style={{ ...sectionLbl, color: 'var(--text-faint, #666)' }}>
+              · {policy === 'bot' ? 'bot(obs) → action' : gameId}
+            </span>
           </div>
+
+          {policy === 'bot' ? (
+            // Bot policy: the decision is a pure `def run(args, obs)` that returns a
+            // legal action id every tick — no system prompt, no model. Context/model
+            // knobs are hidden because they do nothing under the bot policy. (The
+            // editor follows the chosen policy, so agent-policy games get the harness.)
+            <>
+              <div
+                style={{
+                  padding: '0.5rem 0.7rem',
+                  fontSize: '0.72rem',
+                  color: 'var(--text-dim)',
+                }}
+              >
+                Return a legal action id from <code>run(args, obs)</code> — it runs every tick, so
+                keep it fast. <code>obs["legal_actions"]</code> lists your moves.
+              </div>
+              <div style={{ padding: 10, flex: 1, minHeight: 0 }}>
+                <CodeEditor
+                  value={botTool?.code ?? ''}
+                  onChange={setBotCode}
+                  language="python"
+                  minHeight="320px"
+                  placeholder={'def run(args, obs):\n    return obs["legal_actions"][0]["id"]'}
+                />
+              </div>
+              {!botTool && (
+                <div
+                  style={{
+                    margin: '0 10px 10px',
+                    fontSize: '0.72rem',
+                    color: 'var(--text-dim)',
+                  }}
+                >
+                  No bot yet — start typing above, or load a starter from Helper tools below.
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => setShowTools((s) => !s)}
+                style={{
+                  ...btn,
+                  border: 'none',
+                  borderTop: '1px solid var(--border, #33343a)',
+                  borderRadius: 0,
+                  textAlign: 'left',
+                  color: 'var(--text-dim)',
+                }}
+              >
+                {showTools ? '▾' : '▸'} Helper tools (
+                {loadout.tools.filter((t) => t.name !== botTool?.name).length}) — optional Python
+                your bot can call
+              </button>
+              {showTools && (
+                <div style={{ padding: 10 }}>
+                  <ToolsEditor
+                    tools={loadout.tools}
+                    templates={templates}
+                    onChange={(tools) => patch({ tools })}
+                    onApplyTemplate={applyTemplate}
+                  />
+                </div>
+              )}
+            </>
+          ) : (
+            // Reasoner game: the LLM harness — an optional `my_agent` over the system
+            // prompt + tools + model that actually decide the move.
+            <>
+              <div style={{ padding: 10, flex: 1, minHeight: 0 }}>
+                <CodeEditor
+                  value={loadout.agent_code}
+                  onChange={(v) => patch({ agent_code: v })}
+                  language="python"
+                  minHeight="320px"
+                  placeholder={
+                    'def my_agent(obs, config):\n    return obs["legal_actions"][0]["id"]'
+                  }
+                />
+              </div>
+              {agentError && (
+                <div
+                  style={{
+                    margin: '0 10px 10px',
+                    padding: '0.5rem 0.6rem',
+                    borderRadius: 6,
+                    fontFamily: 'var(--font-mono, monospace)',
+                    fontSize: '0.72rem',
+                    color: 'var(--danger, #f87171)',
+                    background: 'color-mix(in srgb, var(--danger, #f87171) 12%, transparent)',
+                    border: '1px solid color-mix(in srgb, var(--danger, #f87171) 40%, transparent)',
+                  }}
+                >
+                  {agentError}
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => setShowContext((s) => !s)}
+                style={{
+                  ...btn,
+                  border: 'none',
+                  borderTop: '1px solid var(--border, #33343a)',
+                  borderRadius: 0,
+                  textAlign: 'left',
+                  color: 'var(--text-dim)',
+                }}
+              >
+                {showContext ? '▾' : '▸'} Context (system prompt) — the default agent’s instructions
+              </button>
+              {showContext && (
+                <div style={{ padding: 10 }}>
+                  <textarea
+                    value={loadout.context}
+                    onChange={(e) => patch({ context: e.target.value })}
+                    placeholder="System prompt for the default agent (your context + tools drive the model)…"
+                    style={{
+                      width: '100%',
+                      minHeight: 90,
+                      resize: 'vertical',
+                      boxSizing: 'border-box',
+                      padding: '0.5rem',
+                      fontSize: '0.8rem',
+                      fontFamily: 'inherit',
+                      background: 'var(--bg, #1c1c1c)',
+                      color: 'var(--text)',
+                      border: '1px solid var(--border, #33343a)',
+                      borderRadius: 6,
+                    }}
+                  />
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => setShowTools((s) => !s)}
+                style={{
+                  ...btn,
+                  border: 'none',
+                  borderTop: '1px solid var(--border, #33343a)',
+                  borderRadius: 0,
+                  textAlign: 'left',
+                  color: 'var(--text-dim)',
+                }}
+              >
+                {showTools ? '▾' : '▸'} Tools ({loadout.tools.length}) — Python your agent can call
+              </button>
+              {showTools && (
+                <div style={{ padding: 10 }}>
+                  <ToolsEditor
+                    tools={loadout.tools}
+                    templates={templates}
+                    onChange={(tools) => patch({ tools })}
+                    onApplyTemplate={applyTemplate}
+                  />
+                </div>
+              )}
+            </>
+          )}
         </div>
-        <div
-          style={{
-            padding: '0 12px 12px',
-            fontFamily: 'var(--font-mono, monospace)',
-            fontSize: '0.72rem',
-            color: 'var(--text-dim)',
-            minHeight: 18,
-          }}
-        >
-          {status}
-        </div>
-      </aside>
+
+        {/* Loadout column */}
+        <aside style={{ ...card, display: 'flex', flexDirection: 'column' }}>
+          {/* game picker */}
+          <div style={{ padding: 12, borderBottom: '1px solid var(--border, #33343a)' }}>
+            <div style={{ ...sectionLbl, marginBottom: 8 }}>
+              Match — grades{' '}
+              <span style={{ color: 'var(--gold, #f5b942)' }}>{STAT_LABEL[graded]} ★</span>
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {games.map((g) => (
+                <button
+                  key={g.id}
+                  type="button"
+                  onClick={() => {
+                    setGameId(g.id);
+                    setActiveGame(g.id);
+                  }}
+                  style={{
+                    ...btn,
+                    fontSize: '0.72rem',
+                    padding: '0.3rem 0.55rem',
+                    ...(g.id === gameId
+                      ? {
+                          borderColor: 'var(--accent, #6ea8fe)',
+                          background: 'color-mix(in srgb, var(--accent, #6ea8fe) 12%, transparent)',
+                          color: 'var(--text)',
+                        }
+                      : { color: 'var(--text-dim)' }),
+                  }}
+                >
+                  {g.name}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* ability readout */}
+          <div style={{ padding: '10px 12px', borderBottom: '1px solid var(--border, #33343a)' }}>
+            <div style={{ ...sectionLbl, marginBottom: 8 }}>
+              Loadout <span style={{ color: 'var(--text-faint, #666)' }}>· from your code</span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+              <Slot on={build.context} name="Context" sub="system prompt" />
+              <Slot on={build.tools > 0} name="Tools" sub={`${build.tools} custom`} />
+              <Slot on={build.rag} name="RAG" sub="retrieve()" />
+              <Slot on={build.memory} name="Memory" sub="config.memory" />
+              <Slot on={!!build.model} name="Model" sub={build.model ?? 'default'} />
+            </div>
+          </div>
+
+          {/* stats */}
+          <div style={{ padding: '10px 12px', display: 'grid', gap: 8 }}>
+            <div style={sectionLbl}>Agent stats</div>
+            {(Object.keys(STAT_LABEL) as StatKey[]).map((k) => (
+              <StatBar key={k} label={STAT_LABEL[k]} value={st[k]} graded={k === graded} />
+            ))}
+          </div>
+
+          {/* power + actions */}
+          <div
+            style={{
+              marginTop: 'auto',
+              padding: 12,
+              borderTop: '1px solid var(--border, #33343a)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+            }}
+          >
+            <div style={{ fontFamily: 'var(--font-mono, monospace)' }}>
+              <div style={{ ...sectionLbl }}>Power</div>
+              <div style={{ fontSize: '1.5rem', color: 'var(--gold, #f5b942)', lineHeight: 1 }}>
+                {power}
+              </div>
+            </div>
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+              <button type="button" onClick={save} style={btn}>
+                Save
+              </button>
+              <button
+                type="button"
+                onClick={lockIn}
+                style={{
+                  ...btn,
+                  border: 'none',
+                  fontWeight: 700,
+                  color: '#0b0b0b',
+                  background: 'var(--accent, #6ea8fe)',
+                }}
+              >
+                Lock in ▸
+              </button>
+            </div>
+          </div>
+          <div
+            style={{
+              padding: '0 12px 12px',
+              fontFamily: 'var(--font-mono, monospace)',
+              fontSize: '0.72rem',
+              color: 'var(--text-dim)',
+              minHeight: 18,
+            }}
+          >
+            {status}
+          </div>
+        </aside>
+      </div>
 
       {vsOpen && (
         <VsCeremony

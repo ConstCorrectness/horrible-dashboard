@@ -249,3 +249,33 @@ def test_player_conn_handles_conn_close(monkeypatch) -> None:
         assert mock_ws.closed
 
     asyncio.run(go())
+
+
+def test_auth_providers_reports_flow_availability(monkeypatch) -> None:
+    """GET /auth/providers reflects the configured credentials: GitHub's device flow
+    needs only the client id; its web flow (and both Google flows) need the secret too.
+    The UI uses this to disable a provider button up front instead of opening a popup
+    that immediately fails."""
+    from starlette.testclient import TestClient
+
+    from backend.games_server import app as app_mod
+    from backend.games_server import auth as auth_mod
+
+    client = TestClient(app_mod.app)
+
+    # Only a GitHub client id: device flow available, web flow not; Google nothing.
+    monkeypatch.setattr(auth_mod, "_github_client_id", lambda: "iv1.deadbeef")
+    monkeypatch.setattr(auth_mod, "_github_client_secret", lambda: "")
+    monkeypatch.setattr(auth_mod, "_google_client_id", lambda: "")
+    monkeypatch.setattr(auth_mod, "_google_client_secret", lambda: "")
+    assert client.get("/auth/providers").json() == {
+        "github": {"device": True, "web": False},
+        "google": {"device": False, "web": False},
+    }
+
+    # Full GitHub credentials: both flows.
+    monkeypatch.setattr(auth_mod, "_github_client_secret", lambda: "s3cret")
+    assert client.get("/auth/providers").json()["github"] == {
+        "device": True,
+        "web": True,
+    }

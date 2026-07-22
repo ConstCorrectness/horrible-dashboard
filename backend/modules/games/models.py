@@ -12,6 +12,12 @@ class GameInfo(BaseModel):
     name: str
     min_players: int
     max_players: int
+    # How a seat decides + how to present it (see GameSpec in games_engine/base.py).
+    decision_class: str = "policy"
+    default_policy: str = "random"
+    allowed_policies: list[str] = ["random", "agent", "manual", "bot"]
+    obs_kind: str = "json"
+    pacing: str = "turn"
 
 
 class ToolDefModel(BaseModel):
@@ -123,6 +129,18 @@ class DryRunResponse(BaseModel):
     chosen: str | None = None
     rounds_used: int = 0
     total_ms: float = 0.0
+
+
+class SampleObservationResponse(BaseModel):
+    """A realistic opening position for a game — the Build panel's observation
+    inspector. Just the engine's per-seat observation + legal actions; no loadout,
+    no model, no agent run (unlike DryRunResponse), so it's cheap to resample."""
+
+    ok: bool
+    error: str | None = None
+    game_id: str
+    observation: dict[str, Any] = {}
+    legal_actions: list[dict[str, Any]] = []
 
 
 class GamesStatus(BaseModel):

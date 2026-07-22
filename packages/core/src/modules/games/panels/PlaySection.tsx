@@ -169,7 +169,15 @@ export function PlaySection({
   const [difficulty, setDifficulty] = useState<string>('standard');
   const [botTier, setBotTier] = useState<string>('bronze');
   const onboarded = useSetting<boolean>('games.onboarded') === true;
-  const policy = useSetting<string>('games.policy') ?? 'random';
+  // Move policy is a property of the GAME now: resolve the per-game override, then
+  // the game's declared default (from the catalog), then the legacy global setting.
+  // Writes go to the per-game key so switching games doesn't clobber another's choice.
+  const policyKey = selectedGame ? `games.policy.${selectedGame}` : 'games.policy';
+  const policyOverride = useSetting<string>(policyKey);
+  const globalPolicy = useSetting<string>('games.policy') ?? 'random';
+  const selectedEntry = selectedGame ? games.find((g) => g.id === selectedGame) : undefined;
+  const policy = policyOverride ?? selectedEntry?.default_policy ?? globalPolicy;
+  const setPolicy = (val: string) => void setSetting(policyKey, val);
 
   useEffect(() => onChallengeDraft(setDraft), []);
 
@@ -342,7 +350,7 @@ export function PlaySection({
                   <ToggleButtonGroup
                     value={policy}
                     exclusive
-                    onChange={(_, val) => val && void setSetting('games.policy', val)}
+                    onChange={(_, val) => val && setPolicy(val)}
                     size="small"
                   >
                     <ToggleButton value="random" sx={{ px: 1.5, py: 0.5 }}>
@@ -530,7 +538,7 @@ export function PlaySection({
                     <ToggleButtonGroup
                       value={policy}
                       exclusive
-                      onChange={(_, val) => val && void setSetting('games.policy', val)}
+                      onChange={(_, val) => val && setPolicy(val)}
                       size="small"
                     >
                       <ToggleButton value="random" sx={{ px: 1.5, py: 0.25, fontSize: '0.75rem' }}>

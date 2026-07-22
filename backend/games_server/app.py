@@ -144,6 +144,14 @@ class _DevicePoll(BaseModel):
     device_code: str
 
 
+@app.get("/auth/providers")
+async def auth_providers() -> dict[str, Any]:
+    """Which OAuth providers/flows this server is configured for
+    (`{provider: {device, web}}`) — lets a client grey out a sign-in button with an
+    explanation instead of opening a popup that immediately fails."""
+    return auth.providers_available()
+
+
 @app.post("/auth/github/start")
 async def github_start() -> dict[str, Any]:
     """Begin GitHub device-flow sign-in. Returns the user_code + verification_uri the

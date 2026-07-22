@@ -19,18 +19,24 @@ import { useSyncExternalStore } from 'react';
 
 import { registry } from '../../registry';
 
-export type GamesSection = 'play' | 'board' | 'build';
+export type GamesSection = 'play' | 'board' | 'build' | 'replays' | 'career' | 'social';
 
 export const SECTION_LABEL: Record<GamesSection, string> = {
   play: 'Play',
   board: 'Game Board',
-  build: 'Build your agent',
+  build: 'Build',
+  replays: 'Replays',
+  career: 'Career',
+  social: 'Social',
 };
 
 export const SECTION_ICON: Record<GamesSection, string> = {
   play: '🕹',
   board: '▦',
   build: '🛠',
+  replays: '📼',
+  career: '🪪',
+  social: '🏛',
 };
 
 let section: GamesSection = 'play';

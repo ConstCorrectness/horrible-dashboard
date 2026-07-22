@@ -30,29 +30,18 @@ import { TownPanel } from './panels/TownPanel';
 export const gamesModule: ModuleManifest = {
   id: 'games',
   title: 'Games',
-  // DashArena: the game-tuned workspace. The Games pane (play → build → board, all
-  // in one) takes the stage, with the two live spectator surfaces stacked beside
-  // it: the Games Log on top and the Episode visualizer below. The auxiliary tools
-  // (Ladder, Replays, Players, Profile, Challenges) are summoned on demand from the
-  // left activity rail rather than pre-stacked here.
+  // DashArena: the game-tuned workspace. The Games client fills the whole window —
+  // it is a single-window console (Play / Board / Build / Replays / Career / Social),
+  // with the live spectator surfaces (Games Log, Episodes) folded into its own bottom
+  // drawer rather than tiled as sibling documents. The standalone Log/Episodes panels
+  // stay registered so a power user can still pop one out onto the rail.
   frames: [
     {
       id: 'dasharena',
       name: 'DashArena',
       icon: '🏟',
       frame: {
-        center: {
-          split: 'row',
-          sizes: [0.66, 0.34],
-          children: [
-            { pane: 'games.lobby' },
-            {
-              split: 'column',
-              sizes: [0.5, 0.5],
-              children: [{ pane: 'games.log' }, { pane: 'games.episodes' }],
-            },
-          ],
-        },
+        center: { pane: 'games.lobby' },
       },
     },
   ],

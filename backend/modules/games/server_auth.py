@@ -133,6 +133,23 @@ async def _auth_poll(provider: str, device_code: str) -> dict[str, Any]:
     return data  # {pending: true} or {error: ...}
 
 
+async def auth_providers() -> dict[str, Any]:
+    """Which sign-in flows the connected game server supports
+    (`{provider: {device, web}}`), or `{}` when it can't say — an older server
+    without the endpoint, or an unreachable one. `{}` means "unknown": the UI keeps
+    the buttons enabled and the click-time errors take over."""
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            res = await client.get(f"{_http_base()}/auth/providers")
+            res.raise_for_status()
+            data = res.json()
+            return data if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001 — availability is advisory, never an error
+        return {}
+
+
 # ---- web (authorization-code) sign-in --------------------------------------
 #
 # The redirect flow: the node asks the game server to open a login, keeps the

@@ -267,3 +267,72 @@ def test_primary_seat_refreshes_policy_between_games(monkeypatch) -> None:
     setting["value"] = "agent"
     sparring._refresh_policy_from_setting()
     assert isinstance(sparring._policy, RandomPolicy)
+
+
+def test_resolve_policy_name_prefers_the_games_declared_default(monkeypatch) -> None:
+    """Policy is a property of the game: with no per-game override set, the game's
+    declared `default_policy` (from GameSpec) wins over the legacy global setting."""
+    from backend.modules.games import client as client_mod
+
+    # get_value returns the caller's default for every key => no overrides anywhere.
+    monkeypatch.setattr(client_mod, "get_value", lambda key, default=None: default)
+    assert client_mod._resolve_policy_name("vizdoom_duel") == "bot"
+    assert client_mod._resolve_policy_name("rag_race") == "agent"
+    assert client_mod._resolve_policy_name("tictactoe") == "agent"
+
+
+def test_resolve_policy_name_per_game_override_beats_default(monkeypatch) -> None:
+    from backend.modules.games import client as client_mod
+
+    store = {"games.policy.vizdoom_duel": "agent"}
+    monkeypatch.setattr(
+        client_mod, "get_value", lambda key, default=None: store.get(key, default)
+    )
+    # The explicit per-game override wins over the game's `bot` default.
+    assert client_mod._resolve_policy_name("vizdoom_duel") == "agent"
+    # A different game with no override still resolves to its own default.
+    assert client_mod._resolve_policy_name("rag_race") == "agent"
+
+
+def test_resolve_policy_name_falls_back_to_global_for_uncatalogued(monkeypatch) -> None:
+    from backend.modules.games import client as client_mod
+
+    store = {"games.policy": "random"}
+    monkeypatch.setattr(
+        client_mod, "get_value", lambda key, default=None: store.get(key, default)
+    )
+    # No per-game override and no catalog default => the legacy global setting.
+    assert client_mod._resolve_policy_name("nope_missing") == "random"
+    assert client_mod._resolve_policy_name(None) == "random"
+
+
+def test_refresh_policy_from_setting_resolves_per_game(monkeypatch) -> None:
+    """The primary seat rebuilds its policy for the specific game at each match
+    boundary, so a VizDoom table gets `bot` and a RAG Race table `agent` without the
+    player flipping a global switch."""
+    from backend.modules.games import client as client_mod
+    from backend.modules.games.policy import AgentPolicy, BotPolicy
+
+    monkeypatch.setattr(client_mod, "get_value", lambda key, default=None: default)
+    conn = client_mod._PlayerConn(
+        "ws://x", "tok", None, lambda _m: None, follow_setting=True
+    )
+    conn._refresh_policy_from_setting("vizdoom_duel")
+    assert isinstance(conn._policy, BotPolicy)
+    conn._refresh_policy_from_setting("rag_race")
+    assert isinstance(conn._policy, AgentPolicy)
+
+
+def test_catalog_carries_decision_metadata() -> None:
+    """The /games/status catalog surfaces the decision-class axis to the frontend."""
+    from backend.modules.games.routes import _catalog
+
+    by_id = {g.id: g for g in _catalog()}
+    vd = by_id["vizdoom_duel"]
+    assert vd.decision_class == "policy"
+    assert vd.default_policy == "bot"
+    assert vd.obs_kind == "frames"
+    assert vd.pacing == "realtime"
+    rr = by_id["rag_race"]
+    assert rr.decision_class == "reasoner"
+    assert rr.default_policy == "agent"

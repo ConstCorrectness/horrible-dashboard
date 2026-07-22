@@ -226,6 +226,35 @@ class VizDoomGame(GameState):
         self.close()
 
 
+# Canned sample for the Build panel's observation inspector — see vizdoom_duel for
+# why previewing must never instantiate the native engine (solo init can crash).
+_SAMPLE_ACTION_IDS = [
+    IDLE,
+    "attack",
+    "use",
+    "turn_left",
+    "turn_right",
+    "move_left",
+    "move_right",
+    "move_forward",
+    "move_backward",
+]
+
+
+def _sample_obs(seed: int = 0) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    legal = [{"id": a, "label": a} for a in _SAMPLE_ACTION_IDS]
+    obs = {
+        "game": "vizdoom_toy",
+        "seat": 0,
+        "hud": {"health": 100.0, "ammo": 50.0, "score": 0.0},
+        "tick": 0,
+        "max_ticks": MAX_TICKS,
+        "frame_note": "a JPEG frame streams each tick during a live match (opaque to the bot)",
+        "legal_actions": legal,
+    }
+    return obs, legal
+
+
 SPEC = register_game(
     GameSpec(
         id="vizdoom_toy",
@@ -234,6 +263,11 @@ SPEC = register_game(
         max_players=2,
         factory=VizDoomGame,
         move_timeout_s=1.2,  # fast simultaneous tick rate
+        decision_class="policy",
+        default_policy="bot",
+        obs_kind="frames",
+        pacing="realtime",
+        sample_obs=_sample_obs,
     )
 )
 
