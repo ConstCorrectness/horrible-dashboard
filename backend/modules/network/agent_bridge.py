@@ -95,7 +95,12 @@ class RemoteAgentConn:
 
     is_remote = True
 
-    def __init__(self, force_mode: Mode) -> None:
+    def __init__(
+        self, hub: PeerHub, dst: str, request_id: str, force_mode: Mode
+    ) -> None:
+        self.hub = hub
+        self.dst = dst
+        self.request_id = request_id
         self.force_mode = force_mode
         self.pending: dict[str, Any] = {}
         self.pending_approvals: dict[str, Any] = {}
@@ -107,6 +112,18 @@ class RemoteAgentConn:
     async def send_json(self, data: dict[str, Any]) -> None:
         event = data.get("event")
         payload = data.get("data") or {}
+
+        # Relay stream tokens and reasoning back to the peer
+        if event in ("token", "reasoning", "delegate_token"):
+            asyncio.create_task(
+                self.hub.send_to(
+                    self.dst,
+                    protocol.AGENT_STREAM,
+                    {**payload, "event": event, "request_id": self.request_id},
+                )
+            )
+            return
+
         if event == "answer":
             self.answer_text = str(payload.get("text", ""))
         elif event == "error":
@@ -114,7 +131,6 @@ class RemoteAgentConn:
             self._done.set()
         elif event == "done":
             self._done.set()
-        # token/reasoning/tool_call are not relayed across the peer wire in v1.
 
     async def wait_done(self, timeout: float) -> None:
         try:
@@ -157,7 +173,7 @@ async def handle_remote_agent_request(
 
     from backend.modules.agent.orchestrator import run_agent_turn
 
-    rconn = RemoteAgentConn(_remote_mode())
+    rconn = RemoteAgentConn(hub, env.src, request_id, _remote_mode())
     try:
         # remote=True restricts the turn to no actuating tools (no browser behind it).
         await run_agent_turn(rconn, request_id, prompt, remote=True)  # type: ignore[arg-type]

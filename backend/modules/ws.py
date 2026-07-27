@@ -4,6 +4,8 @@ Lives on its own (no telemetry/agent imports) so both the telemetry push task an
 the agent orchestrator can depend on it without an import cycle.
 """
 
+from __future__ import annotations
+
 import asyncio
 from collections.abc import Callable
 from typing import Any

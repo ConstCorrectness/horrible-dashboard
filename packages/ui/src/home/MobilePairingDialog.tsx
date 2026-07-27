@@ -14,31 +14,31 @@ export function MobilePairingDialog({ onClose }: Props) {
   useEffect(() => {
     createInvite()
       .then(setInvite)
-      .catch((err) => setError(String(err)))
+      .catch((err: unknown) => setError(String(err)))
       .finally(() => setLoading(false));
   }, []);
 
   return (
-    <div className="mobile-pairing-dialog" role="dialog" aria-label="Pair Mobile Device">
+    <div className="integration-popover mobile-pairing-popover" role="dialog" aria-label="Pair Mobile Device">
       <div className="mobile-pairing-header">
-        <h3>Pair Mobile Device</h3>
+        <h3>Pair Mobile</h3>
         <button type="button" className="close-button" onClick={onClose} aria-label="Close">
           ×
         </button>
       </div>
       <div className="mobile-pairing-body">
-        {loading && <div className="pairing-status">Generating invite...</div>}
+        {loading && <div className="pairing-status">Generating...</div>}
         {error && <div className="pairing-status error">{error}</div>}
         {invite && (
           <div className="pairing-qr-container">
             <div className="pairing-qr">
-              <QRCodeSVG value={invite.invite} size={256} marginSize={4} />
+              <QRCodeSVG value={`horrible://pair?invite=${invite.invite}`} size={180} marginSize={2} />
             </div>
             <p className="pairing-instructions">
-              Scan this QR code with the Horrible Dashboard mobile app to pair your phone.
+              Scan with the mobile app to pair.
             </p>
             <div className="pairing-details">
-              <span>Token expires in {Math.round((invite.expires - Date.now() / 1000) / 60)}m</span>
+              <span>Expires in {Math.round((invite.expires - Date.now() / 1000) / 60)}m</span>
             </div>
           </div>
         )}

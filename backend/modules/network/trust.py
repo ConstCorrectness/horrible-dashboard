@@ -11,6 +11,7 @@ import base64
 import json
 import os
 import secrets
+import socket
 import time
 from pathlib import Path
 from typing import Any
@@ -121,10 +122,36 @@ def trust_mode() -> str:
     return str(get_value("network.trustMode", TRUST_MANUAL))
 
 
+def lan_ip() -> str | None:
+    """This machine's LAN IPv4, or None if it can't be determined.
+
+    Opens a UDP socket toward a public address and reads back the local end the
+    OS picked — no packets are sent, and it beats `gethostbyname(gethostname())`,
+    which on Windows routinely answers `127.0.0.1` or a stale adapter.
+    """
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.connect(("8.8.8.8", 80))
+            ip = str(sock.getsockname()[0])
+        finally:
+            sock.close()
+    except Exception:
+        return None
+    return ip if ip and not ip.startswith("127.") else None
+
+
 def advertised_address() -> str:
-    """The `ws://…/peer-ws` URL peers should dial to reach this node. The external
-    host can't be inferred reliably, so it's a setting (default localhost:8000)."""
-    return str(get_value("network.advertisedAddress", "ws://localhost:8000/peer-ws"))
+    """The `ws://…/peer-ws` URL peers should dial to reach this node.
+
+    Defaults to this machine's **LAN IP**, not `localhost`: the address is baked
+    into every invite QR code, and a phone scanning `ws://localhost:…` dials
+    itself. An explicit `network.advertisedAddress` setting still wins (needed
+    for a public hostname or a port-forwarded box); blank means auto-detect.
+    """
+    port = os.environ.get("HORRIBLE_DEV_BACKEND_PORT", "8000")
+    default = f"ws://{lan_ip() or 'localhost'}:{port}/peer-ws"
+    return str(get_value("network.advertisedAddress", "") or default)
 
 
 def evaluate(node_id: str, token: str | None) -> tuple[bool, str | None]:

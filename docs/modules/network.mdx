@@ -188,12 +188,21 @@ agent-capable peer, ask a question, and read the answer. It calls `POST
 on the peer's node (which must have `network.allowRemoteAgent` enabled). See
 [Agent chat](agent-chat.mdx#agent-to-agent-talking-to-a-peers-agent).
 
+## Remote control (`remote_command`)
+
+A trusted peer can drive this node: open a pane, play media, raise a notification,
+or ask for an agent-generated briefing. Handled by `remote_control.py`, which
+drops any command from an untrusted peer; the reverse direction is the `mobile.*`
+agent tools in `mobile_tools.py`. The [Android companion
+app](mobile-android.mdx) is the primary consumer of both — it pairs by QR and
+appears on the fabric as an ordinary peer carrying the `mobile` capability.
+
 ## Settings
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `network.nodeName` | string | hostname | Display name advertised to peers. |
-| `network.advertisedAddress` | string | `ws://localhost:8000/peer-ws` | URL peers dial to reach this node (encoded into invites). |
+| `network.advertisedAddress` | string | `""` (auto) | URL peers dial to reach this node, encoded into invites. Blank auto-detects this machine's LAN IPv4 — `localhost` would make every invite undialable from another device. Set it for a public hostname or a forwarded port. |
 | `network.enableDirect` | boolean | `true` | Accept/dial direct WebSocket peers. |
 | `network.enableLanDiscovery` | boolean | `false` | Advertise/discover via mDNS. |
 | `network.relayUrl` | string | `""` | Rendezvous broker URL (blank = off). |

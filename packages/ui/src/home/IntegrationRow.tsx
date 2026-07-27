@@ -88,11 +88,7 @@ export function IntegrationRow() {
           <span className="integration-letter">📱</span>
         </button>
         <span className="integration-label">Mobile</span>
-        {showMobile && (
-          <div className="integration-popover">
-            <MobilePairingDialog onClose={() => setShowMobile(false)} />
-          </div>
-        )}
+        {showMobile && <MobilePairingDialog onClose={() => setShowMobile(false)} />}
       </div>
     </div>
   );

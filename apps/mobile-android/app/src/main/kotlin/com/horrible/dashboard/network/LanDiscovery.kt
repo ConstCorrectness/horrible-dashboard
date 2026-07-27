@@ -15,24 +15,40 @@ class LanDiscovery(context: Context, private val peerHub: PeerHub) {
         }
 
         override fun onServiceFound(service: NsdServiceInfo) {
-            Log.d("LanDiscovery", "Service found: ${service.serviceName}")
-            if (service.serviceType == serviceType || service.serviceType == "${serviceType}local.") {
+            Log.d("LanDiscovery", "Service found: ${service.serviceName} (${service.serviceType})")
+            // Be more permissive with service type matching
+            if (service.serviceType.contains("_horrible-peer._tcp")) {
                 nsdManager.resolveService(service, object : NsdManager.ResolveListener {
                     override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
-                        Log.e("LanDiscovery", "Resolve failed: $errorCode")
+                        Log.e("LanDiscovery", "Resolve failed for ${serviceInfo.serviceName}: $errorCode")
                     }
 
                     override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
-                        Log.d("LanDiscovery", "Service resolved: ${serviceInfo.host}:${serviceInfo.port}")
+                        val host = serviceInfo.host?.hostAddress
+                        val port = serviceInfo.port
+                        if (host == null) {
+                            Log.e("LanDiscovery", "Resolved service has no host address")
+                            return
+                        }
+                        
+                        Log.d("LanDiscovery", "Service resolved: $host:$port")
+                        
                         val props = serviceInfo.attributes
                         val nodeId = props["node_id"]?.decodeToString()
-                        val address = props["address"]?.decodeToString()
+                        val advertisedAddress = props["address"]?.decodeToString()
                         
-                        if (nodeId != null && address != null) {
-                            Log.i("LanDiscovery", "Discovered peer $nodeId at $address")
-                            // Auto-connect if not already connected
-                            peerHub.connect(address)
+                        // If mDNS didn't give us a nodeId, we use the service name as a fallback key
+                        val effectiveNodeId = nodeId ?: serviceInfo.serviceName
+                        
+                        // Build a real address using the resolved IP if the advertised one is localhost
+                        val realAddress = if (advertisedAddress != null && !advertisedAddress.contains("localhost") && !advertisedAddress.contains("127.0.0.1")) {
+                            advertisedAddress
+                        } else {
+                            "ws://$host:$port/peer-ws"
                         }
+                        
+                        Log.i("LanDiscovery", "Discovered peer $effectiveNodeId at $realAddress")
+                        peerHub.registerDiscoveredPeer(effectiveNodeId, realAddress)
                     }
                 })
             }

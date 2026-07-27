@@ -161,6 +161,12 @@ apps/desktop/src-tauri/gen/
 # Backend runtime logs (backend/app.py writes logs/backend.log)
 logs/
 
+# JVM heap/crash dumps. A Gradle OOM while building apps/mobile-android drops a
+# multi-hundred-MB java_pid*.hprof wherever the daemon was launched — often here.
+*.hprof
+hs_err_pid*.log
+replay_pid*.log
+
 # OS specific
 .DS_Store
 Thumbs.db
@@ -173,4 +179,46 @@ Thumbs.db
 *.userossc
 *.sln.docstates
 
+
+# ------------------------------------------------------------------------------
+# Android & Gradle
+# ------------------------------------------------------------------------------
+# Gradle build directory & cache
+.gradle/
+**/build/
+!**/src/main/build/
+
+# Local configuration & SDK paths (contains local machine path to Android SDK)
+local.properties
+
+# Android Studio / IntelliJ local workspace & user configurations
+.idea/caches/
+.idea/libraries/
+.idea/modules.xml
+.idea/workspace.xml
+.idea/navEditor.xml
+.idea/assetWizardSettings.xml
+
+# Native build artifacts (NDK / C++)
+.cxx/
+.externalNativeBuild/
+
+# Android signing keys & keystores (CRITICAL - never commit private keys!)
+*.keystore
+*.jks
+*.p12
+
+# Android Studio temporary files
+*.apk
+*.ap_
+*.aab
+*.dex
+
+# Google Services config (if using Firebase/Google APIs with private keys later)
+# google-services.json
+
+# ------------------------------------------------------------------------------
+# AI Agent Local Artifacts
+# ------------------------------------------------------------------------------
+.artifacts/
 

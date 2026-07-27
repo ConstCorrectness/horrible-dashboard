@@ -8,11 +8,13 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
@@ -28,22 +30,37 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import java.util.concurrent.Executors
 
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+
 @Composable
 fun PairingScreen(peerHub: PeerHub, onPaired: () -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val cameraExecutor = remember { Executors.newSingleThreadExecutor() }
     
-    var hasPermission by remember { mutableStateOf(false) }
+    var hasPermission by remember { 
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        ) 
+    }
     var isProcessing by remember { mutableStateOf(false) }
+    var isConnecting by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
     val moshi = remember { Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build() }
     val inviteAdapter = remember { moshi.adapter(InviteBundle::class.java) }
 
-    // Simplified permission check for this task
+    val launcher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+        onResult = { granted -> hasPermission = granted }
+    )
+
     LaunchedEffect(Unit) {
-        hasPermission = true // Assume granted for now or handle via ActivityResult
+        if (!hasPermission) {
+            launcher.launch(Manifest.permission.CAMERA)
+        }
     }
 
     Scaffold { padding ->
@@ -96,13 +113,40 @@ fun PairingScreen(peerHub: PeerHub, onPaired: () -> Unit) {
                                                     val rawValue = barcode.rawValue ?: continue
                                                     try {
                                                         isProcessing = true
-                                                        // Invite is base64url-encoded JSON bundle
-                                                        val json = String(Base64.decode(rawValue, Base64.URL_SAFE))
-                                                        val bundle = inviteAdapter.fromJson(json)
-                                                        if (bundle != null) {
-                                                            Log.i("Pairing", "Redeeming invite to ${bundle.address}")
-                                                            peerHub.connect(bundle.address, bundle.token)
-                                                            onPaired()
+                                                        val invite = if (rawValue.startsWith("horrible://")) {
+                                                            android.net.Uri.parse(rawValue).getQueryParameter("invite")
+                                                        } else {
+                                                            rawValue
+                                                        }
+                                                        
+                                                        if (invite != null) {
+                                                            // Invite is base64url-encoded JSON bundle
+                                                            val json = String(Base64.decode(invite, Base64.URL_SAFE))
+                                                            val bundle = inviteAdapter.fromJson(json)
+                                                            if (bundle != null) {
+                                                                Log.i("Pairing", "Redeeming invite to ${bundle.address}")
+                                                                isConnecting = true
+                                                                peerHub.connect(
+                                                                    address = bundle.address, 
+                                                                    token = bundle.token,
+                                                                    onError = { msg ->
+                                                                        android.os.Handler(context.mainLooper).post {
+                                                                            error = msg
+                                                                            isConnecting = false
+                                                                            isProcessing = false
+                                                                        }
+                                                                    },
+                                                                    onHandshake = { 
+                                                                        android.os.Handler(context.mainLooper).post {
+                                                                            onPaired()
+                                                                        }
+                                                                    }
+                                                                )
+                                                            } else {
+                                                                isProcessing = false
+                                                            }
+                                                        } else {
+                                                            isProcessing = false
                                                         }
                                                     } catch (e: Exception) {
                                                         Log.e("Pairing", "Failed to parse invite", e)
@@ -132,10 +176,58 @@ fun PairingScreen(peerHub: PeerHub, onPaired: () -> Unit) {
                 } else {
                     Text("Camera permission required", modifier = Modifier.align(Alignment.Center))
                 }
+                
+                if (isConnecting) {
+                    Box(
+                        modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.5f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator(color = Color.White)
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text("Connecting...", color = Color.White)
+                        }
+                    }
+                }
             }
             
             if (error != null) {
-                Text(error!!, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp))
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(error!!, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(16.dp))
+                    
+                    var manualIp by remember { mutableStateOf("") }
+                    OutlinedTextField(
+                        value = manualIp,
+                        onValueChange = { manualIp = it },
+                        label = { Text("Enter Desktop IP:Port (e.g. 10.0.0.18:8100)") },
+                        modifier = Modifier.padding(horizontal = 16.dp).fillMaxWidth()
+                    )
+                    Button(
+                        onClick = {
+                            var addr = manualIp.trim()
+                            if (!addr.startsWith("ws://")) {
+                                addr = "ws://$addr"
+                            }
+                            // Check if port is missing by looking for a colon after the ws:// prefix
+                            if (addr.indexOf(":", 6) == -1) { 
+                                addr = "$addr:8100"
+                            }
+                            if (!addr.endsWith("/peer-ws")) {
+                                addr = "$addr/peer-ws"
+                            }
+                            
+                            isConnecting = true
+                            peerHub.connect(addr) { 
+                                android.os.Handler(context.mainLooper).post {
+                                    onPaired()
+                                }
+                            }
+                        },
+                        modifier = Modifier.padding(16.dp)
+                    ) {
+                        Text("Connect Manually")
+                    }
+                }
             }
 
             Text(

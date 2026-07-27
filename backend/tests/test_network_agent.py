@@ -122,8 +122,11 @@ def test_remote_turn_denies_side_effects(monkeypatch, tmp_path):
     """Under the default plan mode, the remote turn's gate denies any side effect —
     a remote agent can answer, never act on this machine."""
     from backend.modules.network.agent_bridge import RemoteAgentConn
+    from backend.modules.network.hub import PeerHub
 
-    rconn = RemoteAgentConn(agent_bridge._remote_mode())
+    # The gate only reads `force_mode`/`is_remote`; the hub and destination are the
+    # relay path for streaming tokens, unused here.
+    rconn = RemoteAgentConn(PeerHub(), "peer", "req-1", agent_bridge._remote_mode())
 
     class Call:
         name = "agent.ask_peer"  # a known side-effecting static tool

@@ -54,7 +54,14 @@ async def start_network() -> None:
     peer_hub.register_handler(protocol.COLLAB_OP, collab.handle_peer_collab_op)
     peer_hub.register_handler(protocol.PEER_CHAT, chat.handle_peer_chat)
     from backend.modules.network import remote_control
-    peer_hub.register_handler(protocol.REMOTE_COMMAND, remote_control.handle_remote_command)
+
+    peer_hub.register_handler(
+        protocol.REMOTE_COMMAND, remote_control.handle_remote_command
+    )
+
+    from backend.modules.network.mobile_tools import register_mobile_tools
+
+    register_mobile_tools()
     # Training fabric: advertise/receive "GPU offered / help wanted" ads.
     from backend.modules.training import fabric as training_fabric
 
