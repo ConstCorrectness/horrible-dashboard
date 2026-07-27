@@ -112,6 +112,18 @@ lock enforces ≥3 s between requests, and a 10-minute TTL cache absorbs repeats
 Parsing is stdlib `ElementTree`; arXiv ids are validated against both id
 grammars (`2107.03374v2`, `cs/0112017`) before any URL is built from them.
 
+Spacing requests isn't the whole story — arXiv also rate-limits over longer
+windows and answers **429** (or **503** while shedding load), which no local
+throttle can predict. Both statuses are retried up to three times with a
+backoff that honors `Retry-After` (falling back to 10 s, doubling per attempt),
+and the resulting cooldown is **process-wide**: a deep-research run fanning out
+a dozen queries would otherwise burn a full retry budget per query. A caller
+arriving during a cooldown longer than 30 s fails fast instead of parking a
+request handler, and a rate-limited lookup falls back to a **stale** cache entry
+when one exists — a ten-minute-old abstract beats an error. Exhausted retries
+raise `ArxivRateLimited`, which the routes pass through as a real **429 with a
+`Retry-After` header** rather than flattening it into "arXiv unreachable".
+
 - `GET /api/arxiv/search?query=&category=&sort=&start=` — Atom search
   (relevance / newest / recently-updated, category filter, pagination).
 - `GET /api/arxiv/paper/{id}` — full metadata for one paper.

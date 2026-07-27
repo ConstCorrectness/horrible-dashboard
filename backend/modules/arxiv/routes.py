@@ -34,6 +34,15 @@ def _entry_model(entry: client.ArxivEntry) -> ArxivEntryModel:
     return ArxivEntryModel(**dataclasses.asdict(entry))
 
 
+def _rate_limited(exc: client.ArxivRateLimited) -> HTTPException:
+    """arXiv's 429 is ours too — pass the status and the wait through verbatim."""
+    return HTTPException(
+        status_code=429,
+        detail=str(exc),
+        headers={"Retry-After": str(max(1, int(exc.retry_after)))},
+    )
+
+
 @router.get("/search", response_model=ArxivSearchResponse)
 async def search(
     query: str = Query(default=""),
@@ -46,6 +55,8 @@ async def search(
         total, entries = await client.search(
             query, start=start, max_results=max_results, category=category, sort=sort
         )
+    except client.ArxivRateLimited as exc:
+        raise _rate_limited(exc) from exc
     except client.ArxivError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except httpx.HTTPError as exc:
@@ -64,6 +75,8 @@ async def search(
 async def paper(arxiv_id: str) -> ArxivEntryModel:
     try:
         entry = await client.get_paper(arxiv_id)
+    except client.ArxivRateLimited as exc:
+        raise _rate_limited(exc) from exc
     except client.ArxivError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except httpx.HTTPError as exc:
@@ -77,6 +90,8 @@ async def paper(arxiv_id: str) -> ArxivEntryModel:
 async def download(req: ArxivDownloadRequest) -> ArxivDownloadResponse:
     try:
         entry = await client.get_paper(req.arxiv_id)
+    except client.ArxivRateLimited as exc:
+        raise _rate_limited(exc) from exc
     except client.ArxivError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except httpx.HTTPError as exc:

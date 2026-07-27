@@ -1,5 +1,5 @@
-"""ArXiv module: Atom parsing (fixture, no network), etiquette throttle, id
-validation, and the download flow with a mocked guarded fetch."""
+"""ArXiv module: Atom parsing (fixture, no network), etiquette throttle, 429
+backoff, id validation, and the download flow with a mocked guarded fetch."""
 
 from __future__ import annotations
 
@@ -45,8 +45,10 @@ def api() -> TestClient:
 @pytest.fixture(autouse=True)
 def clear_cache():
     client._cache.clear()
+    client._penalty_until = 0.0  # a 429 here must not leave the next test in cooldown
     yield
     client._cache.clear()
+    client._penalty_until = 0.0
 
 
 def test_parse_feed_extracts_everything() -> None:
@@ -107,16 +109,25 @@ def test_search_caches_and_throttles(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(calls) == 2
 
 
-def test_throttle_spacing(monkeypatch: pytest.MonkeyPatch) -> None:
+class FakeResponse:
+    def __init__(self, status_code: int = 200, headers: dict | None = None) -> None:
+        self.status_code = status_code
+        self.headers = headers or {}
+        self.text = FEED
+
+    def raise_for_status(self) -> None: ...
+
+
+def fake_transport(
+    monkeypatch: pytest.MonkeyPatch, responses: list[FakeResponse]
+) -> tuple[list[float], list[str]]:
+    """Drive `_throttled_get` off a scripted response list. Returns (sleeps, urls)."""
     sleeps: list[float] = []
+    urls: list[str] = []
+    queue = list(responses)
 
     async def fake_sleep(seconds: float) -> None:
         sleeps.append(seconds)
-
-    class FakeResponse:
-        text = FEED
-
-        def raise_for_status(self) -> None: ...
 
     class FakeClient:
         def __init__(self, **kwargs) -> None: ...
@@ -125,11 +136,17 @@ def test_throttle_spacing(monkeypatch: pytest.MonkeyPatch) -> None:
 
         async def __aexit__(self, *args) -> None: ...
         async def get(self, url: str) -> FakeResponse:
-            return FakeResponse()
+            urls.append(url)
+            return queue.pop(0) if queue else FakeResponse()
 
     monkeypatch.setattr(client.asyncio, "sleep", fake_sleep)
     monkeypatch.setattr(client.httpx, "AsyncClient", FakeClient)
     monkeypatch.setattr(client, "_last_request", 0.0)
+    return sleeps, urls
+
+
+def test_throttle_spacing(monkeypatch: pytest.MonkeyPatch) -> None:
+    sleeps, _urls = fake_transport(monkeypatch, [])
 
     async def run() -> None:
         await client._throttled_get("https://export.arxiv.org/api/query?a=1")
@@ -138,6 +155,90 @@ def test_throttle_spacing(monkeypatch: pytest.MonkeyPatch) -> None:
     asyncio.run(run())
     # The second request had to wait ~the full interval.
     assert sleeps and sleeps[-1] > 2.0
+
+
+def test_429_retries_honoring_retry_after(monkeypatch: pytest.MonkeyPatch) -> None:
+    sleeps, urls = fake_transport(
+        monkeypatch,
+        [FakeResponse(429, {"retry-after": "7"}), FakeResponse(200)],
+    )
+
+    out = asyncio.run(client._throttled_get("https://export.arxiv.org/api/query?a=1"))
+    assert out == FEED
+    assert len(urls) == 2  # retried
+    assert 7.0 in sleeps  # waited exactly what the header asked for
+    assert client._penalty_until == 0.0  # cooldown cleared by the success
+
+
+def test_retry_after_accepts_both_header_forms() -> None:
+    import email.utils
+    from datetime import datetime, timedelta, timezone
+
+    def seconds(value: str | None) -> float:
+        headers = {"retry-after": value} if value is not None else {}
+        return client._retry_after_seconds(FakeResponse(429, headers), fallback=10.0)
+
+    assert seconds("7") == 7.0
+    assert seconds(None) == 10.0
+    assert seconds("later, maybe") == 10.0  # unparseable → fallback
+    when = datetime.now(timezone.utc) + timedelta(seconds=30)
+    assert 25.0 < seconds(email.utils.format_datetime(when)) <= 30.0
+
+
+def test_429_exhausted_raises_rate_limited(monkeypatch: pytest.MonkeyPatch) -> None:
+    _sleeps, urls = fake_transport(
+        monkeypatch, [FakeResponse(429) for _ in range(client._MAX_ATTEMPTS)]
+    )
+
+    with pytest.raises(client.ArxivRateLimited) as caught:
+        asyncio.run(client._throttled_get("https://export.arxiv.org/api/query?a=1"))
+    assert len(urls) == client._MAX_ATTEMPTS
+    assert caught.value.retry_after > 0
+    # The cooldown is process-wide: the next caller fails fast instead of
+    # burning another full retry budget.
+    assert client._penalty_until > 0
+
+
+def test_long_cooldown_fails_fast(monkeypatch: pytest.MonkeyPatch) -> None:
+    _sleeps, urls = fake_transport(monkeypatch, [])
+    client._penalty_until = client.time.monotonic() + client._MAX_BLOCKING_WAIT_S + 60.0
+
+    with pytest.raises(client.ArxivRateLimited):
+        asyncio.run(client._throttled_get("https://export.arxiv.org/api/query?a=1"))
+    assert urls == []  # never touched the network
+
+
+def test_rate_limit_falls_back_to_stale_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    async def fake_get(url: str) -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return FEED
+        raise client.ArxivRateLimited(30.0)
+
+    monkeypatch.setattr(client, "_throttled_get", fake_get)
+
+    async def run() -> tuple[int, list]:
+        first = await client.search("attention")
+        # Age the entry past its TTL so the next call is a real request.
+        url, (stamp, value) = next(iter(client._cache.items()))
+        client._cache[url] = (stamp - client._CACHE_TTL_S - 1, value)
+        return first, await client.search("attention")
+
+    first, second = asyncio.run(run())
+    assert calls == 2
+    assert second == first  # stale beats an error
+
+
+def test_rate_limit_with_no_cache_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_get(url: str) -> str:
+        raise client.ArxivRateLimited(30.0)
+
+    monkeypatch.setattr(client, "_throttled_get", fake_get)
+    with pytest.raises(client.ArxivRateLimited):
+        asyncio.run(client.search("attention"))
 
 
 def test_get_paper_rejects_bad_id() -> None:
@@ -158,6 +259,19 @@ def test_search_route(api: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
 
     res = api.get("/api/arxiv/search")
     assert res.status_code == 400  # empty query
+
+
+def test_search_route_passes_through_429(
+    api: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def fake_get(url: str) -> str:
+        raise client.ArxivRateLimited(42.0)
+
+    monkeypatch.setattr(client, "_throttled_get", fake_get)
+    res = api.get("/api/arxiv/search", params={"query": "attention"})
+    assert res.status_code == 429  # not 400 (bad query) and not 502 (unreachable)
+    assert res.headers["retry-after"] == "42"
+    assert "rate-limiting" in res.json()["detail"]
 
 
 def test_download_route_files_pdf(
