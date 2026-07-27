@@ -1,0 +1,25 @@
+# Task: Implement Mobile Android Companion App
+
+- [x] Scaffold Android project in `apps/mobile-android`
+    - [x] Root `build.gradle.kts` and `settings.gradle.kts`
+    - [x] App module `build.gradle.kts` and Manifest
+    - [x] Basic Compose MainActivity
+- [x] Core P2P Networking Layer (Kotlin)
+    - [x] `PeerEnvelope` and `Protocol` (serialization/signing)
+    - [x] `Identity` management (Ed25519)
+    - [x] `PeerHub` and `PeerSession` logic
+    - [x] WebSocket client (OkHttp)
+- [x] QR Pairing Flow
+    - [x] [Backend] Invite generation utility
+    - [x] [Frontend] "Pair Mobile" UI and QR code display
+    - [x] [Android] QR scanner and invite redemption
+- [x] LAN Discovery (mDNS)
+    - [x] [Android] `LanDiscovery` using `NsdManager`
+    - [x] [Backend] Verify zeroconf advertisement
+- [x] Remote Control Capability
+    - [x] [Backend] `REMOTE_COMMAND` handler
+    - [x] [Android] Remote control UI (Media/Agent)
+- [x] Verification
+    - [x] Manual pairing test
+    - [x] LAN auto-reconnect test
+    - [x] Remote command execution test

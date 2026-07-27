@@ -30,6 +30,7 @@ COLLAB_JOIN = "collab_join"
 COLLAB_LEAVE = "collab_leave"
 COLLAB_OP = "collab_op"
 PEER_CHAT = "peer_chat"
+REMOTE_COMMAND = "remote_command"
 ERROR = "error"
 
 

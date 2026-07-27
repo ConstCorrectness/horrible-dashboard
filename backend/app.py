@@ -303,6 +303,8 @@ async def ws(websocket: WebSocket) -> None:
         {"channel": "system", "event": "hello", "version": APP_VERSION}
     )
     conn = WsConnection(websocket)
+    from backend.modules.ws import register_connection, unregister_connection
+    register_connection(conn)
     terminals = TerminalManager(conn)
     repl = ReplManager(conn)
     lsp = LspManager(conn)
@@ -374,6 +376,7 @@ async def ws(websocket: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     finally:
+        unregister_connection(conn)
         await terminals.close_all()
         await repl.close_all()
         await lsp.close_all()
