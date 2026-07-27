@@ -275,7 +275,7 @@ function SidebarProfile() {
           disabled={busy !== null || unavailable('google')}
           title={
             unavailable('google')
-              ? 'This game server has no Google OAuth configured (games.google.clientId / clientSecret)'
+              ? 'This game server has no Google OAuth configured (games.google.clientId + GAMES_GOOGLE_CLIENT_SECRET)'
               : 'Sign in with Google'
           }
         >

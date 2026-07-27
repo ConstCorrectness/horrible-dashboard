@@ -19,9 +19,26 @@ page, then we poll for the token and read their profile.
 - **Google**: requires an OAuth client of type **"TVs and Limited Input devices"**,
   and (unlike GitHub) its token poll requires the client secret — for that client
   type Google treats it as non-confidential, but we still keep it server-side.
-  Configure `games.google.clientId` + `games.google.clientSecret` (or
-  `GAMES_GOOGLE_CLIENT_ID` / `GAMES_GOOGLE_CLIENT_SECRET`). Accounts are keyed
-  `google:<sub>`, so two different Gmail accounts are two distinct players.
+  Configure `games.google.clientId` (or `GAMES_GOOGLE_CLIENT_ID`) plus
+  `GAMES_GOOGLE_CLIENT_SECRET`. Accounts are keyed `google:<sub>`, so two different
+  Gmail accounts are two distinct players.
+
+**Client ids may come from a setting; client secrets never may.** An id is public by
+design, but `GET /api/settings` hands the whole settings bag to the browser, and a
+bundled game server shares `$HORRIBLE_DATA_DIR/settings.json` with the node — so a
+secret parked there is readable by any page the node serves. Every `*_CLIENT_SECRET`
+below is therefore read from the environment only.
+
+There is also a **web (authorization-code) flow** — the one-click redirect the UI
+prefers. GitHub runs it on the same OAuth App as its device flow, but **Google
+cannot**: a "TVs and Limited Input devices" client has no redirect-URI field at all,
+so pointing the redirect flow at it returns `Error 400: redirect_uri_mismatch` no
+matter what callback we send. Google's web flow therefore needs its *own* client of
+type **"Web application"**, with this server's callback
+(`<public base>/auth/google/callback`) registered on it — configured separately as
+`GAMES_GOOGLE_WEB_CLIENT_ID` / `GAMES_GOOGLE_WEB_CLIENT_SECRET`. When it isn't set
+we report the web flow as unavailable, which makes the UI fall back to the device
+flow rather than open a consent page that 400s.
 """
 
 from __future__ import annotations
@@ -201,12 +218,9 @@ def _google_client_id() -> str:
 
 
 def _google_client_secret() -> str:
-    from backend.modules.settings.routes import get_value
-
-    return str(
-        os.environ.get("GAMES_GOOGLE_CLIENT_SECRET", "")
-        or get_value("games.google.clientSecret", "")
-    )
+    # Env only, deliberately — see the module docstring: the settings bag is served to
+    # the browser wholesale, so a client secret must never be readable as a setting.
+    return str(os.environ.get("GAMES_GOOGLE_CLIENT_SECRET", ""))
 
 
 async def google_device_start() -> dict[str, Any]:
@@ -256,7 +270,9 @@ async def google_device_poll(device_code: str) -> dict[str, Any]:
     client_id = _google_client_id()
     client_secret = _google_client_secret()
     if not client_id or not client_secret:
-        raise ValueError("games.google.clientId / clientSecret are not configured")
+        raise ValueError(
+            "games.google.clientId / GAMES_GOOGLE_CLIENT_SECRET are not configured"
+        )
     async with httpx.AsyncClient(timeout=15.0) as client:
         res = await client.post(
             GOOGLE_TOKEN_URL,
@@ -315,12 +331,27 @@ GOOGLE_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 
 
 def _github_client_secret() -> str:
+    # Env only, deliberately — see the module docstring: the settings bag is served to
+    # the browser wholesale, so a client secret must never be readable as a setting.
+    return str(os.environ.get("GAMES_GITHUB_CLIENT_SECRET", ""))
+
+
+def _google_web_client_id() -> str:
+    """Google's **web** client id — a different OAuth client from the device one (see
+    the module docstring: a limited-input client can't carry a redirect URI). Env only
+    for the secret; the id may also come from a setting because an id is public."""
     from backend.modules.settings.routes import get_value
 
     return str(
-        os.environ.get("GAMES_GITHUB_CLIENT_SECRET", "")
-        or get_value("games.github.clientSecret", "")
+        os.environ.get("GAMES_GOOGLE_WEB_CLIENT_ID", "")
+        or get_value("games.google.webClientId", "")
     )
+
+
+def _google_web_client_secret() -> str:
+    # Env only, deliberately: the settings bag is served to the browser wholesale, so a
+    # client secret must never be readable as a setting.
+    return str(os.environ.get("GAMES_GOOGLE_WEB_CLIENT_SECRET", ""))
 
 
 def providers_available() -> dict[str, dict[str, bool]]:
@@ -328,13 +359,16 @@ def providers_available() -> dict[str, dict[str, bool]]:
     credentials — so a client can disable (and explain) a provider button up front
     instead of discovering the gap after it has already opened a popup.
 
-    GitHub's device flow needs only the client id; its web flow (and both Google
-    flows — Google's device token poll requires the secret too) need id + secret."""
+    GitHub's device flow needs only the client id; its web flow needs id + secret on
+    the same OAuth App. Google's device flow needs its limited-input id + secret, and
+    its web flow needs the *separate* web-application client — never the device one,
+    which has no redirect URI and so always 400s."""
     gh_id, gh_secret = bool(_github_client_id()), bool(_github_client_secret())
-    g_ok = bool(_google_client_id()) and bool(_google_client_secret())
+    g_device = bool(_google_client_id()) and bool(_google_client_secret())
+    g_web = bool(_google_web_client_id()) and bool(_google_web_client_secret())
     return {
         "github": {"device": gh_id, "web": gh_id and gh_secret},
-        "google": {"device": g_ok, "web": g_ok},
+        "google": {"device": g_device, "web": g_web},
     }
 
 
@@ -346,12 +380,20 @@ def web_config_error(provider: str) -> str | None:
             return "games.github.clientId is not configured"
         if not _github_client_secret():
             return (
-                "games.github.clientSecret is not configured (required for web sign-in)"
+                "GAMES_GITHUB_CLIENT_SECRET is not configured "
+                "(required for web sign-in)"
             )
         return None
     if provider == "google":
-        if not _google_client_id() or not _google_client_secret():
-            return "games.google.clientId / clientSecret are not configured"
+        if not _google_web_client_id() or not _google_web_client_secret():
+            # Not a fallback to the device client on purpose: using it here is exactly
+            # what produces Google's redirect_uri_mismatch. Reporting "unconfigured"
+            # instead lets the caller fall back to the device flow, which does work.
+            return (
+                "Google one-click sign-in is not configured on this game server "
+                "(needs a Web-application OAuth client: GAMES_GOOGLE_WEB_CLIENT_ID / "
+                "GAMES_GOOGLE_WEB_CLIENT_SECRET)"
+            )
         return None
     return f"unknown provider {provider!r}"
 
@@ -370,7 +412,12 @@ def web_authorize_url(provider: str, state: str, redirect_uri: str) -> str:
         }
         return f"{GITHUB_AUTHORIZE_URL}?{urlencode(params)}"
     if provider == "google":
-        client_id = _google_client_id()
+        client_id = _google_web_client_id()
+        if not client_id:
+            raise ValueError(
+                "Google one-click sign-in is not configured "
+                "(GAMES_GOOGLE_WEB_CLIENT_ID)"
+            )
         params = {
             "client_id": client_id,
             "redirect_uri": redirect_uri,
@@ -423,8 +470,10 @@ async def web_exchange(provider: str, code: str, redirect_uri: str) -> dict[str,
             res = await client.post(
                 GOOGLE_TOKEN_URL,
                 data={
-                    "client_id": _google_client_id(),
-                    "client_secret": _google_client_secret(),
+                    # The web client, matching the one the consent page was opened
+                    # with — Google checks that code, client and redirect_uri agree.
+                    "client_id": _google_web_client_id(),
+                    "client_secret": _google_web_client_secret(),
                     "code": code,
                     "redirect_uri": redirect_uri,
                     "grant_type": "authorization_code",

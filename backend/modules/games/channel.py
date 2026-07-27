@@ -144,6 +144,14 @@ async def handle_games_message(conn: Any, msg: dict[str, Any]) -> None:
                     "Your game-server sign-in is no longer valid (the server may have "
                     "been redeployed). Please sign in again to reconnect."
                 )
+            else:
+                # Never signed in: the node presented the dev token and this server
+                # doesn't accept dev auth (the hosted one doesn't). "invalid token"
+                # reads like a bug; it just means sign-in is required here.
+                message = (
+                    "This game server requires sign-in. Sign in with GitHub or "
+                    "Google to connect."
+                )
         try:
             # Let the browser know we are not connected so UI can reset state
             await conn.send_json(

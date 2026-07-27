@@ -256,14 +256,9 @@ export const gamesModule: ModuleManifest = {
       type: 'string',
       default: '',
     },
-    {
-      key: 'games.google.clientSecret',
-      title: 'Google OAuth client secret',
-      description:
-        "Google's device flow requires the client secret at the token poll (unlike GitHub). On a hosted server prefer the GAMES_GOOGLE_CLIENT_SECRET env secret.",
-      type: 'string',
-      default: '',
-    },
+    // No client-secret setting here on purpose: /api/settings serves the whole bag to
+    // the browser, so the game server reads GAMES_GITHUB_CLIENT_SECRET /
+    // GAMES_GOOGLE_CLIENT_SECRET from its environment only.
     {
       key: 'games.onboarded',
       title: 'Onboarding complete',

@@ -290,7 +290,10 @@ setting), so the node can't sign in to one server and play against another — a
 the play server rejects as `invalid token`. If the server rejects the token anyway
 (expired, or signed by a secret a redeploy rotated), the node **clears the stale token**
 and the UI drops back to signed-out with a "sign in again" prompt (`channel.py`), rather
-than silently failing every connect.
+than silently failing every connect. When there is **no** stored token, the same
+rejection means something different — the node offered the dev token and this server
+runs `GAMES_ALLOW_DEV_AUTH=0` (the hosted one does) — so the toast reads *"This game
+server requires sign-in"* instead of the raw `invalid token`, which reads like a bug.
 
 The
 **Profile** panel (`games.profile`) shows your avatar/level ring, per-game tier
@@ -1070,11 +1073,26 @@ never handed to the browser). Two OAuth flows produce it:
   (`POST /auth/{provider}/web/poll`). Because the retrieval code never touches the
   browser, seeing the URL can't lift the token. This flow **needs a client secret and
   a registered callback**: for GitHub set `GAMES_GITHUB_CLIENT_SECRET` and add
-  `https://<server>/auth/github/callback` as the OAuth app's callback URL; for Google
-  use a **"Web application"** OAuth client with that redirect URI (the device-flow
-  "TVs and Limited Input devices" client won't work for redirect). Pin the public base
-  with `GAMES_PUBLIC_URL` if the server can't infer it (behind a proxy the inbound
-  scheme can read as http).
+  `https://<server>/auth/github/callback` as the OAuth app's callback URL — the same
+  OAuth App serves both of GitHub's flows.
+
+  **Google needs a second, separate OAuth client here.** Its device flow requires a
+  **"TVs and Limited Input devices"** client, and that client type has no
+  redirect-URI field at all — so pointing the redirect flow at it can only ever
+  return `Error 400: redirect_uri_mismatch`, whatever callback is sent. Register a
+  **"Web application"** client in the same Cloud project with
+  `https://<server>/auth/google/callback` as an authorized redirect URI, and give it
+  to the server as `GAMES_GOOGLE_WEB_CLIENT_ID` / `GAMES_GOOGLE_WEB_CLIENT_SECRET`
+  (distinct from `GAMES_GOOGLE_CLIENT_ID` / `GAMES_GOOGLE_CLIENT_SECRET`, which stay
+  the device client). Unset, the server reports Google's web flow as unavailable and
+  the lobby falls back to the device flow rather than opening a page that 400s — the
+  redirect flow deliberately does **not** fall back to the device client id.
+
+  Pin the public base with `GAMES_PUBLIC_URL` if the server can't infer it (behind a
+  proxy the inbound scheme can read as http). The `redirect_uri` is derived from that
+  base, so a node pointed at a *local* game server authorizes against
+  `http://localhost:9090/auth/google/callback` — register that too if you sign in
+  against a dev server.
 - **Device flow — the automatic fallback.** The original RFC 8628 flow: the server
   returns a `user_code` you enter at the provider's device page, and the node polls.
   No client secret **for GitHub** and no callback server. The lobby's sign-in button
@@ -1217,10 +1235,19 @@ tool at a time — the rail switches between them, there is no in-dock tab strip
   per-node to point anywhere.
 - `games.devToken` — fallback identity when not signed in (the token *is* your account id).
 - `games.github.clientId` — GitHub OAuth client id (on the server host) to enable sign-in. Can be overridden via the `GAMES_GITHUB_CLIENT_ID` env variable (preferred for hosted servers).
-- `games.google.clientId` / `games.google.clientSecret` — Google OAuth device-flow
-  credentials (client type "TVs and Limited Input devices"). Can be overridden via the
-  `GAMES_GOOGLE_CLIENT_ID` and `GAMES_GOOGLE_CLIENT_SECRET` env variables (preferred for hosted servers).
+- `games.google.clientId` — Google OAuth **device-flow** client id (client type "TVs
+  and Limited Input devices"). Can be overridden via the `GAMES_GOOGLE_CLIENT_ID` env
+  variable (preferred for hosted servers).
+- `games.google.webClientId` — the **separate** "Web application" client id used by
+  the one-click redirect flow (`GAMES_GOOGLE_WEB_CLIENT_ID`).
 - `games.policy` — `random` | `agent` | `manual`.
+
+Only the client **ids** are settings — an id is public by design. Every client
+**secret** the game server needs is read from its environment and has no settings
+fallback: `GAMES_GITHUB_CLIENT_SECRET`, `GAMES_GOOGLE_CLIENT_SECRET`,
+`GAMES_GOOGLE_WEB_CLIENT_SECRET`. `GET /api/settings` serves the whole settings bag to
+the browser, and a bundled game server shares `$HORRIBLE_DATA_DIR/settings.json` with
+its node — so a secret parked there would be readable by any page the node serves.
 
 ### Backend surface
 

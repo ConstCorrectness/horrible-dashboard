@@ -161,11 +161,65 @@ def test_web_signin_start_reports_config_error(monkeypatch) -> None:
     monkeypatch.setattr(
         auth_mod,
         "web_config_error",
-        lambda provider: "games.github.clientSecret is not configured",
+        lambda provider: "GAMES_GITHUB_CLIENT_SECRET is not configured",
     )
     client = TestClient(app_mod.app)
     start = client.post("/auth/github/web/start").json()
-    assert "clientSecret" in start["error"]
+    assert "GAMES_GITHUB_CLIENT_SECRET" in start["error"]
+
+
+def test_client_secrets_are_never_read_from_settings(monkeypatch) -> None:
+    """`GET /api/settings` returns the whole bag to the browser, and a bundled game
+    server shares `$HORRIBLE_DATA_DIR/settings.json` with its node — so a secret parked
+    there would be readable by any page the node serves. Env only, no fallback."""
+    from backend.modules.settings.routes import set_value
+
+    for env in (
+        "GAMES_GITHUB_CLIENT_SECRET",
+        "GAMES_GOOGLE_CLIENT_SECRET",
+        "GAMES_GOOGLE_WEB_CLIENT_SECRET",
+    ):
+        monkeypatch.delenv(env, raising=False)
+    set_value("games.github.clientSecret", "leaked-via-settings")
+    set_value("games.google.clientSecret", "leaked-via-settings")
+    set_value("games.google.webClientSecret", "leaked-via-settings")
+
+    assert auth._github_client_secret() == ""
+    assert auth._google_client_secret() == ""
+    assert auth._google_web_client_secret() == ""
+
+    # Env is the one source that works.
+    monkeypatch.setenv("GAMES_GITHUB_CLIENT_SECRET", "from-env")
+    monkeypatch.setenv("GAMES_GOOGLE_CLIENT_SECRET", "from-env")
+    assert auth._github_client_secret() == "from-env"
+    assert auth._google_client_secret() == "from-env"
+
+
+def test_client_ids_may_come_from_settings(monkeypatch) -> None:
+    """The other half of the rule: an id is public by design, so it stays settable."""
+    from backend.modules.settings.routes import set_value
+
+    for env in (
+        "GAMES_GITHUB_CLIENT_ID",
+        "GAMES_GOOGLE_CLIENT_ID",
+        "GAMES_GOOGLE_WEB_CLIENT_ID",
+    ):
+        monkeypatch.delenv(env, raising=False)
+    set_value("games.github.clientId", "gh-id")
+    set_value("games.google.clientId", "tv.apps.google")
+    set_value("games.google.webClientId", "web.apps.google")
+
+    assert auth._github_client_id() == "gh-id"
+    assert auth._google_client_id() == "tv.apps.google"
+    assert auth._google_web_client_id() == "web.apps.google"
+
+
+def test_web_config_error_names_the_env_var_for_a_missing_secret(monkeypatch) -> None:
+    """The message has to point at the env var, not a setting the server won't read."""
+    monkeypatch.setattr(auth, "_github_client_id", lambda: "iv1.deadbeef")
+    monkeypatch.setattr(auth, "_github_client_secret", lambda: "")
+    error = auth.web_config_error("github")
+    assert error and "GAMES_GITHUB_CLIENT_SECRET" in error
 
 
 def test_web_poll_rejects_unknown_retrieval_code() -> None:
@@ -279,3 +333,52 @@ def test_auth_providers_reports_flow_availability(monkeypatch) -> None:
         "device": True,
         "web": True,
     }
+
+    # Google's device credentials do NOT enable its web flow: a limited-input client
+    # has no redirect URI, so claiming `web` here is what sent users to a
+    # redirect_uri_mismatch page. Only the separate web client turns it on.
+    monkeypatch.setattr(auth_mod, "_google_client_id", lambda: "tv.apps.google")
+    monkeypatch.setattr(auth_mod, "_google_client_secret", lambda: "tv-secret")
+    monkeypatch.setattr(auth_mod, "_google_web_client_id", lambda: "")
+    monkeypatch.setattr(auth_mod, "_google_web_client_secret", lambda: "")
+    assert client.get("/auth/providers").json()["google"] == {
+        "device": True,
+        "web": False,
+    }
+
+    monkeypatch.setattr(auth_mod, "_google_web_client_id", lambda: "web.apps.google")
+    monkeypatch.setattr(auth_mod, "_google_web_client_secret", lambda: "web-secret")
+    assert client.get("/auth/providers").json()["google"] == {
+        "device": True,
+        "web": True,
+    }
+
+
+def test_google_web_flow_never_uses_the_device_client(monkeypatch) -> None:
+    """The regression that produced `Error 400: redirect_uri_mismatch`: the redirect
+    flow reused Google's "TVs and Limited Input devices" client, which cannot have a
+    redirect URI registered. Without a web client the flow must report itself
+    unconfigured (so the caller falls back to the device flow), and with one it must
+    authorize against *that* client id."""
+    from urllib.parse import parse_qs, urlparse
+
+    from backend.games_server import auth as auth_mod
+
+    monkeypatch.setattr(auth_mod, "_google_client_id", lambda: "tv.apps.google")
+    monkeypatch.setattr(auth_mod, "_google_client_secret", lambda: "tv-secret")
+    monkeypatch.setattr(auth_mod, "_google_web_client_id", lambda: "")
+    monkeypatch.setattr(auth_mod, "_google_web_client_secret", lambda: "")
+
+    error = auth_mod.web_config_error("google")
+    assert error and "GAMES_GOOGLE_WEB_CLIENT_ID" in error
+
+    monkeypatch.setattr(auth_mod, "_google_web_client_id", lambda: "web.apps.google")
+    monkeypatch.setattr(auth_mod, "_google_web_client_secret", lambda: "web-secret")
+    assert auth_mod.web_config_error("google") is None
+
+    url = auth_mod.web_authorize_url(
+        "google", "state123", "https://games.example/auth/google/callback"
+    )
+    params = parse_qs(urlparse(url).query)
+    assert params["client_id"] == ["web.apps.google"]
+    assert params["redirect_uri"] == ["https://games.example/auth/google/callback"]
