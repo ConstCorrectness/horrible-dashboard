@@ -33,6 +33,7 @@ A new native Android project built with **Kotlin and Jetpack Compose**.
 
 ### Remote Control
 - Pressing "Open Browser" on the phone successfully triggers the `layout:open_pane` event on the desktop via the Peer fabric.
+- **Implemented `play_media`**: Your phone can now send a URL to the desktop, which will automatically open in a new browser tab. I've implemented a global `broadcast_event` mechanism in the backend to make this possible.
 - LAN Discovery allows the phone to reconnect to the desktop automatically after a Wi-Fi toggle.
 
 > [!TIP]
