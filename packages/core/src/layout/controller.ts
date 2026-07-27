@@ -5,7 +5,7 @@
  * on the same verbs and every mutation rides the store's autosave. Installed by
  * the Frame component on mount (`installFrameController`).
  */
-import { hasAgentContext } from '../agent-context';
+import { hasAgentContext, readAgentContext } from '../agent-context';
 import {
   registry,
   type LayoutController,
@@ -25,6 +25,7 @@ import {
   instanceId as makeInstanceId,
   listPanes,
   neighborAreaId,
+  visiblePanes,
 } from './model';
 import * as persistence from './persistence';
 import { layoutStore } from './store';
@@ -704,6 +705,68 @@ export function describeLayout(): Record<string, unknown> {
     ),
     floating: f.floating.map((fl) => ({ ...describePane(fl.pane), rect: fl.rect })),
   };
+}
+
+/**
+ * The workspace's ambient agent context: a snapshot of every pane the user can
+ * actually see that exposes one. This is what makes a workspace a *role* rather
+ * than furniture — the agent in the CRM workspace knows which record is open
+ * without spending a `list_open_panes` + `get_pane_context` round-trip on it.
+ *
+ * Budgeted by the caller, not here: `limit` caps how many panes are attached (the
+ * ones nearest the user first — floating, then docks, then center) and `maxChars`
+ * truncates each serialized snapshot. Unbudgeted, this would hand back the token
+ * savings the gateable `layout` group just won.
+ */
+export function readVisibleAgentContexts(
+  limit: number,
+  maxChars: number,
+  skipInstanceId?: string,
+): Array<Record<string, unknown>> {
+  const ranked = visiblePanes(frame()).sort(
+    (a, b) => LOCATION_PRIORITY[b.location.kind] - LOCATION_PRIORITY[a.location.kind],
+  );
+  const out: Array<Record<string, unknown>> = [];
+  for (const { pane, location } of ranked) {
+    if (out.length >= limit) break;
+    if (pane.instanceId === skipInstanceId) continue;
+    const snapshot = readAgentContext(pane.instanceId);
+    if (!snapshot) continue;
+    out.push({
+      instanceId: pane.instanceId,
+      viewId: pane.viewId,
+      title: resolveView(pane.viewId)?.title ?? pane.viewId,
+      location: location.kind,
+      snapshot: truncateSnapshot(snapshot, maxChars),
+    });
+  }
+  return out;
+}
+
+/** Panes the user reached for most recently rank first when the budget is tight. */
+const LOCATION_PRIORITY: Record<LocatedPane['location']['kind'], number> = {
+  floating: 3,
+  dock: 2,
+  area: 1,
+};
+
+/** Serialize a snapshot, clipping any oversized string field rather than the whole
+ * object — a truncated JSON blob is unparseable, a clipped field still reads. */
+function truncateSnapshot(
+  snapshot: Record<string, unknown>,
+  maxChars: number,
+): Record<string, unknown> {
+  if (JSON.stringify(snapshot).length <= maxChars) return snapshot;
+  const budget = Math.max(120, Math.floor(maxChars / Math.max(1, Object.keys(snapshot).length)));
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(snapshot)) {
+    const text = typeof value === 'string' ? value : (JSON.stringify(value) ?? '');
+    out[key] =
+      text.length > budget
+        ? `${text.slice(0, budget)}… (${text.length - budget} more chars — read the pane directly with get_pane_context)`
+        : value;
+  }
+  return out;
 }
 
 /** `listOpenPanes` plus where each pane lives — the agent's orientation read. */

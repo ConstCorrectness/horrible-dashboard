@@ -85,6 +85,56 @@ export const layoutsModule: ModuleManifest = {
       },
     },
     {
+      id: 'dataops',
+      name: 'Data Ops',
+      icon: '🗄',
+      // Console left, knowledge right; the scratchpad (REPL) and the live I/O feed
+      // share the bottom dock because you reach for exactly one of them at a time.
+      agent: 'dba',
+      frame: {
+        center: {
+          split: 'row',
+          sizes: [0.65, 0.35],
+          children: [{ tabs: ['database.console'] }, { pane: 'library.panel' }],
+        },
+        docks: {
+          right: { tools: ['agent.chat'], size: 380 },
+          bottom: {
+            tools: ['repl.console', 'observability.io'],
+            activeTool: 'repl.console',
+          },
+        },
+      },
+    },
+    {
+      id: 'webops',
+      name: 'Web Ops',
+      icon: '🌐',
+      // Reading the live web, not papers: the browser pane brings its own network
+      // region (Waterfall/DNS/Route) along, which is what separates this from
+      // Research — search feeds it from the left, what you keep lands right.
+      agent: 'researcher',
+      frame: {
+        center: {
+          split: 'row',
+          sizes: [0.6, 0.4],
+          children: [
+            { tabs: ['browser.view'] },
+            {
+              split: 'column',
+              sizes: [0.5, 0.5],
+              children: [{ pane: 'library.panel' }, { pane: 'research.pageViewer' }],
+            },
+          ],
+        },
+        docks: {
+          left: { tools: ['search.panel'], size: 300 },
+          right: { tools: ['agent.chat'], size: 360 },
+          bottom: { tools: ['observability.io'], visible: false },
+        },
+      },
+    },
+    {
       id: 'harness',
       name: 'Coding Harnesses',
       icon: '🛠',

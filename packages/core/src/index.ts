@@ -170,6 +170,7 @@ export { browserModule } from './modules/browser';
 export { stubModule } from './modules/stub';
 export { databaseModule } from './modules/database';
 export { libraryModule } from './modules/library';
+export { recordsModule } from './modules/records';
 export { researchModule } from './modules/research';
 export { searchModule } from './modules/search';
 export { trainingModule } from './modules/training';

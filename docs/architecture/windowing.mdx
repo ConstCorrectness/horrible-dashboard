@@ -71,9 +71,21 @@ a custom layout engine that hybridizes VS Code and Blender:
   picture. `FramePreset`s (contributed via `ModuleManifest.frames`) seed
   stable-id workspaces on first activation — **Dashboard**, **Scripting**,
   **Research** (console/arxiv/browser beside the viewers + library — see
-  [research](../modules/research.mdx)), **Coding Harnesses**, plus
-  module-contributed ones (**DashArena** from the games module, Training,
-  Notebook, Orchestration); `layout.reset` restores the preset.
+  [research](../modules/research.mdx)), **Data Ops** (database console + REPL +
+  library), **Web Ops** (embedded browser + its network views + search +
+  library), **Coding Harnesses**, plus module-contributed ones (**CRM** and
+  **Data Entry** from the [records](../modules/records.mdx) module, **DashArena**
+  from games, Training, Notebook, Orchestration); `layout.reset` restores the
+  preset.
+- **A workspace carries a role, not just furniture.** A preset may declare
+  `agent: '<roster id>'` — the roster agent its docked chat opens as. Switching to
+  Data Ops makes the agent the `dba`; switching to Data Entry makes it `intake`,
+  which can only *propose* record values. Because an `AgentSpec` carries a system
+  prompt, a tool scope and a preload set, the persona, its capabilities and its
+  token cost all switch with the layout. An unknown id falls back to `main`, the
+  same way `seedFromPreset` skips unknown views; picking a different agent by hand
+  is a per-workspace override kept in `localStorage`, so it survives a switch away
+  and back. See [agent-chat](../modules/agent-chat.mdx).
 
 ## Model
 

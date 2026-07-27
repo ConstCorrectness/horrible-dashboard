@@ -42,6 +42,15 @@ export interface FramePreset {
   name: string;
   /** Workspace-tab glyph (emoji/letter); falls back to the name's first character. */
   icon?: string;
+  /**
+   * The roster agent this workspace's chat talks to by default — a *role* for the
+   * layout, not just furniture: the persona, its system prompt and its tool scope
+   * switch with the workspace. Just an id (resolved against the backend roster,
+   * `GET /api/agent/roster`) rather than an inline spec, so agents stay defined in
+   * one place (backend `roster.py` / `host.add_agent`). An unknown id falls back to
+   * `main`, the same way `seedFromPreset` skips unknown views.
+   */
+  agent?: string;
   frame: {
     center: PresetNode;
     docks?: Partial<Record<DockSide, PresetDock>>;

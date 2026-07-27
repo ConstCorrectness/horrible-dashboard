@@ -9,6 +9,7 @@ slice. See docs/modules/agent-chat.md.
 """
 
 import asyncio
+import json
 import logging
 import re
 import uuid
@@ -399,6 +400,29 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
     ),
 ]
 
+# The layout verbs split by what they cost. The five READ verbs are orientation —
+# cheap, and any agent may need to see what the user is looking at, so they stay in
+# every agent's core. The sixteen ARRANGEMENT verbs are the expensive half: a scoped
+# agent that doesn't list "layout" in its tool_groups gets them only on demand, via
+# load_tools("layout"). The main orchestrator keeps all 21 unconditionally — its job
+# *is* driving the shell. This is the single biggest lever on tool-schema tokens:
+# an agent that never rearranges panes was paying ~16 schemas every round.
+LAYOUT_READ_TOOL_NAMES = frozenset(
+    {
+        "list_available_panes",
+        "list_workspaces",
+        "list_open_panes",
+        "get_layout",
+        "get_pane_context",
+    }
+)
+LAYOUT_READ_TOOLS: list[dict[str, Any]] = [
+    t for t in LAYOUT_TOOLS if t["function"]["name"] in LAYOUT_READ_TOOL_NAMES
+]
+LAYOUT_WRITE_TOOLS: list[dict[str, Any]] = [
+    t for t in LAYOUT_TOOLS if t["function"]["name"] not in LAYOUT_READ_TOOL_NAMES
+]
+
 
 # Backend-resolved tools for the distributed peer fabric. Unlike LAYOUT_TOOLS (which
 # relay to the browser), these execute in the backend against the process-global
@@ -531,6 +555,11 @@ TOOL_BUDGET = 44
 
 # Human-readable blurbs for known groups; unknown groups get a generic fallback.
 _GROUP_DESCRIPTIONS: dict[str, str] = {
+    "layout": (
+        "Arrange the app shell: open/close/focus panes, split and resize areas, "
+        "move panes between docks and regions, create and switch workspaces. "
+        "(Reading the layout needs no load — those verbs are always present.)"
+    ),
     "files": "Browse, read, search, create, and edit files in the workspace.",
     "editor": "Inspect and modify open editor buffers (read, propose edits, format, rename).",
     "terminal": "Run shell commands and manage terminal sessions.",
@@ -555,11 +584,29 @@ _GROUP_DESCRIPTIONS: dict[str, str] = {
         "reports), plus capturing pages and PDFs into the knowledge library."
     ),
     "arxiv": "Search arXiv, read abstracts, and download papers into the library.",
+    "records": (
+        "The user's own record tables (CRM contacts and deals, intake forms, any "
+        "row-shaped data): read them, propose field values for review, and define "
+        "new tables."
+    ),
 }
 
 # Keywords that auto-preload a group for a turn (so common asks stay one-shot). A
 # group's own name is always an implicit keyword.
 _GROUP_KEYWORDS: dict[str, tuple[str, ...]] = {
+    # Deliberately narrow: these must be words that only mean *arranging the shell*.
+    # "open" and "close" are not here — they'd preload the arrangement verbs on
+    # nearly every turn, which is exactly the cost this split exists to avoid.
+    "layout": (
+        "layout",
+        "pane",
+        "workspace",
+        "dock",
+        "split",
+        "fullscreen",
+        "tab strip",
+        "rearrange",
+    ),
     "files": (
         "file",
         "directory",
@@ -692,6 +739,17 @@ _GROUP_KEYWORDS: dict[str, tuple[str, ...]] = {
         "save pdf",
     ),
     "arxiv": ("arxiv", "paper", "preprint", "abstract", "publication"),
+    "records": (
+        "record",
+        "contact",
+        "deal",
+        "crm",
+        "pipeline",
+        "form",
+        "row",
+        "spreadsheet",
+        "data entry",
+    ),
 }
 
 
@@ -701,15 +759,32 @@ def _group_of(name: str) -> str:
     return name.split(".", 1)[0] if "." in name else "layout"
 
 
+def _group_permitted(group: str, allowed: set[str] | None) -> bool:
+    """Whether a scoped agent may reach a group at all. `layout` is app-shell control
+    rather than a capability, so it stays loadable for every agent — scoping only
+    decides whether its arrangement verbs cost schema space up front."""
+    return allowed is None or group in allowed or group == "layout"
+
+
+def _layout_core(spec: AgentSpec | None) -> list[dict[str, Any]]:
+    """The layout verbs an agent starts with: all 21 for the main orchestrator and
+    for any spec that asks for `layout`, otherwise just the 5 read verbs (the rest
+    are one `load_tools("layout")` away)."""
+    if spec is None or spec.tool_groups is None or "layout" in spec.tool_groups:
+        return list(LAYOUT_TOOLS)
+    return list(LAYOUT_READ_TOOLS)
+
+
 def _core_tools(spec: AgentSpec | None = None) -> list[dict[str, Any]]:
-    """Always-present tools: the layout verbs, the peer/delegate tools (spec-gated),
-    the meta tools, and the *ungrouped* backend-plugin agent tools (registered via
-    backend.sdk). Plugin tools that declare a `group` are disclosed progressively
-    instead (see `_all_dynamic_tools`). `spec=None` (the main orchestrator and
-    every pre-roster caller) keeps the full core."""
+    """Always-present tools: the layout verbs (read-only for a scoped agent, see
+    `_layout_core`), the peer/delegate tools (spec-gated), the meta tools, and the
+    *ungrouped* backend-plugin agent tools (registered via backend.sdk). Plugin
+    tools that declare a `group` are disclosed progressively instead (see
+    `_all_dynamic_tools`). `spec=None` (the main orchestrator and every pre-roster
+    caller) keeps the full core."""
     from backend.sdk.registry import registry as _plugins
 
-    tools = list(LAYOUT_TOOLS)
+    tools = _layout_core(spec)
     if spec is None or spec.include_peer_tools:
         tools += list(PEER_TOOLS)
     if spec is None or spec.can_delegate:
@@ -724,15 +799,24 @@ def _core_tools(spec: AgentSpec | None = None) -> list[dict[str, Any]]:
     return tools + core_plugin
 
 
-def _all_dynamic_tools(conn: WsConnection) -> list[dict[str, Any]]:
-    """Every progressively-disclosed tool — grouped backend-plugin tools plus every
-    browser-pushed tool — deduped against the static core (core wins)."""
+def _all_dynamic_tools(
+    conn: WsConnection, spec: AgentSpec | None = None
+) -> list[dict[str, Any]]:
+    """Every progressively-disclosed tool — the layout arrangement verbs (for a spec
+    that doesn't carry them in core), grouped backend-plugin tools, and every
+    browser-pushed tool — deduped against **this spec's** core (core wins).
+
+    The dedupe base has to be spec-aware: computed against the unscoped core it would
+    swallow the layout write verbs for every agent, and `load_tools("layout")` would
+    silently return nothing."""
     from backend.sdk.registry import registry as _plugins
 
-    seen = {t["function"]["name"] for t in _core_tools()}
+    seen = {t["function"]["name"] for t in _core_tools(spec)}
     out: list[dict[str, Any]] = []
-    candidates = _plugins.provider_tools(grouped=True) + _manifest_to_tools(
-        getattr(conn, "agent_tools", [])
+    candidates = (
+        list(LAYOUT_WRITE_TOOLS)
+        + _plugins.provider_tools(grouped=True)
+        + _manifest_to_tools(getattr(conn, "agent_tools", []))
     )
     for t in candidates:
         name = t["function"]["name"]
@@ -797,14 +881,15 @@ def _guides_message(groups: set[str]) -> dict[str, Any] | None:
 
 
 def _group_catalog(
-    conn: WsConnection, allowed: set[str] | None = None
+    conn: WsConnection, allowed: set[str] | None = None, spec: AgentSpec | None = None
 ) -> list[dict[str, Any]]:
     """The loadable groups (dynamic tools only), each with a description + count.
-    `allowed` restricts the catalog to a specialized agent's tool groups."""
+    `allowed` restricts the catalog to a specialized agent's tool groups (`layout`
+    excepted — see `_group_permitted`)."""
     counts: dict[str, int] = {}
-    for t in _all_dynamic_tools(conn):
+    for t in _all_dynamic_tools(conn, spec):
         g = _group_of(t["function"]["name"])
-        if allowed is not None and g not in allowed:
+        if not _group_permitted(g, allowed):
             continue
         counts[g] = counts.get(g, 0) + 1
     return [
@@ -814,7 +899,10 @@ def _group_catalog(
 
 
 def _preload_groups(
-    conn: WsConnection, prompt: str = "", history: list[Any] | None = None
+    conn: WsConnection,
+    prompt: str = "",
+    history: list[Any] | None = None,
+    spec: AgentSpec | None = None,
 ) -> set[str]:
     """Groups to activate up front from prompt/history keywords, so a typical request
     doesn't need an explicit load_tools round first."""
@@ -824,7 +912,7 @@ def _preload_groups(
             if isinstance(m, dict) and isinstance(m.get("content"), str):
                 text += " " + m["content"].lower()
     active: set[str] = set()
-    for g in {grp["name"] for grp in _group_catalog(conn)}:
+    for g in {grp["name"] for grp in _group_catalog(conn, spec=spec)}:
         if g in text or any(kw in text for kw in _GROUP_KEYWORDS.get(g, ())):
             active.add(g)
     return active
@@ -845,9 +933,9 @@ def _select_tools(
     without it the cap is invisible to everything but the log."""
     allowed = set(spec.tool_groups) if spec and spec.tool_groups is not None else None
     selected = _core_tools(spec)
-    for t in _all_dynamic_tools(conn):
+    for t in _all_dynamic_tools(conn, spec):
         group = _group_of(t["function"]["name"])
-        if group in active_groups and (allowed is None or group in allowed):
+        if group in active_groups and _group_permitted(group, allowed):
             selected.append(t)
     if stats is not None:
         stats["selected"] = len(selected)
@@ -1076,6 +1164,41 @@ def _active_editor_message(context: dict[str, Any] | None) -> dict[str, Any] | N
     return {"role": "system", "content": "\n".join(parts)}
 
 
+def _workspace_context_message(context: dict[str, Any] | None) -> dict[str, Any] | None:
+    """A system message describing what the user's current workspace is showing.
+
+    The companion to `_active_editor_message`: that one hands over the focused
+    buffer's full text, this one is a compact index of every *other* visible pane's
+    snapshot. It's what makes a preset workspace a role rather than furniture — the
+    agent in a records workspace sees which record is open without spending a
+    list_open_panes + get_pane_context round on it. The frontend has already applied
+    the pane/char budget (`agent.workspaceContext*` settings); this only formats."""
+    if not isinstance(context, dict):
+        return None
+    panes = context.get("panes")
+    if not isinstance(panes, list) or not panes:
+        return None
+    lines = [
+        "The user's current workspace is showing these panes. This is a live "
+        "snapshot — treat it as what the user can see right now, and do NOT call "
+        "list_open_panes or get_pane_context for a pane already described here "
+        "(use get_pane_context only to read past a clipped field):"
+    ]
+    for pane in panes:
+        if not isinstance(pane, dict):
+            continue
+        snapshot = pane.get("snapshot")
+        if not isinstance(snapshot, dict):
+            continue
+        title = pane.get("title") or pane.get("viewId") or "pane"
+        lines.append(
+            f"- {title} (view: {pane.get('viewId')}, instanceId: "
+            f"{pane.get('instanceId')}): {json.dumps(snapshot, default=str)}"
+        )
+    # Only the header survived — every entry was malformed, so say nothing.
+    return {"role": "system", "content": "\n".join(lines)} if len(lines) > 1 else None
+
+
 def _history_messages(history: list[Any] | None) -> list[dict[str, Any]]:
     """Sanitize prior-turn messages sent by the chat widget into the bare
     {role, content} pairs the providers accept. Only user/assistant text is kept
@@ -1142,7 +1265,7 @@ async def _dispatch_call(
     name = call.name
     if name == "list_tool_groups":
         return {
-            "groups": _group_catalog(conn, allowed),
+            "groups": _group_catalog(conn, allowed, spec),
             "loaded": sorted(active_groups),
         }
     if name == "load_tools":
@@ -1150,12 +1273,12 @@ async def _dispatch_call(
         if isinstance(requested, str):
             requested = [requested]
         requested = requested if isinstance(requested, list) else []
-        available = {g["name"] for g in _group_catalog(conn, allowed)}
+        available = {g["name"] for g in _group_catalog(conn, allowed, spec)}
         loaded = [g for g in requested if g in available]
         active_groups.update(loaded)
         tools_now = [
             t["function"]["name"]
-            for t in _all_dynamic_tools(conn)
+            for t in _all_dynamic_tools(conn, spec)
             if _group_of(t["function"]["name"]) in loaded
         ]
         unknown = [g for g in requested if g not in available]
@@ -1173,9 +1296,9 @@ async def _dispatch_call(
     # Forgiveness: the model called a known tool from a group it hadn't loaded — pull
     # the group in (so it stays visible next round) and run the call. A scoped
     # agent gets no forgiveness outside its allowed groups: the call is refused.
-    if any(t["function"]["name"] == name for t in _all_dynamic_tools(conn)):
+    if any(t["function"]["name"] == name for t in _all_dynamic_tools(conn, spec)):
         group = _group_of(name)
-        if allowed is not None and group not in allowed:
+        if not _group_permitted(group, allowed):
             return {"error": f"tool {name} is outside this agent's allowed groups"}
         active_groups.add(group)
 
@@ -1431,8 +1554,15 @@ async def run_agent_turn(
         active_groups = _preload_groups(conn, prompt, history)
     else:
         active_groups = set(spec.preload_groups)
+        # `layout` is the one group every agent can reach regardless of scope (it's
+        # shell control, not a capability), so a scoped agent still gets the
+        # arrangement verbs up front when the user is plainly asking to rearrange —
+        # otherwise it would burn a load_tools round on "split this pane".
+        if "layout" in _preload_groups(conn, prompt, history, spec):
+            active_groups.add("layout")
     mode_override = None if remote else roster.resolve_mode(spec)
     editor_msg = _active_editor_message(context)
+    workspace_msg = _workspace_context_message(context)
     # Guides for groups the turn starts with — the model never calls load_tools for
     # those, so this is the only chance to hand it the usage notes.
     guides_msg = _guides_message(active_groups) if active_groups else None
@@ -1440,8 +1570,10 @@ async def run_agent_turn(
         {"role": "system", "content": spec.system_prompt},
         *([guides_msg] if guides_msg else []),
         *_history_messages(history),
-        # The focused buffer goes right before the user turn so it's the freshest
-        # context the model sees (and isn't diluted by prior conversation).
+        # The workspace index and then the focused buffer go right before the user
+        # turn so they're the freshest context the model sees (and aren't diluted by
+        # prior conversation). Focused buffer last: it's the most specific.
+        *([workspace_msg] if workspace_msg else []),
         *([editor_msg] if editor_msg else []),
         {"role": "user", "content": prompt},
     ]

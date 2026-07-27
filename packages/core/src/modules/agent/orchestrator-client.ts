@@ -5,8 +5,15 @@
  * docs/modules/agent-chat.md and backend/modules/agent/orchestrator.py.
  */
 import { readActiveAgentContext } from '../../agent-context';
+import { readVisibleAgentContexts } from '../../layout/controller';
+import { getSetting } from '../../settings';
 import { sendChannel, subscribeChannel } from '../../ws';
 import { executeTool, paneTitle } from './tool-exec';
+
+/** Ambient-context budget. Small on purpose: this rides on EVERY turn, so it is
+ * a per-turn tax, not a one-off read. Both are overridable in settings. */
+const DEFAULT_CONTEXT_PANES = 6;
+const DEFAULT_CONTEXT_CHARS = 1500;
 
 export interface AgentCallbacks {
   /** The model's final natural-language reply for the turn (authoritative). */
@@ -166,11 +173,21 @@ export function askAgent(
     // Attach the focused editor buffer (if any) so the backend can give the model
     // the open code up front — it can then alter it without a discovery round-trip.
     const context = readActiveAgentContext();
+    // …and, alongside it, what the rest of this workspace is showing, so the agent
+    // a preset workspace opens as already knows what it is looking at.
+    const panes =
+      (getSetting<boolean>('agent.workspaceContext') ?? true)
+        ? readVisibleAgentContexts(
+            getSetting<number>('agent.workspaceContextPanes') ?? DEFAULT_CONTEXT_PANES,
+            getSetting<number>('agent.workspaceContextBudget') ?? DEFAULT_CONTEXT_CHARS,
+            context?.instanceId,
+          )
+        : [];
     sendChannel('agent', 'ask', {
       turnId,
       prompt,
       history: history ?? [],
-      context,
+      context: context ? { ...context, panes } : panes.length ? { panes } : null,
       ...(opts?.agentId && opts.agentId !== 'main' ? { agentId: opts.agentId } : {}),
     });
   });

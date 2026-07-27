@@ -31,6 +31,8 @@ import { matchSlash, runSlash } from './slash';
 import { claimPendingChatSession, onOpenChatSession } from './openSession';
 import { listRoots, listDir } from '../files/api';
 import { registry, type OpenPaneInfo } from '../../registry';
+import { agentForWorkspace, setWorkspaceAgent } from '../../layout/persistence';
+import { useWorkspaces } from '../../workspace-store';
 
 const AVATAR_MOODS = Object.keys(DEFAULT_AVATAR_MOODS);
 
@@ -141,8 +143,11 @@ export function ChatWidget() {
   const [prompt, setPrompt] = useState('');
   const [busy, setBusy] = useState(false);
   // The roster agent this pane is talking to; each agent keeps its own sessions.
+  // It follows the *workspace*: a preset declares the persona its layout is for
+  // (`FramePreset.agent`), so switching to CRM or Data Ops switches who answers.
   const [roster, setRoster] = useState<RosterAgent[]>([]);
-  const [agentId, setAgentId] = useState('main');
+  const { activeId: workspaceId } = useWorkspaces();
+  const [agentId, setAgentId] = useState(() => agentForWorkspace(workspaceId));
   const scrollRef = useRef<HTMLDivElement>(null);
   const turnsRef = useRef<ChatTurn[]>([]);
   turnsRef.current = turns;
@@ -173,6 +178,20 @@ export function ChatWidget() {
         /* backend down — the picker just shows the orchestrator */
       });
   }, []);
+
+  // Follow the workspace: each preset workspace opens as its declared persona
+  // (or the user's override for it). Switching workspaces re-points the pane,
+  // which then reloads that agent's own sessions through the effect below.
+  useEffect(() => {
+    setAgentId(agentForWorkspace(workspaceId));
+  }, [workspaceId]);
+
+  /** Picking an agent by hand overrides the workspace's declared persona, and the
+   * override sticks so switching away and back doesn't undo the choice. */
+  const pickAgent = (id: string) => {
+    setWorkspaceAgent(workspaceId, id);
+    setAgentId(id);
+  };
 
   // Restore the selected agent's active session (on mount, after a pane remount,
   // and whenever the user switches agents — each agent has its own sessions).
@@ -416,7 +435,7 @@ export function ChatWidget() {
     if (text.startsWith('/')) {
       setPrompt('');
       setTurns((prev) => [...prev, { role: 'user', text, ephemeral: true }]);
-      const out = await runSlash(text, { newSession, setAgent: setAgentId });
+      const out = await runSlash(text, { newSession, setAgent: pickAgent });
       setTurns((prev) => [...prev, { role: 'system', text: out, ephemeral: true }]);
       return;
     }
@@ -479,7 +498,7 @@ export function ChatWidget() {
         {roster.length > 1 && (
           <select
             value={agentId}
-            onChange={(e) => setAgentId(e.target.value)}
+            onChange={(e) => pickAgent(e.target.value)}
             aria-label="Agent"
             title={roster.find((a) => a.id === agentId)?.description ?? ''}
             disabled={busy}

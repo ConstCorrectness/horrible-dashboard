@@ -144,6 +144,10 @@ layout shell and how it behaves in the browser vs the desktop app:
 - [Library](modules/library.mdx) — **Web + notes slice implemented.** Ingest blog
   URLs and notes into the vector store as sources + chunks, watch them ingest live,
   and semantic-search them for RAG.
+- [Records](modules/records.mdx) — **Implemented.** User-defined tables (grid, form,
+  board) stored as real `rec_*` tables in the app database, with an agent write path
+  that **proposes** field values with provenance for per-field review instead of
+  committing. Backs the CRM and Data Entry workspaces.
 - [Research](modules/research.mdx) — **Phase 1 implemented.** The artifact blob
   store, SingleFile-style page capture (native inliner, AGPL-free), PDF
   pipeline + pdf.js viewer, sandboxed saved-page viewer, and Obsidian export;

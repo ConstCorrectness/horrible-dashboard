@@ -100,6 +100,30 @@ export const agentModule: ModuleManifest = {
       type: 'boolean',
       default: true,
     },
+    {
+      key: 'agent.workspaceContext',
+      title: 'Send workspace context',
+      description:
+        'Attach a snapshot of the panes visible in the current workspace to every turn, so the agent knows what you are looking at without asking. Turn off to send only the focused pane.',
+      type: 'boolean',
+      default: true,
+    },
+    {
+      key: 'agent.workspaceContextPanes',
+      title: 'Workspace context: panes',
+      description:
+        'How many visible panes may contribute their snapshot to a turn. This rides on every turn, so raising it costs context on all of them.',
+      type: 'number',
+      default: 6,
+    },
+    {
+      key: 'agent.workspaceContextBudget',
+      title: 'Workspace context: characters per pane',
+      description:
+        "Size limit for each pane's snapshot. Oversized fields are clipped with a note pointing the agent at get_pane_context for the full read.",
+      type: 'number',
+      default: 1500,
+    },
   ],
   // The orchestrator model is a dropdown of the provider's live models (not a static
   // enum), so it's a custom section rather than a declarative SettingDecl; temperature

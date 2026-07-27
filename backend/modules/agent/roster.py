@@ -76,6 +76,41 @@ RESEARCHER_PROMPT = (
 )
 
 
+CRM_PROMPT = (
+    "You are the CRM agent for horrible-dashboard. You keep the user's records "
+    "straight: contacts, deals and the activity log behind them. The record tables "
+    "are yours to read and write through the records tools, and you can enrich them "
+    "from the open web (browser, search) and from the user's connected GitHub and "
+    "Google accounts.\n"
+    "Rules:\n"
+    "- Call records.listSchemas before anything else — field keys are not guessable, "
+    "and the user may have renamed or added fields.\n"
+    "- Enriching a record from an outside source (a company page, a profile, a "
+    "search result) is a records.propose, not a records.commit: the user reviews "
+    "what you found, per field, with your citation next to it.\n"
+    "- records.commit is for bookkeeping the user explicitly asked for — moving a "
+    "deal's stage, logging a call they just described.\n"
+    "- Never invent a contact detail. If a lookup found nothing, say so and leave "
+    "the field empty.\n" + _SHARED_RULES
+)
+
+INTAKE_PROMPT = (
+    "You are the data-entry agent for horrible-dashboard. The user has a source "
+    "document open — a PDF, a scanned page, a web page — and a record form beside "
+    "it. Your job is to read the source and fill the form.\n"
+    "Rules:\n"
+    "- ALWAYS use records.propose. NEVER use records.commit. The user reviews every "
+    "field before it is saved; that review is the entire point of this workflow.\n"
+    "- Cite the source of every field: which page, section, line or heading you took "
+    "it from. A field the user cannot verify at a glance is worse than a blank one.\n"
+    "- Never infer, complete or tidy a value that is not in the document. If a field "
+    "isn't there, leave it out and say which ones you couldn't find.\n"
+    "- Read the source before proposing (browser.read / research tools / "
+    "get_pane_context on the viewer) — do not propose from the file name or title.\n"
+    "- Propose the whole form in one call, not one field per call.\n" + _SHARED_RULES
+)
+
+
 def _builtin_agents() -> dict[str, AgentSpec]:
     from backend.modules.agent.orchestrator import SYSTEM_PROMPT
 
@@ -116,6 +151,24 @@ def _builtin_agents() -> dict[str, AgentSpec]:
             system_prompt=RESEARCHER_PROMPT,
             tool_groups=["browser", "library", "github", "google", "research", "arxiv"],
             preload_groups=["research", "library", "arxiv"],
+        ),
+        "crm": AgentSpec(
+            id="crm",
+            name="CRM",
+            description="Contacts, deals and activity: keeps the record tables "
+            "current and enriches them from the web and connected accounts.",
+            system_prompt=CRM_PROMPT,
+            tool_groups=["records", "browser", "search", "github", "google", "library"],
+            preload_groups=["records"],
+        ),
+        "intake": AgentSpec(
+            id="intake",
+            name="Data Entry",
+            description="Reads the open source document and proposes the record "
+            "form's values for review, citing where each one came from.",
+            system_prompt=INTAKE_PROMPT,
+            tool_groups=["records", "browser", "research", "library"],
+            preload_groups=["records", "research"],
         ),
     }
 

@@ -82,12 +82,17 @@ def test_core_tools_gated_by_spec() -> None:
     names_default = {t["function"]["name"] for t in orchestrator._core_tools()}
     assert {"agent.ask_peer", "agent.delegate", "list_tool_groups"} <= names_default
 
+    # The main orchestrator keeps every layout verb — driving the shell is its job.
+    assert {"open_pane", "split_area", "get_layout"} <= names_default
+
     coder = roster.get_agent("coder")
     names_coder = {t["function"]["name"] for t in orchestrator._core_tools(coder)}
     assert "agent.ask_peer" not in names_coder
     assert "agent.delegate" not in names_coder
-    # Layout verbs and the meta tools stay for every local agent.
-    assert {"open_pane", "get_layout", "load_tools"} <= names_coder
+    # A scoped agent keeps the layout READ verbs (orientation) and the meta tools,
+    # but pays nothing for the arrangement verbs until it loads the `layout` group.
+    assert {"get_layout", "list_open_panes", "load_tools"} <= names_coder
+    assert names_coder.isdisjoint({"open_pane", "split_area", "toggle_dock"})
 
 
 def test_select_tools_scoped_to_spec_groups() -> None:
@@ -127,7 +132,9 @@ def test_dispatch_scoped_catalog_and_no_out_of_scope_forgiveness() -> None:
     # so assert containment, not equality).
     names = {g["name"] for g in catalog["groups"]}
     assert "editor" in names
-    assert names <= set(coder.tool_groups or [])
+    # `layout` is shell control, not a capability, so it stays loadable for every
+    # agent regardless of scope — it just isn't carried in core.
+    assert names <= set(coder.tool_groups or []) | {"layout"}
     assert "browser" not in names
 
     loaded = asyncio.run(
@@ -146,6 +153,39 @@ def test_dispatch_scoped_catalog_and_no_out_of_scope_forgiveness() -> None:
         orchestrator._dispatch_call(conn, "t", _Call("browser.read"), set(), coder)
     )
     assert "outside this agent's allowed groups" in refused["error"]
+
+
+def test_scoped_agent_can_load_the_layout_group() -> None:
+    """The arrangement verbs a scoped agent drops from core must be reachable again.
+
+    The trap: `_all_dynamic_tools` dedupes against the core, and computed against
+    the *unscoped* core that swallows every layout verb — so load_tools("layout")
+    would report success and hand back an empty list."""
+    conn = FakeConn(agent_tools=[])
+    coder = roster.get_agent("coder")
+
+    class _Call:
+        def __init__(self, name: str, arguments: dict[str, Any] | None = None) -> None:
+            self.name = name
+            self.arguments = arguments or {}
+
+    active: set[str] = set()
+    loaded = asyncio.run(
+        orchestrator._dispatch_call(
+            conn, "t", _Call("load_tools", {"groups": ["layout"]}), active, coder
+        )
+    )
+    assert loaded["loaded"] == ["layout"]
+    assert {"open_pane", "split_area", "toggle_dock"} <= set(loaded["tools"])
+    # …and the next round actually presents them.
+    names = {
+        t["function"]["name"] for t in orchestrator._select_tools(conn, active, coder)
+    }
+    assert {"open_pane", "split_area", "get_layout"} <= names
+
+    # The main orchestrator carries them in core, so they must not ALSO show up as a
+    # loadable group (that would double-list every layout verb).
+    assert "layout" not in {g["name"] for g in orchestrator._group_catalog(conn)}
 
 
 def test_ungrouped_plugin_core_tools_filtered_for_scoped_agents() -> None:

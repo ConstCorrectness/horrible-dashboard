@@ -36,6 +36,46 @@ function presetFor(id: string | null): FramePreset | undefined {
   return id ? registry.framePresets.find((p) => p.id === id) : undefined;
 }
 
+// --- Workspace ↔ agent binding -----------------------------------------------
+// A preset declares the persona its workspace opens with (`FramePreset.agent`).
+// Picking a different agent from the chat's dropdown is a per-workspace override
+// that outlives a switch away and back — kept in localStorage rather than the
+// workspace record because it is a UI preference of *this* browser, not part of
+// the layout every client shares.
+
+const AGENT_OVERRIDES_KEY = 'horrible.workspaceAgents';
+
+function readOverrides(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(AGENT_OVERRIDES_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, string>) : {};
+  } catch {
+    return {}; // private mode / corrupt entry — fall back to the preset's agent
+  }
+}
+
+/** The roster agent a workspace's chat should open as: the user's override for it,
+ * else its preset's declared agent, else the main orchestrator. */
+export function agentForWorkspace(workspaceId: string | null): string {
+  if (!workspaceId) return 'main';
+  return readOverrides()[workspaceId] ?? presetFor(workspaceId)?.agent ?? 'main';
+}
+
+/** Remember the agent the user picked for a workspace. Choosing the workspace's
+ * declared default clears the override rather than pinning it. */
+export function setWorkspaceAgent(workspaceId: string | null, agentId: string): void {
+  if (!workspaceId) return;
+  const overrides = readOverrides();
+  if (agentId === (presetFor(workspaceId)?.agent ?? 'main')) delete overrides[workspaceId];
+  else overrides[workspaceId] = agentId;
+  try {
+    localStorage.setItem(AGENT_OVERRIDES_KEY, JSON.stringify(overrides));
+  } catch {
+    /* storage unavailable — the choice just doesn't persist */
+  }
+}
+
 function seed(preset: FramePreset): FrameState {
   return seedFromPreset(preset, {
     knownViews: knownViews(),

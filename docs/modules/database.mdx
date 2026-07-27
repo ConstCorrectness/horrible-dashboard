@@ -17,8 +17,14 @@ dashboard's own local vector store as the built-in **`app`** connection.
 
 - **Connections** — a named-connection store. The built-in `app` connection (the node's
   own SQLite database, `.data/app.db` — library sources, browser history, code symbols,
-  tasks) is always present and read-only; you add your own connections for external
-  databases. Connections persist in `.data/connections.json`.
+  tasks, and every `rec_*` table the [records](records.mdx) module creates) is always
+  present and read-only; you add your own connections for external databases.
+  Connections persist in `.data/connections.json`.
+
+  Records tables being ordinary tables here is the whole reason that module stores
+  them physically rather than as JSON blobs: a CRM built in the Records panes is
+  queryable from this console — `SELECT stage, count(*) FROM rec_deals GROUP BY
+  stage` — with no records-specific support in the driver layer.
 
   :::note `app` is the app database; `vectors` is the vector store
   Two built-ins, because the node keeps its data in two different shapes. `app` is the

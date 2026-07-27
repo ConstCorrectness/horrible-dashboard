@@ -212,6 +212,39 @@ def test_active_editor_message_skips_unsaved_or_missing() -> None:
     )
 
 
+def test_workspace_context_message_indexes_visible_panes() -> None:
+    ctx = {
+        "instanceId": "records.form#1",
+        "snapshot": {"uri": "x", "content": "y"},
+        "panes": [
+            {
+                "instanceId": "records.board#2",
+                "viewId": "records.board",
+                "title": "Board",
+                "location": "area",
+                "snapshot": {"schema": "deals", "stages": ["new", "won"]},
+            },
+            {"instanceId": "junk", "viewId": "junk"},  # no snapshot — dropped
+        ],
+    }
+    msg = orchestrator._workspace_context_message(ctx)
+    assert msg is not None
+    assert msg["role"] == "system"
+    assert "records.board#2" in msg["content"]
+    assert '"deals"' in msg["content"]
+    assert "junk" not in msg["content"]
+    # It must actively suppress the discovery round it exists to replace.
+    assert "get_pane_context" in msg["content"]
+
+
+def test_workspace_context_message_absent_without_panes() -> None:
+    assert orchestrator._workspace_context_message(None) is None
+    assert orchestrator._workspace_context_message({"panes": []}) is None
+    assert orchestrator._workspace_context_message({"snapshot": {"uri": "x"}}) is None
+    # Every entry malformed → no message at all, not a bare header.
+    assert orchestrator._workspace_context_message({"panes": ["nope"]}) is None
+
+
 def test_turn_injects_active_editor_context(monkeypatch) -> None:
     # The focused buffer must reach the provider payload, right before the user turn.
     seen: dict[str, Any] = {}

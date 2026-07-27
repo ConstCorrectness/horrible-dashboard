@@ -263,6 +263,8 @@ sessions. Built-ins (`backend/modules/agent/roster.py`):
 | `coder`      | files, editor, terminal, code, symbols       | editor, files, symbols | `acceptEdits` |
 | `dba`        | database, symbols                            | database           | session mode  |
 | `researcher` | browser, library, github, google, research, arxiv | research, library, arxiv | session mode  |
+| `crm`        | records, browser, search, github, google, library | records            | session mode  |
+| `intake`     | records, browser, research, library           | records, research  | session mode  |
 
 Mechanics (`run_agent_turn(agent_id=…)`):
 
@@ -270,6 +272,12 @@ Mechanics (`run_agent_turn(agent_id=…)`):
   the spec's `preload_groups`, and `list_tool_groups`/`load_tools` only see its
   allowed groups (no forgiveness auto-load outside them). The peer tools and
   `agent.delegate` are core only for specs that declare them (`main`).
+- **A workspace picks the agent.** A `FramePreset` may declare `agent: '<id>'`, and
+  the docked chat opens as that agent for that workspace — Data Ops as the `dba`,
+  CRM as `crm`, Data Entry as `intake`. Choosing another from the picker is a
+  per-workspace override (kept in `localStorage`, keyed by workspace id) so it
+  survives switching away and back; the declared agent is the default, not a lock.
+  See [windowing](../architecture/windowing.mdx).
 - **Per-agent settings** `agent.<id>.model/temperature/contextSize/maxTokens/topP/permissionMode`
   fall back to the `agent.orchestrator.*` keys, then defaults (`roster.agent_setting`).
   The permission-mode override threads through the gate; the user's explicit
@@ -376,6 +384,20 @@ writes it back with `editor.proposeEdit(uri=…)` — no `list_open_panes` +
 `get_pane_context` discovery first (a multi-step dance weak local models often skip).
 Unsaved scratch buffers (no uri) are excluded.
 
+**Workspace context.** Alongside the focused pane, `askAgent` attaches
+`context.panes` — a snapshot of every *visible* pane that exposes one
+(`readVisibleAgentContexts`: each area's active tab, each visible dock's active
+tool, floating panes; background tabs are unmounted, so their state isn't readable
+anyway). The backend formats it as a compact index just before the user turn
+(`_workspace_context_message`). This is what makes a preset workspace a role rather
+than furniture: the CRM agent already knows which record is open, and the intake
+agent which document is on screen, without spending a `list_open_panes` +
+`get_pane_context` round on it. It rides on **every** turn, so it is budgeted —
+`agent.workspaceContext` (on/off), `agent.workspaceContextPanes` (6) and
+`agent.workspaceContextBudget` (1500 chars per pane, clipping oversized *fields*
+rather than the whole object, so the JSON stays parseable and the note points the
+model at `get_pane_context` for the full read).
+
 The frontend executes each relayed `tool_call` against the registry and the
 `registry.layoutController` seam and the frame controller (installed by
 `Frame.tsx`), then replies. This
@@ -467,13 +489,32 @@ that, so tools are exposed **hierarchically and injected on demand** rather than
 flattened and pruned.
 
 Tools belong to **groups** by name prefix (`files`, `editor`, `terminal`,
-`visualizer`, `database`, `network`, …; layout verbs are the `layout` core). Each
-turn the model sees only:
+`visualizer`, `database`, `records`, `network`, …; the dotless layout verbs are the
+`layout` group). Each turn the model sees only:
 
-* the **core** — the layout verbs, the peer tools (`list_peers`, `agent.ask_peer`),
-  and two **meta-tools**: `list_tool_groups()` (discover groups + counts) and
-  `load_tools(groups[])` (enable a group); plus
+* the **core** — the layout verbs (see below), the peer tools (`list_peers`,
+  `agent.ask_peer`), and two **meta-tools**: `list_tool_groups()` (discover groups
+  + counts) and `load_tools(groups[])` (enable a group); plus
 * the tools of every **active** group.
+
+The **layout verbs split by cost**, because they were the largest always-on block
+and most agents never rearrange anything. The five *read* verbs
+(`list_available_panes`, `list_workspaces`, `list_open_panes`, `get_layout`,
+`get_pane_context`) stay in every agent's core — any agent may need to see what the
+user is looking at. The sixteen *arrangement* verbs stay in core only for `main`
+(driving the shell is its job) and for any spec that lists `layout` in its
+`tool_groups`; every other agent gets them on demand via `load_tools("layout")`.
+Measured with the interpretability recorder's own counter, that takes a scoped
+agent's always-on core from **26 tools / 2351 tool-schema tokens to 7 / 563** —
+the 16 arrangement verbs alone were 1455 tokens on every round of every turn.
+`layout` is shell control rather than a
+capability, so it stays loadable for **every** agent regardless of scope — scoping
+only decides whether it costs schema space up front. Two traps worth knowing:
+`_all_dynamic_tools` dedupes against the core, and that dedupe base **must** be
+spec-aware or the arrangement verbs are swallowed and `load_tools("layout")`
+silently returns nothing; and the `layout` keyword list is deliberately narrow
+(`pane`, `dock`, `split`, … but never `open`/`close`), since a keyword that fires
+on most turns would give back exactly what the split saves.
 
 `run_agent_turn` recomputes the presented list **each round** from `active_groups`,
 so a group loaded this round is **injected** into the next model call (true dynamic

@@ -531,6 +531,33 @@ export function listPanes(frame: FrameState): LocatedPane[] {
   return out;
 }
 
+/**
+ * The panes actually on screen: each area's active tab, each visible dock's active
+ * tool, and every floating pane. Distinct from `listPanes`, which includes the
+ * background tabs — those are unmounted, so their live state isn't readable anyway.
+ * A fullscreened area hides everything else, including the docks.
+ */
+export function visiblePanes(frame: FrameState): LocatedPane[] {
+  const out: LocatedPane[] = [];
+  const areas = collectAreas(frame.center);
+  const shown = frame.fullscreenAreaId
+    ? areas.filter((a) => a.id === frame.fullscreenAreaId)
+    : areas;
+  for (const area of shown) {
+    const tab = area.tabs[area.activeTab];
+    if (tab) out.push({ pane: tab, location: { kind: 'area', areaId: area.id } });
+  }
+  if (frame.fullscreenAreaId) return out;
+  for (const side of ['left', 'right', 'bottom'] as const) {
+    const dock = frame.docks[side];
+    if (!dock.visible) continue;
+    const tool = dock.tools.find((t) => t.instanceId === dock.activeTool);
+    if (tool) out.push({ pane: tool, location: { kind: 'dock', dock: side } });
+  }
+  for (const f of frame.floating) out.push({ pane: f.pane, location: { kind: 'floating' } });
+  return out;
+}
+
 /** Apply `fn` to a pane instance wherever it lives. Null if unknown. */
 export function updatePaneAnywhere(
   frame: FrameState,

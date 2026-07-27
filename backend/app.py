@@ -69,6 +69,12 @@ from backend.modules.library import push_library_events
 from backend.modules.library import queue_handlers as _library_queue_handlers  # noqa: F401 — registers the ingest task handlers on import (see its docstring)
 from backend.modules.interpretability import router as interpretability_router
 from backend.modules.library import router as library_router
+from backend.modules.records import (
+    init_records_db,
+    push_records_events,
+    register_records_tools,
+)
+from backend.modules.records import router as records_router
 from backend.modules.lsp import LspManager
 from backend.modules.lsp import router as lsp_router
 from backend.modules.mcp import router as mcp_router
@@ -135,6 +141,9 @@ async def lifespan(app: FastAPI):
     queue.start()
     # Search caches + crawl tables, and the built-in seed list on first run.
     init_search_db()
+    # Records catalog + proposal queue (the per-schema data tables are created on
+    # demand, when a schema is defined).
+    init_records_db()
     # Deep-research runner: resumes any run that was in flight when the process
     # last died (steps stuck `running` reset to `pending`), then works the queue.
     research_runner.start()
@@ -188,6 +197,7 @@ app.include_router(agent_router, prefix="/api")
 app.include_router(workspace_router, prefix="/api")
 app.include_router(database_router, prefix="/api")
 app.include_router(library_router, prefix="/api")
+app.include_router(records_router, prefix="/api")
 app.include_router(artifacts_router, prefix="/api")
 app.include_router(research_router, prefix="/api")
 app.include_router(search_router, prefix="/api")
@@ -251,6 +261,10 @@ register_arxiv_tools()
 # in the orchestrator's `_GROUP_DESCRIPTIONS`.
 register_search_tools()
 
+# Register the records agent tools (grouped under `records`): read + propose are
+# free, commit and createSchema go through the permission gate.
+register_records_tools()
+
 # Discover and mount backend plugins (bundled, HORRIBLE_PLUGINS_DIR, and pip entry
 # points). Ships empty; each plugin's routes mount under /api + its prefix. Agent
 # tools, /ws channels, dash facades, and lifespan hooks are read from the registry
@@ -296,6 +310,9 @@ async def ws(websocket: WebSocket) -> None:
     files_task = asyncio.create_task(push_file_events(conn))
     # Fan library ingestion status (queued→…→ready/failed) to this browser.
     library_task = asyncio.create_task(push_library_events(conn))
+    # Fan record proposals + committed rows to this browser, so an open form shows
+    # the agent's extraction the moment it files one.
+    records_task = asyncio.create_task(push_records_events(conn))
     # Fan deep-research run/step progress + synthesis deltas to this browser.
     research_task = asyncio.create_task(push_research_events(conn))
     # Fan focused-crawl progress (seed status, per-page results) to this browser.
@@ -365,6 +382,7 @@ async def ws(websocket: WebSocket) -> None:
         telemetry_task.cancel()
         files_task.cancel()
         library_task.cancel()
+        records_task.cancel()
         research_task.cancel()
         crawl_task.cancel()
         code_task.cancel()

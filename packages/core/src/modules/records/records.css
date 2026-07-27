@@ -1,0 +1,435 @@
+/* Records panes (grid / form / board / rail). Shares the shell's tokens
+   (--bg-raised, --border, --text-dim, --accent) so it themes with everything
+   else; only layout and the proposal-diff treatment live here. */
+
+.rec-grid,
+.rec-form,
+.rec-board,
+.rec-list {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  font-size: 0.85rem;
+}
+
+.rec-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.35rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.rec-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rec-dim {
+  color: var(--text-dim);
+  font-size: 0.78rem;
+}
+
+.rec-pad {
+  padding: 0.5rem 0.6rem;
+}
+
+.rec-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  height: 100%;
+  padding: 1.5rem;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
+.rec-error {
+  padding: 0.35rem 0.6rem;
+  color: #ff6b6b;
+  font-size: 0.78rem;
+}
+
+.rec-hint {
+  flex: 0 0 auto;
+  padding: 0.25rem 0.6rem;
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 0.72rem;
+}
+
+/* --- buttons + inputs ---------------------------------------------------- */
+
+.rec-btn {
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+
+.rec-btn:hover {
+  border-color: var(--accent);
+}
+
+.rec-btn-primary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.rec-btn-ghost {
+  border-color: transparent;
+  color: var(--text-dim);
+}
+
+.rec-toolbar .rec-btn-primary {
+  margin-left: auto;
+}
+
+.rec-input {
+  width: 100%;
+  padding: 0.2rem 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-raised);
+  color: inherit;
+  font: inherit;
+  font-size: 0.82rem;
+}
+
+.rec-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.rec-textarea {
+  resize: vertical;
+  min-height: 4.5rem;
+}
+
+/* --- grid ---------------------------------------------------------------- */
+
+.rec-grid-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.rec-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.rec-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+  text-align: left;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.rec-table td {
+  padding: 0.2rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  max-width: 22rem;
+}
+
+.rec-cell {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rec-row {
+  cursor: pointer;
+}
+
+.rec-row:hover {
+  background: var(--bg-raised);
+}
+
+.rec-row-selected {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.rec-col-actions {
+  width: 2rem;
+  text-align: right;
+}
+
+/* --- form ---------------------------------------------------------------- */
+
+.rec-form-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 0.5rem 0.6rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.rec-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.rec-label {
+  font-size: 0.74rem;
+  color: var(--text-dim);
+}
+
+.rec-required {
+  color: var(--accent);
+  margin-left: 0.15rem;
+}
+
+/* A proposed field is visually a diff, not an input — the user is reviewing, not
+   typing, and the two modes must never be confusable. */
+.rec-field-proposed {
+  padding: 0.35rem 0.45rem;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.rec-diff {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.rec-diff-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: baseline;
+}
+
+.rec-diff-tag {
+  flex: 0 0 4.2rem;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-dim);
+}
+
+.rec-diff-old {
+  color: var(--text-dim);
+  text-decoration: line-through;
+}
+
+.rec-diff-new {
+  font-weight: 600;
+}
+
+.rec-provenance {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rec-accept {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+
+.rec-proposal {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.rec-proposal-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.rec-proposal-actions {
+  display: flex;
+  gap: 0.35rem;
+  margin-left: auto;
+}
+
+/* --- board --------------------------------------------------------------- */
+
+.rec-board-columns {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  overflow-x: auto;
+}
+
+.rec-column {
+  flex: 0 0 14rem;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-raised);
+}
+
+.rec-column-over {
+  border-color: var(--accent);
+}
+
+.rec-column-head {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.76rem;
+  font-weight: 600;
+}
+
+.rec-column-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.35rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.rec-card {
+  padding: 0.35rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  cursor: grab;
+}
+
+.rec-card:hover {
+  border-color: var(--accent);
+}
+
+.rec-card-selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.rec-card-title {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rec-card-sub {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rec-card-add {
+  align-self: flex-start;
+}
+
+/* --- rail list ----------------------------------------------------------- */
+
+.rec-list-schemas {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--border);
+}
+
+.rec-schema {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.4rem;
+  padding: 0.25rem 0.6rem;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.82rem;
+  text-align: left;
+}
+
+.rec-schema:hover {
+  background: var(--bg-raised);
+}
+
+.rec-schema-active {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  font-weight: 600;
+}
+
+.rec-pending {
+  flex: 0 0 auto;
+  padding: 0.25rem 0.6rem;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font-size: 0.75rem;
+}
+
+.rec-search {
+  flex: 0 0 auto;
+  margin: 0.35rem 0.5rem;
+  width: auto;
+}
+
+.rec-list-rows {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.rec-item {
+  padding: 0.2rem 0.6rem;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8rem;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rec-item:hover {
+  background: var(--bg-raised);
+}
+
+.rec-item-active {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
