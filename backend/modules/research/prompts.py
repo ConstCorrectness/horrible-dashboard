@@ -34,12 +34,18 @@ collide or leave gaps: give each a DISTINCT objective, say what its output must
 look like, which tools to prefer, and what is out of its scope.
 
 Available subagent tools: arxiv_search/arxiv_get (academic papers),
-web_search (general web), fetch_page (read any URL as text),
-library_search (the user's own saved knowledge), save_source (archive a
-page worth keeping as evidence).
+web_search (the live web across every configured engine at once; depth='deep'
+also reads the top pages), index_search (this node's own crawled index of ML
+sites, blogs and API docs — instant and free, but only covers seeded sites),
+fetch_page (read any URL as text), library_search (the user's own saved
+knowledge), save_source (archive a page worth keeping as evidence).
 
 Guidance to bake into tool_guidance: start with broad, short queries to map the
 landscape, then narrow; prefer primary sources; note the source of every claim.
+Reach for index_search and library_search before web_search on documentation and
+framework questions — they cost nothing and answer instantly. One web_search
+already queries several engines in parallel, so re-running it with reworded
+queries duplicates work it does internally; change the angle, not the phrasing.
 
 Respond with ONLY a JSON object, no prose, in exactly this shape:
 {{
@@ -94,8 +100,85 @@ Write a well-structured markdown report that answers the query:
 - Note disagreements between sources and open questions honestly.
 - Do not invent sources or cite numbers not in the list."""
 
+CRITIQUE_PROMPT = """You are the lead researcher reviewing what your subagents
+found, before writing anything. Your job is to find the GAPS, not to summarize.
+
+Query: {query}
+
+What you asked for:
+{plan}
+
+What came back (sources numbered globally):
+{findings}
+{followups}
+Judge honestly:
+- Which parts of the query are still unanswered or only thinly supported?
+- Where does the evidence rest on a single source, or on sources that would all
+  say the same thing?
+- What did a subagent claim without showing where it came from?
+
+If the findings genuinely answer the query, say so and stop — spawning another
+round to confirm what you already know is waste. Otherwise write up to
+{max_subagents} NEW subagent tasks that target the gaps specifically. Do not
+re-run work that has already been done.
+
+Respond with ONLY a JSON object, no prose, in exactly this shape:
+{{
+  "sufficient": true | false,
+  "gaps": ["what is still missing, one per entry"],
+  "subagents": [
+    {{
+      "name": "short-slug",
+      "objective": "the specific gap this closes",
+      "output_format": "what its findings should look like",
+      "tool_guidance": "which tools to lead with and how",
+      "boundaries": "what it must NOT spend calls on",
+      "max_tool_calls": 8
+    }}
+  ]
+}}
+
+When "sufficient" is true, "subagents" must be an empty array."""
+
+CRITIQUE_REPAIR_PROMPT = """Your previous reply was not valid JSON of the required
+shape ({error}). Reply again with ONLY the JSON object, nothing else."""
+
+VERIFY_EXTRACT_PROMPT = """You are auditing a research report for how well its
+claims are supported.
+
+Report:
+{report}
+
+Extract the report's LOAD-BEARING factual claims — the ones a reader would act
+on, or would be misled by if they were wrong. Skip background, definitions and
+hedged statements. Aim for {max_claims} at most; fewer is fine.
+
+For each, record the citation numbers [n] actually attached to it in the report.
+A claim with no marker gets an empty list.
+
+Respond with ONLY a JSON array, no prose:
+[{{"claim": "the claim in one sentence", "citations": [1, 4]}}]"""
+
+CONTRADICTIONS_PROMPT = """You are checking a body of research findings for
+DISAGREEMENT between sources.
+
+Query: {query}
+
+Findings (sources numbered globally):
+{findings}
+
+Find places where sources genuinely conflict — different numbers for the same
+quantity, opposite conclusions, claims that cannot both be true. Ignore
+differences of emphasis, wording, or scope. If sources broadly agree, return an
+empty array; inventing conflict is worse than reporting none.
+
+Respond with ONLY a JSON array, no prose:
+[{{"topic": "what they disagree about",
+   "positions": [{{"source": 1, "claim": "what this source says"}}]}}]"""
+
 CITATIONS_PROMPT = """You are the citation checker for a research report. You get
-the report and the numbered source list it was written against.
+the report, the numbered source list it was written against, and an independence
+audit of its claims.
 
 Report:
 {report}
@@ -103,11 +186,22 @@ Report:
 Sources:
 {sources}
 
+Audit:
+{verification}
+
 Tasks:
 1. Verify every [n] marker refers to a source that plausibly supports the claim
    it is attached to; fix wrong numbers, remove markers with no plausible
    source, and mark clearly unsupported claims with [unverified].
-2. Append a `## References` section listing every cited source as
+2. For every claim the audit marks `single-sourced`, add "(single source)" after
+   its citation in the body. Do not delete it and do not soften the wording —
+   the reader decides what one source is worth.
+3. Append a `## References` section listing every cited source as
    `[n] title — url`.
+4. If the audit lists any contradictions or unsupported claims, append a final
+   `## Confidence & caveats` section: one bullet per contradiction naming both
+   sides with their [n], and one bullet per unsupported claim. Omit the section
+   entirely when the audit is clean — an empty caveats section reads as a
+   thoroughness the report hasn't earned.
 
 Reply with ONLY the corrected report markdown."""

@@ -54,6 +54,11 @@ class PluginRegistry:
     # backend.modules.training.providers.base.EnvironmentProvider; kept as Any so
     # the SDK stays dependency-light).
     training_providers: dict[str, Any] = field(default_factory=dict)
+    # Web-search providers (duck-typed against
+    # backend.modules.search.base.SearchProvider). Built-ins register themselves into
+    # that module's own registry; this mirror is what `host.add_search_provider`
+    # writes to so a plugin's provider is discoverable the same way.
+    search_providers: dict[str, Any] = field(default_factory=dict)
     startup_hooks: list[LifecycleHook] = field(default_factory=list)
     shutdown_hooks: list[LifecycleHook] = field(default_factory=list)
     # Per-plugin load failures, surfaced rather than crashing the app.
@@ -69,6 +74,7 @@ class PluginRegistry:
         self.ws_channels.clear()
         self.dash_facades.clear()
         self.training_providers.clear()
+        self.search_providers.clear()
         self.startup_hooks.clear()
         self.shutdown_hooks.clear()
         self.errors.clear()

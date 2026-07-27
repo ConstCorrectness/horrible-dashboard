@@ -32,6 +32,35 @@ export interface IoEvent {
   // image, xhr, …) and whether the SSRF guard let the request out.
   resource_type?: string | null;
   verdict?: IoVerdict | null;
+  // Connection forensics harvested from Chromium's DevTools protocol — who
+  // actually answered, over what, and where the time went. See
+  // backend/modules/browser/cdp.py.
+  remote_ip?: string | null;
+  remote_port?: number | null;
+  /** `h3` | `h2` | `http/1.1`. */
+  http_protocol?: string | null;
+  tls?: TlsDetails | null;
+  /**
+   * Per-phase durations in milliseconds. Phases that didn't happen are **absent**,
+   * not zero — a reused connection genuinely has no DNS or TLS phase.
+   */
+  timing?: Partial<Record<NetPhase, number>> | null;
+  from_cache?: boolean | null;
+}
+
+/** The phases of one request, in the order they occur. */
+export const NET_PHASES = ['dns', 'connect', 'tls', 'send', 'wait'] as const;
+export type NetPhase = (typeof NET_PHASES)[number];
+
+export interface TlsDetails {
+  protocol?: string;
+  cipher?: string;
+  issuer?: string;
+  subject?: string;
+  sans?: string[];
+  san_count?: number;
+  valid_from?: number;
+  valid_to?: number;
 }
 
 const MAX_EVENTS = 300;

@@ -50,6 +50,18 @@ def publish_delta(run_id: str, step_id: str, text: str) -> None:
     )
 
 
+def publish_tool_call(run_id: str, step_id: str, payload: dict[str, Any]) -> None:
+    """One subagent tool call, live.
+
+    A step's transcript is only persisted when the step *finishes*, so without this
+    the console shows nothing for a subagent for minutes — exactly the window in
+    which you want to know whether it's searching sensibly or looping.
+    """
+    research_events.publish(
+        {"event": "tool", "data": {"run_id": run_id, "step_id": step_id, **payload}}
+    )
+
+
 async def push_research_events(conn: Any) -> None:
     queue = research_events.subscribe()
     try:

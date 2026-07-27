@@ -27,6 +27,7 @@ from backend.modules.library.clip import MODEL_REPO as CLIP_MODEL_REPO
 from backend.modules.library.clip import clip_enabled, clip_installed
 from backend.modules.library.clip import encode_text as clip_encode_text
 from backend.modules.artifacts.store import get_artifact
+from backend.modules.search.fusion import rrf
 from backend.modules.tasks import enqueue_task
 from backend.modules.library.models import (
     ARTIFACT_TYPES,
@@ -232,25 +233,6 @@ def reindex_clip(library: str | None = None) -> ReindexResult:
     return ReindexResult(started=True, queued=len(sources))
 
 
-# Reciprocal Rank Fusion constant. 60 is the value from the original paper and the
-# de-facto default; it damps the difference between the top few ranks so one space
-# can't dominate purely by being more confident.
-_RRF_K = 60
-
-
-def _rrf(ranked_source_ids: list[str]) -> dict[str, float]:
-    """Reciprocal-rank score per source, from one ranked result list.
-
-    Only the *best* rank a source achieves counts — a source with six matching chunks
-    isn't six times more relevant than one with a single strong chunk.
-    """
-    scores: dict[str, float] = {}
-    for rank, source_id in enumerate(ranked_source_ids):
-        if source_id not in scores:
-            scores[source_id] = 1.0 / (_RRF_K + rank + 1)
-    return scores
-
-
 def _source_id_of(row: dict) -> str:
     return str(row["metadata"].get("source_id", row["id"]))
 
@@ -327,8 +309,8 @@ async def search(req: LibrarySearchRequest) -> LibrarySearchResponse:
         if "clip" not in group.matched_by:
             group.matched_by.append("clip")
 
-    fused = _rrf([_source_id_of(r) for r in text_results])
-    for source_id, score in _rrf([_source_id_of(r) for r in clip_results]).items():
+    fused = rrf([_source_id_of(r) for r in text_results])
+    for source_id, score in rrf([_source_id_of(r) for r in clip_results]).items():
         fused[source_id] = fused.get(source_id, 0.0) + score
 
     ordered = sorted(

@@ -283,11 +283,35 @@ export const researchModule: ModuleManifest = {
     },
     {
       key: 'research.webSearch',
-      title: 'Web search (keyless)',
+      title: 'Web search',
       description:
-        'Let research subagents search the general web via DuckDuckGo’s HTML endpoint. No API key; may rate-limit or break on markup changes, in which case runs degrade to arXiv/library/fetch-by-URL.',
+        'Let research subagents search the open web. Uses whichever engines are configured in the Web Search module — with no API key and no SearXNG instance it falls back to a keyless DuckDuckGo scrape, which may rate-limit. Off means runs rely on arXiv, the local index, the library, and fetch-by-URL.',
       type: 'boolean',
       default: true,
+    },
+    {
+      key: 'research.maxRounds',
+      title: 'Max research rounds',
+      description:
+        'Override the number of gap-filling rounds a run may spend. After each round the lead reviews what came back and either stops or spawns subagents targeting what is still missing. 0 (the default) uses the effort tier: quick 1, standard 2, deep 3.',
+      type: 'number',
+      default: 0,
+    },
+    {
+      key: 'research.verifyDepth',
+      title: 'Claim verification',
+      description:
+        '“cheap” extracts the report’s load-bearing claims and checks how many independent publishers back each one (three citations to the same site count as one source), then flags contradictions between sources. “off” skips the audit and its two model calls. “corroborate” additionally re-searches single-sourced claims.',
+      type: 'enum',
+      enumValues: ['off', 'cheap', 'corroborate'],
+      default: 'cheap',
+    },
+    {
+      key: 'research.maxVerifiedClaims',
+      title: 'Max verified claims',
+      description: 'Upper bound on how many claims the verification pass audits per report.',
+      type: 'number',
+      default: 12,
     },
     {
       key: 'research.maxConcurrentRuns',

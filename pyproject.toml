@@ -36,6 +36,7 @@ dependencies = [
     "websockets>=16.0",
     "zeroconf>=0.150.0",
     "mcp>=1.28.1",
+    "dnspython>=2.8.0",
 ]
 
 [project.optional-dependencies]
@@ -76,6 +77,9 @@ qdrant = ["qdrant-client>=1.9"]
 weaviate = ["weaviate-client>=4.6"]
 # Everything above in one shot, for a node that inspects several stores.
 vectordb = ["chromadb>=0.5", "qdrant-client>=1.9", "weaviate-client>=4.6"]
+geoip = [
+    "geoip2>=5.3.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]

@@ -147,6 +147,12 @@ flowchart LR
   CITE --> EXP[export\nartifact + library + Obsidian]
 ```
 
+:::info Rounds, verification and steering
+The pipeline above is the v1 single pass. It now runs as
+`plan → [subagents → critique]* → synthesis → verify → citations → export` — see
+[Depth: rounds, verification, steering](#depth-rounds-verification-steering).
+:::
+
 ### The durable runner
 
 There is **no Temporal server** — durability is a discipline, not a
@@ -169,10 +175,6 @@ lifespan):
 - Enforces a per-run **token budget** (`research.tokenBudget`, default 200k,
   estimated where providers don't report usage): past it, remaining subagents
   are `skipped` and the run synthesizes what it has.
-
-The deliberately *separate* job system: `tasks/queue.py` stays the serial
-short-job queue (library ingest, Drive sync) — a ten-minute research run on
-that worker would starve every ingest behind it.
 
 ### The pipeline
 
@@ -214,6 +216,92 @@ Every step's complete message transcript is persisted and served
 (`GET /api/research/runs/{id}/steps?transcript=true`) — the console's step
 drill-down and the observability pane read the same record. Run/step snapshots
 and synthesis deltas stream on the **`research` `/ws` channel**.
+
+## Depth: rounds, verification, steering
+
+### Gap-filling rounds
+
+A single pass answers only what it thought to ask at the start. The **critique** step
+closes each round: it reads what actually came back, names the gaps, and either
+declares the findings sufficient or writes new subagent specs targeting only what is
+missing. The second round asks questions the first round *taught* it to ask — that is
+where the depth comes from.
+
+Rounds are capped by effort tier (quick 1, standard 2, deep 3). `research.maxRounds` is
+an **override, not a lid** — it defaults to 0 meaning "use the tier", so a non-zero
+default can't silently stop deep runs reaching their third round.
+
+The current round is always derived from the database (`max(round)` over subagent
+steps), never from a loop counter. That is what makes a restart mid-round resume into
+the right round instead of starting over. Steps are keyed by `(kind, round)`
+throughout; keying by kind alone silently collapses several critiques into one.
+
+A failed critique is treated as "sufficient" rather than failing the run — the same
+principle as a failed subagent. Throwing away a completed round because the reviewer
+couldn't produce JSON would be the worst available trade.
+
+### Verification: what is actually supported
+
+Between synthesis and citations — not after, because the citation pass rewrites the
+report and appends `## References`, so the audit has to inform that rewrite.
+
+The interesting half needs no model. Claims are extracted by the lead, then their
+citations are grouped by **registrable domain**: three citations to `openai.com`,
+`platform.openai.com` and `openai.com/research` are one publisher wearing three hats
+and count as **one** independent source. That is the honest reading of "two independent
+sources", it is deterministic, and it is unit-tested.
+
+Verdicts are `supported` (two or more publishers), `single-sourced` or `unsupported`.
+A separate single pass over the findings flags where sources genuinely **contradict**
+each other — one call over the whole block, not pairwise comparison of subagent
+outputs, which is quadratic and mostly surfaces differences of emphasis.
+
+The citation step then marks single-sourced claims inline and appends a **Confidence &
+caveats** section listing contradictions and unsupported claims. It never deletes or
+softens content — the reader decides what one source is worth.
+
+`research.verifyDepth` (`off` | `cheap` | `corroborate`) gates it; `cheap` is the
+default and costs two model calls.
+
+### Steering a run in flight
+
+**Review the plan first.** Starting a run with `approval_mode: "plan"` (the "review
+plan" checkbox) parks it at `awaiting_plan` after planning, before any subagent has
+spent a token. `POST /runs/{id}/plan` approves it, optionally with an edited plan.
+
+The gate **returns** rather than blocking, and that matters twice over:
+`research.maxConcurrentRuns` defaults to 1, so a blocking wait would halt every other
+run on the node, and it wouldn't survive a restart either. `awaiting_plan` is excluded
+from the resume pass — a run waiting on a *person* must not be re-enqueued on every
+boot, or it spins through the gate forever.
+
+An edited plan is written to **both** the run row and the plan step's output. The
+pipeline reads it back from the step on resume, so writing only the run row would
+silently discard the edit the moment the run picked up again.
+
+**Ask follow-ups mid-run.** `POST /runs/{id}/followup` queues a question; the next
+critique folds unconsumed follow-ups into its "what's still missing" prompt, so they
+shape the next round rather than being lost.
+
+**Watch the tools live.** Each subagent tool call streams on the `research` channel as
+a `tool` event and persists to `research_tool_calls`. Without it a subagent shows
+nothing for minutes — a step's transcript is only written when the step *finishes*,
+which is exactly the window where you want to know whether it is searching sensibly or
+looping. `GET /runs/{id}/tool-calls` is how a browser that wasn't open catches up.
+
+### Schema migrations
+
+`init_research_db` was `CREATE TABLE IF NOT EXISTS` only, which is a no-op on an
+install that already has the tables — so new columns would have silently never
+appeared and every write would have failed on an unknown column. `_ensure_column`
+(PRAGMA + `ALTER TABLE`) now backfills `research_steps.round`,
+`research_runs.approval_mode` and `research_runs.rounds_used`, and there is a test that
+builds the *old* schema first, because a fresh-database test cannot see this class of
+bug.
+
+The deliberately *separate* job system: `tasks/queue.py` stays the serial
+short-job queue (library ingest, Drive sync) — a ten-minute research run on
+that worker would starve every ingest behind it.
 
 ## Obsidian export
 

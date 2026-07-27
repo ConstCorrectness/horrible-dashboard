@@ -61,6 +61,10 @@ from backend.modules.research import register_research_tools
 from backend.modules.research import router as research_router
 from backend.modules.research.broadcast import push_research_events
 from backend.modules.research.runner import research_runner
+from backend.modules.search import init_search_db, register_search_tools
+from backend.modules.search import router as search_router
+from backend.modules.search.broadcast import push_crawl_events
+from backend.modules.search.crawl import queue_handlers as _crawl_queue_handlers  # noqa: F401 — registers the crawl task handler on import (see its docstring)
 from backend.modules.library import push_library_events
 from backend.modules.library import queue_handlers as _library_queue_handlers  # noqa: F401 — registers the ingest task handlers on import (see its docstring)
 from backend.modules.interpretability import router as interpretability_router
@@ -129,6 +133,8 @@ async def lifespan(app: FastAPI):
     await start_network()
     await plugin_registry.run_startup()  # backend plugins' startup hooks
     queue.start()
+    # Search caches + crawl tables, and the built-in seed list on first run.
+    init_search_db()
     # Deep-research runner: resumes any run that was in flight when the process
     # last died (steps stuck `running` reset to `pending`), then works the queue.
     research_runner.start()
@@ -184,6 +190,7 @@ app.include_router(database_router, prefix="/api")
 app.include_router(library_router, prefix="/api")
 app.include_router(artifacts_router, prefix="/api")
 app.include_router(research_router, prefix="/api")
+app.include_router(search_router, prefix="/api")
 app.include_router(arxiv_router, prefix="/api")
 app.include_router(interpretability_router, prefix="/api")
 app.include_router(connectors_router, prefix="/api")
@@ -238,6 +245,12 @@ register_research_tools()
 # read-only; download files a paper into the library.
 register_arxiv_tools()
 
+# Register the search module (grouped under `search`): the provider registry, the
+# `search` connector that holds each provider's API key, and the five agent tools.
+# The group's catalog blurb comes from that connector rather than a duplicate entry
+# in the orchestrator's `_GROUP_DESCRIPTIONS`.
+register_search_tools()
+
 # Discover and mount backend plugins (bundled, HORRIBLE_PLUGINS_DIR, and pip entry
 # points). Ships empty; each plugin's routes mount under /api + its prefix. Agent
 # tools, /ws channels, dash facades, and lifespan hooks are read from the registry
@@ -285,6 +298,8 @@ async def ws(websocket: WebSocket) -> None:
     library_task = asyncio.create_task(push_library_events(conn))
     # Fan deep-research run/step progress + synthesis deltas to this browser.
     research_task = asyncio.create_task(push_research_events(conn))
+    # Fan focused-crawl progress (seed status, per-page results) to this browser.
+    crawl_task = asyncio.create_task(push_crawl_events(conn))
     # Fan code-locus updates (dash/agent-set, and cross-window sync) to this browser.
     code_task = asyncio.create_task(push_code_events(conn))
     # Fan symdex index progress (packages/schema/docs builds) to this browser.
@@ -351,6 +366,7 @@ async def ws(websocket: WebSocket) -> None:
         files_task.cancel()
         library_task.cancel()
         research_task.cancel()
+        crawl_task.cancel()
         code_task.cancel()
         symdex_task.cancel()
         network_unsub()  # type: ignore[operator]

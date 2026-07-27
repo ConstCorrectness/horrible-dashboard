@@ -193,6 +193,108 @@ that region rather than local state.
   duplicated: both surfaces render the same `IoEvent`, and a module reaching into
   another module's internals is what the registry conventions forbid.
 
+## Seeing how the web actually works
+
+The pane has four views, ordered from passive to active. **Requests** and **Waterfall**
+are pure observation. **DNS** and **Route** send packets of their own, so they sit
+behind a button rather than running when the pane opens.
+
+### Connection forensics (passive, free)
+
+Chromium *measured* far more about every request than Playwright's API exposes — and
+the browser module was throwing all of it away. A DevTools-protocol session
+(`backend/modules/browser/cdp.py`) recovers it, sending no extra packets:
+
+| Field | What it answers |
+| --- | --- |
+| `remote_ip` / `remote_port` | Who actually answered — the thing a URL hides completely |
+| `http_protocol` | `h3` / `h2` / `http/1.1` |
+| `tls` | Negotiated version and cipher, certificate issuer, subject, SAN list, validity |
+| `timing` | Per-phase durations: DNS, TCP connect, TLS handshake, request send, server wait |
+| `from_cache` | Nothing crossed the network at all |
+
+**Waterfall** draws those phases as one stacked bar per request on a shared time axis.
+It is the most educational view in the app: a URL bar makes fetching a page look
+atomic, and seeing 180ms of DNS and 90ms of TLS in front of a 40ms download explains
+more about the web than any amount of prose.
+
+Phases that didn't happen are drawn as **nothing**, not as zero-width bars. A
+connection reused from the pool genuinely has no DNS or TLS phase, and that absence is
+information — it is *why* the second request to a host is faster.
+
+:::note CDP's timing format is a trap
+`requestTime` is an absolute value in **seconds**; every other field is a millisecond
+offset relative to it, and `-1` means "this phase did not happen". Treating that `-1`
+as a duration produces negative bars with no error anywhere, which is why the
+conversion is a pure, tested function rather than inline arithmetic.
+:::
+
+Correlation between CDP and Playwright is **by URL** — they identify a request
+differently with no join key between them. Two in-flight requests to the same URL are
+last-write-wins, which is acceptable for an inspector; the alternative is driving the
+whole network stack through CDP and giving up the request interception the egress guard
+is built on.
+
+### The DNS delegation walk (active, no privileges)
+
+**DNS** resolves a name the long way: ask a root server who runs `.org`, ask *those*
+servers who runs `python.org`, and only then get an answer. Your resolver does this
+once and hides it behind a cache forever.
+
+Each rung shows who answered, in how long, the nameservers it delegated to, its **glue
+records**, and whether the parent published a **DS** record — one link of the DNSSEC
+chain of trust. A **CNAME** answer restarts the walk at the target name, which is
+usually in a different zone entirely: `docs.python.org` turns out to be an alias for
+Fastly, so the ladder continues through `.net`.
+
+Plain UDP port 53 via dnspython, so it needs **no elevated privileges** — which is what
+makes this the centrepiece rather than a footnote. Where UDP/53 is blocked it falls
+back to DNS-over-HTTPS and says so: a DoH endpoint is a recursive resolver that already
+did the walk, so it can answer but has no delegation to show.
+
+### Traceroute and route plotting (active)
+
+**Route** traces the hops between here and a host, then plots the ones it can locate on
+a bundled world map.
+
+Raw ICMP sockets need administrator rights on Windows and root on Unix, so this shells
+out to the **system** `tracert`/`traceroute` and parses its output. Less elegant, but a
+feature only elevated users can see is a feature most people never see. IPv6 hops are
+handled: a dual-stack host traces over v6 by default and `tracert` prints those
+addresses unbracketed.
+
+A router that doesn't answer ICMP is reported as a hop with no reply rather than
+dropped — the packets did cross it.
+
+The map is an inline SVG coastline in equirectangular projection, with **no tile
+provider**: a slippy map would mean an external host, an API key, and every pan leaking
+the viewport to a third party — in a pane whose entire purpose is showing what leaves
+the machine. Unlocatable hops are gaps in the line, never interpolated; the first hops
+of any trace are your own router, and inventing coordinates for them would be fiction.
+
+Geolocation uses **DB-IP Lite** (CC BY 4.0, freely redistributable) rather than MaxMind
+GeoLite2, which requires an account and a license key. It is an optional extra:
+
+```bash
+uv sync --extra geoip
+```
+
+then download the DB-IP Lite City `.mmdb` to `$HORRIBLE_DATA_DIR/geoip/dbip-city.mmdb`.
+Without it, hops still list — they just have no coordinates. Attribution is required
+and is rendered in the pane.
+
+### Probe safety
+
+Every probe target goes through the same public-IP check as the fetch guard. Probing
+internal hosts is a reconnaissance primitive, and "the user clicked it" is not a
+defence when the target could have been suggested by a page.
+
+| Route | Purpose |
+| --- | --- |
+| `POST /api/browser/net/dns` | Walk the delegation chain |
+| `POST /api/browser/net/trace` | Trace the path to a host |
+| `GET /api/browser/net/geo` | Whether locations can be plotted, and how to enable it |
+
 :::note Scope: all browser traffic, not one tab's
 The list covers **every** embedded-browser request, not just the pane you are looking
 at. `BrowserManager` keys sessions by **WebSocket connection**

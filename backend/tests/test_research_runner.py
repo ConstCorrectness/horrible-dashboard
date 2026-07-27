@@ -19,7 +19,15 @@ def _choice() -> engine.ModelChoice:
 @pytest.fixture
 def fake_pipeline(monkeypatch: pytest.MonkeyPatch):
     """Stub every engine step with fast fakes; returns a dict to tweak behavior."""
-    state: dict = {"plan_failures": 0, "subagent_failures": {}, "sleeps": []}
+    state: dict = {
+        "plan_failures": 0,
+        "subagent_failures": {},
+        "sleeps": [],
+        "critiques": [],
+        # What the critique returns by default: "we have enough", so a test that
+        # doesn't care about rounds gets the old single-pass behaviour.
+        "critique_result": {"sufficient": True, "gaps": [], "subagents": []},
+    }
 
     monkeypatch.setattr(engine, "resolve_models", lambda run: (_choice(), _choice()))
 
@@ -50,11 +58,22 @@ def fake_pipeline(monkeypatch: pytest.MonkeyPatch):
         }
         return plan, [{"role": "user", "content": "plan"}], 10
 
-    async def fake_subagent(run, spec, sub, *, is_cancelled):
+    async def fake_subagent(run, spec, sub, *, is_cancelled, on_tool=None):
         fails = state["subagent_failures"].get(spec["name"], 0)
         if fails > 0:
             state["subagent_failures"][spec["name"]] = fails - 1
             raise RuntimeError(f"{spec['name']} flaked")
+        if on_tool is not None:
+            on_tool(
+                {
+                    "seq": 1,
+                    "name": "web_search",
+                    "args": {"query": spec["objective"]},
+                    "ok": True,
+                    "ms": 5,
+                    "summary": "2 result(s)",
+                }
+            )
         return (
             {
                 "name": spec["name"],
@@ -77,12 +96,31 @@ def fake_pipeline(monkeypatch: pytest.MonkeyPatch):
         numbered, _ = engine.number_sources(outputs)
         return {"report": report, "sources": numbered}, [], 30
 
-    async def fake_citations(run, synth, lead):
+    async def fake_critique(run, plan, outputs, lead, *, round_no, followups=None):
+        state["critiques"].append(
+            {"round": round_no, "followups": list(followups or [])}
+        )
+        return dict(state["critique_result"]), [], 5
+
+    async def fake_verification(run, synth, outputs, lead):
+        return (
+            {
+                "skipped": False,
+                "claims": [],
+                "contradictions": [],
+                "summary": {"total": 0},
+            },
+            [],
+            5,
+        )
+
+    async def fake_citations(run, synth, lead, verification=None):
         return (
             {
                 "report": synth["report"] + "\n\n## References",
                 "sources": synth["sources"],
                 "stripped_markers": [],
+                "verification": (verification or {}).get("summary") or {},
             },
             [],
             15,
@@ -90,7 +128,9 @@ def fake_pipeline(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(engine, "run_plan_step", fake_plan)
     monkeypatch.setattr(engine, "run_subagent_step", fake_subagent)
+    monkeypatch.setattr(engine, "run_critique_step", fake_critique)
     monkeypatch.setattr(engine, "run_synthesis_step", fake_synthesis)
+    monkeypatch.setattr(engine, "run_verification_step", fake_verification)
     monkeypatch.setattr(engine, "run_citations_step", fake_citations)
 
     # No real backoff waits in tests.
@@ -134,9 +174,13 @@ def test_full_pipeline_completes(fake_pipeline) -> None:
         "plan": "done",
         "subagent": "done",  # dict collapses; check separately below
         "synthesis": "done",
+        "verify": "done",
         "citations": "done",
         "export": "done",
     }
+    # A quick run is one round, so no critique step is created at all — the round
+    # cap is checked before spending a model call on "should we do more?".
+    assert not [s for s in runstore.list_steps(run["id"]) if s["kind"] == "critique"]
     subs = [s for s in runstore.list_steps(run["id"]) if s["kind"] == "subagent"]
     assert len(subs) == 2 and all(s["status"] == "done" for s in subs)
     assert final["tokens_used"] > 0
@@ -222,7 +266,7 @@ def test_cancellation(fake_pipeline, monkeypatch: pytest.MonkeyPatch) -> None:
     started = asyncio.Event()
     release = asyncio.Event()
 
-    async def hanging_subagent(run, spec, sub, *, is_cancelled):
+    async def hanging_subagent(run, spec, sub, *, is_cancelled, on_tool=None):
         started.set()
         await release.wait()
         raise runner_mod.RunCancelled

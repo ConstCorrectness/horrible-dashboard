@@ -148,6 +148,12 @@ layout shell and how it behaves in the browser vs the desktop app:
   store, SingleFile-style page capture (native inliner, AGPL-free), PDF
   pipeline + pdf.js viewer, sandboxed saved-page viewer, and Obsidian export;
   ArXiv browser and the durable deep-research engine follow.
+- [Search](modules/search.mdx) — **Implemented.** Pluggable web-search engines
+  (Tavily/Brave/Exa/Serper, self-hosted SearXNG, a keyless fallback) behind one
+  provider interface, an AI layer of our own on top (query fan-out, canonical
+  dedupe, rank fusion, fetch + rerank), and a **focused crawler** that indexes a
+  curated set of ML sites and API docs into the node's own vector collection —
+  queried as just another engine, so local hits fuse with live web hits.
 - [Notebook](modules/notebook.mdx) — **Phases 0–3 implemented.** A domain-neutral reactive
   `.ipynb` notebook (JupyterLab cells + a marimo-style reactive dataflow mode with cascade
   re-execution and stale-variable deletion) with **interactive ipywidgets** (native

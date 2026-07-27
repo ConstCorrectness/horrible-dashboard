@@ -81,6 +81,17 @@ class PluginHost:
         providers (kaggle, huggingface, gymnasium) win id conflicts."""
         self._registry.training_providers[provider.provider] = provider
 
+    def add_search_provider(self, provider: Any) -> None:
+        """Expose a web-search provider (an object satisfying
+        `backend.modules.search.base.SearchProvider`): one `search(query, ...)` that
+        returns ranked `SearchResult`s. It joins the fan-out and rank fusion
+        alongside the built-ins, so a plugin's provider is indistinguishable from
+        Tavily or the node's own crawl index. Reusing a built-in's id overrides it."""
+        from backend.modules.search.base import register_provider
+
+        self._registry.search_providers[provider.id] = provider
+        register_provider(provider)
+
     def add_dash_facade(self, name: str, factory: DashFacadeFactory) -> None:
         """Attach `dash.<name>` in every REPL session (factory builds the object)."""
         self._registry.dash_facades[name] = factory

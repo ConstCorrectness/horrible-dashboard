@@ -6,20 +6,28 @@ the loop, so the set is fixed, read-mostly, and every network path rides the
 SSRF guard. `save_source` is the one write — it files evidence into the run's
 library, which is the point of a research node.
 
-DuckDuckGo's HTML endpoint is the keyless web search. Its markup drifts and it
-rate-limits; both failure modes degrade to an explanatory tool result (the
-model routes around a broken tool far better than a crashed run).
+`web_search` used to be a regex scrape of DuckDuckGo's HTML, and it was the only way
+anything in this app found a URL. It now delegates to `modules.search`, which fans
+out across whatever providers are configured (Tavily/Brave/Exa/Serper, a self-hosted
+SearXNG, the node's own crawl index), fuses the rankings and dedupes by canonical
+URL. The DDG scrape survives inside that module as the keyless fallback, so a node
+with no keys behaves exactly as it did before.
+
+The tool keeps its name because `prompts.py` names it, and gains a `depth` argument
+rather than a sibling tool — one more tool in a subagent's fixed set is context spent
+on every round of every subagent.
 """
 
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any, Awaitable, Callable
-from urllib.parse import parse_qs, unquote, urlencode, urlsplit
 
 from backend.modules.arxiv import client as arxiv_client
-from backend.modules.browser.fetch import _fetch_guarded, fetch_readable
+
+# Re-exported: `backend/tests/test_research_engine.py` imports it from here, and the
+# parser is genuinely shared — it now lives with the provider that owns it.
+from backend.modules.search.providers.ddg import parse_ddg_results  # noqa: F401
 from backend.modules.settings.routes import get_value
 
 logger = logging.getLogger(__name__)
@@ -27,91 +35,112 @@ logger = logging.getLogger(__name__)
 ToolHandler = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
 
 _PAGE_TEXT_CAP = 8_000
-_DDG_URL = "https://html.duckduckgo.com/html/"
-_DDG_RESULT_RE = re.compile(
-    r'<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="(?P<href>[^"]+)"[^>]*>(?P<title>.*?)</a>',
-    re.DOTALL,
-)
-_DDG_SNIPPET_RE = re.compile(
-    r'class="[^"]*result__snippet[^"]*"[^>]*>(?P<snippet>.*?)</a>', re.DOTALL
-)
-_TAG_RE = re.compile(r"<[^>]+>")
-
-
-def _strip(html: str) -> str:
-    return " ".join(_TAG_RE.sub(" ", html).split())
-
-
-def _ddg_href_to_url(href: str) -> str | None:
-    """DDG wraps results as /l/?uddg=<encoded>; unwrap to the target URL."""
-    if href.startswith("http") and "duckduckgo.com" not in href:
-        return href
-    parts = urlsplit(href)
-    target = parse_qs(parts.query).get("uddg", [None])[0]
-    return unquote(target) if target else None
-
-
-def parse_ddg_results(html: str, limit: int = 8) -> list[dict[str, str]]:
-    """Best-effort scrape of the DDG lite-HTML results page. Pure — testable."""
-    results: list[dict[str, str]] = []
-    snippets = [_strip(m.group("snippet")) for m in _DDG_SNIPPET_RE.finditer(html)]
-    for i, match in enumerate(_DDG_RESULT_RE.finditer(html)):
-        url = _ddg_href_to_url(match.group("href"))
-        if not url:
-            continue
-        results.append(
-            {
-                "title": _strip(match.group("title")),
-                "url": url,
-                "snippet": snippets[i] if i < len(snippets) else "",
-            }
-        )
-        if len(results) >= limit:
-            break
-    return results
+_SNIPPET_CAP = 400
 
 
 async def _web_search(args: dict[str, Any]) -> dict[str, Any]:
+    """Search the open web through the shared pipeline.
+
+    Failure is a *value*, not an exception: a model routes around a broken tool far
+    better than it recovers from a crashed run, and a research run that dies because
+    one search timed out has thrown away everything it had gathered.
+    """
+    from backend.modules.search import pipeline
+
     if not bool(get_value("research.webSearch", True)):
         return {"error": "web search is disabled (research.webSearch setting)"}
     query = str(args.get("query", "")).strip()
     if not query:
         return {"error": "web_search needs a query"}
-    url = f"{_DDG_URL}?{urlencode({'q': query})}"
+
+    deep = str(args.get("depth") or "fast").lower() == "deep"
+    limit = max(1, min(int(args.get("max_results") or 8), 10))
     try:
-        _final, resp = await _fetch_guarded(
-            url, accept=("html", "text"), max_bytes=2_000_000
+        answer = await (pipeline.deep_search if deep else pipeline.quick_search)(
+            query, limit=limit
         )
-        results = parse_ddg_results(resp.text)
     except Exception as exc:  # noqa: BLE001 — degrade, never crash the run
         logger.warning("web_search failed: %s", exc)
         return {
-            "error": f"web search unavailable ({exc}); use arxiv_search or fetch_page"
+            "error": f"web search unavailable ({exc}); use index_search, "
+            "arxiv_search or fetch_page"
         }
+
+    results = [
+        {
+            "title": hit.title,
+            "url": hit.url,
+            "snippet": hit.snippet[:_SNIPPET_CAP],
+            "found_by": hit.providers,
+            **({"text": hit.text} if deep and hit.text else {}),
+        }
+        for hit in answer.hits
+    ]
+    out: dict[str, Any] = {"results": results}
+    if answer.notes:
+        # Carries "tavily: no API key" through to the model, so it can tell a
+        # configuration gap from a genuinely empty topic.
+        out["notes"] = answer.notes
+    if not results:
+        out["note"] = (
+            "no results parsed — try different wording, or index_search / "
+            "arxiv_search / fetch_page on a known site"
+        )
+    return out
+
+
+async def _index_search(args: dict[str, Any]) -> dict[str, Any]:
+    """Search the node's own crawled corpus. Free, instant, and narrow."""
+    from backend.modules.search.base import SearchProviderError
+    from backend.modules.search.providers.crawl import search_index
+
+    query = str(args.get("query", "")).strip()
+    if not query:
+        return {"error": "index_search needs a query"}
+    try:
+        results = await search_index(
+            query, limit=max(1, min(int(args.get("max_results") or 6), 10))
+        )
+    except SearchProviderError as exc:
+        return {"error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"index search failed: {exc}"}
+
     if not results:
         return {
             "results": [],
-            "note": "no results parsed — the engine may have changed markup; "
-            "try arxiv_search or fetch_page on a known site",
+            "note": (
+                "nothing in the local index. It only covers seeded sites, so this "
+                "is NOT evidence the web has nothing — follow up with web_search."
+            ),
         }
-    return {"results": results}
+    return {
+        "results": [
+            {
+                "title": r.title,
+                "url": r.url,
+                "snippet": r.snippet[:_SNIPPET_CAP],
+            }
+            for r in results
+        ]
+    }
 
 
 async def _fetch_page(args: dict[str, Any]) -> dict[str, Any]:
+    """Read one URL as extracted article text.
+
+    Goes through the search module's page cache, which is what stops five subagents
+    in the same run each paying a full fetch and parse for the same obvious URL.
+    """
+    from backend.modules.search import pipeline
+
     url = str(args.get("url", "")).strip()
     if not url:
         return {"error": "fetch_page needs a url"}
     try:
-        article = await fetch_readable(url)
+        return await pipeline.fetch_page(url)
     except Exception as exc:  # noqa: BLE001 — bad URLs are routine mid-run
         return {"error": f"couldn't read {url}: {exc}"}
-    return {
-        "url": article.url,
-        "title": article.title,
-        "author": article.author,
-        "text": article.text[:_PAGE_TEXT_CAP],
-        "truncated": len(article.text) > _PAGE_TEXT_CAP,
-    }
 
 
 async def _arxiv_search(args: dict[str, Any]) -> dict[str, Any]:
@@ -202,6 +231,7 @@ def make_tools(library: str) -> tuple[list[dict[str, Any]], dict[str, ToolHandle
 
     handlers: dict[str, ToolHandler] = {
         "web_search": _web_search,
+        "index_search": _index_search,
         "fetch_page": _fetch_page,
         "arxiv_search": _arxiv_search,
         "arxiv_get": _arxiv_get,
@@ -226,13 +256,30 @@ def make_tools(library: str) -> tuple[list[dict[str, Any]], dict[str, ToolHandle
     definitions = [
         tool(
             "web_search",
-            "Search the web (keyless). Returns titles, URLs, and snippets.",
-            {"query": {"type": "string"}},
+            "Search the live web across every configured engine at once. Returns "
+            "titles, URLs and snippets, with `found_by` naming which engines "
+            "surfaced each result (agreement is a relevance signal). depth='deep' "
+            "also rewrites the query, reads the top pages and returns their text — "
+            "several seconds, so use it only when a fast search came back thin.",
+            {
+                "query": {"type": "string"},
+                "depth": {"type": "string", "enum": ["fast", "deep"]},
+                "max_results": {"type": "integer"},
+            },
+            ["query"],
+        ),
+        tool(
+            "index_search",
+            "Search this node's own crawled index of ML sites, blogs and API docs. "
+            "Instant, free and rate-limit-free, but it only covers seeded sites — "
+            "an empty result means 'not in the index', never 'not on the web'. Try "
+            "it before web_search for documentation questions.",
+            {"query": {"type": "string"}, "max_results": {"type": "integer"}},
             ["query"],
         ),
         tool(
             "fetch_page",
-            "Read a URL as extracted article text (capped).",
+            "Read a URL as extracted article text (capped, cached).",
             {"url": {"type": "string"}},
             ["url"],
         ),

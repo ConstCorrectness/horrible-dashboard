@@ -8,6 +8,7 @@ same as every other source.
 
 from __future__ import annotations
 
+import json
 import logging
 
 import httpx
@@ -19,20 +20,26 @@ from backend.modules.artifacts.store import artifact_path
 from backend.modules.browser.fetch import UnsafeUrlError
 from backend.modules.library import store as library_store
 from backend.modules.library.models import SourceModel
-from backend.modules.research.broadcast import publish_run
+from backend.modules.research.broadcast import publish_run, publish_step
 from backend.modules.research.models import (
+    ApprovePlanRequest,
     CaptureRequest,
     CaptureResponse,
     ExportRequest,
     ExportResponse,
+    FollowupModel,
+    FollowupRequest,
+    FollowupsListResponse,
     RunModel,
     RunsListResponse,
     SavePdfRequest,
     StartRunRequest,
     StepModel,
     StepsListResponse,
+    ToolCallModel,
+    ToolCallsListResponse,
 )
-from backend.modules.research import obsidian, runstore, service
+from backend.modules.research import engine, obsidian, runstore, service
 from backend.modules.research.runner import research_runner
 from backend.modules.settings.routes import get_value
 
@@ -97,6 +104,10 @@ def start_run(req: StartRunRequest) -> RunModel:
         raise HTTPException(status_code=400, detail="query is required")
     if req.effort not in ("auto", "quick", "standard", "deep"):
         raise HTTPException(status_code=400, detail=f"unknown effort: {req.effort}")
+    if req.approval_mode not in ("auto", "plan"):
+        raise HTTPException(
+            status_code=400, detail=f"unknown approval mode: {req.approval_mode}"
+        )
     budget = int(get_value("research.tokenBudget", 200_000) or 200_000)
     run = runstore.create_run(
         query=query,
@@ -105,6 +116,7 @@ def start_run(req: StartRunRequest) -> RunModel:
         provider=req.provider,
         model=req.model,
         token_budget=budget,
+        approval_mode=req.approval_mode,
     )
     research_runner.enqueue(run["id"])
     publish_run(run)
@@ -168,6 +180,84 @@ def retry_run(run_id: str) -> RunModel:
     research_runner.enqueue(run_id)
     publish_run(run)
     return RunModel(**run)
+
+
+@router.post("/runs/{run_id}/plan", response_model=RunModel)
+def approve_plan(run_id: str, req: ApprovePlanRequest) -> RunModel:
+    """Approve (and optionally edit) a parked run's plan, then let it go.
+
+    The plan is written to **both** the run row and the plan step's output. The
+    pipeline reads it back from the step on resume, so writing only the run row
+    would silently discard the edit the moment the run picked up again.
+    """
+    run = _run_or_404(run_id)
+    if run["status"] != "awaiting_plan":
+        raise HTTPException(
+            status_code=409,
+            detail=f"run is {run['status']}, not awaiting plan approval",
+        )
+
+    plan = run["plan"]
+    if req.plan is not None:
+        max_subagents = int(get_value("research.maxSubagents", 4) or 4)
+        try:
+            plan = engine.parse_plan(json.dumps(req.plan), max_subagents=max_subagents)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"invalid plan: {exc}") from exc
+
+    plan_step = next(
+        (s for s in runstore.list_steps(run_id) if s["kind"] == "plan"), None
+    )
+    if plan_step is not None:
+        runstore.set_step_output(plan_step["id"], plan)
+        publish_step(runstore.get_step(plan_step["id"]) or plan_step)
+
+    # Flipping the mode back to `auto` *is* the approval record — one gate per run,
+    # no second flag to drift out of sync with it.
+    runstore.update_run(run_id, plan=plan, approval_mode="auto", status="researching")
+    run = _run_or_404(run_id)
+    research_runner.enqueue(run_id)
+    publish_run(run)
+    return RunModel(**run)
+
+
+@router.post("/runs/{run_id}/followup", response_model=FollowupModel)
+def add_followup(run_id: str, req: FollowupRequest) -> FollowupModel:
+    """Ask a running investigation something extra.
+
+    Picked up two ways: the critique step folds unconsumed follow-ups into its
+    "what's still missing" prompt, so they shape the next round. A follow-up that
+    arrives after the last round still lands in the report's gaps rather than
+    vanishing.
+    """
+    run = _run_or_404(run_id)
+    if run["status"] in runstore.TERMINAL_STATUSES:
+        raise HTTPException(status_code=409, detail=f"run is already {run['status']}")
+    text = req.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="a follow-up needs text")
+    return FollowupModel(**runstore.add_followup(run_id, text))
+
+
+@router.get("/runs/{run_id}/followups", response_model=FollowupsListResponse)
+def list_followups(run_id: str) -> FollowupsListResponse:
+    _run_or_404(run_id)
+    return FollowupsListResponse(
+        followups=[FollowupModel(**f) for f in runstore.list_followups(run_id)]
+    )
+
+
+@router.get("/runs/{run_id}/tool-calls", response_model=ToolCallsListResponse)
+def list_tool_calls(run_id: str) -> ToolCallsListResponse:
+    """Every tool call the run's subagents made, in order.
+
+    The console streams these live on the `research` channel; this is how a browser
+    that wasn't open at the time catches up.
+    """
+    _run_or_404(run_id)
+    return ToolCallsListResponse(
+        calls=[ToolCallModel(**c) for c in runstore.list_tool_calls(run_id)]
+    )
 
 
 @router.get("/runs/{run_id}/report")

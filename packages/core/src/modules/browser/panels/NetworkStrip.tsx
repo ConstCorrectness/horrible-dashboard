@@ -27,12 +27,29 @@
  * Registered as a view (`browser.network`) and declared as a right-hand region of
  * `browser.view`, so it persists per pane instance, resizes, and can be dragged
  * out to an area of its own where the inspector has room.
+ *
+ * **Four views, passive to active.** *Requests* and *Waterfall* are pure
+ * observation — Chromium already measured all of it and we were discarding
+ * everything but the URL. *DNS* and *Route* send packets of their own, so they're
+ * explicit actions behind a button rather than something the pane does on open.
  */
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 
 import { telemetryStore, type IoEvent } from '../../../telemetry';
 import { IoInspector, ioEventKey, ioStatusClass } from '../../../telemetry-view';
 import { subscribeConnections, type BrowserConnection } from '../session';
+import { DnsView } from './network/DnsView';
+import { RouteView } from './network/RouteView';
+import { Waterfall } from './network/Waterfall';
+
+type NetTab = 'requests' | 'waterfall' | 'dns' | 'route';
+
+const TABS: { id: NetTab; label: string; title: string }[] = [
+  { id: 'requests', label: 'Requests', title: 'Every request this browser made' },
+  { id: 'waterfall', label: 'Waterfall', title: 'Where the time went, per request' },
+  { id: 'dns', label: 'DNS', title: 'Walk the delegation from the root servers down' },
+  { id: 'route', label: 'Route', title: 'Trace the network path to a host' },
+];
 
 function host(url: string): string {
   try {
@@ -63,25 +80,38 @@ export function NetworkStrip() {
   const [conns, setConns] = useState<BrowserConnection[]>([]);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+  const [tab, setTab] = useState<NetTab>('requests');
   const events = useSyncExternalStore(telemetryStore.subscribe, telemetryStore.getSnapshot);
 
   useEffect(() => subscribeConnections(setConns), []);
 
+  const browserEvents = useMemo(
+    () => events.filter((e: IoEvent) => e.source === 'browser'),
+    [events],
+  );
+
   const done = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return events
-      .filter((e: IoEvent) => e.source === 'browser')
+    return browserEvents
       .filter(
         (e) => !q || `${e.method} ${e.target} ${e.resource_type ?? ''}`.toLowerCase().includes(q),
       )
       .slice(-200)
       .reverse();
-  }, [events, query]);
+  }, [browserEvents, query]);
 
   const blocked = done.filter((e) => e.verdict === 'blocked').length;
   // Resolved against the unfiltered list: a selection must survive the filter
   // changing out from under it.
   const selected = events.find((e) => ioEventKey(e) === selectedKey) ?? null;
+
+  // The host of the most recent document request — what the DNS and Route probes
+  // default to, so the common case ("explain the page I'm looking at") is one click
+  // rather than a retype.
+  const currentHost = useMemo(() => {
+    const doc = [...browserEvents].reverse().find((e) => e.resource_type === 'document');
+    return doc ? host(doc.target) : '';
+  }, [browserEvents]);
 
   return (
     <div className="browser-net">
@@ -93,15 +123,36 @@ export function NetworkStrip() {
         </span>
       </div>
 
-      <input
-        className="browser-net-filter"
-        type="search"
-        placeholder="Filter requests…"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-      />
+      <div style={{ display: 'flex', gap: '0.25rem', padding: '0 0.35rem 0.3rem' }}>
+        {TABS.map((entry) => (
+          <button
+            key={entry.id}
+            type="button"
+            title={entry.title}
+            onClick={() => setTab(entry.id)}
+            disabled={tab === entry.id}
+            style={{ fontSize: '0.72rem', padding: '0.1rem 0.35rem' }}
+          >
+            {entry.label}
+          </button>
+        ))}
+      </div>
 
-      <div className="browser-net-list">
+      {tab === 'waterfall' && <Waterfall events={done} />}
+      {tab === 'dns' && <DnsView initialTarget={currentHost} />}
+      {tab === 'route' && <RouteView initialTarget={currentHost} />}
+
+      {tab === 'requests' && (
+        <>
+          <input
+            className="browser-net-filter"
+            type="search"
+            placeholder="Filter requests…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+
+          <div className="browser-net-list">
         {conns.length > 0 && <div className="browser-net-section">In flight</div>}
         {conns.map((c) => (
           <div key={c.id} className="browser-net-row" title={c.url}>
@@ -131,23 +182,37 @@ export function NetworkStrip() {
               {e.resource_type ?? ''}
             </span>
             <span style={{ ...cell, flex: 1 }}>{leaf(e.target)}</span>
-            <span style={{ width: 62, ...cell, color: 'var(--text-dim)' }}>{host(e.target)}</span>
+            {/* The peer's IP when we have it: the single most concrete thing a URL
+                hides, and the reason a CDN'd domain resolves differently per user. */}
+            <span
+              style={{ width: 62, ...cell, color: 'var(--text-dim)' }}
+              title={e.remote_ip ? `${host(e.target)} → ${e.remote_ip}` : host(e.target)}
+            >
+              {e.remote_ip || host(e.target)}
+            </span>
+            {e.http_protocol && (
+              <span style={{ width: 34, ...cell, color: 'var(--text-dim)' }}>
+                {e.http_protocol.replace('http/', '')}
+              </span>
+            )}
             <span className={ioStatusClass(e)}>
               {e.verdict === 'blocked' ? '⃠' : e.error ? '!' : (e.status ?? '')}
             </span>
           </button>
-        ))}
+            ))}
 
-        {conns.length === 0 && done.length === 0 && (
-          <div className="dashboard-hint" style={{ padding: '0.45rem' }}>
-            {query
-              ? 'No requests match the filter.'
-              : 'No requests yet. Navigate and every request this page makes appears here.'}
+            {conns.length === 0 && done.length === 0 && (
+              <div className="dashboard-hint" style={{ padding: '0.45rem' }}>
+                {query
+                  ? 'No requests match the filter.'
+                  : 'No requests yet. Navigate and every request this page makes appears here.'}
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </>
+      )}
 
-      {selected && (
+      {selected && tab === 'requests' && (
         <div className="browser-net-inspector">
           <IoInspector event={selected} onClose={() => setSelectedKey(null)} />
         </div>

@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin, urlsplit
 
+from backend.modules.browser.cdp import connection_info
 from backend.modules.browser.fetch import UnsafeUrlError, _check_host_public
 from backend.modules.telemetry.instrument import record_browser_request
 from backend.modules.ws import WsConnection
@@ -248,6 +249,15 @@ class BrowserSession:
         self._inflight: dict[Any, dict[str, Any]] = {}
         self._blocked: dict[Any, str] = {}
         self._seq = 0
+        # Connection forensics from the DevTools protocol, keyed by URL.
+        #
+        # CDP and Playwright identify a request differently (a CDP `requestId` vs a
+        # Playwright `Request` object) with no join key between them, so the URL is
+        # the correlation. Two in-flight requests to the *same* URL will therefore
+        # last-write-wins — acceptable for an inspector, and the alternative is
+        # driving the whole network stack through CDP and giving up Playwright's
+        # request interception, which is what the egress guard is built on.
+        self._cdp_conn: dict[str, dict[str, Any]] = {}
 
     # ---- lifecycle ---------------------------------------------------------
 
@@ -322,6 +332,7 @@ class BrowserSession:
             context.on("response", self._on_response)
             context.on("requestfailed", self._on_request_failed)
             page = context.pages[0] if context.pages else context.new_page()
+            self._attach_cdp(context, page)
             self._started.set()
             self._loop_commands(page)
         except Exception as exc:  # noqa: BLE001
@@ -382,6 +393,44 @@ class BrowserSession:
     # in-flight set for the open-connections view. All of them run on the **worker
     # thread**, so every hand-off to the recorder or the socket is posted onto the
     # loop rather than called directly.
+
+    def _attach_cdp(self, context: Any, page: Any) -> None:
+        """Subscribe to `Network.responseReceived` for per-request connection detail.
+
+        Chromium already measures DNS/TCP/TLS/TTFB timing, the peer's IP, the
+        negotiated HTTP version and the full certificate for every request — the
+        Playwright API just doesn't expose it. One CDP session recovers all of it and
+        sends no extra packets.
+
+        Best-effort by design: this is an inspector, and a browser that renders pages
+        without a waterfall beats one that fails to start because a CDP call moved.
+        """
+        try:
+            session = context.new_cdp_session(page)
+            session.send("Network.enable")
+            session.on("Network.responseReceived", self._on_cdp_response)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("CDP network instrumentation unavailable: %s", exc)
+
+    def _on_cdp_response(self, event: dict[str, Any]) -> None:
+        """Stash one response's connection detail for `_on_response` to pick up.
+
+        Runs on the worker thread. Deliberately does no I/O and touches no loop
+        state — Playwright's `response` event fires separately and is what actually
+        records the row.
+        """
+        try:
+            response = event.get("response") or {}
+            url = str(response.get("url") or "")
+            if not url:
+                return
+            if len(self._cdp_conn) >= _MAX_INFLIGHT * 2:
+                # A page that fires thousands of requests must not grow this map
+                # without bound. Oldest-first: dicts preserve insertion order.
+                self._cdp_conn.pop(next(iter(self._cdp_conn)), None)
+            self._cdp_conn[url] = connection_info(response)
+        except Exception:  # noqa: BLE001 — telemetry must never break the browser
+            logger.debug("CDP response handling failed", exc_info=True)
 
     def _post(self, fn: Any) -> None:
         """Run `fn` on the event loop from the worker thread, fire-and-forget."""
@@ -444,6 +493,10 @@ class BrowserSession:
         meta = self._inflight.pop(request, None)
         self._blocked.pop(request, None)
         body = _response_body(response)
+        # Correlated by URL — see `_cdp_conn`. Missing is normal (CDP unavailable, or
+        # a response Playwright saw first); the row is still recorded, just without
+        # the connection detail.
+        connection = self._cdp_conn.pop(response.url, {})
         self._post(
             partial(
                 record_browser_request,
@@ -457,6 +510,7 @@ class BrowserSession:
                 response_headers=_safe_headers(response),
                 response_bytes=len(body) if body is not None else None,
                 body=body,
+                **connection,
             )
         )
         self._emit_connections()

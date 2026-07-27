@@ -13,14 +13,24 @@ import { apiUrl } from '../../../origin';
 import { registry } from '../../../registry';
 import { toastsStore } from '../../../toasts';
 import { getSetting } from '../../../settings';
-import { cancelRun, retryRun, startRun, type RunModel, type StepModel } from '../api';
-import { loadSteps, useResearchState } from '../store';
+import {
+  addFollowup,
+  approvePlan,
+  cancelRun,
+  retryRun,
+  startRun,
+  type RunModel,
+  type StepModel,
+} from '../api';
+import { loadSteps, useResearchState, type ToolCallEvent } from '../store';
 
 const STATUS_ICON: Record<string, string> = {
   pending: '…',
   planning: '🧭',
+  awaiting_plan: '✋',
   researching: '🔎',
   synthesizing: '✍',
+  verifying: '⚖',
   citing: '🔗',
   exporting: '📦',
   done: '✅',
@@ -36,13 +46,85 @@ const STEP_ICON: Record<string, string> = {
   skipped: '⤼',
 };
 
-function StepRow({ step, delta }: { step: StepModel; delta?: string }) {
+/** What a step's body shows when expanded, by kind. */
+function stepBody(step: StepModel): string {
+  if (!step.output) return '';
+  const output = step.output as Record<string, unknown>;
+  if (step.kind === 'subagent') return String(output.findings ?? '');
+  if (step.kind === 'critique') {
+    const gaps = (output.gaps as string[] | undefined) ?? [];
+    const next = (output.subagents as { objective?: string }[] | undefined) ?? [];
+    const lines = [
+      output.sufficient ? 'Findings judged sufficient.' : 'Gaps found:',
+      ...gaps.map((g) => `· ${g}`),
+      ...(next.length ? ['', 'Next round:'] : []),
+      ...next.map((s) => `→ ${s.objective ?? ''}`),
+    ];
+    return lines.join('\n');
+  }
+  if (step.kind === 'verify') {
+    const claims = (output.claims as { claim: string; verdict: string }[] | undefined) ?? [];
+    const conflicts = (output.contradictions as { topic: string }[] | undefined) ?? [];
+    const problems = claims.filter((c) => c.verdict !== 'supported');
+    if (!problems.length && !conflicts.length) {
+      return `All ${claims.length} audited claim(s) rest on two or more independent publishers.`;
+    }
+    return [
+      ...problems.map((c) => `${c.verdict}: ${c.claim}`),
+      ...conflicts.map((c) => `contradiction: ${c.topic}`),
+    ].join('\n');
+  }
+  return '';
+}
+
+/**
+ * The live tool trace under a subagent.
+ *
+ * This is the answer to "is it making progress or spinning" — visible while the
+ * step runs, rather than only once its transcript is persisted at the end.
+ */
+function ToolTrace({ calls }: { calls: ToolCallEvent[] }) {
+  return (
+    <div style={{ margin: '0.25rem 0 0 1.4rem', fontSize: '0.72rem' }}>
+      {calls.map((call) => (
+        <div key={call.seq} style={{ display: 'flex', gap: '0.4rem', color: 'var(--text-dim)' }}>
+          <span style={{ color: call.ok ? 'inherit' : 'var(--danger, #d66)' }}>
+            {call.ok ? '›' : '✗'}
+          </span>
+          <span style={{ fontWeight: 600 }}>{call.name}</span>
+          <span
+            style={{
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              flex: 1,
+            }}
+            title={JSON.stringify(call.args)}
+          >
+            {String(call.args.query ?? call.args.url ?? '')}
+          </span>
+          <span style={{ whiteSpace: 'nowrap' }}>{call.summary}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function StepRow({
+  step,
+  delta,
+  calls,
+}: {
+  step: StepModel;
+  delta?: string;
+  calls?: ToolCallEvent[];
+}) {
   const [open, setOpen] = useState(false);
-  const findings =
-    step.kind === 'subagent' && step.output
-      ? String((step.output as { findings?: string }).findings ?? '')
-      : '';
+  const body = stepBody(step);
   const live = step.status === 'running' && delta ? delta : '';
+  // The trace stays visible while the step runs without needing a click — that's
+  // exactly when it's worth seeing.
+  const showTrace = Boolean(calls?.length) && (open || step.status === 'running');
   return (
     <div style={{ borderBottom: '1px solid var(--border)', padding: '0.3rem 0.5rem' }}>
       <div
@@ -53,6 +135,7 @@ function StepRow({ step, delta }: { step: StepModel; delta?: string }) {
         <span style={{ fontWeight: 600 }}>{step.name}</span>
         <span style={{ color: 'var(--text-dim)' }}>
           {step.kind}
+          {step.round > 0 ? ` · round ${step.round + 1}` : ''}
           {step.attempt > 1 ? ` · attempt ${step.attempt}` : ''}
           {step.tokens_used ? ` · ~${step.tokens_used} tok` : ''}
         </span>
@@ -60,7 +143,8 @@ function StepRow({ step, delta }: { step: StepModel; delta?: string }) {
           <span style={{ color: 'var(--danger, #d66)', marginLeft: 'auto' }}>{step.error}</span>
         )}
       </div>
-      {(open || live) && (findings || live || step.error) && (
+      {showTrace && <ToolTrace calls={calls ?? []} />}
+      {(open || live) && (body || live || step.error) && (
         <pre
           style={{
             whiteSpace: 'pre-wrap',
@@ -71,15 +155,75 @@ function StepRow({ step, delta }: { step: StepModel; delta?: string }) {
             color: 'var(--text-dim)',
           }}
         >
-          {live || findings || step.error}
+          {live || body || step.error}
         </pre>
       )}
     </div>
   );
 }
 
+/** The gate: nothing has been spent yet, and the plan is still editable. */
+function PlanGate({ run }: { run: RunModel }) {
+  const [busy, setBusy] = useState(false);
+  const release = () => {
+    setBusy(true);
+    approvePlan(run.id)
+      .catch((err: unknown) => toastsStore.add('warning', 'Could not start the run', String(err)))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <div
+      style={{
+        padding: '0.5rem 0.6rem',
+        borderBottom: '1px solid var(--border)',
+        fontSize: '0.78rem',
+      }}
+    >
+      <strong>Review the plan before it runs.</strong>{' '}
+      <span style={{ color: 'var(--text-dim)' }}>
+        {run.plan?.subagents.length ?? 0} subagent(s), {run.plan?.complexity} effort. Nothing has
+        been spent yet.
+      </span>
+      <div style={{ marginTop: '0.4rem' }}>
+        <button type="button" disabled={busy} onClick={release}>
+          Approve &amp; run
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Ask a running investigation something extra; it shapes the next round. */
+function FollowupBar({ run }: { run: RunModel }) {
+  const [text, setText] = useState('');
+  const send = () => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    setText('');
+    void addFollowup(run.id, trimmed)
+      .then(() =>
+        toastsStore.add('info', 'Follow-up queued', 'It will steer the next round of this run.'),
+      )
+      .catch((err: unknown) => toastsStore.add('warning', 'Could not add follow-up', String(err)));
+  };
+  return (
+    <div style={{ display: 'flex', gap: '0.4rem', padding: '0.4rem 0.5rem' }}>
+      <input
+        style={{ flex: 1 }}
+        placeholder="Also look into…"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => e.key === 'Enter' && send()}
+      />
+      <button type="button" onClick={send}>
+        add
+      </button>
+    </div>
+  );
+}
+
 function RunDetail({ run }: { run: RunModel }) {
-  const { steps, deltas } = useResearchState();
+  const { steps, deltas, toolCalls } = useResearchState();
   const runSteps = steps[run.id] ?? [];
   const [report, setReport] = useState<string | null>(null);
   const [tab, setTab] = useState<'steps' | 'report'>('steps');
@@ -162,26 +306,34 @@ function RunDetail({ run }: { run: RunModel }) {
           {run.error}
         </div>
       )}
+      {run.status === 'awaiting_plan' && <PlanGate run={run} />}
       {tab === 'steps' ? (
-        <div style={{ flex: 1, overflow: 'auto' }}>
-          {run.plan && (
-            <div
-              style={{ padding: '0.4rem 0.6rem', fontSize: '0.75rem', color: 'var(--text-dim)' }}
-            >
-              plan: {run.plan.complexity} · {run.plan.subagents.length} subagent(s)
-            </div>
-          )}
-          {runSteps.map((step) => (
-            <StepRow
-              key={step.id}
-              step={step}
-              delta={step.kind === 'synthesis' ? liveDelta : undefined}
-            />
-          ))}
-          {runSteps.length === 0 && (
-            <div style={{ padding: '0.75rem', color: 'var(--text-dim)', fontSize: '0.8rem' }}>
-              Waiting for the plan…
-            </div>
+        <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ flex: 1, overflow: 'auto' }}>
+            {run.plan && (
+              <div
+                style={{ padding: '0.4rem 0.6rem', fontSize: '0.75rem', color: 'var(--text-dim)' }}
+              >
+                plan: {run.plan.complexity} · {run.plan.subagents.length} subagent(s)
+                {run.rounds_used > 1 ? ` · ${run.rounds_used} rounds` : ''}
+              </div>
+            )}
+            {runSteps.map((step) => (
+              <StepRow
+                key={step.id}
+                step={step}
+                delta={step.kind === 'synthesis' ? liveDelta : undefined}
+                calls={toolCalls[step.id]}
+              />
+            ))}
+            {runSteps.length === 0 && (
+              <div style={{ padding: '0.75rem', color: 'var(--text-dim)', fontSize: '0.8rem' }}>
+                Waiting for the plan…
+              </div>
+            )}
+          </div>
+          {!['done', 'failed', 'cancelled', 'awaiting_plan'].includes(run.status) && (
+            <FollowupBar run={run} />
           )}
         </div>
       ) : (
@@ -214,6 +366,7 @@ export function ResearchConsole() {
   const [effort, setEffort] = useState('auto');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  const [reviewPlan, setReviewPlan] = useState(false);
 
   const selected = useMemo(
     () => runs.find((r) => r.id === selectedId) ?? runs[0] ?? null,
@@ -228,6 +381,7 @@ export function ResearchConsole() {
       query: trimmed,
       effort,
       library: getSetting<string>('browser.saveLibrary') || 'default',
+      approval_mode: reviewPlan ? 'plan' : 'auto',
     })
       .then((run) => {
         setSelectedId(run.id);
@@ -268,6 +422,24 @@ export function ResearchConsole() {
           <option value="standard">standard</option>
           <option value="deep">deep</option>
         </select>
+        <label
+          title="Pause after planning so you can see (and change) what it intends to do before any subagent spends a token."
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.25rem',
+            fontSize: '0.75rem',
+            color: 'var(--text-dim)',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={reviewPlan}
+            onChange={(e) => setReviewPlan(e.target.checked)}
+          />
+          review plan
+        </label>
         <button onClick={begin} disabled={starting || !query.trim()}>
           {starting ? '…' : 'Research'}
         </button>

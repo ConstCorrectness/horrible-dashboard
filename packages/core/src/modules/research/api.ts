@@ -90,8 +90,11 @@ export interface ExportResponse {
 export type RunStatus =
   | 'pending'
   | 'planning'
+  /** Parked after planning, waiting for the user to approve or edit the plan. */
+  | 'awaiting_plan'
   | 'researching'
   | 'synthesizing'
+  | 'verifying'
   | 'citing'
   | 'exporting'
   | 'done'
@@ -124,6 +127,9 @@ export interface RunModel {
   tokens_used: number;
   token_budget: number;
   cancel_requested: boolean;
+  /** 'plan' parks the run at the approval gate; 'auto' runs straight through. */
+  approval_mode: string;
+  rounds_used: number;
   created_at: string;
   updated_at: string;
 }
@@ -132,11 +138,13 @@ export interface StepModel {
   id: string;
   run_id: string;
   seq: number;
-  kind: 'plan' | 'subagent' | 'synthesis' | 'citations' | 'export';
+  kind: 'plan' | 'subagent' | 'critique' | 'synthesis' | 'verify' | 'citations' | 'export';
   name: string;
   status: StepStatus;
   attempt: number;
   max_attempts: number;
+  /** Which gap-filling wave this step belongs to (0 for the first pass). */
+  round: number;
   input: Record<string, unknown>;
   output?: Record<string, unknown> | null;
   transcript?: { role: string; content?: string }[] | null;
@@ -146,14 +154,56 @@ export interface StepModel {
   finished_at?: string | null;
 }
 
+export interface ToolCallModel {
+  id: string;
+  run_id: string;
+  step_id: string;
+  seq: number;
+  name: string;
+  args: Record<string, unknown>;
+  ok: boolean;
+  ms?: number | null;
+  summary: string;
+  created_at?: string | null;
+}
+
+export interface FollowupModel {
+  id: string;
+  run_id: string;
+  text: string;
+  created_at?: string | null;
+  consumed_at?: string | null;
+}
+
 export function startRun(args: {
   query: string;
   effort?: string;
   library?: string;
   provider?: string;
   model?: string;
+  approval_mode?: 'auto' | 'plan';
 }): Promise<RunModel> {
   return apiPost<RunModel>('/research/runs', args);
+}
+
+/**
+ * Release a run parked at the approval gate. Omitting `plan` approves the lead's
+ * proposal unchanged; passing one replaces it (validated server-side).
+ */
+export function approvePlan(
+  runId: string,
+  plan?: { complexity: string; subagents: SubagentSpec[] },
+): Promise<RunModel> {
+  return apiPost<RunModel>(`/research/runs/${runId}/plan`, plan ? { plan } : {});
+}
+
+/** Ask a running investigation something extra; it shapes the next round. */
+export function addFollowup(runId: string, text: string): Promise<FollowupModel> {
+  return apiPost<FollowupModel>(`/research/runs/${runId}/followup`, { text });
+}
+
+export function getToolCalls(runId: string): Promise<{ calls: ToolCallModel[] }> {
+  return apiGet<{ calls: ToolCallModel[] }>(`/research/runs/${runId}/tool-calls`);
 }
 
 export function listRuns(): Promise<{ runs: RunModel[] }> {

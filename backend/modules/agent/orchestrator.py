@@ -592,6 +592,22 @@ _GROUP_KEYWORDS: dict[str, tuple[str, ...]] = {
         "pip",
         "git",
     ),
+    # Deliberately excludes "find", "read", "docs" and "documentation": those already
+    # belong to `files`/`symbols`, and an overlapping keyword preloads both groups,
+    # spending the tool budget twice for one intent.
+    "search": (
+        "web",
+        "google it",
+        "look up",
+        "online",
+        "latest",
+        "current",
+        "news",
+        "recent",
+        "browse the web",
+        "who is",
+        "url",
+    ),
     # The connector groups. A group's own name is always an implicit keyword, so
     # "github" needs no entry — these are the words people actually use instead.
     "github": (

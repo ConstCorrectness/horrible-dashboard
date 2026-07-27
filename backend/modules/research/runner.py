@@ -16,7 +16,11 @@ import logging
 from typing import Any
 
 from backend.modules.research import engine, runstore
-from backend.modules.research.broadcast import publish_run, publish_step
+from backend.modules.research.broadcast import (
+    publish_run,
+    publish_step,
+    publish_tool_call,
+)
 from backend.modules.settings.routes import get_value
 
 logger = logging.getLogger(__name__)
@@ -118,16 +122,45 @@ class ResearchRunner:
             logger.exception("research run %s failed", run_id)
             self._set_run(run_id, status="failed", error=str(exc))
 
+    def _linear_steps(self, run_id: str) -> dict[tuple[str, int], dict[str, Any]]:
+        """The non-subagent steps, keyed by `(kind, round)`.
+
+        Keyed by the pair rather than by kind alone: with gap-filling rounds there
+        can be several `critique` steps, and a dict keyed by kind silently collapses
+        them so round 2's critique reads as already done.
+        """
+        return {
+            (s["kind"], s["round"]): s
+            for s in runstore.list_steps(run_id)
+            if s["kind"] != "subagent"
+        }
+
+    def _max_rounds(self, run: dict[str, Any], plan: dict[str, Any]) -> int:
+        """How many research rounds this run may spend.
+
+        The effort tier decides by default — a quick run that loops three times
+        isn't quick — and the plan's own complexity wins over the requested effort,
+        because the model may have judged the question simpler than it was asked to
+        treat it.
+
+        `research.maxRounds` is an **override, not a lid**: it defaults to 0 meaning
+        "use the tier", so a user who wants every run capped at one round can say so
+        without a non-zero default silently preventing deep runs from ever reaching
+        their third round.
+        """
+        tier = plan.get("complexity") or run.get("effort") or "standard"
+        ceiling = {"quick": 1, "standard": 2, "deep": 3}.get(tier, 2)
+        override = int(get_value("research.maxRounds", 0) or 0)
+        return max(1, min(override, ceiling)) if override > 0 else ceiling
+
     async def _pipeline(
         self, run: dict[str, Any], lead: engine.ModelChoice, sub: engine.ModelChoice
     ) -> None:
         run_id = run["id"]
-        steps = {
-            s["kind"]: s for s in runstore.list_steps(run_id) if s["kind"] != "subagent"
-        }
+        steps = self._linear_steps(run_id)
 
         # 1. plan --------------------------------------------------------------
-        plan_step = steps.get("plan") or runstore.create_step(
+        plan_step = steps.get(("plan", 0)) or runstore.create_step(
             run_id, seq=0, kind="plan", name="Plan the run"
         )
         if plan_step["status"] != "done":
@@ -140,27 +173,38 @@ class ResearchRunner:
             runstore.update_run(run_id, plan=plan_output)
         else:
             plan_output = plan_step["output"]
-        plan = plan_output
 
-        # 2. subagents ---------------------------------------------------------
-        self._set_run(run_id, status="researching")
-        existing = [s for s in runstore.list_steps(run_id) if s["kind"] == "subagent"]
-        if not existing:
-            existing = [
-                runstore.create_step(
-                    run_id,
-                    seq=1 + i,
-                    kind="subagent",
-                    name=spec["name"],
-                    input=spec,
-                )
-                for i, spec in enumerate(plan["subagents"])
-            ]
-            for step in existing:
-                publish_step(step)
+        # 1b. the approval gate -------------------------------------------------
+        #
+        # Parking here *returns* rather than blocking. Blocking would hold a worker
+        # from a pool whose default size is 1, so one paused run would halt every
+        # other run on the node — and it wouldn't survive a restart either. The run
+        # comes back through `POST /runs/{id}/plan`, which re-enqueues it.
+        # Approval is recorded by flipping `approval_mode` back to `auto`, so there
+        # is exactly one gate per run and no separate "approved" flag to keep in
+        # sync with it.
+        fresh = runstore.get_run(run_id) or run
+        if fresh.get("approval_mode") == "plan":
+            if fresh["status"] != "awaiting_plan":
+                self._set_run(run_id, status="awaiting_plan")
+                logger.info("research run %s: awaiting plan approval", run_id)
+            return
 
+        # The edited plan, if the user changed one: the run row is the authority
+        # after approval, and the step output was updated to match.
+        plan = (runstore.get_run(run_id) or {}).get("plan") or plan_output
+
+        # 2. research rounds ----------------------------------------------------
         parallelism = max(1, int(get_value("research.subagentParallelism", 2) or 2))
         semaphore = asyncio.Semaphore(parallelism)
+        max_rounds = self._max_rounds(run, plan)
+
+        # Derived from the DB, never from a loop counter: that's what makes a restart
+        # mid-round resume into the right round instead of starting over.
+        subagent_steps = [
+            s for s in runstore.list_steps(run_id) if s["kind"] == "subagent"
+        ]
+        round_no = max((s["round"] for s in subagent_steps), default=0)
 
         async def run_one(step: dict[str, Any]) -> None:
             if step["status"] in ("done", "skipped"):
@@ -181,6 +225,7 @@ class ResearchRunner:
                             step["input"],
                             sub,
                             is_cancelled=lambda: self._cancelled(run_id),
+                            on_tool=self._tool_observer(run_id, step["id"]),
                         ),
                     )
                 except RunCancelled:
@@ -193,30 +238,80 @@ class ResearchRunner:
                         step["name"],
                     )
 
-        results = await asyncio.gather(
-            *(run_one(s) for s in existing), return_exceptions=True
-        )
-        for result in results:
-            if isinstance(result, RunCancelled):
-                raise result
-            if isinstance(result, asyncio.CancelledError):
-                raise result
-        self._check_cancel(run_id)
+        while True:
+            self._set_run(run_id, status="researching")
 
-        subagent_outputs = [
-            s["output"]
-            for s in runstore.list_steps(run_id)
-            if s["kind"] == "subagent" and s["status"] == "done" and s["output"]
-        ]
+            wave = [
+                s
+                for s in runstore.list_steps(run_id)
+                if s["kind"] == "subagent" and s["round"] == round_no
+            ]
+            if not wave:
+                specs = (
+                    plan["subagents"]
+                    if round_no == 0
+                    else self._pending_specs(run_id, round_no)
+                )
+                wave = [
+                    runstore.create_step(
+                        run_id,
+                        seq=100 * round_no + 1 + i,
+                        kind="subagent",
+                        name=spec["name"],
+                        input=spec,
+                        round=round_no,
+                    )
+                    for i, spec in enumerate(specs)
+                ]
+                for step in wave:
+                    publish_step(step)
+            if not wave:
+                break
+
+            # A `while` rather than a single gather: a follow-up posted mid-wave
+            # creates a subagent step in this round, and this picks it up in the
+            # same wave instead of making the user wait for the next one.
+            done_ids: set[str] = set()
+            while True:
+                todo = [s for s in wave if s["id"] not in done_ids]
+                if not todo:
+                    break
+                results = await asyncio.gather(
+                    *(run_one(s) for s in todo), return_exceptions=True
+                )
+                for result in results:
+                    if isinstance(result, (RunCancelled, asyncio.CancelledError)):
+                        raise result
+                done_ids.update(s["id"] for s in todo)
+                wave = [
+                    s
+                    for s in runstore.list_steps(run_id)
+                    if s["kind"] == "subagent" and s["round"] == round_no
+                ]
+            self._check_cancel(run_id)
+
+            outputs = self._round_outputs(run_id)
+            if not outputs:
+                raise RuntimeError("every subagent failed — nothing to synthesize")
+
+            runstore.update_run(run_id, rounds_used=round_no + 1)
+            if round_no + 1 >= max_rounds or self._over_budget(run_id):
+                break
+
+            # 2b. critique -----------------------------------------------------
+            critique = await self._critique(run, plan, outputs, lead, round_no)
+            if critique.get("sufficient") or not critique.get("subagents"):
+                break
+            round_no += 1
+
+        subagent_outputs = self._round_outputs(run_id)
         if not subagent_outputs:
             raise RuntimeError("every subagent failed — nothing to synthesize")
 
         # 3. synthesis ---------------------------------------------------------
-        steps = {
-            s["kind"]: s for s in runstore.list_steps(run_id) if s["kind"] != "subagent"
-        }
-        synth_step = steps.get("synthesis") or runstore.create_step(
-            run_id, seq=100, kind="synthesis", name="Synthesize the report"
+        steps = self._linear_steps(run_id)
+        synth_step = steps.get(("synthesis", 0)) or runstore.create_step(
+            run_id, seq=900, kind="synthesis", name="Synthesize the report"
         )
         if synth_step["status"] != "done":
             self._set_run(run_id, status="synthesizing")
@@ -230,29 +325,55 @@ class ResearchRunner:
         else:
             synth_output = synth_step["output"]
 
-        # 4. citations ---------------------------------------------------------
-        steps = {
-            s["kind"]: s for s in runstore.list_steps(run_id) if s["kind"] != "subagent"
-        }
-        cite_step = steps.get("citations") or runstore.create_step(
-            run_id, seq=101, kind="citations", name="Verify citations"
+        # 4. verification -------------------------------------------------------
+        steps = self._linear_steps(run_id)
+        verify_step = steps.get(("verify", 0)) or runstore.create_step(
+            run_id, seq=901, kind="verify", name="Check claim support"
+        )
+        if verify_step["status"] != "done":
+            self._set_run(run_id, status="verifying")
+            try:
+                verify_output = await self._run_step(
+                    run_id,
+                    verify_step,
+                    lambda: engine.run_verification_step(
+                        run, synth_output, subagent_outputs, lead
+                    ),
+                )
+            except RunCancelled:
+                raise
+            except Exception as exc:  # noqa: BLE001 — the audit is additive
+                logger.warning(
+                    "research run %s: verification failed (%s); shipping the report "
+                    "without an audit",
+                    run_id,
+                    exc,
+                )
+                verify_output = {}
+        else:
+            verify_output = verify_step["output"]
+
+        # 5. citations ---------------------------------------------------------
+        steps = self._linear_steps(run_id)
+        cite_step = steps.get(("citations", 0)) or runstore.create_step(
+            run_id, seq=902, kind="citations", name="Verify citations"
         )
         if cite_step["status"] != "done":
             self._set_run(run_id, status="citing")
             cite_output = await self._run_step(
                 run_id,
                 cite_step,
-                lambda: engine.run_citations_step(run, synth_output, lead),
+                lambda: engine.run_citations_step(
+                    run, synth_output, lead, verify_output
+                ),
             )
         else:
             cite_output = cite_step["output"]
 
-        # 5. export ------------------------------------------------------------
-        steps = {
-            s["kind"]: s for s in runstore.list_steps(run_id) if s["kind"] != "subagent"
-        }
-        export_step = steps.get("export") or runstore.create_step(
-            run_id, seq=102, kind="export", name="File the report"
+        # 6. export ------------------------------------------------------------
+        steps = self._linear_steps(run_id)
+        export_step = steps.get(("export", 0)) or runstore.create_step(
+            run_id, seq=903, kind="export", name="File the report"
         )
         if export_step["status"] != "done":
             self._set_run(run_id, status="exporting")
@@ -272,6 +393,108 @@ class ResearchRunner:
             error=None,
         )
         logger.info("research run %s: done", run_id)
+
+    # -- rounds --------------------------------------------------------------
+
+    def _round_outputs(self, run_id: str) -> list[dict[str, Any]]:
+        """Every finished subagent's output, across all rounds.
+
+        Cumulative on purpose: round 2 exists to *fill gaps* in round 1, not to
+        replace it, so synthesis reads both.
+        """
+        return [
+            s["output"]
+            for s in runstore.list_steps(run_id)
+            if s["kind"] == "subagent" and s["status"] == "done" and s["output"]
+        ]
+
+    def _pending_specs(self, run_id: str, round_no: int) -> list[dict[str, Any]]:
+        """The subagent specs the previous round's critique asked for."""
+        previous = self._linear_steps(run_id).get(("critique", round_no - 1))
+        if previous is None or previous["status"] != "done" or not previous["output"]:
+            return []
+        return list(previous["output"].get("subagents") or [])
+
+    async def _critique(
+        self,
+        run: dict[str, Any],
+        plan: dict[str, Any],
+        outputs: list[dict[str, Any]],
+        lead: engine.ModelChoice,
+        round_no: int,
+    ) -> dict[str, Any]:
+        """Close a round: what's still missing, and is another round worth it.
+
+        A failed critique is treated as "sufficient" rather than failing the run —
+        we already have findings, and throwing away a completed round because the
+        reviewer couldn't produce JSON would be the worst possible trade. Same
+        principle as a failed subagent not failing the run.
+        """
+        run_id = run["id"]
+        step = self._linear_steps(run_id).get(("critique", round_no)) or (
+            runstore.create_step(
+                run_id,
+                seq=100 * round_no + 90,
+                kind="critique",
+                name=f"Review round {round_no + 1}",
+                round=round_no,
+            )
+        )
+        if step["status"] == "done" and step["output"]:
+            return step["output"]
+
+        # Anything the user asked mid-run that no subagent picked up shapes the next
+        # round instead of being silently dropped.
+        pending = runstore.list_followups(run_id, unconsumed_only=True)
+        try:
+            critique = await self._run_step(
+                run_id,
+                step,
+                lambda: engine.run_critique_step(
+                    run,
+                    plan,
+                    outputs,
+                    lead,
+                    round_no=round_no,
+                    followups=[f["text"] for f in pending],
+                ),
+            )
+        except RunCancelled:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "research run %s: critique failed (%s); treating the findings as "
+                "sufficient and moving to synthesis",
+                run_id,
+                exc,
+            )
+            return {"sufficient": True, "gaps": [], "subagents": []}
+
+        runstore.consume_followups([f["id"] for f in pending])
+        return critique
+
+    def _tool_observer(self, run_id: str, step_id: str):
+        """A callback that turns each subagent tool call into a `/ws` event and a row.
+
+        Persisted as well as broadcast: "what did subagent 3 actually search for" is
+        the highest-value thing to know when a run comes back thin, and a browser
+        that wasn't open when the run happened would otherwise have no way to find out.
+        """
+
+        def observe(payload: dict[str, Any]) -> None:
+            runstore.record_tool_call(
+                run_id,
+                step_id,
+                seq=int(payload.get("seq") or 0),
+                name=str(payload.get("name") or "?"),
+                args=payload.get("args"),
+                ok=bool(payload.get("ok")),
+                ms=payload.get("ms"),
+                summary=str(payload.get("summary") or ""),
+            )
+            publish_tool_call(run_id, step_id, payload)
+
+        return observe
 
     # -- step machinery ------------------------------------------------------
 

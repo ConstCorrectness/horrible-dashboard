@@ -83,7 +83,12 @@ def _validate(url: str) -> None:
 
 
 async def _fetch_guarded(
-    url: str, *, accept: tuple[str, ...], max_bytes: int
+    url: str,
+    *,
+    accept: tuple[str, ...],
+    max_bytes: int,
+    user_agent: str | None = None,
+    headers: dict[str, str] | None = None,
 ) -> tuple[str, httpx.Response]:
     """Walk redirects under the SSRF policy and return `(final_url, response)`.
 
@@ -92,16 +97,31 @@ async def _fetch_guarded(
     two guards that drift, and the whole value of this module is that there's exactly
     one. `accept` is a content-type substring allowlist; the body is streamed so
     `max_bytes` aborts a hostile response *during* transfer rather than after it.
+
+    `user_agent` overrides the reader-mode default. The focused crawler passes its own
+    honest, contactable agent string: a crawler that identifies as a browser has no
+    business claiming to honour robots.txt. `headers` carries conditional-request
+    headers (`If-None-Match`, `If-Modified-Since`) so a re-crawl can be answered with
+    a **304**, which is returned as a normal response — content-type and size checks
+    are skipped for it, because a 304 has no body to check.
     """
     current = url
+    base_headers = {"User-Agent": user_agent or _UA, **(headers or {})}
     async with httpx.AsyncClient(
-        follow_redirects=False, timeout=_TIMEOUT, headers={"User-Agent": _UA}
+        follow_redirects=False, timeout=_TIMEOUT, headers=base_headers
     ) as client:
         for _ in range(_MAX_REDIRECTS + 1):
             await asyncio.to_thread(_validate, current)
             req = client.build_request("GET", current)
             resp = await client.send(req, stream=True)
             try:
+                # **Before** the redirect check, not after: 304 lives in the 3xx
+                # range, so `is_redirect` is true for it, and a Not-Modified response
+                # carries no Location header. Checking redirects first therefore
+                # rejected every conditional request as a malformed redirect — which
+                # silently broke the crawler's entire incremental path.
+                if resp.status_code == 304:
+                    return current, resp
                 if resp.is_redirect:
                     location = resp.headers.get("location")
                     if not location:
@@ -144,12 +164,21 @@ async def _read_capped(resp: httpx.Response, max_bytes: int) -> None:
     resp._content = b"".join(chunks)  # noqa: SLF001 — httpx has no public setter
 
 
-async def safe_fetch_html(url: str) -> tuple[str, str]:
+async def safe_fetch_html(
+    url: str,
+    *,
+    user_agent: str | None = None,
+    headers: dict[str, str] | None = None,
+) -> tuple[str, str]:
     """Fetch `url` under the SSRF policy, following redirects manually and
     re-validating each hop. Returns `(final_url, html)`. Raises `UnsafeUrlError`
     for a policy violation, or `httpx.HTTPError` for a transport/HTTP failure."""
     final_url, resp = await _fetch_guarded(
-        url, accept=("html", "xml", "text"), max_bytes=_MAX_BYTES
+        url,
+        accept=("html", "xml", "text"),
+        max_bytes=_MAX_BYTES,
+        user_agent=user_agent,
+        headers=headers,
     )
     return final_url, resp.text
 

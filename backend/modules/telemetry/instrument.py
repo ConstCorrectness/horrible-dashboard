@@ -246,6 +246,12 @@ def record_browser_request(
     response_bytes: int | None = None,
     body: bytes | None = None,
     error: str | None = None,
+    remote_ip: str | None = None,
+    remote_port: int | None = None,
+    http_protocol: str | None = None,
+    tls: dict[str, object] | None = None,
+    timing: dict[str, float] | None = None,
+    from_cache: bool | None = None,
 ) -> None:
     """Record one request made by the embedded Chromium (see modules/browser).
 
@@ -272,6 +278,12 @@ def record_browser_request(
         response_headers=response_headers,
         response_body=safe_body(body, max_chars=_max_body_chars()),
         error=error,
+        remote_ip=remote_ip,
+        remote_port=remote_port,
+        http_protocol=http_protocol,
+        tls=tls,
+        timing=timing,
+        from_cache=from_cache,
     )
 
 

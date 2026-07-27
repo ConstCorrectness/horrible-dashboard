@@ -55,6 +55,51 @@ class StartRunRequest(BaseModel):
         None  # override; empty = research.provider setting/agent config
     )
     model: str | None = None
+    # `plan` parks the run after planning so you can edit the plan before any
+    # subagent spends a token. `auto` is the old behaviour.
+    approval_mode: str = "auto"
+
+
+class ApprovePlanRequest(BaseModel):
+    """Release a run parked at the approval gate, optionally with an edited plan.
+
+    Omitting `plan` approves what the lead proposed unchanged.
+    """
+
+    plan: dict[str, Any] | None = None
+
+
+class FollowupRequest(BaseModel):
+    text: str
+
+
+class FollowupModel(BaseModel):
+    id: str
+    run_id: str
+    text: str
+    created_at: str | None = None
+    consumed_at: str | None = None
+
+
+class FollowupsListResponse(BaseModel):
+    followups: list[FollowupModel]
+
+
+class ToolCallModel(BaseModel):
+    id: str
+    run_id: str
+    step_id: str
+    seq: int
+    name: str
+    args: dict[str, Any] = Field(default_factory=dict)
+    ok: bool = True
+    ms: int | None = None
+    summary: str = ""
+    created_at: str | None = None
+
+
+class ToolCallsListResponse(BaseModel):
+    calls: list[ToolCallModel]
 
 
 class RunModel(BaseModel):
@@ -72,6 +117,8 @@ class RunModel(BaseModel):
     tokens_used: int = 0
     token_budget: int = 0
     cancel_requested: bool = False
+    approval_mode: str = "auto"
+    rounds_used: int = 0
     created_at: str
     updated_at: str
 
@@ -89,6 +136,9 @@ class StepModel(BaseModel):
     status: str
     attempt: int
     max_attempts: int
+    # Which gap-filling wave this step belongs to (0 for the first pass and for
+    # every linear step).
+    round: int = 0
     input: dict[str, Any] = Field(default_factory=dict)
     output: dict[str, Any] | None = None
     transcript: list[dict[str, Any]] | None = None

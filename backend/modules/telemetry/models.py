@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -37,3 +37,19 @@ class IoEvent(BaseModel):
     # request stays visible instead of vanishing.
     resource_type: str | None = None
     verdict: IoVerdict | None = None
+    # Connection forensics, harvested from Chromium's DevTools protocol (see
+    # modules/browser/cdp.py). Chromium already measures all of this for every
+    # request and we were throwing it away; surfacing it is what turns the network
+    # view from a list of URLs into an explanation of how the web actually works.
+    #
+    # `remote_ip`/`remote_port` are who actually answered — the thing a URL hides.
+    # `http_protocol` is `h3`/`h2`/`http/1.1`. `tls` carries the negotiated version,
+    # cipher, issuer, subject and SAN list. `timing` is the phase breakdown in
+    # milliseconds (dns/connect/tls/send/wait/receive), which is what makes a
+    # waterfall possible.
+    remote_ip: str | None = None
+    remote_port: int | None = None
+    http_protocol: str | None = None
+    tls: dict[str, Any] | None = None
+    timing: dict[str, float] | None = None
+    from_cache: bool | None = None

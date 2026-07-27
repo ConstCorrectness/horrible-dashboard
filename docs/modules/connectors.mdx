@@ -423,3 +423,38 @@ granted scopes and a Disconnect, or the connect flow when unconnected.
 - `backend/tests/test_secrets_store.py` — key resolution and the decrypt-failure
   contract.
 - `packages/core/src/connectors/__tests__/api.test.ts` — the polling loop.
+
+## Web Search
+
+The one connector that is **not** an account — it is key custody for the
+[search module's](search.mdx) metered engines: Tavily, Brave, Exa and Serper.
+
+**One connector, four keys**, because a connector's `id` must equal its agent-tool
+prefix. Four connectors would mean `tavily.search`, `brave.search`, … — four tool
+groups and four catalog blurbs for a single capability, and no provider-agnostic tool
+for the model to call. One `search` connector gives one `search.*` group whose engine
+is an implementation detail the user can switch without the agent noticing.
+
+The connect flow is a single `form` step with one optional secret field per engine.
+There is no `select` field type in the connect-form vocabulary, so engine *choice*
+could not live here anyway — and it shouldn't: a vendor's name is public, so
+`search.provider` is an ordinary setting. Only the key is secret, and keys are stored
+under `search:<provider>` in `secrets.db`, never echoed back into a form prefill or a
+status payload.
+
+Environment variables win over stored keys (`SEARCH_TAVILY_API_KEY` and friends). A
+pinned field says so in its help text and its submitted value is **discarded** rather
+than persisted — storing a value that will never be read is worse than doing nothing,
+because it looks like it worked.
+
+:::note `connected` means "you added paid engines", not "search works"
+The `search.*` tools are registered unconditionally, and SearXNG and the keyless
+DuckDuckGo fallback need no key at all — so search answers queries with this tile
+untouched. Conflating the two would push people into paying for something they already
+have.
+:::
+
+A blank field on reconfigure means "leave it alone", never "clear it". The form cannot
+prefill a secret, so blank is the *default* state of a field whose key is already
+stored; treating it as a delete would wipe a working key every time someone opened the
+tile.

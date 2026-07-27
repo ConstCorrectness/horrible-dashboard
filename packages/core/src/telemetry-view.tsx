@@ -196,6 +196,51 @@ export function IoInspector({ event, onClose }: { event: IoEvent; onClose: () =>
     ]);
   }
   if (event.duration_ms != null) rows.push(['Duration', `${Math.round(event.duration_ms)} ms`]);
+
+  // Connection forensics: who actually answered, over what, with which certificate.
+  // Chromium measured all of this and the URL hides every bit of it.
+  if (event.remote_ip) {
+    rows.push([
+      'Peer',
+      <span className="io-mono">
+        {event.remote_ip}
+        {event.remote_port ? `:${event.remote_port}` : ''}
+      </span>,
+    ]);
+  }
+  if (event.http_protocol) rows.push(['Protocol', event.http_protocol]);
+  if (event.from_cache) rows.push(['Cache', 'served locally — nothing crossed the network']);
+  if (event.timing) {
+    const phases = Object.entries(event.timing).filter(([, ms]) => ms);
+    if (phases.length) {
+      rows.push([
+        'Timing',
+        <span className="io-mono">
+          {phases.map(([name, ms]) => `${name} ${ms}ms`).join(' · ')}
+        </span>,
+      ]);
+    }
+  }
+  if (event.tls) {
+    const tls = event.tls;
+    if (tls.protocol) rows.push(['TLS', `${tls.protocol}${tls.cipher ? ` · ${tls.cipher}` : ''}`]);
+    if (tls.issuer) rows.push(['Certificate', `${tls.subject ?? ''} issued by ${tls.issuer}`]);
+    if (tls.valid_to) {
+      rows.push(['Cert expires', new Date(tls.valid_to * 1000).toLocaleDateString()]);
+    }
+    if (tls.sans?.length) {
+      // A cert covering hundreds of names is a CDN's shared certificate — worth
+      // seeing, and the reason the count is shown rather than just the first few.
+      rows.push([
+        'Also valid for',
+        <span className="io-mono">
+          {tls.sans.slice(0, 6).join(', ')}
+          {tls.san_count && tls.san_count > 6 ? ` +${tls.san_count - 6} more` : ''}
+        </span>,
+      ]);
+    }
+  }
+
   if (event.request_bytes != null) rows.push(['Request size', fmtBytes(event.request_bytes)]);
   if (event.response_bytes != null) rows.push(['Response size', fmtBytes(event.response_bytes)]);
   rows.push(['Time', new Date(event.ts * 1000).toLocaleString()]);

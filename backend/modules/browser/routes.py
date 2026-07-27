@@ -17,12 +17,17 @@ from backend.modules.browser.models import (
     AddBookmarkRequest,
     Bookmark,
     BookmarksResponse,
+    DnsChainResponse,
     EngineStatus,
+    GeoStatus,
     HistoryEntry,
     HistoryListResponse,
+    NetProbeRequest,
     OkResponse,
     ReaderResponse,
     RecordHistoryRequest,
+    TraceHopModel,
+    TraceResponse,
 )
 from backend.modules.browser.session import server_browser_enabled
 
@@ -98,3 +103,76 @@ def delete_bookmark(bookmark_id: str) -> OkResponse:
     if not store.delete_bookmark(bookmark_id):
         raise HTTPException(status_code=404, detail="bookmark not found")
     return OkResponse()
+
+
+# --- network probes ---------------------------------------------------------
+#
+# The educational half of the network view. Everything else in this module reports
+# what the browser *did*; these answer how the web underneath it works — where a
+# name comes from, and what path the packets take.
+#
+# All three validate the target against the SSRF guard's public-IP check first.
+# Probing internal hosts is a reconnaissance primitive, and "the user clicked it"
+# is not a defence when the target could have been suggested by a page.
+
+
+def _probe_target(value: str) -> str:
+    """The hostname to probe, from a bare host or a URL. Rejects private targets."""
+    from urllib.parse import urlsplit
+
+    from backend.modules.browser.fetch import _check_host_public
+
+    raw = (value or "").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="a host or URL is required")
+    host = urlsplit(raw).hostname if "//" in raw else raw.split("/")[0]
+    if not host:
+        raise HTTPException(
+            status_code=400, detail=f"couldn't read a host from {raw!r}"
+        )
+    try:
+        _check_host_public(host)
+    except UnsafeUrlError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return host
+
+
+@router.post("/net/dns", response_model=DnsChainResponse)
+async def probe_dns(req: NetProbeRequest) -> DnsChainResponse:
+    """Walk the DNS delegation from a root server down to the authoritative answer.
+
+    Plain UDP/53, so it needs no elevated privileges — which is what makes this the
+    centrepiece of the network view rather than a footnote.
+    """
+    from backend.modules.browser import netprobe
+
+    host = _probe_target(req.target)
+    chain = await netprobe.resolve_chain(host, req.record_type or "A")
+    return DnsChainResponse(**chain.to_dict())
+
+
+@router.post("/net/trace", response_model=TraceResponse)
+async def probe_trace(req: NetProbeRequest) -> TraceResponse:
+    """Trace the network path to a host, annotating hops with location when possible."""
+    from backend.modules.browser import netprobe
+
+    host = _probe_target(req.target)
+    result = await netprobe.traceroute(host)
+    hops = []
+    for hop in result["hops"]:
+        located = netprobe.locate(hop["ip"]) if hop.get("ip") else None
+        hops.append(TraceHopModel(**hop, geo=located))
+    return TraceResponse(
+        host=result["host"],
+        hops=hops,
+        elapsed_ms=result.get("elapsed_ms", 0),
+        error=result.get("error"),
+    )
+
+
+@router.get("/net/geo", response_model=GeoStatus)
+def geo_status() -> GeoStatus:
+    """Whether route locations can be plotted, and how to enable it if not."""
+    from backend.modules.browser import netprobe
+
+    return GeoStatus(**netprobe.geo_status())

@@ -26,7 +26,9 @@ from backend.modules.library.models import (
     LibrarySearchRequest,
     MediaAsset,
 )
-from backend.modules.library.routes import _rrf
+# RRF moved to the search module when web search needed the same rank fusion;
+# the library imports it from there rather than keeping a second copy.
+from backend.modules.search.fusion import rrf as _rrf
 from backend.modules.library.routes import add_source as add_source_route
 from backend.modules.library.routes import delete_source as delete_route
 from backend.modules.library.routes import search as search_route

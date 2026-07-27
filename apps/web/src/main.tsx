@@ -36,6 +36,7 @@ import {
   replModule,
   researchModule,
   scratchModule,
+  searchModule,
   mcpModule,
   setWindowControl,
   settingsModule,
@@ -94,6 +95,7 @@ async function boot(): Promise<void> {
   registry.register(databaseModule);
   registry.register(libraryModule);
   registry.register(researchModule);
+  registry.register(searchModule);
   registry.register(trainingModule);
   registry.register(notebookModule);
   registry.register(visualizerModule);
