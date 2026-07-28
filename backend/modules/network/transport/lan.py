@@ -75,7 +75,10 @@ class LanDiscovery(Transport):
             b"address": address.encode(),
             b"name": identity.node_name().encode(),
         }
-        host_ip = socket.gethostbyname(socket.gethostname())
+        # `gethostbyname(gethostname())` is the classic choice here and the wrong
+        # one on Windows, where it often answers 127.0.0.1 — advertising loopback
+        # over mDNS makes this node undiscoverable to everyone but itself.
+        host_ip = trust.lan_ip() or socket.gethostbyname(socket.gethostname())
         return ServiceInfo(
             SERVICE_TYPE,
             f"{me.node_id}.{SERVICE_TYPE}",

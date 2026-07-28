@@ -169,6 +169,11 @@ layout shell and how it behaves in the browser vs the desktop app:
   canvas (n8n-style) for composing runnable multi-agent orchestrations over the
   existing orchestrator loop, tool surface, and permission gate.
 - [Network](modules/network.mdx)
+- [Mobile (Android)](modules/mobile-android.mdx) — **Implemented.** A native Android
+  companion that pairs by QR and joins the peer fabric as an ordinary node: remote
+  control of panes/media, streaming agent chat, and `mobile.*` tools pointing back at
+  the phone. Reimplements the signed-envelope wire in Kotlin, so it documents the
+  byte-exact canonicalization contract both sides must honour.
 - [Commons](modules/commons.mdx) — **Phase 4 implemented.** The agent commons: browse and
   search strangers' public, signed profiles (vector matchmaking), meet via a two-sided
   consent handshake, and a reputation floor (blocklist, signed vouches, reports, trust

@@ -79,9 +79,10 @@ export const networkModule: ModuleManifest = {
     {
       key: 'network.advertisedAddress',
       title: 'Advertised address',
-      description: 'The ws://…/peer-ws URL peers should dial to reach this node.',
+      description:
+        'The ws://…/peer-ws URL peers should dial to reach this node, baked into invite QR codes. Blank auto-detects this machine’s LAN address; set it only for a public hostname or a forwarded port.',
       type: 'string',
-      default: 'ws://localhost:8000/peer-ws',
+      default: '',
     },
     {
       key: 'network.enableDirect',

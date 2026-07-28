@@ -4424,3 +4424,74 @@ kbd {
   overflow: auto;
   border-top: 1px solid var(--border);
 }
+
+/* Mobile Pairing Popover */
+.mobile-pairing-popover {
+  width: min(20rem, 90vw);
+  padding: 1rem;
+  gap: 0.75rem;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+}
+
+.mobile-pairing-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.mobile-pairing-header h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.close-button {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 1.25rem;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+
+.mobile-pairing-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  text-align: center;
+}
+
+.pairing-status {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
+.pairing-status.error {
+  color: #f08c8c;
+}
+
+.pairing-qr-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.pairing-qr {
+  padding: 0.75rem;
+  background: white;
+  border-radius: 8px;
+}
+
+.pairing-instructions {
+  font-size: 0.8rem;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
+
+.pairing-details {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  opacity: 0.7;
+}

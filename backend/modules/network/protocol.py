@@ -30,6 +30,10 @@ COLLAB_JOIN = "collab_join"
 COLLAB_LEAVE = "collab_leave"
 COLLAB_OP = "collab_op"
 PEER_CHAT = "peer_chat"
+REMOTE_COMMAND = "remote_command"
+VIEW_REQUEST = "view_request"
+VIEW_ACCEPT = "view_accept"
+VIEW_FRAME = "view_frame"
 ERROR = "error"
 
 

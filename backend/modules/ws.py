@@ -4,6 +4,8 @@ Lives on its own (no telemetry/agent imports) so both the telemetry push task an
 the agent orchestrator can depend on it without an import cycle.
 """
 
+from __future__ import annotations
+
 import asyncio
 from collections.abc import Callable
 from typing import Any
@@ -12,6 +14,28 @@ from typing import Any
 # for the observability panel). Kept as a plain callable set from outside so this
 # module stays free of telemetry imports — the very cycle it exists to avoid.
 _send_observer: Callable[[str, dict[str, Any]], None] | None = None
+_active_connections: set[WsConnection] = set()
+
+
+def register_connection(conn: WsConnection) -> None:
+    """Register a new active `/ws` connection."""
+    _active_connections.add(conn)
+
+
+def unregister_connection(conn: WsConnection) -> None:
+    """Remove an active `/ws` connection."""
+    _active_connections.discard(conn)
+
+
+async def broadcast_event(channel: str, event: str, data: dict[str, Any]) -> None:
+    """Send an event to all active `/ws` connections."""
+    message = {"channel": channel, "event": event, "data": data}
+    for conn in list(_active_connections):
+        try:
+            await conn.send_json(message)
+        except Exception:
+            # A broken connection should be cleaned up by the main loop.
+            pass
 
 
 def set_ws_send_observer(

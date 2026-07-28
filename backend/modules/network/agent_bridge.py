@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections import defaultdict
 from typing import TYPE_CHECKING, Any
 
 from backend.modules.agent.permissions import Mode
@@ -48,6 +49,10 @@ def _remote_mode() -> Mode:
 
 
 # ---- caller side ------------------------------------------------------------------
+
+
+# node_id -> request_id -> task
+_active_remote_turns: dict[str, dict[str, asyncio.Task[None]]] = defaultdict(dict)
 
 
 async def ask_peer(
@@ -95,7 +100,12 @@ class RemoteAgentConn:
 
     is_remote = True
 
-    def __init__(self, force_mode: Mode) -> None:
+    def __init__(
+        self, hub: PeerHub, dst: str, request_id: str, force_mode: Mode
+    ) -> None:
+        self.hub = hub
+        self.dst = dst
+        self.request_id = request_id
         self.force_mode = force_mode
         self.pending: dict[str, Any] = {}
         self.pending_approvals: dict[str, Any] = {}
@@ -107,6 +117,18 @@ class RemoteAgentConn:
     async def send_json(self, data: dict[str, Any]) -> None:
         event = data.get("event")
         payload = data.get("data") or {}
+
+        # Relay stream tokens and reasoning back to the peer
+        if event in ("token", "reasoning", "delegate_token"):
+            asyncio.create_task(
+                self.hub.send_to(
+                    self.dst,
+                    protocol.AGENT_STREAM,
+                    {**payload, "event": event, "request_id": self.request_id},
+                )
+            )
+            return
+
         if event == "answer":
             self.answer_text = str(payload.get("text", ""))
         elif event == "error":
@@ -114,7 +136,6 @@ class RemoteAgentConn:
             self._done.set()
         elif event == "done":
             self._done.set()
-        # token/reasoning/tool_call are not relayed across the peer wire in v1.
 
     async def wait_done(self, timeout: float) -> None:
         try:
@@ -157,24 +178,56 @@ async def handle_remote_agent_request(
 
     from backend.modules.agent.orchestrator import run_agent_turn
 
-    rconn = RemoteAgentConn(_remote_mode())
-    try:
-        # remote=True restricts the turn to no actuating tools (no browser behind it).
-        await run_agent_turn(rconn, request_id, prompt, remote=True)  # type: ignore[arg-type]
-        await rconn.wait_done(timeout=PEER_AGENT_TIMEOUT_S)
-    except Exception as exc:  # never let a remote turn crash the pump
-        logger.exception("remote agent turn failed")
-        rconn.error = str(exc)
+    rconn = RemoteAgentConn(hub, env.src, request_id, _remote_mode())
 
-    ok = rconn.error is None and rconn.answer_text is not None
-    await hub.send_to(
-        env.src,
-        protocol.AGENT_RESULT,
-        {
-            "request_id": request_id,
-            "ok": ok,
-            "text": rconn.answer_text,
-            "error": rconn.error,
-        },
-        re=env.msg_id,
-    )
+    async def _reply(ok: bool, text: str | None, error: str | None) -> None:
+        await hub.send_to(
+            env.src,
+            protocol.AGENT_RESULT,
+            {"request_id": request_id, "ok": ok, "text": text, "error": error},
+            re=env.msg_id,
+        )
+
+    async def _run_and_reply() -> None:
+        try:
+            try:
+                # remote=True restricts the turn to no actuating tools (no browser behind it).
+                await run_agent_turn(rconn, request_id, prompt, remote=True)  # type: ignore[arg-type]
+                await rconn.wait_done(timeout=PEER_AGENT_TIMEOUT_S)
+            except Exception as exc:  # never let a remote turn crash the session
+                logger.exception("remote agent turn failed")
+                rconn.error = str(exc)
+            ok = rconn.error is None and rconn.answer_text is not None
+            await _reply(ok, rconn.answer_text, rconn.error)
+        except asyncio.CancelledError:
+            # handle_remote_agent_cancel cancelled us. The peer is blocked on a
+            # reply keyed to this msg_id, so it still needs one — awaiting here is
+            # safe because the cancellation has already been delivered and caught.
+            logger.info("remote agent turn %s cancelled by %s", request_id, env.src)
+            await _reply(False, None, "cancelled")
+        finally:
+            _active_remote_turns[env.src].pop(request_id, None)
+
+    # Detached on purpose: the session pump awaits handlers inline, so awaiting the
+    # turn here would block the receive loop for its whole duration — the peer's
+    # own agent_cancel could never be dispatched, and cancelling would unwind a
+    # CancelledError into the pump and tear the link down.
+    _active_remote_turns[env.src][request_id] = asyncio.create_task(_run_and_reply())
+
+
+async def handle_remote_agent_cancel(
+    hub: PeerHub, session: PeerSession, env: PeerEnvelope
+) -> None:
+    """Stop an ongoing remote agent turn requested by this peer."""
+    request_id = env.data.get("request_id")
+    if not request_id:
+        # If no specific request_id, cancel all turns for this peer
+        turns = _active_remote_turns.pop(env.src, {})
+        for task in turns.values():
+            task.cancel()
+        return
+
+    task = _active_remote_turns[env.src].pop(str(request_id), None)
+    if task:
+        logger.info("Cancelling remote agent turn %s for %s", request_id, env.src)
+        task.cancel()

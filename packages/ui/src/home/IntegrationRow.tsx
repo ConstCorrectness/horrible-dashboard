@@ -3,6 +3,7 @@ import { listConnectors, type Connector } from '@horrible/core';
 
 import { ConnectorIcon } from './connector-icons';
 import { ConnectorPopover } from './ConnectorPopover';
+import { MobilePairingDialog } from './MobilePairingDialog';
 
 /**
  * The row of integration tiles above the ask bar: what your agent can reach.
@@ -13,6 +14,7 @@ import { ConnectorPopover } from './ConnectorPopover';
 export function IntegrationRow() {
   const [connectors, setConnectors] = useState<Connector[] | 'loading' | 'unavailable'>('loading');
   const [open, setOpen] = useState<string | null>(null);
+  const [showMobile, setShowMobile] = useState(false);
 
   const refresh = () =>
     listConnectors()
@@ -29,14 +31,12 @@ export function IntegrationRow() {
     // Skeletons at the tiles' final size, so the greeting and ask bar don't jump.
     return (
       <div className="integration-row" aria-busy="true">
-        {[0, 1, 2].map((i) => (
+        {[0, 1, 2, 3].map((i) => (
           <div key={i} className="integration-tile skeleton" />
         ))}
       </div>
     );
   }
-
-  if (connectors.length === 0) return null;
 
   return (
     <div className="integration-row">
@@ -50,7 +50,10 @@ export function IntegrationRow() {
             title={
               c.connected ? `${c.label} — ${c.account?.label ?? 'connected'}` : `Connect ${c.label}`
             }
-            onClick={() => setOpen(open === c.id ? null : c.id)}
+            onClick={() => {
+              setOpen(open === c.id ? null : c.id);
+              setShowMobile(false);
+            }}
           >
             <ConnectorIcon icon={c.icon} label={c.label} />
             {!c.connected && (
@@ -70,6 +73,23 @@ export function IntegrationRow() {
           )}
         </div>
       ))}
+
+      {/* Mobile Pairing Tile */}
+      <div className="integration-slot">
+        <button
+          type="button"
+          className="integration-tile"
+          title="Pair Mobile Device"
+          onClick={() => {
+            setShowMobile(!showMobile);
+            setOpen(null);
+          }}
+        >
+          <span className="integration-letter">📱</span>
+        </button>
+        <span className="integration-label">Mobile</span>
+        {showMobile && <MobilePairingDialog onClose={() => setShowMobile(false)} />}
+      </div>
     </div>
   );
 }

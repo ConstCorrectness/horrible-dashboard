@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@horrible/core": "workspace:*"
+    "@horrible/core": "workspace:*",
+    "qrcode.react": "^4.2.0"
   },
   "peerDependencies": {
     "react": "^19.0.0",

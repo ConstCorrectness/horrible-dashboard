@@ -210,6 +210,8 @@ export {
   initNetwork,
   initLobby,
   getPeers,
+  createInvite,
+  redeemInvite,
   subscribeCollab,
   collabJoin,
   collabLeave,
@@ -218,6 +220,7 @@ export {
   type PeerInfo,
   type NodeIdentity,
   type PeersSnapshot,
+  type InviteResponse,
 } from './modules/network';
 export {
   commonsModule,

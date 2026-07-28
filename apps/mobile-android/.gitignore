@@ -1,0 +1,43 @@
+# Android / Gradle build outputs and machine-local state.
+# Scoped to this app; the repo root .gitignore covers the JS/Python/Rust side.
+
+# Machine-local SDK location — `sdk.dir` is an absolute path to whoever built it,
+# so committing it breaks every other checkout. Android Studio regenerates it on
+# first open; from the CLI set ANDROID_HOME instead.
+local.properties
+
+# Gradle
+.gradle/
+build/
+captures/
+.cxx/
+
+# Kotlin incremental-compile cache
+.kotlin/
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+.navigation/
+output.json
+
+# Build artifacts
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+bin/
+gen/
+out/
+release/
+
+# JVM crash / heap dumps (an OOM during a Gradle build drops these, often ~1 GB)
+*.hprof
+hs_err_pid*.log
+replay_pid*.log
+
+# Signing material — never commit a keystore or its passwords
+*.jks
+*.keystore
+keystore.properties
