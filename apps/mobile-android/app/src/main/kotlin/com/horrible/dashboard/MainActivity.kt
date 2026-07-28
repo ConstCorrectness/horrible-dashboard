@@ -27,11 +27,27 @@ import com.horrible.dashboard.ui.PairingScreen
 import com.horrible.dashboard.ui.RemoteControlScreen
 import com.horrible.dashboard.ui.AgentScreen
 import com.horrible.dashboard.ui.FriendsScreen
+import com.horrible.dashboard.ui.RemoteViewScreen
 import com.horrible.dashboard.ui.theme.HorribleDashboardTheme
 import androidx.activity.result.contract.ActivityResultContracts
 import android.Manifest
 import android.content.Intent
 import android.net.Uri
+
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+
+sealed class Screen {
+    object Pairing : Screen()
+    object Control : Screen()
+    object Agent : Screen()
+    object Friends : Screen()
+    object Watch : Screen()
+}
 
 class MainActivity : ComponentActivity() {
     private lateinit var identity: Identity
@@ -57,25 +73,52 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent {
             HorribleDashboardTheme {
-                var screen by remember { mutableStateOf(if (lastNodeId != null) "control" else "pairing") }
-                var selectedNodeId by remember { mutableStateOf(lastNodeId) }
+                val navigationStack = remember { mutableStateListOf<Screen>(if (lastNodeId != null) Screen.Control else Screen.Pairing) }
+                val currentScreen = navigationStack.last()
+                
+                var connectedNodeId by remember { mutableStateOf<String?>(null) }
+                var isConnecting by remember { mutableStateOf(false) }
                 val invite by initialInvite
+
+                fun navigateTo(screen: Screen) {
+                    navigationStack.add(screen)
+                }
+
+                fun goBack() {
+                    if (navigationStack.size > 1) {
+                        navigationStack.removeAt(navigationStack.size - 1)
+                    }
+                }
+
+                BackHandler(enabled = navigationStack.size > 1) {
+                    goBack()
+                }
 
                 LaunchedEffect(Unit) {
                     peerHub.onPeerConnected = { nodeId ->
-                        selectedNodeId = nodeId
+                        connectedNodeId = nodeId
+                        isConnecting = false
                         prefs.edit().putString("last_node_id", nodeId).apply()
+                    }
+                    peerHub.onPeerDisconnected = { nodeId ->
+                        if (connectedNodeId == nodeId) {
+                            connectedNodeId = null
+                        }
                     }
                 }
 
                 LaunchedEffect(invite) {
                     invite?.let { 
+                        isConnecting = true
                         peerHub.connectWithInvite(it, 
                             onError = { msg ->
-                                // Optional: handle background connect error
+                                isConnecting = false
                             },
                             onHandshake = {
-                                screen = "control"
+                                if (navigationStack.last() is Screen.Pairing) {
+                                    navigationStack.clear()
+                                    navigationStack.add(Screen.Control)
+                                }
                             }
                         )
                     }
@@ -83,31 +126,63 @@ class MainActivity : ComponentActivity() {
 
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
                     Box(modifier = Modifier.padding(innerPadding)) {
-                        val currentId = selectedNodeId
+                        val currentId = connectedNodeId
                         
-                        when (screen) {
-                            "pairing" -> PairingScreen(peerHub) {
-                                screen = "control"
+                        AnimatedContent(
+                            targetState = currentScreen,
+                            transitionSpec = {
+                                fadeIn(animationSpec = tween(300)) togetherWith fadeOut(animationSpec = tween(300))
                             }
-                            "control" -> {
-                                if (currentId != null) {
-                                    RemoteControlScreen(peerHub, currentId, 
-                                        onOpenAgent = { screen = "agent" },
-                                        onOpenFriends = { screen = "friends" }
-                                    )
-                                } else {
-                                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                            CircularProgressIndicator()
-                                            Spacer(Modifier.height(16.dp))
-                                            Text("Waiting for connection...")
-                                            Button(onClick = { screen = "pairing" }) { Text("Back to Pairing") }
+                        ) { screen ->
+                            when (screen) {
+                                is Screen.Pairing -> PairingScreen(peerHub) {
+                                    navigationStack.clear()
+                                    navigationStack.add(Screen.Control)
+                                }
+                                is Screen.Control -> {
+                                    if (currentId != null) {
+                                        RemoteControlScreen(peerHub, currentId, 
+                                            onOpenAgent = { navigateTo(Screen.Agent) },
+                                            onOpenFriends = { navigateTo(Screen.Friends) },
+                                            onWatchScreen = { navigateTo(Screen.Watch) }
+                                        )
+                                    } else {
+                                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                                CircularProgressIndicator()
+                                                Spacer(Modifier.height(16.dp))
+                                                Text(if (lastNodeId != null) "Reconnecting to $lastNodeId..." else "Waiting for connection...")
+                                                Spacer(Modifier.height(8.dp))
+                                                Button(onClick = { 
+                                                    prefs.edit().remove("last_node_id").apply()
+                                                    navigationStack.clear()
+                                                    navigationStack.add(Screen.Pairing)
+                                                }) { Text("Back to Pairing") }
+                                            }
                                         }
                                     }
                                 }
+                                is Screen.Agent -> if (currentId != null) {
+                                    AgentScreen(peerHub, currentId, onBack = { goBack() })
+                                } else {
+                                    navigationStack.clear()
+                                    navigationStack.add(Screen.Pairing)
+                                }
+                                is Screen.Friends -> if (currentId != null) {
+                                    FriendsScreen(peerHub, currentId, onBack = { goBack() }) { 
+                                        navigateTo(Screen.Watch)
+                                    }
+                                } else {
+                                    navigationStack.clear()
+                                    navigationStack.add(Screen.Pairing)
+                                }
+                                is Screen.Watch -> if (currentId != null) {
+                                    RemoteViewScreen(peerHub, currentId, onBack = { goBack() })
+                                } else {
+                                    navigationStack.clear()
+                                    navigationStack.add(Screen.Pairing)
+                                }
                             }
-                            "agent" -> if (currentId != null) AgentScreen(peerHub, currentId) else screen = "pairing"
-                            "friends" -> if (currentId != null) FriendsScreen(peerHub, currentId) else screen = "pairing"
                         }
                     }
                 }

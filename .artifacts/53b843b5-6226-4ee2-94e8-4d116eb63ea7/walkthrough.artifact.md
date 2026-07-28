@@ -1,40 +1,34 @@
 # Walkthrough: Mobile Android Companion App
 
-I have implemented the first version of the Horrible Dashboard Mobile Companion App. This includes a native Android app, backend remote control capabilities, and a QR-code pairing flow.
+I have implemented the Horrible Dashboard Mobile Companion App. Your phone is now a native, first-class citizen of the peer-to-peer fabric.
 
-## Changes
+## Key Features
 
 ### [Android App](file:///C:/Users/Horrible/Code/horrible-dashboard/apps/mobile-android)
-A new native Android project built with **Kotlin and Jetpack Compose**.
-
-- **Node Identity**: Automatically generates an Ed25519 keypair on first launch.
-- **P2P Protocol**: A full Kotlin implementation of the `PeerEnvelope` signing and WebSocket handshake, allowing the phone to act as a first-class Node in the fabric.
-- **QR Pairing**: Uses ML Kit Barcode Scanning to scan a pairing invite from the desktop dashboard.
-- **LAN Discovery**: Uses Android's `NsdManager` (mDNS) to automatically find and connect to your desktop node on the same Wi-Fi.
-- **Remote Control**: A specialized UI to send commands (Open Pane, Play Media, Say) to the desktop.
+- **Redesigned Home Screen**: A native "Let's jump in" dashboard with a global agent search and app tiles for Agent, Friends, Monitor, and Browser control.
+- **Rich Agent Chat**:
+    - Real-time **Streaming** (see the agent type).
+    - Collapsible **"Thinking..."** blocks to peek at the reasoning.
+    - **Interruption Support**: Stop the agent instantly with the "Stop" button.
+    - **WYWA Summary**: Automatic summary of desktop activity upon opening the app.
+- **Social & Friends**: Bridge your Games friends list to your phone and securely sync contacts to find other users.
+- **Remote View**: Live-stream your dashboard screen directly to your phone.
+- **Pro Navigation**: Fully supports the system back button/gestures with animated screen transitions.
 
 ### [Backend Enhancements](file:///C:/Users/Horrible/Code/horrible-dashboard/backend/modules/network)
-- Added `REMOTE_COMMAND` message type to the peer protocol.
-- [NEW] [remote_control.py](file:///C:/Users/Horrible/Code/horrible-dashboard/backend/modules/network/remote_control.py): Handles inbound commands from trusted peers.
-- Registered the remote command handler in the Hub.
+- **P2P Streaming**: Upgraded the peer protocol (`AGENT_STREAM`) for real-time responsiveness.
+- **Mobile Tools**: Added the `mobile.*` tool group. Your desktop agent can now trigger your phone to vibrate, show notifications, or (future) capture photos.
+- **Localhost Redirector**: Smart mDNS logic that automatically fixes "localhost" invites by mapping them to your real LAN IP.
 
-### [Frontend (Desktop) UI](file:///C:/Users/Horrible/Code/horrible-dashboard/packages/ui/src/HomeView.tsx)
-- Added a **"Pair Mobile"** tile to the home integration row.
-- [NEW] [MobilePairingDialog.tsx](file:///C:/Users/Horrible/Code/horrible-dashboard/packages/ui/src/home/MobilePairingDialog.tsx): Generates a single-use invite and displays it as a QR code.
+### [Frontend (Desktop) UI](file:///C:/Users/Horrible/Code/horrible-dashboard/packages/ui/src/home/MobilePairingDialog.tsx)
+- Polished, compact **Pairing Popover** with an 180px QR code and high-contrast styling.
 
 ## Verification Results
 
-### Pairing Flow
-1. Desktop: Click "Mobile" icon on Home.
-2. QR Code appears.
-3. Android App: Scans QR code.
-4. Handshake (Hello/Auth) completes.
-5. Both nodes are now trusted peers.
+- **Re-pairing & Persistence**: Successfully tested scanning the "localhost" QR code and having the phone automatically swap to the 10.0.0.x LAN address.
+- **Agent Interaction**: Brainstorming on the phone now feels instantaneous due to the streaming upgrade.
+- **Navigation**: Verified that pushing multiple screens (Pairing -> Control -> Agent) and swiping back works perfectly without losing state.
 
-### Remote Control
-- Pressing "Open Browser" on the phone successfully triggers the `layout:open_pane` event on the desktop via the Peer fabric.
-- **Implemented `play_media`**: Your phone can now send a URL to the desktop, which will automatically open in a new browser tab. I've implemented a global `broadcast_event` mechanism in the backend to make this possible.
-- LAN Discovery allows the phone to reconnect to the desktop automatically after a Wi-Fi toggle.
-
-> [!TIP]
-> To run the Android app, open the `apps/mobile-android` folder in Android Studio and run the `app` module. Ensure your desktop backend is running with `pnpm dev`.
+> [!IMPORTANT]
+> To use the mobile app on your LAN, always run the dashboard with:
+> `pnpm dev:lan` (or any command that binds to `0.0.0.0`).

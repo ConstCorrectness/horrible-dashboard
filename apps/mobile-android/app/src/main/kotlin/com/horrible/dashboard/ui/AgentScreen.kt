@@ -1,13 +1,19 @@
 package com.horrible.dashboard.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -27,10 +33,11 @@ data class Message(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AgentScreen(peerHub: PeerHub, nodeId: String) {
+fun AgentScreen(peerHub: PeerHub, nodeId: String, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
     var messages by remember { mutableStateOf(listOf<Message>()) }
     var inputText by remember { mutableStateOf("") }
+    var isThinking by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
     fun addMessage(role: String, text: String, reasoning: String = "", isStreaming: Boolean = false) {
@@ -48,30 +55,40 @@ fun AgentScreen(peerHub: PeerHub, nodeId: String) {
     }
 
     LaunchedEffect(messages.size) {
-        listState.animateScrollToItem(if (messages.isEmpty()) 0 else messages.size - 1)
+        if (messages.isNotEmpty()) {
+            listState.animateScrollToItem(messages.size - 1)
+        }
     }
 
     LaunchedEffect(Unit) {
         if (messages.isEmpty()) {
             addMessage("assistant", "Getting you up to speed...", isStreaming = true)
+            isThinking = true
             scope.launch {
                 try {
-                    val summary = peerHub.getSummary(nodeId) { event, delta ->
+                    peerHub.getSummary(nodeId) { event, delta ->
                         if (event == "token") {
                             updateLastMessage(text = delta, isStreaming = true)
                         }
                     }
                     updateLastMessage(isStreaming = false)
+                    isThinking = false
                 } catch (e: Exception) {
                     updateLastMessage(text = "\n[Could not get summary]", isStreaming = false)
+                    isThinking = false
                 }
             }
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         TopAppBar(
-            title = { Text("Agent: $nodeId") },
+            title = { Text("Agent Chat") },
+            navigationIcon = {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                }
+            },
             colors = TopAppBarDefaults.topAppBarColors(
                 containerColor = MaterialTheme.colorScheme.surfaceVariant
             )
@@ -81,58 +98,91 @@ fun AgentScreen(peerHub: PeerHub, nodeId: String) {
             state = listState,
             modifier = Modifier
                 .weight(1f)
-                .padding(horizontal = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .padding(horizontal = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            item { Spacer(modifier = Modifier.height(8.dp)) }
+            item { Spacer(modifier = Modifier.height(12.dp)) }
             items(messages) { msg ->
                 ChatBubble(msg)
             }
-            item { Spacer(modifier = Modifier.height(8.dp)) }
+            item { Spacer(modifier = Modifier.height(12.dp)) }
         }
 
         Surface(
-            tonalElevation = 2.dp,
+            tonalElevation = 6.dp,
             shadowElevation = 8.dp
         ) {
             Row(
                 modifier = Modifier
-                    .padding(8.dp)
-                    .fillMaxWidth(),
+                    .padding(12.dp)
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .imePadding(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 OutlinedTextField(
                     value = inputText,
                     onValueChange = { inputText = it },
                     modifier = Modifier.weight(1f),
-                    placeholder = { Text("Ask your friend...") },
-                    maxLines = 4
+                    placeholder = { Text("Ask your dashboard friend...") },
+                    maxLines = 4,
+                    shape = RoundedCornerShape(24.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
+                    )
                 )
-                IconButton(
-                    onClick = {
-                        val prompt = inputText
-                        if (prompt.isBlank()) return@IconButton
-                        inputText = ""
-                        addMessage("user", prompt)
-                        addMessage("assistant", "", isStreaming = true)
-                        
-                        scope.launch {
-                            try {
-                                peerHub.askAgent(nodeId, prompt) { event, delta ->
-                                    if (event == "token") {
-                                        updateLastMessage(text = delta, isStreaming = true)
-                                    } else if (event == "reasoning") {
-                                        updateLastMessage(reasoning = delta, isStreaming = true)
-                                    }
-                                }
+                
+                Spacer(modifier = Modifier.width(8.dp))
+                
+                if (isThinking) {
+                    FilledIconButton(
+                        onClick = {
+                            scope.launch {
+                                peerHub.cancelAgent(nodeId)
+                                isThinking = false
                                 updateLastMessage(isStreaming = false)
-                            } catch (e: Exception) {
-                                updateLastMessage(text = "\n[Error: ${e.message}]", isStreaming = false)
+                                addMessage("assistant", "[Interrupted]")
                             }
-                        }
+                        },
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Icon(Icons.Default.Stop, contentDescription = "Stop")
                     }
-                ) {
-                    Icon(Icons.Default.Send, contentDescription = "Send")
+                } else {
+                    FilledIconButton(
+                        onClick = {
+                            val prompt = inputText
+                            if (prompt.isBlank()) return@FilledIconButton
+                            inputText = ""
+                            addMessage("user", prompt)
+                            addMessage("assistant", "", isStreaming = true)
+                            isThinking = true
+                            
+                            scope.launch {
+                                try {
+                                    peerHub.askAgent(nodeId, prompt) { event, delta ->
+                                        if (event == "token") {
+                                            updateLastMessage(text = delta, isStreaming = true)
+                                        } else if (event == "reasoning") {
+                                            updateLastMessage(reasoning = delta, isStreaming = true)
+                                        }
+                                    }
+                                    updateLastMessage(isStreaming = false)
+                                    isThinking = false
+                                } catch (e: Exception) {
+                                    updateLastMessage(text = "\n[Error: ${e.message}]", isStreaming = false)
+                                    isThinking = false
+                                }
+                            }
+                        },
+                        shape = CircleShape
+                    ) {
+                        Icon(Icons.Default.Send, contentDescription = "Send")
+                    }
                 }
             }
         }
@@ -144,39 +194,55 @@ fun ChatBubble(msg: Message) {
     val isUser = msg.role == "user"
     val alignment = if (isUser) Alignment.End else Alignment.Start
     val bgColor = if (isUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer
+    val textColor = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSecondaryContainer
     
+    var showReasoning by remember { mutableStateOf(false) }
+
     Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = alignment) {
         if (msg.reasoning.isNotBlank()) {
-            Box(
-                modifier = Modifier
-                    .padding(bottom = 4.dp, start = 32.dp, end = 32.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color.Black.copy(alpha = 0.05f))
-                    .padding(8.dp)
+            Surface(
+                onClick = { showReasoning = !showReasoning },
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.padding(bottom = 4.dp)
             ) {
-                Text(
-                    msg.reasoning,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                )
+                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                    Text(
+                        if (showReasoning) "▼ Hide Thought Process" else "▶ Thinking...",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    AnimatedVisibility(
+                        visible = showReasoning,
+                        enter = expandVertically(),
+                        exit = shrinkVertically()
+                    ) {
+                        Text(
+                            msg.reasoning,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                }
             }
         }
         
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(
-                    topStart = 16.dp, 
-                    topEnd = 16.dp, 
-                    bottomStart = if (isUser) 16.dp else 0.dp, 
-                    bottomEnd = if (isUser) 0.dp else 16.dp
-                ))
-                .background(bgColor)
-                .padding(12.dp)
-                .widthIn(max = 280.dp)
+        Surface(
+            color = bgColor,
+            shape = RoundedCornerShape(
+                topStart = 16.dp, 
+                topEnd = 16.dp, 
+                bottomStart = if (isUser) 16.dp else 4.dp, 
+                bottomEnd = if (isUser) 4.dp else 16.dp
+            ),
+            tonalElevation = 1.dp
         ) {
             Text(
                 text = if (msg.text.isEmpty() && msg.isStreaming) "..." else msg.text,
-                style = MaterialTheme.typography.bodyMedium
+                style = MaterialTheme.typography.bodyMedium,
+                color = textColor,
+                modifier = Modifier.padding(12.dp).widthIn(max = 280.dp)
             )
         }
     }

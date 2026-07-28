@@ -1,45 +1,60 @@
-# Implementation Plan: Mobile Android Companion App (LAN & Remote Control)
+# Implementation Plan: Chatbot UI, Fun Navigation & Peer Interaction
 
-Initialize a new Android module `apps/mobile-android` to serve as a mobile companion for the `horrible-dashboard` ecosystem. The app will act as a "Node" in the peer-to-peer fabric, allowing users to monitor their main node, interact with their agent, and remotely control media or other capabilities using a "QR-first" pairing flow and LAN auto-discovery.
+Upgrade the Android app with a "fun" chatbot-style UI, proper back-button navigation, and the ability to request text/voice chat or "Watch" a friend's dashboard screen.
 
 ## User Review Required
 
 > [!IMPORTANT]
-> **Trust & Pairing**: I am proposing a **QR-code based pairing flow**. The Desktop node will generate an invite (Ed25519 pairing token) and display it as a QR code. The mobile app will scan this to establish permanent P2P trust. This avoids the need for a shared Google Account for *pairing*, though we can still use the Google Account for *cloud sync* later.
+> **Interruption & Cancellation**: I will implement `AGENT_CANCEL` in the backend. When you hit "Stop" on your phone, the desktop agent immediately halts its current generation.
 
 > [!TIP]
-> **Remote Control**: To support "Play this song on the TV", I'll implement a **Remote Capability** system. When a trusted peer (the phone) connects, it can invoke specific "Remote Tools" on the host (the desktop/TV).
+> **Remote View (Watch Screen)**: I'm proposing a feature where you can request to "Watch" a friend's dashboard. If they "Let you in," their backend will start a frame-stream (JPEG screenshots) relayed over the peer wire to your phone, similar to how the Browser pane works.
+
+## Proposed Features
+
+### 1. "Fun" Chatbot UI (Android)
+- **Collapsible Reasoning**: Hide the agent's long thought process inside a "Thinking..." toggle at the top of each bubble.
+- **Real-Time Stop Button**: A dedicated button to interrupt the agent mid-stream.
+- **Glassmorphic Bubbles**: Modern, translucent chat bubbles with distinct styling for friends vs. your own agent.
+
+### 2. Robust Navigation
+- **Navigation Stack**: Move from a simple `screen` state to a list-based stack so the **System Back Button** and gestures work intuitively.
+- **Animated Transitions**: Use `AnimatedContent` for smooth cross-fades and slide-ins between screens.
+- **One-Handed Top Bar**: Consistent `TopAppBar` with back arrows on all sub-screens.
+
+### 3. Peer-to-Peer Social Collab
+- **Request to Talk**: A button on the Friends list to send a "Request Voice/Chat" notification.
+- **Remote View**: A "Request to Watch Screen" flow. If the friend accepts, you get a live (JPEG) feed of their active dashboard panes.
+- **Handshake Logic**: New `REQUEST_VIEW` and `ACCEPT_VIEW` messages in the peer protocol.
 
 ## Proposed Changes
 
-### [Component: Mobile Android App]
+### [Component: Android UI]
 
-#### [NEW] [apps/mobile-android](file:///C:/Users/Horrible/Code/horrible-dashboard/apps/mobile-android)
-Initialize the Android project with Compose.
+#### [MODIFY] [MainActivity.kt](file:///C:/Users/Horrible/Code/horrible-dashboard/apps/mobile-android/app/src/main/kotlin/com/horrible/dashboard/MainActivity.kt)
+Implement `NavHost` or a custom `mutableStateListOf` stack to manage screen transitions and back-press handling.
 
-- `src/main/kotlin/com/horrible/dashboard/`
-    - `network/`:
-        - `PeerHub.kt`: Port of the Python `PeerHub`.
-        - `LanDiscovery.kt`: mDNS discovery using NsdManager.
-        - `Protocol.kt`: Signing and serialization.
-    - `ui/`:
-        - `PairingScreen.kt`: QR code scanner to redeem invites.
-        - `RemoteControlScreen.kt`: UI for controlling other nodes (Media/Agent).
+#### [MODIFY] [AgentScreen.kt](file:///C:/Users/Horrible/Code/horrible-dashboard/apps/mobile-android/app/src/main/kotlin/com/horrible/dashboard/ui/AgentScreen.kt)
+Update `ChatBubble` to support collapsible `reasoning` and add a "Stop" button.
 
-### [Component: Desktop/Backend Enhancements]
+#### [NEW] [RemoteViewScreen.kt](file:///C:/Users/Horrible/Code/horrible-dashboard/apps/mobile-android/app/src/main/kotlin/com/horrible/dashboard/ui/RemoteViewScreen.kt)
+A dedicated screen to display the JPEG frame stream from a peer's dashboard.
+
+### [Component: Backend & P2P]
 
 #### [MODIFY] [protocol.py](file:///C:/Users/Horrible/Code/horrible-dashboard/backend/modules/network/protocol.py)
-Add a new `REMOTE_COMMAND` message type.
+Add `AGENT_CANCEL`, `VIEW_REQUEST`, and `VIEW_FRAME` message types.
 
-#### [NEW] [remote_control.py](file:///C:/Users/Horrible/Code/horrible-dashboard/backend/modules/network/remote_control.py)
-A module that handles inbound `REMOTE_COMMAND` envelopes from trusted peers and executes local actions (e.g., controlling the visualizer or media players).
-
-#### [MODIFY] [HomeView.tsx](file:///C:/Users/Horrible/Code/horrible-dashboard/packages/ui/src/HomeView.tsx)
-Add a "Pair Mobile" button that generates an invite and shows a QR code.
+#### [MODIFY] [remote_control.py](file:///C:/Users/Horrible/Code/horrible-dashboard/backend/modules/network/remote_control.py)
+Implement handlers for accepting/rejecting view requests and starting the frame pump.
 
 ## Verification Plan
 
+### Automated Tests
+- **Backstack Test**: Verify that pushing 3 screens and hitting back 3 times returns you to the Pairing screen.
+- **Frame Stream Test**: Verify that the backend can push a raw byte array (JPEG) to a peer link without crashing.
+
 ### Manual Verification
-- **Pairing**: Desktop -> "Pair Mobile" -> Scan with Phone.
-- **LAN Discovery**: Turn off phone Wi-Fi, turn it back on. Phone should auto-reconnect to Desktop via mDNS.
-- **Remote Action**: Phone -> Press "Play" -> Desktop logs "Playing song..." (or triggers a real action).
+- **Fun Navigation**: Verify that the phone's back gesture works smoothly.
+- **Reasoning Toggle**: Ask the agent a hard question -> Verify the reasoning is hidden until tapped.
+- **Watch Screen**: Use two nodes -> Request view from Phone -> Accept on Desktop -> See desktop screen on Phone.

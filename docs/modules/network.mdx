@@ -191,11 +191,22 @@ on the peer's node (which must have `network.allowRemoteAgent` enabled). See
 ## Remote control (`remote_command`)
 
 A trusted peer can drive this node: open a pane, play media, raise a notification,
-or ask for an agent-generated briefing. Handled by `remote_control.py`, which
-drops any command from an untrusted peer; the reverse direction is the `mobile.*`
-agent tools in `mobile_tools.py`. The [Android companion
-app](mobile-android.mdx) is the primary consumer of both — it pairs by QR and
-appears on the fabric as an ordinary peer carrying the `mobile` capability.
+ask for an agent-generated briefing, or cancel a turn it started. Handled by
+`remote_control.py`, which drops any command from an untrusted peer; the reverse
+direction is the `mobile.*` agent tools in `mobile_tools.py`. The [Android
+companion app](mobile-android.mdx) is the primary consumer of both — it pairs by
+QR and appears on the fabric as an ordinary peer carrying the `mobile` capability.
+That page holds the full command table.
+
+A remote agent turn (`agent_request`) is run on a **detached task** tracked in
+`agent_bridge._active_remote_turns`, so a follow-up `agent_cancel` can stop it.
+Handlers are awaited inline by the session pump, so a handler that awaited a long
+turn would wedge the receive loop for its duration — see
+[Cancelling a remote agent turn](mobile-android.mdx#cancelling-a-remote-agent-turn).
+
+Screen watching (`view_request` / `view_frame`) is **scaffolded but not
+functional** — the desktop never emits a frame. See
+[Remote view](mobile-android.mdx#remote-view-screen-watching).
 
 ## Settings
 

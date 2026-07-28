@@ -243,12 +243,16 @@ class PeerHub:
     async def accept_link(self, link: PeerLink) -> PeerSession | None:
         """Drive the acceptor side of the handshake, then pump the link if admitted."""
         try:
+            logger.info("Handshake started from %s", link.address)
             hello = await link.recv()
+            logger.info("Handshake received %s from %s", hello.type, hello.src)
             if hello.type != protocol.HELLO:
+                logger.warning("Handshake failed: expected HELLO, got %s", hello.type)
                 await link.close()
                 return None
             public_key = self._check_identity(hello)
             if public_key is None:
+                logger.warning("Handshake failed: identity verification failed for %s", hello.src)
                 await link.close()
                 return None
             their_nonce = str(hello.data.get("nonce", ""))
@@ -260,14 +264,17 @@ class PeerHub:
                     self._hello_data(my_nonce, {"echo": their_nonce}),
                 )
             )
+            logger.info("Handshake sent HELLO_ACK to %s", hello.src)
 
             auth = await link.recv()
+            logger.info("Handshake received %s from %s", auth.type, auth.src)
             if (
                 auth.type != protocol.AUTH
                 or auth.src != hello.src
                 or auth.data.get("echo") != my_nonce
                 or not protocol.verify_envelope(auth, public_key)
             ):
+                logger.warning("Handshake failed: invalid AUTH from %s", hello.src)
                 await link.close()
                 return None
 
@@ -278,13 +285,20 @@ class PeerHub:
                 )
             )
             if not ok:
+                logger.warning("Handshake failed: auth evaluation rejected for %s: %s", hello.src, reason)
                 await link.close()
                 return None
 
+            logger.info("Handshake complete for %s", hello.src)
             info = self._peer_info(hello, public_key, link, trusted=True)
             session = self._register(link, info)
             return session
         except LinkClosed:
+            logger.info("Handshake aborted: link closed from %s", link.address)
+            await link.close()
+            return None
+        except Exception:
+            logger.exception("Handshake error from %s", link.address)
             await link.close()
             return None
 

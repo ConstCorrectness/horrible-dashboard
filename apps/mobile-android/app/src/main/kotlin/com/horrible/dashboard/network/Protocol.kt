@@ -34,6 +34,9 @@ object Protocol {
     const val AGENT_CANCEL = "agent_cancel"
     const val PEER_CHAT = "peer_chat"
     const val REMOTE_COMMAND = "remote_command"
+    const val VIEW_REQUEST = "view_request"
+    const val VIEW_ACCEPT = "view_accept"
+    const val VIEW_FRAME = "view_frame"
     const val ERROR = "error"
 
     fun encode(env: PeerEnvelope): String = envelopeAdapter.toJson(env)

@@ -60,7 +60,11 @@ async def handle_remote_command(
         text = str(params.get("text", ""))
         from backend.modules.ws import broadcast_event
 
-        await broadcast_event("agent", "notification", {"text": text})
+        await broadcast_event("system", "notification", {
+            "title": f"Message from {session.info.node_name}",
+            "text": text,
+            "peer_id": env.src
+        })
 
     elif cmd == "get_friends":
         from backend.modules.games.client import games_client
@@ -114,6 +118,11 @@ async def handle_remote_command(
                 re=env.msg_id,
             )
             return
+
+    elif cmd == "cancel_agent":
+        from backend.modules.network.agent_bridge import handle_remote_agent_cancel
+        await handle_remote_agent_cancel(hub, session, env)
+        return
 
     # Reply with ack
     await hub.send_to(

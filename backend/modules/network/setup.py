@@ -51,6 +51,13 @@ async def start_network() -> None:
     peer_hub.register_handler(
         protocol.AGENT_REQUEST, agent_bridge.handle_remote_agent_request
     )
+    peer_hub.register_handler(
+        protocol.AGENT_CANCEL, agent_bridge.handle_remote_agent_cancel
+    )
+    from backend.modules.network import remote_view
+    peer_hub.register_handler(
+        protocol.VIEW_REQUEST, remote_view.handle_view_request
+    )
     peer_hub.register_handler(protocol.COLLAB_OP, collab.handle_peer_collab_op)
     peer_hub.register_handler(protocol.PEER_CHAT, chat.handle_peer_chat)
     from backend.modules.network import remote_control

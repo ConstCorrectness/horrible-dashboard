@@ -38,10 +38,21 @@ class PeerHub(private val context: Context, private val identity: Identity) {
     private val discoveredLanAddresses = ConcurrentHashMap<String, String>()
     
     var onPeerConnected: ((String) -> Unit)? = null
+    var onPeerDisconnected: ((String) -> Unit)? = null
 
     fun registerDiscoveredPeer(nodeId: String, address: String) {
         Log.d("PeerHub", "Registering discovered LAN address for $nodeId: $address")
         discoveredLanAddresses[nodeId] = address
+        
+        // Auto-reconnect if this is our last known peer and we aren't connected to anything
+        if (peers.isEmpty()) {
+            val prefs = context.getSharedPreferences("horrible", Context.MODE_PRIVATE)
+            val lastId = prefs.getString("last_node_id", null)
+            if (nodeId == lastId) {
+                Log.i("PeerHub", "Auto-reconnecting to last known peer: $nodeId")
+                connect(address)
+            }
+        }
     }
 
     fun connect(
@@ -79,6 +90,12 @@ class PeerHub(private val context: Context, private val identity: Identity) {
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.e("PeerHub", "WebSocket connection failed", t)
+                val nodeId = session.nodeId
+                if (nodeId != null) {
+                    peers.remove(nodeId)
+                    onPeerDisconnected?.invoke(nodeId)
+                }
+                
                 val isLocal = address.contains("10.") || address.contains("192.168.")
                 val msg = if (isLocal) {
                     "Connection failed. Ensure your desktop dashboard is running with 'pnpm dev:lan' (host 0.0.0.0)."
@@ -86,7 +103,6 @@ class PeerHub(private val context: Context, private val identity: Identity) {
                     "Connection failed: ${t.message}"
                 }
                 onError?.invoke(msg)
-                peers.remove(session.nodeId ?: "")
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -99,7 +115,11 @@ class PeerHub(private val context: Context, private val identity: Identity) {
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                peers.remove(session.nodeId ?: "")
+                val nodeId = session.nodeId
+                if (nodeId != null) {
+                    peers.remove(nodeId)
+                    onPeerDisconnected?.invoke(nodeId)
+                }
                 Log.i("PeerHub", "Disconnected: $reason")
             }
         })
@@ -140,6 +160,10 @@ class PeerHub(private val context: Context, private val identity: Identity) {
             Log.e("PeerHub", "Failed to connect with invite", e)
             onError?.invoke("Failed to parse invite: ${e.message}")
         }
+    }
+
+    fun isConnected(nodeId: String?): Boolean {
+        return nodeId != null && peers.containsKey(nodeId)
     }
 
     fun disconnect(nodeId: String) {
@@ -235,8 +259,38 @@ class PeerHub(private val context: Context, private val identity: Identity) {
         session.send(Protocol.signEnvelope(env, identity))
     }
 
+    suspend fun cancelAgent(nodeId: String, requestId: String? = null) {
+        val session = peers[nodeId] ?: return
+        val env = PeerEnvelope(
+            type = Protocol.AGENT_CANCEL,
+            src = identity.nodeId,
+            dst = nodeId,
+            data = if (requestId != null) mapOf("request_id" to requestId) else emptyMap()
+        )
+        session.send(Protocol.signEnvelope(env, identity))
+    }
+
+    fun registerFrameListener(nodeId: String, callback: (String) -> Unit) {
+        peers[nodeId]?.onViewFrame = callback
+    }
+
+    fun unregisterFrameListener(nodeId: String) {
+        peers[nodeId]?.onViewFrame = null
+    }
+
+    suspend fun requestView(nodeId: String) {
+        val session = peers[nodeId] ?: return
+        val env = PeerEnvelope(
+            type = Protocol.VIEW_REQUEST,
+            src = identity.nodeId,
+            dst = nodeId
+        )
+        session.send(Protocol.signEnvelope(env, identity))
+    }
+
     private suspend fun handshake(session: PeerSession, token: String?) {
         val myNonce = UUID_HEX()
+        Log.d("PeerHub", "Starting handshake, my nodeId: ${identity.nodeId}")
         val hello = PeerEnvelope(
             type = Protocol.HELLO,
             src = identity.nodeId,
@@ -247,13 +301,17 @@ class PeerHub(private val context: Context, private val identity: Identity) {
                 "nonce" to myNonce
             )
         )
-        session.send(Protocol.signEnvelope(hello, identity))
+        val signedHello = Protocol.signEnvelope(hello, identity)
+        Log.d("PeerHub", "Sending HELLO, sig length: ${signedHello.sig?.length ?: 0}")
+        session.send(signedHello)
 
+        Log.d("PeerHub", "Waiting for HELLO_ACK...")
         val ack = session.nextMessage()
-        if (ack.type != Protocol.HELLO_ACK) throw Exception("Expected hello_ack")
+        Log.d("PeerHub", "Received message during handshake: ${ack.type} from ${ack.src}")
+        if (ack.type != Protocol.HELLO_ACK) throw Exception("Expected hello_ack, got ${ack.type}")
         
-        val publicKey = ack.data["public_key"] as? String ?: throw Exception("No public key")
-        if (ack.data["echo"] != myNonce) throw Exception("Nonce mismatch")
+        val publicKey = ack.data["public_key"] as? String ?: throw Exception("No public key in HELLO_ACK")
+        if (ack.data["echo"] != myNonce) throw Exception("Nonce mismatch in HELLO_ACK")
         
         session.nodeId = ack.src
         session.publicKey = publicKey
@@ -270,12 +328,16 @@ class PeerHub(private val context: Context, private val identity: Identity) {
             dst = ack.src,
             data = authData
         )
+        Log.d("PeerHub", "Sending AUTH to ${ack.src}")
         session.send(Protocol.signEnvelope(auth, identity))
 
+        Log.d("PeerHub", "Waiting for AUTH_RESULT...")
         val result = session.nextMessage()
+        Log.d("PeerHub", "Received AUTH_RESULT: ${result.data["ok"]}")
         if (result.type != Protocol.AUTH_RESULT || result.data["ok"] != true) {
-            throw Exception("Auth failed: ${result.data["reason"]}")
+            throw Exception("Auth failed: ${result.data["reason"] ?: "rejected"}")
         }
+        Log.i("PeerHub", "Handshake successful with ${session.nodeId}")
     }
 
     private fun UUID_HEX() = java.util.UUID.randomUUID().toString().replace("-", "")
@@ -293,6 +355,7 @@ class PeerSession(
     private val inboundQueue = kotlinx.coroutines.channels.Channel<PeerEnvelope>(16)
     val pendingRequests = ConcurrentHashMap<String, CompletableDeferred<PeerEnvelope>>()
     val streamListeners = ConcurrentHashMap<String, (String, String) -> Unit>()
+    var onViewFrame: ((String) -> Unit)? = null
 
     suspend fun send(env: PeerEnvelope) {
         webSocket?.send(adapter.toJson(env))
@@ -337,6 +400,12 @@ class PeerSession(
                 val delta = env.data["delta"] as? String
                 if (requestId != null && event != null && delta != null) {
                     streamListeners[requestId]?.invoke(event, delta)
+                }
+            }
+            Protocol.VIEW_FRAME -> {
+                val data = env.data["frame"] as? String
+                if (data != null) {
+                    onViewFrame?.invoke(data)
                 }
             }
             else -> inboundQueue.send(env)
