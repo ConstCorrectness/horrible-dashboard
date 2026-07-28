@@ -37,6 +37,7 @@ dependencies = [
     "zeroconf>=0.150.0",
     "mcp>=1.28.1",
     "dnspython>=2.8.0",
+    "pymongo>=4.17.0",
 ]
 
 [project.optional-dependencies]

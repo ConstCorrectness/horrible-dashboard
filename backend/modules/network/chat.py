@@ -78,14 +78,21 @@ class ChatManager:
         elif event == "close":
             self._members.discard(conn)
 
-    async def _send(self, conn: WsConnection, data: dict[str, Any]) -> None:
+    async def send_to_peer(self, node_id: str, text: str) -> None:
+        """Relay one outbound message and mirror it into this node's history.
+
+        The single outbound path, shared by the chat panel and by callers that
+        aren't a browser at all (the agent's `social.message` tool). Routing the
+        agent through here is what keeps an agent-sent message visible in the
+        conversation instead of vanishing onto the wire. Raises `KeyError` if the
+        peer isn't connected, which the caller reports in its own idiom.
+        """
         from backend.modules.network.hub import peer_hub
 
-        node_id = str(data.get("nodeId", ""))
-        text = str(data.get("text", "")).strip()
-        if not node_id or not text:
-            return
         me = peer_hub.identity().node_name
+        await peer_hub.send_to(
+            node_id, protocol.PEER_CHAT, {"text": text, "from_name": me}
+        )
         message = {
             "id": uuid.uuid4().hex,
             "nodeId": node_id,
@@ -94,17 +101,20 @@ class ChatManager:
             "ts": time.time(),
             "direction": "out",
         }
+        self._record(node_id, message)
+        await self._fan_out(message)
+
+    async def _send(self, conn: WsConnection, data: dict[str, Any]) -> None:
+        node_id = str(data.get("nodeId", ""))
+        text = str(data.get("text", "")).strip()
+        if not node_id or not text:
+            return
         try:
-            await peer_hub.send_to(
-                node_id, protocol.PEER_CHAT, {"text": text, "from_name": me}
-            )
+            await self.send_to_peer(node_id, text)
         except KeyError:
             await conn.send_json(
                 _evt("error", {"nodeId": node_id, "message": "peer not connected"})
             )
-            return
-        self._record(node_id, message)
-        await self._fan_out(message)
 
     async def apply_peer_chat(self, env: PeerEnvelope) -> None:
         """A chat message arrived from a peer — record it and fan out to browsers."""

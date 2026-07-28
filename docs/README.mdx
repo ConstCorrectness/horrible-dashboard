@@ -169,6 +169,24 @@ layout shell and how it behaves in the browser vs the desktop app:
   canvas (n8n-style) for composing runnable multi-agent orchestrations over the
   existing orchestrator loop, tool surface, and permission gate.
 - [Network](modules/network.mdx)
+- [Social (Friends)](modules/social.mdx) — **Implemented.** A friends roster keyed by
+  **person** rather than by machine: a person keypair spanning your devices, a
+  checksummed friend code you share, and device certificates binding each machine to
+  you. Accepting a friend grants their devices fabric trust, which is what makes peer
+  chat, shared panes, and agent-to-agent questions work with no second pairing step.
+- [HorribleAssault](modules/hassault.mdx) — **Map pipeline, renderer, netcode and friends
+  integration implemented.** An AssaultCube remix as a dashboard pane, with our own client
+  and netcode replacing its ENet/master-server stack. Reads the `.cgz` map format (a port
+  of `load_world`), serves it to the browser — metadata as JSON, the 65 536-cube grid as
+  raw byte planes — walks it in first person in WebGL, and runs multiplayer matches
+  against an authoritative match server on your own backend, with client prediction,
+  reconciliation and remote-player interpolation. Invite someone from the
+  [Friends roster](modules/social.mdx) and they play in your match across the peer fabric,
+  their own backend proxying for them — the host never learns some of its players are not
+  browsers. The server simulates, so the physics exists twice; a shared vector fixture
+  replayed by both test suites is what stops the two drifting. Game content is
+  **supported, never bundled**: AssaultCube's media is copyright, so maps are read from
+  your own local install.
 - [Mobile (Android)](modules/mobile-android.mdx) — **Implemented.** A native Android
   companion that pairs by QR and joins the peer fabric as an ordinary node: remote
   control of panes/media, streaming agent chat, and `mobile.*` tools pointing back at

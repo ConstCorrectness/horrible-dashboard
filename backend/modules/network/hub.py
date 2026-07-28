@@ -159,7 +159,10 @@ class PeerHub:
         )
 
     def capabilities(self) -> list[str]:
-        return ["agent", "collab"]
+        # Advertised to every peer during the handshake, so a friend's UI can
+        # offer only what this node can actually accept — a match invite to a
+        # node with no `hassault` is a dead button.
+        return ["agent", "collab", "hassault"]
 
     def list_peers(self) -> list[PeerInfo]:
         return [s.info for s in self.peers.values()]
@@ -252,7 +255,9 @@ class PeerHub:
                 return None
             public_key = self._check_identity(hello)
             if public_key is None:
-                logger.warning("Handshake failed: identity verification failed for %s", hello.src)
+                logger.warning(
+                    "Handshake failed: identity verification failed for %s", hello.src
+                )
                 await link.close()
                 return None
             their_nonce = str(hello.data.get("nonce", ""))
@@ -285,7 +290,11 @@ class PeerHub:
                 )
             )
             if not ok:
-                logger.warning("Handshake failed: auth evaluation rejected for %s: %s", hello.src, reason)
+                logger.warning(
+                    "Handshake failed: auth evaluation rejected for %s: %s",
+                    hello.src,
+                    reason,
+                )
                 await link.close()
                 return None
 

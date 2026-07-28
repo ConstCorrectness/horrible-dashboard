@@ -29,6 +29,8 @@ import {
   initNetwork,
   marketplaceModule,
   networkModule,
+  socialModule,
+  hassaultModule,
   recordsModule,
   browserModule,
   interpretabilityModule,
@@ -104,6 +106,8 @@ async function boot(): Promise<void> {
   registry.register(flowModule);
   registry.register(gamesModule);
   registry.register(networkModule);
+  registry.register(socialModule);
+  registry.register(hassaultModule);
   registry.register(commonsModule);
   // Dev-only agent-tool reference/validation stub (see agent-tools.md).
   if (import.meta.env.DEV) registry.register(stubModule);

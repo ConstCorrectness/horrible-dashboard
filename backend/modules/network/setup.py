@@ -55,9 +55,8 @@ async def start_network() -> None:
         protocol.AGENT_CANCEL, agent_bridge.handle_remote_agent_cancel
     )
     from backend.modules.network import remote_view
-    peer_hub.register_handler(
-        protocol.VIEW_REQUEST, remote_view.handle_view_request
-    )
+
+    peer_hub.register_handler(protocol.VIEW_REQUEST, remote_view.handle_view_request)
     peer_hub.register_handler(protocol.COLLAB_OP, collab.handle_peer_collab_op)
     peer_hub.register_handler(protocol.PEER_CHAT, chat.handle_peer_chat)
     from backend.modules.network import remote_control
@@ -73,6 +72,22 @@ async def start_network() -> None:
     from backend.modules.training import fabric as training_fabric
 
     training_fabric.register(peer_hub)
+    # Social layer: person identity, friend requests, and roster presence.
+    from backend.modules.social import register_social
+
+    register_social(peer_hub)
+    # HorribleAssault: match invites, and playing in a friend's match on their
+    # node. Registered after social because an invite is addressed to a person.
+    from backend.modules.hassault import fabric as hassault_fabric
+
+    hassault_fabric.register(peer_hub)
+    # Announce where this node can be reached, so a friend code resolves to an
+    # address off the LAN. Best-effort: a node with no directory is still fully
+    # usable, it just has to be given an address once.
+    from backend.modules.social import directory as social_directory
+
+    if await social_directory.publish():
+        logger.info("published presence to the Atlas directory")
     peer_hub.set_transports(build_transports())
     await peer_hub.start()
     # Heartbeat the peers for live link health (RTT, throughput).

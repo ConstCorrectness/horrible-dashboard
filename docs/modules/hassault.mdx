@@ -1,0 +1,549 @@
+---
+sidebar_position: 32
+sidebar_label: HorribleAssault
+---
+
+# Module: hassault (HorribleAssault)
+
+An [AssaultCube](https://github.com/assaultcube/AC) remix that runs as a pane in
+the dashboard, with its own client, its own netcode, and its own server
+infrastructure. AssaultCube's original stack — an SDL/OpenGL C++ client speaking
+ENet over UDP to a master server — cannot run in a browser and is not what we
+want anyway; the point is to rebuild it on the fabric this app already has.
+
+**Implemented so far: the map pipeline, the renderer, and the netcode** — you can
+walk around any of the 44 shipped maps in first person, alone or in a match
+against other people, with an authoritative match server running on your own
+backend. Weapons and scoring land on top.
+
+## Licensing: why no game content is in this repo
+
+AssaultCube splits its licensing, and the split decides the whole design:
+
+- The **source** is under a zlib-like license. That is the part being remixed —
+  `cgz.py` is a direct port of `load_world` and `rldecodecubes` from
+  `source/src/worldio.cpp`.
+- The **content** (maps, textures, models, sounds) is copyright. It may be
+  redistributed only inside an unmodified AssaultCube package, and never
+  commercially.
+
+This repo is public, deploys to GitHub Pages, and ships a server image to Fly, so
+committing a single `.cgz` or texture would be a violation. HorribleAssault
+therefore **supports AssaultCube content without ever bundling it**: you point it
+at your own install and the backend reads from there. Same precedent as SearXNG
+(AGPL — supported, never bundled) and choosing pypdf over AGPL PyMuPDF.
+
+The test suite follows the same rule: hermetic tests synthesize maps in memory,
+and the tests that read real maps skip when no install is present.
+
+## Why a TypeScript/WebGL rewrite is tractable
+
+Cube 1 worlds — which AssaultCube still uses — are **not BSP**. The world is a
+flat 2D grid of columns: each cell has a type, a floor and ceiling height, three
+texture ids, and a vertex delta. A whole map is `(1 << sfactor)²` records of nine
+bytes, which is 65 536 cells for the standard `sfactor` of 8.
+
+That is why this can be rendered in Three.js without porting a C++ engine.
+
+```mermaid
+flowchart LR
+  A[".cgz on disk<br/>(your AC install)"] --> B["gzip"]
+  B --> C["header 980B<br/>+ extra block"]
+  B --> D["entities<br/>16B each"]
+  B --> E["RLE cube grid"]
+  C --> F["/api/hassault/maps/name<br/>JSON"]
+  D --> F
+  E --> G["/api/hassault/maps/name/cubes<br/>9 byte planes"]
+  F --> H["Three.js renderer<br/>(next slice)"]
+  G --> H
+```
+
+## The `.cgz` format, and the parts that bite
+
+Transcribed from `world.h` rather than inferred — a wrong offset here produces
+plausible garbage rather than an error.
+
+| Region | Detail |
+| --- | --- |
+| Magic | `CUBE` **or** `ACMP`. Every AssaultCube 1.3 map is `ACMP`. |
+| Header | `sizeof(header)` is 980 bytes; the first 916 precede `waterlevel`. |
+| Header size | Untrustworthy before v10 — see `fix_header_size`. |
+| Entities | 12 bytes before v10, 16 from v10 (`attr5..attr7` added). |
+| Cubes | Run-length encoded; `255` repeats the previous cube N times. |
+
+Four things are easy to get wrong:
+
+**Entities start at `headersize`, not at the end of the struct.** From v10 a map
+may carry a variable-length extra-header block between the two, and *every*
+official 1.3 map does — they range from 3 024 to 6 302 bytes against a 980-byte
+struct. Reading entities from offset 980 lands in the middle of that blob.
+
+**A `SOLID` record carries only a wall texture and a vdelta.** Everything else
+comes from `sqrdefault` (floor 0, ceil 16, default floor/ceil textures). A reader
+that leaves them zero produces a map with no ceilings.
+
+**v10 scales angles by ten.** A spawn stored as `1810` faces 181°. This was
+confirmed against the shipped map set rather than assumed: all 1 741 player
+spawns across the 44 official maps have `attr1` a multiple of ten, spanning
+0–3590, with nothing at or above 3600. `MapEntity.yaw` resolves this at parse
+time, because an entity has no way to know its own map's version.
+
+**A truncated cube stream is filled, not rejected.** The engine fills the
+remainder with defaults and carries on; refusing would discard an otherwise
+readable map. The result is flagged as `truncated`.
+
+Positions (`x`, `y`, `z`) are plain signed 16-bit cube coordinates and are never
+scaled — only *attributes* are.
+
+## The renderer
+
+`packages/core/src/modules/hassault/`. three is **lazy-loaded** on first render
+(matching `Avatar3D`) — it is a large dependency and most sessions never open the
+pane. `world.ts`, `geometry.ts` and `player.ts` deliberately never import three,
+which keeps them unit-testable with no WebGL context.
+
+| File | Role |
+| --- | --- |
+| `world.ts` | The byte planes as typed arrays, plus the height rules |
+| `geometry.ts` | Cube grid → one `BufferGeometry` worth of triangles |
+| `player.ts` | Gravity, jumping, step-up, sliding collision |
+| `net.ts` | Prediction, reconciliation, snapshot interpolation — pure, no socket |
+| `session.ts` | The `/ws` channel as a stateful object the pane drives |
+| `avatars.ts` | Remote-player bodies, facing wedges, nameplates |
+| `HorribleAssaultPanel.tsx` | Canvas, pointer lock, map picker, HUD, match UI |
+
+`net.ts` is split from `session.ts` for the same reason `world.ts` is split from
+the panel: `session.ts` reaches the shell's socket module, which opens a real
+WebSocket at import time and dies in a node test run. Everything worth testing
+lives on the pure side.
+
+Nameplates keep `depthTest` on. A name drawn through walls is a wallhack, and this
+is the same scene a human plays in.
+
+Coordinates: the engine's grid is `(x, y)` with `z` as height, and three.js is
+y-up, so world space maps as `three.x = cube.x`, `three.y = height`,
+`three.z = cube.y`. One cube is one world unit.
+
+### The heightfield rule, which is easy to get backwards
+
+For a heightfield cell, the **base height comes from the cell** while the
+**delta comes from the cell owning that corner vertex**. `physics.cpp:287` shows
+both halves — it starts from `s->floor` and subtracts an average of the four
+corner cells' deltas.
+
+Taking the base from the corner cell instead (the obvious reading of "vertex
+height") tears adjacent heightfields apart at every seam, and it is not an error
+you get told about — the map just renders wrong. `cornerFloor` is the one place
+this lives, and a test pins it.
+
+The two divisors are also distinct and both real:
+
+- **`vdelta / 4` per vertex** — the corner heights the mesh is built from.
+- **`(sum of four vdeltas) / 16` per cell** — the height a body standing there
+  rests on. This is the mean of four `vdelta/4` terms, not a different constant;
+  using `/4` here sinks the player into every slope.
+
+### Where walls come from
+
+An open cell contributes a floor and a ceiling. A wall appears wherever an open
+cell meets something taller: a solid neighbour, a neighbour with a higher floor
+(a step up, textured `wtex`), or one with a lower ceiling (an overhang, textured
+`utex` — using `wtex` there is a classic source of subtly wrong walls).
+
+Emitting walls **from the open side only** means every surface is produced exactly
+once and always faces the space you can stand in, so the mesh needs no back faces.
+Both sides of an edge read the same two shared vertices, so heights meet exactly
+even across heightfields.
+
+Surfaces are tinted by texture id rather than textured — real textures are
+resolved through map config files this slice does not read yet. Distinct ids
+getting distinct hues is what makes walls, floors and trim legible as architecture
+rather than a uniform grey soup.
+
+### Movement
+
+Player dimensions are AssaultCube's own (`entity.h`): radius 1.1, eye height 4.5,
+0.7 above the eye. Collision uses the circle's AABB, as AC's `rectcollide` does,
+so **the body is 2.2 cubes wide and needs three cells of clearance** — worth
+knowing before hand-building a test map that a player then cannot enter.
+
+Two details that matter more than they look:
+
+- **Horizontal movement resolves one axis at a time.** Testing the combined vector
+  once would reject the whole move and make every corner sticky; resolving x and y
+  separately is what lets the player slide along a wall.
+- **`STEP_HEIGHT` is not a nicety.** Sloped terrain is stored as a series of small
+  floor changes, so a collision test that rejects *any* rise leaves the player
+  stuck on ground that looks flat.
+
+The frame timestep is clamped: a backgrounded tab returns a huge `dt`, and
+integrating it in one go teleports the player through walls. The client records
+the **clamped** value in its command, not the raw one — recording the raw value
+would make the replay step further than the server ever simulated, and the two
+would never agree again.
+
+A player wedged inside solid geometry is resolved **before** gravity, not after.
+Checking afterwards means they have already been moved down by one frame of
+falling, which does not look like falling — it looks like sinking half a cube a
+second, forever. Both implementations had this and both were fixed together.
+
+## The netcode
+
+The server owns every player's position; the client predicts so that pressing W
+moves you now rather than a round trip from now. `match.py` simulates,
+`channel.py` carries input and snapshots, `net.ts` predicts and reconciles.
+
+```mermaid
+sequenceDiagram
+  participant C as Browser
+  participant S as Match server
+  C->>C: frame: predict command #42, keep it pending
+  C->>S: input [40, 41, 42] (batched)
+  S->>S: spend dt from the time budget, step physics
+  S-->>C: snapshot { players, ack: 41 }
+  C->>C: drop <=41, rebase on authoritative, replay 42
+  Note over C: prediction was right -> nothing moves
+```
+
+### The three pieces that make prediction work
+
+**Every input carries a sequence number.** The client keeps each command until
+the server acknowledges it. Snapshots carry `ack` — the last command consumed
+*from that client* — so the client knows precisely which of its own predictions
+are still unconfirmed. `ack` is **per recipient**, which is why one shared list of
+player rows still needs a per-player envelope.
+
+**The server advances a player only on that player's own commands**, each with
+the `dt` the client measured, rather than ticking everyone by wall clock. Two
+clients at 120 fps and 30 fps then travel the same distance per second, and — the
+part that actually matters — the server integrates the same sequence of steps the
+client predicted with. A correct prediction reconciles to *zero* error rather
+than to a small permanent jitter.
+
+**Client `dt` is spent from a replenishing budget.** Trusting the client for `dt`
+is trusting it for speed, so each player earns simulated time at real time plus a
+10% jitter allowance, banked into a 0.25 s reservoir. A stutter is absorbed; a
+client that simply claims time faster than it passes runs dry and is throttled.
+Measured against the running server: 6.4 s of input submitted in one burst was
+metered out at ~1.15 simulated seconds per real second instead of being granted
+at once.
+
+It is a cap on the exploit, not a lie detector. This is a game you host for
+friends, and a cheat-proof design would cost far more than it is worth here.
+
+### Correction without jolting
+
+Reconciliation sets the simulation to the authoritative state and replays what
+the server has not seen. Small disagreements would still show as a constant
+micro-jitter, so the *difference* is kept as a visual offset applied to the camera
+only and decayed to nothing in about 150 ms — the simulation is already correct
+while the picture catches up. Past `SNAP_DISTANCE` (2 cubes) the offset is
+dropped instead: easing across a large error draws the player somewhere they are
+not for the whole ease, possibly through a wall.
+
+In a live match on `ac_desert` the steady-state correction averaged **0.04 cubes**
+(max 1.19) — well inside the smoothing band, so nothing snapped after the initial
+spawn placement.
+
+### Remote players are rendered in the past
+
+Everyone else is drawn 100 ms behind the newest snapshot, interpolated between
+two that have **both already arrived**. Ordinary jitter then never becomes
+visible motion, and nothing is ever extrapolated: past the newest snapshot the
+last known position is held, because a guess walks people through walls.
+
+Server and client clocks are unrelated, so rather than synchronising them the
+buffer tracks the smallest `arrival - timestamp` ever seen. The minimum is the
+sample that queued least, which is both the best estimate available without a
+clock-sync protocol and — more usefully — a stable one.
+
+Angles interpolate the short way round. A player turning past π would otherwise
+spin most of a circle the wrong way between two snapshots.
+
+Verified against the running server with two browser tabs in one match: **39
+snapshots produced 233 distinct rendered orientations across 239 frames**, which
+is interpolation doing its job rather than the renderer stepping snapshot to
+snapshot.
+
+### Why JSON on the shared socket, not a binary one
+
+This revises the earlier "binary WebSocket first" plan, and the reason is
+arithmetic. A snapshot of eight players is ~500 bytes of JSON, so 20 Hz costs
+about 10 KB/s — nothing on a LAN, which is the only place this runs. Against
+that, JSON on the shell's existing `/ws` socket shows up in the observability
+panel, needs no second connection to manage or reconnect, and can be debugged by
+reading it. Binary framing is worth reaching for when player counts or tick rates
+make the bandwidth real; today it would buy nothing and cost legibility.
+
+Input is batched — one message per send tick carrying every command since the
+last, rather than one per rendered frame. At 60 fps that is ~30 messages a second
+instead of 60, for identical information.
+
+### Playing in a friend's match
+
+A match is authoritative on **one** node. A guest's browser cannot reach it — the
+host may be behind NAT, on another network, or simply not somewhere a browser is
+allowed to open a socket. So the guest's own backend proxies for them:
+
+```mermaid
+flowchart LR
+  GB["guest browser"] -- "/ws hassault" --> GS["guest backend"]
+  GS -- "peer fabric<br/>hassault_join / _input" --> HS["host backend<br/>MatchRoom"]
+  HS -- "hassault_frame<br/>(snapshots, events)" --> GS
+  GS -- "/ws hassault" --> GB
+```
+
+The [peer fabric](network.mdx) already solves NAT traversal, relays, LAN
+discovery and identity, so this is four message types and two mappings.
+
+**The host never learns that some of its players are not browsers.** A remote
+player is a `PeerPlayerConn`, which has the single method the match server calls —
+`send_json`. `MatchRoom` is unchanged.
+
+**The browser never learns that the match is somewhere else.** The guest backend
+reshapes the host's `welcome` into exactly the frame a local join produces, so the
+client has one code path rather than two.
+
+Three details that are easy to get wrong and are each pinned by a test:
+
+- **Every inbound message is gated on `session.info.trusted`** — what accepting a
+  friend grants. Friendship means reachability, so knowing a room id is not
+  enough to walk into someone's match.
+- **Remote input goes through the same validator as a browser's.** A peer is
+  another user's machine, not a trusted extension of ours; a second, laxer
+  validator on the peer path is exactly where a gap appears.
+- **A dropped peer's players are swept.** They have no browser socket, so nothing
+  else would ever notice they left — they would stand in the match forever.
+
+Frames are tagged with a `client` id, because one machine can have two tabs in the
+same match and otherwise both sets of snapshots go to whichever joined last.
+
+### Invites
+
+Invite a person, not a machine: the pane resolves a name or friend code through
+the social roster and sends `hassault_invite` to **every device they have
+online**, because you invite a human and they pick which box to answer on.
+
+The invite carries the room and the map. The node id it came from is authenticated
+by the fabric; the `hostName` alongside it is only a label and never decides
+anything.
+
+The pane's invite list comes from `GET /api/hassault/invitees`, which the hassault
+backend assembles from the social roster. That join is deliberately backend-side:
+the pane must not import across a module boundary, so it only ever calls
+`/api/hassault`. Friends whose node did not advertise the `hassault` capability
+during the handshake are shown greyed out rather than hidden, since "your friend
+needs to update" is more useful than an absence.
+
+### One socket is one player
+
+Membership is keyed by connection, so joining twice on the same socket replaces
+the first player rather than leaving a body behind that nothing can remove. A
+second player means a second browser tab (or a second machine).
+
+### Two implementations of one set of rules
+
+An authoritative server has to simulate, so `backend/modules/hassault/physics.py`
+is a port of `world.ts` and `player.ts`. Duplication is a real cost and the
+failure mode is nasty: a drifted match does not throw, it just puts each player
+somewhere the other cannot see.
+
+So the two are pinned together by
+`packages/core/src/modules/hassault/__tests__/physics-vectors.json`, replayed by
+**both** `backend/tests/test_hassault_physics.py` and `conformance.test.ts`. The
+fixture pins *agreement*; each side's own unit tests are what argue the rules are
+right. Agreement is asserted to a tolerance rather than bit-for-bit, because
+`math.sin` and `Math.sin` are not required to round identically and demanding
+they do would be a test about libm.
+
+Changing a movement rule means changing both sides and regenerating the fixture,
+in one commit:
+
+```bash
+PYTHONPATH=. uv run python scripts/gen_hassault_vectors.py
+```
+
+If that ever becomes a burden, it is the burden telling you the truth about the
+cost of the design.
+
+## Contributions to the layout shell
+
+- **Panels:** `hassault.play` (HorribleAssault, role `document`, singleton). A
+  `document` because it wants the centre area and a lot of pixels, and it grabs
+  pointer lock, which would be hostile in a narrow dock.
+- **Commands:** `hassault.open` (HorribleAssault: Open).
+- **Settings:** `hassault.installPath` — the folder containing `packages/maps`.
+  Blank auto-detects the usual per-platform locations.
+- **Agent tools** (group `hassault`): `list_maps`, `list_matches`, `host`,
+  `invite`, `status`, `surroundings`.
+
+## Agent tools
+
+These run the *social* side of a game — "start a match on ac_desert and invite
+Rob", "who's in the match?", "what's around me?" — which is the tedious part for a
+human mid-session and the easy part for an agent.
+
+| Tool | Does |
+| --- | --- |
+| `hassault.list_maps` | Maps this install can host |
+| `hassault.list_matches` | Matches running here, plus invitations received |
+| `hassault.host` | Open a match, optionally inviting someone in the same call |
+| `hassault.invite` | Invite a friend; the room may be omitted when only one runs |
+| `hassault.status` | Who is in a match: teams, positions, latency, remote or not |
+| `hassault.surroundings` | Walls in each compass direction, and who is nearby |
+
+`surroundings` casts its rays through the same `World` the simulation uses, so it
+reports what the server believes rather than a guess from a map file, and it
+answers in compass words and cubes because the agent is talking to a human.
+
+**They deliberately stop short of playing.** Driving a player means producing
+input at 60 Hz and an agent turn takes seconds; a tool that "moves you forward"
+would be a bot controller wearing a tool's clothes. Bot AI is its own slice with
+its own design. What is here is everything needed to *set up* and *talk about* a
+match — including acting as a spotter for whoever is actually playing.
+
+Controls: click to lock the pointer, WASD to move, mouse to look, Space to jump,
+V for noclip, Esc to release. Movement keys are swallowed **only while the pointer
+is locked**, so the command palette and every other shortcut keep working when it
+is not.
+
+The toolbar carries the match controls: a name, Join/Leave, and — once in — the
+room id, the head count and your round-trip time. Changing map while in a match
+leaves it rather than silently simulating you in a different world.
+
+## Backend surface
+
+`backend/modules/hassault/`, mounted at `/api/hassault`.
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/hassault/status` | Whether an install was found, where, and how many maps |
+| `GET /api/hassault/maps` | Every readable map, official first |
+| `GET /api/hassault/maps/{name}` | Header, entities, spawn counts (JSON) |
+| `GET /api/hassault/maps/{name}/cubes` | The cube grid as raw byte planes |
+| `GET /api/hassault/matches` | Live matches on this node — enough to render a lobby row |
+| `POST /api/hassault/matches` | Open a match **without joining**, so its id can be handed to a friend |
+| `GET /api/hassault/invitees` | Friends who could join right now, from the social roster |
+| `GET /api/hassault/invites` | Invitations received from friends, unexpired |
+
+Joining is a `/ws` operation, not REST, because it binds a player to a socket. A
+match created over REST stays empty and is retired after a grace period if nobody
+arrives — without that grace an invite room would be swept away before the
+invitee could click it.
+
+### The `hassault` `/ws` channel
+
+| Direction | Event | Purpose |
+| --- | --- | --- |
+| → | `join` | `{ map, name, room?, host? }`; `host` makes it a friend's match |
+| → | `input` | `{ commands: [...], rtt }` — batched, sequence-numbered |
+| → | `respawn` | The server owns spawn points, so respawning is asked for |
+| → | `invite` | `{ who, room }` — `who` is a person, not a node id |
+| → | `leave`, `ping`, `list`, `invites` | |
+| ← | `welcome` | Your player id, the room, everyone in it, and `host` if remote |
+| ← | `snapshot` | All players plus **your** `ack`, at 20 Hz |
+| ← | `invite` | A friend has invited you to a match |
+| ← | `joined`, `left`, `pong`, `error`, `matches`, `invites`, `invite_sent` | |
+
+And on the peer wire, declared in `fabric.py` rather than `network/protocol.py` —
+a module owns its own wire vocabulary, following the training-ads precedent, so
+adding a feature never edits the fabric core:
+`hassault_invite`, `hassault_join`, `hassault_input`, `hassault_leave`,
+`hassault_frame`.
+
+Every field of an inbound command is clamped rather than trusted: the movement
+axes to ±1 (asking for 50 is the obvious cheat), `dt` to 0.25 s, pitch to a right
+angle. NaN and infinity survive JSON and poison every comparison downstream, so
+they are rejected at the edge instead of at the first surprising position. There
+is deliberately **no noclip on the wire** — it is a local sightseeing tool, and
+the pane disables it while you are in a match.
+
+### Why the grid is binary
+
+A 256×256 map is 65 536 cubes across nine fields — roughly 590 000 numbers. As
+JSON that is several megabytes to serialize and parse. The `/cubes` endpoint
+returns the nine planes **concatenated raw**, so the browser adopts them directly
+as typed arrays with one copy and no parsing:
+
+```js
+const info = await fetch(`/api/hassault/maps/${name}`).then((r) => r.json());
+const buf = await fetch(`/api/hassault/maps/${name}/cubes`).then((r) => r.arrayBuffer());
+const n = info.cubic_size;
+const plane = (i) => info.plane_order[i];
+const types = new Uint8Array(buf, 0 * n, n);
+const floor = new Int8Array(buf, 1 * n, n); // floor and ceil are SIGNED
+const ceil = new Int8Array(buf, 2 * n, n);
+// index a cell at (x, y) as y * info.ssize + x
+```
+
+`plane_order` is reported by the metadata route rather than hardcoded on both
+sides, so the two cannot drift. `floor` and `ceil` are signed; the rest are not.
+
+### Path safety
+
+An install path is user-supplied configuration and the names indexing into it come
+from files we did not write, so both are validated. `find_map` accepts only bare
+alphanumeric names — anything containing a separator or a dot is refused outright
+rather than normalized, because a "cleaned" traversal attempt is still an attempt.
+`resolve_asset` compares the **resolved** target against the resolved package root,
+which is what actually catches symlinks and encoded forms; a string check for `..`
+would miss both.
+
+## Browser vs desktop
+
+Identical in both layouts. The install is read by the backend, so the browser
+never touches the filesystem.
+
+## Known limitations
+
+- **No textures yet.** Texture slots are mapped to image files by map config
+  files (`.cfg`), which are not parsed yet; surfaces are tinted by texture id
+  instead.
+- **`CORNER` cells render as open.** The type is a diagonal half-wall; treating it
+  as fully open leaves a small gap rather than blocking a passage, which is the
+  safer wrong answer. They are rare — 104 of 65 536 cells in `ac_desert`.
+- **No map models, water, or sky.** `mapmodel` entities (crates, foliage) are
+  parsed and exposed but not rendered, and the water level is read but not drawn.
+- **No weapons, damage, or scoring.** A match is movement and presence; you can
+  see each other and not shoot each other.
+- **A guest's latency is two hops.** Their input goes browser → their backend →
+  the fabric → the host, and snapshots come back the same way. Prediction hides
+  it for their own movement; other players are correspondingly further in the
+  past. A direct WebRTC datachannel between the two browsers would cut a hop, and
+  the fabric already has that [transport](network.mdx) — it is just not wired to
+  matches yet.
+- **Invites are not persisted.** They live in memory with a five-minute expiry, so
+  a backend restart forgets them. An invitation is a "now" thing; a durable one
+  would want to be a notification, which is a different feature.
+- **Pre-v10 entity attributes are unscaled.** Maps older than v10 need a
+  per-entity-type scaling table this reader does not apply; such maps are flagged
+  `legacy_unscaled_attrs`. Every official 1.3 map is v10, so nothing shipped is
+  affected. Positions and the cube grid are correct regardless.
+- Lighting (`r`/`g`/`b` per cube) is computed by the engine at load time via
+  `calclight` and is not stored in the file, so it is not reproduced here.
+- The whole map is one mesh with no culling beyond the frustum. Fine at the ~50–90k
+  triangles a 256×256 map produces; it would need chunking before it grows.
+
+## Roadmap
+
+1. **Map and asset pipeline** — done.
+2. **Three.js renderer** — done: walk any shipped map in first person.
+3. **Netcode** — done: an authoritative match server on the local backend, with
+   client prediction, reconciliation, and entity interpolation. JSON on the shared
+   `/ws` socket rather than a binary one, for the reasons above; the existing
+   [WebRTC datachannel transport](network.mdx) remains the upgrade path for
+   matches between nodes rather than between tabs.
+4. **Lobby and friends integration** — done: invite a friend from the
+   [Friends roster](social.mdx) and play in their match across the fabric, plus
+   agent tools for hosting, inviting and spotting.
+5. **Weapons and scoring** — hit registration needs lag compensation (rewinding
+   the world to what the shooter actually saw), which is its own problem and
+   deliberately not mixed into the movement slice.
+6. **Bot players** — what it would take for an agent to actually play, rather
+   than only run the match around it.
+
+## See also
+
+- [Module: social](social.mdx) — friends and invites
+- [Module: network](network.mdx) — the peer fabric the netcode will ride
+- [Module: games](games.mdx) — the existing competitive-play platform

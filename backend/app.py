@@ -96,6 +96,10 @@ from backend.modules.network import router as network_router
 from backend.modules.network.hub import peer_hub
 from backend.modules.network.setup import start_network, stop_network
 from backend.modules.network.transport.direct import ServerPeerLink
+from backend.modules.hassault import handle_hassault_message, hassault_on_disconnect
+from backend.modules.hassault import router as hassault_router
+from backend.modules.social import handle_social_message, subscribe_social_conn
+from backend.modules.social import router as social_router
 from backend.modules.notebook import handle_notebook_message, notebook_manager
 from backend.modules.notebook import router as notebook_router
 from backend.modules.notes import router as notes_router
@@ -218,6 +222,8 @@ app.include_router(settings_router, prefix="/api")
 app.include_router(secrets_router, prefix="/api")
 app.include_router(flow_router, prefix="/api")
 app.include_router(network_router, prefix="/api")
+app.include_router(social_router, prefix="/api")
+app.include_router(hassault_router, prefix="/api")
 app.include_router(training_router, prefix="/api")
 app.include_router(lsp_router, prefix="/api")
 app.include_router(mcp_router, prefix="/api")
@@ -304,6 +310,7 @@ async def ws(websocket: WebSocket) -> None:
     )
     conn = WsConnection(websocket)
     from backend.modules.ws import register_connection, unregister_connection
+
     register_connection(conn)
     terminals = TerminalManager(conn)
     repl = ReplManager(conn)
@@ -329,6 +336,8 @@ async def ws(websocket: WebSocket) -> None:
     lobby_unsub = subscribe_lobby_conn(conn)
     # Fan commons (profiles/search) events out to this browser.
     commons_unsub = subscribe_commons_conn(conn)
+    # Fan friends-roster + presence changes out to this browser.
+    social_unsub = subscribe_social_conn(conn)
     # Fan training events (venv/fetch progress, metrics, frames) to this browser.
     training_unsub = subscribe_training_conn(conn)
     try:
@@ -370,6 +379,10 @@ async def ws(websocket: WebSocket) -> None:
                 await handle_commons_message(conn, msg)
             elif channel == "peerchat":
                 await handle_chat_message(conn, msg)
+            elif channel == "social":
+                await handle_social_message(conn, msg)
+            elif channel == "hassault":
+                await handle_hassault_message(conn, msg)
             else:
                 # Unknown built-in channel — offer it to backend plugins.
                 await plugin_registry.dispatch_ws(conn, str(channel), msg)
@@ -393,9 +406,11 @@ async def ws(websocket: WebSocket) -> None:
         network_unsub()  # type: ignore[operator]
         lobby_unsub()  # type: ignore[operator]
         commons_unsub()  # type: ignore[operator]
+        social_unsub()  # type: ignore[operator]
         training_unsub()
         training_kernels.detach(conn)
         notebook_manager.detach(conn)
         collab_manager.drop(conn)
         chat_manager.drop(conn)
+        await hassault_on_disconnect(conn)
         drop_games_conn(conn)

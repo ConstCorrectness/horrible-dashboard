@@ -205,6 +205,18 @@ export { interpretabilityModule } from './modules/interpretability';
 export { observabilityModule } from './modules/observability';
 export { marketplaceModule } from './modules/marketplace';
 export { settingsModule } from './modules/settings';
+export { hassaultModule } from './modules/hassault';
+export {
+  socialModule,
+  initSocial,
+  getRoster,
+  addFriend,
+  linkDevice,
+  type Friend,
+  type DeviceInfo,
+  type SelfProfile,
+  type RosterSnapshot,
+} from './modules/social';
 export {
   networkModule,
   initNetwork,
