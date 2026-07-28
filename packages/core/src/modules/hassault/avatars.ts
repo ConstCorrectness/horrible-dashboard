@@ -120,6 +120,11 @@ export class AvatarPool {
         avatar = this.create(row);
         this.avatars.set(row.id, avatar);
       }
+      // The dead are hidden rather than removed: they respawn in three seconds,
+      // and disposing the whole group to rebuild it is churn for nothing. There
+      // are no corpses because there is no death animation to leave one in.
+      avatar.group.visible = row.alive !== false;
+      if (!avatar.group.visible) continue;
       // Cube (x, y, height) → three (x, height, z).
       avatar.group.position.set(row.x, row.z, row.y);
       // Same derivation as the camera: three's default forward is -Z, so a yaw

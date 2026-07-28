@@ -16,7 +16,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import type { MapInfo } from '../api';
-import { step, type PlayerState } from '../player';
+import { spawnAt, step, type PlayerState } from '../player';
 import { SOLID, SPACE, World } from '../world';
 
 const PLANES = ['type', 'floor', 'ceil', 'wtex', 'ftex', 'ctex', 'vdelta', 'utex', 'tag'];
@@ -46,6 +46,12 @@ interface Vectors {
     start: Record<string, number | boolean>;
     steps: { forward?: number; strafe?: number; jump?: boolean; yaw?: number; dt: number }[];
     expect: { x: number; y: number; z: number; velZ: number; onGround: boolean };
+  }[];
+  spawns: {
+    name: string;
+    world: string;
+    entity: { x: number; y: number; z: number; yaw?: number };
+    expect: { x: number; y: number; z: number; yaw: number; onGround: boolean };
   }[];
 }
 
@@ -146,6 +152,30 @@ describe('cross-language physics conformance', () => {
       expect(player.z).toBeCloseTo(testCase.expect.z, -Math.log10(tol));
       expect(player.velZ).toBeCloseTo(testCase.expect.velZ, -Math.log10(tol));
       expect(player.onGround).toBe(testCase.expect.onGround);
+    });
+  }
+});
+
+/**
+ * Spawn placement is one rule with two implementations, exactly like `step`, so
+ * it is pinned the same way. A disagreement about where a player starts is a
+ * desync from the very first frame.
+ */
+describe('cross-language spawn conformance', () => {
+  it('has spawn vectors to check', () => {
+    expect(vectors.spawns.length).toBeGreaterThan(0);
+  });
+
+  for (const testCase of vectors.spawns) {
+    it(testCase.name, () => {
+      const world = buildWorld(vectors.worlds[testCase.world]);
+      const placed = spawnAt(world, { ...testCase.entity, yaw: testCase.entity.yaw ?? 0 });
+      const digits = -Math.log10(vectors.tolerance);
+      expect(placed.x).toBeCloseTo(testCase.expect.x, digits);
+      expect(placed.y).toBeCloseTo(testCase.expect.y, digits);
+      expect(placed.z).toBeCloseTo(testCase.expect.z, digits);
+      expect(placed.yaw).toBeCloseTo(testCase.expect.yaw, digits);
+      expect(placed.onGround).toBe(testCase.expect.onGround);
     });
   }
 });

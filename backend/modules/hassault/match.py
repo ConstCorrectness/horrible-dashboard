@@ -24,8 +24,15 @@ absorbed; a client that simply claims time faster than it passes runs the
 reservoir dry and is throttled to real time. It is a cap on the exploit, not a
 lie detector — this is a game you host for friends, not a public ladder.
 
-Movement and presence only: shooting needs hit registration and lag compensation,
-which is its own problem and its own slice. See docs/modules/hassault.mdx.
+Combat rides the same rails. Firing is a **flag on a movement command**, not a
+message of its own, so a shot arrives with the exact view angles and sequence
+number of the frame it happened on; and the rate limiter is spent from that same
+budget, so nobody's rifle fires faster than time passes. Hit registration itself
+lives in `weapons.py`, which also explains the rewind. Bots (`bots.py`) enqueue
+commands through the identical path — they are players whose input happens to be
+generated here, which is what stops "bots" becoming a second simulation.
+
+See docs/modules/hassault.mdx.
 """
 
 from __future__ import annotations
@@ -39,11 +46,18 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from backend.modules.hassault import assets, physics
+from backend.modules.hassault import assets, physics, weapons
 from backend.modules.hassault.cgz import CgzError
 from backend.modules.hassault.physics import MoveInput, PlayerState, World
+from backend.modules.hassault.weapons import (
+    MAX_HEALTH,
+    RESPAWN_DELAY,
+    SPAWN_PROTECT,
+    PositionHistory,
+)
 
 if TYPE_CHECKING:
+    from backend.modules.hassault.bots import BotBrain
     from backend.modules.ws import WsConnection
 
 logger = logging.getLogger(__name__)
@@ -79,6 +93,15 @@ STALE_AFTER = 2.0
 MAX_PLAYERS = 16
 MAX_NAME_LEN = 24
 
+# Effects carried in one snapshot. A tick's worth of shots from sixteen players
+# is a handful; a number far past that is a client repeating itself, and the
+# packet is not the place to find out.
+MAX_FX_PER_TICK = 64
+
+# Hitmarkers held for one player between snapshots. Eight pellets of a shotgun on
+# two bodies is the realistic worst case.
+MAX_PENDING_HITS = 24
+
 # How long an empty room is kept before it is retired. A room opened for a friend
 # who has not clicked the invite yet is empty and must survive; a room everyone
 # has left is ~590 KB of map planes and should not.
@@ -87,7 +110,13 @@ EMPTY_GRACE = 60.0
 
 @dataclass(slots=True)
 class Command:
-    """One client input frame."""
+    """One client input frame.
+
+    The combat fields ride here rather than in messages of their own so that a
+    shot carries the sequence number and view angles of the exact frame it was
+    fired on, and so the fabric — which forwards commands verbatim — needed no
+    changes at all to carry weapons across the peer wire.
+    """
 
     seq: int
     forward: float
@@ -96,6 +125,13 @@ class Command:
     yaw: float
     pitch: float
     dt: float
+    fire: bool = False
+    reload: bool = False
+    """Weapon slot to switch to, or `-1` for no change."""
+    weapon: int = -1
+    """Server-clock ms the client was *rendering* when it fired. See `weapons.py`
+    — this is what the shot is rewound to, clamped."""
+    view_t: float | None = None
 
 
 @dataclass(slots=True)
@@ -117,6 +153,51 @@ class MatchPlayer:
     joined_at: float = field(default_factory=time.monotonic)
     rtt_ms: float = 0.0
 
+    # -- combat -------------------------------------------------------------
+    health: float = MAX_HEALTH
+    alive: bool = True
+    weapon: int = weapons.DEFAULT_WEAPON
+    ammo: dict[int, int] = field(default_factory=dict)
+    reserve: dict[int, int] = field(default_factory=dict)
+    kills: int = 0
+    deaths: int = 0
+    # Simulated seconds this player has been advanced by. Fire rate and reloads
+    # are measured on this clock, not the wall clock: commands arrive in batches,
+    # and gating on real time would silently halve a fast weapon's rate. It is
+    # bounded by the same budget as movement, so it cannot outrun real time.
+    sim_time: float = 0.0
+    last_fire_at: float = -999.0
+    reload_until: float = -999.0
+    """Wall clock, unlike the two above: a dead player stops sending commands, so
+    a respawn measured on their simulated time would never come."""
+    respawn_at: float = 0.0
+    protected_until: float = 0.0
+    # Hitmarker feedback, drained into that player's own snapshot envelope.
+    pending_hits: list[dict[str, Any]] = field(default_factory=list)
+    # Set for bot players. Also what distinguishes them from a human whose socket
+    # happens to be `None` (which is every player in the unit tests).
+    brain: BotBrain | None = None
+    bot_seq: int = 0
+
+    @property
+    def is_bot(self) -> bool:
+        return self.brain is not None
+
+    def reset_loadout(self) -> None:
+        """Full health and full magazines. Called on spawn and on respawn."""
+        self.health = MAX_HEALTH
+        self.alive = True
+        self.weapon = weapons.DEFAULT_WEAPON
+        self.ammo = {i: w.mag for i, w in enumerate(weapons.WEAPONS)}
+        self.reserve = {i: w.reserve for i, w in enumerate(weapons.WEAPONS)}
+        self.reload_until = -999.0
+        self.last_fire_at = -999.0
+        self.protected_until = time.monotonic() + SPAWN_PROTECT
+
+    @property
+    def protected(self) -> bool:
+        return time.monotonic() < self.protected_until
+
     def snapshot(self, now: float) -> dict[str, Any]:
         """The wire form. Rounded hard — a millimetre of a cube is not a thing
         anyone can see, and the digits are most of the packet."""
@@ -132,6 +213,44 @@ class MatchPlayer:
             "ground": self.state.on_ground,
             "stale": (now - self.last_command_at) > STALE_AFTER,
             "rtt": round(self.rtt_ms),
+            # Health is public: a wounded enemy is exactly the information that
+            # makes a firefight a decision rather than a coin toss, and every
+            # shooter since Quake has shown it on the hit feedback anyway.
+            "hp": round(self.health),
+            "alive": self.alive,
+            "weapon": self.weapon,
+            "kills": self.kills,
+            "deaths": self.deaths,
+            "bot": self.is_bot,
+        }
+
+    def private_view(self, now: float) -> dict[str, Any]:
+        """The half of a player's state only they get to see, and the flush point
+        for their hitmarkers.
+
+        Ammo is per-recipient rather than in the shared rows because it is nobody
+        else's business how many rounds are left in your magazine — and because it
+        would be sixteen extra numbers in every packet for everyone.
+        """
+        hits = self.pending_hits
+        self.pending_hits = []
+        weapon = weapons.weapon_at(self.weapon)
+        return {
+            "hp": round(self.health),
+            "alive": self.alive,
+            "weapon": self.weapon,
+            "ammo": self.ammo.get(self.weapon, 0),
+            "reserve": self.reserve.get(self.weapon, 0),
+            "reloading": self.sim_time < self.reload_until,
+            "reloadIn": max(0.0, round(self.reload_until - self.sim_time, 2)),
+            "respawnIn": (
+                0.0 if self.alive else max(0.0, round(self.respawn_at - now, 2))
+            ),
+            "protected": self.protected,
+            "kills": self.kills,
+            "deaths": self.deaths,
+            "mag": weapon.mag,
+            "hits": hits,
         }
 
 
@@ -148,11 +267,29 @@ class MatchRoom:
         self.players: dict[str, MatchPlayer] = {}
         self.tick = 0
         self.created_at = time.time()
-        # When the room last had someone in it. A room created for an invite is
-        # empty until the invitee arrives, so "empty" alone cannot mean "retire".
+        # When the room last had a *human* in it. A room created for an invite is
+        # empty until the invitee arrives, so "empty" alone cannot mean "retire" —
+        # and a room holding only bots is empty in every sense that matters.
         self.empty_since: float | None = time.monotonic()
+        # Where everyone was, for rewinding shots. See `weapons.py`.
+        self.history = PositionHistory()
+        # Kills per team, index by team number.
+        self.scores: list[int] = [0, 0]
+        # Effects produced this tick — shots and kills — flushed with the next
+        # snapshot rather than sent as they happen. A rifle at 700 rpm would
+        # otherwise be its own message stream; batching makes combat cost the
+        # tick rate, not the fire rate.
+        self.fx: list[dict[str, Any]] = []
+        # Seeded per room rather than per shot: reproducible if you know the room
+        # and the shot count, which is worth nothing to a cheat and worth a lot
+        # when a test needs a shotgun to pattern the same way twice.
+        self.rng = random.Random(room_id)
 
     # -- membership ---------------------------------------------------------
+
+    @property
+    def humans(self) -> list[MatchPlayer]:
+        return [p for p in self.players.values() if not p.is_bot]
 
     def _balanced_team(self) -> int:
         cla = sum(1 for p in self.players.values() if p.team == 0)
@@ -169,29 +306,55 @@ class MatchRoom:
         if not options:
             mid = self.world.ssize / 2
             return PlayerState(x=mid, y=mid, z=self.world.floor_at(int(mid), int(mid)))
-        return physics.spawn_at(self.world, random.choice(options))
+        return physics.spawn_at(self.world, self.rng.choice(options))
 
-    def add(self, name: str, conn: Any) -> MatchPlayer:
-        team = self._balanced_team()
+    def add(
+        self,
+        name: str,
+        conn: Any,
+        brain: BotBrain | None = None,
+        team: int | None = None,
+    ) -> MatchPlayer:
+        chosen = self._balanced_team() if team is None else (1 if team else 0)
         player = MatchPlayer(
             id=uuid.uuid4().hex[:12],
             name=name,
-            team=team,
-            state=self._spawn_state(team),
+            team=chosen,
+            state=self._spawn_state(chosen),
             conn=conn,
+            brain=brain,
         )
+        player.reset_loadout()
         self.players[player.id] = player
-        self.empty_since = None
+        if not player.is_bot:
+            self.empty_since = None
         return player
 
     def remove(self, player_id: str) -> MatchPlayer | None:
         gone = self.players.pop(player_id, None)
-        if not self.players:
+        if not self.humans:
             self.empty_since = time.monotonic()
         return gone
 
+    def remove_bots(self, count: int | None = None) -> int:
+        """Drop bots, newest first — the undo of "add three more" is those three,
+        not the ones who have been playing since the match opened.
+
+        Ordered by insertion rather than by `joined_at`: `players` is a dict and
+        dicts are ordered, whereas `time.monotonic()` on Windows has a ~16 ms
+        granularity that makes two bots added in the same breath indistinguishable.
+        """
+        bots = [p for p in reversed(list(self.players.values())) if p.is_bot]
+        chosen = bots if count is None else bots[: max(0, count)]
+        for bot in chosen:
+            self.players.pop(bot.id, None)
+        if not self.humans:
+            self.empty_since = time.monotonic()
+        return len(chosen)
+
     def respawn(self, player: MatchPlayer) -> None:
         player.state = self._spawn_state(player.team)
+        player.reset_loadout()
         # Drop queued commands: they were predicted against the old position, and
         # simulating them after a teleport walks the player away from the spawn.
         player.queue.clear()
@@ -211,6 +374,11 @@ class MatchRoom:
 
     def simulate(self, elapsed: float) -> None:
         """Drain each player's queue, spending from their time budget."""
+        now = time.monotonic()
+        now_ms = time.time() * 1000.0
+        self._respawn_due(now)
+        self._think(elapsed)
+
         for player in self.players.values():
             player.budget = min(
                 BUDGET_CEILING, player.budget + elapsed * BUDGET_EARN_RATE
@@ -225,27 +393,240 @@ class MatchRoom:
                     break
                 player.queue.popleft()
                 player.budget -= dt
+                player.sim_time += dt
                 # View angles are cosmetic on the server but they steer movement,
                 # so they are applied before the step, not after.
                 player.state.yaw = command.yaw
                 player.state.pitch = command.pitch
-                physics.step(
-                    self.world,
-                    player.state,
-                    MoveInput(
-                        forward=command.forward,
-                        strafe=command.strafe,
-                        jump=command.jump,
-                        yaw=command.yaw,
-                        pitch=command.pitch,
-                        dt=dt,
-                        seq=command.seq,
-                    ),
-                    dt,
-                )
+                if player.alive:
+                    physics.step(
+                        self.world,
+                        player.state,
+                        MoveInput(
+                            forward=command.forward,
+                            strafe=command.strafe,
+                            jump=command.jump,
+                            yaw=command.yaw,
+                            pitch=command.pitch,
+                            dt=dt,
+                            seq=command.seq,
+                        ),
+                        dt,
+                    )
+                    self._handle_combat(player, command, now, now_ms)
+                # The ack advances even for a dead player's commands: their client
+                # is still predicting and still needs to know what was consumed,
+                # and a frozen ack makes it replay an ever-growing tail.
                 player.ack = command.seq
 
+        self.history.record(
+            now_ms,
+            {
+                p.id: (p.state.x, p.state.y, p.state.z)
+                for p in self.players.values()
+                if p.alive
+            },
+        )
+
+    def _think(self, elapsed: float) -> None:
+        """Let every bot produce this tick's input.
+
+        Bots enqueue through `enqueue` like anyone else, so they are validated,
+        budgeted and simulated by the same code as a browser — there is exactly
+        one simulation, and a bot cannot do anything a player could not.
+        """
+        for player in self.players.values():
+            if player.brain is None:
+                continue
+            try:
+                command = player.brain.think(self, player, elapsed)
+            except Exception:
+                logger.exception("hassault bot %s failed to think", player.name)
+                continue
+            if command is not None:
+                self.enqueue(player, command)
+
+    def _respawn_due(self, now: float) -> None:
+        for player in self.players.values():
+            if not player.alive and now >= player.respawn_at:
+                self.respawn(player)
+                self._emit({"kind": "spawn", "id": player.id})
+
+    # -- combat -------------------------------------------------------------
+
+    def _handle_combat(
+        self, player: MatchPlayer, command: Command, now: float, now_ms: float
+    ) -> None:
+        if command.weapon >= 0 and command.weapon != player.weapon:
+            player.weapon = max(0, min(len(weapons.WEAPONS) - 1, command.weapon))
+            # Switching cancels a reload rather than queueing behind it: that is
+            # what every player expects the switch to be *for*.
+            player.reload_until = -999.0
+        # Every frame, not only on the next trigger pull. Resolving it lazily
+        # deadlocks anyone who reloads and then waits — including every bot, which
+        # stops firing precisely because it is empty.
+        self._finish_reload(player)
+        if command.reload:
+            self._begin_reload(player)
+        if command.fire:
+            self._fire(player, command, now, now_ms)
+
+    def _begin_reload(self, player: MatchPlayer) -> None:
+        weapon = weapons.weapon_at(player.weapon)
+        if weapon.mag <= 0 or player.sim_time < player.reload_until:
+            return
+        if player.ammo.get(player.weapon, 0) >= weapon.mag:
+            return
+        if player.reserve.get(player.weapon, 0) == 0:
+            return
+        player.reload_until = player.sim_time + weapon.reload_time
+
+    def _finish_reload(self, player: MatchPlayer) -> None:
+        """Move rounds from the reserve into the magazine, if a reload has run
+        its course.
+
+        Driven from `_handle_combat`, so it lands on the first command after the
+        reload's simulated time is up rather than on a timer of its own — a
+        player's ammo only advances when their own input does, which is the same
+        rule the rest of the simulation follows.
+        """
+        weapon = weapons.weapon_at(player.weapon)
+        if weapon.mag <= 0 or player.reload_until <= -900:
+            return
+        if player.sim_time < player.reload_until:
+            return
+        player.reload_until = -999.0
+        have = player.ammo.get(player.weapon, 0)
+        want = weapon.mag - have
+        pool = player.reserve.get(player.weapon, -1)
+        if pool < 0:
+            player.ammo[player.weapon] = weapon.mag
+            return
+        taken = min(want, pool)
+        player.ammo[player.weapon] = have + taken
+        player.reserve[player.weapon] = pool - taken
+
+    def _fire(
+        self, player: MatchPlayer, command: Command, now: float, now_ms: float
+    ) -> None:
+        weapon = weapons.weapon_at(player.weapon)
+        if player.sim_time < player.reload_until:
+            return
+        if player.sim_time - player.last_fire_at < weapon.interval:
+            return
+        if weapon.mag > 0:
+            if player.ammo.get(player.weapon, 0) <= 0:
+                # Out: start the reload rather than doing nothing, so holding the
+                # trigger through an empty magazine behaves the way it does in
+                # every other shooter.
+                self._begin_reload(player)
+                return
+            player.ammo[player.weapon] -= 1
+        player.last_fire_at = player.sim_time
+        # Shooting forfeits spawn protection. Otherwise it is not protection, it
+        # is a three-second licence.
+        player.protected_until = 0.0
+
+        origin = weapons.eye_position(player.state.x, player.state.y, player.state.z)
+        direction = weapons.aim_vector(command.yaw, command.pitch)
+
+        rewind_to = self.history.clamp(command.view_t, now_ms)
+        rewound = self.history.rewind(rewind_to)
+        targets: dict[str, tuple[float, float, float]] = {}
+        for other in self.players.values():
+            if other.id == player.id or not other.alive or other.protected:
+                continue
+            # Friendly fire is off. A four-player match on a map with team spawns
+            # is otherwise decided by who turns around first.
+            if other.team == player.team:
+                continue
+            live = (other.state.x, other.state.y, other.state.z)
+            targets[other.id] = (
+                rewound.get(other.id, live) if rewound is not None else live
+            )
+
+        result = weapons.resolve_shot(
+            self.world,
+            weapon,
+            origin,
+            direction,
+            targets,
+            self.rng,
+            rewound_ms=max(0.0, now_ms - rewind_to),
+        )
+
+        for hit in result.hits:
+            victim = self.players.get(hit.victim)
+            if victim is None or not victim.alive:
+                continue
+            self._apply_damage(victim, player, hit.damage, hit.head, weapon, now)
+
+        self._emit(
+            {
+                "kind": "shot",
+                "id": player.id,
+                "weapon": player.weapon,
+                "origin": [round(v, 2) for v in result.origin],
+                "ends": [[round(v, 2) for v in end] for end in result.endpoints],
+                "hit": bool(result.hits),
+            }
+        )
+
+    def _apply_damage(
+        self,
+        victim: MatchPlayer,
+        attacker: MatchPlayer,
+        amount: float,
+        head: bool,
+        weapon: weapons.Weapon,
+        now: float,
+    ) -> None:
+        victim.health -= amount
+        killed = victim.health <= 0
+        if len(attacker.pending_hits) < MAX_PENDING_HITS:
+            attacker.pending_hits.append(
+                {
+                    "victim": victim.id,
+                    "damage": round(amount),
+                    "head": head,
+                    "killed": killed,
+                }
+            )
+        if not killed:
+            return
+
+        victim.health = 0
+        victim.alive = False
+        victim.deaths += 1
+        victim.respawn_at = now + RESPAWN_DELAY
+        victim.queue.clear()
+        attacker.kills += 1
+        if 0 <= attacker.team < len(self.scores):
+            self.scores[attacker.team] += 1
+        self._emit(
+            {
+                "kind": "kill",
+                "victim": victim.id,
+                "victimName": victim.name,
+                "killer": attacker.id,
+                "killerName": attacker.name,
+                "weapon": weapon.id,
+                "head": head,
+            }
+        )
+
+    def _emit(self, effect: dict[str, Any]) -> None:
+        if len(self.fx) < MAX_FX_PER_TICK:
+            self.fx.append(effect)
+
+    # -- wire ---------------------------------------------------------------
+
     def snapshot_for(self, player: MatchPlayer, now: float, rows: list[dict]) -> dict:
+        """This player's copy of the tick.
+
+        Note `private_view` **drains** their hitmarkers, so this is the flush
+        point and must be called once per player per tick.
+        """
         return {
             "channel": CHANNEL,
             "event": "snapshot",
@@ -257,6 +638,13 @@ class MatchRoom:
                 "t": round(now * 1000),
                 "ack": player.ack,
                 "players": rows,
+                "you": player.private_view(time.monotonic()),
+                "scores": self.scores,
+                # Copied, not aliased: `_broadcast` clears `self.fx` once everyone
+                # has been sent their copy, and handing out a reference to a list
+                # we are about to empty is the kind of thing that works until
+                # someone makes the send path yield before serialising.
+                "fx": list(self.fx),
             },
         }
 
@@ -268,6 +656,7 @@ class MatchRoom:
             "tick": self.tick,
             "snapshotHz": SNAPSHOT_HZ,
             "players": [p.snapshot(now) for p in self.players.values()],
+            "scores": self.scores,
         }
 
 
@@ -321,6 +710,7 @@ class MatchServer:
                 "id": room.id,
                 "map": room.map_name,
                 "players": len(room.players),
+                "bots": sum(1 for p in room.players.values() if p.is_bot),
                 "maxPlayers": MAX_PLAYERS,
                 "createdAt": room.created_at,
             }
@@ -346,7 +736,9 @@ class MatchServer:
                 elapsed = started - last
                 last = started
                 for room in list(self.rooms.values()):
-                    if not room.players:
+                    # Bots alone do not keep a room alive, and there is nobody to
+                    # simulate for: a match with no humans in it is a screensaver.
+                    if not room.humans:
                         if (started - (room.empty_since or started)) > EMPTY_GRACE:
                             self.rooms.pop(room.id, None)
                         continue
@@ -364,8 +756,9 @@ class MatchServer:
     async def _broadcast(self, room: MatchRoom) -> None:
         now = time.time()
         mono = time.monotonic()
-        # One shared list of rows, but a per-player envelope: `ack` is the only
-        # field that differs, and it is the field prediction depends on.
+        # One shared list of rows, but a per-player envelope: `ack`, `you` and the
+        # hitmarkers differ per recipient, and `ack` is the field prediction
+        # depends on.
         rows = [p.snapshot(mono) for p in room.players.values()]
         for player in list(room.players.values()):
             conn = player.conn
@@ -377,6 +770,10 @@ class MatchServer:
                 # A dead socket is the /ws loop's problem; dropping the player
                 # here would race its own disconnect handling.
                 pass
+        # Cleared after everyone has been sent this tick's copy, not as they are
+        # produced — a bot has no socket and would otherwise consume the effects
+        # nobody ever saw.
+        room.fx.clear()
 
     async def broadcast_event(
         self, room: MatchRoom, event: str, data: dict[str, Any], exclude: str = ""

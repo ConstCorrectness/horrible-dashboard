@@ -56,8 +56,37 @@ export interface MatchSummary {
   id: string;
   map: string;
   players: number;
+  /** How many of `players` are bots. */
+  bots: number;
   maxPlayers: number;
   createdAt: number;
+}
+
+/**
+ * One weapon's numbers, as the backend defines them.
+ *
+ * Fetched rather than hardcoded here. The client needs the fire interval so it
+ * does not send input the server will only discard, and a second copy of that
+ * constant in TypeScript is a drift trap for no gain — the same reasoning as
+ * `plane_order` on `MapInfo`.
+ */
+export interface WeaponSpec {
+  id: string;
+  name: string;
+  damage: number;
+  headMultiplier: number;
+  rpm: number;
+  /** Seconds between shots, derived from `rpm` server-side so both sides round it identically. */
+  interval: number;
+  mag: number;
+  /** `-1` is unlimited. */
+  reserve: number;
+  reloadTime: number;
+  spread: number;
+  pellets: number;
+  range: number;
+  /** Whether holding the button keeps firing. */
+  auto: boolean;
 }
 
 /**
@@ -86,6 +115,10 @@ export interface MatchInvite {
 
 export function listMatches(): Promise<MatchSummary[]> {
   return apiGet<MatchSummary[]>('/hassault/matches');
+}
+
+export function listWeapons(): Promise<WeaponSpec[]> {
+  return apiGet<WeaponSpec[]>('/hassault/weapons');
 }
 
 export function listInvitees(): Promise<Invitee[]> {

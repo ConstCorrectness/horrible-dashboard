@@ -245,15 +245,37 @@ def step(world: World, player: PlayerState, move: MoveInput, dt: float) -> None:
 
 
 def spawn_at(world: World, spawn) -> PlayerState:
-    """Place a player on a spawn entity, resolving the ground from the world.
+    """Place a player on a spawn entity, standing on the ground beneath it.
 
-    Spawn `z` is cube-aligned and often sits slightly inside the floor, so the
-    entity's height is a lower bound rather than the answer.
+    **A `playerstart`'s `z` is not the ground.** It is the mapper's own origin at
+    the moment they typed `/newent playerstart`, and in Cube 1 that origin is the
+    *eye*, not the feet — which is why the single most common value across the
+    1741 official spawns is exactly four above the floor the body rests on
+    (`(int)(floor + 4.5)`, truncated into the `short` the format stores). Nor is
+    it reliable even read that way: AC's editor flies, so the rest are scattered
+    from one to twenty-two cubes up with no relation to anything, on flat open
+    ground with no map model in sight. The engine gets away with it because
+    `entinmap` and gravity resolve the spawn on arrival.
+
+    So the height is taken from the world instead. `_support` is the same query
+    `step` resolves against, which makes this its fixed point: a player spawned
+    here is already exactly where their first simulated frame would put them,
+    rather than falling several cubes into it.
+
+    Reading it as a lower bound — `max(floor_at, spawn.z)`, which this used to do
+    — put every one of those 1741 spawns in mid-air, because `spawn.z` is above
+    the floor at all but six of them and so the clamp never once fired.
     """
-    floor = world.floor_at(int(spawn.x), int(spawn.y))
-    z = max(floor, float(spawn.z))
+    x = spawn.x + 0.5
+    y = spawn.y + 0.5
+    floor, _ceil, enclosed = _support(world, x, y)
+    if enclosed:
+        # Every cell under the body is solid, which no official map manages but a
+        # community one might. The centre cell's floor is the best guess left.
+        floor = world.floor_at(int(spawn.x), int(spawn.y))
+    # Entity yaw is degrees clockwise from north; the camera uses radians about +x.
     yaw = math.radians(spawn.yaw or 0.0)
-    return PlayerState(x=spawn.x + 0.5, y=spawn.y + 0.5, z=z, yaw=yaw)
+    return PlayerState(x=x, y=y, z=floor, yaw=yaw, on_ground=True)
 
 
 def flat_world(ssize: int = 32, floor: int = 0, ceil: int = 16) -> World:

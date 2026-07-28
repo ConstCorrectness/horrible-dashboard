@@ -11,10 +11,11 @@ infrastructure. AssaultCube's original stack — an SDL/OpenGL C++ client speaki
 ENet over UDP to a master server — cannot run in a browser and is not what we
 want anyway; the point is to rebuild it on the fabric this app already has.
 
-**Implemented so far: the map pipeline, the renderer, and the netcode** — you can
-walk around any of the 44 shipped maps in first person, alone or in a match
-against other people, with an authoritative match server running on your own
-backend. Weapons and scoring land on top.
+**Implemented so far: the map pipeline, the renderer, the netcode, weapons, and
+bots** — you can walk around any of the 44 shipped maps in first person, and you
+can fight in them: an authoritative match server on your own backend, five
+weapons with lag-compensated hit registration, and bot players to fill out a
+match when nobody else is about.
 
 ## Licensing: why no game content is in this repo
 
@@ -54,7 +55,7 @@ flowchart LR
   C --> F["/api/hassault/maps/name<br/>JSON"]
   D --> F
   E --> G["/api/hassault/maps/name/cubes<br/>9 byte planes"]
-  F --> H["Three.js renderer<br/>(next slice)"]
+  F --> H["Three.js renderer"]
   G --> H
 ```
 
@@ -242,8 +243,38 @@ dropped instead: easing across a large error draws the player somewhere they are
 not for the whole ease, possibly through a wall.
 
 In a live match on `ac_desert` the steady-state correction averaged **0.04 cubes**
-(max 1.19) — well inside the smoothing band, so nothing snapped after the initial
-spawn placement.
+(max 1.19) — well inside the smoothing band, so nothing snapped.
+
+### Where a `playerstart` actually puts you
+
+A spawn entity's `z` is **not** a ground height, and reading it as one is the
+single easiest mistake in the format. It is the mapper's own origin at the moment
+they typed `/newent playerstart`, and in Cube 1 that origin is the *eye*, not the
+feet. The evidence is in the numbers: entity `z` is stored as a `short` (all 1741
+official values are integers), and the single most common distance from it down to
+the floor the body rests on is **exactly 4** — 27% of them, far above any other
+value — which is `(int)(floor + 4.5)`, a mapper standing on flat ground with an
+eye height of 4.5, truncated on save.
+
+It is not usable even read that way, though. AC's editor flies, so the rest are
+scattered from one to twenty-two cubes up with no relation to anything, and that
+spread survives restricting the sample to spawns on flat open ground with no map
+model within three cubes. The engine gets away with it because `entinmap` and
+gravity resolve the spawn on arrival.
+
+So `spawn_at` takes the height from the world instead, resolving against the same
+`_support` query `step` does. That makes a spawn the **fixed point of the first
+simulated frame**: all 1741 official spawns now rest exactly on the ground and not
+one of them moves on its first step.
+
+The earlier reading — `max(floor_at(cell), spawn.z)`, treating the entity height
+as a lower bound — put **every one** of those 1741 spawns in mid-air, because
+`spawn.z` is above the floor at all but six of them and so the clamp never once
+fired. On `ac_desert` that was a seven-cube drop on every spawn and respawn, and
+it briefly lifted the eye above the cell ceiling, which makes `raycast_world`
+report an immediate block for anything fired on that frame.
+
+Spawn placement is pinned across the two languages by the same fixture `step` is.
 
 ### Remote players are rendered in the past
 
@@ -350,9 +381,12 @@ somewhere the other cannot see.
 
 So the two are pinned together by
 `packages/core/src/modules/hassault/__tests__/physics-vectors.json`, replayed by
-**both** `backend/tests/test_hassault_physics.py` and `conformance.test.ts`. The
-fixture pins *agreement*; each side's own unit tests are what argue the rules are
-right. Agreement is asserted to a tolerance rather than bit-for-bit, because
+**both** `backend/tests/test_hassault_physics.py` and `conformance.test.ts`. It
+carries two kinds of vector — `cases`, which replay a sequence of movement
+commands, and `spawns`, which place a player from an entity — because spawn
+placement is duplicated exactly like `step` is, and a disagreement about where a
+player starts is a desync from the very first frame. The fixture pins
+*agreement*; each side's own unit tests are what argue the rules are right. Agreement is asserted to a tolerance rather than bit-for-bit, because
 `math.sin` and `Math.sin` are not required to round identically and demanding
 they do would be a test about libm.
 
@@ -366,6 +400,186 @@ PYTHONPATH=. uv run python scripts/gen_hassault_vectors.py
 If that ever becomes a burden, it is the burden telling you the truth about the
 cost of the design.
 
+## Weapons
+
+`backend/modules/hassault/weapons.py` owns the loadout and every shot fired with
+it. The client draws a muzzle flash, kicks its own crosshair and counts its own
+magazine down the instant you press the button — a gun that waits a round trip to
+acknowledge the trigger does not feel like a gun — but *whether you hit anything*
+is decided on the server, from the server's own copy of the world.
+
+Five weapons, in slot order: knife, pistol, assault rifle, shotgun, sniper rifle.
+The numbers are AssaultCube-*flavoured* rather than derived: our movement speed is
+22 cubes/s, which is not AC's, so copying its damage table would produce a
+different game wearing its numbers.
+
+They are **served, not duplicated** — `GET /api/hassault/weapons` — for the same
+reason `plane_order` is reported rather than hardcoded. The client needs each
+weapon's fire interval so it does not send input the server will only discard, and
+a second copy of that constant in TypeScript is a bug waiting for someone to tune
+the rifle.
+
+### Firing is a flag on a movement command
+
+There is no `fire` message. `fire`, `reload`, the weapon slot and `viewT` ride on
+the ordinary input command, which buys three things:
+
+- A shot carries the **exact view angles and sequence number of the frame it
+  happened on**, rather than the angles of whenever a separate message was
+  processed.
+- The rate limiter spends from the **same replenishing time budget** as movement,
+  so nobody's rifle fires faster than time passes — the anti-cheat that was
+  already there covers weapons for free.
+- The peer fabric forwards commands verbatim, so **weapons crossed to remote
+  matches with no changes to the fabric at all**.
+
+Fire rate and reloads are measured on that budgeted *simulated* clock, not on the
+wall clock. Commands arrive in batches — several trigger pulls are consumed in one
+tick — and gating on real time would drop all but the first and silently halve a
+700 rpm rifle. Respawn timers are the exception and use the wall clock on purpose:
+a dead player stops sending commands, so a respawn on their simulated time would
+never arrive.
+
+### Lag compensation: rewinding to what the shooter saw
+
+A shooter aims at what their screen shows, and their screen shows the past twice
+over: half a round trip of network delay, plus the ~100 ms of deliberate
+interpolation delay the renderer adds so remote players move smoothly. On a 60 ms
+link that is ~130 ms, and in 130 ms a running player covers nearly three cubes —
+more than their own width. Judging the shot against *current* positions would mean
+leading every target by a body width, which reads as "this game does not register
+hits".
+
+So each room keeps a second of position history and resolves a shot against the
+world as the shooter saw it:
+
+```mermaid
+sequenceDiagram
+    participant C as Shooter's browser
+    participant S as Match server
+    Note over C: renders remote players at<br/>renderTime = now − offset − 100 ms
+    C->>S: command { fire, yaw, pitch, viewT }
+    Note over S: clamp viewT into<br/>[now − 500 ms, now]
+    Note over S: rewind everyone to that instant<br/>(interpolated between two history frames)
+    Note over S: raycast: world first, then bodies<br/>nearer than the wall
+    S-->>C: snapshot { you.hits, fx: [shot, kill] }
+```
+
+The rewind instant is **client-supplied**, and deliberately so: the client already
+computes it (`SnapshotBuffer.renderTime` is literally "the server-clock time I am
+drawing right now"), and using it is more accurate than the server guessing from a
+latency estimate measured on some other packet.
+
+That makes the **clamp the security boundary**, not a tidiness measure. `view_t`
+is pinned into `[now − MAX_REWIND_MS, now]`. Unclamped, a client could ask to be
+judged against a position from ten seconds ago and shoot people where they used to
+be standing. `PositionHistory.clamp` is the only place that knows the current
+time, which is why the range check lives there rather than in the wire parser.
+
+The cost is the one every game with lag compensation pays: occasionally you take
+damage after stepping behind a wall, because on the shooter's screen you had not
+reached it yet. That is the honest trade — one of the two players has to be wrong,
+and it should not be the one who had to aim.
+
+### The hit model
+
+A shot is a ray. `raycast_world` walks the cube grid with a DDA, because the world
+*is* a grid: within each cell only two things can stop the ray — the cell being
+solid, or the ray leaving the gap between that cell's floor and ceiling. A shot
+across a 256-cube map is a few hundred cheap steps rather than a scene traversal.
+
+Bodies are the **collision cylinder** — the same radius the movement code keeps
+clear, the same height the avatar capsule is drawn to, so what you see is what you
+hit. The top cube of it is the head.
+
+Two rules do more work than they look like they do:
+
+- **A body is only a target if it is nearer than the wall.** That single
+  comparison is the whole of cover; without it every map is a shooting gallery
+  with decorative geometry.
+- **A negative entry distance with a positive exit is point blank, not a miss.**
+  Standing inside someone is a hit at zero range.
+
+Spread is sampled uniformly over the cone's *area* rather than uniformly in angle,
+or every pellet clusters at the centre and a shotgun behaves like a rifle at range.
+
+### Health, death, and what is private
+
+Health is **public**, in the shared snapshot rows: a wounded enemy is exactly the
+information that makes a firefight a decision rather than a coin toss. Ammunition
+is **private**, in the per-recipient envelope — it is nobody else's business how
+full your magazine is, and it would be sixteen extra numbers per packet for
+everyone. Hitmarkers go in the same envelope and are *drained* when it is built,
+so each is delivered exactly once.
+
+Kills, deaths and team scores are tracked; friendly fire is off (a four-player
+match on a map with team spawns is otherwise decided by who turns around first);
+spawn protection lasts a second and a half and is forfeited the moment you fire,
+because otherwise it is not protection, it is a licence.
+
+Shots are **batched into the snapshot** rather than sent as they happen. A rifle at
+700 rpm would otherwise be its own message stream; batching makes combat cost the
+tick rate rather than the fire rate, and the snapshot's `fx` list carries both
+tracers and the kill feed.
+
+Recoil is applied **locally**, because view angles are client-owned anyway — the
+server simply uses whatever angles arrive. A modified client could therefore fire
+without climb. That is the same class of concession as trusting `dt`, and the same
+answer applies: this is a game you host for friends, and the budget caps how much
+any of it is worth.
+
+## Bots
+
+`backend/modules/hassault/bots.py`. A bot is **not a second kind of entity**. It is
+a `MatchPlayer` whose input happens to be produced on this machine instead of
+arriving over a socket: `BotBrain.think` returns a `Command`, the room enqueues it
+through the same `enqueue` a browser's input goes through, and it is validated,
+budgeted and simulated by exactly the same code.
+
+That is the whole design, and it buys two things worth having. A bot cannot do
+anything a player could not — no wall-clipping, no infinite ammo, no firing faster
+than time passes — and there is only ever one simulation to debug.
+
+The AI is reactive rather than planned. There is no navmesh: an AssaultCube map is
+a heightfield of columns, and building a graph over it is a larger piece of work
+than the rest of the file. Instead a bot steers toward something it wants and
+probes ahead with the movement code's **own `can_stand`**, so what it believes it
+can walk through is precisely what it can walk through. Line of sight uses the
+**same `raycast_world` a shot traces**, so a bot never fires at something it could
+not have hit. When it is wedged on geometry the probe was happy with, a stuck
+detector turns it hard and makes it jump.
+
+Aim is the part that has to be wrong on purpose. A bot can compute the exact angle
+to your head every tick; a bot that *uses* it is not difficult, it is unplayable.
+So aim is a rate-limited turn toward the target plus a slowly-wandering error term,
+and the skill levels are mostly settings for those two numbers:
+
+| Skill | Turn rate | Aim error | Reaction | Sight |
+| --- | --- | --- | --- | --- |
+| `easy` | 2.2 rad/s | 0.10 rad | 0.65 s | 70 cubes |
+| `normal` | 4.2 rad/s | 0.045 rad | 0.35 s | 110 cubes |
+| `hard` | 7.5 rad/s | 0.017 rad | 0.16 s | 170 cubes |
+
+The trigger is pulled when the barrel is where the bot **thinks** it is aiming —
+error included — so it shoots with confidence and then misses by that error.
+Comparing against the *true* bearing instead would produce the opposite and much
+worse behaviour: a bot that holds fire until it is perfectly on target, and so
+never misses at all.
+
+Two smaller rules that are easy to get wrong:
+
+- **Bots alone do not keep a room alive.** The empty clock tracks humans, not
+  bodies; a match with nobody in it is a screensaver, and a room seeded with bots
+  would otherwise never be retired.
+- **Removal is newest-first, by insertion order** rather than by `joined_at` —
+  `time.monotonic()` on Windows has a ~16 ms granularity, and two bots added in the
+  same breath are indistinguishable by it.
+
+Add them from the toolbar (`+ Bot`, with a skill selector), or ask the agent:
+`hassault.add_bot` takes a count, a skill and an optional team. Bots are host-only
+— a guest's socket is bound to a remote match, and there is no fabric message for
+reshaping the roster of a match you are only visiting.
+
 ## Contributions to the layout shell
 
 - **Panels:** `hassault.play` (HorribleAssault, role `document`, singleton). A
@@ -375,7 +589,7 @@ cost of the design.
 - **Settings:** `hassault.installPath` — the folder containing `packages/maps`.
   Blank auto-detects the usual per-platform locations.
 - **Agent tools** (group `hassault`): `list_maps`, `list_matches`, `host`,
-  `invite`, `status`, `surroundings`.
+  `invite`, `status`, `surroundings`, `add_bot`, `remove_bot`.
 
 ## Agent tools
 
@@ -389,27 +603,41 @@ human mid-session and the easy part for an agent.
 | `hassault.list_matches` | Matches running here, plus invitations received |
 | `hassault.host` | Open a match, optionally inviting someone in the same call |
 | `hassault.invite` | Invite a friend; the room may be omitted when only one runs |
-| `hassault.status` | Who is in a match: teams, positions, latency, remote or not |
+| `hassault.status` | Who is in a match: teams, health, kills, latency, remote or not |
 | `hassault.surroundings` | Walls in each compass direction, and who is nearby |
+| `hassault.add_bot` | Field bots: a count, a skill, an optional team |
+| `hassault.remove_bot` | Take them back out, by name, by count, or all of them |
 
 `surroundings` casts its rays through the same `World` the simulation uses, so it
 reports what the server believes rather than a guess from a map file, and it
-answers in compass words and cubes because the agent is talking to a human.
+answers in compass words and cubes because the agent is talking to a human. It
+also reports **line of sight** per person, traced with the same ray a shot would
+follow — "behind the wall" is the useful half of spotting.
 
 **They deliberately stop short of playing.** Driving a player means producing
 input at 60 Hz and an agent turn takes seconds; a tool that "moves you forward"
-would be a bot controller wearing a tool's clothes. Bot AI is its own slice with
-its own design. What is here is everything needed to *set up* and *talk about* a
-match — including acting as a spotter for whoever is actually playing.
+would be a bot controller wearing a tool's clothes. The agent can *field* bots —
+"put three hard ones on the other team" — but the thing producing their input is a
+tick-rate brain on the server, not a tool call. What is here is everything needed
+to *set up* and *talk about* a match, including acting as a spotter for whoever is
+actually playing.
 
 Controls: click to lock the pointer, WASD to move, mouse to look, Space to jump,
-V for noclip, Esc to release. Movement keys are swallowed **only while the pointer
-is locked**, so the command palette and every other shortcut keep working when it
-is not.
+left mouse to fire, 1–5 or the wheel to change weapon, R to reload, Tab for the
+scoreboard, V for noclip (offline only), Esc to release. Keys are swallowed **only
+while the pointer is locked**, so the command palette and every other shortcut keep
+working when it is not; releasing the pointer also releases the trigger, or a
+weapon left firing keeps firing into whatever you tabbed away to.
 
-The toolbar carries the match controls: a name, Join/Leave, and — once in — the
-room id, the head count and your round-trip time. Changing map while in a match
-leaves it rather than silently simulating you in a different world.
+The toolbar carries the match controls: a name, Join/Leave, bot add/remove with a
+skill selector, and — once in — the team scores, the head count and your
+round-trip time. Changing map while in a match leaves it rather than silently
+simulating you in a different world.
+
+The HUD is health bottom-left, weapon and magazine bottom-right, kill feed
+top-right, and a crosshair whose gap is the weapon's **actual** spread cone, so a
+shotgun looks like a shotgun without anyone reading the numbers. Hitmarkers rotate
+it into an X rather than fading a second element in and out.
 
 ## Backend surface
 
@@ -421,6 +649,7 @@ leaves it rather than silently simulating you in a different world.
 | `GET /api/hassault/maps` | Every readable map, official first |
 | `GET /api/hassault/maps/{name}` | Header, entities, spawn counts (JSON) |
 | `GET /api/hassault/maps/{name}/cubes` | The cube grid as raw byte planes |
+| `GET /api/hassault/weapons` | The loadout, in slot order — served so the client cannot drift from it |
 | `GET /api/hassault/matches` | Live matches on this node — enough to render a lobby row |
 | `POST /api/hassault/matches` | Open a match **without joining**, so its id can be handed to a friend |
 | `GET /api/hassault/invitees` | Friends who could join right now, from the social roster |
@@ -439,11 +668,26 @@ invitee could click it.
 | → | `input` | `{ commands: [...], rtt }` — batched, sequence-numbered |
 | → | `respawn` | The server owns spawn points, so respawning is asked for |
 | → | `invite` | `{ who, room }` — `who` is a person, not a node id |
+| → | `add_bot` | `{ count, skill }` — host only |
+| → | `remove_bot` | `{ count }` or `{ id }` — host only |
 | → | `leave`, `ping`, `list`, `invites` | |
-| ← | `welcome` | Your player id, the room, everyone in it, and `host` if remote |
-| ← | `snapshot` | All players plus **your** `ack`, at 20 Hz |
+| ← | `welcome` | Your player id, the room, everyone in it, the scores, and `host` if remote |
+| ← | `snapshot` | All players plus **your** `ack`, `you` and the tick's `fx`, at 20 Hz |
 | ← | `invite` | A friend has invited you to a match |
+| ← | `roster` | Bots joined or left; membership itself follows in the next snapshot |
 | ← | `joined`, `left`, `pong`, `error`, `matches`, `invites`, `invite_sent` | |
+
+One command, with the combat fields it may carry:
+
+```json
+{ "seq": 412, "forward": 1, "strafe": 0, "jump": false,
+  "yaw": 1.57, "pitch": -0.02, "dt": 0.0166,
+  "fire": true, "reload": false, "weapon": -1, "viewT": 1743102934812 }
+```
+
+`weapon` is `-1` for "no change", so an absent or nonsensical slot leaves the
+weapon alone rather than silently arming the knife. The combat fields are omitted
+entirely on the frames that are not shots, which is most of them.
 
 And on the peer wire, declared in `fabric.py` rather than `network/protocol.py` —
 a module owns its own wire vocabulary, following the training-ads precedent, so
@@ -453,10 +697,13 @@ adding a feature never edits the fabric core:
 
 Every field of an inbound command is clamped rather than trusted: the movement
 axes to ±1 (asking for 50 is the obvious cheat), `dt` to 0.25 s, pitch to a right
-angle. NaN and infinity survive JSON and poison every comparison downstream, so
-they are rejected at the edge instead of at the first surprising position. There
-is deliberately **no noclip on the wire** — it is a local sightseeing tool, and
-the pane disables it while you are in a match.
+angle, the weapon slot to the loadout. NaN and infinity survive JSON and poison
+every comparison downstream, so they are rejected at the edge instead of at the
+first surprising position. `viewT` is the exception and is *not* range-checked
+here: it is clamped against the clock in `PositionHistory.clamp`, which is the
+only place that knows what time it is. There is deliberately **no noclip on the
+wire** — it is a local sightseeing tool, and the pane disables it while you are in
+a match.
 
 ### Why the grid is binary
 
@@ -504,8 +751,30 @@ never touches the filesystem.
   safer wrong answer. They are rare — 104 of 65 536 cells in `ac_desert`.
 - **No map models, water, or sky.** `mapmodel` entities (crates, foliage) are
   parsed and exposed but not rendered, and the water level is read but not drawn.
-- **No weapons, damage, or scoring.** A match is movement and presence; you can
-  see each other and not shoot each other.
+- **Two official spawns leave your head in a lintel.** `ac_arid` (180, 122) and
+  `ac_snow` (48, 146) sit where the 2.2-cube body reaches into a cell with one or
+  two cubes of headroom, so `can_stand` is false at the spot the spawn names. AC
+  gets away with it because `entinmap` nudges a spawning player until they fit;
+  we have no equivalent, and the ceiling push-down in `step` cannot help when the
+  floor is already the only option. Two spawns in 1741, and the effect is a shot
+  from that exact tile reading as blocked.
+- **No ammo pickups.** The entities are parsed but not placed, so a finite reserve
+  on every weapon would end a long match with everyone standing around empty. The
+  sidearm is bottomless and the rest are not, and dying refills you. Pickups are
+  the real answer and are their own slice.
+- **No weapon models, sounds, or animations.** You see a tracer and a crosshair
+  kick; there is no gun on screen and nothing to hear.
+- **Recoil is client-side.** View angles are client-owned anyway — the server uses
+  whatever arrives — so a modified client could fire without climb. Same class of
+  concession as trusting `dt`, and the same answer: this is a game you host for
+  friends.
+- **Bots do not use ladders, lifts, or teleporters**, and have no notion of
+  objectives. They steer, take cover by accident rather than on purpose, and get
+  lost in complicated geometry. There is no navmesh.
+- **Bots are host-only.** A guest across the fabric cannot add or remove them:
+  their socket is bound to a remote match, and a fabric message for reshaping
+  someone else's roster would let a friend change a match from a pane you cannot
+  see.
 - **A guest's latency is two hops.** Their input goes browser → their backend →
   the fabric → the host, and snapshots come back the same way. Prediction hides
   it for their own movement; other players are correspondingly further in the
@@ -536,11 +805,19 @@ never touches the filesystem.
 4. **Lobby and friends integration** — done: invite a friend from the
    [Friends roster](social.mdx) and play in their match across the fabric, plus
    agent tools for hosting, inviting and spotting.
-5. **Weapons and scoring** — hit registration needs lag compensation (rewinding
-   the world to what the shooter actually saw), which is its own problem and
-   deliberately not mixed into the movement slice.
-6. **Bot players** — what it would take for an agent to actually play, rather
-   than only run the match around it.
+5. **Weapons and scoring** — done: five weapons, server-authoritative hitscan with
+   a clamped rewind to the shooter's own render instant, health, deaths, kill feed
+   and team scores.
+6. **Bot players** — done: reactive AI at three skill levels, producing ordinary
+   input through the ordinary queue, so a bot is a player rather than a second
+   simulation.
+7. **Textures and map models** — the largest remaining gap between this and
+   something that looks like AssaultCube. Needs the `.cfg` parser that maps
+   texture slots to files.
+8. **Pickups** — ammo and health entities are already in the map file; placing
+   them turns the ammo economy from a countdown into a reason to move.
+9. **Game modes** — team deathmatch is what the scoreboard currently describes.
+   CTF and the rest need flag entities and a round structure.
 
 ## See also
 

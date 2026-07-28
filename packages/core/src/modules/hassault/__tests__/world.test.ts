@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 import type { MapInfo } from '../api';
 import { buildWorldMesh } from '../geometry';
 import { canStand, createPlayer, spawnAt, step, STEP_HEIGHT } from '../player';
-import { CHF, FHF, SOLID, SPACE, World } from '../world';
+import { CHF, FHF, PLAYER_EYE_HEIGHT, SOLID, SPACE, World } from '../world';
 
 const PLANES = ['type', 'floor', 'ceil', 'wtex', 'ftex', 'ctex', 'vdelta', 'utex', 'tag'];
 
@@ -309,5 +309,61 @@ describe('player', () => {
     const p = spawnAt(w, { x: 7, y: 7, z: 0, yaw: 90 });
     expect(p.z).toBe(6);
     expect(p.yaw).toBeCloseTo(Math.PI / 2, 6);
+  });
+});
+
+describe('spawnAt', () => {
+  /**
+   * A `playerstart`'s `z` is the mapper's *eye* at placement time and AC's editor
+   * flies, so it is not a ground height. Read as a lower bound — `max(floor, z)`,
+   * which this used to do — it put all 1741 official spawns in mid-air, because
+   * it is above the floor at all but six of them.
+   */
+  it('lands the feet on the ground however high the entity sits', () => {
+    const w = makeWorld(16, openRoom(16, 4, 4, 10, 10, { floor: 3, ceil: 24 }));
+    for (const z of [-20, 0, 3, 7, 40]) {
+      expect(spawnAt(w, { x: 7, y: 7, z, yaw: 0 }).z).toBe(3);
+    }
+  });
+
+  it('is the fixed point of the first simulated step', () => {
+    const w = makeWorld(16, openRoom(16, 4, 4, 10, 10, { floor: 5, ceil: 24 }));
+    const p = spawnAt(w, { x: 7, y: 7, z: 17, yaw: 0 });
+    const before = { x: p.x, y: p.y, z: p.z };
+    step(w, p, { forward: 0, strafe: 0, jump: false, noclip: false }, 1 / 60);
+    expect(p.x).toBeCloseTo(before.x, 9);
+    expect(p.y).toBeCloseTo(before.y, 9);
+    expect(p.z).toBeCloseTo(before.z, 9);
+    expect(p.onGround).toBe(true);
+  });
+
+  it('puts the eye under the ceiling', () => {
+    // The old placement could leave it above: on ac_desert, feet at 12 with a
+    // ceiling of 16 puts the eye at 16.5, which reads as solid to a raycast.
+    const w = makeWorld(16, openRoom(16, 4, 4, 10, 10, { floor: 0, ceil: 16 }));
+    const p = spawnAt(w, { x: 7, y: 7, z: 12, yaw: 0 });
+    expect(p.z + PLAYER_EYE_HEIGHT).toBeLessThan(w.ceilAt(7, 7));
+  });
+
+  it('stands on the highest floor under the body, not the centre cell', () => {
+    // The body is 2.2 cubes wide, so it straddles the step at x = 8.
+    const cells = {
+      ...openRoom(16, 4, 4, 10, 10, { floor: 0, ceil: 24 }),
+      ...openRoom(16, 8, 4, 10, 10, { floor: 2, ceil: 24 }),
+    };
+    const w = makeWorld(16, cells);
+    expect(spawnAt(w, { x: 7, y: 7, z: 40, yaw: 0 }).z).toBe(2);
+  });
+
+  it('treats a null entity yaw as zero', () => {
+    const w = makeWorld(16, openRoom(16, 4, 4, 10, 10, { floor: 0 }));
+    expect(spawnAt(w, { x: 7, y: 7, z: 0, yaw: null }).yaw).toBe(0);
+  });
+
+  it('still places a player sealed inside solid geometry', () => {
+    // No official map manages it, but refusing would turn an odd community map
+    // into an unjoinable one.
+    const w = makeWorld(16, {});
+    expect(Number.isFinite(spawnAt(w, { x: 7, y: 7, z: 30, yaw: 0 }).z)).toBe(true);
   });
 });

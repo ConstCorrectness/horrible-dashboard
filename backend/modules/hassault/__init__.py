@@ -1,9 +1,12 @@
 """HorribleAssault: an AssaultCube remix that runs as a pane in the dashboard.
 
-Three slices are in place: the **map and asset pipeline** (reading AssaultCube's
-`.cgz` format), the **WebGL renderer**, and the **authoritative match server** —
+Five slices are in place: the **map and asset pipeline** (reading AssaultCube's
+`.cgz` format), the **WebGL renderer**, the **authoritative match server** —
 `match.py` simulates, `channel.py` carries input and snapshots over the shared
-`/ws` socket, and the browser predicts and reconciles against it.
+`/ws` socket, and the browser predicts and reconciles against it — **weapons**
+(`weapons.py`: server-side hitscan with a clamped rewind to the shooter's own
+render instant), and **bots** (`bots.py`: players whose input happens to be
+produced here, so there is only ever one simulation).
 
 Game *content* is never bundled: AssaultCube's media is copyright and only
 redistributable inside an unmodified AssaultCube package, so the module reads from

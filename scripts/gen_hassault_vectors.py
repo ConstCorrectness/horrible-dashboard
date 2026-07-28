@@ -19,7 +19,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from backend.modules.hassault.physics import MoveInput, PlayerState, World, step
+from backend.modules.hassault.physics import (
+    MoveInput,
+    PlayerState,
+    World,
+    spawn_at,
+    step,
+)
 
 OUT = Path("packages/core/src/modules/hassault/__tests__/physics-vectors.json")
 
@@ -185,6 +191,65 @@ CASES = [
 ]
 
 
+class Spawn:
+    """The four fields `spawn_at` reads off a `playerstart` entity."""
+
+    def __init__(self, x: float, y: float, z: float, yaw: float = 0.0) -> None:
+        self.x = x
+        self.y = y
+        self.z = z
+        self.yaw = yaw
+
+
+# Spawn placement is duplicated across the two implementations exactly like
+# `step` is, so it is pinned here for the same reason. The cases are chosen
+# around the one thing that is easy to get wrong — that a `playerstart`'s `z` is
+# the mapper's eye at placement time and not a ground height, so the world
+# decides where the feet go.
+SPAWN_CASES = [
+    {
+        "name": "a spawn floating above flat ground stands on the ground",
+        "world": "room",
+        "entity": {"x": 8, "y": 8, "z": 12},
+    },
+    {
+        "name": "a spawn buried below the floor is lifted onto it",
+        "world": "room",
+        "entity": {"x": 8, "y": 8, "z": -3},
+    },
+    {
+        "name": "entity z does not change the height at all",
+        "world": "room",
+        "entity": {"x": 8, "y": 8, "z": 99},
+    },
+    {
+        "name": "a spawn over the raised half stands on the raised half",
+        "world": "steps",
+        "entity": {"x": 9, "y": 8, "z": 20},
+    },
+    {
+        "name": "a spawn over the four-unit ledge stands on the ledge",
+        "world": "steps",
+        "entity": {"x": 12, "y": 8, "z": 2},
+    },
+    {
+        "name": "a body straddling a step is placed on the higher floor",
+        "world": "steps",
+        "entity": {"x": 7, "y": 8, "z": 6},
+    },
+    {
+        "name": "a spawn on a heightfield takes the corner-averaged floor",
+        "world": "slope",
+        "entity": {"x": 6, "y": 8, "z": 30},
+    },
+    {
+        "name": "entity yaw is degrees clockwise, converted to radians",
+        "world": "room",
+        "entity": {"x": 8, "y": 8, "z": 4, "yaw": 90.0},
+    },
+]
+
+
 def main() -> None:
     out_cases = []
     for case in CASES:
@@ -221,6 +286,24 @@ def main() -> None:
             }
         )
 
+    out_spawns = []
+    for case in SPAWN_CASES:
+        world = build(WORLDS[case["world"]])
+        e = case["entity"]
+        placed = spawn_at(world, Spawn(e["x"], e["y"], e["z"], e.get("yaw", 0.0)))
+        out_spawns.append(
+            {
+                **case,
+                "expect": {
+                    "x": placed.x,
+                    "y": placed.y,
+                    "z": placed.z,
+                    "yaw": placed.yaw,
+                    "onGround": placed.on_ground,
+                },
+            }
+        )
+
     payload = {
         "_comment": (
             "Cross-language physics conformance vectors. Read by BOTH "
@@ -234,13 +317,23 @@ def main() -> None:
         "tolerance": 1e-9,
         "worlds": WORLDS,
         "cases": out_cases,
+        "spawns": out_spawns,
     }
     OUT.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    print(f"wrote {OUT} with {len(out_cases)} cases")
+    print(
+        f"wrote {OUT} with {len(out_cases)} step cases, {len(out_spawns)} spawn cases"
+    )
     for c in out_cases:
         e = c["expect"]
         print(
             f"  {c['name']:<48} x={e['x']:.4f} y={e['y']:.4f} z={e['z']:.4f} g={e['onGround']}"
+        )
+    print("  --- spawns ---")
+    for c in out_spawns:
+        e = c["expect"]
+        print(
+            f"  {c['name']:<58} entz={c['entity']['z']:>3} -> "
+            f"x={e['x']:.2f} y={e['y']:.2f} z={e['z']:.4f} yaw={e['yaw']:.4f}"
         )
 
 

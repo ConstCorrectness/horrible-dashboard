@@ -7,8 +7,10 @@ agent.
 
 They deliberately stop short of playing. Driving a player means producing input
 at 60 Hz, and an agent turn takes seconds; a tool that "moves you forward" would
-be a bot controller wearing a tool's clothes, and bot AI is its own slice with
-its own design. What is here instead is everything an agent needs to *set up* and
+be a bot controller wearing a tool's clothes. Bots are a real feature (`bots.py`)
+and the agent can *field* them — `add_bot` puts three hard ones on the other team
+— but the thing producing their input is a tick-rate brain on the server, not a
+tool call. What is here instead is everything an agent needs to *set up* and
 *talk about* a match — including reading the world around a player, which makes
 it a useful spotter for someone actually playing.
 
@@ -22,7 +24,7 @@ import logging
 import math
 from typing import Any
 
-from backend.modules.hassault import assets, fabric
+from backend.modules.hassault import assets, bots, fabric, weapons
 from backend.modules.hassault.channel import invite_friend
 from backend.modules.hassault.match import MAX_PLAYERS, match_server
 from backend.modules.hassault.physics import PLAYER_RADIUS
@@ -122,6 +124,7 @@ async def match_status(args: dict[str, Any]) -> dict[str, Any]:
     return {
         "room": room.id,
         "map": room.map_name,
+        "scores": {"CLA": room.scores[0], "RVSF": room.scores[1]},
         "players": [
             {
                 "name": p.name,
@@ -131,14 +134,86 @@ async def match_status(args: dict[str, Any]) -> dict[str, Any]:
                     "y": round(p.state.y, 1),
                     "z": round(p.state.z, 1),
                 },
+                "health": round(p.health) if p.alive else 0,
+                "alive": p.alive,
+                "weapon": weapons.weapon_at(p.weapon).name,
+                "kills": p.kills,
+                "deaths": p.deaths,
+                "bot": p.is_bot,
                 "rtt_ms": round(p.rtt_ms),
-                "lagging": (now - p.last_command_at) > 2.0,
+                "lagging": (not p.is_bot) and (now - p.last_command_at) > 2.0,
                 "remote": isinstance(p.conn, fabric.PeerPlayerConn),
             }
             for p in room.players.values()
         ],
         "capacity": MAX_PLAYERS,
     }
+
+
+def _room_for(args: dict[str, Any]):
+    """The room a tool means: the one named, or the only one running.
+
+    Returned as `(room, error)` because every caller has to say something useful
+    when there are two matches and no room id — "which one?" is the answer, not a
+    guess.
+    """
+    room_id = str(args.get("room") or "").strip()
+    rooms = list(match_server.rooms.values())
+    if room_id:
+        room = match_server.get(room_id)
+        return (room, None) if room else (None, {"error": f"no match {room_id!r}"})
+    if len(rooms) == 1:
+        return rooms[0], None
+    if not rooms:
+        return None, {"error": "no matches are running on this node — host one first"}
+    return None, {"error": "several matches are running; say which room"}
+
+
+async def add_bot(args: dict[str, Any]) -> dict[str, Any]:
+    """Put bot players into a match."""
+    room, error = _room_for(args)
+    if room is None:
+        return error or {"error": "no match"}
+    count = args.get("count")
+    count = int(count) if isinstance(count, (int, float)) else 1
+    skill = str(args.get("skill") or bots.DEFAULT_SKILL).lower()
+    if skill not in bots.SKILLS:
+        return {"error": f"skill must be one of {', '.join(bots.SKILLS)}"}
+    team = args.get("team")
+    if isinstance(team, str):
+        team = {"cla": 0, "rvsf": 1}.get(team.strip().lower())
+    added = bots.add_bots(room, max(1, min(count, MAX_PLAYERS)), skill, team)
+    if not added:
+        return {"error": "that match is full"}
+    return {
+        "ok": True,
+        "room": room.id,
+        "added": [
+            {"name": b.name, "team": "CLA" if b.team == 0 else "RVSF"} for b in added
+        ],
+        "skill": skill,
+        "players": len(room.players),
+    }
+
+
+async def remove_bot(args: dict[str, Any]) -> dict[str, Any]:
+    """Take bots back out of a match."""
+    room, error = _room_for(args)
+    if room is None:
+        return error or {"error": "no match"}
+    name = str(args.get("name") or "").strip().lower()
+    if name:
+        match = next(
+            (p for p in room.players.values() if p.is_bot and name in p.name.lower()),
+            None,
+        )
+        if match is None:
+            return {"error": f"no bot matching {name!r} in that match"}
+        room.remove(match.id)
+        return {"ok": True, "removed": 1, "name": match.name}
+    count = args.get("count")
+    removed = room.remove_bots(int(count) if isinstance(count, (int, float)) else None)
+    return {"ok": True, "room": room.id, "removed": removed}
 
 
 async def describe_surroundings(args: dict[str, Any]) -> dict[str, Any]:
@@ -199,18 +274,31 @@ async def describe_surroundings(args: dict[str, Any]) -> dict[str, Any]:
         {
             "name": other.name,
             "team": "CLA" if other.team == 0 else "RVSF",
+            "enemy": other.team != player.team,
+            "alive": other.alive,
+            "health": round(other.health) if other.alive else 0,
             "distance": round(math.hypot(other.state.x - px, other.state.y - py), 1),
             "bearing": _bearing(px, py, other.state.x, other.state.y),
+            # Whether the shot exists, from the *server's* world — the same ray a
+            # trigger pull would trace. This is what makes the tool a spotter
+            # rather than a minimap: "behind the wall" is the useful half.
+            "line_of_sight": _has_los(room, player, other),
         }
         for other in room.players.values()
         if other.id != player.id
     ]
     others.sort(key=lambda o: o["distance"])
+    weapon = weapons.weapon_at(player.weapon)
 
     return {
         "player": player.name,
         "map": room.map_name,
         "position": {"x": round(px, 1), "y": round(py, 1), "z": round(pz, 1)},
+        "health": round(player.health) if player.alive else 0,
+        "alive": player.alive,
+        "weapon": weapon.name,
+        "ammo": player.ammo.get(player.weapon, 0),
+        "reserve": player.reserve.get(player.weapon, 0),
         "facing": _bearing(
             0, 0, math.cos(player.state.yaw), math.sin(player.state.yaw)
         ),
@@ -221,6 +309,24 @@ async def describe_surroundings(args: dict[str, Any]) -> dict[str, Any]:
         "body_width": round(PLAYER_RADIUS * 2, 1),
         "others": others,
     }
+
+
+def _has_los(room, watcher, other) -> bool:
+    """Whether `watcher` could actually shoot `other` right now.
+
+    Eye to eye through the same `raycast_world` a shot uses, so the answer cannot
+    disagree with what would happen if the trigger were pulled.
+    """
+    eye = weapons.eye_position(watcher.state.x, watcher.state.y, watcher.state.z)
+    target = weapons.eye_position(other.state.x, other.state.y, other.state.z)
+    vx, vy, vz = target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]
+    length = math.sqrt(vx * vx + vy * vy + vz * vz)
+    if length < 1e-6:
+        return True
+    reach = weapons.raycast_world(
+        room.world, eye, (vx / length, vy / length, vz / length), length
+    )
+    return reach >= length - 0.5
 
 
 def _bearing(x0: float, y0: float, x1: float, y1: float) -> str:
@@ -298,6 +404,49 @@ def register_hassault_tools() -> None:
         handler=match_status,
         group="hassault",
         parameters={"room": {"type": "string", "description": "Match room id."}},
+    )
+    registry.agent_tools["hassault.add_bot"] = AgentTool(
+        name="hassault.add_bot",
+        description=(
+            "Add bot players to a HorribleAssault match. Skill is easy, normal "
+            "or hard. Team defaults to balancing the sides; name a team to stack "
+            "them all as opponents."
+        ),
+        handler=add_bot,
+        group="hassault",
+        parameters={
+            "room": {"type": "string", "description": "Match room id."},
+            "count": {"type": "integer", "description": "How many bots (default 1)."},
+            "skill": {
+                "type": "string",
+                "enum": list(bots.SKILLS),
+                "description": "Difficulty; defaults to normal.",
+            },
+            "team": {
+                "type": "string",
+                "enum": ["CLA", "RVSF"],
+                "description": "Force a team instead of balancing.",
+            },
+        },
+        side_effect=True,
+    )
+    registry.agent_tools["hassault.remove_bot"] = AgentTool(
+        name="hassault.remove_bot",
+        description=(
+            "Remove bots from a match — one by name, a number of them, or all of "
+            "them when neither is given."
+        ),
+        handler=remove_bot,
+        group="hassault",
+        parameters={
+            "room": {"type": "string", "description": "Match room id."},
+            "name": {"type": "string", "description": "A particular bot's name."},
+            "count": {
+                "type": "integer",
+                "description": "How many to remove, newest first. Omit for all.",
+            },
+        },
+        side_effect=True,
     )
     registry.agent_tools["hassault.surroundings"] = AgentTool(
         name="hassault.surroundings",

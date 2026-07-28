@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Response
 
-from backend.modules.hassault import assets, fabric
+from backend.modules.hassault import assets, fabric, weapons
 from backend.modules.hassault.cgz import PLANE_ORDER, CgzError
 from backend.modules.hassault.match import MAX_PLAYERS, match_server
 from backend.modules.hassault.models import (
@@ -23,6 +23,7 @@ from backend.modules.hassault.models import (
     MapSummary,
     MatchInvite,
     MatchSummary,
+    WeaponOut,
 )
 
 router = APIRouter(prefix="/hassault", tags=["hassault"])
@@ -143,6 +144,17 @@ async def post_match(body: CreateMatchRequest) -> MatchSummary:
         maxPlayers=MAX_PLAYERS,
         createdAt=room.created_at,
     )
+
+
+@router.get("/weapons", response_model=list[WeaponOut])
+async def get_weapons() -> list[WeaponOut]:
+    """The loadout, in slot order.
+
+    Served rather than hardcoded in the browser for the same reason `plane_order`
+    is: two copies of a number that has to match is a bug waiting for someone to
+    tune the rifle.
+    """
+    return [WeaponOut(**w.to_dict()) for w in weapons.WEAPONS]
 
 
 @router.get("/invitees", response_model=list[Invitee])

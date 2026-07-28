@@ -171,18 +171,40 @@ export function step(world: World, player: PlayerState, input: MoveInput, dt: nu
 }
 
 /**
- * Drop the player onto a spawn point.
+ * Place a player on a spawn point, standing on the ground beneath it.
  *
- * Spawn `z` is cube-aligned and often sits slightly inside the floor, so the
- * ground is resolved from the world rather than trusted from the entity.
+ * **A `playerstart`'s `z` is not the ground.** It is the mapper's own origin at
+ * the moment they typed `/newent playerstart`, and in Cube 1 that origin is the
+ * *eye*, not the feet — which is why the single most common value across the
+ * 1741 official spawns is exactly four above the floor the body rests on
+ * (`(int)(floor + 4.5)`, truncated into the `short` the format stores). Nor is it
+ * reliable even read that way: AC's editor flies, so the rest are scattered from
+ * one to twenty-two cubes up with no relation to anything. The engine gets away
+ * with it because `entinmap` and gravity resolve the spawn on arrival.
+ *
+ * So the height comes from the world instead. `support` is the same query `step`
+ * resolves against, which makes this its fixed point: a player spawned here is
+ * already exactly where their first frame would put them, rather than falling
+ * several cubes into it.
+ *
+ * Mirrored by `spawn_at` in `backend/modules/hassault/physics.py` and pinned
+ * against it by `physics-vectors.json`.
  */
 export function spawnAt(
   world: World,
   spawn: { x: number; y: number; z: number; yaw: number | null },
 ): PlayerState {
-  const floor = world.floorAt(Math.floor(spawn.x), Math.floor(spawn.y));
-  const z = Math.max(floor, spawn.z);
+  const x = spawn.x + 0.5;
+  const y = spawn.y + 0.5;
+  const { floor, enclosed } = support(world, x, y);
+  // Every cell under the body solid — which no official map manages, but a
+  // community one might. The centre cell's floor is the best guess left.
+  const z = enclosed ? world.floorAt(Math.floor(spawn.x), Math.floor(spawn.y)) : floor;
   // Entity yaw is degrees clockwise from north; the camera uses radians about +x.
   const yaw = ((spawn.yaw ?? 0) * Math.PI) / 180;
-  return createPlayer(spawn.x + 0.5, spawn.y + 0.5, z, yaw);
+  const player = createPlayer(x, y, z, yaw);
+  // Resting on the floor, so say so: otherwise the very first frame refuses a
+  // jump that the player is standing in a perfectly good position to make.
+  player.onGround = true;
+  return player;
 }

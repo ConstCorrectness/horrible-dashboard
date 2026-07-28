@@ -54,6 +54,26 @@ export interface Command {
   yaw: number;
   pitch: number;
   dt: number;
+  fire?: boolean;
+  reload?: boolean;
+  /** Slot to switch to, or `-1` for no change. */
+  weapon?: number;
+  /**
+   * Server-clock ms this frame was *rendering* — `SnapshotBuffer.renderTime`.
+   *
+   * The server rewinds a shot to this instant, so it is what makes hitting a
+   * moving target possible without leading them by a body width. It is clamped
+   * server-side; see `backend/modules/hassault/weapons.py`.
+   */
+  viewT?: number;
+}
+
+/** The combat half of a command, decided by `ShotController` rather than by keys. */
+export interface ShotIntent {
+  fire: boolean;
+  reload: boolean;
+  weapon: number;
+  viewT: number;
 }
 
 export interface PlayerRow {
@@ -68,7 +88,61 @@ export interface PlayerRow {
   ground: boolean;
   stale: boolean;
   rtt: number;
+  /** Public: a wounded enemy is what makes a firefight a decision. */
+  hp: number;
+  alive: boolean;
+  weapon: number;
+  kills: number;
+  deaths: number;
+  bot: boolean;
 }
+
+/** The half of our own state nobody else is sent. */
+export interface SelfState {
+  hp: number;
+  alive: boolean;
+  weapon: number;
+  ammo: number;
+  /** `-1` is unlimited. */
+  reserve: number;
+  reloading: boolean;
+  reloadIn: number;
+  respawnIn: number;
+  protected: boolean;
+  kills: number;
+  deaths: number;
+  mag: number;
+  /** Hitmarkers since the last snapshot. Drained server-side, so each is sent once. */
+  hits: { victim: string; damage: number; head: boolean; killed: boolean }[];
+}
+
+/** A shot somebody took, batched into the snapshot rather than sent as it happened. */
+export interface ShotFx {
+  kind: 'shot';
+  id: string;
+  weapon: number;
+  origin: [number, number, number];
+  /** One endpoint per pellet — a wall, a body, or the end of its range. */
+  ends: [number, number, number][];
+  hit: boolean;
+}
+
+export interface KillFx {
+  kind: 'kill';
+  victim: string;
+  victimName: string;
+  killer: string;
+  killerName: string;
+  weapon: string;
+  head: boolean;
+}
+
+export interface SpawnFx {
+  kind: 'spawn';
+  id: string;
+}
+
+export type Fx = ShotFx | KillFx | SpawnFx;
 
 export interface Snapshot {
   room: string;
@@ -77,6 +151,9 @@ export interface Snapshot {
   t: number;
   ack: number;
   players: PlayerRow[];
+  you?: SelfState;
+  scores?: number[];
+  fx?: Fx[];
 }
 
 /** A three-component offset, in cube units. */
@@ -117,7 +194,13 @@ export class Predictor {
    * Predict `input` locally and record it for replay. Returns the command so the
    * caller can queue it for the next send.
    */
-  record(world: World, player: PlayerState, input: MoveInput, dt: number): Command {
+  record(
+    world: World,
+    player: PlayerState,
+    input: MoveInput,
+    dt: number,
+    shot?: ShotIntent,
+  ): Command {
     this.seq += 1;
     // The server clamps dt the same way; recording the unclamped value would
     // make the client replay a step the server never simulated.
@@ -131,6 +214,18 @@ export class Predictor {
       pitch: player.pitch,
       dt: clamped,
     };
+    // Only when there is something to say. Combat fields ride on movement
+    // commands so a shot carries the exact angles of the frame it happened on,
+    // but most frames are not shots and an empty field is bytes on the wire
+    // sixty times a second.
+    if (shot && (shot.fire || shot.reload || shot.weapon >= 0)) {
+      if (shot.fire) {
+        command.fire = true;
+        command.viewT = shot.viewT;
+      }
+      if (shot.reload) command.reload = true;
+      if (shot.weapon >= 0) command.weapon = shot.weapon;
+    }
     this.pending.push(command);
     step(world, player, input, clamped);
     return command;

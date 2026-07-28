@@ -2472,5 +2472,136 @@
         "onGround": true
       }
     }
+  ],
+  "spawns": [
+    {
+      "name": "a spawn floating above flat ground stands on the ground",
+      "world": "room",
+      "entity": {
+        "x": 8,
+        "y": 8,
+        "z": 12
+      },
+      "expect": {
+        "x": 8.5,
+        "y": 8.5,
+        "z": 0.0,
+        "yaw": 0.0,
+        "onGround": true
+      }
+    },
+    {
+      "name": "a spawn buried below the floor is lifted onto it",
+      "world": "room",
+      "entity": {
+        "x": 8,
+        "y": 8,
+        "z": -3
+      },
+      "expect": {
+        "x": 8.5,
+        "y": 8.5,
+        "z": 0.0,
+        "yaw": 0.0,
+        "onGround": true
+      }
+    },
+    {
+      "name": "entity z does not change the height at all",
+      "world": "room",
+      "entity": {
+        "x": 8,
+        "y": 8,
+        "z": 99
+      },
+      "expect": {
+        "x": 8.5,
+        "y": 8.5,
+        "z": 0.0,
+        "yaw": 0.0,
+        "onGround": true
+      }
+    },
+    {
+      "name": "a spawn over the raised half stands on the raised half",
+      "world": "steps",
+      "entity": {
+        "x": 9,
+        "y": 8,
+        "z": 20
+      },
+      "expect": {
+        "x": 9.5,
+        "y": 8.5,
+        "z": 1.0,
+        "yaw": 0.0,
+        "onGround": true
+      }
+    },
+    {
+      "name": "a spawn over the four-unit ledge stands on the ledge",
+      "world": "steps",
+      "entity": {
+        "x": 12,
+        "y": 8,
+        "z": 2
+      },
+      "expect": {
+        "x": 12.5,
+        "y": 8.5,
+        "z": 4.0,
+        "yaw": 0.0,
+        "onGround": true
+      }
+    },
+    {
+      "name": "a body straddling a step is placed on the higher floor",
+      "world": "steps",
+      "entity": {
+        "x": 7,
+        "y": 8,
+        "z": 6
+      },
+      "expect": {
+        "x": 7.5,
+        "y": 8.5,
+        "z": 1.0,
+        "yaw": 0.0,
+        "onGround": true
+      }
+    },
+    {
+      "name": "a spawn on a heightfield takes the corner-averaged floor",
+      "world": "slope",
+      "entity": {
+        "x": 6,
+        "y": 8,
+        "z": 30
+      },
+      "expect": {
+        "x": 6.5,
+        "y": 8.5,
+        "z": 6.75,
+        "yaw": 0.0,
+        "onGround": true
+      }
+    },
+    {
+      "name": "entity yaw is degrees clockwise, converted to radians",
+      "world": "room",
+      "entity": {
+        "x": 8,
+        "y": 8,
+        "z": 4,
+        "yaw": 90.0
+      },
+      "expect": {
+        "x": 8.5,
+        "y": 8.5,
+        "z": 0.0,
+        "yaw": 1.5707963267948966,
+        "onGround": true
+      }
+    }
   ]
 }

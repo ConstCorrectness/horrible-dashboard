@@ -36,6 +36,7 @@ from backend.modules.hassault.physics import (
     World,
     can_stand,
     flat_world,
+    spawn_at,
     step,
 )
 
@@ -78,6 +79,20 @@ def build_world(spec: dict) -> World:
         ceil=bytes(ceil),
         vdelta=bytes(vdelta),
     )
+
+
+class _Spawn:
+    """The four fields `spawn_at` reads off a `playerstart` entity.
+
+    Mirrored by the literal the vitest file passes, and by `Spawn` in
+    `scripts/gen_hassault_vectors.py`.
+    """
+
+    def __init__(self, x: float, y: float, z: float, yaw: float | None = 0.0) -> None:
+        self.x = x
+        self.y = y
+        self.z = z
+        self.yaw = yaw
 
 
 def _load_vectors() -> dict:
@@ -312,3 +327,107 @@ def test_conformance_vector(index: int):
     assert player.z == pytest.approx(expect["z"], abs=tol), case["name"]
     assert player.vel_z == pytest.approx(expect["velZ"], abs=tol), case["name"]
     assert player.on_ground == expect["onGround"], case["name"]
+
+
+@pytest.mark.parametrize("index", range(len(_load_vectors()["spawns"])))
+def test_conformance_spawn(index: int):
+    """Spawn placement, replayed by the vitest file too.
+
+    It lives in the fixture for the same reason `step` does: it is one rule with
+    two implementations, and a disagreement about where a player starts is a
+    desync from the very first frame.
+    """
+    data = _load_vectors()
+    case = data["spawns"][index]
+    world = build_world(data["worlds"][case["world"]])
+    entity = case["entity"]
+    placed = spawn_at(
+        world, _Spawn(entity["x"], entity["y"], entity["z"], entity.get("yaw", 0.0))
+    )
+    expect = case["expect"]
+    tol = data["tolerance"]
+    assert placed.x == pytest.approx(expect["x"], abs=tol), case["name"]
+    assert placed.y == pytest.approx(expect["y"], abs=tol), case["name"]
+    assert placed.z == pytest.approx(expect["z"], abs=tol), case["name"]
+    assert placed.yaw == pytest.approx(expect["yaw"], abs=tol), case["name"]
+    assert placed.on_ground == expect["onGround"], case["name"]
+
+
+# ---------------------------------------------------------------------------
+# Where a spawn entity actually puts you
+# ---------------------------------------------------------------------------
+
+
+def test_the_feet_land_on_the_ground_however_high_the_entity_sits():
+    """A `playerstart`'s `z` is the mapper's *eye* at placement time, and AC's
+    editor flies — so it is not a ground height and cannot be used as one. Read
+    as a lower bound (`max(floor, z)`) it put all 1741 official spawns in
+    mid-air, because it is above the floor at all but six of them."""
+    world = flat_world(32, floor=3, ceil=24)
+    for entity_z in (-20, 0, 3, 7, 40):
+        placed = spawn_at(world, _Spawn(12, 12, entity_z))
+        assert placed.z == pytest.approx(3.0), f"entity z {entity_z}"
+
+
+def test_a_spawn_is_the_fixed_point_of_the_first_simulated_step():
+    """The whole point of resolving against `_support`: simulating a spawned
+    player must not move them. A drop on every spawn and respawn is what the old
+    behaviour looked like from inside the game."""
+    world = flat_world(32, floor=5, ceil=24)
+    placed = spawn_at(world, _Spawn(12, 12, 17))
+    before = (placed.x, placed.y, placed.z)
+    step(world, placed, MoveInput(), 1 / 60)
+    assert (placed.x, placed.y, placed.z) == pytest.approx(before)
+    assert placed.on_ground is True
+
+
+def test_a_spawn_puts_the_eye_under_the_ceiling():
+    """The old placement could leave the eye *above* the cell ceiling — on
+    ac_desert, feet at 12 with a ceiling of 16 puts the eye at 16.5 — which makes
+    `raycast_world` report an immediate block for anything fired on that frame."""
+    world = flat_world(32, floor=0, ceil=16)
+    placed = spawn_at(world, _Spawn(12, 12, 12))
+    assert placed.z + PLAYER_EYE_HEIGHT < world.ceil_at(12, 12)
+
+
+def test_a_spawn_stands_on_the_highest_floor_under_the_body():
+    """The body is 2.2 cubes wide, so it can straddle a step. `_support` takes
+    the highest floor beneath it — the same rule `step` resolves against, which
+    is what stops the two disagreeing."""
+    n = 32 * 32
+    types = bytearray([SPACE]) * n
+    floor = bytearray(n)
+    for y in range(32):
+        for x in range(16, 32):
+            floor[y * 32 + x] = 2
+    world = World(
+        ssize=32,
+        type=bytes(types),
+        floor=bytes(floor),
+        ceil=bytes([24]) * n,
+        vdelta=bytes(n),
+    )
+    # Centre at 15.5 with radius 1.1 reaches cell 16, which is two units up.
+    assert spawn_at(world, _Spawn(15, 8, 40)).z == pytest.approx(2.0)
+
+
+def test_spawn_yaw_is_converted_from_degrees():
+    world = flat_world(32)
+    assert spawn_at(world, _Spawn(12, 12, 0, yaw=90.0)).yaw == pytest.approx(
+        math.pi / 2
+    )
+    assert spawn_at(world, _Spawn(12, 12, 0, yaw=None)).yaw == pytest.approx(0.0)
+
+
+def test_a_spawn_sealed_in_solid_geometry_still_places_the_player():
+    """No official map manages it, but a community one might, and refusing to
+    place anyone would turn an odd map into an unjoinable one."""
+    n = 16 * 16
+    world = World(
+        ssize=16,
+        type=bytes([SOLID]) * n,
+        floor=bytes([7]) * n,
+        ceil=bytes([16]) * n,
+        vdelta=bytes(n),
+    )
+    assert spawn_at(world, _Spawn(8, 8, 30)).z == pytest.approx(7.0)

@@ -21,9 +21,15 @@ import time
 import uuid
 from typing import Any
 
-from backend.modules.hassault import fabric
+from backend.modules.hassault import bots, fabric
 from backend.modules.hassault.cgz import CgzError
-from backend.modules.hassault.match import CHANNEL, Command, match_server
+from backend.modules.hassault.match import (
+    CHANNEL,
+    MAX_PLAYERS,
+    Command,
+    match_server,
+)
+from backend.modules.hassault.weapons import WEAPONS
 from backend.modules.ws import WsConnection
 
 logger = logging.getLogger(__name__)
@@ -58,6 +64,8 @@ def _parse_command(raw: Any) -> Command | None:
     seq = raw.get("seq")
     if not isinstance(seq, int) or seq <= 0:
         return None
+    weapon = raw.get("weapon")
+    view_t = raw.get("viewT")
     return Command(
         seq=seq,
         # Clamped rather than trusted: the analogue axes are the obvious place to
@@ -68,6 +76,20 @@ def _parse_command(raw: Any) -> Command | None:
         yaw=_num(raw.get("yaw")),
         pitch=_clamp(_num(raw.get("pitch")), -1.5708, 1.5708),
         dt=_clamp(_num(raw.get("dt")), 0.0, 0.25),
+        fire=bool(raw.get("fire")),
+        reload=bool(raw.get("reload")),
+        # `-1` means "no change", so an absent or nonsensical slot leaves the
+        # weapon alone rather than silently arming the knife.
+        weapon=(
+            int(_clamp(_num(weapon, -1.0), -1.0, float(len(WEAPONS) - 1)))
+            if isinstance(weapon, (int, float))
+            else -1
+        ),
+        # Left as `None` when absent: the shot is then judged live, which is the
+        # right answer for a client that did not say what it was looking at.
+        # Range-checking is `PositionHistory.clamp`'s job — it is the only place
+        # that knows the current time, and it is the security boundary.
+        view_t=_num(view_t) if isinstance(view_t, (int, float)) else None,
     )
 
 
@@ -153,6 +175,40 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
         if entry is not None:
             room, player = entry
             room.respawn(player)
+
+    elif event in ("add_bot", "remove_bot"):
+        # Host-only, deliberately. A guest's socket is bound to a `RemoteMatch`,
+        # not to a local room, and there is no fabric message for "change the
+        # roster of someone else's match" — adding one would mean a friend could
+        # reshape a match you are hosting from a pane you cannot see.
+        if fabric.remote_for(conn) is not None:
+            await conn.send_json(
+                _evt("error", {"message": "only the host can add or remove bots"})
+            )
+            return
+        entry = match_server.player_for(conn)
+        if entry is None:
+            return
+        room, _ = entry
+        if event == "add_bot":
+            count = int(_clamp(_num(data.get("count"), 1.0), 1.0, float(MAX_PLAYERS)))
+            skill = str(data.get("skill") or bots.DEFAULT_SKILL)
+            added = bots.add_bots(room, count, skill)
+            await match_server.broadcast_event(
+                room, "roster", {"room": room.id, "added": [b.name for b in added]}
+            )
+        else:
+            who = str(data.get("id") or "")
+            if who and who in room.players and room.players[who].is_bot:
+                room.remove(who)
+                removed = 1
+            else:
+                removed = room.remove_bots(
+                    int(_clamp(_num(data.get("count"), 1.0), 1.0, float(MAX_PLAYERS)))
+                )
+            await match_server.broadcast_event(
+                room, "roster", {"room": room.id, "removed": removed}
+            )
 
     elif event == "invite":
         # Invite a friend to a match hosted here. `who` is a person — a name or

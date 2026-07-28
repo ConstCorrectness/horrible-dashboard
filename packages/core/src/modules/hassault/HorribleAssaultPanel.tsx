@@ -7,12 +7,16 @@ import {
   getMapInfo,
   listInvitees,
   listMaps,
+  listWeapons,
   type InstallStatus,
   type Invitee,
   type MapInfo,
   type MapSummary,
+  type WeaponSpec,
 } from './api';
 import { AvatarPool } from './avatars';
+import { ShotController } from './combat';
+import { EffectsPool } from './effects';
 import { buildWorldMesh } from './geometry';
 import type { PlayerRow } from './net';
 import { createPlayer, eyeHeight, spawnAt, step, type PlayerState } from './player';
@@ -31,7 +35,7 @@ interface Hud {
 }
 
 /** Keys we consume, so the pane never swallows the app's own shortcuts. */
-const MOVEMENT_KEYS = new Set([
+const CONSUMED_KEYS = new Set([
   'KeyW',
   'KeyA',
   'KeyS',
@@ -39,6 +43,13 @@ const MOVEMENT_KEYS = new Set([
   'Space',
   'ShiftLeft',
   'KeyV',
+  'KeyR',
+  'Digit1',
+  'Digit2',
+  'Digit3',
+  'Digit4',
+  'Digit5',
+  'Tab',
   'ArrowUp',
   'ArrowDown',
   'ArrowLeft',
@@ -47,6 +58,25 @@ const MOVEMENT_KEYS = new Set([
 
 const NAME_KEY = 'hassault.playerName';
 const NO_CORRECTION = { x: 0, y: 0, z: 0 };
+/** How long a hitmarker and a damage flash stay on screen. */
+const FLASH_MS = 220;
+/** Team tint used for tracers and the scoreboard: CLA sand, RVSF blue. */
+const TEAM_COLORS = [0xd9a441, 0x4c8fd4];
+
+const EMPTY_SESSION: SessionState = {
+  status: 'idle',
+  room: '',
+  map: '',
+  playerId: '',
+  peers: [],
+  error: '',
+  rtt: 0,
+  you: null,
+  scores: [0, 0],
+  killfeed: [],
+  host: '',
+  invites: [],
+};
 
 interface SceneHandle {
   setMesh: (w: World) => number;
@@ -60,7 +90,7 @@ interface SceneHandle {
 /**
  * HorribleAssault: walk around a real AssaultCube map, rendered in WebGL from the
  * cube grid the backend serves — alone, or in a match against other people on the
- * fabric.
+ * fabric and against bots.
  *
  * three is lazy-loaded on first render, matching `Avatar3D` — it is a large
  * dependency and most sessions never open this pane.
@@ -88,19 +118,14 @@ export function HorribleAssaultPanel() {
     onGround: false,
     error: 0,
   });
-  const [net, setNet] = useState<SessionState>({
-    status: 'idle',
-    room: '',
-    map: '',
-    playerId: '',
-    peers: [],
-    error: '',
-    rtt: 0,
-    host: '',
-    invites: [],
-  });
+  const [net, setNet] = useState<SessionState>(EMPTY_SESSION);
   const [invitees, setInvitees] = useState<Invitee[]>([]);
   const [inviteWho, setInviteWho] = useState('');
+  const [weapons, setWeapons] = useState<WeaponSpec[]>([]);
+  const [botSkill, setBotSkill] = useState('normal');
+  const [showScores, setShowScores] = useState(false);
+  /** Timestamps, compared against `Date.now()` so a stale one simply expires. */
+  const [flash, setFlash] = useState({ hit: 0, killed: 0, hurt: 0 });
 
   // Mutable simulation state, kept out of React: this updates every frame and
   // re-rendering the component 60 times a second would be absurd.
@@ -110,7 +135,9 @@ export function HorribleAssaultPanel() {
   const noclipRef = useRef(false);
   const sceneRef = useRef<SceneHandle | null>(null);
   const sessionRef = useRef<MatchSession | null>(null);
+  const shotsRef = useRef<ShotController | null>(null);
   if (sessionRef.current === null) sessionRef.current = new MatchSession();
+  if (shotsRef.current === null) shotsRef.current = new ShotController();
 
   useEffect(() => {
     const session = sessionRef.current;
@@ -121,6 +148,25 @@ export function HorribleAssaultPanel() {
     session.refreshInvites();
     return () => {
       session.disconnect();
+    };
+  }, []);
+
+  // The loadout, fetched rather than hardcoded: the client needs each weapon's
+  // fire interval so it does not send input the server would only discard, and a
+  // second copy of those numbers here is a drift trap.
+  useEffect(() => {
+    let cancelled = false;
+    void listWeapons()
+      .then((specs) => {
+        if (cancelled) return;
+        setWeapons(specs);
+        shotsRef.current?.setWeapons(specs, Math.min(2, specs.length - 1));
+      })
+      .catch(() => {
+        /* no loadout means no shooting; movement and the map still work */
+      });
+    return () => {
+      cancelled = true;
     };
   }, []);
 
@@ -145,6 +191,39 @@ export function HorribleAssaultPanel() {
       window.clearInterval(timer);
     };
   }, []);
+
+  // Hit feedback. Driven off the authoritative `you`, not off pulling the
+  // trigger: a hitmarker that appears because you fired is a lie.
+  const lastHpRef = useRef(100);
+  const [, forceTick] = useState(0);
+  useEffect(() => {
+    const you = net.you;
+    if (!you) return;
+    const hit = you.hits.length > 0;
+    const killed = you.hits.some((h) => h.killed);
+    const hurt = you.hp < lastHpRef.current;
+    lastHpRef.current = you.hp;
+    // Only on an actual event: this effect runs on every emitted snapshot, and
+    // setting state unconditionally would re-render the pane for nothing.
+    if (!hit && !killed && !hurt) return;
+    const at = Date.now();
+    setFlash((f) => ({
+      hit: hit ? at : f.hit,
+      killed: killed ? at : f.killed,
+      hurt: hurt ? at : f.hurt,
+    }));
+  }, [net.you]);
+
+  // Flashes expire by wall clock, so something has to re-render when they do —
+  // otherwise the crosshair keeps its hitmarker until the next snapshot that
+  // happens to change something else.
+  useEffect(() => {
+    const newest = Math.max(flash.hit, flash.killed, flash.hurt);
+    const remaining = newest + FLASH_MS * 2 + 20 - Date.now();
+    if (newest === 0 || remaining <= 0) return;
+    const timer = window.setTimeout(() => forceTick((n) => n + 1), remaining);
+    return () => window.clearTimeout(timer);
+  }, [flash]);
 
   // ---- discover the install and its maps ------------------------------------------
 
@@ -207,6 +286,7 @@ export function HorribleAssaultPanel() {
       let mesh: import('three').Mesh | null = null;
       const material = new THREE.MeshLambertMaterial({ vertexColors: true });
       const avatars = new AvatarPool(THREE, scene);
+      const effects = new EffectsPool(THREE, scene);
 
       const setMesh = (world: World): number => {
         if (mesh) {
@@ -252,26 +332,32 @@ export function HorribleAssaultPanel() {
         const world = worldRef.current;
         const player = playerRef.current;
         const session = sessionRef.current;
+        const shots = shotsRef.current;
         const online = session != null && session.state.status === 'joined';
+        const alive = !online || (session?.state.you?.alive ?? true);
 
         if (world) {
           const keys = keysRef.current;
-          const forward =
-            (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) -
-            (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
-          const strafe =
-            (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) -
-            (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0);
+          // A dead player's input is discarded server-side, so predicting
+          // movement from it would only be a correction waiting to happen.
+          const forward = alive
+            ? (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) -
+              (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0)
+            : 0;
+          const strafe = alive
+            ? (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) -
+              (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0)
+            : 0;
           const input = {
             forward,
             strafe,
-            jump: keys.has('Space'),
+            jump: alive && keys.has('Space'),
             // Noclip is a local sightseeing tool. The server has no such move, so
             // in a match it would desync on the very first frame.
             noclip: !online && noclipRef.current,
           };
 
-          if (online && session) {
+          if (online && session && shots) {
             // Correct against the newest snapshot *before* predicting this
             // frame, so the frame we are about to draw is built on the
             // authoritative state rather than on top of a stale error.
@@ -280,9 +366,23 @@ export function HorribleAssaultPanel() {
               session.predictor.reconcile(world, player, correction.row, correction.ack);
               session.pendingCorrection = null;
             }
-            session.queue(session.predictor.record(world, player, input, dt));
+            // Recoil is a local move on the camera, exactly like the mouse: the
+            // server reads whatever angles the resulting command carries.
+            const kick = shots.recoil(dt);
+            player.yaw += kick.yaw;
+            player.pitch = clampPitch(player.pitch + kick.pitch);
+            // The instant we are *rendering*, which is what the server rewinds a
+            // shot to. Not sent until the buffer has an offset to derive it from.
+            const renderT = session.snapshots.renderTime(now);
+            const intent = shots.frame(
+              now,
+              Number.isFinite(renderT) ? renderT : 0,
+              session.state.you,
+            );
+            session.queue(session.predictor.record(world, player, input, dt, intent));
             session.predictor.decay(dt);
           } else {
+            shots?.frame(now, 0, null);
             step(world, player, input, dt);
           }
         }
@@ -291,7 +391,22 @@ export function HorribleAssaultPanel() {
           session.pump(now);
           remote = online ? session.snapshots.sample(now, session.state.playerId) : [];
           avatars.sync(remote);
+          if (session.pendingShots.length > 0) {
+            // Teams come from the roster, not from `remote` — that one excludes
+            // us, and our own tracer needs a colour too.
+            const teamOf = new Map(session.state.peers.map((p) => [p.id, p.team]));
+            for (const fx of session.pendingShots) {
+              effects.shot(
+                fx.origin,
+                fx.ends,
+                TEAM_COLORS[teamOf.get(fx.id) ?? 0] ?? 0xffffff,
+                fx.id === session.state.playerId,
+              );
+            }
+            session.pendingShots = [];
+          }
         }
+        effects.update(dt);
 
         // Cube (x, y, height) → three (x, height, z). The correction offset is
         // visual only: the simulation stays exactly where the server says.
@@ -329,6 +444,7 @@ export function HorribleAssaultPanel() {
         cancelAnimationFrame(raf);
         observer.disconnect();
         avatars.dispose();
+        effects.dispose();
         if (mesh) mesh.geometry.dispose();
         material.dispose();
         renderer.dispose();
@@ -406,42 +522,76 @@ export function HorribleAssaultPanel() {
   useEffect(() => {
     const el = mountRef.current;
     if (!el) return;
+    const isLocked = () => document.pointerLockElement === el.querySelector('canvas');
 
     const onPointerLockChange = () => {
-      const canvas = el.querySelector('canvas');
-      setLocked(document.pointerLockElement === canvas);
+      const held = isLocked();
+      setLocked(held);
+      // Releasing the pointer must release the trigger too, or a weapon left
+      // firing keeps firing into whatever you tabbed away to.
+      if (!held) {
+        shotsRef.current?.release();
+        keysRef.current.clear();
+        setShowScores(false);
+      }
     };
     const onMouseMove = (e: MouseEvent) => {
-      const canvas = el.querySelector('canvas');
-      if (document.pointerLockElement !== canvas) return;
+      if (!isLocked()) return;
       const p = playerRef.current;
       p.yaw -= e.movementX * 0.0022;
-      p.pitch -= e.movementY * 0.0022;
-      // Just under a right angle: exactly ±90° makes the view flip over.
-      const limit = Math.PI / 2 - 0.001;
-      p.pitch = Math.max(-limit, Math.min(limit, p.pitch));
+      p.pitch = clampPitch(p.pitch - e.movementY * 0.0022);
+    };
+    const onMouseDown = (e: MouseEvent) => {
+      if (!isLocked() || e.button !== 0) return;
+      e.preventDefault();
+      shotsRef.current?.press();
+    };
+    const onMouseUp = (e: MouseEvent) => {
+      if (e.button === 0) shotsRef.current?.release();
+    };
+    const onWheel = (e: WheelEvent) => {
+      if (!isLocked()) return;
+      e.preventDefault();
+      shotsRef.current?.cycle(e.deltaY > 0 ? 1 : -1);
     };
     const onKeyDown = (e: KeyboardEvent) => {
-      const canvas = el.querySelector('canvas');
-      if (document.pointerLockElement !== canvas) return;
-      if (!MOVEMENT_KEYS.has(e.code)) return;
+      if (!isLocked()) return;
+      if (!CONSUMED_KEYS.has(e.code)) return;
       // Only swallow keys while the pointer is locked, so the command palette
       // and every other shortcut keep working when it isn't.
       e.preventDefault();
+      if (e.repeat) return;
       if (e.code === 'KeyV') noclipRef.current = !noclipRef.current;
+      if (e.code === 'KeyR') shotsRef.current?.requestReload();
+      if (e.code === 'Tab') setShowScores(true);
+      if (e.code.startsWith('Digit')) {
+        shotsRef.current?.select(Number(e.code.slice(5)) - 1);
+      }
       keysRef.current.add(e.code);
     };
-    const onKeyUp = (e: KeyboardEvent) => keysRef.current.delete(e.code);
-    const onBlur = () => keysRef.current.clear();
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'Tab') setShowScores(false);
+      keysRef.current.delete(e.code);
+    };
+    const onBlur = () => {
+      keysRef.current.clear();
+      shotsRef.current?.release();
+    };
 
     document.addEventListener('pointerlockchange', onPointerLockChange);
     document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('mouseup', onMouseUp);
+    el.addEventListener('wheel', onWheel, { passive: false });
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
     window.addEventListener('blur', onBlur);
     return () => {
       document.removeEventListener('pointerlockchange', onPointerLockChange);
       document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mousedown', onMouseDown);
+      document.removeEventListener('mouseup', onMouseUp);
+      el.removeEventListener('wheel', onWheel);
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
@@ -470,6 +620,7 @@ export function HorribleAssaultPanel() {
       session.leave();
     } else {
       localStorage.setItem(NAME_KEY, playerName);
+      shotsRef.current?.reset();
       session.join(mapName, playerName);
     }
   }, [mapName, playerName]);
@@ -487,12 +638,14 @@ export function HorribleAssaultPanel() {
       // Load their map before joining: the snapshots are positions in *that*
       // world, and rendering them against a different one is nonsense.
       setMapName(map);
+      shotsRef.current?.reset();
       session.join(map, playerName, room, host);
     },
     [playerName],
   );
 
-  // Let the agent see where it is, what map is loaded, and who else is here.
+  // Let the agent see where it is, what map is loaded, who else is here, and how
+  // the fight is going.
   useAgentContext(() => ({
     map: info ? { name: info.name, title: info.title, size: info.ssize } : null,
     position: { x: Math.round(hud.x), y: Math.round(hud.y), z: Math.round(hud.z) },
@@ -504,7 +657,26 @@ export function HorribleAssaultPanel() {
         ? {
             room: net.room,
             rtt: Math.round(net.rtt),
-            players: net.peers.map((p) => ({ name: p.name, team: p.team, stale: p.stale })),
+            scores: { CLA: net.scores[0], RVSF: net.scores[1] },
+            you: net.you
+              ? {
+                  health: net.you.hp,
+                  alive: net.you.alive,
+                  weapon: weapons[net.you.weapon]?.name ?? '',
+                  ammo: net.you.ammo,
+                  kills: net.you.kills,
+                  deaths: net.you.deaths,
+                }
+              : null,
+            players: net.peers.map((p) => ({
+              name: p.name,
+              team: p.team,
+              stale: p.stale,
+              bot: p.bot,
+              kills: p.kills,
+              deaths: p.deaths,
+              alive: p.alive,
+            })),
           }
         : null,
   }));
@@ -526,6 +698,13 @@ export function HorribleAssaultPanel() {
   }
 
   const online = net.status === 'joined';
+  const you = net.you;
+  const weapon = you ? weapons[you.weapon] : undefined;
+  const now = Date.now();
+  const showHit = now - flash.hit < FLASH_MS;
+  const showKilled = now - flash.killed < FLASH_MS * 2;
+  const showHurt = now - flash.hurt < FLASH_MS * 2;
+  const crosshairGap = shotsRef.current?.crosshairSpread() ?? 4;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
@@ -564,6 +743,27 @@ export function HorribleAssaultPanel() {
         <button onClick={toggleMatch} disabled={!info}>
           {online ? 'Leave match' : net.status === 'joining' ? 'Joining…' : 'Join match'}
         </button>
+        {online && !net.host && (
+          <>
+            <select
+              value={botSkill}
+              onChange={(e) => setBotSkill(e.target.value)}
+              aria-label="Bot skill"
+              style={{ width: 82 }}
+            >
+              <option value="easy">easy</option>
+              <option value="normal">normal</option>
+              <option value="hard">hard</option>
+            </select>
+            <button onClick={() => sessionRef.current?.addBots(1, botSkill)}>+ Bot</button>
+            <button
+              onClick={() => sessionRef.current?.removeBots(1)}
+              disabled={!net.peers.some((p) => p.bot)}
+            >
+              − Bot
+            </button>
+          </>
+        )}
         {online && !net.host && invitees.length > 0 && (
           <>
             <select
@@ -587,7 +787,11 @@ export function HorribleAssaultPanel() {
         )}
         {online && (
           <span style={{ color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>
-            {net.room} · {net.peers.length} in · {Math.round(net.rtt)} ms
+            <span style={{ color: '#d9a441' }}>{net.scores[0]}</span>
+            {' · '}
+            <span style={{ color: '#4c8fd4' }}>{net.scores[1]}</span>
+            {' · '}
+            {net.peers.length} in · {Math.round(net.rtt)} ms
             {net.host ? ` · guest on ${net.host.slice(0, 8)}` : ''}
           </span>
         )}
@@ -611,6 +815,19 @@ export function HorribleAssaultPanel() {
 
       <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
         <div ref={mountRef} onClick={onCanvasClick} style={{ position: 'absolute', inset: 0 }} />
+
+        {showHurt && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              pointerEvents: 'none',
+              // A vignette rather than a full wash: it says "you are being shot"
+              // without hiding the person shooting you.
+              boxShadow: 'inset 0 0 120px 30px rgba(220,40,40,0.55)',
+            }}
+          />
+        )}
 
         {net.invites.length > 0 && (
           <div
@@ -653,7 +870,7 @@ export function HorribleAssaultPanel() {
           </div>
         )}
 
-        {online && net.peers.length > 0 && (
+        {online && net.killfeed.length > 0 && (
           <div
             style={{
               position: 'absolute',
@@ -661,21 +878,94 @@ export function HorribleAssaultPanel() {
               top: 8,
               pointerEvents: 'none',
               fontFamily: 'monospace',
-              fontSize: '0.7rem',
-              color: 'rgba(255,255,255,0.8)',
-              background: 'rgba(13,17,23,0.55)',
-              borderRadius: 4,
-              padding: '0.3rem 0.5rem',
-              lineHeight: 1.5,
+              fontSize: '0.72rem',
+              textAlign: 'right',
+              lineHeight: 1.6,
             }}
           >
-            {net.peers.map((p) => (
-              <div key={p.id} style={{ opacity: p.stale ? 0.45 : 1 }}>
-                <span style={{ color: p.team === 1 ? '#7fb2e5' : '#e0b96a' }}>●</span> {p.name}
-                {p.id === net.playerId ? ' (you)' : ''} · {Math.round(p.rtt)} ms
-                {p.stale ? ' · lagging' : ''}
+            {net.killfeed.map((k) => (
+              <div
+                key={k.id}
+                style={{
+                  color: k.mine ? '#f0d48a' : 'rgba(255,255,255,0.75)',
+                  background: 'rgba(13,17,23,0.55)',
+                  borderRadius: 3,
+                  padding: '0 0.35rem',
+                  display: 'inline-block',
+                  marginBottom: 2,
+                }}
+              >
+                {k.text}
               </div>
             ))}
+          </div>
+        )}
+
+        {online && showScores && (
+          <div
+            style={{
+              position: 'absolute',
+              left: '50%',
+              top: '12%',
+              transform: 'translateX(-50%)',
+              minWidth: 340,
+              pointerEvents: 'none',
+              fontFamily: 'monospace',
+              fontSize: '0.75rem',
+              color: 'rgba(255,255,255,0.9)',
+              background: 'rgba(13,17,23,0.85)',
+              border: '1px solid var(--border, #2a2a2a)',
+              borderRadius: 6,
+              padding: '0.5rem 0.7rem',
+            }}
+          >
+            <div style={{ marginBottom: '0.35rem', opacity: 0.7 }}>
+              CLA {net.scores[0]} — {net.scores[1]} RVSF
+            </div>
+            {[...net.peers]
+              .sort((a, b) => b.kills - a.kills || a.deaths - b.deaths)
+              .map((p) => (
+                <div
+                  key={p.id}
+                  style={{
+                    display: 'flex',
+                    gap: '0.5rem',
+                    opacity: p.alive ? 1 : 0.45,
+                  }}
+                >
+                  <span style={{ color: p.team === 1 ? '#7fb2e5' : '#e0b96a' }}>●</span>
+                  <span style={{ flex: 1 }}>
+                    {p.name}
+                    {p.id === net.playerId ? ' (you)' : ''}
+                  </span>
+                  <span style={{ width: 28, textAlign: 'right' }}>{p.kills}</span>
+                  <span style={{ width: 28, textAlign: 'right', opacity: 0.6 }}>{p.deaths}</span>
+                  <span style={{ width: 52, textAlign: 'right', opacity: 0.6 }}>
+                    {p.bot ? 'bot' : `${Math.round(p.rtt)} ms`}
+                  </span>
+                </div>
+              ))}
+          </div>
+        )}
+
+        {online && you && !you.alive && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              pointerEvents: 'none',
+              background: 'rgba(60,10,10,0.35)',
+              color: '#fff',
+            }}
+          >
+            <strong style={{ fontSize: '1.4rem', letterSpacing: '0.08em' }}>DOWN</strong>
+            <span style={{ opacity: 0.8, fontSize: '0.85rem' }}>
+              respawning in {Math.max(0, Math.ceil(you.respawnIn))}s
+            </span>
           </div>
         )}
 
@@ -706,9 +996,13 @@ export function HorribleAssaultPanel() {
                 <span style={{ color: 'var(--text-dim)' }}>
                   WASD move · mouse look · Space jump{online ? '' : ' · V noclip'} · Esc release
                 </span>
-                {online && (
+                {online ? (
                   <span style={{ color: 'var(--text-dim)' }}>
-                    In match {net.room} — noclip is disabled while the server is simulating you.
+                    Fire · 1–5 or wheel weapon · R reload · Tab scores
+                  </span>
+                ) : (
+                  <span style={{ color: 'var(--text-dim)' }}>
+                    Join a match to shoot — then add bots if nobody else is about.
                   </span>
                 )}
               </>
@@ -718,21 +1012,7 @@ export function HorribleAssaultPanel() {
 
         {locked && (
           <>
-            <div
-              style={{
-                position: 'absolute',
-                left: '50%',
-                top: '50%',
-                width: 3,
-                height: 3,
-                marginLeft: -1.5,
-                marginTop: -1.5,
-                borderRadius: '50%',
-                background: '#fff',
-                opacity: 0.75,
-                pointerEvents: 'none',
-              }}
-            />
+            <Crosshair gap={crosshairGap} hit={showHit} killed={showKilled} />
             <div
               style={{
                 position: 'absolute',
@@ -744,14 +1024,106 @@ export function HorribleAssaultPanel() {
                 color: 'rgba(255,255,255,0.7)',
               }}
             >
+              {online && you && (
+                <div
+                  style={{
+                    fontSize: '1.5rem',
+                    lineHeight: 1.1,
+                    color: you.hp > 30 ? '#fff' : '#f85149',
+                  }}
+                >
+                  {you.hp}
+                  <span style={{ fontSize: '0.7rem', opacity: 0.6 }}> hp</span>
+                  {you.protected && (
+                    <span style={{ fontSize: '0.6rem', opacity: 0.7 }}> · spawn shield</span>
+                  )}
+                </div>
+              )}
               x {hud.x.toFixed(1)} y {hud.y.toFixed(1)} z {hud.z.toFixed(1)}
               {hud.onGround ? '' : ' · airborne'}
               {!online && noclipRef.current ? ' · noclip' : ''}
               {online ? ` · ${Math.round(net.rtt)} ms · err ${hud.error.toFixed(2)}` : ''}
             </div>
+
+            {online && you && weapon && (
+              <div
+                style={{
+                  position: 'absolute',
+                  right: 12,
+                  bottom: 8,
+                  pointerEvents: 'none',
+                  fontFamily: 'monospace',
+                  textAlign: 'right',
+                  color: 'rgba(255,255,255,0.85)',
+                }}
+              >
+                <div style={{ fontSize: '0.7rem', opacity: 0.6 }}>{weapon.name}</div>
+                <div style={{ fontSize: '1.5rem', lineHeight: 1.1 }}>
+                  {weapon.mag > 0 ? you.ammo : '∞'}
+                  <span style={{ fontSize: '0.8rem', opacity: 0.55 }}>
+                    {weapon.mag > 0 ? ` / ${you.reserve < 0 ? '∞' : you.reserve}` : ''}
+                  </span>
+                </div>
+                {you.reloading && (
+                  <div style={{ fontSize: '0.7rem', color: '#f0d48a' }}>reloading…</div>
+                )}
+              </div>
+            )}
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Just under a right angle: exactly ±90° makes the view flip over. */
+function clampPitch(pitch: number): number {
+  const limit = Math.PI / 2 - 0.001;
+  return Math.max(-limit, Math.min(limit, pitch));
+}
+
+/**
+ * Four ticks around a centre dot, opening with the weapon's spread.
+ *
+ * The gap is the honest thing to show: it is the cone the server will actually
+ * roll pellets inside, so a shotgun looks like a shotgun without anyone having
+ * to read the numbers.
+ */
+function Crosshair({ gap, hit, killed }: { gap: number; hit: boolean; killed: boolean }) {
+  const color = killed ? '#ff6b6b' : hit ? '#ffd166' : 'rgba(255,255,255,0.8)';
+  const arm = 6;
+  const ticks = [
+    { left: -gap - arm, top: -1, width: arm, height: 2 },
+    { left: gap, top: -1, width: arm, height: 2 },
+    { left: -1, top: -gap - arm, width: 2, height: arm },
+    { left: -1, top: gap, width: 2, height: arm },
+  ];
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        left: '50%',
+        top: '50%',
+        pointerEvents: 'none',
+        // Hitmarkers rotate the ticks into an X, which reads instantly and needs
+        // no second element to fade in and out.
+        transform: hit ? 'rotate(45deg)' : undefined,
+      }}
+    >
+      <div
+        style={{
+          position: 'absolute',
+          left: -1.5,
+          top: -1.5,
+          width: 3,
+          height: 3,
+          borderRadius: '50%',
+          background: color,
+        }}
+      />
+      {ticks.map((t, i) => (
+        <div key={i} style={{ position: 'absolute', background: color, ...t }} />
+      ))}
     </div>
   );
 }

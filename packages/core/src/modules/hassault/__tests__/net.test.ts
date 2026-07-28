@@ -77,6 +77,12 @@ function rowFrom(id: string, p: PlayerState, over: Partial<PlayerRow> = {}): Pla
     ground: p.onGround,
     stale: false,
     rtt: 0,
+    hp: 100,
+    alive: true,
+    weapon: 2,
+    kills: 0,
+    deaths: 0,
+    bot: false,
     ...over,
   };
 }
@@ -285,6 +291,12 @@ describe('SnapshotBuffer', () => {
     ground: true,
     stale: false,
     rtt: 0,
+    hp: 100,
+    alive: true,
+    weapon: 2,
+    kills: 0,
+    deaths: 0,
+    bot: false,
   });
 
   it('interpolates between the two snapshots straddling the render time', () => {

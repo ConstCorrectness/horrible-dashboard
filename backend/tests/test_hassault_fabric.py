@@ -610,6 +610,6 @@ def test_tools_are_registered_under_the_module_prefix():
 
     agent_tools.register_hassault_tools()
     names = [n for n in registry.agent_tools if n.startswith("hassault.")]
-    assert len(names) == 6
+    assert len(names) == 8
     for name in names:
         assert registry.agent_tools[name].group == "hassault"

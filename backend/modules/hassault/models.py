@@ -68,8 +68,37 @@ class MatchSummary(BaseModel):
     id: str
     map: str
     players: int
+    """How many of `players` are bots, so a lobby row can say "1 + 3 bots"
+    rather than advertising a busy match that nobody is in."""
+    bots: int = 0
     maxPlayers: int  # noqa: N815 — the browser reads this verbatim
     createdAt: float  # noqa: N815
+
+
+class WeaponOut(BaseModel):
+    """One weapon's numbers, served rather than duplicated in TypeScript.
+
+    The client needs the fire interval (so it does not send input the server will
+    only discard), the magazine size, and a name to put on the HUD. A second copy
+    of those constants in the frontend is a drift trap for no gain — the same
+    reasoning as `plane_order` on `MapInfo`.
+    """
+
+    id: str
+    name: str
+    damage: float
+    headMultiplier: float  # noqa: N815 — read verbatim by the browser
+    rpm: float
+    """Seconds between shots. Derived from `rpm` here so both sides cannot round
+    it differently."""
+    interval: float
+    mag: int
+    reserve: int
+    reloadTime: float  # noqa: N815
+    spread: float
+    pellets: int
+    range: float
+    auto: bool
 
 
 class Invitee(BaseModel):
