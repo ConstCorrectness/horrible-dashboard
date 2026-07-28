@@ -10,8 +10,12 @@ import { apiDelete, apiGet, apiPost, apiPut } from '../../api';
 
 export type ConnectionConfig = Record<string, string | number | boolean>;
 
-/** Which query surface a provider speaks: SQL, or a vector-store JSON body. */
-export type QueryDialect = 'sql' | 'json';
+/**
+ * Which query surface a provider speaks: SQL, a vector-store JSON body, or a MongoDB
+ * operation body. `mongo` is its own dialect rather than a flavour of `json` because
+ * MQL has its own vocabulary — see backend/modules/database/drivers/base.py.
+ */
+export type QueryDialect = 'sql' | 'json' | 'mongo';
 
 export interface ProviderInfo {
   id: string;

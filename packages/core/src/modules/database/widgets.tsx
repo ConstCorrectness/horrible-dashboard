@@ -25,18 +25,50 @@ const MAX_HISTORY = 25;
 
 /** Starter query for a connection, per dialect. */
 function starterQuery(dialect: string): string {
-  return dialect === 'json' ? '{ "op": "collections" }' : '';
+  return dialect === 'json' || dialect === 'mongo' ? '{ "op": "collections" }' : '';
 }
 
 /**
  * What clicking a table/collection in the sidebar inserts. SQL gets a SELECT;
  * vector stores get a scan, which is the closest equivalent — a `search` would
- * need query text the click can't supply.
+ * need query text the click can't supply. Mongo gets an unfiltered `find`.
  */
 function tableClickQuery(dialect: string, name: string): string {
+  if (dialect === 'mongo') {
+    return `{ "op": "find", "collection": "${name}", "filter": {}, "limit": 20 }`;
+  }
   return dialect === 'json'
     ? `{ "op": "list", "collection": "${name}", "limit": 20 }`
     : `SELECT * FROM ${name} LIMIT 100;`;
+}
+
+/** The read-only toggle's tooltip — what it will refuse, in this dialect's terms. */
+function readOnlyHint(dialect: string): string {
+  if (dialect === 'mongo') {
+    return 'Reject write ops (insert, update, delete, drop_collection) and any aggregate with $out/$merge';
+  }
+  return dialect === 'json'
+    ? 'Reject write ops (upsert, delete, drop_collection)'
+    : 'Reject anything but a single SELECT/WITH/EXPLAIN';
+}
+
+/** How the agent should shape a query for this dialect (exposed as agent context). */
+function queryFormat(dialect: string): string {
+  if (dialect === 'mongo') {
+    return (
+      'MongoDB: send a JSON body like {"op":"find","collection":"…","filter":{},"limit":20}. ' +
+      'Ops: find, aggregate, count, distinct, collections, databases, describe, indexes, stats ' +
+      '(read) / insert, update, delete, create_collection, drop_collection, command (write). ' +
+      'Bodies are Extended JSON, so an ObjectId is {"$oid":"…"}.'
+    );
+  }
+  if (dialect === 'json') {
+    return (
+      'Vector store: send a JSON body like {"op":"search","collection":"…","query":"…","limit":5}. ' +
+      'Ops: search, list, get, count, collections, describe, peek (read) / upsert, delete (write).'
+    );
+  }
+  return 'SQL.';
 }
 
 function errText(err: unknown): string {
@@ -82,12 +114,8 @@ export function DatabaseConsole() {
     activeConnection: activeConn,
     provider: activeConnInfo?.provider ?? null,
     dialect,
-    queryFormat:
-      dialect === 'json'
-        ? 'Vector store: send a JSON body like {"op":"search","collection":"…","query":"…","limit":5}. ' +
-          'Ops: search, list, get, count, collections, describe, peek (read) / upsert, delete (write).'
-        : 'SQL.',
-    [dialect === 'json' ? 'collections' : 'tables']:
+    queryFormat: queryFormat(dialect),
+    [dialect === 'sql' ? 'tables' : 'collections']:
       schema?.tables.map((t) => ({
         name: t.schema_name ? `${t.schema_name}.${t.name}` : t.name,
         columns: t.columns.map((c) => c.name),
@@ -191,14 +219,7 @@ export function DatabaseConsole() {
         <button className="dbc-btn" onClick={() => setManagerOpen(true)}>
           Manage…
         </button>
-        <label
-          className="dbc-checkbox"
-          title={
-            dialect === 'json'
-              ? 'Reject write ops (upsert, delete, drop_collection)'
-              : 'Reject anything but a single SELECT/WITH/EXPLAIN'
-          }
-        >
+        <label className="dbc-checkbox" title={readOnlyHint(dialect)}>
           <input
             type="checkbox"
             checked={readOnly}
@@ -237,7 +258,11 @@ export function DatabaseConsole() {
               <div key={qualified} className="dbc-tree-table">
                 <button
                   className="dbc-tree-table-name"
-                  title="Insert SELECT for this table"
+                  title={
+                    dialect === 'sql'
+                      ? 'Insert SELECT for this table'
+                      : 'Insert a query for this collection'
+                  }
                   onClick={() => onTableClick(qualified)}
                 >
                   {qualified}
@@ -331,7 +356,10 @@ interface ManagerProps {
   onChanged: () => void;
 }
 
-const SECRET_FIELDS = new Set(['password', 'dsn']);
+// Mirrors `connections._SECRET_FIELDS` — these come back from the backend as booleans
+// (set / unset), never as values. `uri` is one of them because a connection string
+// embeds the password.
+const SECRET_FIELDS = new Set(['password', 'dsn', 'uri']);
 
 function ConnectionManager({ connections, providers, onClose, onChanged }: ManagerProps) {
   // null = list view; otherwise the connection being edited ('new' for a fresh one).

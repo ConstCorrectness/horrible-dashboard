@@ -17,6 +17,15 @@ Drivers come in two **dialects**, declared by the module-level ``dialect``:
     so the console sends their native shape rather than pretending otherwise. See
     ``vector_base.py`` for the shared body. Results still come back as
     columns + rows, so the results grid is dialect-agnostic.
+``mongo``
+    The query text is a JSON body carrying a MongoDB operation — a filter, a
+    pipeline, a projection (``mongo_driver.py``). Deliberately **not** folded into
+    ``json``: MQL is a real query language with its own vocabulary, and mapping
+    ``find`` onto the vector contract's ``search`` would be exactly the silent
+    reinterpretation the vector drivers refuse to do.
+
+Results still come back as columns + rows in every dialect, so the results grid, the
+CSV export and the agent's reader are dialect-agnostic — only the input surface differs.
 """
 
 from __future__ import annotations
@@ -29,7 +38,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Literal, Protocol, runtime_checkable
 
-Dialect = Literal["sql", "json"]
+Dialect = Literal["sql", "json", "mongo"]
 
 # Hard cap on rows returned to the client for a single query. The driver fetches one
 # extra row to detect (and flag) truncation without counting the whole result set.
@@ -176,8 +185,65 @@ def json_query_is_read_only(query: str) -> bool:
     return isinstance(op, str) and op.strip().lower() in READ_ONLY_OPS
 
 
+# MongoDB ops that only read. `aggregate` is here but is **not** unconditionally a
+# read: a pipeline ending in `$out` or `$merge` writes a whole collection, which is
+# why `mongo_query_is_read_only` inspects the pipeline rather than trusting the op name.
+MONGO_READ_OPS = frozenset(
+    {
+        "find",
+        "find_one",
+        "aggregate",
+        "count",
+        "distinct",
+        "collections",
+        "databases",
+        "describe",
+        "indexes",
+        "stats",
+    }
+)
+
+# Aggregation stages that write. Searched for at any depth: they are only *legal* as
+# the last top-level stage, but a gate that trusts the shape of valid input is a gate
+# that can be walked past with invalid input.
+_MONGO_WRITE_STAGES = ("$out", "$merge")
+
+
+def _contains_key(node: Any, keys: tuple[str, ...]) -> bool:
+    if isinstance(node, dict):
+        return any(k in node for k in keys) or any(
+            _contains_key(v, keys) for v in node.values()
+        )
+    if isinstance(node, list):
+        return any(_contains_key(v, keys) for v in node)
+    return False
+
+
+def mongo_query_is_read_only(query: str) -> bool:
+    """Read-only check for a ``mongo``-dialect query body.
+
+    Same fail-closed rule as the vector dialect — an unparseable body is not
+    read-only — plus the ``$out``/``$merge`` check, which is the one place where an
+    op *name* is not enough to classify a Mongo query.
+    """
+    try:
+        body = json.loads(query)
+    except ValueError:
+        return False
+    if not isinstance(body, dict):
+        return False
+    op = body.get("op")
+    if not isinstance(op, str) or op.strip().lower() not in MONGO_READ_OPS:
+        return False
+    if op.strip().lower() == "aggregate":
+        return not _contains_key(body.get("pipeline"), _MONGO_WRITE_STAGES)
+    return True
+
+
 def query_is_read_only(query: str, dialect: Dialect = "sql") -> bool:
     """Dialect-aware read-only gate used by the routes and the agent's query tool."""
-    return (
-        json_query_is_read_only(query) if dialect == "json" else looks_read_only(query)
-    )
+    if dialect == "json":
+        return json_query_is_read_only(query)
+    if dialect == "mongo":
+        return mongo_query_is_read_only(query)
+    return looks_read_only(query)

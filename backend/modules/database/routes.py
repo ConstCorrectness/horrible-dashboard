@@ -64,6 +64,19 @@ router = APIRouter(prefix="/database", tags=["database"])
 # ---------------------------------------------------------------------------
 
 
+def _resolve(conn: dict[str, Any]) -> dict[str, Any]:
+    """Driver-ready config for a connection, or 403 if it is gated and now closed.
+
+    ``resolve_config`` raises ``PermissionError`` for the admin-gated ``atlas``
+    built-in when ``ATLAS_ADMIN`` is no longer set — a live env change between listing
+    the connections and running a query. That is a refusal, not a server fault.
+    """
+    try:
+        return resolve_config(conn)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
 def _as_info(record: dict[str, Any]) -> ConnectionInfo:
     """Redact secrets and stamp the provider's query dialect onto a connection."""
     safe = redact(record)
@@ -139,7 +152,7 @@ async def test_saved_connection(conn_id: str) -> ConnectionTestResult:
     conn = get_connection(conn_id)
     if conn is None:
         raise HTTPException(status_code=404, detail=f"No connection '{conn_id}'")
-    return await asyncio.to_thread(_test_config, conn["provider"], resolve_config(conn))
+    return await asyncio.to_thread(_test_config, conn["provider"], _resolve(conn))
 
 
 @router.get("/connections/{conn_id}/schema", response_model=SchemaResponse)
@@ -149,7 +162,7 @@ async def get_schema(conn_id: str) -> SchemaResponse:
         raise HTTPException(status_code=404, detail=f"No connection '{conn_id}'")
     driver = get_driver(conn["provider"])
     try:
-        schema = await asyncio.to_thread(driver.introspect, resolve_config(conn))
+        schema = await asyncio.to_thread(driver.introspect, _resolve(conn))
     except DriverError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return SchemaResponse(
@@ -172,6 +185,24 @@ async def get_schema(conn_id: str) -> SchemaResponse:
     )
 
 
+def _read_only_detail(dialect: str) -> str:
+    """Why a query was refused in read-only mode, in the dialect's own vocabulary."""
+    if dialect == "json":
+        return (
+            "Read-only mode allows read ops only "
+            "(search, get, list, count, peek, collections, describe) — e.g. "
+            '{"op": "search", "collection": "…"}.'
+        )
+    if dialect == "mongo":
+        return (
+            "Read-only mode allows read ops only (find, aggregate, count, distinct, "
+            "collections, databases, describe, indexes, stats) — e.g. "
+            '{"op": "find", "collection": "…", "filter": {}}. An aggregate whose '
+            "pipeline contains $out or $merge writes a collection and is refused too."
+        )
+    return "Read-only mode allows a single SELECT/WITH/EXPLAIN statement only."
+
+
 @router.post("/query", response_model=QueryResultModel)
 async def run_query(req: QueryRequest) -> QueryResultModel:
     conn = get_connection(req.connection_id)
@@ -181,19 +212,12 @@ async def run_query(req: QueryRequest) -> QueryResultModel:
         )
     dialect = get_dialect(conn["provider"])
     if req.read_only and not query_is_read_only(req.sql, dialect):
-        detail = (
-            "Read-only mode allows read ops only "
-            "(search, get, list, count, peek, collections, describe) — e.g. "
-            '{"op": "search", "collection": "…"}.'
-            if dialect == "json"
-            else "Read-only mode allows a single SELECT/WITH/EXPLAIN statement only."
-        )
-        raise HTTPException(status_code=400, detail=detail)
+        raise HTTPException(status_code=400, detail=_read_only_detail(dialect))
     driver = get_driver(conn["provider"])
     try:
         result = await asyncio.to_thread(
             driver.run_query,
-            resolve_config(conn),
+            _resolve(conn),
             req.sql,
             req.params,
             read_only=req.read_only,

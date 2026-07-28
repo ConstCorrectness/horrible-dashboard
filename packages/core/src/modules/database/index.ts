@@ -48,7 +48,7 @@ export const databaseModule: ModuleManifest = {
         {
           name: 'database.listConnections',
           description:
-            'List the database connections the user can query. Returns each connection id, name, provider, and dialect. Two built-ins are always present: "app" is the dashboard\'s own SQLite database (SQL), and "vectors" is its LanceDB vector store (JSON dialect). Check "dialect" before writing a query — "sql" takes SQL, "json" takes a vector-store operation body.',
+            'List the database connections the user can query. Returns each connection id, name, provider, and dialect. Two built-ins are always present: "app" is the dashboard\'s own SQLite database (SQL), and "vectors" is its LanceDB vector store (JSON dialect). A third, "atlas", is present only on a node that administers the shared MongoDB Atlas cluster (mongo dialect). Check "dialect" before writing a query — "sql" takes SQL, "json" takes a vector-store operation body, "mongo" takes a MongoDB operation body.',
           params: { type: 'object', properties: {} },
           handler: async () => {
             const { connections } = await listConnections();
@@ -64,7 +64,7 @@ export const databaseModule: ModuleManifest = {
         {
           name: 'database.describe',
           description:
-            'Describe a connection\'s schema so you can write a correct query. For SQL connections these are tables and their columns/types; for vector stores they are collections and their fields. Also returns the connection\'s dialect. Defaults to the built-in "app" connection.',
+            'Describe a connection\'s schema so you can write a correct query. For SQL connections these are tables and their columns/types; for vector stores and MongoDB they are collections and their fields (MongoDB field types are sampled from documents, since a collection has no declared schema). Also returns the connection\'s dialect. Defaults to the built-in "app" connection.',
           params: {
             type: 'object',
             properties: {
@@ -89,7 +89,7 @@ export const databaseModule: ModuleManifest = {
         {
           name: 'database.query',
           description:
-            'Run a read-only query against a connection and return columns and rows. For "sql"-dialect connections pass a single SELECT/WITH/EXPLAIN statement. For "json"-dialect (vector store) connections pass a JSON operation body instead, e.g. {"op":"search","collection":"library","query":"some text","limit":5} — read ops are search, get, list, count, peek, collections, describe. Call database.listConnections or database.describe first if you do not know the dialect. Defaults to the built-in "app" connection.',
+            'Run a read-only query against a connection and return columns and rows. For "sql"-dialect connections pass a single SELECT/WITH/EXPLAIN statement. For "json"-dialect (vector store) connections pass a JSON operation body instead, e.g. {"op":"search","collection":"library","query":"some text","limit":5} — read ops are search, get, list, count, peek, collections, describe. For "mongo"-dialect (MongoDB/Atlas) connections pass a MongoDB operation body, e.g. {"op":"find","collection":"presence","filter":{},"limit":20} — read ops are find, aggregate, count, distinct, collections, databases, describe, indexes, stats; bodies are Extended JSON, so an ObjectId is written {"$oid":"…"}. Call database.listConnections or database.describe first if you do not know the dialect. Defaults to the built-in "app" connection.',
           params: {
             type: 'object',
             properties: {
@@ -116,7 +116,7 @@ export const databaseModule: ModuleManifest = {
         {
           name: 'database.execute',
           description:
-            'Execute a writing SQL statement (INSERT/UPDATE/DELETE/DDL) against a connection. Use only when the user wants to modify data. Defaults to the built-in "app" connection.',
+            'Execute a writing statement against a connection: SQL (INSERT/UPDATE/DELETE/DDL) for "sql" connections, or a write operation body for "json"/"mongo" ones (e.g. {"op":"update","collection":"x","filter":{…},"update":{"$set":{…}}}). Use only when the user wants to modify data. Some connections refuse writes regardless — the shared "atlas" cluster is read-only unless the node is configured otherwise. Defaults to the built-in "app" connection.',
           params: {
             type: 'object',
             properties: {

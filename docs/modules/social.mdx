@@ -240,6 +240,12 @@ returns the whole bag to the browser. The shared client lives at
 `backend/atlas.py` rather than inside this module, since HorribleAssault will need
 the same cluster and modules must not import each other's internals.
 
+Those credentials let this node publish and read *its own* presence lookups; they do
+**not** open the cluster to ad-hoc queries. Browsing or editing it from the database
+console is a separate, default-off opt-in (`ATLAS_ADMIN`) — see
+[database](database.mdx#the-atlas-built-in-admins-only). Every node on the fabric holds
+these credentials, so "the credentials are configured" would be a meaningless gate.
+
 `_dial` consults the directory **last** — after an existing session, a
 caller-supplied address, and each device's last known address. A LAN address you
 already have is both faster and likelier to work than a published one, and the

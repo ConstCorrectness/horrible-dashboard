@@ -11,6 +11,13 @@ directory, not a SQLite file, so there is nothing for a *SQL* connection to open
 ``app_db.py`` — the two were one path before the LanceDB migration, and conflating
 them is the classic bug here). The vector store is reachable instead through the
 second built-in, ``vectors``, a ``lancedb`` json-dialect connection.
+
+A **third** built-in, ``atlas``, appears only when this node administers the shared
+MongoDB cluster (``ATLAS_ADMIN``; see ``backend/atlas.py:admin_access``). It is
+conditional because every node on the social fabric holds cluster credentials to
+publish its own presence record — synthesizing the connection whenever credentials
+exist would turn a narrow, single-purpose credential into a cluster-wide console on
+every user's machine.
 """
 
 from __future__ import annotations
@@ -24,14 +31,17 @@ from typing import Any
 from backend.modules.database.app_db import get_app_db_path
 
 
-# Connection config keys whose values must never be returned to the client.
-_SECRET_FIELDS = {"password", "dsn"}
+# Connection config keys whose values must never be returned to the client. `uri` is
+# here because a MongoDB (or any) connection string embeds the password — a redactor
+# that only knows about a `password` field would hand it straight to the browser.
+_SECRET_FIELDS = {"password", "dsn", "uri"}
 
 BUILTIN_APP_ID = "app"
 BUILTIN_VECTORS_ID = "vectors"
+BUILTIN_ATLAS_ID = "atlas"
 
 # Built-in connections are synthesized, not stored, so they can't be edited or deleted.
-BUILTIN_IDS = frozenset({BUILTIN_APP_ID, BUILTIN_VECTORS_ID})
+BUILTIN_IDS = frozenset({BUILTIN_APP_ID, BUILTIN_VECTORS_ID, BUILTIN_ATLAS_ID})
 
 
 def _store_path() -> Path:
@@ -84,9 +94,44 @@ def _builtin_vectors() -> dict[str, Any]:
     }
 
 
+def _builtin_atlas() -> dict[str, Any] | None:
+    """The shared MongoDB Atlas cluster, for an operator who administers it.
+
+    Returns None unless ``ATLAS_ADMIN`` is set (default off) — see
+    ``atlas.admin_access()`` for why credentials-present is the wrong gate.
+
+    The config exposed here carries **no URI**: the connection string holds the cluster
+    password, and this dict is what ``redact()`` turns into the browser's payload.
+    ``resolve_config`` reads the URI from the environment at query time instead, so the
+    secret never enters the store or a response body.
+    """
+    from backend import atlas  # noqa: PLC0415 — avoid an import cycle at module load
+
+    access = atlas.admin_access()
+    if access == "off":
+        return None
+    return {
+        "id": BUILTIN_ATLAS_ID,
+        "name": f"Atlas cluster ({atlas.cluster_label()})",
+        "provider": "mongodb",
+        "config": {
+            "cluster": atlas.cluster_label(),
+            "database": atlas.database_name(),
+            "read_only": access == "ro",
+            "builtin": True,
+        },
+        "builtin": True,
+    }
+
+
 def list_connections() -> list[dict[str, Any]]:
-    """Built-in connections first (app database, then vector store), then user ones."""
-    return [_builtin_app(), _builtin_vectors(), *_read()]
+    """Built-in connections first (app database, vector store, then the Atlas cluster
+    when this node administers it), then user ones."""
+    atlas_conn = _builtin_atlas()
+    builtins = [_builtin_app(), _builtin_vectors()]
+    if atlas_conn is not None:
+        builtins.append(atlas_conn)
+    return [*builtins, *_read()]
 
 
 def get_connection(conn_id: str) -> dict[str, Any] | None:
@@ -100,6 +145,20 @@ def resolve_config(conn: dict[str, Any]) -> dict[str, Any]:
         return {"path": str(get_app_db_path()), "builtin": True}
     if conn.get("id") == BUILTIN_VECTORS_ID:
         return dict(_builtin_vectors()["config"])
+    if conn.get("id") == BUILTIN_ATLAS_ID:
+        # The URI is added here and nowhere else, so the password reaches the driver
+        # without ever passing through the connection store or a client response. The
+        # access check is repeated rather than trusted: this is the function every
+        # query path funnels through, so it is the right place to fail closed if
+        # ATLAS_ADMIN was removed since the connection list was built.
+        from backend import atlas  # noqa: PLC0415
+
+        record = _builtin_atlas()
+        if record is None:
+            raise PermissionError(
+                "Atlas admin access is not enabled on this node (set ATLAS_ADMIN)."
+            )
+        return {**record["config"], "uri": atlas.admin_uri()}
     return dict(conn.get("config") or {})
 
 

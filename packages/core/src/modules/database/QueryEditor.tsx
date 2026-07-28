@@ -2,9 +2,12 @@
  * The database console's editor. One controlled CodeMirror wrapper serving both
  * query dialects:
  *
- * - `sql`  — schema-aware completion from `@codemirror/lang-sql`.
- * - `json` — vector-store operation bodies, with completion for the op names and
+ * - `sql`   — schema-aware completion from `@codemirror/lang-sql`.
+ * - `json`  — vector-store operation bodies, with completion for the op names and
  *   field keys, plus the collections discovered by introspection.
+ * - `mongo` — MongoDB operation bodies. Same JSON editor, different vocabulary: the
+ *   ops and body keys are MQL's (`find`/`aggregate`, `filter`/`pipeline`), because
+ *   offering `search`/`vector` at a Mongo collection would just mislead.
  *
  * Both the language and the completion source live in compartments, so switching
  * connections reconfigures the live view rather than remounting it (a remount would
@@ -69,12 +72,52 @@ const VECTOR_KEYS = [
   { label: 'metric', info: 'Distance metric override, e.g. "cosine" or "l2"' },
 ];
 
+/** Ops and body keys of the MongoDB query contract (drivers/mongo_driver.py). */
+const MONGO_OPS = [
+  { label: 'find', info: 'Query documents with a "filter" (+ projection, sort, skip)' },
+  { label: 'aggregate', info: 'Run a "pipeline" of aggregation stages' },
+  { label: 'count', info: 'Count documents matching "filter"' },
+  { label: 'distinct', info: 'Distinct values of "field"' },
+  { label: 'collections', info: 'List collections in the database' },
+  { label: 'databases', info: 'List databases in the cluster' },
+  { label: 'describe', info: 'Fields and BSON types, sampled from documents' },
+  { label: 'indexes', info: "A collection's indexes" },
+  { label: 'stats', info: 'Database storage stats' },
+  { label: 'insert', info: 'Insert "documents" (not read-only)' },
+  { label: 'update', info: 'Update by "filter" with "update" (not read-only)' },
+  { label: 'delete', info: 'Delete by "filter" (not read-only)' },
+  { label: 'create_collection', info: 'Create a collection (not read-only)' },
+  { label: 'drop_collection', info: 'Drop a collection (not read-only)' },
+  { label: 'command', info: 'Run a raw database command (not read-only)' },
+];
+
+const MONGO_KEYS = [
+  { label: 'op', info: 'Which operation to run (required)' },
+  { label: 'collection', info: 'Target collection name' },
+  { label: 'db', info: "Database override (defaults to the connection's)" },
+  { label: 'filter', info: 'MQL filter, e.g. {"person_id": "abc"}' },
+  { label: 'projection', info: 'Fields to include/exclude, e.g. {"addresses": 1}' },
+  { label: 'sort', info: 'Sort spec, e.g. {"ts": -1}' },
+  { label: 'pipeline', info: 'Aggregation stages (array)' },
+  { label: 'documents', info: 'Documents to insert' },
+  { label: 'update', info: 'Update document, e.g. {"$set": {"x": 1}}' },
+  { label: 'field', info: 'Field name for distinct' },
+  { label: 'many', info: 'true to update/delete every match' },
+  { label: 'limit', info: 'Max documents (default 50)' },
+  { label: 'skip', info: 'Documents to skip' },
+];
+
 /**
  * Completion for JSON bodies. Context-sensitive in the one way that matters: after
  * `"op":` it offers ops, after a collection-ish key it offers real collection names,
- * and otherwise it offers body keys.
+ * and otherwise it offers body keys. The op/key vocabulary is passed in, so the same
+ * machinery serves the vector and mongo dialects without either leaking into the other.
  */
-function vectorCompletions(collections: string[]) {
+function bodyCompletions(
+  ops: { label: string; info: string }[],
+  keys: { label: string; info: string }[],
+  collections: string[],
+) {
   return (context: CompletionContext): CompletionResult | null => {
     const word = context.matchBefore(/[\w".]*/);
     if (!word || (word.from === word.to && !context.explicit)) return null;
@@ -83,7 +126,7 @@ function vectorCompletions(collections: string[]) {
     if (/"op"\s*:\s*"?$/.test(before)) {
       return {
         from: word.from,
-        options: VECTOR_OPS.map((o) => ({ ...o, type: 'keyword' })),
+        options: ops.map((o) => ({ ...o, type: 'keyword' })),
       };
     }
     if (/"collection"\s*:\s*"?$/.test(before)) {
@@ -94,7 +137,7 @@ function vectorCompletions(collections: string[]) {
     }
     return {
       from: word.from,
-      options: VECTOR_KEYS.map((k) => ({ ...k, type: 'property' })),
+      options: keys.map((k) => ({ ...k, type: 'property' })),
     };
   };
 }
@@ -173,14 +216,16 @@ export function QueryEditor({
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
-    const isJson = dialect === 'json';
+    const isMongo = dialect === 'mongo';
+    // Both non-SQL dialects send a JSON body; only the vocabulary differs.
+    const isBody = isMongo || dialect === 'json';
     const collections = schema?.tables.map((t) => t.name) ?? [];
     const { schema: schemaMap, defaultSchema } = schemaToSqlConfig(schema);
 
     view.dispatch({
       effects: [
         langConfRef.current.reconfigure(
-          isJson
+          isBody
             ? javascript()
             : sql({
                 dialect: DIALECTS[provider ?? ''] ?? StandardSQL,
@@ -190,15 +235,25 @@ export function QueryEditor({
               }),
         ),
         completionConfRef.current.reconfigure(
-          isJson
-            ? autocompletion({ override: [vectorCompletions(collections)] })
+          isBody
+            ? autocompletion({
+                override: [
+                  bodyCompletions(
+                    isMongo ? MONGO_OPS : VECTOR_OPS,
+                    isMongo ? MONGO_KEYS : VECTOR_KEYS,
+                    collections,
+                  ),
+                ],
+              })
             : autocompletion(),
         ),
         placeholderConfRef.current.reconfigure(
           placeholder(
-            isJson
-              ? 'Vector query, e.g. {"op": "search", "collection": "…", "query": "…"} — Ctrl/Cmd+Enter to run'
-              : 'Write SQL, then press Ctrl/Cmd+Enter or Run…',
+            isMongo
+              ? 'MongoDB query, e.g. {"op": "find", "collection": "…", "filter": {}} — Ctrl/Cmd+Enter to run'
+              : isBody
+                ? 'Vector query, e.g. {"op": "search", "collection": "…", "query": "…"} — Ctrl/Cmd+Enter to run'
+                : 'Write SQL, then press Ctrl/Cmd+Enter or Run…',
           ),
         ),
       ],

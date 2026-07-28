@@ -12,6 +12,7 @@ from backend.modules.database.drivers import (
     chroma_driver,
     duckdb_driver,
     lancedb_driver,
+    mongo_driver,
     mysql_driver,
     oracle_driver,
     postgres_driver,
@@ -31,6 +32,7 @@ _DRIVERS: dict[str, Driver] = {
     chroma_driver.provider: chroma_driver,  # type: ignore[dict-item]
     qdrant_driver.provider: qdrant_driver,  # type: ignore[dict-item]
     weaviate_driver.provider: weaviate_driver,  # type: ignore[dict-item]
+    mongo_driver.provider: mongo_driver,  # type: ignore[dict-item]
 }
 
 # Provider ids the UI offers, with the connection fields each one expects and the
@@ -89,6 +91,21 @@ PROVIDERS: list[dict[str, object]] = [
         "label": "Weaviate (vector)",
         "fields": ["url", "api_key", "host", "port", "grpc_port"],
         "dialect": "json",
+    },
+    {
+        "id": "mongodb",
+        "label": "MongoDB / Atlas",
+        "fields": [
+            "uri",
+            "host",
+            "port",
+            "database",
+            "user",
+            "password",
+            "auth_source",
+            "tls",
+        ],
+        "dialect": "mongo",
     },
 ]
 

@@ -19,8 +19,8 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
-from urllib.parse import quote_plus
+from typing import Any, Literal
+from urllib.parse import quote_plus, urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +109,76 @@ async def ping() -> tuple[bool, str]:
     except Exception as exc:
         return False, f"{type(exc).__name__}: {exc}"
     return True, f"connected to {database_name()}"
+
+
+# ---------------------------------------------------------------------------
+# Admin access (the database console's `atlas` connection)
+# ---------------------------------------------------------------------------
+
+AdminAccess = Literal["off", "ro", "rw"]
+
+# Values of ATLAS_ADMIN that open the cluster to the database console, and at what
+# level. Anything else — including unset — is "off".
+_ADMIN_RO = {"1", "true", "yes", "on", "ro", "read", "readonly", "read-only"}
+_ADMIN_RW = {"rw", "write", "readwrite", "read-write", "admin"}
+
+
+def admin_access() -> AdminAccess:
+    """Whether this node may run **arbitrary** queries against the shared cluster.
+
+    Separate from `is_configured()` on purpose, and default-off. Every node that
+    joins the social fabric has `ATLAS_DB_USER` set so it can publish its presence
+    record, so "the credentials are present" is emphatically *not* the same question
+    as "this operator administers the cluster" — gating on the former would hand
+    every user's console (and agent) a free hand over shared infrastructure. Signed
+    directory records mean a stranger can't forge presence, but nothing stops them
+    reading the whole collection or dropping it, so the console needs its own gate.
+
+    Env-only, like the credentials themselves: `GET /api/settings` returns the whole
+    settings bag to the browser, so a setting here would be a switch any page could
+    read (and a value the frontend could be tricked into flipping).
+
+    `ATLAS_ADMIN=1` grants read-only access; `ATLAS_ADMIN=rw` also allows writes.
+    The split is not tidiness — the console's `database.execute` is an agent tool, so
+    "rw" is the difference between an agent that can inspect the cluster and one that
+    can drop a collection every other node depends on.
+
+    Note this is a gate against *ambient* credential use, not a boundary against the
+    human at the keyboard: anyone who knows the cluster password can add an ordinary
+    `mongodb` connection by hand. It stops a node from escalating the credential it
+    holds for one narrow purpose into a cluster-wide console.
+    """
+    raw = os.environ.get("ATLAS_ADMIN", "").strip().lower()
+    if not raw or admin_uri() is None:
+        return "off"
+    if raw in _ADMIN_RW:
+        return "rw"
+    return "ro" if raw in _ADMIN_RO else "off"
+
+
+def admin_uri() -> str | None:
+    """The URI the console's `atlas` connection dials.
+
+    `ATLAS_ADMIN_URI` wins when set, so an operator can point the console at a
+    higher-privileged user than the app itself runs as (the app only needs read/write
+    on one collection; listing databases needs more). Otherwise the app's own URI is
+    reused.
+    """
+    explicit = os.environ.get("ATLAS_ADMIN_URI", "").strip()
+    return explicit or cluster_uri()
+
+
+def cluster_label() -> str:
+    """The cluster host, safe to show in the UI — never the URI, which holds the
+    password. Falls back to a generic label if the URI can't be parsed."""
+    uri = admin_uri()
+    if not uri:
+        return "not configured"
+    try:
+        host = urlsplit(uri).hostname
+    except ValueError:
+        host = None
+    return host or "mongodb cluster"
 
 
 async def close() -> None:

@@ -26,6 +26,10 @@ dashboard's own local vector store as the built-in **`app`** connection.
   queryable from this console — `SELECT stage, count(*) FROM rec_deals GROUP BY
   stage` — with no records-specific support in the driver layer.
 
+  A third built-in, **`atlas`**, is conditional: it appears only on a node that
+  administers the shared MongoDB cluster — see
+  [The `atlas` built-in](#the-atlas-built-in-admins-only).
+
   :::note `app` is the app database; `vectors` is the vector store
   Two built-ins, because the node keeps its data in two different shapes. `app` is the
   SQLite file `.data/app.db`. The vector store is **LanceDB**, a *directory* under
@@ -50,13 +54,16 @@ dashboard's own local vector store as the built-in **`app`** connection.
     schema-qualified names (`public.users`) included, with the dominant schema as the
     unqualified default. The mapping lives in the pure helper
     `sqlSchema.ts:schemaToSqlConfig`.
-  - *Vector connections* get JSON highlighting (via `lang-javascript` — JSON is a subset
-    of JS, so this needs no extra language package) and completion for the op names, the
-    body keys, and the store's real collection names.
+  - *Vector and MongoDB connections* get JSON highlighting (via `lang-javascript` — JSON
+    is a subset of JS, so this needs no extra language package) and completion for the
+    op names, the body keys, and the store's real collection names. The op/key
+    vocabulary is passed into one shared completion source, so the vector and Mongo
+    dialects can't leak into each other.
 - **Schema sidebar** — an introspected tree of tables → columns (with types and PK
-  markers), or collections → fields for vector stores. Clicking one inserts the
-  dialect-appropriate starter: `SELECT * FROM <table> LIMIT 100` or
-  `{"op": "list", "collection": "<name>", "limit": 20}`.
+  markers), or collections → fields for vector stores and MongoDB. Clicking one inserts
+  the dialect-appropriate starter: `SELECT * FROM <table> LIMIT 100`,
+  `{"op": "list", "collection": "<name>", "limit": 20}`, or
+  `{"op": "find", "collection": "<name>", "filter": {}, "limit": 20}`.
 - **No synthetic data** — the pane only ever shows real rows returned from a real
   connection.
 
@@ -75,9 +82,20 @@ Every driver declares a **dialect** — which query surface it speaks:
   stores have no SQL dialect (a collection, a metadata filter and a query vector is
   genuinely all they take), so the console sends their native shape rather than
   faking SQL over them. See [Querying vector stores](#querying-vector-stores).
+- **`mongo`** — the query text is a JSON body carrying a **MongoDB** operation: a
+  filter, a pipeline, a projection. See [Querying MongoDB](#querying-mongodb).
 
-Both dialects return the **same** columns/rows result, so the grid, the status line
+Every dialect returns the **same** columns/rows result, so the grid, the status line
 and the agent's reader are dialect-agnostic — only the input surface differs.
+
+:::note Why `mongo` isn't just `json`
+Both send a JSON body, so folding Mongo into the vector dialect is tempting. It would
+mean mapping `find` onto `search` and a metadata filter onto an MQL filter — exactly
+the silent reinterpretation the vector drivers refuse to do (they raise instead when a
+store can't express something). MQL is a real query language with its own vocabulary;
+offering an agent `"vector"` and `"query"` keys at a Mongo collection, or `"pipeline"`
+at a vector store, teaches it the wrong shape. Same editor, different vocabulary.
+:::
 
 | Provider | Driver | Dialect | Dependency | Notes |
 | --- | --- | --- | --- | --- |
@@ -90,6 +108,7 @@ and the agent's reader are dialect-agnostic — only the input surface differs.
 | `chroma` | `chroma_driver` | `json` | `chromadb` (extra `chroma`) | Embedded (`path`) or HTTP server (`host`). |
 | `qdrant` | `qdrant_driver` | `json` | `qdrant-client` (extra `qdrant`) | Server (`url`/`host`) or embedded (`path`). |
 | `weaviate` | `weaviate_driver` | `json` | `weaviate-client` (extra `weaviate`) | Local instance or Weaviate Cloud. |
+| `mongodb` | `mongo_driver` | `mongo` | `pymongo` (core dep) | Any Mongo deployment, and the shared **Atlas cluster** via the admin-gated built-in `atlas` connection. |
 
 Install the vector-store clients with `uv sync --extra chroma` (or `qdrant`,
 `weaviate`, or `vectordb` for all three); Oracle with `uv sync --extra oracle`. Each is
@@ -153,6 +172,110 @@ physical columns are pushed down, metadata keys are filtered in Python over a bo
 over-fetched window, and the status line says so when that happens. It is not a cheap
 deep paginator.
 :::
+
+## Querying MongoDB
+
+A `mongo`-dialect query is one JSON object (`drivers/mongo_driver.py`):
+
+```json
+{"op": "collections"}
+{"op": "find",      "collection": "presence", "filter": {"person_id": "abc"}, "limit": 20}
+{"op": "find",      "collection": "presence", "projection": {"addresses": 1}, "sort": {"updated_at": -1}}
+{"op": "aggregate", "collection": "presence", "pipeline": [{"$group": {"_id": "$display_name", "n": {"$sum": 1}}}]}
+{"op": "count",     "collection": "presence", "filter": {}}
+{"op": "distinct",  "collection": "presence", "field": "person_id"}
+{"op": "describe",  "collection": "presence"}
+{"op": "indexes",   "collection": "presence"}
+{"op": "databases"}
+{"op": "update",    "collection": "presence", "filter": {"_id": {"$oid": "…"}}, "update": {"$set": {"x": 1}}}
+{"op": "delete",    "collection": "presence", "filter": {"person_id": "abc"}, "many": true}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `op` | Required. Read: `find`, `find_one`, `aggregate`, `count`, `distinct`, `collections`, `databases`, `describe`, `indexes`, `stats`. Write: `insert`, `update`, `delete`, `create_collection`, `drop_collection`, `command`. |
+| `collection` | Target collection (required by every op except `collections`, `databases`, `stats`, `command`). |
+| `db` | Database override — an admin inspecting more than one database on the cluster. Defaults to the connection's. |
+| `filter` | MQL filter document. |
+| `projection` | Fields to include/exclude, e.g. `{"addresses": 1}`. |
+| `sort` | `{"field": -1}`. Written as an object because that is what a human types; JSON object order survives parsing, so a multi-key sort keeps its order. |
+| `pipeline` | Aggregation stages (array). |
+| `documents` | Documents for `insert`. |
+| `update` | Update document for `update`, e.g. `{"$set": {…}}`. |
+| `field` | The key to collect for `distinct`. |
+| `many` | `true` to `update`/`delete` every match instead of one. |
+| `limit` / `skip` | Paging. `limit` is capped by the `database.rowLimit` setting. |
+
+Documents flatten into the grid with `_id` first and every other field in document
+order, the union of keys across a ragged result set. `describe` is honest sampling
+rather than introspection — a document store has no declared schema, so it reports
+each field's BSON types and how many of the sampled documents carried it. `$jsonSchema`
+validators are deliberately not consulted: they describe what is *allowed*, not what is
+stored.
+
+:::warning `aggregate` is not automatically a read
+A pipeline ending in `$out` or `$merge` **rewrites a collection**. Classifying
+`aggregate` as read-only on the strength of the op name would let read-only mode — and
+the agent's read-only `database.query` tool — replace a collection on the shared
+cluster. `base.mongo_query_is_read_only` therefore inspects the pipeline, and searches
+for those stages at **any** depth: they are only *legal* as the final top-level stage,
+but a gate that trusts input to be well-formed is a gate you can walk past with
+input that isn't.
+
+`command` is classified as a write for the same reason a multi-statement SQL string is:
+its contents can't be vouched for.
+:::
+
+:::note ObjectIds: bare hex out, `{"$oid": …}` back in
+Query bodies are parsed as **Extended JSON** (`bson.json_util`), so `{"$oid": "…"}`,
+`{"$date": "…"}` and the rest of the BSON types work. Results go the other way through
+`jsonable`, which renders an `ObjectId` as bare hex because that is what is readable in
+a grid — so filtering on an id you can see in the results means typing it back as
+`{"$oid": "65f…"}`. The alternative, coercing any 24-hex string in a filter to an
+ObjectId, would silently change the meaning of a filter on a string field.
+:::
+
+Clients are cached per URI. A `MongoClient` is a connection *pool* meant to outlive one
+query, and it is thread-safe, so the `asyncio.to_thread` workers share one rather than
+paying SRV resolution plus a TLS handshake to Atlas on every run.
+
+### The `atlas` built-in (admins only)
+
+The shared MongoDB Atlas cluster (`backend/atlas.py` — the social layer's `presence`
+directory) shows up as a **third built-in connection**, `atlas`, but only on a node
+whose operator administers it:
+
+| `ATLAS_ADMIN` | Effect |
+| --- | --- |
+| unset (default) | No `atlas` connection. The cluster is unreachable from the console. |
+| `1` / `true` / `ro` | `atlas` appears, **read-only** — writes are refused in the driver. |
+| `rw` | `atlas` appears and accepts writes. |
+
+Env-only, and default-off, for two separate reasons:
+
+- **Credentials present ≠ administrator.** Every node on the social fabric sets
+  `ATLAS_DB_USER` so it can publish its own presence record. Gating on "are credentials
+  configured" would hand every user's console — and their agent — a free hand over
+  shared infrastructure. Signed directory records stop a stranger forging presence;
+  nothing would stop them reading the whole collection or dropping it.
+- **Never a setting.** `GET /api/settings` returns the whole settings bag to the
+  browser, so a setting here would be a switch any page could read and the frontend
+  could be tricked into flipping. Same rule as the credentials themselves.
+
+`ATLAS_ADMIN_URI` optionally points the console at a higher-privileged cluster user
+than the app itself runs as (listing databases needs more than the app's own
+single-collection access); otherwise the app's URI is reused.
+
+The `ro` / `rw` split is not tidiness. `database.execute` is an **agent tool**, so it is
+the difference between an agent that can inspect the cluster and one that can drop a
+collection every other node depends on. It is enforced in `mongo_driver._guard_writes`
+rather than in the route, because `run_query(read_only=False)` is exactly what that tool
+sends — a route-only check would leave the driver as an unguarded back door.
+
+This is a gate against *ambient* credential use, not a boundary against the human at
+the keyboard: anyone who knows the cluster password can add an ordinary `mongodb`
+connection by hand. What it prevents is a node silently escalating a credential it holds
+for one narrow purpose into a cluster-wide console.
 
 ## The node's two local stores
 
@@ -268,8 +391,8 @@ agent can target the right database:
 }
 ```
 
-On a vector connection the same hook reports the dialect and the op vocabulary instead,
-and names the list `collections`:
+On a vector or MongoDB connection the same hook reports the dialect and that dialect's
+op vocabulary instead, and names the list `collections`:
 
 ```typescript
 {
@@ -281,6 +404,9 @@ and names the list `collections`:
 }
 ```
 
+…and on the `atlas` connection it reports `dialect: "mongo"` with the MQL op list and a
+note that bodies are Extended JSON, so an ObjectId is `{"$oid": "…"}`.
+
 `dialect` matters as much as the table list: without it the agent writes SQL at a vector
 store and gets a parse error it can't diagnose.
 
@@ -290,6 +416,18 @@ SQL execution is unsandboxed (consistent with the v1 trusted plugin posture). Th
 `database.query` tool is read-only; writes go through `database.execute`, which is
 side-effect gated. Connection credentials are stored as plaintext in the gitignored
 `.data/connections.json`; encryption is a tracked follow-up.
+
+Two credential rules the driver layer enforces:
+
+- **`uri` is a secret field.** A connection string embeds the password, so `uri` is
+  redacted to a boolean alongside `password` and `dsn` (`connections._SECRET_FIELDS`,
+  mirrored by `SECRET_FIELDS` in `widgets.tsx`). A redactor that only knew about a
+  `password` field would hand a `mongodb+srv://user:pw@host` straight to the browser.
+- **The `atlas` built-in carries no URI at all.** Its listed config holds only the
+  cluster *host*, the database name and the read-only flag; `resolve_config` adds the
+  URI from the environment at query time, so the cluster password never enters the
+  connection store or a response body. That function re-checks `ATLAS_ADMIN` and raises
+  `PermissionError` (→ 403) if access was revoked since the connection list was built.
 
 ## Browser vs Desktop
 
