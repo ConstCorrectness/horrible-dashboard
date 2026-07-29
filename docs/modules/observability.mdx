@@ -64,13 +64,33 @@ flowchart LR
 The panel is the app's built-in protocol analyzer, so it deliberately hides
 nothing at the application layer: every event carries metadata (method, target,
 status, duration, byte counts) plus the **full headers and bodies, unredacted**,
-for the inspector. Nothing is masked or suppressed — credential headers
+for the inspector. Almost nothing is masked or suppressed — credential headers
 (`authorization`, `cookie`, tokens) and sensitive bodies (Clubhouse phone
-numbers, SMS codes) are shown verbatim. The only limit is **size**: bodies are
-truncated to a configurable cap (`observability.maxBodyChars`, default 16 KB) and
-never read past a 1 MB hard ceiling. Outbound URLs are recorded scheme+host+path
-only (query/fragment stripped). Treat the in-memory buffer as sensitive — it is a
-local introspection tool, and the data never leaves the machine.
+numbers, SMS codes) are shown verbatim. The only general limit is **size**: bodies
+are truncated to a configurable cap (`observability.maxBodyChars`, default 16 KB)
+and never read past a 1 MB hard ceiling. Outbound URLs are recorded
+scheme+host+path only (query/fragment stripped). Treat the in-memory buffer as
+sensitive — it is a local introspection tool, and the data never leaves the
+machine.
+
+### The one exception: password bodies
+
+Paths matching `_REDACT_BODY_PREFIXES` (`instrument.py`) — currently the
+HorribleAssault/games **native email+password** sign-in, `/api/games/auth/local/*`
+on the node and `/auth/local/*` on the game server — are recorded **without
+either body**. They carry a plaintext password up and a freshly-minted session
+token back, and the node proxies the browser's sign-in to the game server, so the
+same credential crosses the inbound middleware, the outbound httpx hook, and the
+frontend client recorder. Capturing it would make this panel the leak; "it's only
+local" is not an argument, because a local buffer is exactly what an inspector
+reads.
+
+This is a **redaction** list, not a skip list: the event still appears with its
+method, path, status and timing, which is what you actually need to debug a
+sign-in. It is keyed on **path prefix** in all three seams rather than on a flag
+at the call site, so a new auth route inherits the protection by where it lives
+instead of by someone remembering to annotate it. See
+[the games module](games.mdx) for the flow itself.
 
 Response bodies are captured on `client` events and on all `outbound` calls — so
 the request↔response pair to the LLM reads end to end — truncated like request

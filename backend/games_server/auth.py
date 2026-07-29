@@ -43,6 +43,7 @@ flow rather than open a consent page that 400s.
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import secrets
@@ -123,6 +124,202 @@ def resolve_token(token: str) -> dict[str, str] | None:
     return None
 
 
+def _session(account_id: str, display_name: str, handle: str | None) -> dict[str, Any]:
+    """The payload every sign-in returns: a JWT plus the account behind it.
+
+    One builder for all four flows (GitHub, Google, local signup, local login) so
+    the shape can't drift between them — the node stores this verbatim and the
+    browser is handed only the `account` half.
+    """
+    return {
+        "token": issue_jwt(account_id, display_name),
+        "account": {
+            "id": account_id,
+            "display_name": display_name,
+            "handle": handle,
+        },
+    }
+
+
+def account_payload(account_id: str) -> dict[str, Any]:
+    """The `account` half on its own, read fresh from the DB — what `GET /me`
+    answers. The node uses it to learn a handle its stored token predates, and to
+    see a callsign change made from another machine."""
+    account = store.get_account(account_id) or {}
+    return {
+        "id": account_id,
+        "display_name": str(account.get("display_name") or account_id),
+        "handle": account.get("handle"),
+    }
+
+
+# ---- Local (email + password) accounts --------------------------------------
+#
+# The third way in, alongside the two OAuth providers: sign up with an address and
+# a password. Everything downstream is identical — the same `accounts` row, the
+# same handle, the same JWT — so a local account is a first-class player, not a
+# guest tier. Only the credential check differs.
+
+# scrypt from the standard library, not bcrypt/argon2: neither is a dependency of
+# this project (bcrypt appears in the lock file only via the optional `chroma`
+# extra, so it is absent from a default `uv sync`), and scrypt is memory-hard,
+# which is the property that matters. Parameters are stored *in* the hash string
+# so they can be raised later without invalidating existing rows.
+_SCRYPT_N = 2**14  # 16 MB at r=8 — see _hash_raw on why not 2**15
+_SCRYPT_R = 8
+_SCRYPT_P = 1
+_SCRYPT_DKLEN = 32
+_SCRYPT_MAXMEM = 64 * 1024 * 1024
+
+MIN_PASSWORD_LEN = 8
+
+
+def _hash_raw(password: str, salt: bytes, n: int, r: int, p: int, dklen: int) -> bytes:
+    # `maxmem` must be passed explicitly: CPython defaults it to 32 MB, which is
+    # *under* what n=2**15,r=8 needs, so the stronger parameters raise ValueError
+    # rather than run. Setting it high enough leaves room to raise _SCRYPT_N later.
+    import hashlib
+
+    return hashlib.scrypt(
+        password.encode("utf-8"),
+        salt=salt,
+        n=n,
+        r=r,
+        p=p,
+        dklen=dklen,
+        maxmem=_SCRYPT_MAXMEM,
+    )
+
+
+def hash_password(password: str) -> str:
+    """`scrypt$n$r$p$<b64 salt>$<b64 hash>` — self-describing, so verify never has
+    to guess the parameters a stored hash was made with."""
+    import base64
+
+    salt = os.urandom(16)
+    dk = _hash_raw(password, salt, _SCRYPT_N, _SCRYPT_R, _SCRYPT_P, _SCRYPT_DKLEN)
+    return "scrypt${}${}${}${}${}".format(
+        _SCRYPT_N,
+        _SCRYPT_R,
+        _SCRYPT_P,
+        base64.b64encode(salt).decode(),
+        base64.b64encode(dk).decode(),
+    )
+
+
+def verify_password(password: str, encoded: str) -> bool:
+    """Constant-time check against a stored hash. A malformed or unknown-scheme
+    hash is False, never an exception — a corrupt row must fail the login, not the
+    request."""
+    import base64
+    import hmac
+
+    try:
+        scheme, n, r, p, salt_b64, dk_b64 = encoded.split("$")
+        if scheme != "scrypt":
+            return False
+        expected = base64.b64decode(dk_b64)
+        actual = _hash_raw(
+            password, base64.b64decode(salt_b64), int(n), int(r), int(p), len(expected)
+        )
+    except (ValueError, TypeError):
+        return False
+    return hmac.compare_digest(actual, expected)
+
+
+@functools.cache
+def _dummy_hash() -> str:
+    """A hash of a random string nobody can log in with, used to spend the same
+    scrypt time on an unknown address as on a real one. Without it, "no such
+    account" returns in microseconds while a real account takes ~50ms, and that
+    gap is an account-enumeration oracle for anyone who can time two requests.
+
+    Computed on first use rather than at import: scrypt is deliberately slow, and
+    every process that imports this module would otherwise pay for it whether or
+    not it ever serves a login.
+    """
+    return hash_password(secrets.token_hex(16))
+
+
+EMAIL_RE = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
+
+
+def _valid_email(email: str) -> bool:
+    import re
+
+    return bool(re.match(EMAIL_RE, email.strip())) and len(email.strip()) <= 254
+
+
+def signup_local(email: str, password: str, callsign: str = "") -> dict[str, Any]:
+    """Create an email+password account. Raises ValueError with a user-facing
+    message on bad input or a taken address/callsign.
+
+    The account id is `local:<uuid4hex>` — **not** the email. People change their
+    address; an id is referenced by ratings, replays and match history forever.
+    """
+    import uuid
+
+    email = store.normalize_email(email)
+    if not _valid_email(email):
+        raise ValueError("that doesn't look like an email address")
+    if len(password) < MIN_PASSWORD_LEN:
+        raise ValueError(f"password must be at least {MIN_PASSWORD_LEN} characters")
+    if store.get_local_credentials(email) is not None:
+        raise ValueError("an account already exists for that email")
+
+    account_id = store.upsert_account("local", uuid.uuid4().hex, email.split("@")[0])
+    if store.set_local_credentials(account_id, email, hash_password(password)) != "ok":
+        # Lost a race against a simultaneous signup for the same address.
+        raise ValueError("an account already exists for that email")
+
+    # An explicit callsign is the signup form's; without one we derive a starting
+    # handle from the address, exactly as the OAuth flows derive theirs, so every
+    # account leaves sign-up with a callsign it can rename later.
+    if callsign:
+        outcome = set_account_handle(account_id, callsign)
+        if outcome != "ok":
+            raise ValueError(
+                "that callsign is taken"
+                if outcome == "taken"
+                else "a callsign is 3-20 characters of a-z, 0-9, - or _"
+            )
+        handle: str | None = callsign.strip().lower()
+    else:
+        handle = store.ensure_handle(account_id, email.split("@")[0])
+
+    display_name = handle or email.split("@")[0]
+    return _session(account_id, display_name, handle)
+
+
+def login_local(email: str, password: str) -> dict[str, Any]:
+    """Check an email+password and mint a session. Raises ValueError on a bad
+    pair — deliberately the *same* message either way, so the response can't be
+    used to test whether an address has an account."""
+    cred = store.get_local_credentials(email)
+    if cred is None:
+        # Spend the time anyway (see _dummy_hash) before failing.
+        verify_password(password, _dummy_hash())
+        raise ValueError("wrong email or password")
+    if not verify_password(password, str(cred["password_hash"])):
+        raise ValueError("wrong email or password")
+
+    account_id = str(cred["account_id"])
+    account = store.get_account(account_id) or {}
+    handle = account.get("handle")
+    display_name = str(handle or account.get("display_name") or account_id)
+    return _session(account_id, display_name, handle)
+
+
+def set_account_handle(account_id: str, handle: str) -> str:
+    """Claim or rename a callsign. Returns 'ok', 'invalid' or 'taken'.
+
+    Unlike `store.ensure_handle` — which auto-derives one and locks it — this is
+    the deliberate, user-chosen rename, so it applies whether or not a handle is
+    already set. Uniqueness is enforced by the DB index, not by a pre-read.
+    """
+    return store.set_handle(account_id, handle)
+
+
 # ---- GitHub OAuth (device flow) -------------------------------------------
 
 GITHUB_DEVICE_CODE_URL = "https://github.com/login/device/code"
@@ -196,9 +393,8 @@ def _finish_github(profile: dict[str, Any]) -> dict[str, Any]:
     display_name = login or str(profile.get("name") or f"gh-{subject}")
     account_id = store.upsert_account("github", subject, display_name)
     # The GitHub login *is* the handle — it's globally unique, so no collision dance.
-    store.ensure_handle(account_id, login or display_name)
-    token = issue_jwt(account_id, display_name)
-    return {"token": token, "account": {"id": account_id, "display_name": display_name}}
+    handle = store.ensure_handle(account_id, login or display_name)
+    return _session(account_id, display_name, handle)
 
 
 # ---- Google OAuth (device flow) ---------------------------------------------
@@ -314,9 +510,8 @@ def _finish_google(profile: dict[str, Any]) -> dict[str, Any]:
     account_id = store.upsert_account("google", subject, display_name)
     # Google has no username, so the handle is the email's local part (before @);
     # these aren't globally unique, so ensure_handle resolves collisions.
-    store.ensure_handle(account_id, local_part or display_name)
-    token = issue_jwt(account_id, display_name)
-    return {"token": token, "account": {"id": account_id, "display_name": display_name}}
+    handle = store.ensure_handle(account_id, local_part or display_name)
+    return _session(account_id, display_name, handle)
 
 
 # ---- Web (authorization-code) OAuth ----------------------------------------
@@ -362,13 +557,19 @@ def providers_available() -> dict[str, dict[str, bool]]:
     GitHub's device flow needs only the client id; its web flow needs id + secret on
     the same OAuth App. Google's device flow needs its limited-input id + secret, and
     its web flow needs the *separate* web-application client — never the device one,
-    which has no redirect URI and so always 400s."""
+    which has no redirect URI and so always 400s.
+
+    `local` (email + password) needs no configuration at all, so it is always
+    available — which is the point: a server with no OAuth credentials set can still
+    sign people up. It reports neither `device` nor `web` because it is neither; the
+    `password` key is what a client checks."""
     gh_id, gh_secret = bool(_github_client_id()), bool(_github_client_secret())
     g_device = bool(_google_client_id()) and bool(_google_client_secret())
     g_web = bool(_google_web_client_id()) and bool(_google_web_client_secret())
     return {
         "github": {"device": gh_id, "web": gh_id and gh_secret},
         "google": {"device": g_device, "web": g_web},
+        "local": {"password": True},
     }
 
 

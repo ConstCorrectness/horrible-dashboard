@@ -48,7 +48,13 @@ def test_dev_auth_can_be_disabled_but_jwt_still_works(monkeypatch) -> None:
 
 def test_finish_github_creates_account_and_signs_jwt() -> None:
     out = auth._finish_github({"id": 99, "login": "octocat"})
-    assert out["account"] == {"id": "github:99", "display_name": "octocat"}
+    # `handle` rides along on every sign-in payload so the node learns the callsign
+    # without a second round-trip (see auth._session).
+    assert out["account"] == {
+        "id": "github:99",
+        "display_name": "octocat",
+        "handle": "octocat",
+    }
     claims = auth.verify_jwt(out["token"])
     assert claims["sub"] == "github:99"
     # The account is now persisted for the leaderboard.
@@ -61,7 +67,11 @@ def test_finish_google_creates_account_and_signs_jwt() -> None:
     out = auth._finish_google(
         {"id": "108", "email": "mildred.bakes@gmail.com", "name": "Mildred"}
     )
-    assert out["account"] == {"id": "google:108", "display_name": "Mildred"}
+    assert out["account"] == {
+        "id": "google:108",
+        "display_name": "Mildred",
+        "handle": "mildred-bakes",
+    }
     claims = auth.verify_jwt(out["token"])
     assert claims["sub"] == "google:108"
     assert store.get_account("google:108")["display_name"] == "Mildred"
@@ -74,6 +84,166 @@ def test_finish_google_falls_back_to_email_local_part() -> None:
     assert out["account"]["display_name"] == "bosun.salt"
     # Two different Gmail accounts are two distinct players.
     assert out["account"]["id"] != auth._finish_google({"id": "108"})["account"]["id"]
+
+
+# ---- local (email + password) accounts --------------------------------------
+
+
+def test_password_hash_roundtrip_and_is_salted() -> None:
+    encoded = auth.hash_password("correct horse battery")
+    assert encoded.startswith("scrypt$")
+    assert auth.verify_password("correct horse battery", encoded)
+    assert not auth.verify_password("wrong horse battery", encoded)
+    # Per-password salt: the same password never produces the same stored string,
+    # so a stolen table can't be attacked with one precomputed pass.
+    assert auth.hash_password("correct horse battery") != encoded
+
+
+def test_verify_password_rejects_garbage_instead_of_raising() -> None:
+    # A corrupt or foreign-scheme row must fail the login, not the request.
+    for bad in ["", "not-a-hash", "bcrypt$a$b", "scrypt$x$8$1$zz$zz", "scrypt$1$2$3"]:
+        assert auth.verify_password("anything", bad) is False
+
+
+def test_signup_local_creates_account_with_chosen_callsign() -> None:
+    out = auth.signup_local("Ada@Example.com", "hunter2hunter2", "ada")
+    account_id = out["account"]["id"]
+    # The id is a uuid, never the email — people change addresses, ids are forever.
+    assert account_id.startswith("local:")
+    assert "ada" not in account_id
+    assert out["account"]["handle"] == "ada"
+    assert auth.verify_jwt(out["token"])["sub"] == account_id
+    # The email is stored lowercased, so the address is one account not two.
+    assert store.get_local_credentials("ADA@EXAMPLE.COM")["account_id"] == account_id
+    # The password is never stored in a readable form.
+    assert (
+        "hunter2hunter2"
+        not in store.get_local_credentials("ada@example.com")["password_hash"]
+    )
+
+
+def test_signup_local_derives_a_callsign_when_none_is_chosen() -> None:
+    out = auth.signup_local("bosun@example.com", "longenoughpw")
+    assert out["account"]["handle"] == "bosun"
+
+
+def test_signup_local_rejects_bad_input_and_duplicates() -> None:
+    auth.signup_local("taken@example.com", "longenoughpw")
+    for email, password, expected in [
+        ("TAKEN@example.com", "longenoughpw", "already exists"),
+        ("notanemail", "longenoughpw", "email address"),
+        ("fresh@example.com", "short", "at least 8"),
+    ]:
+        try:
+            auth.signup_local(email, password)
+            raise AssertionError(f"{email} should have been rejected")
+        except ValueError as exc:
+            assert expected in str(exc)
+
+
+def test_login_local_roundtrip() -> None:
+    auth.signup_local("pilot@example.com", "longenoughpw", "pilot")
+    out = auth.login_local("PILOT@example.com", "longenoughpw")
+    assert out["account"]["handle"] == "pilot"
+    assert auth.resolve_token(out["token"])["account_id"] == out["account"]["id"]
+
+
+def test_login_local_cannot_be_used_to_enumerate_accounts() -> None:
+    """A wrong password and an unknown address are indistinguishable — same message,
+    and both spend the scrypt time (see auth._dummy_hash), so neither the response
+    nor its latency confirms whether an address has an account here."""
+    auth.signup_local("known@example.com", "longenoughpw")
+    messages = set()
+    for email, password in [
+        ("known@example.com", "wrongpassword"),
+        ("unknown@example.com", "wrongpassword"),
+    ]:
+        try:
+            auth.login_local(email, password)
+            raise AssertionError("should have been rejected")
+        except ValueError as exc:
+            messages.add(str(exc))
+    assert len(messages) == 1
+
+
+def test_oauth_account_has_no_password_and_cannot_be_logged_into_locally() -> None:
+    auth._finish_github({"id": 4242, "login": "gh-only"})
+    assert store.get_local_credentials("gh-only") is None
+    try:
+        auth.login_local("gh-only", "anything")
+        raise AssertionError("an OAuth account has no local password")
+    except ValueError as exc:
+        assert "wrong email or password" in str(exc)
+
+
+def test_set_account_handle_renames_and_enforces_uniqueness() -> None:
+    a = auth.signup_local("one@example.com", "longenoughpw", "alpha")["account"]["id"]
+    b = auth.signup_local("two@example.com", "longenoughpw", "bravo")["account"]["id"]
+
+    # Unlike ensure_handle, a deliberate rename applies even though one is set.
+    assert auth.set_account_handle(a, "alpha-prime") == "ok"
+    assert auth.account_payload(a)["handle"] == "alpha-prime"
+
+    assert auth.set_account_handle(b, "alpha-prime") == "taken"
+    assert auth.set_account_handle(b, "no") == "invalid"
+    assert auth.set_account_handle(b, "Has Spaces") == "invalid"
+    assert auth.account_payload(b)["handle"] == "bravo"
+
+
+def test_local_signup_rejects_a_taken_callsign_without_stranding_the_account() -> None:
+    auth.signup_local("first@example.com", "longenoughpw", "wanted")
+    try:
+        auth.signup_local("second@example.com", "longenoughpw", "wanted")
+        raise AssertionError("the callsign was already taken")
+    except ValueError as exc:
+        assert "callsign is taken" in str(exc)
+
+
+def test_local_signup_and_login_over_http(monkeypatch) -> None:
+    """The routes, end to end — and specifically that `/auth/local/*` is reachable
+    at all: it is declared above `/auth/{provider}/web/start`, whose path parameter
+    would otherwise swallow it (FastAPI matches in declaration order)."""
+    from starlette.testclient import TestClient
+
+    from backend.games_server import app as app_mod
+
+    client = TestClient(app_mod.app)
+
+    created = client.post(
+        "/auth/local/signup",
+        json={
+            "email": "http@example.com",
+            "password": "longenoughpw",
+            "callsign": "httpuser",
+        },
+    ).json()
+    assert created["account"]["handle"] == "httpuser"
+    assert created["token"]
+
+    again = client.post(
+        "/auth/local/login",
+        json={"email": "http@example.com", "password": "longenoughpw"},
+    ).json()
+    assert again["account"]["id"] == created["account"]["id"]
+
+    wrong = client.post(
+        "/auth/local/login",
+        json={"email": "http@example.com", "password": "nope"},
+    ).json()
+    assert "token" not in wrong and wrong["error"]
+
+    # /me and the callsign rename, both bearer-authenticated.
+    headers = {"Authorization": f"Bearer {created['token']}"}
+    assert client.get("/me", headers=headers).json()["account"]["handle"] == "httpuser"
+    renamed = client.post(
+        "/account/handle", json={"handle": "renamed"}, headers=headers
+    ).json()
+    assert renamed["ok"] and renamed["account"]["handle"] == "renamed"
+    assert client.get("/me", headers=headers).json()["account"]["handle"] == "renamed"
+
+    # Both are refused without a token.
+    assert client.get("/me").json()["error"]
+    assert client.post("/account/handle", json={"handle": "x"}).json()["error"]
 
 
 def test_ensure_handle_is_locked_after_first_sign_in() -> None:
@@ -325,6 +495,9 @@ def test_auth_providers_reports_flow_availability(monkeypatch) -> None:
     assert client.get("/auth/providers").json() == {
         "github": {"device": True, "web": False},
         "google": {"device": False, "web": False},
+        # Email+password needs no credentials, so it is unconditionally on — a
+        # server with no OAuth configured at all can still sign people up.
+        "local": {"password": True},
     }
 
     # Full GitHub credentials: both flows.

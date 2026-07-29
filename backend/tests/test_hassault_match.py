@@ -28,6 +28,14 @@ from backend.modules.hassault.match import (
 from backend.modules.hassault.physics import MOVE_SPEED, flat_world
 
 
+@pytest.fixture
+def signed_in(monkeypatch):
+    """A player with an account. Joining is gated on one (see
+    test_hassault_channel.py); these tests are about the wire path past that gate,
+    so they stand an account up rather than exercise the refusal."""
+    monkeypatch.setattr(channel, "_signed_in_callsign", lambda: "alice")
+
+
 class FakeConn:
     """Stands in for a `/ws` connection: records what would have been sent."""
 
@@ -255,7 +263,7 @@ def test_a_command_without_a_sequence_number_is_dropped():
     assert channel._parse_command("not a dict") is None
 
 
-def test_join_and_input_round_trip_over_the_channel():
+def test_join_and_input_round_trip_over_the_channel(signed_in):
     """The real wire path: `join` then `input`, through `channel.handle`."""
 
     async def go():
@@ -302,7 +310,7 @@ def test_join_and_input_round_trip_over_the_channel():
     asyncio.run(go())
 
 
-def test_joining_a_missing_room_sends_an_error_rather_than_raising():
+def test_joining_a_missing_room_sends_an_error_rather_than_raising(signed_in):
     async def go():
         conn = FakeConn()
         try:

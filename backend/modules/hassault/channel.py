@@ -101,9 +101,29 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
 
     if event == "join":
         map_name = str(data.get("map") or "")
-        name = str(data.get("name") or "player")
         room_id = str(data.get("room") or "") or None
         host = str(data.get("host") or "")
+
+        # Identity is the account's callsign, never `data["name"]` — a name the
+        # client picks is a label anyone can type, and this is the one place that
+        # decides who a player *is*. The check sits above both branches on purpose:
+        # the remote branch below returns before `match_server.join` is ever
+        # reached, so a gate placed there would leave cross-node play wide open.
+        # It also sits above `_leave_any`, so a refused join can't evict someone
+        # from the match they are already in.
+        name = _signed_in_callsign()
+        if name is None:
+            await conn.send_json(
+                _evt(
+                    "error",
+                    {
+                        "message": "sign in and choose a callsign to play",
+                        "code": "not_signed_in",
+                    },
+                )
+            )
+            return
+
         # Leaving whatever we were in first is what makes "join" idempotent from
         # the browser's point of view, local or remote.
         await _leave_any(conn)
@@ -232,6 +252,24 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
 
     elif event == "list":
         await conn.send_json(_evt("matches", {"matches": match_server.listing()}))
+
+
+def _signed_in_callsign() -> str | None:
+    """This node's player identity, or None when signed out / not yet enlisted.
+
+    Reaches into the games module deliberately, and for the same reason
+    `invite_friend` below reaches into social: the account lives there — the node
+    holds one game-server JWT and one callsign, shared by the ladder and by this
+    game — and duplicating that custody here would mean two accounts to sign into.
+    The dependency is one-way and backend-side, so the frontend module boundary is
+    untouched: the pane only ever talks to `/api/hassault`.
+
+    Imported inside the function, not at module scope, so a games-module import
+    error can never stop this channel from loading.
+    """
+    from backend.modules.games import server_auth
+
+    return server_auth.signed_in_callsign()
 
 
 async def _leave_any(conn: WsConnection) -> None:

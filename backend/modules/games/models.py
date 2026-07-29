@@ -148,8 +148,12 @@ class GamesStatus(BaseModel):
 
     connected: bool
     account_id: str | None = None
-    signed_in: bool = False  # holds a GitHub-issued JWT (vs the dev token)
+    signed_in: bool = False  # holds a server-issued JWT (vs the dev token)
     display_name: str | None = None
+    # The globally unique callsign (the game server's `handle`). None means signed
+    # out *or* signed in without one yet — HorribleAssault treats the latter as
+    # "not enlisted" and asks for one before letting you play.
+    callsign: str | None = None
     server_url: str
     policy: str
     games: list[GameInfo] = []
@@ -157,3 +161,20 @@ class GamesStatus(BaseModel):
 
 class DevicePollRequest(BaseModel):
     device_code: str
+
+
+class LocalSignupRequest(BaseModel):
+    """Email+password signup. Never logged — see `_REDACT_BODY_PREFIXES`."""
+
+    email: str
+    password: str
+    callsign: str = ""
+
+
+class LocalLoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class SetCallsignRequest(BaseModel):
+    callsign: str

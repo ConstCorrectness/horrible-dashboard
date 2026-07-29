@@ -68,6 +68,44 @@ def test_sensitive_route_bodies_are_captured(client: TestClient) -> None:
     assert "+15551234567" in auth["request_body"]
 
 
+def test_password_bodies_are_redacted_but_the_event_is_still_recorded(
+    client: TestClient,
+) -> None:
+    """The one exception to "capture everything raw".
+
+    The observability panel is a local Wireshark and captures bodies unmasked on
+    purpose — see the two tests above, which pin that. Email+password sign-in is
+    the single carve-out: the request carries a plaintext password and the
+    response carries a freshly minted session token, so capturing either would
+    make this panel the leak. The *event* still appears (method, path, status and
+    timing are what you actually need to debug a sign-in) — this is a redaction,
+    not a skip.
+    """
+    client.post(
+        "/api/games/auth/local/login",
+        json={"email": "ada@example.com", "password": "hunter2hunter2"},
+    )
+    events = client.get("/api/telemetry/recent").json()
+
+    signin = [e for e in events if e["target"] == "/api/games/auth/local/login"]
+    assert signin, "the sign-in attempt should still be recorded"
+    assert signin[-1]["request_body"] is None
+    assert signin[-1]["response_body"] is None
+    assert signin[-1]["method"] == "POST"
+
+    # And nowhere else in the buffer either — the node proxies this call onward,
+    # so the same credential also crosses the outbound httpx hook.
+    assert "hunter2hunter2" not in str(events)
+
+
+def test_redaction_is_scoped_to_the_auth_paths(client: TestClient) -> None:
+    """A prefix list, not a global switch: everything else still captures bodies."""
+    client.put("/api/dashboard/layout", json={"widgets": ["dashboard.welcome"]})
+    events = client.get("/api/telemetry/recent").json()
+    put = [e for e in events if e["target"] == "/api/dashboard/layout"][-1]
+    assert put["request_body"] is not None and "widgets" in put["request_body"]
+
+
 def test_ws_frame_is_recorded() -> None:
     recorder.clear()
     record_ws_frame("in", {"channel": "agent", "event": "ask", "text": "hi"})

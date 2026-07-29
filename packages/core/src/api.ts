@@ -22,6 +22,21 @@ export class ApiError extends Error {
 // Mirror of the backend's capture policy (instrument.py): everything is truncated.
 const MAX_BODY_CHARS = 2048;
 
+/**
+ * Paths whose bodies never reach the client I/O ring buffer — the mirror of
+ * `_REDACT_BODY_PREFIXES` in instrument.py, and the same reasoning: these carry a
+ * plaintext password up and a session token back, so capturing them would make the
+ * observability panel the leak. The event is still recorded without its bodies.
+ *
+ * Keyed on path prefix rather than an argument at the call site so a new auth
+ * route is covered by existing, not by remembering to opt out.
+ */
+const REDACT_BODY_PREFIXES = ['/games/auth/local'];
+
+function redactsBody(path: string): boolean {
+  return REDACT_BODY_PREFIXES.some((prefix) => path.startsWith(prefix));
+}
+
 function safeBody(body: string | null | undefined): string | null {
   if (!body) return null;
   return body.length > MAX_BODY_CHARS ? `${body.slice(0, MAX_BODY_CHARS)}… [truncated]` : body;
@@ -32,6 +47,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const start = performance.now();
   const requestBody = typeof init?.body === 'string' ? init.body : null;
   const requestBytes = requestBody?.length ?? null;
+  const redacted = redactsBody(path);
   try {
     const res = await fetch(apiUrl(`${BASE}${path}`), init);
     const text = await res.text();
@@ -44,8 +60,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       response_bytes: text.length,
       request_headers: init?.headers ? { ...(init.headers as Record<string, string>) } : null,
       response_headers: Object.fromEntries(res.headers.entries()),
-      request_body: safeBody(requestBody),
-      response_body: safeBody(text),
+      request_body: redacted ? null : safeBody(requestBody),
+      response_body: redacted ? null : safeBody(text),
     });
     if (!res.ok) {
       // Surface the backend's `detail` (FastAPI HTTPException) instead of a bare

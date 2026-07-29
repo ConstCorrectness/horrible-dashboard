@@ -28,6 +28,10 @@ def test_fresh_db_is_fully_migrated() -> None:
     assert _version() == len(store.MIGRATIONS)
     assert {"handle", "is_bot"} <= _columns("accounts")
     assert {"series_id", "ruleset", "models"} <= _columns("results")
+    assert {"account_id", "email", "password_hash"} <= _columns("local_credentials")
+    # The credential lives in its own table on purpose, so the hash can never ride
+    # along on the `SELECT *` behind get_account (see _m7_local_credentials).
+    assert not ({"password_hash", "email"} & _columns("accounts"))
 
 
 def test_v0_db_upgrades_in_place_preserving_rows() -> None:
@@ -59,6 +63,9 @@ def test_v0_db_upgrades_in_place_preserving_rows() -> None:
     assert _version() == len(store.MIGRATIONS)
     assert {"handle", "is_bot"} <= _columns("accounts")
     assert {"series_id", "ruleset", "models"} <= _columns("results")
+    # Tables introduced by a later migration exist on an upgraded install too —
+    # this is the case that breaks if a migration is inserted rather than appended.
+    assert {"account_id", "email", "password_hash"} <= _columns("local_credentials")
     with store.get_conn() as c:
         row = c.execute("SELECT * FROM accounts WHERE id = 'github:1'").fetchone()
         assert row["display_name"] == "Alice"

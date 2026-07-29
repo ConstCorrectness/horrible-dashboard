@@ -114,7 +114,10 @@ def test_a_peer_joins_and_becomes_an_ordinary_player():
         )
         assert len(room.players) == 1
         player = next(iter(room.players.values()))
-        assert player.name == "rob"
+        # The peer's claimed name is a *label*, tagged with the node it actually
+        # arrived from — identity is the authenticated node id, so a trusted
+        # friend's node can't send a nameplate that reads as a local account.
+        assert player.name == "rob@nodeA"
         # The match server has no notion of "remote" — it just has a conn.
         assert isinstance(player.conn, fabric.PeerPlayerConn)
 
@@ -269,7 +272,7 @@ def test_a_departed_peer_takes_its_players_with_it():
 
         await fabric.drop_peer("nodeA")
         assert len(room.players) == 1
-        assert next(iter(room.players.values())).name == "kim"
+        assert next(iter(room.players.values())).name == "kim@nodeB"
         assert fabric.hosted_count() == 1
 
     asyncio.run(go())

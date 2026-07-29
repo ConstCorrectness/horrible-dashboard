@@ -8,12 +8,22 @@ browser** — the clubhouse/`google_auth.py` token pattern. The node presents it
 The device flows themselves run on the game server (it has the client ids/secrets);
 the node just proxies start/poll so the browser talks to one origin (no CORS), and
 captures the issued token when it arrives.
+
+There is a third way in alongside the two OAuth providers: **email + password**
+(`local_signup` / `local_login`), which needs no OAuth configuration at all, so a
+server with no client ids set can still sign people up. It ends in the same place —
+one JWT, held here — and the credential is never recorded (see `_local_auth`).
+
+The account carries a **callsign**: the game server's globally unique `handle`,
+which is what HorribleAssault plays you as. `signed_in_callsign()` is the gate the
+match channel consults; a client-supplied name is never identity.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -40,12 +50,62 @@ def get_token() -> str | None:
     return str(data["token"]) if data and data.get("token") else None
 
 
-def signed_in_name() -> str | None:
+def _is_expired(token: str) -> bool:
+    """Whether a stored JWT is past its `exp`.
+
+    The signature is deliberately *not* verified: only the game server holds the
+    signing secret, and this file is written by nothing but our own sign-in flow,
+    so the trust boundary here is the filesystem. All we need is the expiry, and
+    reading it locally is what stops the node reporting "signed in" for a token
+    the play socket will reject as `invalid token` — a 30-day-old session used to
+    look live right up until the moment you tried to play.
+    """
+    import jwt
+
+    try:
+        claims = jwt.decode(token, options={"verify_signature": False})
+    except jwt.PyJWTError:
+        return True  # unreadable is as good as expired
+    exp = claims.get("exp")
+    if exp is None:
+        return False  # no expiry claim — nothing to have passed
+    return time.time() >= float(exp)
+
+
+def signed_in_account() -> dict[str, Any] | None:
+    """The account this node is signed in as (`{id, display_name, handle}`), or None.
+
+    None covers three cases that all mean the same thing to a caller: no token
+    file, a malformed one, and an expired session.
+    """
     data = _read()
-    if not data:
+    if not data or not data.get("token"):
+        return None
+    if _is_expired(str(data["token"])):
         return None
     account = data.get("account") or {}
-    return account.get("display_name")
+    account_id = str(account.get("id") or "")
+    if not account_id:
+        return None
+    return {
+        "id": account_id,
+        "display_name": str(account.get("display_name") or account_id),
+        "handle": account.get("handle"),
+    }
+
+
+def signed_in_name() -> str | None:
+    account = signed_in_account()
+    return account["display_name"] if account else None
+
+
+def signed_in_callsign() -> str | None:
+    """The account's globally unique callsign (the game server's `handle`), or None
+    when signed out or not yet enlisted. This — never a client-supplied string — is
+    who a player is in HorribleAssault."""
+    account = signed_in_account()
+    handle = account.get("handle") if account else None
+    return str(handle) if handle else None
 
 
 def sign_out() -> None:
@@ -225,6 +285,125 @@ async def web_login_poll(provider: str) -> dict[str, Any]:
         return {"signed_in": True, "account": data.get("account")}
     _pending_web.pop(provider, None)
     return {"error": data.get("error") or "sign-in failed"}
+
+
+# ---- local (email + password) sign-in ---------------------------------------
+#
+# Same custody rule as the OAuth flows: the game server mints the JWT, the node
+# keeps it, and the browser is handed only `{signed_in, account}`.
+#
+# The password does pass through this process on its way to the game server —
+# unavoidable while the browser talks to one origin (the alternative is a
+# cross-origin POST straight to the game server, which breaks CORS *and* would put
+# the minted token in the browser). What matters is that it is never written down:
+# `/api/games/auth/local` and `/auth/local` are both in `_REDACT_BODY_PREFIXES`
+# (backend/modules/telemetry/instrument.py), so neither the inbound middleware nor
+# the outbound httpx hook records these bodies.
+
+
+async def _local_auth(action: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """POST a credential to the game server and capture the session it returns."""
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            res = await client.post(f"{_http_base()}/auth/local/{action}", json=payload)
+            res.raise_for_status()
+            data = res.json()
+    except (httpx.ConnectError, httpx.ConnectTimeout):
+        return _unreachable_error()
+    except httpx.HTTPStatusError as exc:
+        try:
+            err_data = exc.response.json()
+            if "error" in err_data:
+                return {"error": err_data["error"]}
+        except Exception:
+            pass
+        return {
+            "error": f"Game server returned error status {exc.response.status_code}"
+        }
+    except httpx.HTTPError as exc:
+        return {"error": f"Failed to communicate with game server: {exc}"}
+    if data.get("token"):
+        path = _token_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data), encoding="utf-8")
+        return {"signed_in": True, "account": data.get("account")}
+    return {"error": data.get("error") or "sign-in failed"}
+
+
+async def local_signup(email: str, password: str, callsign: str = "") -> dict[str, Any]:
+    return await _local_auth(
+        "signup", {"email": email, "password": password, "callsign": callsign}
+    )
+
+
+async def local_login(email: str, password: str) -> dict[str, Any]:
+    return await _local_auth("login", {"email": email, "password": password})
+
+
+# ---- account / callsign ------------------------------------------------------
+
+
+async def fetch_account() -> dict[str, Any] | None:
+    """The signed-in account, read fresh from the game server (`GET /me`).
+
+    Used to pick up a callsign this node's stored token predates, or one changed
+    from another machine. Returns None when signed out or the server is
+    unreachable — callers fall back to the locally cached account.
+    """
+    import httpx
+
+    if signed_in_account() is None:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.get(f"{_http_base()}/me", headers=_bearer())
+            res.raise_for_status()
+            data = res.json()
+    except Exception:  # noqa: BLE001 — a refresh is advisory, never fatal
+        return None
+    account = data.get("account")
+    if not isinstance(account, dict):
+        return None
+    _merge_account(account)
+    return account
+
+
+def _merge_account(account: dict[str, Any]) -> None:
+    """Write a refreshed account back into the token file, keeping the token."""
+    data = _read()
+    if not data:
+        return
+    data["account"] = account
+    _token_path().write_text(json.dumps(data), encoding="utf-8")
+
+
+async def set_callsign(handle: str) -> dict[str, Any]:
+    """Claim or rename the callsign, then cache the updated account locally."""
+    import httpx
+
+    if signed_in_account() is None:
+        return {"error": "sign in first"}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.post(
+                f"{_http_base()}/account/handle",
+                json={"handle": handle},
+                headers=_bearer(),
+            )
+            res.raise_for_status()
+            data = res.json()
+    except (httpx.ConnectError, httpx.ConnectTimeout):
+        return _unreachable_error()
+    except httpx.HTTPError as exc:
+        return {"error": f"Failed to set callsign: {exc}"}
+    if data.get("error"):
+        return {"error": data["error"]}
+    account = data.get("account")
+    if isinstance(account, dict):
+        _merge_account(account)
+    return {"ok": True, "account": account}
 
 
 async def github_start() -> dict[str, Any]:

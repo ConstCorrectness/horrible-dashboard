@@ -110,7 +110,20 @@ async def handle_join(hub: PeerHub, session: PeerSession, env: PeerEnvelope) -> 
     room_id = str(data.get("room") or "")
     if not client:
         return
-    name = str(data.get("name") or "guest")[:24]
+
+    # The peer's *claimed* callsign is only a label — the same rule `handle_invite`
+    # states below. Identity here is the node id, which the fabric authenticated;
+    # `name` is whatever the guest's backend put on the wire, so a trusted friend
+    # could otherwise send a nameplate reading as somebody else's account. It is
+    # used for display and nothing else: no lookup, no decision, no account.
+    #
+    # Verifying a remote player's account for real would mean forwarding their
+    # game-server JWT for this host to `resolve_token`, which drags the central
+    # server into every join and breaks matches on an offline LAN. Deliberately not
+    # done — see the limitation noted in docs/modules/hassault.mdx.
+    label = str(data.get("name") or "guest")[:24]
+    # Tagged so a nameplate can never be mistaken for a local account's callsign.
+    name = f"{label}@{session.info.node_id[:6]}"[:24]
 
     room = match_server.get(room_id)
     if room is None:

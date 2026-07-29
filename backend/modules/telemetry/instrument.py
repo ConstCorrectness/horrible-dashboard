@@ -8,6 +8,15 @@ Bodies are only *size*-capped (truncated past the user-configured
 ``observability.maxBodyChars``, and never reading past ``_MAX_CAPTURE_BYTES``).
 Wiring these once means every module's traffic is observed without per-module
 logging — see docs/modules/observability.md.
+
+The **one** exception to "no masking" is ``_REDACT_BODY_PREFIXES``: paths whose
+bodies carry a password or a freshly-minted session token in *plaintext*, where
+capture would turn the panel itself into the leak. Those events are still
+recorded — method, path, status and timing are exactly as useful for debugging a
+sign-in — but with both bodies dropped. This is a redaction list, not a skip
+list, and it is deliberately keyed on **path prefix** rather than an opt-in flag
+at the call site: a new auth route inherits the protection by living under the
+same prefix, instead of leaking until someone remembers to annotate it.
 """
 
 import json
@@ -23,6 +32,24 @@ from backend.modules.telemetry.recorder import recorder
 
 # Don't observe the telemetry endpoints (noise) or the websocket itself.
 _SKIP_PREFIXES = ("/api/telemetry",)
+
+# Paths whose request/response bodies are dropped from the captured event (see the
+# module docstring). These carry a plaintext password on the way in and a signed
+# session token on the way out, and both legs are recorded — the node proxies the
+# browser's sign-in to the game server, so the same credential passes the inbound
+# middleware *and* the outbound httpx hook. Matched against the inbound URL path
+# and, for outbound calls, the request path, so the node-side (`/api/games/auth/
+# local/...`) and game-server-side (`/auth/local/...`) spellings are both covered.
+_REDACT_BODY_PREFIXES = (
+    "/api/games/auth/local",
+    "/auth/local",
+)
+
+
+def _redacts_body(path: str) -> bool:
+    """Whether this path's bodies must be kept out of the I/O ring buffer."""
+    return path.startswith(_REDACT_BODY_PREFIXES)
+
 
 # Default body-truncation cap (characters) and the hard ceiling on how many bytes
 # are ever read from a body. Generous enough to inspect real payloads; the ceiling
@@ -105,9 +132,13 @@ async def telemetry_middleware(
 
     # Read the body up front: Starlette's middleware request replays it to the
     # downstream handler. Skip huge payloads rather than buffering them twice.
+    # A redacted path is never read at all — the point is that the credential
+    # doesn't enter this process's memory as a captured string in the first place.
     content_length = int(request.headers.get("content-length") or 0)
     raw_body = (
-        await request.body() if 0 < content_length <= _MAX_CAPTURE_BYTES else None
+        await request.body()
+        if 0 < content_length <= _MAX_CAPTURE_BYTES and not _redacts_body(path)
+        else None
     )
 
     start = time.perf_counter()
@@ -157,7 +188,13 @@ async def _on_response(response: httpx.Response) -> None:
     # Non-streaming response bodies (e.g. the agent's stream:false /api/chat round)
     # are captured here; streaming ones (Ollama chat/pull NDJSON, OpenAI SSE) can't
     # be read here without consuming the stream — `tee_stream` amends them later.
-    response_body, response_bytes = await _capture_response(response)
+    redacted = _redacts_body(request.url.path)
+    if redacted:
+        # Both legs matter here: the request carries the password, the response
+        # carries the session token the game server just minted.
+        response_body, response_bytes = None, None
+    else:
+        response_body, response_bytes = await _capture_response(response)
     event = recorder.record(
         source="outbound",
         method=request.method,
@@ -168,7 +205,11 @@ async def _on_response(response: httpx.Response) -> None:
         response_bytes=response_bytes,
         request_headers=capture_headers(request.headers),
         response_headers=capture_headers(response.headers),
-        request_body=safe_body(request.content, max_chars=_max_body_chars()),
+        request_body=(
+            None
+            if redacted
+            else safe_body(request.content, max_chars=_max_body_chars())
+        ),
         response_body=response_body,
     )
     if _is_streaming_response(response):

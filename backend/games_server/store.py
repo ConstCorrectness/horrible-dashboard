@@ -225,6 +225,36 @@ def _m6_backfill_handles(conn: sqlite3.Connection) -> None:
         taken.add(candidate)
 
 
+def _m7_local_credentials(conn: sqlite3.Connection) -> None:
+    """Native email+password sign-in, alongside the OAuth providers.
+
+    Deliberately a **separate table** rather than columns on `accounts`: the hash
+    and the email then never ride along on the `SELECT *` in `get_account`, which
+    feeds the account payloads handed to nodes. An account with no row here simply
+    has no password — that's every OAuth account, and it's why the two kinds of
+    sign-in can't be confused for one another.
+
+    `email` is stored lowercased and uniquely indexed. It is *not* the account id:
+    ids are `local:<uuid4hex>` because people change their email address and an id
+    is forever.
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS local_credentials (
+            account_id    TEXT PRIMARY KEY,
+            email         TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at    REAL NOT NULL,
+            updated_at    REAL NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_local_credentials_email "
+        "ON local_credentials(email)"
+    )
+
+
 MIGRATIONS: list[Any] = [
     _m1_identity_and_series,
     _m2_replays,
@@ -232,6 +262,7 @@ MIGRATIONS: list[Any] = [
     _m4_unique_handles,
     _m5_task_bank,
     _m6_backfill_handles,
+    _m7_local_credentials,
 ]
 
 
@@ -335,6 +366,62 @@ def get_account(account_id: str) -> dict[str, Any] | None:
             "SELECT * FROM accounts WHERE id = ?", (account_id,)
         ).fetchone()
     return dict(row) if row else None
+
+
+# ---- local (email+password) credentials -------------------------------------
+
+
+def normalize_email(email: str) -> str:
+    """The stored form of an address: trimmed and lowercased. Applied on every
+    read *and* write, so `Ada@Example.com` and `ada@example.com` are one account
+    rather than two that can't both be created (the unique index would only catch
+    the second one, and only if it happened to be written identically)."""
+    return email.strip().lower()
+
+
+def set_local_credentials(account_id: str, email: str, password_hash: str) -> str:
+    """Attach an email+password to an account. Returns 'ok' or 'taken'.
+
+    'taken' comes from the unique email index rather than a pre-read, so two
+    simultaneous signups for the same address can't both pass a check and then
+    both write.
+    """
+    init_db()
+    now = time.time()
+    with get_conn() as conn:
+        try:
+            conn.execute(
+                """
+                INSERT INTO local_credentials
+                    (account_id, email, password_hash, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(account_id) DO UPDATE SET
+                    email = excluded.email,
+                    password_hash = excluded.password_hash,
+                    updated_at = excluded.updated_at
+                """,
+                (account_id, normalize_email(email), password_hash, now, now),
+            )
+        except sqlite3.IntegrityError:
+            return "taken"
+    return "ok"
+
+
+def get_local_credentials(email: str) -> dict[str, Any] | None:
+    """The credential row for an address, or None if nobody has signed up with it."""
+    init_db()
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM local_credentials WHERE email = ?",
+            (normalize_email(email),),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def find_account_by_email(email: str) -> dict[str, Any] | None:
+    """The `accounts` row behind an email address, or None."""
+    cred = get_local_credentials(email)
+    return get_account(str(cred["account_id"])) if cred else None
 
 
 HANDLE_RE = r"^[a-z0-9_-]{3,20}$"

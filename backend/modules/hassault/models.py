@@ -25,6 +25,22 @@ class InstallStatus(BaseModel):
     message: str | None = None
 
 
+class SessionInfo(BaseModel):
+    """Who this node plays as. The pane's gate: no callsign, no match.
+
+    `callsign` is the game server's globally unique handle — the account is shared
+    with the games ladder, so there is one sign-in for the whole app rather than a
+    second one for this game. `enlisted` is derived from holding a callsign, not
+    stored, so the two can never disagree.
+    """
+
+    signed_in: bool
+    account_id: str | None = None
+    display_name: str | None = None
+    callsign: str | None = None
+    enlisted: bool = False
+
+
 class EntityOut(BaseModel):
     type: int
     name: str

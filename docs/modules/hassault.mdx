@@ -111,6 +111,10 @@ which keeps them unit-testable with no WebGL context.
 | `net.ts` | Prediction, reconciliation, snapshot interpolation — pure, no socket |
 | `session.ts` | The `/ws` channel as a stateful object the pane drives |
 | `avatars.ts` | Remote-player bodies, facing wedges, nameplates |
+| `boot.ts` | The front door's state machine and progress maths — pure, no three |
+| `reveal.ts` | The build animation, patched into the world's own material |
+| `backdrop.ts` | The grid and mote shaders the map stands in |
+| `BootOverlay.tsx` | Loading, sign-in, callsign, deploy — the DOM half |
 | `HorribleAssaultPanel.tsx` | Canvas, pointer lock, map picker, HUD, match UI |
 
 `net.ts` is split from `session.ts` for the same reason `world.ts` is split from
@@ -187,6 +191,143 @@ A player wedged inside solid geometry is resolved **before** gravity, not after.
 Checking afterwards means they have already been moved down by one frame of
 falling, which does not look like falling — it looks like sinking half a cube a
 second, forever. Both implementations had this and both were fixed together.
+
+## Identity: sign in, enlist, play
+
+It is a game, so it has a front door. Opening the pane runs a **boot sequence** —
+the map assembles itself, then you sign in, then you deploy — and there is no way
+past it: **no account, no play**, enforced on the backend and not just in the UI.
+
+```mermaid
+flowchart LR
+  L["loading<br/>(the map builds)"] --> S{signed in?}
+  S -- no --> I[signin]
+  I --> S
+  S -- yes --> E{has a callsign?}
+  E -- no --> N[enlist]
+  N --> E
+  E -- yes --> R[ready] --> P[playing]
+```
+
+`boot.ts` owns those transitions and nothing else — no React, no three, no fetch —
+so it is unit-testable in a core vitest run, which has no DOM.
+
+### One account, not a second one
+
+Identity is the **existing game-server account** (`backend/games_server/`), the same
+one the [games ladder](games.mdx) uses. Signing in here signs you in there. Three
+ways in, all ending in one JWT held node-side:
+
+| | Needs |
+| --- | --- |
+| **GitHub / Google, redirect flow** | OAuth client id + secret on the game server |
+| **GitHub / Google, device flow** | Just a client id (the automatic fallback) |
+| **Email + password** | Nothing — works on a server with no OAuth configured |
+
+The OAuth halves are the core account service (`packages/core/src/account.ts`),
+shared with the games lobby rather than duplicated: a module must not import
+another module's internals, so the popup dance, the redirect-then-device fallback,
+and the desktop-shell branch live in core and both surfaces call them.
+
+Email+password uses stdlib **`hashlib.scrypt`** — memory-hard, and no new
+dependency (`bcrypt` is in the lock file only via the optional `chroma` extra, so
+it is absent from a default `uv sync`). Parameters are stored in the hash string
+so they can be raised later without invalidating existing rows. A login against an
+unknown address still spends the scrypt time and returns the *same* message as a
+wrong password, so neither the response nor its latency reveals who has an account.
+
+:::danger The password must never reach the observability panel
+The panel captures request and response bodies **raw, unmasked, by design**. A
+sign-in crosses three capture points — the backend's inbound middleware, its
+outbound httpx hook (the node proxies the call onward), and the frontend client
+recorder — so `/api/games/auth/local` and `/auth/local` are in
+`_REDACT_BODY_PREFIXES` at all three. The event is still recorded; only the bodies
+are dropped. See [observability](observability.mdx#the-one-exception-password-bodies).
+:::
+
+### The callsign is the identity
+
+Your **callsign** is the game server's globally unique `handle` — the same one the
+ladder shows. "Enlisted" is *derived* from having one rather than stored
+separately, so there is nothing to keep in sync, and the callsign follows you to
+another machine because the account does.
+
+The join handler takes the name from the account and **ignores `data["name"]`
+entirely**. There is deliberately no name field in the pane any more: offering one
+would be a lie. Two details in `channel.py` are load-bearing:
+
+- The check sits **above both join branches**. The remote branch returns before
+  `match_server.join` is ever reached, so a gate placed next to that call would
+  leave cross-node play completely open.
+- It sits **above `_leave_any`**, so a refused join cannot evict you from a match
+  you are already in.
+
+### What a remote player's name is worth: nothing
+
+`fabric.handle_join` receives a name from a peer node. It is a **label**, never an
+identity — the same rule `handle_invite` already states for the string it carries.
+Authentication there is the Ed25519 node id the fabric verified; the name is
+whatever the guest's backend wrote on the wire, so a trusted friend's node could
+otherwise send a nameplate reading as somebody else's account. It is tagged with
+the peer's node id and used for display only: no lookup, no decision.
+
+Verifying a remote player's *account* would mean forwarding their game-server JWT
+for the host to `resolve_token`, which drags the central server into every join and
+breaks matches on an offline LAN. Deliberately not done — see
+[Known limitations](#known-limitations).
+
+## The loading screen builds the level
+
+The loading animation **is** the map. Cubes rise into place along a front that
+sweeps outward from the middle, lit at the frontier and settling into normal
+shading behind it, over the same three.js scene you then play in. When it finishes
+the camera keeps a slow orbit, and the sign-in card sits over a live level rather
+than a screenshot.
+
+Two decisions carry it:
+
+**The reveal patches the existing `MeshLambertMaterial` via `onBeforeCompile`**
+rather than swapping in a `ShaderMaterial`. A separate material would have to
+reproduce three's lighting exactly or the world visibly pops the instant the build
+ends — and it never quite does. Patching makes the lit result identical by
+construction. (Chunk names are a three-internal contract, so a missed
+`String.replace` would silently mean no reveal and no error; `reveal.ts` warns
+instead.)
+
+**The build order comes from the vertex position, not a new attribute.**
+`buildWorldMesh` emits positions as `(cube x, height, cube y)` directly in
+three-space and the mesh has an identity transform, so object space *is* world
+space — which means `geometry.ts`, pure and shared with the physics, needed no
+changes at all for a visual effect.
+
+The numbers are real. Progress is weighted actual work — renderer, install, map
+bytes, mesh, build — and the byte counter is the map download's own
+`Content-Length`, read through a stream reader. Three things that look like polish
+and are not:
+
+- Progress is **monotonic**. A re-fetch or a mesh rebuild can legitimately report
+  less than a later stage already has, and a bar that jumps back reads as a fault.
+- The unit is picked from the **total**, so it can't switch mid-download — and it
+  is usually KB, because a 128-cube map is nine 16 KB planes. A fixed MB unit
+  showed the entire load as `0.0`.
+- The build runs on **its own clock**, not on load progress. The map route sets
+  `Cache-Control: max-age=3600`, so a warm reload downloads in one frame and a
+  build tied to bytes would be over before it was visible.
+
+The grid under the map uses **derivative-based line width** (`fwidth`). A fixed
+`smoothstep` is fine face-on but collapses at the grazing angles a low camera
+produces: cells compress below a pixel near the horizon and alias into a flat grey
+wash. And the camera frames the **mesh's bounding sphere**, not `ssize` — a map's
+grid is mostly empty border, so orbiting the grid centre puts the level small and
+off to one side.
+
+`prefers-reduced-motion` cuts straight to the finished world.
+
+Pointer lock is requested only in the `playing` phase, guarded in the *handler*
+rather than the markup: the pre-existing "click to play" layer is
+`pointerEvents: none` by design, so without the guard a click on the email field
+would grab the pointer instead of focusing it — and Esc during play returns to the
+unlocked state and re-arms that exact path.
 
 ## The netcode
 
@@ -629,7 +770,8 @@ while the pointer is locked**, so the command palette and every other shortcut k
 working when it is not; releasing the pointer also releases the trigger, or a
 weapon left firing keeps firing into whatever you tabbed away to.
 
-The toolbar carries the match controls: a name, Join/Leave, bot add/remove with a
+The toolbar carries the match controls: your callsign (shown, not typed — the
+backend refuses any name the client supplies), Join/Leave, bot add/remove with a
 skill selector, and — once in — the team scores, the head count and your
 round-trip time. Changing map while in a match leaves it rather than silently
 simulating you in a different world.
@@ -645,6 +787,7 @@ it into an X rather than fading a second element in and out.
 
 | Route | Purpose |
 | --- | --- |
+| `GET /api/hassault/session` | Who this node plays as: `{signed_in, callsign, enlisted}`. `?refresh=true` re-reads it from the game server, which is how a callsign claimed on another machine appears |
 | `GET /api/hassault/status` | Whether an install was found, where, and how many maps |
 | `GET /api/hassault/maps` | Every readable map, official first |
 | `GET /api/hassault/maps/{name}` | Header, entities, spawn counts (JSON) |
@@ -664,7 +807,7 @@ invitee could click it.
 
 | Direction | Event | Purpose |
 | --- | --- | --- |
-| → | `join` | `{ map, name, room?, host? }`; `host` makes it a friend's match |
+| → | `join` | `{ map, room?, host? }`; `host` makes it a friend's match. Refused with `{code: "not_signed_in"}` unless this node holds an account **with a callsign** — and any `name` in the payload is ignored, because identity comes from the account |
 | → | `input` | `{ commands: [...], rtt }` — batched, sequence-numbered |
 | → | `respawn` | The server owns spawn points, so respawning is asked for |
 | → | `invite` | `{ who, room }` — `who` is a person, not a node id |
@@ -768,6 +911,19 @@ never touches the filesystem.
   whatever arrives — so a modified client could fire without climb. Same class of
   concession as trusting `dt`, and the same answer: this is a game you host for
   friends.
+- **A remote player's account is not verified, only their node.** In a cross-node
+  match the host authenticates the guest's *machine* (Ed25519 node id, plus
+  friendship), and the callsign that arrives with them is a display label tagged
+  with that node id — never looked up, never trusted. Verifying the account itself
+  would mean forwarding the guest's game-server JWT for the host to
+  `resolve_token`, which puts the central server in the path of every join and
+  breaks matches on an offline LAN. The practical effect: a friend's *node* can
+  show a misleading nameplate, and a stranger's cannot get in at all.
+- **A callsign is claimed per account, not reserved per person.** Two people who
+  share an account share a callsign; the uniqueness index is the only arbiter.
+- **No password reset.** An email+password account whose password is lost has no
+  recovery path — there is no mail sender in this app, and adding one for a game
+  login is not worth it. Sign in with GitHub or Google instead.
 - **Bots do not use ladders, lifts, or teleporters**, and have no notion of
   objectives. They steer, take cover by accident rather than on purpose, and get
   lost in complicated geometry. There is no navmesh.

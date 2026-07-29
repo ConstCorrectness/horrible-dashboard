@@ -29,8 +29,11 @@ from backend.modules.games.models import (
     DryRunResponse,
     GameInfo,
     GamesStatus,
+    LocalLoginRequest,
+    LocalSignupRequest,
     SampleObservationResponse,
     SaveVersionRequest,
+    SetCallsignRequest,
     SetKeyRequest,
     LoadoutModel,
     TestToolRequest,
@@ -65,14 +68,18 @@ def _catalog() -> list[GameInfo]:
 
 @router.get("/status", response_model=GamesStatus)
 def status() -> GamesStatus:
-    name = server_auth.signed_in_name()
+    account = server_auth.signed_in_account()
     return GamesStatus(
         connected=games_client.connected,
         account_id=(
             games_client._primary.account_id if games_client.connected else None
         ),
-        signed_in=name is not None,
-        display_name=name,
+        # `signed_in` is false once the stored JWT is past its expiry, not merely
+        # when the token file is missing — otherwise a month-old session reads as
+        # live right up until the play socket rejects it.
+        signed_in=account is not None,
+        display_name=account["display_name"] if account else None,
+        callsign=account.get("handle") if account else None,
         server_url=resolve_server_url(),
         policy=str(get_value("games.policy", "random") or "random"),
         games=_catalog(),
@@ -333,8 +340,34 @@ async def google_poll_route(body: DevicePollRequest) -> dict[str, Any]:
 @router.get("/auth/providers")
 async def auth_providers_route() -> dict[str, Any]:
     """Which sign-in flows the connected game server supports
-    (`{provider: {device, web}}`); `{}` when unknown (older/unreachable server)."""
+    (`{provider: {device, web}}`, plus `local: {password}`); `{}` when unknown
+    (older/unreachable server)."""
     return await server_auth.auth_providers()
+
+
+# Declared above the `/auth/{provider}/web/*` routes below on purpose: `provider`
+# there is a path parameter, FastAPI matches in declaration order, and `local`
+# would otherwise be captured by it. Bodies on these two are never recorded —
+# see `_REDACT_BODY_PREFIXES` in backend/modules/telemetry/instrument.py.
+
+
+@router.post("/auth/local/signup")
+async def local_signup_route(body: LocalSignupRequest) -> dict[str, Any]:
+    """Create an email+password account on the game server and sign this node in."""
+    return await server_auth.local_signup(body.email, body.password, body.callsign)
+
+
+@router.post("/auth/local/login")
+async def local_login_route(body: LocalLoginRequest) -> dict[str, Any]:
+    """Sign in with an existing email+password."""
+    return await server_auth.local_login(body.email, body.password)
+
+
+@router.post("/auth/callsign")
+async def set_callsign_route(body: SetCallsignRequest) -> dict[str, Any]:
+    """Claim or rename the callsign — the globally unique handle the ladder and
+    HorribleAssault both play you as."""
+    return await server_auth.set_callsign(body.callsign)
 
 
 @router.post("/auth/{provider}/web/start")

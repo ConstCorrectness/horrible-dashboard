@@ -191,6 +191,81 @@ async def google_poll(body: _DevicePoll) -> dict[str, Any]:
         return {"error": str(exc)}
 
 
+# ---- local (email + password) sign-in ---------------------------------------
+#
+# These MUST stay above `/auth/{provider}/web/start` below: that route's `provider`
+# is a path parameter, FastAPI matches in declaration order, and a `/auth/local/...`
+# request would otherwise be swallowed by it. Same hazard the node's routes.py
+# documents for its own `/auth/{provider}` block.
+#
+# Neither body is ever recorded by the observability panel — `/auth/local` is in
+# `_REDACT_BODY_PREFIXES` (backend/modules/telemetry/instrument.py), because the
+# request carries a plaintext password and the response carries a fresh JWT.
+
+
+class _LocalSignup(BaseModel):
+    email: str
+    password: str
+    callsign: str = ""
+
+
+class _LocalLogin(BaseModel):
+    email: str
+    password: str
+
+
+class _SetHandle(BaseModel):
+    handle: str
+
+
+@app.post("/auth/local/signup")
+async def local_signup(body: _LocalSignup) -> dict[str, Any]:
+    """Create an email+password account. `{token, account}` on success, `{error}`
+    with a user-facing message otherwise."""
+    try:
+        return auth.signup_local(body.email, body.password, body.callsign)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+
+@app.post("/auth/local/login")
+async def local_login(body: _LocalLogin) -> dict[str, Any]:
+    """Check an email+password. The failure message is identical for an unknown
+    address and a wrong password — on purpose, so this can't confirm who has an
+    account here."""
+    try:
+        return auth.login_local(body.email, body.password)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+
+@app.get("/me")
+async def me(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    """The bearer's account, read fresh. The node calls this to learn a handle its
+    stored token predates, and to pick up a callsign changed on another machine."""
+    viewer = _viewer(authorization)
+    if viewer is None:
+        return {"error": "sign in required"}
+    return {"account": auth.account_payload(viewer)}
+
+
+@app.post("/account/handle")
+async def set_handle_route(
+    body: _SetHandle, authorization: str | None = Header(default=None)
+) -> dict[str, Any]:
+    """Claim or rename the caller's callsign — the globally unique `handle` the
+    ladder and HorribleAssault both display."""
+    viewer = _viewer(authorization)
+    if viewer is None:
+        return {"error": "sign in required"}
+    outcome = auth.set_account_handle(viewer, body.handle)
+    if outcome == "taken":
+        return {"error": "that callsign is taken"}
+    if outcome == "invalid":
+        return {"error": "a callsign is 3-20 characters of a-z, 0-9, - or _"}
+    return {"ok": True, "account": auth.account_payload(viewer)}
+
+
 # ---- web (authorization-code) sign-in --------------------------------------
 #
 # The redirect flow behind the browser "Sign in" button. A pending login carries

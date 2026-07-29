@@ -11,6 +11,9 @@ export interface GamesStatus {
   account_id: string | null;
   signed_in: boolean;
   display_name: string | null;
+  /** The globally unique callsign (the account's handle); null when signed out or
+   * signed in without one yet. */
+  callsign: string | null;
   server_url: string;
   policy: string;
   games: GameCatalogEntry[];
@@ -36,14 +39,6 @@ export interface LeaderRow {
   losses: number;
   draws: number;
   games: number;
-}
-
-interface DeviceStart {
-  user_code?: string;
-  verification_uri?: string;
-  device_code?: string;
-  interval?: number;
-  error?: string;
 }
 
 export interface GameCatalogEntry {
@@ -194,10 +189,6 @@ export function fetchChallengeLeaderboard(
   return apiGet(`/games/challenges/leaderboard?game_id=${encodeURIComponent(gameId)}`);
 }
 
-export function signOut(): Promise<{ ok: boolean }> {
-  return apiPost('/games/signout', {});
-}
-
 // ---- replays -----------------------------------------------------------------
 
 /** A replay summary row (no event log — fetch the replay itself for that). */
@@ -246,94 +237,20 @@ export function publishReplay(replayId: string): Promise<{ ok?: boolean; error?:
   return apiPost(`/games/replays/${encodeURIComponent(replayId)}/publish`, {});
 }
 
-/** OAuth providers the game server can sign a player in with (both device flow). */
-export type SignInProvider = 'github' | 'google';
-
-/** Which sign-in flows the game server supports for a provider. A missing provider
- * (or a `{}` response) means the server couldn't say — treat as available and let the
- * click-time error handle it. */
-export interface AuthProviderFlows {
-  device?: boolean;
-  web?: boolean;
-}
-
-export function fetchAuthProviders(): Promise<Partial<Record<SignInProvider, AuthProviderFlows>>> {
-  return apiGet('/games/auth/providers');
-}
-
-const PROVIDER_FALLBACK_URL: Record<SignInProvider, string> = {
-  github: 'https://github.com/login/device',
-  google: 'https://www.google.com/device',
-};
-
 /**
- * Run a provider's device flow: start it, surface the code via `onCode`, then poll
- * until the node captures the token (or it errors/times out). Resolves to the
- * signed-in display name. The node normalizes both providers to one wire shape.
+ * Sign-in moved to the core account service (`packages/core/src/account.ts`): one
+ * identity is shared by the games ladder and HorribleAssault, and a module must
+ * not import another module's internals. Re-exported here so existing call sites
+ * keep working — new code should import from `../../account` directly.
  */
-export async function signInWith(
-  provider: SignInProvider,
-  onCode: (code: string, url: string) => void,
-): Promise<string> {
-  const start = await apiPost<DeviceStart>(`/games/auth/${provider}/start`, {});
-  if (start.error || !start.device_code) {
-    throw new Error(
-      start.error || `sign-in unavailable — configure games.${provider}.clientId on the server`,
-    );
-  }
-  onCode(start.user_code ?? '', start.verification_uri ?? PROVIDER_FALLBACK_URL[provider]);
-  const intervalMs = Math.max((start.interval ?? 5) * 1000, 2000);
-  const deadline = Date.now() + 5 * 60 * 1000; // device codes last ~15m; cap our wait at 5m
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, intervalMs));
-    const poll = await apiPost<{
-      signed_in?: boolean;
-      account?: { display_name?: string };
-      error?: string;
-    }>(`/games/auth/${provider}/poll`, { device_code: start.device_code });
-    if (poll.signed_in) return poll.account?.display_name ?? 'signed in';
-    if (poll.error && poll.error !== 'authorization_pending') throw new Error(poll.error);
-  }
-  throw new Error('sign-in timed out');
-}
-
-/** Back-compat alias: the original GitHub-only entry point. */
-export function signInWithGitHub(onCode: (code: string, url: string) => void): Promise<string> {
-  return signInWith('github', onCode);
-}
-
-/**
- * Run a provider's redirect (authorization-code) flow — no code typing. Starts the
- * flow, hands the provider consent URL to `openAuthorize` (the caller opens it, ideally
- * in a pre-opened popup so it isn't blocked), then polls the node until it captures the
- * token. The private retrieval code stays on the node; the browser never sees it.
- * Resolves to the signed-in display name.
- */
-export async function signInWithRedirect(
-  provider: SignInProvider,
-  openAuthorize: (url: string) => void,
-): Promise<string> {
-  const start = await apiPost<{ authorize_url?: string; error?: string }>(
-    `/games/auth/${provider}/web/start`,
-    {},
-  );
-  if (start.error || !start.authorize_url) {
-    throw new Error(
-      start.error || `sign-in unavailable — configure ${provider} web OAuth on the server`,
-    );
-  }
-  openAuthorize(start.authorize_url);
-  const deadline = Date.now() + 5 * 60 * 1000; // codes last ~15m; cap our wait at 5m
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 2500));
-    const poll = await apiPost<{
-      signed_in?: boolean;
-      pending?: boolean;
-      account?: { display_name?: string };
-      error?: string;
-    }>(`/games/auth/${provider}/web/poll`, {});
-    if (poll.signed_in) return poll.account?.display_name ?? 'signed in';
-    if (poll.error) throw new Error(poll.error);
-  }
-  throw new Error('sign-in timed out');
-}
+export {
+  fetchAuthProviders,
+  oauthSignIn,
+  signInWith,
+  signInWithGitHub,
+  signInWithRedirect,
+  signOut,
+  type AuthProviderFlows,
+  type SignInPrompt,
+  type SignInProvider,
+} from '../../account';

@@ -5,6 +5,7 @@ import {
   getInstallStatus,
   getMapCubes,
   getMapInfo,
+  getSession,
   listInvitees,
   listMaps,
   listWeapons,
@@ -12,16 +13,65 @@ import {
   type Invitee,
   type MapInfo,
   type MapSummary,
+  type SessionInfo,
   type WeaponSpec,
 } from './api';
 import { AvatarPool } from './avatars';
+import { createBackdrop, type Backdrop } from './backdrop';
+import {
+  EMPTY_PROGRESS,
+  SIGNED_OUT,
+  acceptsGameInput,
+  advance,
+  bootPhase,
+  type BootProgress,
+} from './boot';
+import { BootOverlay } from './BootOverlay';
 import { ShotController } from './combat';
 import { EffectsPool } from './effects';
 import { buildWorldMesh } from './geometry';
 import type { PlayerRow } from './net';
 import { createPlayer, eyeHeight, spawnAt, step, type PlayerState } from './player';
+import { installReveal, type Reveal } from './reveal';
 import { MatchSession, type SessionState } from './session';
 import { World } from './world';
+
+/**
+ * three, imported once per page rather than once per mount.
+ *
+ * The panel is a singleton pane, but it can be closed and reopened, and a dynamic
+ * `import()` inside the effect makes the *promise* per-mount even though the
+ * module is cached. Hoisting it gives the boot sequence something to await that is
+ * already resolved on a second open — a reopened pane shows no renderer stage at
+ * all, which is correct: there is nothing left to load.
+ */
+let threeModule: Promise<typeof import('three')> | null = null;
+function loadThree(): Promise<typeof import('three')> {
+  if (!threeModule) threeModule = import('three');
+  return threeModule;
+}
+
+const prefersReducedMotion = (): boolean =>
+  typeof window.matchMedia === 'function' &&
+  window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/**
+ * How long the world takes to assemble.
+ *
+ * Deliberately a duration rather than a function of load progress: the map route
+ * sets `Cache-Control: max-age=3600`, so a warm reload downloads in one frame and
+ * a build tied to bytes would be over before it was visible.
+ */
+const REVEAL_MS = 2600;
+
+/** A signed-out `SessionInfo`, for when the backend can't be reached at all. */
+const SIGNED_OUT_ACCOUNT: SessionInfo = {
+  signed_in: false,
+  account_id: null,
+  display_name: null,
+  callsign: null,
+  enlisted: false,
+};
 
 interface Hud {
   fps: number;
@@ -56,7 +106,6 @@ const CONSUMED_KEYS = new Set([
   'ArrowRight',
 ]);
 
-const NAME_KEY = 'hassault.playerName';
 const NO_CORRECTION = { x: 0, y: 0, z: 0 };
 /** How long a hitmarker and a damage flash stay on screen. */
 const FLASH_MS = 220;
@@ -81,6 +130,8 @@ const EMPTY_SESSION: SessionState = {
 interface SceneHandle {
   setMesh: (w: World) => number;
   avatars: AvatarPool;
+  reveal: Reveal;
+  backdrop: Backdrop;
   camera: {
     position: { set: (x: number, y: number, z: number) => void };
     rotation: { set: (x: number, y: number, z: number, order?: string) => void };
@@ -103,12 +154,27 @@ export function HorribleAssaultPanel() {
   const [maps, setMaps] = useState<MapSummary[]>([]);
   const [mapName, setMapName] = useState<string>('');
   const [info, setInfo] = useState<MapInfo | null>(null);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [locked, setLocked] = useState(false);
-  const [playerName, setPlayerName] = useState<string>(
-    () => localStorage.getItem(NAME_KEY) || 'player',
-  );
+
+  // ---- the boot sequence ----------------------------------------------------
+  //
+  // `progress` is real work completed (see boot.ts), `account` is who this node
+  // plays as, and `deployed` is the player having chosen to enter. Together they
+  // decide which screen the pane shows.
+  const [progress, setProgress] = useState<BootProgress>(EMPTY_PROGRESS);
+  const [bytes, setBytes] = useState<{ loaded: number; total: number | null }>({
+    loaded: 0,
+    total: null,
+  });
+  const [account, setAccount] = useState<SessionInfo | null>(null);
+  const [deployed, setDeployed] = useState(false);
+
+  const phase = bootPhase(progress, account ?? SIGNED_OUT, deployed);
+  // Identity is the account's callsign. There is deliberately no name input any
+  // more: the backend ignores a client-supplied name outright (see
+  // `channel._signed_in_callsign`), so offering one would only be a lie.
+  const playerName = account?.callsign ?? '';
   const [hud, setHud] = useState<Hud>({
     fps: 0,
     triangles: 0,
@@ -139,6 +205,23 @@ export function HorribleAssaultPanel() {
   if (sessionRef.current === null) sessionRef.current = new MatchSession();
   if (shotsRef.current === null) shotsRef.current = new ShotController();
 
+  // The frame loop is built once and never re-created, so anything it needs to
+  // read per-frame from React state has to arrive by ref.
+  const phaseRef = useRef(phase);
+  phaseRef.current = phase;
+
+  // Resolved when the scene exists. Replaces polling for `sceneRef.current`: the
+  // map load and the renderer load are genuinely concurrent, and awaiting is both
+  // exact and instant, where a retry loop was neither.
+  const sceneReadyRef = useRef<{ promise: Promise<void>; resolve: () => void } | null>(null);
+  if (sceneReadyRef.current === null) {
+    let resolve!: () => void;
+    const promise = new Promise<void>((r) => {
+      resolve = r;
+    });
+    sceneReadyRef.current = { promise, resolve };
+  }
+
   useEffect(() => {
     const session = sessionRef.current;
     if (!session) return;
@@ -150,6 +233,19 @@ export function HorribleAssaultPanel() {
       session.disconnect();
     };
   }, []);
+
+  /** Re-read who we are. Called on mount and after every sign-in or rename. */
+  const refreshAccount = useCallback(async (fromServer = false): Promise<SessionInfo> => {
+    const info = await getSession(fromServer);
+    setAccount(info);
+    return info;
+  }, []);
+
+  useEffect(() => {
+    // A failure here is signed-out, not an error banner: the sign-in screen is
+    // already the right answer, and a backend that can't say is not signed in.
+    void refreshAccount().catch(() => setAccount(SIGNED_OUT_ACCOUNT));
+  }, [refreshAccount]);
 
   // The loadout, fetched rather than hardcoded: the client needs each weapon's
   // fire interval so it does not send input the server would only discard, and a
@@ -238,6 +334,7 @@ export function HorribleAssaultPanel() {
         const list = await listMaps();
         if (cancelled) return;
         setMaps(list);
+        setProgress((p) => advance(p, { install: 1 }));
         // ac_desert is a good default: small, open, and obviously recognisable.
         const preferred = list.find((m) => m.name === 'ac_desert') ?? list[0];
         if (preferred) setMapName(preferred.name);
@@ -257,9 +354,13 @@ export function HorribleAssaultPanel() {
     if (!mount) return;
     let disposed = false;
     let cleanup: (() => void) | undefined;
+    // What the cinematic camera orbits: the loaded map's real extent, filled in
+    // by `setMesh`. A sane default so the first frames before any map aren't NaN.
+    const bounds = { current: { cx: 64, cz: 64, extent: 64 } };
 
-    void import('three').then((THREE) => {
+    void loadThree().then((THREE) => {
       if (disposed || !mountRef.current) return;
+      setProgress((p) => advance(p, { renderer: 1 }));
 
       const scene = new THREE.Scene();
       scene.background = new THREE.Color(0x0d1117);
@@ -285,6 +386,10 @@ export function HorribleAssaultPanel() {
 
       let mesh: import('three').Mesh | null = null;
       const material = new THREE.MeshLambertMaterial({ vertexColors: true });
+      // Patched, not replaced: the build animation runs through the same lit
+      // material the finished world uses, so nothing pops when it ends.
+      const reveal = installReveal(material);
+      const backdrop = createBackdrop(THREE, scene);
       const avatars = new AvatarPool(THREE, scene);
       const effects = new EffectsPool(THREE, scene);
 
@@ -301,6 +406,21 @@ export function HorribleAssaultPanel() {
         geo.computeBoundingSphere();
         mesh = new THREE.Mesh(geo, material);
         scene.add(mesh);
+
+        // Frame on the geometry's own bounds, not on `ssize`. A map's grid is
+        // mostly empty border — ac_desert's buildings occupy a fraction of its
+        // 128 cubes — so orbiting the grid centre at a grid-sized radius puts the
+        // level in the far distance, small and off to one side.
+        const sphere = geo.boundingSphere;
+        const cx = sphere ? sphere.center.x : world.ssize / 2;
+        const cz = sphere ? sphere.center.z : world.ssize / 2;
+        const extent = Math.max(sphere ? sphere.radius : world.ssize / 2, 8);
+        bounds.current = { cx, cz, extent };
+
+        // Aim the build at *this* map. The material outlives a map change, so a
+        // reveal left completed would show the next map already assembled.
+        reveal.fit([cx, cz], extent * 1.05, Math.max(extent * 0.6, 1));
+        backdrop.fit([cx, cz], extent * 2);
         return data.triangles;
       };
 
@@ -319,6 +439,7 @@ export function HorribleAssaultPanel() {
 
       let raf = 0;
       let last = performance.now();
+      const started = last;
       let fpsAccum = 0;
       let fpsFrames = 0;
       let hudAccum = 0;
@@ -408,13 +529,35 @@ export function HorribleAssaultPanel() {
         }
         effects.update(dt);
 
-        // Cube (x, y, height) → three (x, height, z). The correction offset is
-        // visual only: the simulation stays exactly where the server says.
-        const c = online && session ? session.predictor.correction : NO_CORRECTION;
-        camera.position.set(player.x + c.x, eyeHeight(player) + c.z, player.y + c.y);
-        // YXZ so yaw is applied before pitch; the default XYZ order rolls the
-        // camera as you look around.
-        camera.rotation.set(player.pitch, -player.yaw - Math.PI / 2, 0, 'YXZ');
+        const elapsed = (now - started) / 1000;
+        backdrop.update(elapsed);
+
+        if (acceptsGameInput(phaseRef.current)) {
+          backdrop.setOpacity(0);
+          // Cube (x, y, height) → three (x, height, z). The correction offset is
+          // visual only: the simulation stays exactly where the server says.
+          const c = online && session ? session.predictor.correction : NO_CORRECTION;
+          camera.position.set(player.x + c.x, eyeHeight(player) + c.z, player.y + c.y);
+          // YXZ so yaw is applied before pitch; the default XYZ order rolls the
+          // camera as you look around.
+          camera.rotation.set(player.pitch, -player.yaw - Math.PI / 2, 0, 'YXZ');
+        } else {
+          // Before you deploy the camera flies the map rather than standing in
+          // it: a slow orbit is what makes the sign-in screen read as a game's
+          // front door instead of a form over a frozen screenshot.
+          backdrop.setOpacity(1);
+          // Close and low: a distant top-down orbit reads as a minimap, not as a
+          // place. This sits about level with the rooftops and drifts.
+          const { cx, cz, extent } = bounds.current;
+          const radius = extent * 1.25;
+          const angle = elapsed * 0.055;
+          camera.position.set(
+            cx + Math.cos(angle) * radius,
+            extent * 0.45 + Math.sin(elapsed * 0.19) * extent * 0.06,
+            cz + Math.sin(angle) * radius,
+          );
+          camera.lookAt(cx, extent * 0.1, cz);
+        }
         renderer.render(scene, camera);
 
         fpsAccum += dt;
@@ -438,13 +581,16 @@ export function HorribleAssaultPanel() {
       };
       raf = requestAnimationFrame(frame);
 
-      sceneRef.current = { setMesh, avatars, camera: camera as never };
+      sceneRef.current = { setMesh, avatars, reveal, backdrop, camera: camera as never };
+      // Unblocks the map load, which has been waiting rather than polling.
+      sceneReadyRef.current?.resolve();
 
       cleanup = () => {
         cancelAnimationFrame(raf);
         observer.disconnect();
         avatars.dispose();
         effects.dispose();
+        backdrop.dispose();
         if (mesh) mesh.geometry.dispose();
         material.dispose();
         renderer.dispose();
@@ -464,12 +610,32 @@ export function HorribleAssaultPanel() {
   useEffect(() => {
     if (!mapName) return;
     let cancelled = false;
-    setLoading(true);
+    let revealRaf = 0;
     setError(null);
+    // A new map re-runs the download, mesh and build stages. `renderer` and
+    // `install` stay done — they are not per-map work.
+    setProgress((p) => ({ ...p, map: 0, mesh: 0, reveal: 0 }));
+    setBytes({ loaded: 0, total: null });
+
     void (async () => {
       try {
-        const [mapInfo, cubes] = await Promise.all([getMapInfo(mapName), getMapCubes(mapName)]);
+        // Sequential, not `Promise.all`: the metadata is cheap and tells us how
+        // big the grid should be, which is what makes the byte counter meaningful
+        // before the first chunk lands.
+        const mapInfo = await getMapInfo(mapName);
         if (cancelled) return;
+        const expected = mapInfo.ssize * mapInfo.ssize * 9;
+        setBytes({ loaded: 0, total: expected });
+
+        const cubes = await getMapCubes(mapName, (loaded, total) => {
+          if (cancelled) return;
+          const size = total ?? expected;
+          setBytes({ loaded, total: size });
+          setProgress((p) => advance(p, { map: size > 0 ? loaded / size : 1 }));
+        });
+        if (cancelled) return;
+        setProgress((p) => advance(p, { map: 1 }));
+
         const world = new World(mapInfo, cubes);
         worldRef.current = world;
         setInfo(mapInfo);
@@ -479,28 +645,42 @@ export function HorribleAssaultPanel() {
           ? spawnAt(world, spawn)
           : createPlayer(world.ssize / 2, world.ssize / 2, 0);
 
-        // The scene may still be lazy-loading three; retry briefly rather than
-        // dropping the mesh on the floor.
-        const attach = (tries: number) => {
-          const s = sceneRef.current;
-          if (!s) {
-            if (tries > 0) window.setTimeout(() => attach(tries - 1), 100);
-            return;
-          }
-          const triangles = s.setMesh(world);
-          setHud((h) => ({ ...h, triangles }));
-          setLoading(false);
-        };
-        attach(30);
-      } catch (e) {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : String(e));
-          setLoading(false);
+        // Await the renderer rather than poll for it. The two loads are genuinely
+        // concurrent, and the retry loop this replaces would silently drop the
+        // mesh on a machine slow enough to exhaust its attempts.
+        await sceneReadyRef.current?.promise;
+        if (cancelled) return;
+        const scene = sceneRef.current;
+        if (!scene) return;
+
+        const triangles = scene.setMesh(world);
+        setHud((h) => ({ ...h, triangles }));
+        setProgress((p) => advance(p, { mesh: 1 }));
+
+        // The build. Runs on its own clock rather than on load progress: the map
+        // is already here by now, and the point of the animation is to show the
+        // world arriving, not to stall until it has.
+        if (prefersReducedMotion()) {
+          scene.reveal.complete();
+          setProgress((p) => advance(p, { reveal: 1 }));
+          return;
         }
+        const startedAt = performance.now();
+        const tick = (now: number) => {
+          if (cancelled) return;
+          const t = Math.min(1, (now - startedAt) / REVEAL_MS);
+          scene.reveal.set(t);
+          setProgress((p) => advance(p, { reveal: t }));
+          if (t < 1) revealRaf = requestAnimationFrame(tick);
+        };
+        revealRaf = requestAnimationFrame(tick);
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
       }
     })();
     return () => {
       cancelled = true;
+      cancelAnimationFrame(revealRaf);
     };
   }, [mapName]);
 
@@ -515,7 +695,14 @@ export function HorribleAssaultPanel() {
 
   // ---- input ----------------------------------------------------------------------
 
+  // Guarded on the phase, not on the overlay's visibility. The boot overlay has
+  // real inputs in it, and the pre-existing "click to play" layer is deliberately
+  // `pointerEvents: none` so clicks fall through to this handler — so without the
+  // guard, clicking an email field would grab the pointer instead of focusing it.
+  // It must be the handler and not the markup, because Esc during play returns to
+  // the unlocked state and re-arms this exact path.
   const onCanvasClick = useCallback(() => {
+    if (!acceptsGameInput(phaseRef.current)) return;
     mountRef.current?.querySelector('canvas')?.requestPointerLock();
   }, []);
 
@@ -619,8 +806,9 @@ export function HorribleAssaultPanel() {
     if (session.state.status === 'joined' || session.state.status === 'joining') {
       session.leave();
     } else {
-      localStorage.setItem(NAME_KEY, playerName);
       shotsRef.current?.reset();
+      // The name is sent for the wire's sake; the backend takes the callsign from
+      // the account and ignores this entirely.
       session.join(mapName, playerName);
     }
   }, [mapName, playerName]);
@@ -634,7 +822,6 @@ export function HorribleAssaultPanel() {
     (room: string, map: string, host: string) => {
       const session = sessionRef.current;
       if (!session) return;
-      localStorage.setItem(NAME_KEY, playerName);
       // Load their map before joining: the snapshots are positions in *that*
       // world, and rendering them against a different one is nonsense.
       setMapName(map);
@@ -733,13 +920,19 @@ export function HorribleAssaultPanel() {
         <button onClick={respawn} disabled={!info}>
           Respawn
         </button>
-        <input
-          value={playerName}
-          onChange={(e) => setPlayerName(e.target.value.slice(0, 24))}
-          disabled={online}
-          aria-label="Player name"
-          style={{ width: 110 }}
-        />
+        {/* The callsign, shown not typed: it comes from the account, and the
+            backend refuses any name the client supplies. Renaming happens on the
+            enlist screen, which owns the uniqueness check. */}
+        <span
+          title="Your callsign — change it from the sign-in screen"
+          style={{
+            fontFamily: 'var(--font-mono, monospace)',
+            color: 'var(--accent, #6ea8fe)',
+            padding: '0 0.2rem',
+          }}
+        >
+          {playerName || '—'}
+        </span>
         <button onClick={toggleMatch} disabled={!info}>
           {online ? 'Leave match' : net.status === 'joining' ? 'Joining…' : 'Join match'}
         </button>
@@ -969,7 +1162,11 @@ export function HorribleAssaultPanel() {
           </div>
         )}
 
-        {!locked && (
+        {/* Only once deployed. Before that the boot overlay owns this space, and
+            two full-bleed layers would fight — this one is `pointerEvents: none`
+            by design, so it would sit invisibly over the sign-in form's buttons
+            while still dimming them. */}
+        {phase === 'playing' && !locked && (
           <div
             style={{
               position: 'absolute',
@@ -986,9 +1183,7 @@ export function HorribleAssaultPanel() {
               textAlign: 'center',
             }}
           >
-            {loading ? (
-              <strong>Loading {mapName}…</strong>
-            ) : error ? (
+            {error ? (
               <strong style={{ color: '#f85149' }}>{error}</strong>
             ) : (
               <>
@@ -1008,6 +1203,19 @@ export function HorribleAssaultPanel() {
               </>
             )}
           </div>
+        )}
+
+        {phase !== 'playing' && (
+          <BootOverlay
+            phase={phase}
+            progress={progress}
+            bytes={bytes}
+            mapName={mapName}
+            error={error}
+            account={account}
+            onSignedIn={() => refreshAccount(true)}
+            onDeploy={() => setDeployed(true)}
+          />
         )}
 
         {locked && (

@@ -23,6 +23,7 @@ from backend.modules.hassault.models import (
     MapSummary,
     MatchInvite,
     MatchSummary,
+    SessionInfo,
     WeaponOut,
 )
 
@@ -63,6 +64,36 @@ async def get_status() -> InstallStatus:
         path=str(root),
         configured=configured,
         map_count=len(assets.list_maps()),
+    )
+
+
+@router.get("/session", response_model=SessionInfo)
+async def get_session(refresh: bool = False) -> SessionInfo:
+    """Who this node plays as — the gate the pane checks before it lets anyone in.
+
+    The account is the shared game-server one (the ladder's), so signing in here
+    signs you in there and vice versa; the join done backend-side here is the same
+    pattern as `/invitees`, keeping the pane clear of a cross-module import.
+
+    `enlisted` is *derived* from having a callsign rather than stored separately,
+    so there is one source of truth and nothing to keep in sync. `refresh=true`
+    re-reads it from the game server, which is how a callsign claimed on another
+    machine — or one this node's token predates — shows up here.
+    """
+    from backend.modules.games import server_auth
+
+    if refresh:
+        await server_auth.fetch_account()
+    account = server_auth.signed_in_account()
+    if account is None:
+        return SessionInfo(signed_in=False)
+    callsign = account.get("handle")
+    return SessionInfo(
+        signed_in=True,
+        account_id=account["id"],
+        display_name=account["display_name"],
+        callsign=str(callsign) if callsign else None,
+        enlisted=bool(callsign),
     )
 
 

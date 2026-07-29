@@ -1114,6 +1114,30 @@ never handed to the browser). Two OAuth flows produce it:
   Configure `games.github.clientId` / `games.google.clientId` on the server host (or
   the `GAMES_GITHUB_CLIENT_ID` / `GAMES_GOOGLE_CLIENT_ID` env overrides, which take
   priority); the redirect flow adds the client-secret + callback requirements above.
+- **Email + password — the third way in, no OAuth required.** `POST /auth/local/signup`
+  and `/auth/local/login` on the game server (proxied by the node at
+  `/api/games/auth/local/*`) mint the same JWT as either OAuth flow, so a server with
+  no client ids configured at all can still sign people up — which is why
+  `GET /auth/providers` reports `local: {password: true}` unconditionally. Accounts
+  key `local:<uuid4hex>`; the address is **not** the id, because people change their
+  email and an id is referenced by ratings and replays forever. Credentials live in
+  their own `local_credentials` table rather than on `accounts`, so a hash can never
+  ride along on the `SELECT *` behind `get_account`.
+
+  Hashing is stdlib **`hashlib.scrypt`** — memory-hard, and no new dependency
+  (`bcrypt` is in the lock file only via the optional `chroma` extra, so it is absent
+  from a default `uv sync`). Parameters are stored in the hash string so they can be
+  raised later without invalidating existing rows. A login against an unknown address
+  still spends the scrypt time and returns the *same* message as a wrong password, so
+  neither the response nor its latency reveals who has an account here.
+
+  :::warning These two bodies are kept out of the observability panel
+  The panel captures bodies raw and unmasked by design, and a sign-in crosses three
+  capture points (inbound middleware, the node's outbound httpx hook, the frontend
+  client recorder). `/api/games/auth/local` and `/auth/local` are in
+  `_REDACT_BODY_PREFIXES` at all three — the event is still recorded, only the bodies
+  are dropped. See [observability](observability.mdx#the-one-exception-password-bodies).
+  :::
 - **Dev token** (fallback) — when not signed in, the token *is* the account id, so
   local play and tests need no OAuth. Disable it with `GAMES_ALLOW_DEV_AUTH=0` to
   require real sign-in.
@@ -1136,6 +1160,20 @@ Finished games are persisted to the server's SQLite `game_server.db` (`accounts`
 the **Ladder** panel (`games.openLeaderboard`) shows the leaderboard per game.
 Multi-player rating (poker) is a later phase — those results are logged but not yet
 rated.
+
+### The callsign (handle)
+
+Every account carries a **globally unique handle** — the ladder's display name, and
+what [HorribleAssault](hassault.mdx) plays you as. OAuth sign-ins derive one from the
+provider username and lock it; `POST /account/handle` (node: `/api/games/auth/callsign`)
+claims or renames it deliberately, and unlike the auto-derivation it applies whether or
+not one is already set. `store.set_handle` returns `ok` / `invalid` / `taken`, with
+uniqueness enforced by a partial unique index rather than a pre-read, so two
+simultaneous claims can't both pass a check and then both write.
+
+`GET /me` on the game server returns the account fresh — how a node learns a handle its
+stored token predates, or one changed on another machine. It rides on every sign-in
+payload too, so the usual path costs no extra round trip.
 
 ### Sessions vs. accounts (playing from two devices)
 
@@ -1264,8 +1302,14 @@ its node — so a secret parked there would be readable by any page the node ser
   through one agent turn against a sample engine position; returns the full trace
   (`backend/modules/games/dryrun.py`).
 - `/api/games/auth/{github,google}/{start,poll}` — proxy the device-flow sign-ins.
+- `/api/games/auth/local/{signup,login}` — email+password, proxied the same way (the
+  node captures the JWT; the browser gets only the account). Declared **above** the
+  `/auth/{provider}/web/*` routes — that `provider` is a path parameter, FastAPI
+  matches in declaration order, and `local` would otherwise be swallowed by it.
+- `/api/games/auth/callsign` — claim or rename the account's unique handle.
 - `/api/games/auth/providers` — which sign-in flows the game server supports
-  (`{provider: {device, web}}`; `{}` = unknown), for disabling lobby buttons up front.
+  (`{provider: {device, web}}` plus `local: {password}`; `{}` = unknown), for
+  disabling lobby buttons up front.
 - `/api/games/sample-observation?game_id=&seed=` — a realistic opening observation +
   legal actions (the Build view's inspector; no loadout/model/agent run).
 - `/api/games/leaderboard?game_id=` — proxy the server's ladder.
@@ -1276,8 +1320,9 @@ its node — so a secret parked there would be readable by any page the node ser
   (`tictactoe`, `connect_four`, `holdem` with its best-5-of-7 hand evaluator).
 - Node client `backend/modules/games/client.py` — connection + auto-play + relay.
 - Harness `backend/modules/games/loadout.py` — loadout store + tool runtime.
-- Game server `backend/games_server/` — referee, `auth.py` (JWT + OAuth), `store.py`
-  (ladder + `player_profiles`/`friendships`), `social.py` (the Plaza: presence, rooms,
+- Game server `backend/games_server/` — referee, `auth.py` (JWT + OAuth + scrypt
+  email/password), `store.py`
+  (ladder + `local_credentials`/`player_profiles`/`friendships`), `social.py` (the Plaza: presence, rooms,
   bubbles, roster, invites). The hub (`hub.py`) keys sessions/seats by a **per-connection
   session id**, not the account, so one account can play from two devices; the referee
   routes by session id and records results by account id.
