@@ -425,6 +425,15 @@ rather than the markup: the pre-existing "click to play" layer is
 would grab the pointer instead of focusing it — and Esc during play returns to the
 unlocked state and re-arms that exact path.
 
+Locking also takes the shell's **input capture** (`mode: 'full'`), which is what
+stops the app's own shortcuts firing mid-match — before that, `t`/`n`/`b` toggled
+region strips and `mod+1..9` switched workspace while you were playing, because
+this pane preventDefault'ed its keys but never stopped propagation. Capture is
+released by the [Escape ladder](../architecture/keybindings.mdx#the-escape-ladder),
+by focus moving to another pane, or by the browser dropping pointer lock on its
+own; whichever fires, `onRelease` runs exactly once and unwinds pointer lock, the
+held-key set and the trigger together.
+
 ## The netcode
 
 The server owns every player's position; the client predicts so that pressing W
@@ -866,6 +875,12 @@ scoreboard, V for noclip (offline only), Esc to release. Keys are swallowed **on
 while the pointer is locked**, so the command palette and every other shortcut keep
 working when it is not; releasing the pointer also releases the trigger, or a
 weapon left firing keeps firing into whatever you tabbed away to.
+
+Escape is nominally the game's own key (`escape: 'passthrough'`), with a **hold**
+releasing the mouse — but that only works where the browser lets the page keep
+Escape (Chromium, in document fullscreen). Elsewhere a single press releases and
+the on-screen badge says so, rather than promising a gesture that silently does
+nothing. See [the Escape ladder](../architecture/keybindings.mdx#the-escape-ladder).
 
 The toolbar carries the match controls: your callsign (shown, not typed — the
 backend refuses any name the client supplies), Join/Leave, bot add/remove with a

@@ -98,6 +98,16 @@ buffers, terminal + file explorer.
 - New features go through the module registry — a module declares its commands,
   panels, and keybindings in one place; nothing reaches into another module's
   internals. See `.claude/skills/new-module/SKILL.md` before adding a feature.
+- **Never install a `keydown` listener in a component.** `packages/core/src/keymap/`
+  is the one keyboard authority: declare a `KeybindingDecl` (with a `when` clause
+  over the closed context-key vocabulary if it should be pane-scoped). A pane that
+  genuinely needs the keyboard — a game, a terminal, the server-rendered browser —
+  takes **capture** (`useCapture`, or `capture` in its manifest) so the shell knows
+  to suppress its own bindings, and Escape unwinds through one ordered ladder
+  instead of every component racing for it. Bindings the host steals
+  (`mod+1..9` is browser tab switching and never arrives) are declared in
+  `keymap/reserved.ts` and split by `hosts`/`platforms`. See
+  docs/architecture/keybindings.mdx.
 - Browser and desktop layouts share one codebase; never fork a component per
   platform — branch on a platform capability check instead.
 - Formatting/linting is automatic: a PostToolUse hook runs ruff (Python), prettier +

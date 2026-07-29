@@ -55,7 +55,16 @@ describe('parseSpec', () => {
   });
 
   it('round-trips through formatSpec', () => {
-    for (const spec of ['mod+k', 'alt+shift+arrowleft', 'code:KeyW', 'mod+k mod+s']) {
+    for (const spec of [
+      'mod+k',
+      'alt+shift+arrowleft',
+      'code:KeyW',
+      'mod+k mod+s',
+      // The space key's e.key is a literal ' ', which would re-parse as `+`
+      // (strokes are space-separated) — it has to come back out as `space`.
+      'ctrl+space',
+      'mod++',
+    ]) {
       expect(formatSpec(parseSpec(spec))).toBe(spec);
     }
   });

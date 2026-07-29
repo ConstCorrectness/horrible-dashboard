@@ -232,7 +232,12 @@ function formatStroke(spec: KeySpec): string {
   if (spec.meta) parts.push('meta');
   if (spec.alt) parts.push('alt');
   if (spec.shift) parts.push('shift');
-  parts.push(spec.kind === 'code' ? `code:${spec.value}` : spec.value);
+  // The space key's `e.key` is a literal ' ', which cannot be written into a
+  // spec — strokes are space-separated, so `ctrl+ ` re-parses as `ctrl++`. Emit
+  // the alias, or a stored override for ctrl+space corrupts on reload.
+  const key =
+    spec.kind === 'code' ? `code:${spec.value}` : spec.value === ' ' ? 'space' : spec.value;
+  parts.push(key);
   return parts.join('+');
 }
 

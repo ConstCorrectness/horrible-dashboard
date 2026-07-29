@@ -1,0 +1,120 @@
+---
+title: Keyboard
+---
+
+# Keyboard (`keymap`)
+
+The keyboard-shortcut surface: one pane for browsing and rebinding every command,
+and the `keymap.*` agent tools behind "I don't like this shortcut, change it".
+
+The service underneath — key specs, `when` conditions, precedence, capture, the
+Escape ladder, host reservations — is documented in
+[architecture/keybindings](../architecture/keybindings.mdx). This page covers what
+the user and the agent see.
+
+## Panes
+
+| Id | Role | Notes |
+| --- | --- | --- |
+| `keymap.shortcuts` | tool | Keyboard Shortcuts. Singleton, docks left or right. |
+
+## Commands and keybindings
+
+| Command | Default | Action |
+| --- | --- | --- |
+| `keymap.open` | `mod+k mod+s` | Open the Shortcuts pane |
+
+The default is a **sequence** rather than a single chord, deliberately: it costs
+no scarce chord of its own, and it mirrors the palette prefix people already know.
+
+## Settings
+
+| Key | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `keymap.escapeHoldMs` | number | `400` | How long Escape must be held to hand the mouse back from a pane that captured it |
+
+`escapeHoldMs` only applies where the browser lets the page keep Escape (Chromium,
+in fullscreen). Elsewhere a single press releases — see the warning in
+[architecture/keybindings](../architecture/keybindings.mdx#the-escape-ladder).
+
+## The Shortcuts pane
+
+One row per command, showing every binding that resolves to it. Each chip is
+annotated on hover with why it is or isn't live:
+
+- **custom** — it came from your overrides, not the shipped defaults.
+- **struck through with ✕** — the host takes this chord before the app sees it.
+  This is the column that matters: `mod+1` had been bound to workspace switching
+  for the life of the browser layout without ever firing, because Chrome's tab
+  switching is not cancellable and nothing checked.
+- *shadowed by …* — another binding on the same key wins right now.
+- *suppressed while … has the keyboard* — a capturing pane is swallowing it.
+
+Row actions: **Rebind** (records the next chord you press), **Unbind** (suppresses
+a default), **Reset** (drops your customizations for that command).
+
+Rebinding records the new chord *and* disables the default it replaces. Without
+that second half the old key keeps working next to the new one — which reads as
+"my change did nothing".
+
+The recorder captures both spellings of the keystroke — the character form (`w`)
+and the physical form (`code:KeyW`) — and stores the character form by default.
+Positional bindings (game movement) want the `code:` form; see
+[key specs](../architecture/keybindings.mdx#two-key-identities-and-why).
+
+## Storage
+
+Overrides are a document of their own at `$HORRIBLE_DATA_DIR/keymap.json`, served
+by `GET/PUT/DELETE /api/keymap` (`backend/modules/keymap/`). Not a setting — a
+list of bindings does not fit `string | number | boolean`, and the settings bag is
+handed to the browser whole on every boot.
+
+```json
+{
+  "schema": "horrible.keymap",
+  "version": 1,
+  "bindings": [
+    { "key": "alt+1", "command": "workspace.switch:1", "when": null, "disabled": false },
+    { "key": "mod+1", "command": "workspace.switch:1", "when": null, "disabled": true }
+  ]
+}
+```
+
+`PUT` replaces the whole document, because a rebind is two edits that must land
+together. The stored `schema`/`version` are pinned server-side, so a client cannot
+talk the store into claiming another format. A corrupt file falls back to defaults
+rather than erroring — a bad keymap must never lock you out of the UI that would
+fix it.
+
+## Agent tools
+
+| Tool | Side effect | Purpose |
+| --- | --- | --- |
+| `keymap.list` | no | Commands with their bindings, conditions, source, and reserved status |
+| `keymap.describe` | no | What a key does, or what binds a command — **including why a binding is not firing** |
+| `keymap.set` | **yes** | Bind a key to a command |
+| `keymap.reset` | **yes** | Clear overrides for one command, or all |
+| `keymap.context` | no | The `when` vocabulary and its current values |
+
+`set` and `reset` carry `sideEffect`, so they route through the normal permission
+prompt — unlike layout verbs, rebinding is persistent, user-visible state.
+
+Two behaviors do the real work:
+
+- **`describe` explains losses.** It reports whether a binding is shadowed, has a
+  false condition, is suppressed by a capturing pane, or is taken by the host. So
+  "Tab doesn't do what I want" is one tool call, not a guess.
+- **`set` refuses unreachable chords.** Binding to something the host swallows
+  would look like success and then do nothing, so it errors and asks for another
+  chord instead.
+
+A typical turn:
+
+```text
+User:  I don't like ctrl+K for the palette, make it ctrl+shift+P
+Agent: keymap.describe { command: "shell.commandPalette" }
+       → bindings: [{ key: "mod+k", source: "default", status: "active" }]
+       keymap.set { key: "mod+shift+p", command: "shell.commandPalette",
+                    replaceKey: "mod+k" }        ← permission prompt
+       → { ok: true }
+```

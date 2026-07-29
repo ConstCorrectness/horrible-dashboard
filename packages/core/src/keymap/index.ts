@@ -60,6 +60,7 @@ export {
   type EscapePolicy,
 } from './capture';
 export {
+  auditKeymap,
   detectPlatform,
   getKeymap,
   getKeymapOverrides,
@@ -73,6 +74,7 @@ export {
   readKeyContext,
   setKeymapOverrides,
   setShellView,
+  unreachableDefaults,
   useKeyContext,
   useKeymap,
   type KeymapOverride,
@@ -86,3 +88,17 @@ export {
   unlockEscape,
   type KeymapHooks,
 } from './dispatch';
+export {
+  globalShortcuts,
+  installGlobalShortcuts,
+  setGlobalShortcuts,
+  type GlobalShortcuts,
+} from './global';
+export {
+  disableKeybinding,
+  isCommandCustomized,
+  loadKeymapOverrides,
+  resetAllKeybindings,
+  resetKeybindings,
+  setKeybinding,
+} from './overrides';

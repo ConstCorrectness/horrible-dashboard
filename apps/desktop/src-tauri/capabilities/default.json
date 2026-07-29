@@ -16,6 +16,9 @@
     "allow-window-start-resize-dragging",
     "allow-window-open-workspace",
     "allow-browser-open-url",
+    "allow-shortcuts-register",
+    "allow-shortcuts-unregister-all",
+    "global-shortcut:default",
     "core:window:allow-start-dragging",
     "core:window:allow-internal-toggle-maximize"
   ]

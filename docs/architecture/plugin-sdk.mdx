@@ -66,11 +66,17 @@ export default definePlugin({
 
 Declaration types (`CommandDecl`, `PanelDecl`, `WidgetDecl`, `KeybindingDecl`,
 `SettingDecl`, `SettingType`, `Capability`, `CollabDecl`, `RegionViewDecl`,
-`PaneRole`, `WsMessage`) live in the SDK and are re-exported by
-`@horrible/core`, so plugins and built-in modules share one contract. A `KeybindingDecl` can be **focus-scoped**: set `scope` to a pane
-view id so the binding is active only while that pane is focused (shadowing plain
-globals), or `override: true` on a global so it can't be shadowed — see
-[keybinding scopes](layout-shell.mdx#keybinding-scopes).
+`PaneRole`, `PaneCaptureDecl`, `WsMessage`) live in the SDK and are re-exported by
+`@horrible/core`, so plugins and built-in modules share one contract.
+
+A `KeybindingDecl` can be **conditioned**: `when` takes a clause over a closed
+context-key vocabulary (`when: "paneFocus == 'my.pane'"` is active only while that
+pane is focused, and beats a plain global on the same key), `override: true` makes
+a binding unshadowable, and `hosts`/`platforms` restrict a default to the builds
+where its chord is actually reachable. `key` accepts sequences (`mod+k mod+s`) and
+physical keys (`code:KeyW`). A `PanelDecl`/`WidgetDecl` can declare `capture` to
+take the keyboard while focused. See
+[keybindings.mdx](keybindings.mdx).
 
 A plugin's panes are first-class frame panes, just like a built-in module's.
 Every `PanelDecl`/`WidgetDecl` declares a **`role`** — `document` (tabs into a

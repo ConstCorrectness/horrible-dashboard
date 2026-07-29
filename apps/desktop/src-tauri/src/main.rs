@@ -3,6 +3,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod backend;
+mod shortcuts;
 mod window;
 
 use std::sync::Arc;
@@ -22,9 +23,12 @@ fn main() {
     backend::start(Arc::clone(&supervisor));
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(supervisor)
         .invoke_handler(tauri::generate_handler![
             backend::backend_status,
+            shortcuts::shortcuts_register,
+            shortcuts::shortcuts_unregister_all,
             window::window_is_fullscreen,
             window::window_set_fullscreen,
             window::window_toggle_fullscreen,

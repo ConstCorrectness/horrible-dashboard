@@ -23,7 +23,9 @@ pre-running a command (via an `initialCommand` pane param). The agent's gated
 - **Keybindings:** `mod+k` → `terminal.clear`, **scoped to `terminal.instance`**:
   it clears the focused terminal (the iTerm/VS Code convention) while shadowing the
   global command-palette shortcut, which still works everywhere else. See
-  [keybinding scopes](../architecture/layout-shell.mdx#keybinding-scopes).
+  [keybindings](../architecture/keybindings.mdx#precedence). (Declared as
+  `scope: 'terminal.instance'`, which normalizes to
+  `when: "paneFocus == 'terminal.instance'"`.)
 - **Services for other modules:** `runCommand(cmd, opts)` (exported as
   `runTerminalCommand`) lets modules (e.g. agent chat showing a suggested command)
   open a terminal pre-running a command — always visibly, never hidden execution.

@@ -1,10 +1,38 @@
 import { useEffect, useRef, useState } from 'react';
-import { registry } from '@horrible/core';
+import {
+  bindingsFor,
+  labelSpec,
+  registry,
+  tryParseSpec,
+  useKeyContext,
+  useKeymap,
+  type KeyContext,
+  type ResolvedBinding,
+} from '@horrible/core';
+
+/**
+ * The shortcut to show for a command: the one that would actually fire right now
+ * (`bindingsFor` sorts live bindings first), rendered with this platform's
+ * conventions. The palette used to print the raw command id here, which told the
+ * user nothing about how to reach the command without opening the palette.
+ */
+function shortcutLabel(
+  command: string,
+  bindings: readonly ResolvedBinding[],
+  ctx: KeyContext,
+): string | null {
+  const best: ResolvedBinding | undefined = bindingsFor(command, bindings, ctx)[0];
+  if (!best) return null;
+  const chord = tryParseSpec(best.key);
+  return chord ? labelSpec(chord, { platform: ctx.platform }) : null;
+}
 
 export function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const bindings = useKeymap();
+  const ctx = useKeyContext();
 
   useEffect(() => {
     if (open) {
@@ -45,12 +73,15 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           }}
         />
         <ul>
-          {matches.map((c, i) => (
-            <li key={c.id} className={i === selected ? 'selected' : ''} onClick={() => run(i)}>
-              <span>{c.title}</span>
-              <code>{c.id}</code>
-            </li>
-          ))}
+          {matches.map((c, i) => {
+            const shortcut = shortcutLabel(c.id, bindings, ctx);
+            return (
+              <li key={c.id} className={i === selected ? 'selected' : ''} onClick={() => run(i)}>
+                <span>{c.title}</span>
+                {shortcut ? <kbd>{shortcut}</kbd> : <code>{c.id}</code>}
+              </li>
+            );
+          })}
           {matches.length === 0 && <li className="empty">No matching commands</li>}
         </ul>
       </div>

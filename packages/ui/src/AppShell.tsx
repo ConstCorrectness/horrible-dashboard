@@ -100,10 +100,12 @@ export function AppShell({
           : []),
       ],
       keybindings: [
-        // `override` so a focused pane's scoped mod+k (terminal.clear) can't
-        // shadow the palette — the docs and this service's own comments have
-        // always claimed it was override-global; now it is.
-        { key: 'mod+k', command: 'shell.commandPalette', override: true },
+        // Deliberately NOT `override`. The old service's comments claimed the
+        // palette was override-global, but the terminal's scoped `mod+k` →
+        // `terminal.clear` shadow is intentional and documented (the iTerm/VS
+        // Code convention) — the comment was stale, not the behavior. `alt+x`
+        // (minibuffer) is the binding that genuinely must never be shadowed.
+        { key: 'mod+k', command: 'shell.commandPalette' },
         ...(nativeFullscreen ? [{ key: 'f11', command: 'shell.toggleFullscreen' }] : []),
       ],
     });

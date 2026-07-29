@@ -189,7 +189,10 @@ export function Frame({
         })),
       ],
       keybindings: [
-        { key: 'ctrl+space', command: 'area.fullscreen' },
+        // ctrl+space is the IME toggle on Windows and the input-source switch on
+        // macOS — neither reaches the page — so those two get an alternative.
+        { key: 'ctrl+space', command: 'area.fullscreen', platforms: ['linux'] },
+        { key: 'mod+alt+f', command: 'area.fullscreen', platforms: ['mac', 'win'] },
         // `override` so a focused editor pane can't shadow it — the minibuffer
         // is the escape hatch and has to be reachable from anywhere.
         { key: 'alt+x', command: 'minibuffer.open', override: true },
@@ -203,9 +206,18 @@ export function Frame({
         { key: 't', command: 'region.toggle:left' },
         { key: 'n', command: 'region.toggle:right' },
         { key: 'b', command: 'region.toggle:bottom' },
+        // Workspace switching splits by host. `mod+1..9` is browser tab switching
+        // and is NOT cancellable, so in a tab these bindings have never once
+        // fired; the browser build gets alt+N, which nothing claims.
         ...Array.from({ length: 9 }, (_, i) => ({
           key: `mod+${i + 1}`,
           command: `workspace.switch:${i + 1}`,
+          hosts: ['desktop' as const],
+        })),
+        ...Array.from({ length: 9 }, (_, i) => ({
+          key: `alt+${i + 1}`,
+          command: `workspace.switch:${i + 1}`,
+          hosts: ['browser' as const],
         })),
       ],
     });

@@ -60,14 +60,24 @@ describe('precedence', () => {
     expect(resolveKey(press('n'), ctx(), bindings)).toMatchObject({ command: 'global.n' });
   });
 
-  it('override beats a scoped binding', () => {
+  it('a plain global loses to the focused pane (the terminal mod+k shadow)', () => {
     const bindings = [
       bind('mod+k', 'terminal.clear', { when: "paneFocus == 'terminal.instance'" }),
-      bind('mod+k', 'shell.commandPalette', { override: true }),
+      bind('mod+k', 'shell.commandPalette'),
     ];
     expect(
       resolveKey(press('k', { ctrlKey: true }), ctx({ paneFocus: 'terminal.instance' }), bindings),
-    ).toMatchObject({ command: 'shell.commandPalette' });
+    ).toMatchObject({ command: 'terminal.clear' });
+  });
+
+  it('override beats a scoped binding', () => {
+    const bindings = [
+      bind('alt+x', 'editor.something', { when: "paneFocus == 'editor.buffer'" }),
+      bind('alt+x', 'minibuffer.open', { override: true }),
+    ];
+    expect(
+      resolveKey(press('x', { altKey: true }), ctx({ paneFocus: 'editor.buffer' }), bindings),
+    ).toMatchObject({ command: 'minibuffer.open' });
   });
 
   it('a user binding beats both a default and an override default', () => {
@@ -150,6 +160,38 @@ describe('the capture gate', () => {
     expect(resolveKey(press('t'), typing, bindings)).toEqual({ kind: 'none' });
     expect(resolveKey(press('k', { ctrlKey: true }), typing, bindings)).toMatchObject({
       command: 'shell.commandPalette',
+    });
+  });
+
+  it('keyboard capture swallows a bare key even when scoped to the capturing pane', () => {
+    // The frame synthesizes a `t`/`n`/`b` region toggle scoped to EVERY view
+    // with regions, so exempting "the capturing pane's own bindings" here let
+    // `t` toggle the outline of the editor you were typing `t` into.
+    const scoped = [
+      bind('t', 'region.toggle:left:notebook.editor', { when: "paneFocus == 'notebook.editor'" }),
+      bind('mod+s', 'editor.save', { when: "paneFocus == 'notebook.editor'" }),
+    ];
+    const typing = ctx({
+      paneFocus: 'notebook.editor',
+      capture: 'keyboard',
+      captureView: 'notebook.editor',
+    });
+    expect(resolveKey(press('t'), typing, scoped)).toEqual({ kind: 'none' });
+    // ...but the pane's own modified chord still resolves.
+    expect(resolveKey(press('s', { ctrlKey: true }), typing, scoped)).toMatchObject({
+      command: 'editor.save',
+    });
+  });
+
+  it('full capture still lets the capturing pane keep its own bare keys', () => {
+    // A game needs WASD; that is the difference between `full` and `keyboard`.
+    const playing = ctx({
+      paneFocus: 'hassault.play',
+      capture: 'full',
+      captureView: 'hassault.play',
+    });
+    expect(resolveKey(press('w', {}, 'KeyW'), playing, bindings)).toMatchObject({
+      command: 'game.forward',
     });
   });
 

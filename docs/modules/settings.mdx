@@ -62,6 +62,15 @@ That case is also why the rule bites harder than it looks: a bundled game server
 `$HORRIBLE_DATA_DIR/settings.json` with its node, so the secret was reachable from the
 browser even though nothing in the UI displayed it.
 
+## What is deliberately *not* a setting
+
+Keybindings. A `SettingValue` is `string | number | boolean`, so a list of
+bindings has no home in the bag, and the whole-bag `GET` above is the second
+reason: the keymap is its own document at `$HORRIBLE_DATA_DIR/keymap.json` behind
+`/api/keymap`. It follows the same frontend-owns-the-schema split this store uses
+— see [keymap](keymap.mdx#storage). `keymap.escapeHoldMs` *is* a setting, because
+it is a single number.
+
 ## Custom sections
 
 Some configuration is too rich for the declarative `SettingDecl` controls

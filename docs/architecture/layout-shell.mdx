@@ -102,35 +102,26 @@ Everything user-facing routes through two shell services:
   (`module.verb` ids, e.g. `terminal.new`, `chat.focusInput`). Panels' buttons
   invoke commands; the palette and keybindings invoke the same commands. This is
   what keeps both layouts behaviorally identical.
-- **Keybinding service** — maps keys to command ids with **focus scopes**.
-  Modules declare defaults; the shell resolves them against the focused pane (see
-  below) and (on desktop) registers any global shortcuts.
+- **Keybinding service** — maps keys to command ids, conditioned on the focused
+  pane and on whether a pane has captured the keyboard. Modules declare defaults,
+  the user can rebind anything, and on desktop it registers OS global shortcuts.
+  Fully documented in [keybindings.mdx](keybindings.mdx); the summary below is
+  just the frame's own defaults.
 
-### Keybinding scopes
+### Keybindings
 
-A `KeybindingDecl` (`{ key, command }`) is **global** by default — active
-everywhere. Two optional fields make bindings focus-aware:
+A `KeybindingDecl` is `{ key, command }` plus optional `when` (a condition over a
+closed context-key vocabulary), `override`, `hosts`/`platforms`, and `global`.
+Precedence is **capture gate → user override → `override: true` → most specific
+`when` → registration order**. Key specs are `+`-separated modifier tokens plus
+the key (`mod+k`, `alt+shift+left`, `mod+k mod+s` for a sequence, `code:KeyW` for
+a physical key).
 
-- **`scope`** — a pane view id (e.g. `terminal.instance`). The binding is only
-  active while a pane of that view is focused, and it **shadows a plain global**
-  binding for the same key. So a focused terminal can bind `mod+k` to
-  `terminal.clear` while `mod+k` opens the command palette everywhere else.
-- **`override`** (on a *global* binding) — when true, the global wins even if the
-  focused pane has a scoped binding for the same key. The escape hatch for
-  shortcuts that must never be shadowed.
-
-The shell tracks the **active scope** — the focused pane's view id — in
-`packages/core/src/keybindings.ts`: the frame's pane host calls `setActiveScope`
-on focus/pointer-down and `clearActiveScope` on unmount. The pure
-`resolveKeybinding(event, scope, bindings)` picks the command with precedence
-**override-global → focused-scope → plain-global**, so most globals are
-overridable by the focused pane but an `override` global always wins — the "may or
-may not override" rule. (CodeMirror/xterm keep their own internal keymaps; this
-service is for registry command bindings.)
-
-Key specs are `+`-separated modifier tokens plus the key — `mod+k`,
-`alt+shift+left`, `ctrl+space`, plain `t` — and modifiers match **exactly**
-(`mod+b` and `mod+alt+b` bind independently). `mod` is ctrl or cmd.
+Focus lives in `frame.focusedInstanceId`; a pane that needs the whole keyboard
+takes **capture**, and Escape unwinds through one ordered ladder. All of that,
+plus host-reserved chords and the `keymap.*` agent tools, is in
+[keybindings.mdx](keybindings.mdx). (CodeMirror/xterm keep their own internal
+keymaps; this service is for registry command bindings.)
 
 ### Default frame keybindings
 
@@ -138,16 +129,23 @@ Key specs are `+`-separated modifier tokens plus the key — `mod+k`,
 | --- | --- |
 | `t` / `n` / `b` | toggle the focused pane's left / right / bottom **region** strip |
 | declared letters (`o`, `s`, `g`, …) | reveal that region view on the focused pane |
-| `ctrl+space` (Esc exits) | fullscreen the focused area (in-window) |
+| `ctrl+space` (Linux) · `mod+alt+f` (mac/Windows) | fullscreen the focused area (in-window) |
 | `f11` (desktop only) | toggle native OS-window fullscreen (`window.fullscreen`) |
 | `alt+arrows` | move focus between areas |
 | `alt+shift+arrows` | move the active pane to the neighboring area |
 | `mod+alt+arrows` | split the focused area in that direction |
 | `mod+alt+j` | join the focused area with a neighbor |
 | `mod+b` / `mod+alt+b` / `mod+j` | toggle the left / right / bottom dock |
-| `mod+1..9` | switch workspace by position |
-| `mod+k` | command palette (override-global) |
-| `alt+x` | minibuffer / M-x — slash commands (override-global) |
+| `mod+1..9` (desktop) · `alt+1..9` (browser) | switch workspace by position |
+| `mod+k` | command palette (a focused pane may shadow it — the terminal binds it to `terminal.clear`) |
+| `alt+x` | minibuffer / M-x — slash commands (`override`, never shadowable) |
+| `mod+k mod+s` | Keyboard Shortcuts pane |
+
+Two of those rows split by host or platform for a reason. `mod+1..9` is browser
+tab switching and is **not** cancellable, so in a tab those bindings never fired
+at all; `ctrl+space` is the IME toggle on Windows and the input-source switch on
+macOS. Both are in the reserved table, and the Shortcuts pane flags any binding
+that lands on one.
 
 ## Platform capability service
 
@@ -164,7 +162,7 @@ gracefully:
 | `window.perWorkspace`  | no                                 | **yes** (open a workspace in its own OS window) |
 | `window.fullscreen`    | no (in-window fullscreen-area only) | **yes** (F11 toggles native OS-window fullscreen) |
 | `chrome.workspaceTabs` | no (the frame renders its own tab strip) | **yes** (undecorated window; the tab strip is the titlebar) |
-| `shortcuts.global`     | no                                 | yes (summon window, quick chat)  |
+| `shortcuts.global`     | no                                 | **yes** (`global: true` bindings registered with the OS) |
 | `tray`                 | no                                 | yes                              |
 
 The `window.*`/`chrome.*` **phase-2** rows are the contract for the native

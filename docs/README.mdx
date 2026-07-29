@@ -59,6 +59,10 @@ flowchart TB
 - [Windowing](architecture/windowing.mdx) — the dockable workspace: how views
   (panels and widgets) open as tabbed/split/floating panes, views vs pane
   instances, and layout persistence.
+- [Keybindings](architecture/keybindings.mdx) — the keyboard authority: key specs,
+  `when` conditions, precedence, which pane has focus, **input capture** (a game
+  or terminal taking the keyboard and giving it back), the Escape ladder, and the
+  chords the browser/OS steal before we see them.
 - [Plugin SDK](architecture/plugin-sdk.mdx) — the public **frontend** plugin
   contract (`@horribledashboard/sdk`): package format, authoring guide, runtime
   shims, versioning, trust model, catalog/install lifecycle.
@@ -117,6 +121,8 @@ layout shell and how it behaves in the browser vs the desktop app:
   "Interpretability" workspace (inspector centre, agent chat docked right).
 - [Marketplace](modules/marketplace.mdx)
 - [Settings](modules/settings.mdx)
+- [Keyboard](modules/keymap.mdx) — the Keyboard Shortcuts pane and the `keymap.*`
+  agent tools, so "I don't like this shortcut, change it" is one turn.
 - [Connectors](modules/connectors.mdx) — **GitHub + Google implemented.** External
   accounts the node holds credentials for, surfaced as tiles on the home page; each
   connector owns its connect flow, its encrypted server-side credential, and the agent

@@ -156,6 +156,12 @@ class ModuleRegistry {
     this.changeListeners.forEach((l) => l());
   }
 
+  /** Test-only: drop every registered module (mirrors `layoutStore.resetForTests`). */
+  resetForTests(): void {
+    this.modules.clear();
+    this.changeListeners.forEach((l) => l());
+  }
+
   /**
    * Fire `listener` whenever the set of registered modules changes (e.g. a plugin
    * registers at boot). Returns an unsubscribe. Used to re-push the agent

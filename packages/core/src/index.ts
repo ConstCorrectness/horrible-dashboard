@@ -209,6 +209,7 @@ export { interpretabilityModule } from './modules/interpretability';
 export { observabilityModule } from './modules/observability';
 export { marketplaceModule } from './modules/marketplace';
 export { settingsModule } from './modules/settings';
+export { keymapModule } from './modules/keymap';
 export { hassaultModule } from './modules/hassault';
 export {
   socialModule,

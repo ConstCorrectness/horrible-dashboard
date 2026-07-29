@@ -5,6 +5,7 @@
  */
 import type { ModuleManifest } from '../../registry';
 import { registry } from '../../registry';
+import { keymapAgentTools } from './tools';
 import { ShortcutsPanel } from './ShortcutsPanel';
 
 export const keymapModule: ModuleManifest = {
@@ -21,6 +22,10 @@ export const keymapModule: ModuleManifest = {
       dockable: ['right', 'left'],
       defaultDock: 'right',
       defaultDockSize: 460,
+      // Declared on the pane but not dependent on it being open — the manifest
+      // collects `agentTools` from every registered view, so the agent can
+      // rebind a key without the Shortcuts pane being on screen.
+      agentTools: keymapAgentTools,
     },
   ],
   commands: [

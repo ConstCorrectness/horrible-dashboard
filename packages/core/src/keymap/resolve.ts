@@ -33,6 +33,8 @@ export interface ResolvedBinding {
    * that must stay reachable while a pane owns the keyboard.
    */
   capturePassthrough?: boolean;
+  /** Registered with the OS so it fires while the app is unfocused (desktop). */
+  global?: boolean;
   source: 'default' | 'user';
   /** Position in the merged list; lower wins ties. */
   order: number;
@@ -61,15 +63,25 @@ export function isSuppressedByCapture(binding: ResolvedBinding, ctx: KeyContext)
   if (!ctx.capture || ctx.capture === 'pointer') return false;
   if (binding.capturePassthrough) return false;
 
+  const first = binding.chord[0];
+  const modified = first.mod || first.ctrl || first.meta || first.alt;
+
+  if (ctx.capture === 'keyboard') {
+    // The pane is being typed into, so NO bare key may resolve — not even one
+    // scoped to this very pane. The frame synthesizes a `t`/`n`/`b` region
+    // toggle scoped to every view with regions, so exempting "the capturing
+    // pane's own bindings" here would let `t` toggle the outline of the editor
+    // you are typing `t` into. Modified chords are untouched, which is how
+    // `mod+s` still saves from inside a buffer.
+    return !modified;
+  }
+
+  // `full`: only the capturing pane's own bindings survive. A binding belongs to
+  // it when its condition names the focused/capturing pane and holds — which is
+  // only possible for that pane, since capture is released when focus moves.
   if (binding.when) {
     const used = keysUsed(binding.when);
     if (used.has('paneFocus') || used.has('captureView') || used.has('paneInstance')) return false;
-  }
-  if (ctx.capture === 'keyboard') {
-    // Only bare keys are swallowed; a modified chord still reaches the shell.
-    const first = binding.chord[0];
-    const modified = first.mod || first.ctrl || first.meta || first.alt;
-    return !modified;
   }
   return true;
 }

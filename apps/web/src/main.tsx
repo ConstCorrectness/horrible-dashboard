@@ -17,12 +17,19 @@ import {
   initAgentManifestSync,
   initAgentRelay,
   initApprovalListener,
+  auditKeymap,
+  detectPlatform,
+  installGlobalShortcuts,
+  setGlobalShortcuts,
   initBackendOrigin,
   initCapabilities,
   initCommons,
+  initKeymapHost,
   installExternalLinkBridge,
+  keymapModule,
   layoutsModule,
   libraryModule,
+  loadKeymapOverrides,
   loadPlugins,
   loadSettings,
   initLobby,
@@ -53,6 +60,7 @@ import {
 import { AppShell } from '@horrible/ui';
 
 import { isTauri, resolveBackendOrigin } from './tauriBackend';
+import { createTauriGlobalShortcuts } from './tauriShortcuts';
 import { createTauriWindowControl } from './tauriWindow';
 
 // Browser layout entry: browser capability set, built-in module registration,
@@ -68,9 +76,15 @@ async function boot(): Promise<void> {
   // Same frontend, two layouts: under Tauri claim the desktop capability set
   // (native dialogs, window control, tray…) and wire the native window control;
   // the browser gets the browser set and leaves the seam null.
+  // The keymap has to know its host and platform before any binding resolves:
+  // `mod+1..9` is workspace switching on the desktop and unreachable browser tab
+  // switching in a tab, so the two ship different defaults for the same command.
+  initKeymapHost({ platform: detectPlatform(), host: isTauri() ? 'desktop' : 'browser' });
+
   if (isTauri()) {
     initCapabilities(DESKTOP_CAPABILITIES);
     setWindowControl(createTauriWindowControl());
+    setGlobalShortcuts(createTauriGlobalShortcuts());
     // The webview can't spawn browser windows (window.open / target="_blank" are
     // silent no-ops), so route external-link clicks to the system browser.
     installExternalLinkBridge();
@@ -88,6 +102,7 @@ async function boot(): Promise<void> {
   registry.register(observabilityModule);
   registry.register(marketplaceModule);
   registry.register(settingsModule);
+  registry.register(keymapModule);
   registry.register(editorModule);
   registry.register(filesModule);
   registry.register(codeModule);
@@ -116,6 +131,14 @@ async function boot(): Promise<void> {
   // After plugins register their declarations, seed the persisted overrides so
   // widgets read correct values on first render. Backend down ⇒ defaults only.
   await loadSettings();
+  // Same reason as settings: seed the user's overrides before the first render so
+  // the palette and the Shortcuts pane show the bindings that will actually fire.
+  await loadKeymapOverrides();
+  // Shout in dev about any shipped binding this host will never deliver.
+  if (import.meta.env.DEV) auditKeymap();
+  // Push `global: true` bindings to the OS, and keep them in step with rebinds.
+  // No-op without the `shortcuts.global` capability, i.e. in the browser.
+  installGlobalShortcuts();
 
   // Push the agent capability manifest (agent commands + widget/panel agentTools)
   // to the backend orchestrator, now and on every reconnect / registry change.

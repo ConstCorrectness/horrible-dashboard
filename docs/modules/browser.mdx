@@ -407,6 +407,13 @@ agent tools off one shared session.
 **Coordinates** are scaled by the panel from the rendered `<img>` to the fixed
 1280×800 backend viewport.
 
+**Keyboard.** The viewport takes `keyboard` [capture](../architecture/keybindings.mdx#input-capture)
+while focused: unmodified keys go to the remote page (this is a browser — `t` has
+to type a `t`), while `mod+`/`alt+` chords still reach the shell so the palette and
+the pane verbs keep working. Without capture the app's plain-letter bindings fired
+*alongside* the keystrokes being relayed, so typing into a remote page toggled
+region strips.
+
 ### Gating & security
 
 A backend Chromium makes **real network requests to any host**, including the user's
