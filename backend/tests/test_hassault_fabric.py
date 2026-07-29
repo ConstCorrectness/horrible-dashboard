@@ -49,7 +49,9 @@ class FakeHub:
         self.sent: list[tuple[str, str, dict[str, Any]]] = []
         self.reachable = reachable
 
-    async def send_to(self, node_id: str, msg_type: str, data: dict[str, Any]) -> None:
+    async def send_to(
+        self, node_id: str, msg_type: str, data: dict[str, Any], re: str | None = None
+    ) -> None:
         if self.reachable is not None and node_id not in self.reachable:
             raise KeyError(node_id)
         self.sent.append((node_id, msg_type, data))
@@ -604,6 +606,198 @@ def test_the_node_advertises_the_hassault_capability():
     from backend.modules.network.hub import PeerHub
 
     assert fabric.CAPABILITY in PeerHub().capabilities()
+
+
+# ---------------------------------------------------------------------------
+# hosted_rooms: locating a remote friend's players
+# ---------------------------------------------------------------------------
+
+
+def test_hosted_rooms_maps_a_node_to_the_room_its_players_are_in():
+    async def go():
+        make_room()
+        hub = FakeHub()
+        await fabric.handle_join(
+            hub,
+            FakeSession("nodeA"),
+            env({"client": "c1", "room": "r1", "name": "rob"}),
+        )
+        assert fabric.hosted_rooms() == {"nodeA": "r1"}
+
+    asyncio.run(go())
+
+
+def test_hosted_rooms_is_empty_with_no_remote_players():
+    assert fabric.hosted_rooms() == {}
+
+
+def test_hosted_rooms_takes_the_first_room_for_two_tabs_on_one_node():
+    """Two browsers on one machine could be in two different rooms; the server
+    browser is answering "where is this friend", not enumerating their tabs, so
+    one room per node is all it promises."""
+
+    async def go():
+        room_a = make_room("ra")
+        room_b = make_room("rb")
+        hub = FakeHub()
+        await fabric.handle_join(
+            hub,
+            FakeSession("nodeA"),
+            env({"client": "c1", "room": room_a.id, "name": "rob"}),
+        )
+        await fabric.handle_join(
+            hub,
+            FakeSession("nodeA"),
+            env({"client": "c2", "room": room_b.id, "name": "rob"}),
+        )
+        assert fabric.hosted_rooms()["nodeA"] in (room_a.id, room_b.id)
+
+    asyncio.run(go())
+
+
+# ---------------------------------------------------------------------------
+# The server browser
+# ---------------------------------------------------------------------------
+
+
+def test_handle_browse_answers_with_the_local_listing():
+    async def go():
+        make_room()
+        hub = FakeHub()
+        await fabric.handle_browse(hub, FakeSession("friend"), env({}))
+        replies = hub.of_type(fabric.HASSAULT_BROWSE)
+        assert len(replies) == 1
+        assert replies[0]["matches"][0]["id"] == "r1"
+        assert "hostName" in replies[0]
+
+    asyncio.run(go())
+
+
+def test_handle_browse_refuses_an_untrusted_peer():
+    async def go():
+        make_room()
+        hub = FakeHub()
+        await fabric.handle_browse(hub, FakeSession("stranger", trusted=False), env({}))
+        assert hub.of_type(fabric.HASSAULT_BROWSE) == []
+
+    asyncio.run(go())
+
+
+class FakePeer:
+    def __init__(
+        self, node_id: str, node_name: str, trusted: bool, capable: bool
+    ) -> None:
+        self.node_id = node_id
+        self.node_name = node_name
+        self.trusted = trusted
+        self.capabilities = ["hassault"] if capable else []
+
+
+class FakePeerHub:
+    """Stands in for `network.hub.peer_hub` in `browse_peers`.
+
+    `answers` maps node id to either a reply payload or `None` for "never
+    answers" — the case a real request would time out on.
+    """
+
+    def __init__(
+        self, peers: list[FakePeer], answers: dict[str, dict[str, Any] | None]
+    ) -> None:
+        self._peers = peers
+        self._answers = answers
+
+    def list_peers(self) -> list[FakePeer]:
+        return self._peers
+
+    async def request(
+        self, node_id: str, msg_type: str, data: dict[str, Any], timeout: float = 2.0
+    ) -> Any:
+        reply = self._answers.get(node_id)
+        if reply is None:
+            raise TimeoutError(node_id)
+
+        class _Env:
+            def __init__(self, data: dict[str, Any]) -> None:
+                self.data = data
+
+        return _Env(reply)
+
+
+def test_browse_peers_asks_only_trusted_capable_friends(monkeypatch):
+    async def go():
+        peers = [
+            FakePeer("trusted-capable", "Kim", trusted=True, capable=True),
+            FakePeer("trusted-not-capable", "Sam", trusted=True, capable=False),
+            FakePeer("untrusted-capable", "Stranger", trusted=False, capable=True),
+        ]
+        fake_hub = FakePeerHub(
+            peers,
+            {
+                "trusted-capable": {
+                    "matches": [
+                        {
+                            "id": "m1",
+                            "map": "ac_desert",
+                            "players": 1,
+                            "bots": 0,
+                            "maxPlayers": 8,
+                            "createdAt": 0.0,
+                        }
+                    ],
+                    "hostName": "Kim's Box",
+                }
+            },
+        )
+        import backend.modules.network.hub as hub_module
+
+        monkeypatch.setattr(hub_module, "peer_hub", fake_hub)
+
+        rows, asked, answered = await fabric.browse_peers()
+        assert asked == 1  # only the trusted + capable peer was worth asking
+        assert answered == 1
+        assert len(rows) == 1
+        assert rows[0]["host"] == "trusted-capable"
+        assert rows[0]["hostName"] == "Kim"  # the roster's name wins over the claim
+        assert rows[0]["map"] == "ac_desert"
+
+    asyncio.run(go())
+
+
+def test_browse_peers_drops_a_peer_that_never_answers(monkeypatch):
+    async def go():
+        peers = [FakePeer("slow", "Slow Friend", trusted=True, capable=True)]
+        fake_hub = FakePeerHub(peers, {"slow": None})
+        import backend.modules.network.hub as hub_module
+
+        monkeypatch.setattr(hub_module, "peer_hub", fake_hub)
+
+        rows, asked, answered = await fabric.browse_peers()
+        assert asked == 1
+        assert answered == 0
+        assert rows == []
+
+    asyncio.run(go())
+
+
+def test_browse_peers_with_no_capable_friends_asks_nobody(monkeypatch):
+    async def go():
+        fake_hub = FakePeerHub([], {})
+        import backend.modules.network.hub as hub_module
+
+        monkeypatch.setattr(hub_module, "peer_hub", fake_hub)
+
+        rows, asked, answered = await fabric.browse_peers()
+        assert (rows, asked, answered) == ([], 0, 0)
+
+    asyncio.run(go())
+
+
+def test_the_browse_handler_is_registered():
+    from backend.modules.network.hub import PeerHub
+
+    hub = PeerHub()
+    fabric.register(hub)
+    assert fabric.HASSAULT_BROWSE in hub._handlers
 
 
 def test_tools_are_registered_under_the_module_prefix():

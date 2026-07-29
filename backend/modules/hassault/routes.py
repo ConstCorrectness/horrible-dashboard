@@ -15,6 +15,8 @@ from backend.modules.hassault import assets, fabric, mapsource, weapons
 from backend.modules.hassault.cgz import PLANE_ORDER, CgzError, write_cgz
 from backend.modules.hassault.match import MAX_PLAYERS, match_server
 from backend.modules.hassault.models import (
+    BrowseMatch,
+    BrowsePlayer,
     CreateMatchRequest,
     EntityOut,
     InstallStatus,
@@ -23,6 +25,7 @@ from backend.modules.hassault.models import (
     MapSummary,
     MatchInvite,
     MatchSummary,
+    ServerBrowse,
     SessionInfo,
     WeaponOut,
 )
@@ -235,6 +238,66 @@ async def get_invitees() -> list[Invitee]:
 async def get_invites() -> list[MatchInvite]:
     """Match invitations received from friends and not yet expired."""
     return [MatchInvite(**invite) for invite in fabric.live_invites()]
+
+
+@router.get("/browse", response_model=ServerBrowse)
+async def get_browse() -> ServerBrowse:
+    """The server browser: every match we can see, and everyone we could play with.
+
+    There is no master server to query — this game has no central list and is not
+    getting one. "Available servers" here means matches on **this node** plus
+    matches on the nodes of friends the fabric currently has a session with, asked
+    for over the peer wire on a two-second deadline. That is the honest extent of
+    it: a stranger's match is not discoverable, because it is also not joinable
+    (see `fabric.handle_join`).
+
+    Players are the roster's, and they carry a `room` when one of their devices is
+    playing in a match hosted here — which is the only place we can know it from.
+    """
+    local = [
+        BrowseMatch(**row, host="", hostName="this node")
+        for row in match_server.listing()
+    ]
+    remote, asked, answered = await fabric.browse_peers()
+
+    # Which of our own rooms a friend's device is standing in. `player_nodes` is
+    # the only view of that: a remote player is a `PeerPlayerConn`, so its node id
+    # is all that ties a body in a room to a person on the roster.
+    rooms_by_node = fabric.hosted_rooms()
+
+    players: list[BrowsePlayer] = []
+    from backend.modules.network.hub import peer_hub
+    from backend.modules.social import roster, store
+
+    online = roster.online_nodes()
+    capable = {
+        p.node_id
+        for p in peer_hub.list_peers()
+        if fabric.CAPABILITY in (p.capabilities or [])
+    }
+    for friend in store.list_friends(online):
+        if friend.status != "accepted" or friend.is_self:
+            continue
+        nodes = [d.node_id for d in friend.devices if d.online]
+        if not nodes:
+            continue
+        players.append(
+            BrowsePlayer(
+                name=friend.display_name,
+                person_id=friend.person_id,
+                friend_code=friend.friend_code,
+                room=next((rooms_by_node[n] for n in nodes if n in rooms_by_node), ""),
+                can_play=any(n in capable for n in nodes),
+                devices_online=len(nodes),
+            )
+        )
+
+    return ServerBrowse(
+        matches=local + [BrowseMatch(**row) for row in remote],
+        players=players,
+        peers_asked=asked,
+        peers_answered=answered,
+    )
 
 
 @router.get("/maps/{name}/cubes")

@@ -42,8 +42,39 @@ export interface MoveInput {
   noclip: boolean;
 }
 
+/** Radians turned per pixel of mouse movement at sensitivity 1. */
+export const LOOK_RADIANS_PER_PIXEL = 0.0022;
+
 export function createPlayer(x: number, y: number, z: number, yaw = 0): PlayerState {
   return { x, y, z, velZ: 0, yaw, pitch: 0, onGround: false };
+}
+
+/** Just under a right angle: exactly ±90° makes the view flip over. */
+export function clampPitch(pitch: number): number {
+  const limit = Math.PI / 2 - 0.001;
+  return Math.max(-limit, Math.min(limit, pitch));
+}
+
+/**
+ * Turn the view by a mouse movement, in raw `movementX`/`movementY` pixels.
+ *
+ * **Mouse right must increase yaw**, and getting that backwards is not obvious
+ * from the camera code: `yaw` is measured about cube +x, but the renderer maps
+ * cube `y` onto three's `z`, which reflects the plane — so the intuition that
+ * "positive angle turns the way it does on graph paper" is wrong here by exactly
+ * one sign. The fixed point is `step`: it walks toward `(cos yaw, sin yaw)`, and
+ * the camera's right vector at any yaw is `(-sin yaw, cos yaw)`, so turning right
+ * is turning *toward* larger yaw. Pinned by `__tests__/look.test.ts`.
+ */
+export function applyLook(
+  player: PlayerState,
+  movementX: number,
+  movementY: number,
+  sensitivity = 1,
+): void {
+  const scale = LOOK_RADIANS_PER_PIXEL * Math.max(0, sensitivity);
+  player.yaw += movementX * scale;
+  player.pitch = clampPitch(player.pitch - movementY * scale);
 }
 
 /** The eye position, which is what the camera actually uses. */

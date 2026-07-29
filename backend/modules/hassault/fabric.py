@@ -49,6 +49,7 @@ HASSAULT_JOIN = "hassault_join"
 HASSAULT_INPUT = "hassault_input"
 HASSAULT_LEAVE = "hassault_leave"
 HASSAULT_FRAME = "hassault_frame"
+HASSAULT_BROWSE = "hassault_browse"
 
 # The capability a node advertises when it can host or join matches. Used to
 # offer only friends who could actually accept.
@@ -98,6 +99,22 @@ _hosted: dict[tuple[str, str], PeerPlayerConn] = {}
 
 def hosted_count() -> int:
     return len(_hosted)
+
+
+def hosted_rooms() -> dict[str, str]:
+    """Which room each remote node's players are standing in.
+
+    The only place that can be known: a remote player is a `PeerPlayerConn`, so
+    the node id is the one thing tying a body in a room here to a person on the
+    roster. First room wins if one node has two browsers in two matches — the
+    server browser is showing "where is this friend", not a list of their tabs.
+    """
+    out: dict[str, str] = {}
+    for (node_id, _client), conn in _hosted.items():
+        entry = match_server.membership.get(id(conn))
+        if entry is not None:
+            out.setdefault(node_id, entry[0])
+    return out
 
 
 async def handle_join(hub: PeerHub, session: PeerSession, env: PeerEnvelope) -> None:
@@ -350,6 +367,94 @@ async def send_remote_leave(binding: RemoteMatch) -> None:
 
 
 # ---------------------------------------------------------------------------
+# The server browser
+# ---------------------------------------------------------------------------
+
+
+async def handle_browse(hub: PeerHub, session: PeerSession, env: PeerEnvelope) -> None:
+    """A friend asking what is running here.
+
+    The reply is exactly `match_server.listing()` — the same rows `GET /matches`
+    serves — because a friend's node is not a lesser client: they can already join
+    any of these rooms, so there is nothing to withhold. Untrusted peers get
+    silence rather than an error: the roster is not a thing to confirm the shape of
+    to a stranger.
+    """
+    if not session.info.trusted:
+        return
+    from backend.modules.network import identity as node_identity
+
+    await hub.send_to(
+        session.info.node_id,
+        HASSAULT_BROWSE,
+        {"matches": match_server.listing(), "hostName": node_identity.node_name()},
+        re=env.msg_id,
+    )
+
+
+async def browse_peers(timeout: float = 2.0) -> tuple[list[dict[str, Any]], int, int]:
+    """Ask every hassault-capable friend what they are hosting.
+
+    Fanned out concurrently and answered on a deadline, because a browser refresh
+    cannot be as slow as the slowest peer — a node that has gone quiet without its
+    TCP connection noticing would otherwise stall the whole list. A peer that
+    misses the deadline contributes nothing and is simply absent, which is also
+    what it looks like to the player: not there right now.
+
+    Only *trusted* peers are asked. Discovery is not the point of this — the
+    fabric already decides who we can reach, and a stranger's match is not
+    joinable anyway (`handle_join` gates on the same flag).
+
+    Returns the rows plus how many peers were asked and how many answered, so the
+    pane can say the list is partial instead of quietly showing less than there is.
+    """
+    from backend.modules.network.hub import peer_hub
+
+    targets = [
+        peer
+        for peer in peer_hub.list_peers()
+        if peer.trusted and CAPABILITY in (peer.capabilities or [])
+    ]
+    if not targets:
+        return [], 0, 0
+
+    async def ask(node_id: str) -> tuple[str, dict[str, Any] | None]:
+        try:
+            env = await peer_hub.request(node_id, HASSAULT_BROWSE, {}, timeout=timeout)
+        except Exception:
+            # Gone, silent, or on a build with no browse handler. All three mean the
+            # same thing to the player — not there right now — and none is worth a
+            # 500 on a list that is mostly other people's rooms. Cancellation is
+            # deliberately not caught: that is our request being abandoned.
+            return node_id, None
+        return node_id, dict(env.data or {})
+
+    replies = await asyncio.gather(*(ask(p.node_id) for p in targets))
+
+    out: list[dict[str, Any]] = []
+    answered = 0
+    by_node = {p.node_id: p for p in targets}
+    for node_id, data in replies:
+        if data is None:
+            continue
+        answered += 1
+        rows = data.get("matches")
+        if not isinstance(rows, list):
+            continue
+        peer = by_node.get(node_id)
+        # The peer's claimed name is a label only, exactly as in `handle_invite`:
+        # identity is the node id the fabric authenticated. The roster's own name
+        # for them wins when it has one, since that is the name the player chose.
+        claimed = str(data.get("hostName") or "")[:32]
+        label = (peer.node_name if peer and peer.node_name else claimed) or "a friend"
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            out.append({**row, "host": node_id, "hostName": label})
+    return out, len(targets), answered
+
+
+# ---------------------------------------------------------------------------
 # Invites
 # ---------------------------------------------------------------------------
 
@@ -423,4 +528,5 @@ def register(hub: PeerHub) -> None:
     hub.register_handler(HASSAULT_INPUT, handle_input)
     hub.register_handler(HASSAULT_LEAVE, handle_leave)
     hub.register_handler(HASSAULT_FRAME, handle_frame)
+    hub.register_handler(HASSAULT_BROWSE, handle_browse)
     hub.subscribe(_on_peer_event)

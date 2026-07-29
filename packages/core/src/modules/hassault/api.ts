@@ -119,8 +119,49 @@ export interface MatchInvite {
   ts: number;
 }
 
+/**
+ * One row of the server browser.
+ *
+ * `host` is the empty string for a match on this node and a node id for a
+ * friend's — which is exactly what `join` wants, so a row is joinable without the
+ * pane having to know which kind it is looking at.
+ */
+export interface BrowseMatch extends MatchSummary {
+  host: string;
+  hostName: string;
+}
+
+/** Someone reachable: a friend on the roster, wherever they happen to be. */
+export interface BrowsePlayer {
+  name: string;
+  person_id: string;
+  friend_code: string;
+  /** A room id when one of their devices is playing in a match hosted here. */
+  room: string;
+  can_play: boolean;
+  devices_online: number;
+}
+
+/**
+ * A refresh of the server browser. `peers_asked`/`peers_answered` differ when a
+ * friend's node was asked and didn't reply in time — the list is then partial,
+ * and saying so beats quietly showing less than there is.
+ */
+export interface ServerBrowse {
+  matches: BrowseMatch[];
+  players: BrowsePlayer[];
+  peers_asked: number;
+  peers_answered: number;
+}
+
 export function listMatches(): Promise<MatchSummary[]> {
   return apiGet<MatchSummary[]>('/hassault/matches');
+}
+
+/** Matches and players, here and on friends' nodes. Slower than `listMatches`:
+ * it waits on the peer fan-out, so it is a refresh button, not a poll. */
+export function browseServers(): Promise<ServerBrowse> {
+  return apiGet<ServerBrowse>('/hassault/browse');
 }
 
 export function listWeapons(): Promise<WeaponSpec[]> {

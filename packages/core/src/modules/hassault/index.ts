@@ -32,6 +32,14 @@ export const hassaultModule: ModuleManifest = {
   ],
   settings: [
     {
+      key: 'hassault.sensitivity',
+      title: 'Mouse sensitivity',
+      description:
+        'Multiplies how far the view turns per pixel of mouse movement, for this game only. Also adjustable in-game from the pause menu (Esc). The control map lives there too — it is a document rather than a value, so it has no row here.',
+      type: 'number',
+      default: 1,
+    },
+    {
       key: 'hassault.installPath',
       title: 'AssaultCube install path',
       description:

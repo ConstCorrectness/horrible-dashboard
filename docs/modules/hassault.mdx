@@ -203,14 +203,17 @@ which keeps them unit-testable with no WebGL context.
 | --- | --- |
 | `world.ts` | The byte planes as typed arrays, plus the height rules |
 | `geometry.ts` | Cube grid → one `BufferGeometry` worth of triangles |
-| `player.ts` | Gravity, jumping, step-up, sliding collision |
+| `player.ts` | Gravity, jumping, step-up, sliding collision, mouse look |
+| `controls.ts` | The game's own keyboard map — separate from the shell's keymap |
 | `net.ts` | Prediction, reconciliation, snapshot interpolation — pure, no socket |
 | `session.ts` | The `/ws` channel as a stateful object the pane drives |
 | `avatars.ts` | Remote-player bodies, facing wedges, nameplates |
+| `viewmodel.ts` | The first-person weapon model, animated in camera space |
 | `boot.ts` | The front door's state machine and progress maths — pure, no three |
 | `reveal.ts` | The build animation, patched into the world's own material |
 | `backdrop.ts` | The grid and mote shaders the map stands in |
 | `BootOverlay.tsx` | Loading, sign-in, callsign, deploy — the DOM half |
+| `GameMenu.tsx` | The Escape pause menu: sensitivity, server browser, rebinding |
 | `HorribleAssaultPanel.tsx` | Canvas, pointer lock, map picker, HUD, match UI |
 
 `net.ts` is split from `session.ts` for the same reason `world.ts` is split from
@@ -287,6 +290,89 @@ A player wedged inside solid geometry is resolved **before** gravity, not after.
 Checking afterwards means they have already been moved down by one frame of
 falling, which does not look like falling — it looks like sinking half a cube a
 second, forever. Both implementations had this and both were fixed together.
+
+### Mouse look
+
+`applyLook` in `player.ts` turns the view from raw `movementX`/`movementY`
+pixels, and its sign is the one thing in this file that is easy to get backwards
+without any error telling you so — both signs are perfectly valid rotations, and
+only one of them matches what is on screen.
+
+The camera's yaw is measured about cube **+x** (`step` walks toward
+`(cos yaw, sin yaw)`), but the renderer maps cube `(x, y)` onto three's `(x, z)` —
+a reflection, not a rotation — so the camera's right vector at any yaw works out
+to `(-sin yaw, cos yaw)` in those same cube axes rather than the `(sin yaw, -cos
+yaw)` graph-paper intuition would suggest. Getting that one sign wrong is exactly
+what shipped once: mouse right rotated the view left. `applyLook` adds
+`movementX` to yaw directly; `__tests__/look.test.ts` pins the *rendered*
+direction (dot the new forward vector against the old right vector) rather than
+the raw sign, so the test still means the right thing if the camera's rotation
+derivation ever changes.
+
+Sensitivity is a multiplier on `LOOK_RADIANS_PER_PIXEL`, stored as the
+`hassault.sensitivity` setting and also adjustable live from the pause menu — the
+two are the same value, so the settings page and the in-game slider can never
+disagree.
+
+## Controls, and why they are not keymap bindings
+
+`controls.ts` is a **second, separate** keyboard table from
+`packages/core/src/keymap` — see [Keybindings](../architecture/keybindings.mdx)
+for the shell's own. That module resolves a chord to a *command*, dispatched
+once. Movement is the other shape: `forward` is a key being *held*, sampled by
+the render loop sixty times a second, and a shell command per key per frame is
+not a thing worth building.
+
+Being a separate table is also what makes it **scoped to the game by
+construction**, with no `when` clause to get right: the only code that ever reads
+it is the pane's own pointer-locked key handler, so a binding here cannot fire
+anywhere else in the app no matter what it is bound to. The shell's own bindings
+are independently suppressed while the pane holds keyboard capture (`useCapture`
+in `HorribleAssaultPanel.tsx`), so the two tables never compete for the same
+keystroke either.
+
+Bindings are keyed by `KeyboardEvent.code` (the physical key), not `key` (the
+character it produces) — WASD is a *shape* under the fingers, and reading `key`
+would move it to ZQSD on an AZERTY layout. Storage is a **diff against the
+shipped defaults**, persisted as the `hassault.controls` setting (a JSON string,
+not a declared `SettingDecl` row — the settings page renders scalars, and a
+document belongs in its own editor, which is why it is the pause menu's Controls
+tab and not a settings-page control). Storing only the diff means a later release
+that adds an action, or moves a default, still reaches a player who only ever
+touched one binding.
+
+Two keys the pane refuses to bind: `Escape` (the way back to this table if
+everything else has been rebound to nonsense) and the handful of
+browser-reserved keys documented in `keymap/reserved.ts`. Taking a key from
+another action removes it there rather than allowing both to fire — a state the
+player could reach in two clicks and never see the effects of otherwise.
+
+## The weapon view model
+
+Before this there was nothing here: the player was a floating camera with a
+crosshair, and the only evidence of a weapon was the ammo counter. `viewmodel.ts`
+draws the thing the counter is about.
+
+**Procedural, like every other visual in this module**, for the same reason the
+map surfaces are tinted rather than textured: AssaultCube's weapon models are its
+copyright and are never bundled (see
+[Licensing](#licensing-whose-content-ships-and-whose-does-not)). Each of the five
+weapons is a handful of boxes and cylinders — a receiver, a barrel, a magazine —
+untextured and unmistakably geometric, but a shotgun reads as a shotgun and a
+sniper rifle reads as a sniper rifle, which is the job. When real (synthesized)
+models land they replace `WeaponViewModel.build`; nothing else changes.
+
+Parented to the **camera**, not the scene: a view model has no world position, it
+has a position in front of the eyes, and recomputing that transform from the
+camera every frame is how it goes subtly wrong on the one frame the camera moves.
+three only renders camera children when the camera itself is in the scene graph,
+which is why the constructor adds it there once.
+
+Animation is entirely local — walk bob, a turn-lag sway, recoil kick, a reload
+dip — the same concession `combat.ts`'s recoil already makes: view angles are
+client-owned, so how the gun waves about is nobody else's business. `setWeapon`
+disposes the outgoing model's own geometry before building the next one, so
+cycling a loadout never leaks a rifle.
 
 ## Identity: sign in, enlist, play
 
@@ -612,6 +698,37 @@ the pane must not import across a module boundary, so it only ever calls
 during the handshake are shown greyed out rather than hidden, since "your friend
 needs to update" is more useful than an absence.
 
+### The server browser
+
+There is no master server, and there is not going to be one. `GET
+/api/hassault/browse` — the pause menu's Servers tab — is the honest extent of
+"available servers": every match on **this node** (`match_server.listing()`)
+plus every match on the nodes of friends the fabric currently has a session
+with. A stranger's match is not discoverable, because it is also not joinable
+(`fabric.handle_join` gates on `session.info.trusted` the same as every other
+entry point).
+
+Reaching a friend's rooms is `fabric.browse_peers`: it fans a `hassault_browse`
+peer-wire request out to every trusted, `hassault`-capable peer concurrently and
+answers on a two-second deadline. A peer that misses the deadline contributes
+nothing rather than stalling the whole list — a friend's node having gone quiet
+without the TCP connection noticing yet must not make a browser refresh as slow
+as the slowest peer. The reply carries `peers_asked`/`peers_answered` back to the
+pane, so a partial list says so instead of quietly looking complete.
+
+`fabric.handle_browse` answers with exactly `match_server.listing()` — the same
+rows a local `GET /matches` call would see — because a friend can already join
+any of those rooms; there is nothing to withhold from someone who could ask to
+join instead. An untrusted peer gets silence, not an error: the roster is not a
+thing to confirm the shape of to a stranger.
+
+The **players** half of the browser is the same roster `/invitees` already
+builds, plus `fabric.hosted_rooms()` — a node id → room id map built from
+`_hosted`, the same dict that holds every `PeerPlayerConn` this node is proxying
+for. It is the only place "which of my rooms is this friend's device standing
+in" can be answered from: a remote player has no browser socket of its own, only
+the fact that some peer node is proxying for one.
+
 ### One socket is one player
 
 Membership is keyed by connection, so joining twice on the same socket replaces
@@ -835,8 +952,18 @@ reshaping the roster of a match you are only visiting.
 - **Settings:** `hassault.installPath` — the folder containing `packages/maps`.
   Blank auto-detects the usual per-platform locations. **Optional**: it only adds
   an AssaultCube install's maps to the ones already bundled.
+  `hassault.sensitivity` — mouse look multiplier, also editable live from the
+  pause menu. The control map (`hassault.controls`) rides the same setting
+  storage but is not a declared `SettingDecl` row — see
+  [Controls](#controls-and-why-they-are-not-keymap-bindings).
 - **Agent tools** (group `hassault`): `list_maps`, `list_matches`, `host`,
   `invite`, `status`, `surroundings`, `add_bot`, `remove_bot`.
+
+Escape opens the in-game pause menu (`GameMenu.tsx`) rather than any shell
+surface — it releases pointer lock and keyboard capture the same way leaving a
+match does, so the mouse and every ordinary control in the menu just work.
+Rebinding there records the same `hassault.controls` document `controls.ts`
+reads; nothing about it touches `packages/core/src/keymap`.
 
 ## Agent tools
 
@@ -910,6 +1037,7 @@ it into an X rather than fading a second element in and out.
 | `POST /api/hassault/matches` | Open a match **without joining**, so its id can be handed to a friend |
 | `GET /api/hassault/invitees` | Friends who could join right now, from the social roster |
 | `GET /api/hassault/invites` | Invitations received from friends, unexpired |
+| `GET /api/hassault/browse` | The server browser: matches here and on friends' nodes, plus reachable players — see [The server browser](#the-server-browser) |
 
 Joining is a `/ws` operation, not REST, because it binds a player to a socket. A
 match created over REST stays empty and is retired after a grace period if nobody
@@ -949,7 +1077,8 @@ And on the peer wire, declared in `fabric.py` rather than `network/protocol.py` 
 a module owns its own wire vocabulary, following the training-ads precedent, so
 adding a feature never edits the fabric core:
 `hassault_invite`, `hassault_join`, `hassault_input`, `hassault_leave`,
-`hassault_frame`.
+`hassault_frame`, `hassault_browse` (a `PeerHub.request`/reply pair — see
+[The server browser](#the-server-browser)).
 
 Every field of an inbound command is clamped rather than trusted: the movement
 axes to ±1 (asking for 50 is the obvious cheat), `dt` to 0.25 s, pitch to a right
@@ -1023,8 +1152,9 @@ never touches the filesystem.
   on every weapon would end a long match with everyone standing around empty. The
   sidearm is bottomless and the rest are not, and dying refills you. Pickups are
   the real answer and are their own slice.
-- **No weapon models, sounds, or animations.** You see a tracer and a crosshair
-  kick; there is no gun on screen and nothing to hear.
+- **No weapon sounds.** There is a procedural first-person model with a walk bob,
+  recoil kick and reload animation (`viewmodel.ts`), and a tracer and crosshair
+  kick for everyone else's shots, but nothing to hear yet.
 - **Recoil is client-side.** View angles are client-owned anyway — the server uses
   whatever arrives — so a modified client could fire without climb. Same class of
   concession as trusting `dt`, and the same answer: this is a game you host for

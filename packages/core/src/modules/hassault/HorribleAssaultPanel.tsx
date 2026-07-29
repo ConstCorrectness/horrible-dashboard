@@ -1,7 +1,8 @@
-import { useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import { PaneInstanceContext, useAgentContext } from '../../agent-context';
 import { lockEscape, unlockEscape, useCapture } from '../../keymap';
+import { setSetting, useSetting } from '../../settings';
 import {
   getInstallStatus,
   getMapCubes,
@@ -29,12 +30,32 @@ import {
 } from './boot';
 import { BootOverlay } from './BootOverlay';
 import { ShotController } from './combat';
+import {
+  codeMap,
+  describeControls,
+  keyLabel,
+  parseControls,
+  serializeControls,
+  type Bindings,
+  type GameAction,
+} from './controls';
 import { EffectsPool } from './effects';
+import { GameMenu } from './GameMenu';
 import { buildWorldMesh } from './geometry';
 import type { PlayerRow } from './net';
-import { createPlayer, eyeHeight, spawnAt, step, type PlayerState } from './player';
+import {
+  applyLook,
+  clampPitch,
+  createPlayer,
+  eyeHeight,
+  MOVE_SPEED,
+  spawnAt,
+  step,
+  type PlayerState,
+} from './player';
 import { installReveal, type Reveal } from './reveal';
 import { MatchSession, type SessionState } from './session';
+import { WeaponViewModel } from './viewmodel';
 import { World } from './world';
 
 /**
@@ -85,27 +106,18 @@ interface Hud {
   error: number;
 }
 
-/** Keys we consume, so the pane never swallows the app's own shortcuts. */
-const CONSUMED_KEYS = new Set([
-  'KeyW',
-  'KeyA',
-  'KeyS',
-  'KeyD',
-  'Space',
-  'ShiftLeft',
-  'KeyV',
-  'KeyR',
-  'Digit1',
-  'Digit2',
-  'Digit3',
-  'Digit4',
-  'Digit5',
-  'Tab',
-  'ArrowUp',
-  'ArrowDown',
-  'ArrowLeft',
-  'ArrowRight',
-]);
+/**
+ * Where the game's own preferences live.
+ *
+ * `hassault.sensitivity` is declared in the manifest, because a number with a
+ * default is exactly what the settings page is for. The control map deliberately
+ * is **not**: it is a small JSON document, the settings page renders scalars, and
+ * a text box full of JSON is worse than no row at all. It rides the same
+ * persistence — which is all it ever wanted from settings — and the pause menu is
+ * its editor.
+ */
+const SENSITIVITY_KEY = 'hassault.sensitivity';
+const CONTROLS_KEY = 'hassault.controls';
 
 const NO_CORRECTION = { x: 0, y: 0, z: 0 };
 /** How long a hitmarker and a damage flash stay on screen. */
@@ -194,11 +206,20 @@ export function HorribleAssaultPanel() {
   /** Timestamps, compared against `Date.now()` so a stale one simply expires. */
   const [flash, setFlash] = useState({ hit: 0, killed: 0, hurt: 0 });
 
+  // ---- the pause menu and the preferences it edits --------------------------
+  const [menuOpen, setMenuOpen] = useState(false);
+  const sensitivity = useSetting<number>(SENSITIVITY_KEY) ?? 1;
+  const storedControls = useSetting<string>(CONTROLS_KEY);
+  const controls = useMemo(() => parseControls(storedControls), [storedControls]);
+  const codes = useMemo(() => codeMap(controls), [controls]);
+
   // Mutable simulation state, kept out of React: this updates every frame and
   // re-rendering the component 60 times a second would be absurd.
   const worldRef = useRef<World | null>(null);
   const playerRef = useRef<PlayerState>(createPlayer(0, 0, 0));
-  const keysRef = useRef<Set<string>>(new Set());
+  /** Held *actions*, not codes: the key handler resolves the binding once, and the
+   * frame loop then never has to know which key produced a movement. */
+  const keysRef = useRef<Set<GameAction>>(new Set());
   const noclipRef = useRef(false);
   const sceneRef = useRef<SceneHandle | null>(null);
   const sessionRef = useRef<MatchSession | null>(null);
@@ -210,6 +231,17 @@ export function HorribleAssaultPanel() {
   // read per-frame from React state has to arrive by ref.
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
+  // Same for the input handlers, which are installed once: a rebind or a new
+  // sensitivity has to reach them without tearing down pointer lock to do it.
+  const sensitivityRef = useRef(sensitivity);
+  sensitivityRef.current = sensitivity;
+  const codesRef = useRef(codes);
+  codesRef.current = codes;
+  /** Pointer-lock state as the *handlers* see it: `document.pointerLockElement`
+   * has already been cleared by the time an Escape that released it reaches us. */
+  const lockedRef = useRef(false);
+  const menuOpenRef = useRef(false);
+  menuOpenRef.current = menuOpen;
 
   // Resolved when the scene exists. Replaces polling for `sceneRef.current`: the
   // map load and the renderer load are genuinely concurrent, and awaiting is both
@@ -397,6 +429,9 @@ export function HorribleAssaultPanel() {
       const backdrop = createBackdrop(THREE, scene);
       const avatars = new AvatarPool(THREE, scene);
       const effects = new EffectsPool(THREE, scene);
+      // The gun in your hands. Parented to the camera by the constructor, which
+      // is also what puts the camera in the scene graph.
+      const viewmodel = new WeaponViewModel(THREE, scene, camera);
 
       const setMesh = (world: World): number => {
         if (mesh) {
@@ -462,22 +497,21 @@ export function HorribleAssaultPanel() {
         const online = session != null && session.state.status === 'joined';
         const alive = !online || (session?.state.you?.alive ?? true);
 
+        let moving = false;
+        /** Whether a shot left the barrel this frame, for the view model's kick. */
+        let fired = false;
+
         if (world) {
           const keys = keysRef.current;
           // A dead player's input is discarded server-side, so predicting
           // movement from it would only be a correction waiting to happen.
-          const forward = alive
-            ? (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) -
-              (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0)
-            : 0;
-          const strafe = alive
-            ? (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) -
-              (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0)
-            : 0;
+          const forward = alive ? (keys.has('forward') ? 1 : 0) - (keys.has('back') ? 1 : 0) : 0;
+          const strafe = alive ? (keys.has('right') ? 1 : 0) - (keys.has('left') ? 1 : 0) : 0;
+          moving = forward !== 0 || strafe !== 0;
           const input = {
             forward,
             strafe,
-            jump: alive && keys.has('Space'),
+            jump: alive && keys.has('jump'),
             // Noclip is a local sightseeing tool. The server has no such move, so
             // in a match it would desync on the very first frame.
             noclip: !online && noclipRef.current,
@@ -505,10 +539,13 @@ export function HorribleAssaultPanel() {
               Number.isFinite(renderT) ? renderT : 0,
               session.state.you,
             );
+            fired = intent.fire;
             session.queue(session.predictor.record(world, player, input, dt, intent));
             session.predictor.decay(dt);
           } else {
-            shots?.frame(now, 0, null);
+            // Offline there is nobody to resolve a hit, so this never fires — but
+            // it is read the same way, so the day it can, the gun already kicks.
+            fired = shots?.frame(now, 0, null).fire ?? false;
             step(world, player, input, dt);
           }
         }
@@ -546,6 +583,19 @@ export function HorribleAssaultPanel() {
           // YXZ so yaw is applied before pitch; the default XYZ order rolls the
           // camera as you look around.
           camera.rotation.set(player.pitch, -player.yaw - Math.PI / 2, 0, 'YXZ');
+          // The weapon rides the camera, so it is updated with it: what it needs
+          // is what the camera just did (angles) and what the player just did
+          // (moved, fired, reloading).
+          if (fired) viewmodel.fire();
+          viewmodel.setWeapon(shots?.weapon?.id ?? '');
+          viewmodel.update(dt, {
+            speed: moving ? MOVE_SPEED : 0,
+            onGround: player.onGround,
+            reloading: session?.state.you?.reloading ?? false,
+            yaw: player.yaw,
+            pitch: player.pitch,
+            visible: alive,
+          });
         } else {
           // Before you deploy the camera flies the map rather than standing in
           // it: a slow orbit is what makes the sign-in screen read as a game's
@@ -562,6 +612,15 @@ export function HorribleAssaultPanel() {
             cz + Math.sin(angle) * radius,
           );
           camera.lookAt(cx, extent * 0.1, cz);
+          // Nobody is holding it yet: the cinematic camera is not a player.
+          viewmodel.update(dt, {
+            speed: 0,
+            onGround: true,
+            reloading: false,
+            yaw: 0,
+            pitch: 0,
+            visible: false,
+          });
         }
         renderer.render(scene, camera);
 
@@ -595,6 +654,7 @@ export function HorribleAssaultPanel() {
         observer.disconnect();
         avatars.dispose();
         effects.dispose();
+        viewmodel.dispose();
         backdrop.dispose();
         if (mesh) mesh.geometry.dispose();
         material.dispose();
@@ -725,7 +785,9 @@ export function HorribleAssaultPanel() {
   const requestCapture = capture.request;
   const releaseCapture = capture.release;
 
-  const onCanvasClick = useCallback(() => {
+  /** Take the mouse and the keyboard. The one path into playing, from a click on
+   * the canvas and from the pause menu's Resume alike. */
+  const grabInput = useCallback(() => {
     if (!acceptsGameInput(phaseRef.current)) return;
     mountRef.current?.querySelector('canvas')?.requestPointerLock();
     requestCapture();
@@ -733,6 +795,35 @@ export function HorribleAssaultPanel() {
     // lock outright and the hold gesture degrades (see canHoldEscape).
     void lockEscape();
   }, [requestCapture]);
+
+  const onCanvasClick = useCallback(() => {
+    // A click while the menu is up is a click *on* the menu that fell through
+    // somewhere it shouldn't have; it must not silently re-grab the pointer.
+    if (menuOpenRef.current) return;
+    grabInput();
+  }, [grabInput]);
+
+  /**
+   * Open the pause menu, giving the mouse and keyboard back so it can be used.
+   *
+   * Called from Escape, which arrives by one of two routes depending on the host:
+   * with Keyboard Lock the shell's ladder hands the tap to the pane, and without
+   * it the ladder releases capture instead and the browser drops pointer lock on
+   * its own. Both end here, so the menu opens either way — see `keymap/dispatch`.
+   */
+  const openMenu = useCallback(() => {
+    setMenuOpen(true);
+    keysRef.current.clear();
+    shotsRef.current?.release();
+    setShowScores(false);
+    if (document.pointerLockElement) document.exitPointerLock();
+    releaseCapture();
+  }, [releaseCapture]);
+
+  const resumeGame = useCallback(() => {
+    setMenuOpen(false);
+    grabInput();
+  }, [grabInput]);
 
   useEffect(() => {
     const el = mountRef.current;
@@ -742,6 +833,7 @@ export function HorribleAssaultPanel() {
     const onPointerLockChange = () => {
       const held = isLocked();
       setLocked(held);
+      lockedRef.current = held;
       // Releasing the pointer must release the trigger too, or a weapon left
       // firing keeps firing into whatever you tabbed away to.
       if (!held) {
@@ -755,9 +847,11 @@ export function HorribleAssaultPanel() {
     };
     const onMouseMove = (e: MouseEvent) => {
       if (!isLocked()) return;
-      const p = playerRef.current;
-      p.yaw -= e.movementX * 0.0022;
-      p.pitch = clampPitch(p.pitch - e.movementY * 0.0022);
+      // Mouse right turns right. The sign lives in `applyLook` with the reasoning
+      // for it and a test — it was inverted here, which is subtle enough to have
+      // shipped: the camera's yaw is about cube +x, but the renderer maps cube y
+      // onto three's z, and that reflection is exactly one sign.
+      applyLook(playerRef.current, e.movementX, e.movementY, sensitivityRef.current);
     };
     const onMouseDown = (e: MouseEvent) => {
       if (!isLocked() || e.button !== 0) return;
@@ -773,23 +867,40 @@ export function HorribleAssaultPanel() {
       shotsRef.current?.cycle(e.deltaY > 0 ? 1 : -1);
     };
     const onKeyDown = (e: KeyboardEvent) => {
+      // Escape is the pause menu, and it is the one key handled while *not*
+      // locked — because by the time it reaches us the shell's ladder may already
+      // have released the lock (see `openMenu`). `lockedRef` is the state before
+      // that release, which is why it exists.
+      if (e.code === 'Escape') {
+        if (menuOpenRef.current) resumeGame();
+        else if (lockedRef.current) openMenu();
+        return;
+      }
       if (!isLocked()) return;
-      if (!CONSUMED_KEYS.has(e.code)) return;
-      // Only swallow keys while the pointer is locked, so the command palette
-      // and every other shortcut keep working when it isn't.
+      const action = codesRef.current.get(e.code);
+      // Only swallow keys the game is actually bound to, so the command palette
+      // and every other shortcut keep working when the pointer isn't locked — and
+      // an unbound key keeps working even when it is.
+      if (!action) return;
       e.preventDefault();
       if (e.repeat) return;
-      if (e.code === 'KeyV') noclipRef.current = !noclipRef.current;
-      if (e.code === 'KeyR') shotsRef.current?.requestReload();
-      if (e.code === 'Tab') setShowScores(true);
-      if (e.code.startsWith('Digit')) {
-        shotsRef.current?.select(Number(e.code.slice(5)) - 1);
+      if (action === 'noclip') noclipRef.current = !noclipRef.current;
+      if (action === 'reload') shotsRef.current?.requestReload();
+      if (action === 'scores') setShowScores(true);
+      if (action.startsWith('weapon')) {
+        shotsRef.current?.select(Number(action.slice(6)) - 1);
       }
-      keysRef.current.add(e.code);
+      keysRef.current.add(action);
     };
     const onKeyUp = (e: KeyboardEvent) => {
-      if (e.code === 'Tab') setShowScores(false);
-      keysRef.current.delete(e.code);
+      // Resolved through the *current* map on the way up too, and tolerant of a
+      // rebind mid-press: the action a key added is the action it removes, and a
+      // key rebound while held simply leaves its old action stuck until the next
+      // release — which `clear()` on unlock and on blur already covers.
+      const action = codesRef.current.get(e.code);
+      if (!action) return;
+      if (action === 'scores') setShowScores(false);
+      keysRef.current.delete(action);
     };
     const onBlur = () => {
       keysRef.current.clear();
@@ -801,7 +912,12 @@ export function HorribleAssaultPanel() {
     document.addEventListener('mousedown', onMouseDown);
     document.addEventListener('mouseup', onMouseUp);
     el.addEventListener('wheel', onWheel, { passive: false });
-    window.addEventListener('keydown', onKeyDown);
+    // Capture phase, deliberately. The shell's dispatcher is also on `window` in
+    // the capture phase, and when its Escape ladder consumes the key it calls
+    // `stopPropagation` — which stops the event reaching any *other* node, and so
+    // would stop a bubble-phase listener here from ever seeing Escape. Two
+    // listeners on the same node in the same phase both run, so this one does.
+    window.addEventListener('keydown', onKeyDown, true);
     window.addEventListener('keyup', onKeyUp);
     window.addEventListener('blur', onBlur);
     return () => {
@@ -810,11 +926,11 @@ export function HorribleAssaultPanel() {
       document.removeEventListener('mousedown', onMouseDown);
       document.removeEventListener('mouseup', onMouseUp);
       el.removeEventListener('wheel', onWheel);
-      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keydown', onKeyDown, true);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
     };
-  }, [releaseCapture]);
+  }, [releaseCapture, openMenu, resumeGame]);
 
   const respawn = useCallback(() => {
     const session = sessionRef.current;
@@ -849,7 +965,14 @@ export function HorribleAssaultPanel() {
     if (session && inviteWho) session.invite(inviteWho);
   }, [inviteWho]);
 
-  const acceptInvite = useCallback(
+  /**
+   * Join a specific room, wherever it is running.
+   *
+   * The one path for both ways of arriving at one: an invitation a friend pushed,
+   * and a row the player picked out of the server browser. `host` empty means it
+   * is a match on this node, which is the same thing `join` already understands.
+   */
+  const joinRoom = useCallback(
     (room: string, map: string, host: string) => {
       const session = sessionRef.current;
       if (!session) return;
@@ -861,6 +984,16 @@ export function HorribleAssaultPanel() {
     },
     [playerName],
   );
+
+  // The pause menu's two preferences. Written straight through to settings so a
+  // rebind survives a reload — and so the sensitivity slider is the same value
+  // the settings page shows.
+  const setSensitivity = useCallback((value: number) => {
+    void setSetting(SENSITIVITY_KEY, value);
+  }, []);
+  const setControls = useCallback((next: Bindings) => {
+    void setSetting(CONTROLS_KEY, serializeControls(next));
+  }, []);
 
   // Let the agent see where it is, what map is loaded, who else is here, and how
   // the fight is going.
@@ -1107,9 +1240,7 @@ export function HorribleAssaultPanel() {
                 <span>
                   <strong>{invite.hostName}</strong> invited you to <code>{invite.map}</code>
                 </span>
-                <button onClick={() => acceptInvite(invite.room, invite.map, invite.host)}>
-                  Join
-                </button>
+                <button onClick={() => joinRoom(invite.room, invite.map, invite.host)}>Join</button>
                 <button onClick={() => sessionRef.current?.dismissInvite(invite.room)}>
                   Dismiss
                 </button>
@@ -1221,7 +1352,7 @@ export function HorribleAssaultPanel() {
             two full-bleed layers would fight — this one is `pointerEvents: none`
             by design, so it would sit invisibly over the sign-in form's buttons
             while still dimming them. */}
-        {phase === 'playing' && !locked && (
+        {phase === 'playing' && !locked && !menuOpen && (
           <div
             style={{
               position: 'absolute',
@@ -1243,12 +1374,17 @@ export function HorribleAssaultPanel() {
             ) : (
               <>
                 <strong>Click to play</strong>
+                {/* The player's own keys, not the shipped ones: this line is a
+                    lie the moment anything is rebound. */}
                 <span style={{ color: 'var(--text-dim)' }}>
-                  WASD move · mouse look · Space jump{online ? '' : ' · V noclip'} · Esc release
+                  {describeControls(controls)} · Esc menu
                 </span>
                 {online ? (
                   <span style={{ color: 'var(--text-dim)' }}>
-                    Fire · 1–5 or wheel weapon · R reload · Tab scores
+                    Fire · wheel or {keyLabel(controls.weapon1[0] ?? '1')}–
+                    {keyLabel(controls.weapon5[0] ?? '5')} weapon ·{' '}
+                    {keyLabel(controls.reload[0] ?? 'R')} reload ·{' '}
+                    {keyLabel(controls.scores[0] ?? 'Tab')} scores
                   </span>
                 ) : (
                   <span style={{ color: 'var(--text-dim)' }}>
@@ -1258,6 +1394,32 @@ export function HorribleAssaultPanel() {
               </>
             )}
           </div>
+        )}
+
+        {/* The pause menu. Deployed players only: before that the boot overlay owns
+            the pane, and Escape there is the shell's business, not the game's. */}
+        {phase === 'playing' && menuOpen && (
+          <GameMenu
+            online={online}
+            hosting={online && !net.host}
+            room={net.room}
+            maps={maps}
+            peers={net.peers}
+            playerId={net.playerId}
+            sensitivity={sensitivity}
+            onSensitivity={setSensitivity}
+            controls={controls}
+            onControls={setControls}
+            onJoin={(room, map, host) => {
+              joinRoom(room, map, host);
+              // Picking a match is a decision to play, so it puts you back in the
+              // world rather than leaving you looking at the list you just used.
+              resumeGame();
+            }}
+            onLeave={() => sessionRef.current?.leave()}
+            onInvite={(friendCode) => sessionRef.current?.invite(friendCode)}
+            onResume={resumeGame}
+          />
         )}
 
         {phase !== 'playing' && (
@@ -1337,12 +1499,6 @@ export function HorribleAssaultPanel() {
       </div>
     </div>
   );
-}
-
-/** Just under a right angle: exactly ±90° makes the view flip over. */
-function clampPitch(pitch: number): number {
-  const limit = Math.PI / 2 - 0.001;
-  return Math.max(-limit, Math.min(limit, pitch));
 }
 
 /**
