@@ -249,7 +249,20 @@ export function deserialize(
       maxSeq + 1,
     );
 
-    return { center, docks, floating, fullscreenAreaId, focusedAreaId, paneSeq };
+    // Restoring focus is best-effort: a stored instance id that no longer exists
+    // (the pane's module was uninstalled) just means nothing starts focused.
+    const focusedInstanceId =
+      typeof src.focusedInstanceId === 'string' ? src.focusedInstanceId : null;
+
+    return {
+      center,
+      docks,
+      floating,
+      fullscreenAreaId,
+      focusedAreaId,
+      focusedInstanceId,
+      paneSeq,
+    };
   } catch {
     return null;
   }

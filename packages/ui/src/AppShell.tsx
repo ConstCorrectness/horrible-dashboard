@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  getActiveScope,
+  closeTransientChrome,
+  DEFAULT_ESCAPE_HOLD_MS,
+  dialogsStore,
+  fullscreenArea,
+  getSetting,
   hasCapability,
-  isEditableTarget,
+  installKeymap,
+  layoutStore,
   registry,
-  resolveKeybinding,
+  setShellView,
   SymbolSearchModal,
   toastsStore,
   windowControl,
@@ -13,6 +18,7 @@ import {
 } from '@horrible/core';
 
 import { ApprovalPrompts } from './ApprovalPrompts';
+import { CaptureHud } from './CaptureHud';
 import { CommandPalette } from './CommandPalette';
 import { Dialogs } from './Dialogs';
 import { Toasts } from './Toasts';
@@ -94,7 +100,10 @@ export function AppShell({
           : []),
       ],
       keybindings: [
-        { key: 'mod+k', command: 'shell.commandPalette' },
+        // `override` so a focused pane's scoped mod+k (terminal.clear) can't
+        // shadow the palette — the docs and this service's own comments have
+        // always claimed it was override-global; now it is.
+        { key: 'mod+k', command: 'shell.commandPalette', override: true },
         ...(nativeFullscreen ? [{ key: 'f11', command: 'shell.toggleFullscreen' }] : []),
       ],
     });
@@ -115,30 +124,33 @@ export function AppShell({
     }
   }, []);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      // Plain-letter bindings (Blender-style region toggles) must not hijack
-      // typing. Ignore no-modifier keydowns originating in a text field; `mod+`
-      // shortcuts still work (they carry ctrl/meta).
-      if (!e.ctrlKey && !e.metaKey && isEditableTarget(e.target)) return;
+  // One capture-phase handler owns the keyboard, including the Escape ladder —
+  // dialogs, capture release, area fullscreen and transient chrome used to each
+  // grab Escape independently, so two of them could fire on one press.
+  const [chordHint, setChordHint] = useState<string | null>(null);
+  useEffect(
+    () =>
+      installKeymap({
+        runCommand: (id) => {
+          void registry.runCommand(id).catch((err) => {
+            toastsStore.add('error', 'Command failed', String(err), 4000);
+          });
+        },
+        dismissDialog: () => dialogsStore.dismissActive(),
+        exitFullscreen: () => {
+          if (!layoutStore.getSnapshot().frame.fullscreenAreaId) return false;
+          fullscreenArea(null);
+          return true;
+        },
+        closeTransient: () => closeTransientChrome(),
+        setPendingChord: setChordHint,
+        escapeHoldMs: () => Number(getSetting('keymap.escapeHoldMs') ?? DEFAULT_ESCAPE_HOLD_MS),
+      }),
+    [],
+  );
 
-      const scope = getActiveScope();
-      const isEditorFocused = scope
-        ? registry.panels.find((p) => p.id === scope)?.editor ||
-          registry.widgets.find((w) => w.id === scope)?.editor
-        : false;
-      const isPlainKey = !e.ctrlKey && !e.metaKey && !e.altKey;
-      if (isPlainKey && isEditorFocused) return;
-
-      const command = resolveKeybinding(e, scope, registry.keybindings);
-      if (command) {
-        e.preventDefault();
-        void registry.runCommand(command);
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  // The keymap's `shellView` context key, so a binding can say `shellView == 'home'`.
+  useEffect(() => setShellView(view), [view]);
 
   // Mount the Frame the first time it's shown, then keep it alive across views
   // so pane state (terminals, editors) survives visiting home.
@@ -168,6 +180,10 @@ export function AppShell({
           </div>
         )}
       </div>
+      {/* Half-typed chord (mod+k …) — without this the keyboard just goes quiet
+          for a second and the user has no idea the shell is waiting. */}
+      {chordHint && <div className="shell-chord-hint">{chordHint}&nbsp;…</div>}
+      <CaptureHud />
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       <SymbolSearchModal />
       <ApprovalPrompts />

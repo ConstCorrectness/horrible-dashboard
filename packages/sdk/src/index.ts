@@ -18,6 +18,7 @@ export type {
   DockSide,
   JSONSchema,
   KeybindingDecl,
+  PaneCaptureDecl,
   PaneRole,
   PanelDecl,
   RegionPosition,

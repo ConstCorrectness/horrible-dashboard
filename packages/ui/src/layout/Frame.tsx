@@ -12,7 +12,6 @@ import {
   findArea,
   focusAreaDirection,
   framePersistence,
-  fullscreenArea,
   fullscreenFocusedArea,
   installFrameController,
   joinAreaDirection,
@@ -216,15 +215,9 @@ export function Frame({
     };
   }, []);
 
-  // Escape exits fullscreen (in addition to the command/menu paths).
-  useEffect(() => {
-    if (!state.frame.fullscreenAreaId) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') fullscreenArea(null);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [state.frame.fullscreenAreaId]);
+  // Escape exits fullscreen via the shell's Escape ladder (rung 5), so that a
+  // dialog or a capturing pane gets the key first. The command and menu paths
+  // are unchanged.
 
   // Pending opens/switches from the shell (registry.openPanel / switchWorkspace),
   // replayed once hydration finishes so boot-time requests aren't lost.

@@ -12,6 +12,7 @@ import {
   joinAreaDirection,
   layoutStore,
   openFramePane,
+  registerTransient,
   registry,
   resolveView,
   roleOf,
@@ -64,9 +65,13 @@ function useCloseOnOutside(open: boolean, close: () => void) {
     const onDown = () => close();
     window.addEventListener('mousedown', onDown);
     window.addEventListener('keydown', onDown);
+    // Also register with the Escape ladder, so Escape closes the menu as its own
+    // rung instead of racing the blanket keydown listener above.
+    const unregister = registerTransient(close);
     return () => {
       window.removeEventListener('mousedown', onDown);
       window.removeEventListener('keydown', onDown);
+      unregister();
     };
   }, [open, close]);
 }

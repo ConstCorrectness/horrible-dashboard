@@ -102,8 +102,17 @@ export interface FrameState {
   floating: FloatingPane[];
   /** Area temporarily filling the whole frame (Blender ctrl+space), or null. */
   fullscreenAreaId: string | null;
-  /** Focused center area — keyboard commands and role routing target it. */
+  /** Focused center area — area verbs (split/join/nav) and role routing target it. */
   focusedAreaId: string | null;
+  /**
+   * The focused pane **instance**, wherever it lives — a center tab, a docked
+   * tool, or a floating pane. This is the keyboard's idea of "where you are":
+   * `focusedAreaId` only ever names a center area, so before this existed,
+   * clicking a docked tool left every pane-scoped command pointed at whatever
+   * center area was focused last. The view id and location are derived from it
+   * (`findPaneAnywhere`) rather than stored, so they cannot drift.
+   */
+  focusedInstanceId: string | null;
   /** Monotonic id counter for pane instances and tree nodes. Never reset. */
   paneSeq: number;
 }

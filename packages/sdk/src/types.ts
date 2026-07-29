@@ -170,8 +170,19 @@ export interface PanelDecl {
   agentTools?: AgentToolDecl[];
   /** When set, this pane is network-aware: it syncs over the `collab` channel. */
   collab?: CollabDecl;
-  /** When true, this view is an editor/input view that needs all plain-letter key events (e.g. t, n, b) without modifiers. */
+  /**
+   * @deprecated Alias for `capture: { mode: 'keyboard', escape: 'passthrough' }`.
+   * Means "this view needs the plain-letter keys (t, n, b) for itself".
+   */
   editor?: boolean;
+  /**
+   * This view takes the keyboard (and optionally the mouse) while it is focused.
+   * Declaring it here grants capture on focus and releases it on blur, which is
+   * what editors and terminals want. A view that captures only *sometimes* (a
+   * game, and only once pointer-locked) omits this and calls
+   * `useCapture().request()` at the moment it needs the keyboard.
+   */
+  capture?: PaneCaptureDecl;
 }
 
 /**
@@ -216,8 +227,19 @@ export interface WidgetDecl {
   agentTools?: AgentToolDecl[];
   /** When set, this pane is network-aware: it syncs over the `collab` channel. */
   collab?: CollabDecl;
-  /** When true, this view is an editor/input view that needs all plain-letter key events (e.g. t, n, b) without modifiers. */
+  /**
+   * @deprecated Alias for `capture: { mode: 'keyboard', escape: 'passthrough' }`.
+   * Means "this view needs the plain-letter keys (t, n, b) for itself".
+   */
   editor?: boolean;
+  /**
+   * This view takes the keyboard (and optionally the mouse) while it is focused.
+   * Declaring it here grants capture on focus and releases it on blur, which is
+   * what editors and terminals want. A view that captures only *sometimes* (a
+   * game, and only once pointer-locked) omits this and calls
+   * `useCapture().request()` at the moment it needs the keyboard.
+   */
+  capture?: PaneCaptureDecl;
 }
 
 /**
@@ -234,25 +256,75 @@ export type AgentContextSnapshot = Record<string, unknown>;
  */
 export type UseAgentContext = (provider: () => AgentContextSnapshot) => void;
 
+/**
+ * How much of the input a view takes while focused.
+ *
+ * `keyboard` swallows unmodified keys only (an editor: `t` types a `t`, but
+ * `mod+s` still saves). `full` swallows every shortcut but the view's own — for
+ * a pointer-locked game. `pointer` takes the mouse and nothing else.
+ */
+export interface PaneCaptureDecl {
+  mode: 'keyboard' | 'pointer' | 'full';
+  /**
+   * What a tap of Escape does. `release` gives input back; `passthrough` hands
+   * Escape to the view and releases only on a **hold** — but the browser only
+   * permits that with the Keyboard Lock API (Chromium, in fullscreen), so it
+   * degrades to `release` elsewhere and the on-screen hint says which is live.
+   * Defaults to `release`.
+   */
+  escape?: 'release' | 'passthrough';
+}
+
 export interface KeybindingDecl {
-  /** e.g. `mod+k` — `mod` is ctrl (or cmd on macOS). */
+  /**
+   * e.g. `mod+k` — `mod` is ctrl (or cmd on macOS). Space-separated strokes are a
+   * **sequence** (`mod+k mod+s`). A key token is the character it produces
+   * (`w`), or its physical position when prefixed (`code:KeyW`) — use `code:` for
+   * anything positional (game movement), because a character spec follows the
+   * user's layout. See docs/architecture/keybindings.mdx.
+   */
   key: string;
   command: string;
   /**
-   * Pane view id this binding is scoped to (e.g. `terminal.instance`). When set,
-   * the binding is only active while a pane of that view is focused, and it
-   * **takes precedence over a plain global binding** for the same key — so a
-   * focused pane can shadow a global shortcut. Omit for a global binding active
-   * everywhere.
+   * @deprecated Use `when: "paneFocus == '<viewId>'"`, which this is shorthand
+   * for. Kept so existing manifests and plugins keep working.
    */
   scope?: string;
   /**
-   * For a *global* binding (no `scope`): when true it wins even if the focused
-   * pane has a scoped binding for the same key. The escape hatch for shortcuts
-   * that must never be shadowed (e.g. the command palette). Ignored on a scoped
-   * binding.
+   * Condition over the closed context-key vocabulary — `paneFocus`,
+   * `paneInstance`, `capture`, `captureView`, `textInput`, `dialogOpen`,
+   * `fullscreenArea`, `shellView`, `platform`, `host` — combined with `&&`,
+   * `||`, `!`, `==`, `!=` and parentheses. A binding naming `paneFocus` beats one
+   * that names nothing, which is what lets a focused pane shadow a global.
+   */
+  when?: string;
+  /**
+   * Win even against a more specific `when`. The escape hatch for shortcuts that
+   * must never be shadowed (the command palette, the minibuffer).
    */
   override?: boolean;
+  /** Explicit thumb on the scale when two conditions are equally specific. */
+  priority?: number;
+  /**
+   * Stay reachable while a pane holds the keyboard. Reserve this for shell verbs
+   * a user must always be able to reach — normally a capturing pane is meant to
+   * swallow everything but its own bindings.
+   */
+  capturePassthrough?: boolean;
+  /**
+   * Restrict this default to certain hosts. Use when a chord is unreachable in
+   * one of them — `mod+1..9` is browser tab switching and never reaches the page,
+   * so the workspace-switch bindings ship as `mod+` on desktop and `alt+` in the
+   * browser.
+   */
+  hosts?: ('browser' | 'desktop')[];
+  /** Restrict this default to certain platforms (IME and macOS collisions). */
+  platforms?: ('mac' | 'win' | 'linux')[];
+  /**
+   * Register with the OS so it fires while the app is unfocused. Desktop only
+   * (needs the `shortcuts.global` capability); ignored in the browser.
+   */
+  global?: boolean;
 }
 
 /** The value kinds a setting can hold in v1. */

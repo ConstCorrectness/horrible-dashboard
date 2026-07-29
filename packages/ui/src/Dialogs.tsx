@@ -76,14 +76,6 @@ function ChoiceDialog({ dialog }: { dialog: Extract<ActiveDialog, { kind: 'choic
   );
 }
 
-/** Dismiss the active dialog the way Esc / a backdrop click should — each kind
- * resolves with its own cancel value. */
-function dismissActive(dialog: ActiveDialog): void {
-  if (dialog.kind === 'prompt') dialogsStore.resolvePrompt(dialog.id, null);
-  else if (dialog.kind === 'confirm') dialogsStore.resolveConfirm(dialog.id, false);
-  else dialogsStore.resolveChoice(dialog.id, dialog.cancelValue ?? null);
-}
-
 /**
  * Modal dialogs. `prompt` is deliberately **not** rendered here: the minibuffer
  * serves it inline along the bottom of the frame (emacs-style), and rendering it
@@ -95,19 +87,8 @@ export function Dialogs() {
   const active = useActiveDialog();
   const dialog = active?.kind === 'prompt' ? null : active;
 
-  // Escape always cancels the active dialog.
-  useEffect(() => {
-    if (!dialog) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape') return;
-      e.preventDefault();
-      e.stopPropagation();
-      dismissActive(dialog);
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [dialog]);
-
+  // Escape is handled by the shell's Escape ladder (rung 2), not here — see
+  // packages/core/src/keymap/dispatch.ts.
   if (!dialog) return null;
 
   return (
@@ -116,7 +97,7 @@ export function Dialogs() {
       onMouseDown={(e) => {
         // Click on the backdrop (not the card) cancels.
         if (e.target !== e.currentTarget) return;
-        dismissActive(dialog);
+        dialogsStore.dismissActive();
       }}
     >
       {dialog.kind === 'confirm' ? (

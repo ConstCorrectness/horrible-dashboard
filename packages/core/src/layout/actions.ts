@@ -58,6 +58,12 @@ export type LayoutAction =
   /** Target unit-square fractions of the whole center (0..1). */
   | { type: 'RESIZE_AREA'; areaId: string; target: { w?: number; h?: number } }
   | { type: 'FOCUS_AREA'; areaId: string }
+  /**
+   * Focus a pane instance wherever it lives (null = focus left every pane, e.g.
+   * the user clicked the workspace tab strip). When the pane sits in a center
+   * area this focuses that area too, so the two stay consistent by construction.
+   */
+  | { type: 'FOCUS_PANE'; instanceId: string | null }
   | { type: 'SET_FULLSCREEN'; areaId: string | null }
   | { type: 'SET_HEADER_COLLAPSED'; areaId: string; collapsed: boolean }
   // Docks

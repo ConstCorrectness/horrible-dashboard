@@ -153,6 +153,7 @@ export function seedFromPreset(preset: FramePreset, opts: SeedOptions): FrameSta
     floating: [],
     fullscreenAreaId: null,
     focusedAreaId: firstArea(normalized).id,
+    focusedInstanceId: null,
     paneSeq: seq,
   };
 }

@@ -102,6 +102,7 @@ from backend.modules.social import handle_social_message, subscribe_social_conn
 from backend.modules.social import router as social_router
 from backend.modules.notebook import handle_notebook_message, notebook_manager
 from backend.modules.notebook import router as notebook_router
+from backend.modules.keymap import router as keymap_router
 from backend.modules.notes import router as notes_router
 from backend.modules.plugins import router as plugins_router
 from backend.modules.repl import ReplManager
@@ -219,6 +220,7 @@ app.include_router(clubhouse_router, prefix="/api")
 app.include_router(telemetry_router, prefix="/api")
 app.include_router(plugins_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
+app.include_router(keymap_router, prefix="/api")
 app.include_router(secrets_router, prefix="/api")
 app.include_router(flow_router, prefix="/api")
 app.include_router(network_router, prefix="/api")

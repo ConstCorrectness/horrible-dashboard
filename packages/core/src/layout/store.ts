@@ -162,6 +162,22 @@ function reduceFrame(frame: FrameState, action: LayoutAction): FrameState {
       return { ...frame, focusedAreaId: action.areaId };
     }
 
+    case 'FOCUS_PANE': {
+      if (action.instanceId === null) {
+        return frame.focusedInstanceId === null ? frame : { ...frame, focusedInstanceId: null };
+      }
+      const located = findPaneAnywhere(frame, action.instanceId);
+      if (!located) return frame;
+      // A center pane drags the focused area along with it; a docked or floating
+      // pane leaves it alone, because area verbs still need a center target.
+      const focusedAreaId =
+        located.location.kind === 'area' ? located.location.areaId : frame.focusedAreaId;
+      if (frame.focusedInstanceId === action.instanceId && frame.focusedAreaId === focusedAreaId) {
+        return frame;
+      }
+      return { ...frame, focusedInstanceId: action.instanceId, focusedAreaId };
+    }
+
     case 'SET_FULLSCREEN': {
       const valid = action.areaId === null || findArea(frame.center, action.areaId) !== null;
       if (!valid || frame.fullscreenAreaId === action.areaId) return frame;
@@ -349,16 +365,28 @@ function replaceArea(
   return { ...root, children: root.children.map((c) => replaceArea(c, from, to)) };
 }
 
+/**
+ * Drop `focusedInstanceId` when it no longer names a live pane. Done here, once,
+ * after every action rather than inside each closing verb — REMOVE_PANE,
+ * JOIN_AREA and RETARGET_PANE can all orphan it, and a missed case would leave
+ * pane-scoped keybindings resolving against a pane that isn't on screen.
+ */
+function sanitizeFocus(frame: FrameState): FrameState {
+  if (!frame.focusedInstanceId) return frame;
+  if (findPaneAnywhere(frame, frame.focusedInstanceId)) return frame;
+  return { ...frame, focusedInstanceId: null };
+}
+
 function reduce(state: LayoutStoreState, action: LayoutAction): LayoutStoreState {
   if (action.type === 'LOAD_WORKSPACE') {
     return {
       workspaceId: action.workspaceId,
-      frame: action.frame,
+      frame: sanitizeFocus(action.frame),
       hydrated: true,
       revision: state.revision, // loads are not user edits — autosave stays clean
     };
   }
-  const frame = reduceFrame(state.frame, action);
+  const frame = sanitizeFocus(reduceFrame(state.frame, action));
   if (frame === state.frame) return state;
   return { ...state, frame, revision: state.revision + 1 };
 }

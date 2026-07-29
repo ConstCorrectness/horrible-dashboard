@@ -98,6 +98,58 @@ body {
   display: none;
 }
 
+/* Half-typed chord indicator (mod+k …), bottom-left above the minibuffer. */
+.shell-chord-hint {
+  position: fixed;
+  left: 12px;
+  bottom: 12px;
+  z-index: 60;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-elevated, var(--bg));
+  color: var(--fg-muted, var(--fg));
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+/* "How do I get the mouse back" badge, shown while a pane holds capture. */
+.capture-hud {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-elevated, var(--bg)) 88%, transparent);
+  color: var(--fg-muted, var(--fg));
+  font-size: 12px;
+  pointer-events: none;
+  backdrop-filter: blur(6px);
+}
+
+.capture-hud kbd {
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+}
+
+.capture-hud-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
 .editor-buffer {
   display: flex;
   flex-direction: column;
@@ -4170,15 +4222,42 @@ kbd {
 }
 
 /* One hue per context kind. */
-.interp-kind-system { background: rgb(110 168 254 / 55%); color: #6ea8fe; }
-.interp-kind-guides { background: rgb(186 130 255 / 55%); color: #ba82ff; }
-.interp-kind-history { background: rgb(120 130 150 / 55%); color: #8b96aa; }
-.interp-kind-editor { background: rgb(46 213 115 / 55%); color: #2ed573; }
-.interp-kind-user { background: rgb(255 200 87 / 55%); color: #ffc857; }
-.interp-kind-assistant { background: rgb(94 214 214 / 55%); color: #5ed6d6; }
-.interp-kind-tool_result { background: rgb(255 140 100 / 55%); color: #ff8c64; }
-.interp-kind-nudge { background: rgb(240 140 140 / 55%); color: #f08c8c; }
-.interp-kind-tools { background: rgb(160 160 180 / 55%); color: #a0a0b4; }
+.interp-kind-system {
+  background: rgb(110 168 254 / 55%);
+  color: #6ea8fe;
+}
+.interp-kind-guides {
+  background: rgb(186 130 255 / 55%);
+  color: #ba82ff;
+}
+.interp-kind-history {
+  background: rgb(120 130 150 / 55%);
+  color: #8b96aa;
+}
+.interp-kind-editor {
+  background: rgb(46 213 115 / 55%);
+  color: #2ed573;
+}
+.interp-kind-user {
+  background: rgb(255 200 87 / 55%);
+  color: #ffc857;
+}
+.interp-kind-assistant {
+  background: rgb(94 214 214 / 55%);
+  color: #5ed6d6;
+}
+.interp-kind-tool_result {
+  background: rgb(255 140 100 / 55%);
+  color: #ff8c64;
+}
+.interp-kind-nudge {
+  background: rgb(240 140 140 / 55%);
+  color: #f08c8c;
+}
+.interp-kind-tools {
+  background: rgb(160 160 180 / 55%);
+  color: #a0a0b4;
+}
 
 /* Chips carry the hue as text on a tinted ground; bar segments use it as fill. */
 .interp-chip,
@@ -4230,8 +4309,14 @@ kbd {
   color: var(--text-dim);
 }
 
-.interp-kind-agent { background: rgb(94 214 214 / 55%); color: #5ed6d6; }
-.interp-kind-peer { background: rgb(186 130 255 / 55%); color: #ba82ff; }
+.interp-kind-agent {
+  background: rgb(94 214 214 / 55%);
+  color: #5ed6d6;
+}
+.interp-kind-peer {
+  background: rgb(186 130 255 / 55%);
+  color: #ba82ff;
+}
 
 /* ── Interpretability: model architecture diagram ─────────────────────────────
    A 2D view of the loaded model. Colours reuse the context-block hues so the two
@@ -4274,19 +4359,37 @@ kbd {
   stroke-dasharray: 3 2;
 }
 
-.md-io { fill: rgb(120 130 150 / 22%); }
-.md-norm { fill: rgb(255 255 255 / 6%); }
-.md-attn { fill: rgb(110 168 254 / 20%); }
-.md-ffn { fill: rgb(46 213 115 / 18%); }
-.md-moe { fill: rgb(186 130 255 / 20%); }
+.md-io {
+  fill: rgb(120 130 150 / 22%);
+}
+.md-norm {
+  fill: rgb(255 255 255 / 6%);
+}
+.md-attn {
+  fill: rgb(110 168 254 / 20%);
+}
+.md-ffn {
+  fill: rgb(46 213 115 / 18%);
+}
+.md-moe {
+  fill: rgb(186 130 255 / 20%);
+}
 
 /* Head grouping: query ticks over the KV head they share. */
-.md-qhead { fill: #6ea8fe; }
-.md-kvhead { fill: #ffc857; }
+.md-qhead {
+  fill: #6ea8fe;
+}
+.md-kvhead {
+  fill: #ffc857;
+}
 
 /* Expert bank: routed experts stand out from the dormant ones. */
-.md-expert { fill: rgb(186 130 255 / 25%); }
-.md-expert-active { fill: #ba82ff; }
+.md-expert {
+  fill: rgb(186 130 255 / 25%);
+}
+.md-expert-active {
+  fill: #ba82ff;
+}
 
 /* Text ------------------------------------------------------------------ */
 .md-label,
@@ -4299,10 +4402,22 @@ kbd {
   fill: var(--text);
 }
 
-.md-label { font-size: 9px; font-weight: 600; }
-.md-sub { font-size: 7.5px; fill: var(--text-dim); }
-.md-micro { font-size: 6.5px; fill: var(--text-dim); }
-.md-residual { font-size: 7.5px; fill: var(--text-dim); }
+.md-label {
+  font-size: 9px;
+  font-weight: 600;
+}
+.md-sub {
+  font-size: 7.5px;
+  fill: var(--text-dim);
+}
+.md-micro {
+  font-size: 6.5px;
+  fill: var(--text-dim);
+}
+.md-residual {
+  font-size: 7.5px;
+  fill: var(--text-dim);
+}
 
 .md-blocktitle {
   text-anchor: start;

@@ -7,6 +7,7 @@
  * live frame + input capture, and reports the live URL/title upward via `onMeta`.
  */
 import {
+  useContext,
   useEffect,
   useRef,
   useState,
@@ -15,7 +16,15 @@ import {
   type WheelEvent,
 } from 'react';
 
-import { sendInput, startSession, subscribeFrames, subscribeErrors, type BrowserFrame } from '../session';
+import { PaneInstanceContext } from '../../../agent-context';
+import { useCapture } from '../../../keymap';
+import {
+  sendInput,
+  startSession,
+  subscribeFrames,
+  subscribeErrors,
+  type BrowserFrame,
+} from '../session';
 
 // Must match _VIEWPORT in backend/modules/browser/session.py.
 const VW = 1280;
@@ -93,6 +102,18 @@ export function FullBrowserView({
     imgRef.current?.parentElement?.focus();
   };
 
+  // `keyboard` capture, not `full`: unmodified keys go to the remote page (this
+  // is a browser — `t` must type a `t`), while `mod+`/`alt+` chords still reach
+  // the shell so the palette and pane verbs keep working. Escape is the remote
+  // page's (dismissing its dialogs), and releasing capture is just a matter of
+  // clicking elsewhere, so a hold gesture would be overkill here.
+  const capture = useCapture({
+    mode: 'keyboard',
+    escape: 'passthrough',
+    instanceId: useContext(PaneInstanceContext),
+    viewId: 'browser.view',
+  });
+
   const onWheel = (e: WheelEvent) => {
     sendInput('scroll', { dx: e.deltaX, dy: e.deltaY });
   };
@@ -111,6 +132,8 @@ export function FullBrowserView({
   return (
     <div
       tabIndex={0}
+      onFocus={capture.request}
+      onBlur={capture.release}
       onWheel={onWheel}
       onKeyDown={onKeyDown}
       style={{
@@ -127,7 +150,9 @@ export function FullBrowserView({
       {error ? (
         <div style={{ padding: '2rem', color: 'red', textAlign: 'center', maxWidth: '80%' }}>
           <h4 style={{ margin: '0 0 1rem 0' }}>Browser Engine Error</h4>
-          <p style={{ fontSize: '0.9rem', color: 'var(--text-dim)', wordBreak: 'break-word' }}>{error}</p>
+          <p style={{ fontSize: '0.9rem', color: 'var(--text-dim)', wordBreak: 'break-word' }}>
+            {error}
+          </p>
         </div>
       ) : frame ? (
         <img

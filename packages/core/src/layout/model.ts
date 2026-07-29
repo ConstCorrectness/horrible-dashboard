@@ -58,6 +58,7 @@ export function createEmptyFrame(): FrameState {
     floating: [],
     fullscreenAreaId: null,
     focusedAreaId: areaId(0),
+    focusedInstanceId: null,
     paneSeq: 1,
   };
 }

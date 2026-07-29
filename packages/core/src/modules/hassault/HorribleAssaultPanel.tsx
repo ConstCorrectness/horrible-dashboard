@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 
-import { useAgentContext } from '../../agent-context';
+import { PaneInstanceContext, useAgentContext } from '../../agent-context';
+import { lockEscape, unlockEscape, useCapture } from '../../keymap';
 import {
   getInstallStatus,
   getMapCubes,
@@ -705,10 +706,33 @@ export function HorribleAssaultPanel() {
   // guard, clicking an email field would grab the pointer instead of focusing it.
   // It must be the handler and not the markup, because Esc during play returns to
   // the unlocked state and re-arms this exact path.
+  // Capture is the shell's, not ours: while it is held the keymap resolves only
+  // this view's own bindings, so `t`/`n`/`b`/`mod+1..9` stop reaching the frame
+  // mid-match. Releasing runs `onRelease` exactly once no matter who triggered it
+  // — the Escape ladder, focus moving to another pane, or unmount.
+  const capture = useCapture({
+    mode: 'full',
+    // Escape belongs to the game (its own menu); holding it gives the mouse back
+    // where the host allows it. The HUD says which of the two is actually live.
+    escape: 'passthrough',
+    instanceId: useContext(PaneInstanceContext),
+    viewId: 'hassault.play',
+    onRelease: () => {
+      unlockEscape();
+      if (document.pointerLockElement) document.exitPointerLock();
+    },
+  });
+  const requestCapture = capture.request;
+  const releaseCapture = capture.release;
+
   const onCanvasClick = useCallback(() => {
     if (!acceptsGameInput(phaseRef.current)) return;
     mountRef.current?.querySelector('canvas')?.requestPointerLock();
-  }, []);
+    requestCapture();
+    // Keyboard Lock needs document fullscreen; without it Escape releases pointer
+    // lock outright and the hold gesture degrades (see canHoldEscape).
+    void lockEscape();
+  }, [requestCapture]);
 
   useEffect(() => {
     const el = mountRef.current;
@@ -724,6 +748,9 @@ export function HorribleAssaultPanel() {
         shotsRef.current?.release();
         keysRef.current.clear();
         setShowScores(false);
+        // The browser can drop pointer lock on its own (alt-tab, Escape where
+        // Keyboard Lock is unavailable); keep the shell's capture in step.
+        releaseCapture();
       }
     };
     const onMouseMove = (e: MouseEvent) => {
@@ -787,7 +814,7 @@ export function HorribleAssaultPanel() {
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('blur', onBlur);
     };
-  }, []);
+  }, [releaseCapture]);
 
   const respawn = useCallback(() => {
     const session = sessionRef.current;

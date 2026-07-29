@@ -125,7 +125,37 @@ function frame() {
   return layoutStore.getSnapshot().frame;
 }
 
-/** Bring an already-open pane forward wherever it lives. */
+/** The focused pane instance, wherever it lives, or null. */
+export function focusedPane(): LocatedPane | null {
+  const f = frame();
+  return f.focusedInstanceId ? findPaneAnywhere(f, f.focusedInstanceId) : null;
+}
+
+/** View id of the focused pane — the keybinding service's `paneFocus`. */
+export function focusedViewId(): string | null {
+  return focusedPane()?.pane.viewId ?? null;
+}
+
+/**
+ * Move the browser's real focus to a pane instance's container.
+ *
+ * Logical focus (the store) and DOM focus used to drift: `alt+arrow` moved the
+ * accent border while the caret stayed in whatever input the user had clicked,
+ * so the next keystroke landed in the pane they had just navigated away from.
+ * `PaneHost` tags each container with `data-pane-instance`; a pane can nominate a
+ * better target (its editor, its search box) with `data-autofocus`.
+ */
+export function focusPaneDom(instanceId: string): void {
+  if (typeof document === 'undefined') return;
+  const host = document.querySelector<HTMLElement>(
+    `[data-pane-instance="${CSS.escape(instanceId)}"]`,
+  );
+  if (!host) return;
+  const target = host.querySelector<HTMLElement>('[data-autofocus]') ?? host;
+  target.focus({ preventScroll: true });
+}
+
+/** Bring an already-open pane forward wherever it lives, and focus it. */
 export function focusInstance(located: LocatedPane): void {
   const { location, pane } = located;
   if (location.kind === 'area') {
@@ -144,6 +174,9 @@ export function focusInstance(located: LocatedPane): void {
   } else {
     layoutStore.dispatch({ type: 'BRING_FLOATING_FRONT', instanceId: pane.instanceId });
   }
+  layoutStore.dispatch({ type: 'FOCUS_PANE', instanceId: pane.instanceId });
+  // After React has committed the tab/dock change, so the container exists.
+  queueMicrotask(() => focusPaneDom(pane.instanceId));
 }
 
 /**
@@ -450,17 +483,19 @@ export function regionHostOf(regionViewId: string): ViewDecl | undefined {
   );
 }
 
-/** The host pane instance region commands should act on: the focused area's
- * active tab when it matches, else any open instance of the host view. */
+/**
+ * The host pane instance region commands should act on: the **focused pane**
+ * when it is one, else any open instance of the host view.
+ *
+ * The focused-pane check has to come first and has to be by instance. With two
+ * editor buffers open side by side, the old area-based lookup fell through to
+ * "first instance found", so `n` toggled the left buffer's outline no matter
+ * which one you were working in.
+ */
 function hostInstanceOf(hostViewId: string): LocatedPane | null {
   const f = frame();
-  if (f.focusedAreaId) {
-    const area = findArea(f.center, f.focusedAreaId);
-    const active = area?.tabs[area.activeTab];
-    if (active?.viewId === hostViewId) {
-      return { pane: active, location: { kind: 'area', areaId: area!.id } };
-    }
-  }
+  const focused = focusedPane();
+  if (focused?.pane.viewId === hostViewId) return focused;
   return listPanes(f).find((p) => p.pane.viewId === hostViewId) ?? null;
 }
 
@@ -591,6 +626,15 @@ export function focusAreaDirection(direction: NavDirection): boolean {
   const neighbor = neighborAreaId(f.center, f.focusedAreaId, direction);
   if (!neighbor) return false;
   layoutStore.dispatch({ type: 'FOCUS_AREA', areaId: neighbor });
+  // Carry the pane focus (and the caret) along — navigating areas that left the
+  // keyboard behind in the old area is what made `alt+arrow` feel broken.
+  const pane = findArea(frame().center, neighbor)?.tabs[
+    findArea(frame().center, neighbor)?.activeTab ?? 0
+  ];
+  if (pane) {
+    layoutStore.dispatch({ type: 'FOCUS_PANE', instanceId: pane.instanceId });
+    queueMicrotask(() => focusPaneDom(pane.instanceId));
+  }
   return true;
 }
 

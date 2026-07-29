@@ -65,7 +65,10 @@ export {
   closePaneGuarded,
   collapseRegion,
   focusAreaDirection,
+  focusedPane,
+  focusedViewId,
   focusInstance,
+  focusPaneDom,
   fullscreenArea,
   fullscreenFocusedArea,
   dockSidesOf,
@@ -131,6 +134,7 @@ export {
   type DockSide,
   type JSONSchema,
   type KeybindingDecl,
+  type PaneCaptureDecl,
   type PaneRole,
   type RegionPosition,
   type RegionViewDecl,
@@ -283,14 +287,7 @@ export {
 } from './modules/agent';
 export { openChatSession } from './modules/agent/openSession';
 export { executeTool } from './modules/agent/tool-exec';
-export {
-  clearActiveScope,
-  getActiveScope,
-  isEditableTarget,
-  matchesKeySpec,
-  resolveKeybinding,
-  setActiveScope,
-} from './keybindings';
+export * from './keymap';
 export {
   getLocus,
   setLocus,
@@ -301,6 +298,7 @@ export {
   type LocusRange,
 } from './locus';
 export { toastsStore, type Toast } from './toasts';
+export { closeTransientChrome, hasTransientChrome, registerTransient } from './transient';
 export {
   dialogs,
   dialogsStore,

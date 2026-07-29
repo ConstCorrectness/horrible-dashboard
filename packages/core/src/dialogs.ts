@@ -103,6 +103,21 @@ export const dialogsStore = {
     return queue[0] ?? null;
   },
 
+  /**
+   * Dismiss the active dialog the way Esc / a backdrop click should — each kind
+   * resolves with its own cancel value. Lives on the store rather than in the
+   * `<Dialogs>` component because the shell's Escape ladder owns Escape now, and
+   * the ladder must not have to reach into a React component to cancel one.
+   */
+  dismissActive(): boolean {
+    const dialog = queue[0];
+    if (!dialog) return false;
+    if (dialog.kind === 'prompt') this.resolvePrompt(dialog.id, null);
+    else if (dialog.kind === 'confirm') this.resolveConfirm(dialog.id, false);
+    else this.resolveChoice(dialog.id, dialog.cancelValue ?? null);
+    return true;
+  },
+
   /** Ask for a line of text. Resolves to the string, or null if cancelled. */
   prompt(options: PromptOptions): Promise<string | null> {
     return new Promise((resolve) => {
