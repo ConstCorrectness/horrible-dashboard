@@ -12,8 +12,10 @@ texture ids. That is why rendering this in WebGL is tractable: the whole map is
 `(1 << sfactor)²` records of nine bytes.
 
 Only the *code* this is ported from is freely licensed. AssaultCube's **content**
-(maps, textures, models, sounds) is copyright and may not be redistributed, so
-nothing here bundles a map — the reader is pointed at a local AssaultCube install.
+(maps, textures, models, sounds) is copyright and may not be redistributed, so no
+AssaultCube map is committed here — that reader is pointed at a local install.
+The writer at the bottom of this file is the other half of that: it is how the
+app ships maps of its *own* (`mapsource.py`) and so needs no install to play.
 See docs/modules/hassault.mdx.
 """
 
@@ -479,3 +481,123 @@ def read_cgz(path: str | Path) -> CgzMap:
     except OSError as exc:
         raise CgzError(f"could not read {path.name}: {exc}") from exc
     return parse_cgz(data, name=path.stem)
+
+
+# ---- writing ----------------------------------------------------------------------
+#
+# The inverse of everything above, used for the maps this project authors itself
+# (`mapsource.py`) rather than for anything read out of an install. Two consumers:
+# the export route, so a bundled map can be opened in AssaultCube's own editor,
+# and the round-trip test, which is what actually pins the writer — a map built
+# from source, written, and parsed back must come out identical cube for cube.
+#
+# Only version 10 is written. Writing an older version would mean reproducing the
+# quirks this reader exists to absorb (the `mediareq` block, unscaled angles,
+# 12-byte entities), and nothing needs it.
+
+WRITE_VERSION = 10
+
+# Value of every field a SOLID record does *not* store, from `sqrdefault`.
+_SOLID_DEFAULTS = (0, 16, DEFAULT_FLOOR, DEFAULT_CEIL, 0)
+
+
+def _encode_record(rec: tuple[int, ...]) -> bytes:
+    """One cube, in `rldecodecubes`' record form."""
+    ctype, floor, ceil, wtex, ftex, ctex, vdelta, utex, tag = rec
+    if ctype == SOLID:
+        # A SOLID record carries only wtex and vdelta — the reader fills the rest
+        # in from `sqrdefault`, so a solid cube holding anything else would be
+        # silently rewritten by its own round trip. Refuse instead of losing it.
+        if (floor, ceil, ftex, ctex, tag) != _SOLID_DEFAULTS or utex != wtex:
+            raise CgzError(
+                "a solid cube can only store wtex and vdelta; this one carries "
+                f"floor={floor} ceil={ceil} ftex={ftex} ctex={ctex} utex={utex} tag={tag}"
+            )
+        return bytes((SOLID, wtex, vdelta))
+    if not 0 <= ctype < MAXTYPE:
+        raise CgzError(f"illegal cube type {ctype}")
+    if ctype == SEMISOLID:
+        # Only ever produced by mipmapping, never stored — and the reader would
+        # hand it straight back as a solid the physics can't see through.
+        raise CgzError("semisolid cubes are a mipmap artifact and are never stored")
+    return bytes((ctype, floor, ceil, wtex, ftex, ctex, vdelta, utex, tag))
+
+
+def _encode_cubes(world: CgzMap) -> bytes:
+    """Run-length encode the grid, the inverse of `_decode_cubes`.
+
+    A run is `255` plus a count and repeats the *previous* cube, so consecutive
+    runs chain correctly: after one, the reader's "previous" is still the same
+    record, which is what lets a count above 255 be split across several.
+    """
+    records = list(zip(*(getattr(world, plane) for plane in PLANE_ORDER), strict=True))
+    out = bytearray()
+    i, n = 0, len(records)
+    while i < n:
+        rec = records[i]
+        out += _encode_record(rec)
+        j = i + 1
+        while j < n and records[j] == rec:
+            j += 1
+        repeats = j - i - 1
+        while repeats > 0:
+            chunk = min(repeats, 255)
+            out += bytes((255, chunk))
+            repeats -= chunk
+        i = j
+    return bytes(out)
+
+
+def write_cgz(world: CgzMap) -> bytes:
+    """Serialize a map to `.cgz` bytes — a real v10 file AssaultCube can open."""
+    if not SMALLEST_FACTOR <= world.sfactor <= LARGEST_FACTOR:
+        raise CgzError(f"illegal map size: sfactor {world.sfactor}")
+    if len(world.entities) > MAX_ENTITIES:
+        raise CgzError(f"too many entities: {len(world.entities)}")
+
+    head = bytearray(SIZEOF_HEADER)
+    magic = world.magic.encode("ascii", "ignore")[:4]
+    head[0:4] = magic if magic in MAGICS else b"ACMP"
+    struct.pack_into(
+        "<iiii",
+        head,
+        4,
+        WRITE_VERSION,
+        # No extra-header block, so entities begin at exactly `SIZEOF_HEADER` —
+        # which `fix_header_size` will hand straight back for a v10 map.
+        SIZEOF_HEADER,
+        world.sfactor,
+        len(world.entities),
+    )
+    title = world.title.encode("latin-1", "replace")[:127]
+    head[20 : 20 + len(title)] = title
+    # `texlists[3][256]`, the header's texture-slot tables. This reader ignores
+    # them entirely; identity is the neutral value, where all-zero would not be.
+    for base in (148, 404, 660):
+        head[base : base + 256] = bytes(range(256))
+    # v10 stores tenths of a cube, which is what the parsed value was divided by.
+    struct.pack_into("<i", head, 916, round(world.waterlevel * WATERLEVEL_SCALING))
+    head[920:924] = bytes(world.watercolor)
+    struct.pack_into(
+        "<iiii",
+        head,
+        924,
+        world.maprevision,
+        world.ambient,
+        world.flags,
+        world.timestamp,
+    )
+
+    body = bytearray()
+    for e in world.entities:
+        attr1 = e.attr1
+        # A map parsed from a pre-v10 file holds whole degrees in `attr1`, and
+        # this writes v10 — where the same number means a tenth of what it did.
+        # Writing it through unscaled would quietly turn 90° into 9°.
+        if world.legacy_unscaled_attrs and e.type in ANGLED_TYPES:
+            attr1 = round(attr1 * ENTSCALE10)
+        body += struct.pack("<hhhh", e.x, e.y, e.z, attr1)
+        body += struct.pack("<BBBB", e.type, e.attr2, e.attr3, e.attr4)
+        body += struct.pack("<hbB", e.attr5, e.attr6, e.attr7)
+
+    return gzip.compress(bytes(head) + bytes(body) + _encode_cubes(world))

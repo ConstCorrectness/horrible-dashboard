@@ -281,9 +281,10 @@ def spawn_at(world: World, spawn) -> PlayerState:
 def flat_world(ssize: int = 32, floor: int = 0, ceil: int = 16) -> World:
     """An open room with a solid border, for tests and conformance vectors.
 
-    Game content can never be committed to this repo, so every hermetic test needs
-    a world it can build in memory. The border is solid because the engine
-    guarantees one and `is_solid` leans on it.
+    Deliberately not one of the bundled maps: a conformance vector has to mean the
+    same thing in Python and in TypeScript, and the cheapest way to guarantee that
+    is a world both sides can build from four numbers. The border is solid because
+    the engine guarantees one and `is_solid` leans on it.
     """
     n = ssize * ssize
     types = bytearray([SPACE]) * n

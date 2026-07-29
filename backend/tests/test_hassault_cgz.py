@@ -243,11 +243,18 @@ needs_install = pytest.mark.skipif(
 )
 
 
+def installed_maps() -> list[dict[str, str]]:
+    """Only the install's maps. `list_maps` also carries the ones this app ships,
+    which are built from source and have no `.cgz` on disk to read — they are
+    covered by `test_hassault_bundled.py`, and this file is about real files."""
+    return [m for m in assets.list_maps() if m["source"] != "bundled"]
+
+
 @needs_install
 def test_every_installed_map_parses():
     """The reader must handle the whole shipped map set, not just a happy path."""
     failures = []
-    for summary in assets.list_maps():
+    for summary in installed_maps():
         path = assets.find_map(summary["name"])
         assert path is not None
         try:
@@ -264,7 +271,7 @@ def test_every_installed_map_parses():
 
 @needs_install
 def test_installed_maps_have_plausible_content():
-    maps = assets.list_maps()
+    maps = installed_maps()
     assert maps, "an install was detected but holds no maps"
     world = read_cgz(assets.find_map(maps[0]["name"]))
 
@@ -283,7 +290,7 @@ def test_installed_maps_have_plausible_content():
 def test_all_spawn_angles_are_in_range():
     """Cross-checks the v10 angle scaling against the whole corpus: a wrong
     divisor would push yaw outside 0..360."""
-    for summary in assets.list_maps():
+    for summary in installed_maps():
         world = read_cgz(assets.find_map(summary["name"]))
         for spawn in world.spawns():
             assert 0.0 <= (spawn.yaw or 0.0) < 360.0, (summary["name"], spawn.yaw)

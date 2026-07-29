@@ -1,4 +1,4 @@
-"""Locating an AssaultCube install, and serving files out of it safely.
+"""The map catalog: maps this app ships, plus an AssaultCube install if there is one.
 
 AssaultCube's **content** is copyright: freely redistributable only as part of an
 unmodified AssaultCube package, and never commercially. Its *source* is zlib-like,
@@ -6,9 +6,15 @@ which is why the map reader could be ported, but no map, texture, model or sound
 may be committed to this repo — which is public, deploys to GitHub Pages, and ships
 a game server image to Fly.
 
-So HorribleAssault **supports** AssaultCube content without ever bundling it: the
-user points a setting at their own local install and the backend reads from there.
+That restriction is about *their* content. So the game ships **its own** maps
+(`mapsource.py`), built from declarative source and playable with nothing
+installed, and **supports** AssaultCube content without ever bundling it: point
+`hassault.installPath` at your own copy and its 44 maps appear alongside them.
 Same precedent as SearXNG (AGPL, supported but never bundled) and pypdf-over-PyMuPDF.
+
+The two catalogs share one flat namespace, which is safe only because every
+bundled map is named `hd_*` and bundled maps are resolved first — neither side
+can shadow the other, whatever a user drops into their install directory.
 
 Everything served from the install goes through `resolve_asset`, which refuses to
 escape the package root — an install path is user-supplied configuration, and the
@@ -21,6 +27,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
+from backend.modules.hassault import mapsource
 from backend.modules.hassault.cgz import CgzMap, read_cgz
 from backend.modules.settings.routes import get_value
 
@@ -109,8 +116,20 @@ def find_map(name: str) -> Path | None:
 
 
 def list_maps() -> list[dict[str, str]]:
-    """Every readable map in the install, deduped by name, official first."""
+    """Every playable map: the bundled ones first, then the install's.
+
+    `size` is the size of the file each map actually comes from — a `.cgz` for an
+    install map, the JSON source for a bundled one. They are not comparable
+    numbers, which is what `source` is for.
+    """
     seen: dict[str, dict[str, str]] = {}
+    for name in mapsource.bundled_names():
+        path = mapsource.MAPS_DIR / f"{name}.json"
+        seen[name] = {
+            "name": name,
+            "source": "bundled",
+            "size": str(path.stat().st_size if path.is_file() else 0),
+        }
     for directory in map_dirs():
         try:
             entries = sorted(directory.glob("*.cgz"))
@@ -136,11 +155,19 @@ _map_cache: dict[str, CgzMap] = {}
 
 
 def load_map(name: str) -> CgzMap | None:
-    """Parse a map by bare name, or `None` if the install has no such map.
+    """Parse a map by bare name, or `None` if no catalog has such a map.
 
     Raises `CgzError` for a map that exists but cannot be read — the two failures
     want different messages, so they are not collapsed into one `None`.
+
+    Bundled maps are resolved first. They are the ones this project controls, and
+    an install is a directory anyone can drop a file into; letting a stray
+    `hd_pit.cgz` there decide what the game loads would be a surprise with no
+    upside, since the names are ours by construction.
     """
+    bundled = mapsource.load_bundled(name)
+    if bundled is not None:
+        return bundled
     path = find_map(name)
     if path is None:
         return None

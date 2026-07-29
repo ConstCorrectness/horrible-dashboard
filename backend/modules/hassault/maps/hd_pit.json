@@ -1,0 +1,93 @@
+{
+  "title": "The Pit",
+  "author": "horrible-dashboard",
+  "license": "CC0-1.0",
+  "sfactor": 6,
+  "waterlevel": -100,
+  "ambient": 46,
+  "brushes": [
+    {
+      "op": "room",
+      "rect": [4, 4, 56, 56],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 12,
+      "ftex": 21,
+      "ctex": 33
+    },
+
+    {
+      "op": "room",
+      "rect": [24, 24, 16, 16],
+      "floor": -5,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 58,
+      "ctex": 33
+    },
+    {
+      "op": "stairs",
+      "rect": [18, 28, 6, 8],
+      "axis": "x",
+      "from": 0,
+      "to": -5,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 58
+    },
+    {
+      "op": "stairs",
+      "rect": [40, 28, 6, 8],
+      "axis": "x",
+      "from": -5,
+      "to": 0,
+      "ceil": 14,
+      "wtex": 47,
+      "ftex": 58
+    },
+
+    { "op": "solid", "rect": [12, 12, 4, 4], "wtex": 12 },
+    { "op": "solid", "rect": [48, 12, 4, 4], "wtex": 12 },
+    { "op": "solid", "rect": [12, 48, 4, 4], "wtex": 12 },
+    { "op": "solid", "rect": [48, 48, 4, 4], "wtex": 12 },
+
+    { "op": "room", "rect": [28, 6, 8, 6], "floor": 3, "ceil": 14, "wtex": 76, "ftex": 21 },
+    {
+      "op": "stairs",
+      "rect": [28, 12, 8, 4],
+      "axis": "y",
+      "from": 3,
+      "to": 0,
+      "ceil": 14,
+      "wtex": 76,
+      "ftex": 21
+    },
+    { "op": "room", "rect": [28, 52, 8, 6], "floor": 3, "ceil": 14, "wtex": 76, "ftex": 21 },
+    {
+      "op": "stairs",
+      "rect": [28, 48, 8, 4],
+      "axis": "y",
+      "from": 0,
+      "to": 3,
+      "ceil": 14,
+      "wtex": 76,
+      "ftex": 21
+    }
+  ],
+  "entities": [
+    { "type": "playerstart", "x": 9, "y": 9, "yaw": 45, "team": 0 },
+    { "type": "playerstart", "x": 54, "y": 9, "yaw": 135, "team": 1 },
+    { "type": "playerstart", "x": 9, "y": 54, "yaw": 315, "team": 0 },
+    { "type": "playerstart", "x": 54, "y": 54, "yaw": 225, "team": 1 },
+    { "type": "playerstart", "x": 9, "y": 31, "yaw": 0, "team": 0 },
+    { "type": "playerstart", "x": 54, "y": 31, "yaw": 180, "team": 1 },
+    { "type": "playerstart", "x": 31, "y": 8, "yaw": 90, "team": 0 },
+    { "type": "playerstart", "x": 31, "y": 55, "yaw": 270, "team": 1 },
+
+    { "type": "light", "x": 32, "y": 32, "radius": 96, "color": [255, 236, 200] },
+    { "type": "light", "x": 10, "y": 10, "radius": 48, "color": [200, 214, 255] },
+    { "type": "light", "x": 53, "y": 10, "radius": 48, "color": [200, 214, 255] },
+    { "type": "light", "x": 10, "y": 53, "radius": 48, "color": [200, 214, 255] },
+    { "type": "light", "x": 53, "y": 53, "radius": 48, "color": [200, 214, 255] }
+  ]
+}

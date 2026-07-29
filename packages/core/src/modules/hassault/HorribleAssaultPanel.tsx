@@ -330,13 +330,17 @@ export function HorribleAssaultPanel() {
         const st = await getInstallStatus();
         if (cancelled) return;
         setStatus(st);
-        if (!st.found) return;
         const list = await listMaps();
         if (cancelled) return;
         setMaps(list);
         setProgress((p) => advance(p, { install: 1 }));
-        // ac_desert is a good default: small, open, and obviously recognisable.
-        const preferred = list.find((m) => m.name === 'ac_desert') ?? list[0];
+        // Default to a map that ships with the app, so the first thing anyone
+        // sees exists on every machine. Falling back to whatever is first keeps
+        // the panel usable if the bundled maps somehow failed to build.
+        const preferred =
+          list.find((m) => m.name === 'hd_atrium') ??
+          list.find((m) => m.source === 'bundled') ??
+          list[0];
         if (preferred) setMapName(preferred.name);
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
@@ -838,7 +842,10 @@ export function HorribleAssaultPanel() {
     position: { x: Math.round(hud.x), y: Math.round(hud.y), z: Math.round(hud.z) },
     onGround: hud.onGround,
     triangles: hud.triangles,
-    installed: status?.found ?? false,
+    // Spelled out rather than a bare `installed`, which an agent would read as
+    // "cannot play" — the bundled maps play with no install at all.
+    mapCount: status?.map_count ?? 0,
+    assaultCubeInstalled: status?.found ?? false,
     match:
       net.status === 'joined'
         ? {
@@ -870,15 +877,18 @@ export function HorribleAssaultPanel() {
 
   // ---- render ---------------------------------------------------------------------
 
-  if (status && !status.found) {
+  // Gated on having a map to play, *not* on having an AssaultCube install: the
+  // bundled maps ship with the app, so a missing install is only ever a smaller
+  // map list. This is reachable at all in case the bundled maps fail to build.
+  if (status && status.map_count === 0) {
     return (
       <div style={{ padding: '1rem', color: 'var(--text-dim)', fontSize: '0.85rem' }}>
-        <h3 style={{ margin: '0 0 0.5rem', color: 'var(--text)' }}>No AssaultCube install</h3>
+        <h3 style={{ margin: '0 0 0.5rem', color: 'var(--text)' }}>No maps available</h3>
         <p>{status.message}</p>
         <p>
           Set <code>hassault.installPath</code> in Settings to the folder containing{' '}
-          <code>packages/maps</code>. Game content is read from your own copy and is never bundled
-          with this app.
+          <code>packages/maps</code>. AssaultCube content is read from your own copy and is never
+          bundled with this app.
         </p>
       </div>
     );
@@ -911,11 +921,29 @@ export function HorribleAssaultPanel() {
           onChange={(e) => setMapName(e.target.value)}
           style={{ maxWidth: 160 }}
         >
-          {maps.map((m) => (
-            <option key={m.name} value={m.name}>
-              {m.name}
-            </option>
-          ))}
+          {/* Grouped so it is obvious which maps ship with the app and which
+              came from your own AssaultCube — they are different in kind, not
+              just in name. The second group is absent without an install. */}
+          <optgroup label="Bundled">
+            {maps
+              .filter((m) => m.source === 'bundled')
+              .map((m) => (
+                <option key={m.name} value={m.name}>
+                  {m.name}
+                </option>
+              ))}
+          </optgroup>
+          {maps.some((m) => m.source !== 'bundled') && (
+            <optgroup label="AssaultCube">
+              {maps
+                .filter((m) => m.source !== 'bundled')
+                .map((m) => (
+                  <option key={m.name} value={m.name}>
+                    {m.name}
+                  </option>
+                ))}
+            </optgroup>
+          )}
         </select>
         <button onClick={respawn} disabled={!info}>
           Respawn

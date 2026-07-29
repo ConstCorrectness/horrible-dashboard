@@ -12,12 +12,15 @@ ENet over UDP to a master server — cannot run in a browser and is not what we
 want anyway; the point is to rebuild it on the fabric this app already has.
 
 **Implemented so far: the map pipeline, the renderer, the netcode, weapons, and
-bots** — you can walk around any of the 44 shipped maps in first person, and you
-can fight in them: an authoritative match server on your own backend, five
-weapons with lag-compensated hit registration, and bot players to fill out a
-match when nobody else is about.
+bots** — you can walk around a map in first person, and you can fight in it: an
+authoritative match server on your own backend, five weapons with
+lag-compensated hit registration, and bot players to fill out a match when nobody
+else is about.
 
-## Licensing: why no game content is in this repo
+**It needs nothing installed.** The game ships with three maps of its own, and
+pointing it at an AssaultCube install adds that install's 44 on top.
+
+## Licensing: whose content ships, and whose does not
 
 AssaultCube splits its licensing, and the split decides the whole design:
 
@@ -29,13 +32,22 @@ AssaultCube splits its licensing, and the split decides the whole design:
   commercially.
 
 This repo is public, deploys to GitHub Pages, and ships a server image to Fly, so
-committing a single `.cgz` or texture would be a violation. HorribleAssault
-therefore **supports AssaultCube content without ever bundling it**: you point it
-at your own install and the backend reads from there. Same precedent as SearXNG
-(AGPL — supported, never bundled) and choosing pypdf over AGPL PyMuPDF.
+committing a single AssaultCube `.cgz` or texture would be a violation.
+HorribleAssault therefore **supports AssaultCube content without ever bundling
+it**: you point it at your own install and the backend reads from there. Same
+precedent as SearXNG (AGPL — supported, never bundled) and choosing pypdf over
+AGPL PyMuPDF.
 
-The test suite follows the same rule: hermetic tests synthesize maps in memory,
-and the tests that read real maps skip when no install is present.
+That restriction is about *their* content, and it says nothing about ours. The
+format is understood well enough to write as well as read, so the game ships
+**its own maps** — see [Bundled maps](#bundled-maps). An install is an
+enhancement, not a prerequisite, and the same rule is planned for every asset
+class still missing: textures procedural, weapon models geometric, gunshots
+synthesized. Nothing that would ever need someone else's copyright.
+
+The test suite follows the same rule. Hermetic tests synthesize maps in memory,
+the bundled maps give every machine real maps to play, and the tests that read
+*AssaultCube's* maps skip when no install is present.
 
 ## Why a TypeScript/WebGL rewrite is tractable
 
@@ -52,11 +64,16 @@ flowchart LR
   B --> C["header 980B<br/>+ extra block"]
   B --> D["entities<br/>16B each"]
   B --> E["RLE cube grid"]
-  C --> F["/api/hassault/maps/name<br/>JSON"]
-  D --> F
-  E --> G["/api/hassault/maps/name/cubes<br/>9 byte planes"]
+  A0["maps/*.json<br/>(bundled, ours)"] --> M["mapsource.build<br/>(brushes -> grid)"]
+  M --> P
+  C --> P["CgzMap"]
+  D --> P
+  E --> P
+  P --> F["/api/hassault/maps/name<br/>JSON"]
+  P --> G["/api/hassault/maps/name/cubes<br/>9 byte planes"]
   F --> H["Three.js renderer"]
   G --> H
+  P -.->|write_cgz| X["/maps/name/download<br/>(.cgz, bundled only)"]
 ```
 
 ## The `.cgz` format, and the parts that bite
@@ -95,6 +112,85 @@ readable map. The result is flagged as `truncated`.
 
 Positions (`x`, `y`, `z`) are plain signed 16-bit cube coordinates and are never
 scaled — only *attributes* are.
+
+## Bundled maps
+
+`backend/modules/hassault/mapsource.py` + `backend/modules/hassault/maps/*.json`.
+
+Three maps ship with the app — `hd_atrium`, `hd_crossing`, `hd_pit` — so the pane
+is playable on a clean clone. They are ours, CC0, and named `hd_*` so the bundled
+and installed catalogs share one namespace without either being able to shadow
+the other. `assets.load_map` resolves bundled names first: an install directory is
+somewhere anyone can drop a file, and letting a stray `hd_pit.cgz` there decide
+what the game loads would be a surprise with no upside.
+
+### The source of truth is JSON, not a `.cgz`
+
+A committed binary would be an opaque blob in a public repo — unreviewable,
+undiffable, and regenerated wholesale to nudge one spawn. A Cube 1 world is a flat
+grid of columns with no overlapping geometry, so a map is just rectangles painted
+in order over solid rock, and that fits in a file a reviewer can read:
+
+```json
+{
+  "title": "The Pit",
+  "sfactor": 6,
+  "brushes": [
+    { "op": "room", "rect": [4, 4, 56, 56], "floor": 0, "ceil": 14 },
+    { "op": "room", "rect": [24, 24, 16, 16], "floor": -5, "ceil": 14 },
+    { "op": "stairs", "rect": [18, 28, 6, 8], "axis": "x", "from": 0, "to": -5 },
+    { "op": "solid", "rect": [12, 12, 4, 4] }
+  ],
+  "entities": [{ "type": "playerstart", "x": 9, "y": 9, "yaw": 45, "team": 0 }]
+}
+```
+
+`rect` is `[x, y, w, h]` in cells and later brushes overwrite earlier ones, so a
+`solid` after a `room` cuts a pillar back out of it. Three ops is the whole
+vocabulary. Heights are signed cubes in the units the physics already reads: a
+body needs 5.2 of headroom to stand and can step up `STEP_HEIGHT` (1.6) without
+jumping, which is what makes a run of one-cube stairs walkable.
+
+Stairs are stepped rather than a heightfield on purpose. `FHF` reads `vdelta`
+from the **corner-vertex** cell, so a slope only holds together when its
+neighbours agree — see [the heightfield
+rule](#the-heightfield-rule-which-is-easy-to-get-backwards) — and getting that
+wrong tears the surface at every seam, silently.
+
+### The writer, and what pins it
+
+`cgz.write_cgz` is the inverse of the reader: v10 only, RLE-encoded, a real file
+AssaultCube's own editor opens. `GET /api/hassault/maps/{name}/download` serves
+it — **for bundled maps only**, since re-serving copyright content over HTTP is
+precisely the thing this module does not do.
+
+The writer has no independent specification, so its correctness argument is
+entirely **agreement with a reader that has been validated against 44 real
+maps**: `test_hassault_bundled.py` builds each map, writes it, parses it back,
+and requires all nine planes and every entity to come out identical.
+
+Two traps the round trip exists to catch:
+
+- **A SOLID record stores only `wtex` and `vdelta`.** Everything else comes from
+  `sqrdefault` on the way back in, so a solid cube carrying a floor height would
+  be silently rewritten by its own round trip. The writer refuses it instead.
+- **A run length is one byte.** Anything longer is split, and each continuation
+  still repeats the same previous cube — an off-by-one there rewrites the grid.
+
+### Playability is a test, not an assumption
+
+A map that builds is not a map you can play, and neither the format nor the
+renderer has any opinion about that. So the bundled maps are checked the way a
+player would experience them: every spawn must be somewhere a body actually fits
+(`can_stand` at the position `spawn_at` resolves), and a flood fill on foot —
+step up at most `STEP_HEIGHT`, drop freely — must reach **every** standable cell
+from the first spawn.
+
+That last one earns its keep. `hd_atrium`'s gallery ring is cut into four pieces
+by the gates through it, and the first draft built two staircases; the reachability
+test named the two stranded quadrants by their exact bounds. Nothing else in the
+suite would have failed, and the map would simply have had two ledges nobody
+could get to.
 
 ## The renderer
 
@@ -728,7 +824,8 @@ reshaping the roster of a match you are only visiting.
   pointer lock, which would be hostile in a narrow dock.
 - **Commands:** `hassault.open` (HorribleAssault: Open).
 - **Settings:** `hassault.installPath` — the folder containing `packages/maps`.
-  Blank auto-detects the usual per-platform locations.
+  Blank auto-detects the usual per-platform locations. **Optional**: it only adds
+  an AssaultCube install's maps to the ones already bundled.
 - **Agent tools** (group `hassault`): `list_maps`, `list_matches`, `host`,
   `invite`, `status`, `surroundings`, `add_bot`, `remove_bot`.
 
@@ -788,10 +885,11 @@ it into an X rather than fading a second element in and out.
 | Route | Purpose |
 | --- | --- |
 | `GET /api/hassault/session` | Who this node plays as: `{signed_in, callsign, enlisted}`. `?refresh=true` re-reads it from the game server, which is how a callsign claimed on another machine appears |
-| `GET /api/hassault/status` | Whether an install was found, where, and how many maps |
-| `GET /api/hassault/maps` | Every readable map, official first |
+| `GET /api/hassault/status` | What is playable: `map_count` (bundled + installed), `bundled_count`, and whether an AssaultCube install was found. `found: false` is **not** a gate — the bundled maps play without one |
+| `GET /api/hassault/maps` | Every playable map, bundled first, each tagged with its `source` |
 | `GET /api/hassault/maps/{name}` | Header, entities, spawn counts (JSON) |
 | `GET /api/hassault/maps/{name}/cubes` | The cube grid as raw byte planes |
+| `GET /api/hassault/maps/{name}/download` | A **bundled** map as a real `.cgz`, openable in AssaultCube's editor. 404 for anything else |
 | `GET /api/hassault/weapons` | The loadout, in slot order — served so the client cannot drift from it |
 | `GET /api/hassault/matches` | Live matches on this node — enough to render a lobby row |
 | `POST /api/hassault/matches` | Open a match **without joining**, so its id can be handed to a friend |
@@ -888,7 +986,12 @@ never touches the filesystem.
 
 - **No textures yet.** Texture slots are mapped to image files by map config
   files (`.cfg`), which are not parsed yet; surfaces are tinted by texture id
-  instead.
+  instead. For the bundled maps the answer will be **procedural** rather than a
+  shipped image set — generated from the texture id, so it costs no files and no
+  license.
+- **Bundled maps have no map models, ladders, or ammo entities.** The brush
+  vocabulary is `room`, `solid` and `stairs`, which is enough for architecture
+  and nothing else. They are arenas, not a campaign.
 - **`CORNER` cells render as open.** The type is a diagonal half-wall; treating it
   as fully open leaves a small gap rather than blocking a passage, which is the
   safer wrong answer. They are rare — 104 of 65 536 cells in `ac_desert`.
@@ -951,28 +1054,31 @@ never touches the filesystem.
 
 ## Roadmap
 
-1. **Map and asset pipeline** — done.
-2. **Three.js renderer** — done: walk any shipped map in first person.
-3. **Netcode** — done: an authoritative match server on the local backend, with
+1. **Map and asset pipeline** — done, both directions: a reader for AssaultCube's
+   maps and a writer for ours.
+2. **Bundled maps** — done: three original maps ship with the app, so it needs no
+   AssaultCube install to be playable.
+3. **Three.js renderer** — done: walk any map in first person.
+4. **Netcode** — done: an authoritative match server on the local backend, with
    client prediction, reconciliation, and entity interpolation. JSON on the shared
    `/ws` socket rather than a binary one, for the reasons above; the existing
    [WebRTC datachannel transport](network.mdx) remains the upgrade path for
    matches between nodes rather than between tabs.
-4. **Lobby and friends integration** — done: invite a friend from the
+5. **Lobby and friends integration** — done: invite a friend from the
    [Friends roster](social.mdx) and play in their match across the fabric, plus
    agent tools for hosting, inviting and spotting.
-5. **Weapons and scoring** — done: five weapons, server-authoritative hitscan with
+6. **Weapons and scoring** — done: five weapons, server-authoritative hitscan with
    a clamped rewind to the shooter's own render instant, health, deaths, kill feed
    and team scores.
-6. **Bot players** — done: reactive AI at three skill levels, producing ordinary
+7. **Bot players** — done: reactive AI at three skill levels, producing ordinary
    input through the ordinary queue, so a bot is a player rather than a second
    simulation.
-7. **Textures and map models** — the largest remaining gap between this and
+8. **Textures and map models** — the largest remaining gap between this and
    something that looks like AssaultCube. Needs the `.cfg` parser that maps
    texture slots to files.
-8. **Pickups** — ammo and health entities are already in the map file; placing
+9. **Pickups** — ammo and health entities are already in the map file; placing
    them turns the ammo economy from a countdown into a reason to move.
-9. **Game modes** — team deathmatch is what the scoreboard currently describes.
+10. **Game modes** — team deathmatch is what the scoreboard currently describes.
    CTF and the rest need flag entities and a round structure.
 
 ## See also

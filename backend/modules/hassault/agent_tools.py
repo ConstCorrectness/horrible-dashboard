@@ -1,6 +1,6 @@
 """Agent tools for HorribleAssault.
 
-These let the agent run the *social* side of a game — "start a match on ac_desert
+These let the agent run the *social* side of a game — "start a match on hd_atrium
 and invite Rob", "who's in the match?", "what's around me?" — which is the part
 that is genuinely tedious for a human mid-session and genuinely easy for an
 agent.
@@ -39,17 +39,22 @@ PROBE_RANGE = 24
 
 
 async def list_maps(_args: dict[str, Any]) -> dict[str, Any]:
-    """Which maps this node can host, from the user's own AssaultCube install."""
-    root = assets.install_root()
-    if root is None:
-        return {
-            "error": (
-                "no AssaultCube install found — game content is never bundled, so "
-                "hassault.installPath must point at the user's own copy"
-            )
-        }
+    """Which maps this node can host: the bundled ones, plus an install's if any.
+
+    Split by origin rather than returned as one list, so the agent can answer
+    "why so few maps?" without a second call — and never reports a missing
+    AssaultCube install as a reason it cannot host, which it is not.
+    """
     maps = assets.list_maps()
-    return {"count": len(maps), "maps": sorted(m["name"] for m in maps)}
+    bundled = sorted(m["name"] for m in maps if m["source"] == "bundled")
+    installed = sorted(m["name"] for m in maps if m["source"] != "bundled")
+    return {
+        "count": len(maps),
+        "maps": bundled + installed,
+        "bundled": bundled,
+        "from_assaultcube_install": installed,
+        "install_path": str(assets.install_root() or ""),
+    }
 
 
 async def list_matches(_args: dict[str, Any]) -> dict[str, Any]:
@@ -371,7 +376,7 @@ def register_hassault_tools() -> None:
         handler=host_match,
         group="hassault",
         parameters={
-            "map": {"type": "string", "description": "Map name, e.g. ac_desert."},
+            "map": {"type": "string", "description": "Map name, e.g. hd_atrium."},
             "invite": {
                 "type": "string",
                 "description": "Optional friend to invite: their name or friend code.",

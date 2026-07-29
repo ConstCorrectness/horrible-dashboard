@@ -7,21 +7,31 @@ from pydantic import BaseModel, Field
 
 class MapSummary(BaseModel):
     name: str
-    source: str  # which directory it came from: official / servermaps / …
+    """Where the map came from: `bundled` for one this app ships, otherwise the
+    install directory it was found in (official / servermaps / …)."""
+    source: str
     size: int
 
 
 class InstallStatus(BaseModel):
-    """Whether an AssaultCube install was found, and what it holds.
+    """What this node can play, and whether an AssaultCube install adds to it.
 
-    `detected` distinguishes "you have not configured this" from "the path you
-    configured is not an install" — the two need different advice.
+    `found` is about the *install* only — it is deliberately not a gate on
+    playing, because the bundled maps need no install at all. The pane decides
+    whether it can start a match from `map_count`, and treats `found` as the
+    reason a number is smaller than it could be.
+
+    `configured` distinguishes "you have not set this" from "the path you set is
+    not an install" — the two need different advice.
     """
 
     found: bool
     path: str | None = None
     configured: bool = False
+    """Every playable map, bundled and installed together — the count the map
+    list will actually show."""
     map_count: int = 0
+    bundled_count: int = 0
     message: str | None = None
 
 

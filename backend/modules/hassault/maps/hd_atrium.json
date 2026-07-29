@@ -1,0 +1,278 @@
+{
+  "title": "Atrium",
+  "author": "horrible-dashboard",
+  "license": "CC0-1.0",
+  "sfactor": 7,
+  "waterlevel": -100,
+  "ambient": 38,
+  "brushes": [
+    {
+      "op": "room",
+      "rect": [8, 8, 112, 8],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 12,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "room",
+      "rect": [8, 112, 112, 8],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 12,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "room",
+      "rect": [8, 16, 8, 96],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 12,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "room",
+      "rect": [112, 16, 8, 96],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 12,
+      "ftex": 21,
+      "ctex": 33
+    },
+
+    {
+      "op": "room",
+      "rect": [16, 16, 16, 16],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 76,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "room",
+      "rect": [96, 16, 16, 16],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 76,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "room",
+      "rect": [16, 96, 16, 16],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 76,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "room",
+      "rect": [96, 96, 16, 16],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 76,
+      "ftex": 21,
+      "ctex": 33
+    },
+    { "op": "solid", "rect": [22, 22, 4, 4], "wtex": 76 },
+    { "op": "solid", "rect": [102, 22, 4, 4], "wtex": 76 },
+    { "op": "solid", "rect": [22, 102, 4, 4], "wtex": 76 },
+    { "op": "solid", "rect": [102, 102, 4, 4], "wtex": 76 },
+
+    {
+      "op": "room",
+      "rect": [58, 16, 12, 28],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 12,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "room",
+      "rect": [58, 84, 12, 28],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 12,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "room",
+      "rect": [16, 58, 28, 12],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 12,
+      "ftex": 21,
+      "ctex": 33
+    },
+    {
+      "op": "room",
+      "rect": [84, 58, 28, 12],
+      "floor": 0,
+      "ceil": 14,
+      "wtex": 12,
+      "ftex": 21,
+      "ctex": 33
+    },
+
+    {
+      "op": "room",
+      "rect": [44, 44, 40, 40],
+      "floor": 0,
+      "ceil": 26,
+      "wtex": 47,
+      "ftex": 58,
+      "ctex": 33
+    },
+    {
+      "op": "room",
+      "rect": [44, 44, 40, 5],
+      "floor": 8,
+      "ceil": 26,
+      "wtex": 89,
+      "ftex": 58,
+      "ctex": 33
+    },
+    {
+      "op": "room",
+      "rect": [44, 79, 40, 5],
+      "floor": 8,
+      "ceil": 26,
+      "wtex": 89,
+      "ftex": 58,
+      "ctex": 33
+    },
+    {
+      "op": "room",
+      "rect": [44, 49, 5, 30],
+      "floor": 8,
+      "ceil": 26,
+      "wtex": 89,
+      "ftex": 58,
+      "ctex": 33
+    },
+    {
+      "op": "room",
+      "rect": [79, 49, 5, 30],
+      "floor": 8,
+      "ceil": 26,
+      "wtex": 89,
+      "ftex": 58,
+      "ctex": 33
+    },
+
+    {
+      "op": "room",
+      "rect": [58, 44, 12, 5],
+      "floor": 0,
+      "ceil": 26,
+      "wtex": 47,
+      "ftex": 58,
+      "ctex": 33
+    },
+    {
+      "op": "room",
+      "rect": [58, 79, 12, 5],
+      "floor": 0,
+      "ceil": 26,
+      "wtex": 47,
+      "ftex": 58,
+      "ctex": 33
+    },
+    {
+      "op": "room",
+      "rect": [44, 58, 5, 12],
+      "floor": 0,
+      "ceil": 26,
+      "wtex": 47,
+      "ftex": 58,
+      "ctex": 33
+    },
+    {
+      "op": "room",
+      "rect": [79, 58, 5, 12],
+      "floor": 0,
+      "ceil": 26,
+      "wtex": 47,
+      "ftex": 58,
+      "ctex": 33
+    },
+
+    {
+      "op": "stairs",
+      "rect": [49, 50, 9, 6],
+      "axis": "x",
+      "from": 8,
+      "to": 0,
+      "ceil": 26,
+      "wtex": 89,
+      "ftex": 58
+    },
+    {
+      "op": "stairs",
+      "rect": [70, 50, 9, 6],
+      "axis": "x",
+      "from": 0,
+      "to": 8,
+      "ceil": 26,
+      "wtex": 89,
+      "ftex": 58
+    },
+    {
+      "op": "stairs",
+      "rect": [49, 72, 9, 6],
+      "axis": "x",
+      "from": 8,
+      "to": 0,
+      "ceil": 26,
+      "wtex": 89,
+      "ftex": 58
+    },
+    {
+      "op": "stairs",
+      "rect": [70, 72, 9, 6],
+      "axis": "x",
+      "from": 0,
+      "to": 8,
+      "ceil": 26,
+      "wtex": 89,
+      "ftex": 58
+    },
+
+    { "op": "solid", "rect": [56, 56, 4, 4], "wtex": 47 },
+    { "op": "solid", "rect": [68, 56, 4, 4], "wtex": 47 },
+    { "op": "solid", "rect": [56, 68, 4, 4], "wtex": 47 },
+    { "op": "solid", "rect": [68, 68, 4, 4], "wtex": 47 }
+  ],
+  "entities": [
+    { "type": "playerstart", "x": 23, "y": 18, "yaw": 45, "team": 0 },
+    { "type": "playerstart", "x": 18, "y": 29, "yaw": 45, "team": 0 },
+    { "type": "playerstart", "x": 23, "y": 109, "yaw": 315, "team": 0 },
+    { "type": "playerstart", "x": 18, "y": 98, "yaw": 315, "team": 0 },
+    { "type": "playerstart", "x": 11, "y": 63, "yaw": 0, "team": 0 },
+    { "type": "playerstart", "x": 63, "y": 11, "yaw": 90, "team": 0 },
+
+    { "type": "playerstart", "x": 104, "y": 18, "yaw": 135, "team": 1 },
+    { "type": "playerstart", "x": 109, "y": 29, "yaw": 135, "team": 1 },
+    { "type": "playerstart", "x": 104, "y": 109, "yaw": 225, "team": 1 },
+    { "type": "playerstart", "x": 109, "y": 98, "yaw": 225, "team": 1 },
+    { "type": "playerstart", "x": 116, "y": 63, "yaw": 180, "team": 1 },
+    { "type": "playerstart", "x": 63, "y": 116, "yaw": 270, "team": 1 },
+
+    { "type": "light", "x": 63, "y": 63, "radius": 128, "color": [255, 244, 214] },
+    { "type": "light", "x": 46, "y": 46, "radius": 64, "color": [214, 226, 255] },
+    { "type": "light", "x": 81, "y": 46, "radius": 64, "color": [214, 226, 255] },
+    { "type": "light", "x": 46, "y": 81, "radius": 64, "color": [214, 226, 255] },
+    { "type": "light", "x": 81, "y": 81, "radius": 64, "color": [214, 226, 255] },
+    { "type": "light", "x": 23, "y": 23, "radius": 72, "color": [255, 226, 196] },
+    { "type": "light", "x": 104, "y": 23, "radius": 72, "color": [255, 226, 196] },
+    { "type": "light", "x": 23, "y": 104, "radius": 72, "color": [255, 226, 196] },
+    { "type": "light", "x": 104, "y": 104, "radius": 72, "color": [255, 226, 196] }
+  ]
+}

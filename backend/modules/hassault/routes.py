@@ -11,8 +11,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Response
 
-from backend.modules.hassault import assets, fabric, weapons
-from backend.modules.hassault.cgz import PLANE_ORDER, CgzError
+from backend.modules.hassault import assets, fabric, mapsource, weapons
+from backend.modules.hassault.cgz import PLANE_ORDER, CgzError, write_cgz
 from backend.modules.hassault.match import MAX_PLAYERS, match_server
 from backend.modules.hassault.models import (
     CreateMatchRequest,
@@ -44,26 +44,33 @@ def _load(name: str):
 
 @router.get("/status", response_model=InstallStatus)
 async def get_status() -> InstallStatus:
+    """What is playable here. An install is an *addition*, never a prerequisite."""
     root = assets.install_root()
     from backend.modules.settings.routes import get_value
 
     configured = bool(str(get_value("hassault.installPath", "") or "").strip())
+    bundled = len(mapsource.bundled_names())
+    total = len(assets.list_maps())
     if root is None:
         return InstallStatus(
             found=False,
             configured=configured,
+            map_count=total,
+            bundled_count=bundled,
             message=(
                 "That path is not an AssaultCube install (no packages/maps inside)."
                 if configured
-                else "No AssaultCube install found. Set hassault.installPath to "
-                "your copy — game content is never bundled with this app."
+                else "Playing the maps that ship with the app. Point "
+                "hassault.installPath at an AssaultCube install to add its maps "
+                "too — its content is read from your own copy and never bundled."
             ),
         )
     return InstallStatus(
         found=True,
         path=str(root),
         configured=configured,
-        map_count=len(assets.list_maps()),
+        map_count=total,
+        bundled_count=bundled,
     )
 
 
@@ -248,4 +255,25 @@ async def get_map_cubes(name: str) -> Response:
             # Immutable for a given revision, so the browser need not refetch.
             "Cache-Control": "private, max-age=3600",
         },
+    )
+
+
+@router.get("/maps/{name}/download")
+async def download_map(name: str) -> Response:
+    """A bundled map as a real `.cgz`, openable in AssaultCube's own editor.
+
+    Only bundled maps. An install's maps are already `.cgz` files on the user's
+    own disk, and re-serving copyright content over HTTP is exactly the thing
+    this module does not do.
+    """
+    if name not in mapsource.bundled_names():
+        raise HTTPException(
+            status_code=404,
+            detail=f"{name!r} is not a bundled map; only maps this app ships can be exported",
+        )
+    world = _load(name)
+    return Response(
+        content=write_cgz(world),
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{name}.cgz"'},
     )

@@ -7,15 +7,21 @@ import { apiUrl } from '../../origin';
 
 export interface MapSummary {
   name: string;
+  /** `bundled` for a map the app ships, otherwise the install directory it came
+   * from (official / servermaps / …). */
   source: string;
   size: number;
 }
 
 export interface InstallStatus {
+  /** Whether an *AssaultCube install* was found — an addition, not a gate. The
+   * bundled maps play without one, so the panel keys off `map_count`. */
   found: boolean;
   path: string | null;
   configured: boolean;
+  /** Every playable map, bundled and installed together. */
   map_count: number;
+  bundled_count: number;
   message: string | null;
 }
 
