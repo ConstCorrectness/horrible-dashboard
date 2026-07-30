@@ -264,7 +264,7 @@ describe('player', () => {
     const w = makeWorld(16, openRoom(16, 4, 4, 10, 10, { floor: 3 }));
     const p = createPlayer(7, 7, 20);
     for (let i = 0; i < 200; i++) {
-      step(w, p, { forward: 0, strafe: 0, jump: false, noclip: false }, 1 / 60);
+      step(w, p, { forward: 0, strafe: 0, jump: false, crouch: false, noclip: false }, 1 / 60);
     }
     expect(p.z).toBeCloseTo(3, 5);
     expect(p.onGround).toBe(true);
@@ -279,7 +279,7 @@ describe('player', () => {
     p.yaw = Math.PI / 4; // diagonally into the +x wall
     const y0 = p.y;
     for (let i = 0; i < 30; i++) {
-      step(w, p, { forward: 1, strafe: 0, jump: false, noclip: false }, 1 / 60);
+      step(w, p, { forward: 1, strafe: 0, jump: false, crouch: false, noclip: false }, 1 / 60);
     }
     expect(p.y).toBeGreaterThan(y0 + 1);
     expect(p.x).toBeGreaterThan(5.5); // moved toward the wall…
@@ -289,7 +289,7 @@ describe('player', () => {
   it('clamps a huge timestep so a backgrounded tab cannot teleport the player', () => {
     const w = makeWorld(16, openRoom(16, 4, 4, 10, 10, { floor: 0 }));
     const p = createPlayer(7, 7, 0);
-    step(w, p, { forward: 1, strafe: 0, jump: false, noclip: false }, 60);
+    step(w, p, { forward: 1, strafe: 0, jump: false, crouch: false, noclip: false }, 60);
     // At 22 cubes/s a 60s step would cross the map; the clamp bounds it.
     expect(Math.abs(p.x - 7)).toBeLessThan(4);
   });
@@ -299,7 +299,7 @@ describe('player', () => {
     const p = createPlayer(4.5, 4.5, 0);
     p.yaw = 0;
     for (let i = 0; i < 60; i++) {
-      step(w, p, { forward: 1, strafe: 0, jump: false, noclip: true }, 1 / 60);
+      step(w, p, { forward: 1, strafe: 0, jump: false, crouch: false, noclip: true }, 1 / 60);
     }
     expect(p.x).toBeGreaterThan(10);
   });
@@ -330,7 +330,7 @@ describe('spawnAt', () => {
     const w = makeWorld(16, openRoom(16, 4, 4, 10, 10, { floor: 5, ceil: 24 }));
     const p = spawnAt(w, { x: 7, y: 7, z: 17, yaw: 0 });
     const before = { x: p.x, y: p.y, z: p.z };
-    step(w, p, { forward: 0, strafe: 0, jump: false, noclip: false }, 1 / 60);
+    step(w, p, { forward: 0, strafe: 0, jump: false, crouch: false, noclip: false }, 1 / 60);
     expect(p.x).toBeCloseTo(before.x, 9);
     expect(p.y).toBeCloseTo(before.y, 9);
     expect(p.z).toBeCloseTo(before.z, 9);

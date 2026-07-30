@@ -35,9 +35,33 @@ export const hassaultModule: ModuleManifest = {
       key: 'hassault.sensitivity',
       title: 'Mouse sensitivity',
       description:
-        'Multiplies how far the view turns per pixel of mouse movement, for this game only. Also adjustable in-game from the pause menu (Esc). The control map lives there too — it is a document rather than a value, so it has no row here.',
+        'Multiplies how far the view turns per pixel of mouse movement, for this game only. Also adjustable from the main menu and the pause menu (Esc). The control map lives there too — it is a document rather than a value, so it has no row here.',
       type: 'number',
       default: 1,
+    },
+    {
+      key: 'hassault.fov',
+      title: 'Field of view',
+      description:
+        'Vertical field of view in degrees, 60–110. Wider sees more of the map and makes movement read as faster. Applies immediately, mid-match included.',
+      type: 'number',
+      default: 75,
+    },
+    {
+      key: 'hassault.volume',
+      title: 'Volume',
+      description:
+        'Footsteps, shots, jumps and landings, 0–1. Every sound is synthesized on the fly — none of it is a downloaded asset, and none of it is anybody else’s copyright. Zero never even opens an audio device.',
+      type: 'number',
+      default: 0.7,
+    },
+    {
+      key: 'hassault.crouchToggle',
+      title: 'Crouch toggles',
+      description:
+        'Off (the default) means crouch is a hold, which is what the movement rewards — you can release it the instant you need speed back. On makes it a toggle, which is easier on the hand.',
+      type: 'boolean',
+      default: false,
     },
     {
       key: 'hassault.installPath',

@@ -165,6 +165,10 @@ class WeaponOut(BaseModel):
     pellets: int
     range: float
     auto: bool
+    """Cubes per second the shot shoves the shooter, opposite their aim — AC's
+    recoil push, and the whole of shoot-jumping. Served rather than duplicated in
+    TypeScript because the client predicts the identical impulse."""
+    kickback: float
 
 
 class Invitee(BaseModel):

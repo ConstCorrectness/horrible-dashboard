@@ -16,7 +16,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import type { MapInfo } from '../api';
-import { spawnAt, step, type PlayerState } from '../player';
+import { applyImpulse, createPlayer, spawnAt, step, type PlayerState } from '../player';
 import { SOLID, SPACE, World } from '../world';
 
 const PLANES = ['type', 'floor', 'ceil', 'wtex', 'ftex', 'ctex', 'vdelta', 'utex', 'tag'];
@@ -44,8 +44,27 @@ interface Vectors {
     name: string;
     world: string;
     start: Record<string, number | boolean>;
-    steps: { forward?: number; strafe?: number; jump?: boolean; yaw?: number; dt: number }[];
-    expect: { x: number; y: number; z: number; velZ: number; onGround: boolean };
+    steps: {
+      forward?: number;
+      strafe?: number;
+      jump?: boolean;
+      crouch?: boolean;
+      yaw?: number;
+      dt: number;
+      /** An external kick, applied after the step — where the match server
+       * applies weapon recoil. See `applyImpulse`. */
+      impulse?: [number, number, number];
+    }[];
+    expect: {
+      x: number;
+      y: number;
+      z: number;
+      velX: number;
+      velY: number;
+      velZ: number;
+      crouch: number;
+      onGround: boolean;
+    };
   }[];
   spawns: {
     name: string;
@@ -123,15 +142,21 @@ describe('cross-language physics conformance', () => {
   for (const testCase of vectors.cases) {
     it(testCase.name, () => {
       const world = buildWorld(vectors.worlds[testCase.world]);
-      const player: PlayerState = {
-        x: testCase.start.x as number,
-        y: testCase.start.y as number,
-        z: testCase.start.z as number,
-        velZ: (testCase.start.vel_z as number) ?? 0,
-        yaw: (testCase.start.yaw as number) ?? 0,
-        pitch: (testCase.start.pitch as number) ?? 0,
-        onGround: (testCase.start.on_ground as boolean) ?? false,
-      };
+      // Built through `createPlayer` so a field added to `PlayerState` gets its
+      // real default here rather than `undefined`, which would silently poison
+      // the whole replay with NaN.
+      const player: PlayerState = createPlayer(
+        testCase.start.x as number,
+        testCase.start.y as number,
+        testCase.start.z as number,
+        (testCase.start.yaw as number) ?? 0,
+      );
+      player.velX = (testCase.start.vel_x as number) ?? 0;
+      player.velY = (testCase.start.vel_y as number) ?? 0;
+      player.velZ = (testCase.start.vel_z as number) ?? 0;
+      player.pitch = (testCase.start.pitch as number) ?? 0;
+      player.onGround = (testCase.start.on_ground as boolean) ?? false;
+      player.crouch = (testCase.start.crouch as number) ?? 0;
       for (const raw of testCase.steps) {
         if (raw.yaw !== undefined) player.yaw = raw.yaw;
         step(
@@ -141,16 +166,24 @@ describe('cross-language physics conformance', () => {
             forward: raw.forward ?? 0,
             strafe: raw.strafe ?? 0,
             jump: raw.jump ?? false,
+            crouch: raw.crouch ?? false,
             noclip: false,
           },
           raw.dt,
         );
+        // After the step, matching where the match server applies weapon recoil
+        // (`simulate` steps, then `_handle_combat` fires).
+        if (raw.impulse) applyImpulse(player, raw.impulse[0], raw.impulse[1], raw.impulse[2]);
       }
       const tol = vectors.tolerance;
-      expect(player.x).toBeCloseTo(testCase.expect.x, -Math.log10(tol));
-      expect(player.y).toBeCloseTo(testCase.expect.y, -Math.log10(tol));
-      expect(player.z).toBeCloseTo(testCase.expect.z, -Math.log10(tol));
-      expect(player.velZ).toBeCloseTo(testCase.expect.velZ, -Math.log10(tol));
+      const digits = -Math.log10(tol);
+      expect(player.x).toBeCloseTo(testCase.expect.x, digits);
+      expect(player.y).toBeCloseTo(testCase.expect.y, digits);
+      expect(player.z).toBeCloseTo(testCase.expect.z, digits);
+      expect(player.velX).toBeCloseTo(testCase.expect.velX, digits);
+      expect(player.velY).toBeCloseTo(testCase.expect.velY, digits);
+      expect(player.velZ).toBeCloseTo(testCase.expect.velZ, digits);
+      expect(player.crouch).toBeCloseTo(testCase.expect.crouch, digits);
       expect(player.onGround).toBe(testCase.expect.onGround);
     });
   }

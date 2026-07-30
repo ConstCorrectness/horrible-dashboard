@@ -20,10 +20,16 @@
  * - `loading` — assembling the world; nothing is interactive.
  * - `signin`  — built, orbiting, waiting for an account.
  * - `enlist`  — signed in, but no callsign yet: sign-up's second half.
- * - `ready`   — everything satisfied, waiting for the player to deploy.
+ * - `menu`    — the main menu: pick a map, host, browse servers, find friends.
  * - `playing` — pointer lock is live and input belongs to the game.
+ *
+ * `menu` is where a session sits when it is not in the world, and it is reachable
+ * in both directions: the front door on arrival, and where Escape → *Exit to menu*
+ * returns you. That is the whole reason `deployed` is a flag the panel can clear
+ * rather than a one-way latch — a game you can only enter is a game you have to
+ * close the pane to leave.
  */
-export type BootPhase = 'loading' | 'signin' | 'enlist' | 'ready' | 'playing';
+export type BootPhase = 'loading' | 'signin' | 'enlist' | 'menu' | 'playing';
 
 /** One unit of startup work. `weight`s are relative and need not sum to 1. */
 export interface BootStage {
@@ -134,7 +140,7 @@ export function bootPhase(
   if (!isLoaded(progress)) return 'loading';
   if (!session.signed_in) return 'signin';
   if (!session.enlisted) return 'enlist';
-  return deployed ? 'playing' : 'ready';
+  return deployed ? 'playing' : 'menu';
 }
 
 /** Whether the pane should be accepting mouse-look and movement. Pointer lock is

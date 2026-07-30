@@ -110,15 +110,22 @@ describe('phases', () => {
       enlisted: false,
     };
     expect(bootPhase(DONE, noCallsign, false)).toBe('enlist');
-    expect(bootPhase(DONE, ENLISTED, false)).toBe('ready');
+    expect(bootPhase(DONE, ENLISTED, false)).toBe('menu');
     expect(bootPhase(DONE, ENLISTED, true)).toBe('playing');
+  });
+
+  it('returns to the menu when a deployed player leaves the world', () => {
+    // `deployed` is a flag, not a latch: Escape → Exit to menu clears it, and a
+    // game you can only enter is a game you have to close the pane to leave.
+    expect(bootPhase(DONE, ENLISTED, true)).toBe('playing');
+    expect(bootPhase(DONE, ENLISTED, false)).toBe('menu');
   });
 
   it('accepts game input only while playing', () => {
     // Pointer lock is requested nowhere else, so a click on an email field can
     // never be swallowed by it.
     expect(acceptsGameInput('playing')).toBe(true);
-    for (const phase of ['loading', 'signin', 'enlist', 'ready'] as const) {
+    for (const phase of ['loading', 'signin', 'enlist', 'menu'] as const) {
       expect(acceptsGameInput(phase)).toBe(false);
     }
   });

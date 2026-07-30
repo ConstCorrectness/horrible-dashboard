@@ -13,6 +13,8 @@ import {
   SnapshotBuffer,
   type Command,
   type Fx,
+  type MoveState,
+  type NoiseEvent,
   type SelfState,
   type ShotFx,
   type Snapshot,
@@ -29,6 +31,8 @@ export interface MatchPeer {
   kills: number;
   deaths: number;
   bot: boolean;
+  /** Crouch animation, 0..1 — the avatar is drawn to this height. */
+  crouch: number;
 }
 
 /** One line of the kill feed, already phrased. */
@@ -97,8 +101,17 @@ export class MatchSession {
 
   /** Fires on any change worth re-rendering the surrounding UI for. */
   onChange: (state: SessionState) => void = () => {};
-  /** The most recent authoritative row for us, consumed by the render loop. */
-  pendingCorrection: { row: Snapshot['players'][number]; ack: number } | null = null;
+  /**
+   * The most recent authoritative word on us, consumed by the render loop.
+   *
+   * Carries the private movement block alongside the public row: position comes
+   * from the row, momentum from `you.move`, and reconciliation needs both.
+   */
+  pendingCorrection: {
+    row: Snapshot['players'][number];
+    move: MoveState | null;
+    ack: number;
+  } | null = null;
   /**
    * Shots to draw, drained by the render loop.
    *
@@ -106,6 +119,15 @@ export class MatchSession {
    * render-loop concern at 60 fps and React has no business in that path.
    */
   pendingShots: ShotFx[] = [];
+  /**
+   * Noises this player can hear, drained by the render loop.
+   *
+   * Server-filtered to what is actually audible from where we are — see
+   * `backend/modules/hassault/noise.py`. Our *own* noises are deliberately absent
+   * and synthesized locally instead: they need no round trip, and a footstep that
+   * arrives 50 ms after the step does not sound like a footstep.
+   */
+  pendingNoise: NoiseEvent[] = [];
 
   private unsubscribe: (() => void) | null = null;
   private outbox: Command[] = [];
@@ -257,7 +279,19 @@ export class MatchSession {
         // Handed to the render loop rather than applied here: reconciliation
         // needs the World, which lives with the renderer, and a socket callback
         // is the wrong place to be stepping physics.
-        if (mine) this.pendingCorrection = { row: mine, ack: snapshot.ack };
+        if (mine) {
+          this.pendingCorrection = {
+            row: mine,
+            move: snapshot.you?.move ?? null,
+            ack: snapshot.ack,
+          };
+        }
+
+        // Drained here rather than through `onChange`: the audio synth and the
+        // direction ring are render-loop concerns at 60 fps, exactly like tracers.
+        for (const heard of snapshot.you?.noise ?? []) {
+          if (this.pendingNoise.length < 32) this.pendingNoise.push(heard);
+        }
 
         for (const fx of snapshot.fx ?? []) this.absorb(fx);
         const peers = this.peersFrom(snapshot.players);
@@ -357,6 +391,7 @@ export class MatchSession {
       kills: Number(r.kills) || 0,
       deaths: Number(r.deaths) || 0,
       bot: Boolean(r.bot),
+      crouch: Number(r.crouch) || 0,
     }));
   }
 
@@ -427,6 +462,7 @@ export class MatchSession {
     this.outbox = [];
     this.pendingCorrection = null;
     this.pendingShots = [];
+    this.pendingNoise = [];
   }
 
   private emit(): void {

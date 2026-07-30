@@ -125,7 +125,9 @@ const button: CSSProperties = {
 const primary: CSSProperties = {
   ...button,
   background: 'var(--accent, #6ea8fe)',
-  borderColor: 'transparent',
+  // The shorthand, not `borderColor`: `button` above sets `border`, and mixing a
+  // shorthand with its own longhand in one computed style is what React warns about.
+  border: '1px solid transparent',
   color: '#08111f',
   fontWeight: 600,
 };
@@ -450,24 +452,6 @@ function Enlist({ account, onEnlisted }: { account: SessionInfo | null; onEnlist
   );
 }
 
-// ---- ready -------------------------------------------------------------------
-
-function Ready({ account, onDeploy }: { account: SessionInfo | null; onDeploy: () => void }) {
-  return (
-    <div className="hd-boot" style={column}>
-      <Wordmark sub={`ready · ${account?.callsign ?? ''}`} />
-      <button className="hd-boot-primary" style={primary} onClick={onDeploy} autoFocus>
-        Deploy
-      </button>
-      <div style={{ ...label, textAlign: 'center', lineHeight: 1.7 }}>
-        WASD move · mouse look · space jump
-        <br />
-        1–5 weapon · R reload · Tab scores · Esc release
-      </div>
-    </div>
-  );
-}
-
 // ---- the overlay -------------------------------------------------------------
 
 export interface BootOverlayProps {
@@ -479,7 +463,17 @@ export interface BootOverlayProps {
   account: SessionInfo | null;
   /** Re-read the account from the backend (and the game server). */
   onSignedIn: () => void;
-  onDeploy: () => void;
+  /**
+   * The main menu, for the `menu` phase.
+   *
+   * Passed in as a slot rather than built here. It needs the map list, the roster,
+   * the session and half a dozen callbacks, and threading all of that through this
+   * component — whose job is the scrim, the loading bar and the sign-in form —
+   * would make it the panel's second constructor. What it contributes instead is
+   * exactly what the menu should share with sign-in: the same layer over the same
+   * live scene.
+   */
+  menu?: ReactNode;
 }
 
 export function BootOverlay({
@@ -490,7 +484,7 @@ export function BootOverlay({
   error,
   account,
   onSignedIn,
-  onDeploy,
+  menu,
 }: BootOverlayProps) {
   return (
     <div style={shell}>
@@ -500,7 +494,7 @@ export function BootOverlay({
       )}
       {phase === 'signin' && <SignIn onSignedIn={onSignedIn} />}
       {phase === 'enlist' && <Enlist account={account} onEnlisted={onSignedIn} />}
-      {phase === 'ready' && <Ready account={account} onDeploy={onDeploy} />}
+      {phase === 'menu' && menu}
     </div>
   );
 }

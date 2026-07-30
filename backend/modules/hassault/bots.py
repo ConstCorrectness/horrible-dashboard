@@ -60,6 +60,14 @@ class Skill:
     fire_angle: float
     """Chance per second of a dodge jump while engaging."""
     jumpiness: float
+    """How readily the bot crouches to steady a long shot, 0..1.
+
+    Not a separate behaviour so much as an expression of the same trade a player
+    makes: crouching narrows its own hitbox and braces its recoil, at the cost of
+    most of its speed. So a bot only does it at range, where standing still is
+    survivable — and a better bot does it more often.
+    """
+    poise: float = 0.0
 
 
 SKILLS: dict[str, Skill] = {
@@ -72,6 +80,7 @@ SKILLS: dict[str, Skill] = {
         fov=1.15,
         fire_angle=0.13,
         jumpiness=0.1,
+        poise=0.15,
     ),
     "normal": Skill(
         name="normal",
@@ -82,6 +91,7 @@ SKILLS: dict[str, Skill] = {
         fov=1.4,
         fire_angle=0.06,
         jumpiness=0.3,
+        poise=0.45,
     ),
     "hard": Skill(
         name="hard",
@@ -92,6 +102,7 @@ SKILLS: dict[str, Skill] = {
         fov=1.6,
         fire_angle=0.028,
         jumpiness=0.6,
+        poise=0.8,
     ),
 }
 DEFAULT_SKILL = "normal"
@@ -459,6 +470,20 @@ class BotBrain:
         if target is not None and self.rng.random() < self.skill.jumpiness * dt:
             jump = True
 
+        # -- crouch ---------------------------------------------------------
+        #
+        # Only at range, and never while jumping. This is the same trade a player
+        # makes rather than a bot-only trick: a narrower hitbox and a braced shot
+        # for most of its speed, which is survivable at forty cubes and suicide at
+        # ten. Producing it here means it goes through `enqueue` like everything
+        # else — a bot crouches by pressing the key, not by editing its own state.
+        crouch = (
+            target is not None
+            and not jump
+            and distance > LONG_RANGE * 0.6
+            and self.rng.random() < self.skill.poise
+        )
+
         # Movement is expressed in the player's own frame, so a bot that is aiming
         # one way and walking another — which is most of a firefight — needs the
         # heading rotated into it.
@@ -472,6 +497,7 @@ class BotBrain:
             forward=_clamp(forward, -1.0, 1.0),
             strafe=_clamp(strafe, -1.0, 1.0),
             jump=jump,
+            crouch=crouch,
             yaw=yaw,
             pitch=pitch,
             dt=dt,

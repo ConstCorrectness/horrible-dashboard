@@ -15,6 +15,7 @@ import {
   Predictor,
   SNAP_DISTANCE,
   SnapshotBuffer,
+  type MoveState,
   type PlayerRow,
   type Snapshot,
 } from '../net';
@@ -83,7 +84,25 @@ function rowFrom(id: string, p: PlayerState, over: Partial<PlayerRow> = {}): Pla
     kills: 0,
     deaths: 0,
     bot: false,
+    crouch: 0,
     ...over,
+  };
+}
+
+/**
+ * The private movement block a snapshot carries alongside the public row.
+ *
+ * Reconciliation needs it: with momentum in the simulation, rebasing on position
+ * alone and replaying would run the replay on the client's own velocity — the very
+ * number the correction exists to fix.
+ */
+function moveFrom(p: PlayerState): MoveState {
+  return {
+    vel: [p.velX, p.velY, p.velZ],
+    air: p.timeInAir,
+    crouch: p.crouch,
+    crouchedInAir: p.crouchedInAir,
+    sinceLanded: Math.max(0, p.t - p.landedAt),
   };
 }
 
@@ -114,13 +133,13 @@ describe('Predictor', () => {
     const a = predictor.record(
       world,
       player,
-      { forward: 1, strafe: 0, jump: false, noclip: false },
+      { forward: 1, strafe: 0, jump: false, crouch: false, noclip: false },
       1 / 60,
     );
     const b = predictor.record(
       world,
       player,
-      { forward: 1, strafe: 0, jump: false, noclip: false },
+      { forward: 1, strafe: 0, jump: false, crouch: false, noclip: false },
       1 / 60,
     );
     expect(a.seq).toBe(1);
@@ -132,7 +151,12 @@ describe('Predictor', () => {
     const world = room();
     const predictor = new Predictor();
     const player = createPlayer(16, 16, 0);
-    predictor.record(world, player, { forward: 1, strafe: 0, jump: false, noclip: false }, 1 / 60);
+    predictor.record(
+      world,
+      player,
+      { forward: 1, strafe: 0, jump: false, crouch: false, noclip: false },
+      1 / 60,
+    );
     expect(player.x).toBeGreaterThan(16);
   });
 
@@ -143,7 +167,7 @@ describe('Predictor', () => {
     const command = predictor.record(
       world,
       player,
-      { forward: 1, strafe: 0, jump: false, noclip: false },
+      { forward: 1, strafe: 0, jump: false, crouch: false, noclip: false },
       5,
     );
     // Recording the unclamped value would make the replay step further than the
@@ -164,7 +188,7 @@ describe('Predictor', () => {
         predictor.record(
           world,
           player,
-          { forward: 1, strafe: 0, jump: false, noclip: false },
+          { forward: 1, strafe: 0, jump: false, crouch: false, noclip: false },
           1 / 60,
         ),
       );
@@ -174,13 +198,13 @@ describe('Predictor', () => {
       step(
         world,
         authoritative,
-        { forward: c.forward, strafe: c.strafe, jump: c.jump, noclip: false },
+        { forward: c.forward, strafe: c.strafe, jump: c.jump, crouch: false, noclip: false },
         c.dt,
       );
     }
 
     const before = { x: player.x, y: player.y, z: player.z };
-    predictor.reconcile(world, player, rowFrom('me', authoritative), 10);
+    predictor.reconcile(world, player, rowFrom('me', authoritative), moveFrom(authoritative), 10);
     expect(predictor.unacked()).toHaveLength(0);
     expect(predictor.lastError).toBeLessThan(1e-9);
     expect(player.x).toBeCloseTo(before.x, 9);
@@ -198,7 +222,7 @@ describe('Predictor', () => {
         predictor.record(
           world,
           player,
-          { forward: 1, strafe: 0, jump: false, noclip: false },
+          { forward: 1, strafe: 0, jump: false, crouch: false, noclip: false },
           1 / 60,
         ),
       );
@@ -209,13 +233,13 @@ describe('Predictor', () => {
       step(
         world,
         authoritative,
-        { forward: c.forward, strafe: c.strafe, jump: c.jump, noclip: false },
+        { forward: c.forward, strafe: c.strafe, jump: c.jump, crouch: false, noclip: false },
         c.dt,
       );
     }
 
     const predicted = player.x;
-    predictor.reconcile(world, player, rowFrom('me', authoritative), 6);
+    predictor.reconcile(world, player, rowFrom('me', authoritative), moveFrom(authoritative), 6);
     expect(predictor.unacked()).toHaveLength(4);
     // The four unacknowledged commands are ours and still stand, so we end up
     // exactly where we already were.
@@ -227,10 +251,15 @@ describe('Predictor', () => {
     const world = room();
     const predictor = new Predictor();
     const player = createPlayer(16, 16, 0);
-    predictor.record(world, player, { forward: 1, strafe: 0, jump: false, noclip: false }, 1 / 60);
+    predictor.record(
+      world,
+      player,
+      { forward: 1, strafe: 0, jump: false, crouch: false, noclip: false },
+      1 / 60,
+    );
 
     const server = createPlayer(player.x - 0.5, player.y, player.z);
-    predictor.reconcile(world, player, rowFrom('me', server), 1);
+    predictor.reconcile(world, player, rowFrom('me', server), moveFrom(server), 1);
     expect(predictor.lastError).toBeCloseTo(0.5, 6);
     // The simulation moves to the truth; the camera offset hides the jump.
     expect(player.x).toBeCloseTo(server.x, 9);
@@ -241,10 +270,15 @@ describe('Predictor', () => {
     const world = room();
     const predictor = new Predictor();
     const player = createPlayer(16, 16, 0);
-    predictor.record(world, player, { forward: 1, strafe: 0, jump: false, noclip: false }, 1 / 60);
+    predictor.record(
+      world,
+      player,
+      { forward: 1, strafe: 0, jump: false, crouch: false, noclip: false },
+      1 / 60,
+    );
 
     const server = createPlayer(player.x - (SNAP_DISTANCE + 1), player.y, player.z);
-    predictor.reconcile(world, player, rowFrom('me', server), 1);
+    predictor.reconcile(world, player, rowFrom('me', server), moveFrom(server), 1);
     // Easing across that distance would draw the player somewhere they are not
     // for the whole ease — possibly through a wall.
     expect(predictor.correction).toEqual({ x: 0, y: 0, z: 0 });
@@ -266,12 +300,17 @@ describe('Predictor', () => {
     const world = room();
     const predictor = new Predictor();
     const player = createPlayer(16, 16, 0);
-    predictor.record(world, player, { forward: 0, strafe: 0, jump: false, noclip: false }, 1 / 60);
+    predictor.record(
+      world,
+      player,
+      { forward: 0, strafe: 0, jump: false, crouch: false, noclip: false },
+      1 / 60,
+    );
     predictor.reset();
     const next = predictor.record(
       world,
       player,
-      { forward: 0, strafe: 0, jump: false, noclip: false },
+      { forward: 0, strafe: 0, jump: false, crouch: false, noclip: false },
       1 / 60,
     );
     expect(next.seq).toBe(2);
@@ -297,6 +336,7 @@ describe('SnapshotBuffer', () => {
     kills: 0,
     deaths: 0,
     bot: false,
+    crouch: 0,
   });
 
   it('interpolates between the two snapshots straddling the render time', () => {

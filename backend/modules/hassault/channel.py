@@ -73,6 +73,7 @@ def _parse_command(raw: Any) -> Command | None:
         forward=_clamp(_num(raw.get("forward")), -1.0, 1.0),
         strafe=_clamp(_num(raw.get("strafe")), -1.0, 1.0),
         jump=bool(raw.get("jump")),
+        crouch=bool(raw.get("crouch")),
         yaw=_num(raw.get("yaw")),
         pitch=_clamp(_num(raw.get("pitch")), -1.5708, 1.5708),
         dt=_clamp(_num(raw.get("dt")), 0.0, 0.25),

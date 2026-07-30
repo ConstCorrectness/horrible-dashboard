@@ -19,7 +19,7 @@
  *
  * Kept free of three and of React so all of it is unit-testable headless.
  */
-import { step, type MoveInput, type PlayerState } from './player';
+import { applyImpulse, step, type MoveInput, type PlayerState } from './player';
 import type { World } from './world';
 
 /**
@@ -51,6 +51,7 @@ export interface Command {
   forward: number;
   strafe: number;
   jump: boolean;
+  crouch: boolean;
   yaw: number;
   pitch: number;
   dt: number;
@@ -95,6 +96,52 @@ export interface PlayerRow {
   kills: number;
   deaths: number;
   bot: boolean;
+  /**
+   * Crouch animation, 0 standing to 1 crouched.
+   *
+   * Public because it changes both what you see and what you can hit: the avatar
+   * is drawn to this height and the server rewinds a shot against it. A crouching
+   * enemy that still presents a standing hitbox is the kind of disagreement that
+   * makes a game feel dishonest.
+   */
+  crouch: number;
+}
+
+/**
+ * The movement state a client cannot derive from a snapshot on its own.
+ *
+ * Momentum made this necessary: with velocity in the simulation, rebasing on the
+ * server's *position* alone and replaying leaves the replay running on the
+ * client's own velocity, which is precisely the number that was wrong. So the
+ * authoritative velocity rides in the private half of the envelope — it is
+ * nobody else's business, and it would be sixteen extra numbers per packet in
+ * the shared rows.
+ *
+ * `sinceLanded` is a **duration**, not a timestamp: the simulated clocks on the
+ * two sides start whenever each side started and have no relation to each other,
+ * so the only transferable form of "when did this body last land" is how long ago.
+ */
+export interface MoveState {
+  vel: [number, number, number];
+  /** Seconds airborne, which is what the gravity ramp reads. */
+  air: number;
+  crouch: number;
+  crouchedInAir: boolean;
+  /** Seconds since the last landing — the chain-boost window is measured from it. */
+  sinceLanded: number;
+}
+
+/** One thing this player just heard. See `backend/modules/hassault/noise.py`. */
+export interface NoiseEvent {
+  /** `step`, `land`, `jump`, `shot`, `reload`, `hurt`, `die`. */
+  kind: string;
+  /** 0..1 after distance falloff and wall muffling. */
+  volume: number;
+  /** World bearing to the source, in radians. Deliberately **not** an offset:
+   * a bearing and a loudness is what ears give you, and it is all the wire says. */
+  bearing: number;
+  /** -1 below, 0 level, 1 above. */
+  up: number;
 }
 
 /** The half of our own state nobody else is sent. */
@@ -114,6 +161,12 @@ export interface SelfState {
   mag: number;
   /** Hitmarkers since the last snapshot. Drained server-side, so each is sent once. */
   hits: { victim: string; damage: number; head: boolean; killed: boolean }[];
+  /** What prediction rebases on. Absent only from a server older than momentum. */
+  move?: MoveState;
+  /** Audible noises since the last snapshot, drained server-side. */
+  noise?: NoiseEvent[];
+  /** Health lost to the last landing, so the HUD can say why. */
+  fell?: number;
 }
 
 /** A shot somebody took, batched into the snapshot rather than sent as it happened. */
@@ -185,6 +238,16 @@ export function lerpAngle(a: number, b: number, t: number): number {
 export class Predictor {
   private seq = 0;
   private pending: Command[] = [];
+  /**
+   * Weapon kickback by command sequence.
+   *
+   * Kept beside the pending list rather than on the `Command` because it must
+   * **not** go on the wire: the server derives the shooter's push from its own
+   * weapon table, and a client-supplied impulse would be a client-supplied
+   * velocity. A replay still has to apply it, though — it is part of what moved
+   * us — so it is remembered here and dropped on the same ack.
+   */
+  private kicks = new Map<number, Vec3>();
   /** Visual-only offset, decayed to zero, so corrections do not jolt the camera. */
   correction: Vec3 = { x: 0, y: 0, z: 0 };
   /** Last correction magnitude, for the HUD. */
@@ -193,6 +256,10 @@ export class Predictor {
   /**
    * Predict `input` locally and record it for replay. Returns the command so the
    * caller can queue it for the next send.
+   *
+   * `kick` is the recoil push a shot on this frame produces, applied *after* the
+   * step — which is exactly where the server applies it (`simulate` steps, then
+   * `_handle_combat` fires). Getting that order wrong mispredicts every shot.
    */
   record(
     world: World,
@@ -200,6 +267,7 @@ export class Predictor {
     input: MoveInput,
     dt: number,
     shot?: ShotIntent,
+    kick?: Vec3,
   ): Command {
     this.seq += 1;
     // The server clamps dt the same way; recording the unclamped value would
@@ -210,6 +278,7 @@ export class Predictor {
       forward: input.forward,
       strafe: input.strafe,
       jump: input.jump,
+      crouch: input.crouch,
       yaw: player.yaw,
       pitch: player.pitch,
       dt: clamped,
@@ -228,6 +297,10 @@ export class Predictor {
     }
     this.pending.push(command);
     step(world, player, input, clamped);
+    if (kick && (kick.x !== 0 || kick.y !== 0 || kick.z !== 0)) {
+      this.kicks.set(command.seq, { ...kick });
+      applyImpulse(player, kick.x, kick.y, kick.z);
+    }
     return command;
   }
 
@@ -238,8 +311,15 @@ export class Predictor {
    * `authoritative` is where the server had us as of `ack`; the commands after it
    * are ours alone and still stand.
    */
-  reconcile(world: World, player: PlayerState, authoritative: PlayerRow, ack: number): void {
+  reconcile(
+    world: World,
+    player: PlayerState,
+    authoritative: PlayerRow,
+    move: MoveState | null,
+    ack: number,
+  ): void {
     this.pending = this.pending.filter((c) => c.seq > ack);
+    for (const seq of [...this.kicks.keys()]) if (seq <= ack) this.kicks.delete(seq);
 
     const predictedX = player.x;
     const predictedY = player.y;
@@ -248,9 +328,23 @@ export class Predictor {
     player.x = authoritative.x;
     player.y = authoritative.y;
     player.z = authoritative.z;
-    // Velocity and ground state are not on the wire: they are derivable, and a
-    // snapshot carrying them would still be a snapshot behind. Replay rebuilds
-    // them, and with an empty pending list the first local frame does.
+    player.onGround = authoritative.ground;
+    // Momentum has to be rebased too. Replaying on top of the client's own
+    // velocity would run the replay on the very number the correction exists to
+    // fix, and the error would then compound rather than settle. A server too old
+    // to send it leaves the predicted velocity alone, which is the best available
+    // guess rather than a lie.
+    if (move) {
+      player.velX = move.vel[0];
+      player.velY = move.vel[1];
+      player.velZ = move.vel[2];
+      player.timeInAir = move.air;
+      player.crouch = move.crouch;
+      player.crouchedInAir = move.crouchedInAir;
+      // A duration, converted against *our* simulated clock — the two clocks are
+      // unrelated, so the timestamp itself would be meaningless here.
+      player.landedAt = player.t - move.sinceLanded;
+    }
     for (const command of this.pending) {
       // Replay uses each command's *recorded* view angles rather than the
       // player's current ones, or turning mid-correction bends the whole
@@ -260,9 +354,19 @@ export class Predictor {
       step(
         world,
         player,
-        { forward: command.forward, strafe: command.strafe, jump: command.jump, noclip: false },
+        {
+          forward: command.forward,
+          strafe: command.strafe,
+          jump: command.jump,
+          crouch: command.crouch,
+          noclip: false,
+        },
         command.dt,
       );
+      // Recoil is part of what moved us, so a replay that skips it lands short
+      // of where we already drew ourselves.
+      const kick = this.kicks.get(command.seq);
+      if (kick) applyImpulse(player, kick.x, kick.y, kick.z);
     }
     // Restore the live view angles: the camera must follow the mouse, not the
     // last command the server happens to have acknowledged.
@@ -301,6 +405,7 @@ export class Predictor {
 
   reset(): void {
     this.pending = [];
+    this.kicks.clear();
     this.correction = { x: 0, y: 0, z: 0 };
     this.lastError = 0;
   }

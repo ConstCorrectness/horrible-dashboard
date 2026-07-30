@@ -20,10 +20,44 @@
  * Deliberately free of three and of React so all of it is unit-testable headless.
  */
 import type { WeaponSpec } from './api';
-import type { SelfState, ShotIntent } from './net';
+import type { SelfState, ShotIntent, Vec3 } from './net';
 
 /** No shot intent at all — offline, dead, or between matches. */
 export const NO_SHOT: ShotIntent = { fire: false, reload: false, weapon: -1, viewT: 0 };
+
+/**
+ * Recoil push while crouched, from AC's `attackphysics`.
+ *
+ * Mirrors `CROUCH_KICK_SCALE` in `weapons.py`. A braced shot moves you less, which
+ * makes crouching the accurate option *and* the stable one — two incentives
+ * pointing the same way rather than a dial to balance.
+ */
+export const CROUCH_KICK_SCALE = 0.75;
+
+/**
+ * The impulse a shot applies to the **shooter**, in cubes per second.
+ *
+ * Opposite the aim, which is the entire mechanic: aim at the floor and the push is
+ * upward, so a jump plus a well-timed shotgun blast reaches ledges a jump cannot.
+ * Mirrors `kick_vector` in `backend/modules/hassault/weapons.py` and is computed
+ * from the *served* `kickback` number, so the client cannot disagree with the
+ * server about how far it just got shoved.
+ */
+export function kickVector(
+  weapon: WeaponSpec | undefined,
+  yaw: number,
+  pitch: number,
+  crouching = false,
+): Vec3 {
+  if (!weapon || weapon.kickback <= 0) return { x: 0, y: 0, z: 0 };
+  const push = weapon.kickback * (crouching ? CROUCH_KICK_SCALE : 1);
+  const cp = Math.cos(pitch);
+  return {
+    x: -cp * Math.cos(yaw) * push,
+    y: -cp * Math.sin(yaw) * push,
+    z: -Math.sin(pitch) * push,
+  };
+}
 
 /**
  * Upward kick per shot, in radians, as a function of the weapon.

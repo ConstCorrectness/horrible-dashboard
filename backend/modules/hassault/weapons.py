@@ -53,10 +53,16 @@ from backend.modules.hassault.physics import (
 # the same one the avatar capsule is built to, so what you see is what you hit.
 BODY_HEIGHT = PLAYER_EYE_HEIGHT + PLAYER_ABOVE_EYE
 
-# Everything above this height above the feet counts as a head. Roughly the top
-# of the capsule rather than a separate sphere: a second collision volume would
-# have to be replicated in the client's avatar to stay honest, and this does not.
-HEAD_Z = BODY_HEIGHT - 1.0
+# The top band of the body that counts as a head. Roughly the top of the capsule
+# rather than a separate sphere: a second collision volume would have to be
+# replicated in the client's avatar to stay honest, and this does not.
+#
+# A *band* rather than an absolute height, because crouching shortens the body and
+# a head band pinned to a standing figure would sit above a crouched player
+# entirely — making them unheadshottable, which is not a crouch bonus anyone asked
+# for. `HEAD_Z` is kept as the standing case for the tests that name it.
+HEAD_BAND = 1.0
+HEAD_Z = BODY_HEIGHT - HEAD_BAND
 
 # How far back a shot may be judged. Generous enough for a guest playing across
 # the fabric (browser → their backend → peer → host is two hops each way), tight
@@ -75,6 +81,11 @@ RESPAWN_DELAY = 3.0
 # it, spawn points on small maps are a lottery; without the drop, it is a shield
 # you can attack from.
 SPAWN_PROTECT = 1.5
+
+# Recoil push while crouched, from AC's `attackphysics`. A braced shot moves you
+# less — which makes crouching the accurate option *and* the stable one, two
+# incentives pointing the same way instead of a dial to balance.
+CROUCH_KICK_SCALE = 0.75
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +126,20 @@ class Weapon:
     falloff_start: float
     """Whether holding the button keeps firing."""
     auto: bool
+    """Cubes per second the shot shoves the *shooter*, opposite their aim.
+
+    AssaultCube's `attackphysics` does exactly this —
+    `owner->vel.add(vec(unitv).mul(recoil/dist))` with a negative recoil — and it
+    is the whole of shoot-jumping: aim at the floor and the push is upward. It is
+    served to the browser rather than duplicated in TypeScript because the client
+    has to predict the same impulse the server is about to apply, and two copies
+    of that number is a mispredict on every shot.
+
+    Held on the big, slow weapons and near-zero on the fast ones, which is what
+    keeps it a technique rather than a flight mode: an automatic firing at 700 rpm
+    loses more to gravity between shots than each shot gives back.
+    """
+    kickback: float
 
     @property
     def interval(self) -> float:
@@ -135,6 +160,7 @@ class Weapon:
             "pellets": self.pellets,
             "range": self.range,
             "auto": self.auto,
+            "kickback": self.kickback,
         }
 
 
@@ -158,6 +184,7 @@ WEAPONS: tuple[Weapon, ...] = (
         range=5.0,
         falloff_start=5.0,
         auto=False,
+        kickback=0.0,
     ),
     Weapon(
         id="pistol",
@@ -173,6 +200,7 @@ WEAPONS: tuple[Weapon, ...] = (
         range=140.0,
         falloff_start=60.0,
         auto=False,
+        kickback=1.2,
     ),
     Weapon(
         id="assault",
@@ -188,6 +216,7 @@ WEAPONS: tuple[Weapon, ...] = (
         range=200.0,
         falloff_start=80.0,
         auto=True,
+        kickback=1.6,
     ),
     Weapon(
         id="shotgun",
@@ -203,6 +232,7 @@ WEAPONS: tuple[Weapon, ...] = (
         range=48.0,
         falloff_start=14.0,
         auto=False,
+        kickback=9.5,
     ),
     Weapon(
         id="sniper",
@@ -218,6 +248,7 @@ WEAPONS: tuple[Weapon, ...] = (
         range=320.0,
         falloff_start=320.0,
         auto=False,
+        kickback=8.0,
     ),
 )
 
@@ -247,9 +278,36 @@ def aim_vector(yaw: float, pitch: float) -> tuple[float, float, float]:
     return (cp * math.cos(yaw), cp * math.sin(yaw), math.sin(pitch))
 
 
-def eye_position(x: float, y: float, z: float) -> tuple[float, float, float]:
-    """Where a shot leaves from: the eye, not the feet."""
-    return (x, y, z + PLAYER_EYE_HEIGHT)
+def eye_position(
+    x: float, y: float, z: float, eye: float = PLAYER_EYE_HEIGHT
+) -> tuple[float, float, float]:
+    """Where a shot leaves from: the eye, not the feet.
+
+    `eye` is a parameter because crouching lowers it, and a crouched player whose
+    shots still left from standing height would be firing through their own cover.
+    """
+    return (x, y, z + eye)
+
+
+def kick_vector(
+    weapon: Weapon, yaw: float, pitch: float, crouching: bool = False
+) -> tuple[float, float, float]:
+    """The impulse a shot applies to the **shooter**, in cubes per second.
+
+    Opposite the aim, which is the entire mechanic: aim at the floor and the push
+    is upward, so a jump plus a well-timed shotgun blast reaches ledges a jump
+    cannot. AC scales it by 0.75 while crouching (`attackphysics`), and keeping
+    that is what makes a braced shot the accurate one *and* the one that moves you
+    least — two reasons to crouch that point the same way.
+
+    Derived here rather than in `match.py` so the client can compute the identical
+    vector from the served `kickback` number and predict its own recoil.
+    """
+    if weapon.kickback <= 0:
+        return (0.0, 0.0, 0.0)
+    dx, dy, dz = aim_vector(yaw, pitch)
+    push = weapon.kickback * (CROUCH_KICK_SCALE if crouching else 1.0)
+    return (-dx * push, -dy * push, -dz * push)
 
 
 def spread_vector(
@@ -432,6 +490,14 @@ class HistoryFrame:
 
     t: float  # milliseconds, the same base as a snapshot's `t`
     positions: dict[str, tuple[float, float, float]] = field(default_factory=dict)
+    """Body height per player at that instant, for rewinding a crouch.
+
+    Kept beside the positions rather than folded into them so `record`/`rewind`
+    keep their existing shape. It matters for the same reason the positions do: a
+    shooter who aimed at a standing head and hit it must not be told they missed
+    because the target crouched in the 130 ms since.
+    """
+    heights: dict[str, float] = field(default_factory=dict)
 
 
 class PositionHistory:
@@ -447,9 +513,14 @@ class PositionHistory:
         self.frames: list[HistoryFrame] = []
 
     def record(
-        self, t_ms: float, positions: dict[str, tuple[float, float, float]]
+        self,
+        t_ms: float,
+        positions: dict[str, tuple[float, float, float]],
+        heights: dict[str, float] | None = None,
     ) -> None:
-        self.frames.append(HistoryFrame(t=t_ms, positions=positions))
+        self.frames.append(
+            HistoryFrame(t=t_ms, positions=positions, heights=heights or {})
+        )
         cutoff = t_ms - self.seconds * 1000.0
         while len(self.frames) > 2 and self.frames[0].t < cutoff:
             self.frames.pop(0)
@@ -465,19 +536,14 @@ class PositionHistory:
             return now_ms
         return max(now_ms - MAX_REWIND_MS, min(now_ms, view_t))
 
-    def rewind(self, t_ms: float) -> dict[str, tuple[float, float, float]] | None:
-        """Interpolated positions at `t_ms`, or `None` if nothing covers it.
-
-        `None` means "use the present" — with no history there is nothing better
-        to say, and refusing the shot would be worse than resolving it live.
-        """
+    def _bracket(self, t_ms: float) -> tuple[HistoryFrame, HistoryFrame, float] | None:
+        """The two frames `t_ms` falls between, and how far along it sits."""
         if not self.frames:
             return None
         if t_ms >= self.frames[-1].t:
-            return dict(self.frames[-1].positions)
+            return self.frames[-1], self.frames[-1], 0.0
         if t_ms <= self.frames[0].t:
-            return dict(self.frames[0].positions)
-
+            return self.frames[0], self.frames[0], 0.0
         older = self.frames[0]
         newer = self.frames[-1]
         for i in range(1, len(self.frames)):
@@ -486,7 +552,18 @@ class PositionHistory:
                 newer = self.frames[i]
                 break
         span = newer.t - older.t
-        f = 0.0 if span <= 0 else (t_ms - older.t) / span
+        return older, newer, 0.0 if span <= 0 else (t_ms - older.t) / span
+
+    def rewind(self, t_ms: float) -> dict[str, tuple[float, float, float]] | None:
+        """Interpolated positions at `t_ms`, or `None` if nothing covers it.
+
+        `None` means "use the present" — with no history there is nothing better
+        to say, and refusing the shot would be worse than resolving it live.
+        """
+        bracket = self._bracket(t_ms)
+        if bracket is None:
+            return None
+        older, newer, f = bracket
         out: dict[str, tuple[float, float, float]] = {}
         for pid, (x, y, z) in newer.positions.items():
             prev = older.positions.get(pid)
@@ -500,6 +577,19 @@ class PositionHistory:
                 prev[1] + (y - prev[1]) * f,
                 prev[2] + (z - prev[2]) * f,
             )
+        return out
+
+    def rewind_heights(self, t_ms: float) -> dict[str, float]:
+        """Interpolated body heights at `t_ms`. Empty when nothing was recorded,
+        which `resolve_shot` reads as "everyone was standing"."""
+        bracket = self._bracket(t_ms)
+        if bracket is None:
+            return {}
+        older, newer, f = bracket
+        out: dict[str, float] = {}
+        for pid, height in newer.heights.items():
+            prev = older.heights.get(pid, height)
+            out[pid] = prev + (height - prev) * f
         return out
 
     def clear(self) -> None:
@@ -537,6 +627,7 @@ def resolve_shot(
     targets: dict[str, tuple[float, float, float]],
     rng: random.Random,
     rewound_ms: float = 0.0,
+    heights: dict[str, float] | None = None,
 ) -> ShotResult:
     """Trace one trigger pull against the world and a set of rewound bodies.
 
@@ -544,6 +635,12 @@ def resolve_shot(
     already rewound by the caller, and already filtered to who can legitimately be
     hit (living, not the shooter, not a teammate). Keeping that policy out of here
     means this function is pure geometry and a test can aim it at one body.
+
+    `heights` is the body height per target, defaulting to standing. Crouching
+    genuinely shrinks the hitbox — a crouched enemy that still presented a standing
+    one would be the sort of disagreement between what you see and what you hit
+    that makes a shooter feel dishonest — and the head band moves down with it,
+    since it is defined relative to the top of the body rather than absolutely.
     """
     endpoints: list[tuple[float, float, float]] = []
     hits: list[PelletHit] = []
@@ -555,7 +652,8 @@ def resolve_shot(
 
         best: tuple[float, str] | None = None
         for pid, feet in targets.items():
-            distance = ray_hits_body((ox, oy, oz), (pdx, pdy, pdz), feet)
+            tall = BODY_HEIGHT if heights is None else heights.get(pid, BODY_HEIGHT)
+            distance = ray_hits_body((ox, oy, oz), (pdx, pdy, pdz), feet, height=tall)
             # A body behind a wall is not a target; the wall is nearer, and the
             # `<` is what makes cover work.
             if distance is None or distance >= wall:
@@ -569,7 +667,10 @@ def resolve_shot(
 
         distance, pid = best
         point = (ox + pdx * distance, oy + pdy * distance, oz + pdz * distance)
-        head = point[2] >= targets[pid][2] + HEAD_Z
+        tall = BODY_HEIGHT if heights is None else heights.get(pid, BODY_HEIGHT)
+        # Relative to the top of the body, so a crouched head is where the
+        # crouched head actually is.
+        head = point[2] >= targets[pid][2] + (tall - HEAD_BAND)
         amount = damage_at(weapon, distance) * (weapon.head_multiplier if head else 1.0)
         hits.append(
             PelletHit(

@@ -27,6 +27,7 @@ export type GameAction =
   | 'left'
   | 'right'
   | 'jump'
+  | 'crouch'
   | 'reload'
   | 'scores'
   | 'noclip'
@@ -59,7 +60,18 @@ export const ACTIONS: readonly ActionDoc[] = [
   { action: 'back', label: 'Move back', group: 'Movement' },
   { action: 'left', label: 'Strafe left', group: 'Movement' },
   { action: 'right', label: 'Strafe right', group: 'Movement' },
-  { action: 'jump', label: 'Jump', group: 'Movement' },
+  {
+    action: 'jump',
+    label: 'Jump',
+    group: 'Movement',
+    note: 'Hold it. Landing and jumping again within a quarter second while strafing is 25% faster.',
+  },
+  {
+    action: 'crouch',
+    label: 'Crouch',
+    group: 'Movement',
+    note: 'Silent, shorter, and steadier — for 40% of your speed. Crouching in mid-air costs nothing.',
+  },
   { action: 'reload', label: 'Reload', group: 'Combat' },
   { action: 'weapon1', label: 'Weapon 1', group: 'Combat' },
   { action: 'weapon2', label: 'Weapon 2', group: 'Combat' },
@@ -81,6 +93,10 @@ export const DEFAULT_CONTROLS: Bindings = {
   left: ['KeyA', 'ArrowLeft'],
   right: ['KeyD', 'ArrowRight'],
   jump: ['Space'],
+  // Ctrl and C, which is where every shooter puts it. Note these are *physical*
+  // keys and the pane holds keyboard capture while you play, so `ControlLeft` here
+  // is a crouch and not the first half of one of the shell's chords.
+  crouch: ['ControlLeft', 'KeyC'],
   reload: ['KeyR'],
   scores: ['Tab'],
   noclip: ['KeyV'],
@@ -264,5 +280,5 @@ export function keyLabel(code: string): string {
 export function describeControls(bindings: Bindings): string {
   const first = (action: GameAction) => keyLabel(bindings[action]?.[0] ?? '—');
   const move = (['forward', 'left', 'back', 'right'] as const).map(first).join('');
-  return `${move} move · mouse look · ${first('jump')} jump`;
+  return `${move} move · mouse look · ${first('jump')} jump · ${first('crouch')} crouch`;
 }

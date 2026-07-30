@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import random
 import time
 import uuid
@@ -46,8 +47,9 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from backend.modules.hassault import assets, physics, weapons
+from backend.modules.hassault import assets, noise, physics, weapons
 from backend.modules.hassault.cgz import CgzError
+from backend.modules.hassault.noise import Noise
 from backend.modules.hassault.physics import MoveInput, PlayerState, World
 from backend.modules.hassault.weapons import (
     MAX_HEALTH,
@@ -102,6 +104,11 @@ MAX_FX_PER_TICK = 64
 # two bodies is the realistic worst case.
 MAX_PENDING_HITS = 24
 
+# Noises produced in one tick, before the room stops recording them. Sixteen
+# players cannot make many more than this in 50 ms, and the cap is what stops a
+# pathological case turning into a per-recipient audibility sweep of unbounded size.
+MAX_NOISE_PER_TICK = 48
+
 # How long an empty room is kept before it is retired. A room opened for a friend
 # who has not clicked the invite yet is empty and must survive; a room everyone
 # has left is ~590 KB of map planes and should not.
@@ -125,6 +132,7 @@ class Command:
     yaw: float
     pitch: float
     dt: float
+    crouch: bool = False
     fire: bool = False
     reload: bool = False
     """Weapon slot to switch to, or `-1` for no change."""
@@ -174,6 +182,14 @@ class MatchPlayer:
     protected_until: float = 0.0
     # Hitmarker feedback, drained into that player's own snapshot envelope.
     pending_hits: list[dict[str, Any]] = field(default_factory=list)
+    """Cubes travelled since the last footstep. A footstep every `STRIDE_DISTANCE`
+    of ground covered, rather than on a timer: a player who is barely moving is
+    barely audible, which is what makes creeping forward a real option even
+    standing up."""
+    stride: float = 0.0
+    """Health the last landing cost, drained into that player's own envelope so
+    the HUD can say why the number dropped."""
+    last_fall: float = 0.0
     # Set for bot players. Also what distinguishes them from a human whose socket
     # happens to be `None` (which is every player in the unit tests).
     brain: BotBrain | None = None
@@ -222,6 +238,9 @@ class MatchPlayer:
             "kills": self.kills,
             "deaths": self.deaths,
             "bot": self.is_bot,
+            # Public, because it changes both what you see and what you can hit:
+            # the avatar is drawn to this height and a shot is rewound against it.
+            "crouch": round(self.state.crouch, 2),
         }
 
     def private_view(self, now: float) -> dict[str, Any]:
@@ -234,9 +253,31 @@ class MatchPlayer:
         """
         hits = self.pending_hits
         self.pending_hits = []
+        fell = self.last_fall
+        self.last_fall = 0.0
         weapon = weapons.weapon_at(self.weapon)
         return {
             "hp": round(self.health),
+            # What the client's prediction rebases on. Momentum made this
+            # necessary: replaying unacknowledged commands on top of the client's
+            # own velocity would run the replay on the very number the correction
+            # exists to fix. Private rather than in the shared rows because it is
+            # nobody else's business and would be sixteen more numbers per packet.
+            #
+            # `sinceLanded` is a duration, not a timestamp: the two simulated
+            # clocks are unrelated, so only "how long ago" transfers.
+            "move": {
+                "vel": [
+                    round(self.state.vel_x, 3),
+                    round(self.state.vel_y, 3),
+                    round(self.state.vel_z, 3),
+                ],
+                "air": round(self.state.time_in_air, 3),
+                "crouch": round(self.state.crouch, 3),
+                "crouchedInAir": self.state.crouched_in_air,
+                "sinceLanded": round(max(0.0, self.state.t - self.state.landed_at), 3),
+            },
+            "fell": round(fell),
             "alive": self.alive,
             "weapon": self.weapon,
             "ammo": self.ammo.get(self.weapon, 0),
@@ -280,6 +321,11 @@ class MatchRoom:
         # otherwise be its own message stream; batching makes combat cost the
         # tick rate, not the fire rate.
         self.fx: list[dict[str, Any]] = []
+        # Noises made this tick, filtered per recipient when the envelopes are
+        # built. Deliberately *not* broadcast like `fx`: a shared list carrying
+        # every footstep's position would put the location of an enemy two rooms
+        # away in the packet, which is a wall hack made of sound. See `noise.py`.
+        self.noises: list[Noise] = []
         # Seeded per room rather than per shot: reproducible if you know the room
         # and the shot count, which is worth nothing to a cheat and worth a lot
         # when a test needs a shotgun to pattern the same way twice.
@@ -399,6 +445,8 @@ class MatchRoom:
                 player.state.yaw = command.yaw
                 player.state.pitch = command.pitch
                 if player.alive:
+                    before = (player.state.x, player.state.y)
+                    was_airborne = not player.state.on_ground
                     physics.step(
                         self.world,
                         player.state,
@@ -406,6 +454,7 @@ class MatchRoom:
                             forward=command.forward,
                             strafe=command.strafe,
                             jump=command.jump,
+                            crouch=command.crouch,
                             yaw=command.yaw,
                             pitch=command.pitch,
                             dt=dt,
@@ -413,6 +462,7 @@ class MatchRoom:
                         ),
                         dt,
                     )
+                    self._movement_consequences(player, before, was_airborne, now)
                     self._handle_combat(player, command, now, now_ms)
                 # The ack advances even for a dead player's commands: their client
                 # is still predicting and still needs to know what was consumed,
@@ -426,6 +476,105 @@ class MatchRoom:
                 for p in self.players.values()
                 if p.alive
             },
+            # Heights too, so a shooter who aimed at a standing head is not told
+            # they missed because the target crouched in the meantime.
+            {
+                p.id: physics.body_height(p.state)
+                for p in self.players.values()
+                if p.alive
+            },
+        )
+
+    # -- movement consequences ----------------------------------------------
+
+    def _movement_consequences(
+        self,
+        player: MatchPlayer,
+        before: tuple[float, float],
+        was_airborne: bool,
+        now: float,
+    ) -> None:
+        """Noise and fall damage — what moving costs you besides time.
+
+        Driven from the step that produced it rather than from a timer, so both are
+        a function of the same simulated motion the position came from. That is
+        also what makes them replay-safe: `fall_speed` is an output of one step,
+        and a command simulated once produces its landing once.
+        """
+        state = player.state
+
+        # Footsteps, by distance covered rather than by time. Crouching makes none
+        # at all — which is the whole reason the crouch speed penalty is a trade.
+        travelled = math.hypot(state.x - before[0], state.y - before[1])
+        if state.on_ground and state.crouch <= 0.5:
+            player.stride += travelled
+            if player.stride >= noise.STRIDE_DISTANCE:
+                player.stride = 0.0
+                self._noise(player, "step", noise.STRIDE_LOUDNESS)
+        else:
+            # Airborne or crouched: no stride accumulates. Reset rather than bank
+            # it, or a player could crouch-walk a long way and then pay for all of
+            # it with one loud step on standing up.
+            player.stride = 0.0
+
+        if was_airborne and state.on_ground:
+            # A landing is louder the harder it was, and a hard one hurts. Both
+            # are the price of the shoot-jump: vertical travel is available, and
+            # it announces you and costs health.
+            impact = state.fall_speed
+            loudness = noise.LAND_LOUDNESS * min(
+                1.0, 0.45 + impact / (physics.JUMP_SPEED * 2)
+            )
+            self._noise(player, "land", loudness)
+            damage = physics.fall_damage(impact)
+            if damage > 0:
+                self._fall_damage(player, damage, now)
+        elif not was_airborne and not state.on_ground and state.vel_z > 0:
+            self._noise(player, "jump", noise.JUMP_LOUDNESS)
+
+    def _noise(self, player: MatchPlayer, kind: str, loudness: float) -> None:
+        if len(self.noises) >= MAX_NOISE_PER_TICK:
+            return
+        self.noises.append(
+            Noise(
+                kind=kind,
+                source=player.id,
+                x=player.state.x,
+                y=player.state.y,
+                z=player.state.z,
+                loudness=loudness,
+            )
+        )
+
+    def _fall_damage(self, player: MatchPlayer, amount: float, now: float) -> None:
+        """Damage with nobody to credit it to.
+
+        Kept apart from `_apply_damage` because that one needs an attacker for the
+        killfeed, the hitmarker and the score — and a fall has none of those. A
+        death here is a death with no kill, which is exactly right.
+        """
+        player.health -= amount
+        player.last_fall = amount
+        if player.health > 0:
+            self._noise(player, "hurt", noise.HURT_LOUDNESS)
+            return
+        player.health = 0
+        player.alive = False
+        player.deaths += 1
+        player.respawn_at = now + RESPAWN_DELAY
+        player.queue.clear()
+        self._noise(player, "die", noise.DIE_LOUDNESS)
+        self._emit(
+            {
+                "kind": "kill",
+                "victim": player.id,
+                "victimName": player.name,
+                # No killer: an empty id is what the feed reads as "the map did it".
+                "killer": "",
+                "killerName": "",
+                "weapon": "fall",
+                "head": False,
+            }
         )
 
     def _think(self, elapsed: float) -> None:
@@ -527,12 +676,22 @@ class MatchRoom:
         # is a three-second licence.
         player.protected_until = 0.0
 
-        origin = weapons.eye_position(player.state.x, player.state.y, player.state.z)
+        crouching = player.state.crouch > 0.5
+        # From the *current* eye, which crouching lowers — a crouched player whose
+        # shots left from standing height would be firing through their own cover.
+        origin = weapons.eye_position(
+            player.state.x,
+            player.state.y,
+            player.state.z,
+            physics.eye_height(player.state),
+        )
         direction = weapons.aim_vector(command.yaw, command.pitch)
 
         rewind_to = self.history.clamp(command.view_t, now_ms)
         rewound = self.history.rewind(rewind_to)
+        rewound_heights = self.history.rewind_heights(rewind_to)
         targets: dict[str, tuple[float, float, float]] = {}
+        heights: dict[str, float] = {}
         for other in self.players.values():
             if other.id == player.id or not other.alive or other.protected:
                 continue
@@ -544,6 +703,9 @@ class MatchRoom:
             targets[other.id] = (
                 rewound.get(other.id, live) if rewound is not None else live
             )
+            heights[other.id] = rewound_heights.get(
+                other.id, physics.body_height(other.state)
+            )
 
         result = weapons.resolve_shot(
             self.world,
@@ -553,7 +715,19 @@ class MatchRoom:
             targets,
             self.rng,
             rewound_ms=max(0.0, now_ms - rewind_to),
+            heights=heights,
         )
+
+        # Recoil shoves the shooter, opposite their aim — AC's `attackphysics`, and
+        # the whole of shoot-jumping. Applied here, after the step, which is the
+        # order the client's `Predictor` replays it in.
+        kick = weapons.kick_vector(weapon, command.yaw, command.pitch, crouching)
+        if kick != (0.0, 0.0, 0.0):
+            physics.apply_impulse(player.state, *kick)
+
+        # Firing is the loudest thing you can do, and it is the reason a silenced
+        # approach ends the moment you take the shot.
+        self._noise(player, "shot", noise.shot_loudness(weapon))
 
         for hit in result.hits:
             victim = self.players.get(hit.victim)
@@ -627,6 +801,21 @@ class MatchRoom:
         Note `private_view` **drains** their hitmarkers, so this is the flush
         point and must be called once per player per tick.
         """
+        you = player.private_view(time.monotonic())
+        # Resolved per recipient, here rather than in the shared rows, because
+        # audibility is the whole mechanic: a shared list of noises with positions
+        # in it would hand every client the location of everyone it cannot hear.
+        you["noise"] = noise.envelope(
+            self.world,
+            weapons.eye_position(
+                player.state.x,
+                player.state.y,
+                player.state.z,
+                physics.eye_height(player.state),
+            ),
+            player.id,
+            self.noises,
+        )
         return {
             "channel": CHANNEL,
             "event": "snapshot",
@@ -638,7 +827,7 @@ class MatchRoom:
                 "t": round(now * 1000),
                 "ack": player.ack,
                 "players": rows,
-                "you": player.private_view(time.monotonic()),
+                "you": you,
                 "scores": self.scores,
                 # Copied, not aliased: `_broadcast` clears `self.fx` once everyone
                 # has been sent their copy, and handing out a reference to a list
@@ -774,6 +963,10 @@ class MatchServer:
         # produced — a bot has no socket and would otherwise consume the effects
         # nobody ever saw.
         room.fx.clear()
+        # Same for noises, and for a second reason: every recipient's envelope is
+        # built from this one list, so it cannot be emptied until the last of them
+        # has had their audibility resolved against it.
+        room.noises.clear()
 
     async def broadcast_event(
         self, room: MatchRoom, event: str, data: dict[str, Any], exclude: str = ""

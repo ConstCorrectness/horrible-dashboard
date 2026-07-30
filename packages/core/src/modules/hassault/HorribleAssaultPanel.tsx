@@ -18,6 +18,7 @@ import {
   type SessionInfo,
   type WeaponSpec,
 } from './api';
+import { GameAudio } from './audio';
 import { AvatarPool } from './avatars';
 import { createBackdrop, type Backdrop } from './backdrop';
 import {
@@ -29,7 +30,7 @@ import {
   type BootProgress,
 } from './boot';
 import { BootOverlay } from './BootOverlay';
-import { ShotController } from './combat';
+import { kickVector, ShotController } from './combat';
 import {
   codeMap,
   describeControls,
@@ -42,12 +43,21 @@ import {
 import { EffectsPool } from './effects';
 import { GameMenu } from './GameMenu';
 import { buildWorldMesh } from './geometry';
-import type { PlayerRow } from './net';
+import { MainMenu } from './MainMenu';
+import {
+  CONTROLS_KEY,
+  CROUCH_TOGGLE_KEY,
+  FOV_KEY,
+  SENSITIVITY_KEY,
+  VOLUME_KEY,
+} from './menu-panels';
+import type { NoiseEvent, PlayerRow, Vec3 } from './net';
 import {
   applyLook,
   clampPitch,
   createPlayer,
   eyeHeight,
+  JUMP_SPEED,
   MOVE_SPEED,
   spawnAt,
   step,
@@ -102,24 +112,35 @@ interface Hud {
   y: number;
   z: number;
   onGround: boolean;
+  /** Horizontal speed in cubes per second — the number the movement is about. */
+  speed: number;
+  /** 0..1 crouch, so the HUD can say so. */
+  crouch: number;
+  /** View yaw, so the noise ring can rotate into screen space. */
+  yaw: number;
   /** Distance the last reconciliation had to correct, in cubes. */
   error: number;
 }
 
-/**
- * Where the game's own preferences live.
- *
- * `hassault.sensitivity` is declared in the manifest, because a number with a
- * default is exactly what the settings page is for. The control map deliberately
- * is **not**: it is a small JSON document, the settings page renders scalars, and
- * a text box full of JSON is worse than no row at all. It rides the same
- * persistence — which is all it ever wanted from settings — and the pause menu is
- * its editor.
- */
-const SENSITIVITY_KEY = 'hassault.sensitivity';
-const CONTROLS_KEY = 'hassault.controls';
-
 const NO_CORRECTION = { x: 0, y: 0, z: 0 };
+/** No kick this frame. Hoisted so the frame loop allocates nothing for the
+ * overwhelmingly common case of not having fired. */
+const NO_KICK: Vec3 = { x: 0, y: 0, z: 0 };
+
+/**
+ * Cubes of travel between the player's own footsteps.
+ *
+ * Mirrors `STRIDE_DISTANCE` in `noise.py`, and deliberately duplicated rather than
+ * served: this drives *only* the sound of your own boots, which the server does not
+ * send back (it needs no round trip, and a footstep 50 ms late does not sound like
+ * one). A drift here makes your own steps land at a slightly different cadence from
+ * how others hear them, which is inaudible — whereas a drift in anything the server
+ * judges would not be.
+ */
+const OWN_STRIDE = 4.2;
+
+/** How long a heard noise stays on the direction ring. */
+const NOISE_TTL_MS = 900;
 /** How long a hitmarker and a damage flash stay on screen. */
 const FLASH_MS = 220;
 /** Team tint used for tracers and the scoreboard: CLA sand, RVSF blue. */
@@ -142,6 +163,9 @@ const EMPTY_SESSION: SessionState = {
 
 interface SceneHandle {
   setMesh: (w: World) => number;
+  /** Vertical field of view in degrees. A setting, so it has to reach the camera
+   * after construction rather than only at it. */
+  setFov: (degrees: number) => void;
   avatars: AvatarPool;
   reveal: Reveal;
   backdrop: Backdrop;
@@ -195,11 +219,13 @@ export function HorribleAssaultPanel() {
     y: 0,
     z: 0,
     onGround: false,
+    speed: 0,
+    crouch: 0,
+    yaw: 0,
     error: 0,
   });
   const [net, setNet] = useState<SessionState>(EMPTY_SESSION);
   const [invitees, setInvitees] = useState<Invitee[]>([]);
-  const [inviteWho, setInviteWho] = useState('');
   const [weapons, setWeapons] = useState<WeaponSpec[]>([]);
   const [botSkill, setBotSkill] = useState('normal');
   const [showScores, setShowScores] = useState(false);
@@ -209,9 +235,15 @@ export function HorribleAssaultPanel() {
   // ---- the pause menu and the preferences it edits --------------------------
   const [menuOpen, setMenuOpen] = useState(false);
   const sensitivity = useSetting<number>(SENSITIVITY_KEY) ?? 1;
+  const fov = useSetting<number>(FOV_KEY) ?? 75;
+  const volume = useSetting<number>(VOLUME_KEY) ?? 0.7;
+  const crouchToggle = useSetting<boolean>(CROUCH_TOGGLE_KEY) ?? false;
   const storedControls = useSetting<string>(CONTROLS_KEY);
   const controls = useMemo(() => parseControls(storedControls), [storedControls]);
   const codes = useMemo(() => codeMap(controls), [controls]);
+  /** Recent noises, for the direction ring. Not audio — the synth consumes the
+   * same events separately, in the frame loop. */
+  const [heard, setHeard] = useState<{ id: number; at: number; event: NoiseEvent }[]>([]);
 
   // Mutable simulation state, kept out of React: this updates every frame and
   // re-rendering the component 60 times a second would be absurd.
@@ -221,11 +253,21 @@ export function HorribleAssaultPanel() {
    * frame loop then never has to know which key produced a movement. */
   const keysRef = useRef<Set<GameAction>>(new Set());
   const noclipRef = useRef(false);
+  /** Crouch is its own ref rather than an entry in `keysRef`, because in toggle
+   * mode it outlives the keypress that set it. */
+  const crouchRef = useRef(false);
+  /** Distance covered since our own last footstep sound. */
+  const strideRef = useRef(0);
   const sceneRef = useRef<SceneHandle | null>(null);
   const sessionRef = useRef<MatchSession | null>(null);
   const shotsRef = useRef<ShotController | null>(null);
+  const audioRef = useRef<GameAudio | null>(null);
+  /** Bots the main menu asked for, waiting for the room to exist. `add_bot` needs a
+   * room id, and the room is only ours once the welcome lands. */
+  const pendingBotsRef = useRef<{ count: number; skill: string } | null>(null);
   if (sessionRef.current === null) sessionRef.current = new MatchSession();
   if (shotsRef.current === null) shotsRef.current = new ShotController();
+  if (audioRef.current === null) audioRef.current = new GameAudio();
 
   // The frame loop is built once and never re-created, so anything it needs to
   // read per-frame from React state has to arrive by ref.
@@ -237,6 +279,8 @@ export function HorribleAssaultPanel() {
   sensitivityRef.current = sensitivity;
   const codesRef = useRef(codes);
   codesRef.current = codes;
+  const crouchToggleRef = useRef(crouchToggle);
+  crouchToggleRef.current = crouchToggle;
   /** Pointer-lock state as the *handlers* see it: `document.pointerLockElement`
    * has already been cleared by the time an Escape that released it reaches us. */
   const lockedRef = useRef(false);
@@ -280,6 +324,25 @@ export function HorribleAssaultPanel() {
     void refreshAccount().catch(() => setAccount(SIGNED_OUT_ACCOUNT));
   }, [refreshAccount]);
 
+  // Volume reaches the synth without touching the render loop; at zero it never
+  // even builds an AudioContext.
+  useEffect(() => {
+    audioRef.current?.setVolume(volume);
+  }, [volume]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    return () => audio?.dispose();
+  }, []);
+
+  // Field of view. Applied through the scene handle rather than at construction,
+  // because it is a setting and can change while a match is running. The scene may
+  // not exist on the first pass — the renderer loads lazily — so this re-runs when
+  // it arrives.
+  useEffect(() => {
+    sceneRef.current?.setFov(fov);
+  }, [fov, progress.renderer]);
+
   // The loadout, fetched rather than hardcoded: the client needs each weapon's
   // fire interval so it does not send input the server would only discard, and a
   // second copy of those numbers here is a drift trap.
@@ -320,6 +383,16 @@ export function HorribleAssaultPanel() {
       window.clearInterval(timer);
     };
   }, []);
+
+  // Bots the menu asked for, sent once the room is actually ours. Keyed off the
+  // room id rather than the status, so a *new* room gets its own bots and rejoining
+  // the same one does not silently double them.
+  useEffect(() => {
+    const wanted = pendingBotsRef.current;
+    if (!wanted || net.status !== 'joined' || net.host) return;
+    pendingBotsRef.current = null;
+    sessionRef.current?.addBots(wanted.count, wanted.skill);
+  }, [net.status, net.room, net.host]);
 
   // Hit feedback. Driven off the authoritative `you`, not off pulling the
   // trigger: a hitmarker that appears because you fired is a lie.
@@ -512,10 +585,12 @@ export function HorribleAssaultPanel() {
             forward,
             strafe,
             jump: alive && keys.has('jump'),
+            crouch: alive && crouchRef.current,
             // Noclip is a local sightseeing tool. The server has no such move, so
             // in a match it would desync on the very first frame.
             noclip: !online && noclipRef.current,
           };
+          const wasOnGround = player.onGround;
 
           if (online && session && shots) {
             // Correct against the newest snapshot *before* predicting this
@@ -523,14 +598,20 @@ export function HorribleAssaultPanel() {
             // authoritative state rather than on top of a stale error.
             const correction = session.pendingCorrection;
             if (correction) {
-              session.predictor.reconcile(world, player, correction.row, correction.ack);
+              session.predictor.reconcile(
+                world,
+                player,
+                correction.row,
+                correction.move,
+                correction.ack,
+              );
               session.pendingCorrection = null;
             }
             // Recoil is a local move on the camera, exactly like the mouse: the
             // server reads whatever angles the resulting command carries.
-            const kick = shots.recoil(dt);
-            player.yaw += kick.yaw;
-            player.pitch = clampPitch(player.pitch + kick.pitch);
+            const climb = shots.recoil(dt);
+            player.yaw += climb.yaw;
+            player.pitch = clampPitch(player.pitch + climb.pitch);
             // The instant we are *rendering*, which is what the server rewinds a
             // shot to. Not sent until the buffer has an offset to derive it from.
             const renderT = session.snapshots.renderTime(now);
@@ -540,13 +621,43 @@ export function HorribleAssaultPanel() {
               session.state.you,
             );
             fired = intent.fire;
-            session.queue(session.predictor.record(world, player, input, dt, intent));
+            // The shove a shot puts on the shooter, from the *served* kickback
+            // number so the client cannot disagree with the server about it.
+            // Handed to `record`, which applies it after the step — the same
+            // order `match._fire` does, and the order a replay has to repeat.
+            const kick = fired
+              ? kickVector(shots.weapon, player.yaw, player.pitch, player.crouch > 0.5)
+              : NO_KICK;
+            session.queue(session.predictor.record(world, player, input, dt, intent, kick));
             session.predictor.decay(dt);
           } else {
             // Offline there is nobody to resolve a hit, so this never fires — but
             // it is read the same way, so the day it can, the gun already kicks.
             fired = shots?.frame(now, 0, null).fire ?? false;
             step(world, player, input, dt);
+          }
+
+          // Our own sounds, made here rather than waited for: the server does not
+          // send them back, because a footstep that arrives half a round trip late
+          // does not sound like a footstep. Cosmetic only — nothing here is input.
+          const audio = audioRef.current;
+          if (audio && acceptsGameInput(phaseRef.current) && alive) {
+            if (player.onGround && player.crouch <= 0.5) {
+              strideRef.current += Math.hypot(player.velX, player.velY) * dt;
+              if (strideRef.current >= OWN_STRIDE) {
+                strideRef.current = 0;
+                audio.own('step', 0.45);
+              }
+            } else {
+              strideRef.current = 0;
+            }
+            if (wasOnGround && !player.onGround && player.velZ > 0) audio.own('jump', 0.5);
+            if (player.fallSpeed > 0) {
+              // Louder the harder the landing, which is the audible half of the
+              // fall-damage rule: you hear that a drop was expensive.
+              audio.own('land', Math.min(1, 0.35 + player.fallSpeed / (JUMP_SPEED * 2)));
+            }
+            if (fired) audio.own('shot', 0.55);
           }
         }
 
@@ -567,6 +678,22 @@ export function HorribleAssaultPanel() {
               );
             }
             session.pendingShots = [];
+          }
+          if (session.pendingNoise.length > 0) {
+            const audio = audioRef.current;
+            const listenerYaw = playerRef.current.yaw;
+            for (const event of session.pendingNoise) audio?.heard(event, listenerYaw);
+            // Also shown, not only played: a bearing is exactly what the direction
+            // ring draws, and a player on headphones and a player on laptop
+            // speakers should not be playing different games.
+            const at = Date.now();
+            const batch = session.pendingNoise.map((event, i) => ({
+              id: at * 100 + i,
+              at,
+              event,
+            }));
+            setHeard((prev) => [...prev.filter((h) => at - h.at < NOISE_TTL_MS), ...batch]);
+            session.pendingNoise = [];
           }
         }
         effects.update(dt);
@@ -636,6 +763,9 @@ export function HorribleAssaultPanel() {
             y: player.y,
             z: player.z,
             onGround: player.onGround,
+            speed: Math.hypot(player.velX, player.velY),
+            crouch: player.crouch,
+            yaw: player.yaw,
             error: session ? session.predictor.lastError : 0,
           }));
           fpsAccum = 0;
@@ -645,7 +775,19 @@ export function HorribleAssaultPanel() {
       };
       raf = requestAnimationFrame(frame);
 
-      sceneRef.current = { setMesh, avatars, reveal, backdrop, camera: camera as never };
+      const setFov = (degrees: number) => {
+        camera.fov = degrees;
+        camera.updateProjectionMatrix();
+      };
+
+      sceneRef.current = {
+        setMesh,
+        setFov,
+        avatars,
+        reveal,
+        backdrop,
+        camera: camera as never,
+      };
       // Unblocks the map load, which has been waiting rather than polling.
       sceneReadyRef.current?.resolve();
 
@@ -839,6 +981,7 @@ export function HorribleAssaultPanel() {
       if (!held) {
         shotsRef.current?.release();
         keysRef.current.clear();
+        if (!crouchToggleRef.current) crouchRef.current = false;
         setShowScores(false);
         // The browser can drop pointer lock on its own (alt-tab, Escape where
         // Keyboard Lock is unavailable); keep the shell's capture in step.
@@ -887,6 +1030,12 @@ export function HorribleAssaultPanel() {
       if (action === 'noclip') noclipRef.current = !noclipRef.current;
       if (action === 'reload') shotsRef.current?.requestReload();
       if (action === 'scores') setShowScores(true);
+      // Two modes, one ref. In hold mode the key up clears it; in toggle mode
+      // nothing does but the next press, which is exactly why crouch cannot live
+      // in `keysRef` with the rest of the movement keys.
+      if (action === 'crouch') {
+        crouchRef.current = crouchToggleRef.current ? !crouchRef.current : true;
+      }
       if (action.startsWith('weapon')) {
         shotsRef.current?.select(Number(action.slice(6)) - 1);
       }
@@ -900,11 +1049,15 @@ export function HorribleAssaultPanel() {
       const action = codesRef.current.get(e.code);
       if (!action) return;
       if (action === 'scores') setShowScores(false);
+      if (action === 'crouch' && !crouchToggleRef.current) crouchRef.current = false;
       keysRef.current.delete(action);
     };
     const onBlur = () => {
       keysRef.current.clear();
       shotsRef.current?.release();
+      // Standing up on blur, in hold mode only: a toggled crouch is a deliberate
+      // state and losing it because the window lost focus would be a surprise.
+      if (!crouchToggleRef.current) crouchRef.current = false;
     };
 
     document.addEventListener('pointerlockchange', onPointerLockChange);
@@ -947,30 +1100,48 @@ export function HorribleAssaultPanel() {
     if (spawn) playerRef.current = spawnAt(world, spawn);
   }, []);
 
-  const toggleMatch = useCallback(() => {
-    const session = sessionRef.current;
-    if (!session || !mapName) return;
-    if (session.state.status === 'joined' || session.state.status === 'joining') {
-      session.leave();
-    } else {
+  /** Enter the world. The one path from any menu to actually playing. */
+  const deploy = useCallback(() => {
+    setDeployed(true);
+    setMenuOpen(false);
+  }, []);
+
+  /**
+   * Enter the world alone, on the loaded map.
+   *
+   * Not a match: no server, nothing to shoot, and noclip available. This is where
+   * the movement is learnable — the chained-jump timing and the shoot-jump are
+   * exactly the sort of thing to practise before somebody is aiming at you.
+   */
+  const train = useCallback(() => {
+    sessionRef.current?.leave();
+    deploy();
+  }, [deploy]);
+
+  /** Host a match here on the loaded map and enter it, with bots if asked. */
+  const host = useCallback(
+    (bots: number) => {
+      const session = sessionRef.current;
+      if (!session || !mapName) return;
       shotsRef.current?.reset();
       // The name is sent for the wire's sake; the backend takes the callsign from
       // the account and ignores this entirely.
       session.join(mapName, playerName);
-    }
-  }, [mapName, playerName]);
-
-  const sendInvite = useCallback(() => {
-    const session = sessionRef.current;
-    if (session && inviteWho) session.invite(inviteWho);
-  }, [inviteWho]);
+      // Queued behind the join rather than sent with it: `add_bot` needs a room to
+      // add them to, and the room is only ours once the welcome lands. A retry loop
+      // would be the alternative, and this is one message either way.
+      if (bots > 0) pendingBotsRef.current = { count: bots, skill: botSkill };
+      deploy();
+    },
+    [mapName, playerName, botSkill, deploy],
+  );
 
   /**
    * Join a specific room, wherever it is running.
    *
-   * The one path for both ways of arriving at one: an invitation a friend pushed,
-   * and a row the player picked out of the server browser. `host` empty means it
-   * is a match on this node, which is the same thing `join` already understands.
+   * The one path for every way of arriving at one: an invitation a friend pushed, a
+   * row picked out of the server browser, and the main menu's own list. `host` empty
+   * means it is a match on this node, which is the same thing `join` understands.
    */
   const joinRoom = useCallback(
     (room: string, map: string, host: string) => {
@@ -981,16 +1152,33 @@ export function HorribleAssaultPanel() {
       setMapName(map);
       shotsRef.current?.reset();
       session.join(map, playerName, room, host);
+      deploy();
     },
-    [playerName],
+    [playerName, deploy],
   );
 
-  // The pause menu's two preferences. Written straight through to settings so a
-  // rebind survives a reload — and so the sensitivity slider is the same value
-  // the settings page shows.
-  const setSensitivity = useCallback((value: number) => {
-    void setSetting(SENSITIVITY_KEY, value);
-  }, []);
+  /**
+   * Leave the world and go back to the main menu.
+   *
+   * Leaves the match on the way out, deliberately: the main menu is not somewhere
+   * you can stand while a server is still simulating your body. It also gives the
+   * pointer back, because the menu is a DOM overlay and needs a real mouse.
+   */
+  const exitToMenu = useCallback(() => {
+    sessionRef.current?.leave();
+    shotsRef.current?.reset();
+    keysRef.current.clear();
+    crouchRef.current = false;
+    setMenuOpen(false);
+    setShowScores(false);
+    setDeployed(false);
+    if (document.pointerLockElement) document.exitPointerLock();
+    releaseCapture();
+  }, [releaseCapture]);
+
+  // The control map, written straight through to settings so a rebind survives a
+  // reload. The scalar preferences are edited by `SettingsPanel` directly; this one
+  // is a JSON document, which is why the menus are its only editor.
   const setControls = useCallback((next: Bindings) => {
     void setSetting(CONTROLS_KEY, serializeControls(next));
   }, []);
@@ -1076,37 +1264,12 @@ export function HorribleAssaultPanel() {
           flexShrink: 0,
         }}
       >
-        <select
-          value={mapName}
-          onChange={(e) => setMapName(e.target.value)}
-          style={{ maxWidth: 160 }}
-        >
-          {/* Grouped so it is obvious which maps ship with the app and which
-              came from your own AssaultCube — they are different in kind, not
-              just in name. The second group is absent without an install. */}
-          <optgroup label="Bundled">
-            {maps
-              .filter((m) => m.source === 'bundled')
-              .map((m) => (
-                <option key={m.name} value={m.name}>
-                  {m.name}
-                </option>
-              ))}
-          </optgroup>
-          {maps.some((m) => m.source !== 'bundled') && (
-            <optgroup label="AssaultCube">
-              {maps
-                .filter((m) => m.source !== 'bundled')
-                .map((m) => (
-                  <option key={m.name} value={m.name}>
-                    {m.name}
-                  </option>
-                ))}
-            </optgroup>
-          )}
-        </select>
-        <button onClick={respawn} disabled={!info}>
-          Respawn
+        {/* The toolbar is *status*, not setup. Choosing a map, hosting, adding
+            bots and inviting people all live in the main menu now — a game that has
+            a front door should not also have half of one bolted to its chrome, and
+            two ways to start a match is two things to keep in step. */}
+        <button onClick={exitToMenu} disabled={phase !== 'playing'} title="Back to the main menu">
+          ☰ Menu
         </button>
         {/* The callsign, shown not typed: it comes from the account, and the
             backend refuses any name the client supplies. Renaming happens on the
@@ -1121,48 +1284,23 @@ export function HorribleAssaultPanel() {
         >
           {playerName || '—'}
         </span>
-        <button onClick={toggleMatch} disabled={!info}>
-          {online ? 'Leave match' : net.status === 'joining' ? 'Joining…' : 'Join match'}
-        </button>
-        {online && !net.host && (
-          <>
-            <select
-              value={botSkill}
-              onChange={(e) => setBotSkill(e.target.value)}
-              aria-label="Bot skill"
-              style={{ width: 82 }}
-            >
-              <option value="easy">easy</option>
-              <option value="normal">normal</option>
-              <option value="hard">hard</option>
-            </select>
-            <button onClick={() => sessionRef.current?.addBots(1, botSkill)}>+ Bot</button>
-            <button
-              onClick={() => sessionRef.current?.removeBots(1)}
-              disabled={!net.peers.some((p) => p.bot)}
-            >
-              − Bot
-            </button>
-          </>
+        {info && (
+          <span
+            style={{
+              color: 'var(--text-dim)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <code>{info.name}</code> · {info.title}
+          </span>
         )}
-        {online && !net.host && invitees.length > 0 && (
+        {!online && phase === 'playing' && (
           <>
-            <select
-              value={inviteWho}
-              onChange={(e) => setInviteWho(e.target.value)}
-              aria-label="Invite a friend"
-              style={{ maxWidth: 130 }}
-            >
-              <option value="">Invite…</option>
-              {invitees.map((f) => (
-                <option key={f.person_id} value={f.friend_code} disabled={!f.can_play}>
-                  {f.name}
-                  {f.can_play ? '' : ' (no match support)'}
-                </option>
-              ))}
-            </select>
-            <button onClick={sendInvite} disabled={!inviteWho}>
-              Send
+            <span style={{ color: 'var(--text-dim)' }}>training</span>
+            <button onClick={respawn} disabled={!info} title="Back to a spawn point">
+              Respawn
             </button>
           </>
         )}
@@ -1177,18 +1315,6 @@ export function HorribleAssaultPanel() {
           </span>
         )}
         {net.status === 'error' && <span style={{ color: '#f85149' }}>{net.error}</span>}
-        {info && !online && (
-          <span
-            style={{
-              color: 'var(--text-dim)',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {info.title}
-          </span>
-        )}
         <span style={{ marginLeft: 'auto', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>
           {hud.fps} fps · {(hud.triangles / 1000).toFixed(0)}k tris
         </span>
@@ -1388,7 +1514,7 @@ export function HorribleAssaultPanel() {
                   </span>
                 ) : (
                   <span style={{ color: 'var(--text-dim)' }}>
-                    Join a match to shoot — then add bots if nobody else is about.
+                    Training — nothing shoots back. Host a match from the menu to fight.
                   </span>
                 )}
               </>
@@ -1406,8 +1532,8 @@ export function HorribleAssaultPanel() {
             maps={maps}
             peers={net.peers}
             playerId={net.playerId}
-            sensitivity={sensitivity}
-            onSensitivity={setSensitivity}
+            invitees={invitees}
+            invites={net.invites}
             controls={controls}
             onControls={setControls}
             onJoin={(room, map, host) => {
@@ -1418,7 +1544,9 @@ export function HorribleAssaultPanel() {
             }}
             onLeave={() => sessionRef.current?.leave()}
             onInvite={(friendCode) => sessionRef.current?.invite(friendCode)}
+            onDismissInvite={(room) => sessionRef.current?.dismissInvite(room)}
             onResume={resumeGame}
+            onExitToMenu={exitToMenu}
           />
         )}
 
@@ -1431,7 +1559,32 @@ export function HorribleAssaultPanel() {
             error={error}
             account={account}
             onSignedIn={() => refreshAccount(true)}
-            onDeploy={() => setDeployed(true)}
+            menu={
+              <MainMenu
+                account={account}
+                maps={maps}
+                mapName={mapName}
+                onMapName={setMapName}
+                controls={controls}
+                onControls={setControls}
+                peers={net.peers}
+                playerId={net.playerId}
+                room={net.room}
+                hosting={online && !net.host}
+                online={online}
+                invitees={invitees}
+                invites={net.invites}
+                botSkill={botSkill}
+                onBotSkill={setBotSkill}
+                onTrain={train}
+                onHost={host}
+                onJoin={joinRoom}
+                onInvite={(friendCode) => sessionRef.current?.invite(friendCode)}
+                onDismissInvite={(room) => sessionRef.current?.dismissInvite(room)}
+                ready={info != null}
+                error={error}
+              />
+            }
           />
         )}
 
@@ -1464,11 +1617,44 @@ export function HorribleAssaultPanel() {
                   )}
                 </div>
               )}
+              {/* Speed, not just position. It is the number the movement is *about*
+                  — the chained jump is only learnable if you can see that it worked,
+                  and 27.5 against a 22 cap is the whole feedback loop. */}
+              <div style={{ fontSize: '0.78rem' }}>
+                <span
+                  style={{
+                    color: hud.speed > MOVE_SPEED + 0.5 ? '#7ee787' : 'rgba(255,255,255,0.7)',
+                  }}
+                >
+                  {hud.speed.toFixed(1)}
+                </span>
+                <span style={{ opacity: 0.5 }}> / {MOVE_SPEED} c/s</span>
+                {hud.crouch > 0.5 && <span style={{ color: '#8ab4f8' }}> · crouched</span>}
+                {hud.onGround ? '' : ' · airborne'}
+              </div>
               x {hud.x.toFixed(1)} y {hud.y.toFixed(1)} z {hud.z.toFixed(1)}
-              {hud.onGround ? '' : ' · airborne'}
               {!online && noclipRef.current ? ' · noclip' : ''}
               {online ? ` · ${Math.round(net.rtt)} ms · err ${hud.error.toFixed(2)}` : ''}
             </div>
+
+            <NoiseRing heard={heard} yaw={hud.yaw} />
+
+            {online && you && (you.fell ?? 0) > 0 && (
+              <div
+                style={{
+                  position: 'absolute',
+                  left: '50%',
+                  top: '58%',
+                  transform: 'translateX(-50%)',
+                  pointerEvents: 'none',
+                  fontFamily: 'monospace',
+                  fontSize: '0.8rem',
+                  color: '#ff9d94',
+                }}
+              >
+                −{you.fell} fall
+              </div>
+            )}
 
             {online && you && weapon && (
               <div
@@ -1497,6 +1683,72 @@ export function HorribleAssaultPanel() {
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Where the sounds are coming from.
+ *
+ * A ring of ticks around the crosshair, one per noise heard, at the bearing the
+ * server reported and the opacity of its volume. This is not decoration and it is
+ * not an accessibility fallback: the noise system is *information* (see
+ * `backend/modules/hassault/noise.py`), and information that only exists in the
+ * audio mix is information a player on laptop speakers does not have. Showing it
+ * means the two are playing the same game.
+ *
+ * Deliberately coarse — a direction and a loudness, which is exactly what the wire
+ * carries. There is no distance in it because there is no distance on the wire.
+ */
+function NoiseRing({
+  heard,
+  yaw,
+}: {
+  heard: { id: number; at: number; event: NoiseEvent }[];
+  yaw: number;
+}) {
+  const now = Date.now();
+  const live = heard.filter((h) => now - h.at < NOISE_TTL_MS);
+  if (live.length === 0) return null;
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        left: '50%',
+        top: '50%',
+        width: 0,
+        height: 0,
+        pointerEvents: 'none',
+      }}
+    >
+      {live.map(({ id, at, event }) => {
+        const age = (now - at) / NOISE_TTL_MS;
+        // Bearing relative to where we are facing, then into screen space: a sound
+        // dead ahead has to sit at the top of the ring and swing round as we turn.
+        const relative = event.bearing - yaw;
+        const radius = 78;
+        const x = Math.sin(relative) * radius;
+        const y = -Math.cos(relative) * radius;
+        return (
+          <div
+            key={id}
+            style={{
+              position: 'absolute',
+              left: x - 3,
+              top: y - 3,
+              width: 6,
+              height: 6,
+              borderRadius: '50%',
+              // Shots are the loud, urgent ones and read differently on purpose.
+              background: event.kind === 'shot' ? '#ffb86b' : '#cfd8ff',
+              opacity: Math.max(0, (1 - age) * Math.min(1, event.volume * 1.6)),
+              // Above and below get an outline rather than a position: the ring is
+              // a compass, and there is no vertical axis on a compass.
+              boxShadow: event.up !== 0 ? '0 0 0 2px rgba(255,255,255,0.35)' : undefined,
+            }}
+          />
+        );
+      })}
     </div>
   );
 }

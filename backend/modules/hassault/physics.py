@@ -17,6 +17,44 @@ a test about libm rather than about this code.
 
 Coordinates match the client: `x`/`y` index the cube grid and `z` is height,
 measured at the player's **feet**.
+
+### The movement model, and why it is velocity-based
+
+Movement is a **velocity** integrated against the grid, not a position stepped by
+a direction. That is not decoration: three of the mechanics this game is *for*
+have nowhere to live without it. Weapon recoil pushing the shooter (AC's
+shoot-jump) is an impulse; the chained-jump speed boost multiplies a speed that
+has to already exist; and the difference between ground control and air momentum
+*is* the difference between two friction constants.
+
+The constants come from AssaultCube's `physics.cpp` and `entity.h`, converted out
+of AC's per-millisecond unit soup into plain SI (cubes, seconds):
+
+* **Response rates.** AC blends velocity toward the wish direction each frame by
+  `1/fpsfric` where `fpsfric = friction/curtime*20`, with `friction` 6 on the
+  floor and 30 in the air. That is a time constant of `friction/50` seconds, so
+  ground control settles in ~0.12 s while air control takes ~0.6 s — which is
+  what makes momentum, not the stick, decide where a jump lands.
+* **Chained jumps.** AC boosts by `1.25/max(speed/fullspeed, 1)` when you jump
+  again within 250 ms while strafing: 25% faster, but never past 125% of run
+  speed, and it decays in the air so it has to be re-earned every landing.
+* **Crouching.** Eye height drops to 3/4 (`entity.h`), speed to 0.4 — except
+  while airborne after crouching *in* the air, where AC deliberately leaves you
+  at full speed so a crouch-jump clears a gap without costing momentum.
+* **Gravity ramps with time in air** (`dropf = (gravity-1) + timeinair/15`), so a
+  fall accelerates harder the longer it lasts and a jump comes down faster than
+  it went up.
+
+Two deliberate deviations, both because AC's exact behaviour would be a bug here:
+
+1. The blend is `1 - exp(-k*dt)` rather than AC's `k*dt`. AC's linear form is
+   frame-rate dependent — its players tune `maxfps` for movement — and this
+   server integrates whatever `dt` a client reports, so a frame-rate-dependent
+   rule would literally pay clients for lying about their frame times.
+2. The chain-boost window is measured from **landing**, not from the previous
+   jump, and carries no "must be higher than last time" test. AC's version only
+   fires on rising terrain, which makes it undiscoverable; measured from the
+   landing it is a timing skill anyone can find and nobody can automate away.
 """
 
 from __future__ import annotations
@@ -30,6 +68,23 @@ from backend.modules.hassault.cgz import CHF, FHF, SEMISOLID, SOLID, SPACE, CgzM
 PLAYER_RADIUS = 1.1
 PLAYER_EYE_HEIGHT = 4.5
 PLAYER_ABOVE_EYE = 0.7
+# Total body height standing: what the collision code reserves headroom for, what
+# the avatar capsule is drawn to, and what a shot is tested against.
+STANDING_HEIGHT = PLAYER_EYE_HEIGHT + PLAYER_ABOVE_EYE
+
+# Crouching. The eye drops to three quarters of its height — `maxeyeheight*3/4`
+# in AC's `updatecrouch` — while `aboveeye` is unchanged, so a crouched body is
+# ~1.1 cubes shorter and fits under a gap a standing one does not.
+CROUCH_EYE_SCALE = 0.75
+CROUCH_EYE_HEIGHT = PLAYER_EYE_HEIGHT * CROUCH_EYE_SCALE
+CROUCH_HEIGHT = CROUCH_EYE_HEIGHT + PLAYER_ABOVE_EYE
+# AC's `chspeed`. Slow enough to be a real cost, which is what makes silent
+# movement (see `noise.py`) a trade rather than a free upgrade.
+CROUCH_SPEED_SCALE = 0.4
+# Seconds for a full stand↔crouch transition. AC animates the eye height rather
+# than snapping it, and the animation is not cosmetic: it is why crouch-jumping
+# has a rhythm to learn instead of being a binary state flip.
+CROUCH_TRANSITION = 0.15
 
 # Movement constants. Tuned to feel like AC rather than derived from it, but they
 # are part of the wire contract now: a client predicting with different numbers
@@ -38,6 +93,28 @@ MOVE_SPEED = 22.0
 GRAVITY = 55.0
 JUMP_SPEED = 19.0
 STEP_HEIGHT = 1.6
+
+# How fast velocity converges on the wish direction, per second. AC's friction 6
+# on the floor and 30 in the air, as `50/friction` — see the module docstring.
+GROUND_RESPONSE = 50.0 / 6.0
+AIR_RESPONSE = 50.0 / 30.0
+
+# Gravity ramp. `g * (1 + time_in_air/GRAVITY_RAMP)`, capped: AC's ramp is
+# unbounded and reaches 4.5x within a second, which turns any long drop into a
+# teleport straight down.
+GRAVITY_RAMP = 1.0
+MAX_GRAVITY_SCALE = 2.5
+
+# The chained-jump boost. Both numbers are AC's.
+JUMP_CHAIN_WINDOW = 0.25
+JUMP_CHAIN_BOOST = 1.25
+
+# Landing harder than this costs health, at `FALL_DAMAGE_PER_SPEED` per cube/s
+# over. A flat jump lands at `JUMP_SPEED`, so ordinary movement never hurts —
+# but a shoot-jump that gains height has to be paid for on the way down, which is
+# the only thing stopping recoil-launching from being free vertical travel.
+FALL_SAFE_SPEED = 34.0
+FALL_DAMAGE_PER_SPEED = 3.0
 
 # Longest frame the simulation will integrate in one go. A client that stalls and
 # then sends a huge dt would otherwise tunnel straight through a wall — the same
@@ -142,13 +219,44 @@ class World:
 
 @dataclass(slots=True)
 class PlayerState:
+    """Everything the simulation needs to advance one body.
+
+    Rather more than a position, now that movement carries momentum. The fields
+    past `on_ground` are the ones a client cannot derive from a snapshot on its
+    own, which is why they ride in the **private** half of a snapshot envelope
+    (`MatchPlayer.private_view`) — see `reconcile` in `net.ts`.
+    """
+
     x: float = 0.0
     y: float = 0.0
     z: float = 0.0
+    vel_x: float = 0.0
+    vel_y: float = 0.0
     vel_z: float = 0.0
     yaw: float = 0.0
     pitch: float = 0.0
     on_ground: bool = False
+    """Crouch animation, 0 standing to 1 fully crouched."""
+    crouch: float = 0.0
+    """What the last input asked for, so the *transition* into a crouch can be
+    detected — which is what `crouched_in_air` keys off."""
+    crouch_held: bool = False
+    """Crouch began while airborne. AC leaves such a player at full speed, so a
+    crouch-jump clears a gap without paying the crouch speed penalty."""
+    crouched_in_air: bool = False
+    time_in_air: float = 0.0
+    """Simulated seconds this body has been advanced by. A clock local to the
+    simulation, so the jump-chain window means the same thing on both sides of
+    the wire without either trusting the other's wall clock."""
+    t: float = 0.0
+    """`t` of the last landing. The chain-boost window is measured from here."""
+    landed_at: float = -999.0
+    """Impact speed of a landing that happened *this step*, else 0.
+
+    An output, not state: the server turns it into fall damage and the client
+    ignores it. Written every step so a replayed command cannot double-count.
+    """
+    fall_speed: float = 0.0
 
 
 @dataclass(slots=True)
@@ -156,6 +264,7 @@ class MoveInput:
     forward: float = 0.0
     strafe: float = 0.0
     jump: bool = False
+    crouch: bool = False
     # Deliberately absent: noclip. It is a local debugging affordance on the
     # client and must never be something a packet can ask the server for.
     yaw: float = 0.0
@@ -164,16 +273,35 @@ class MoveInput:
     seq: int = 0
 
 
-def can_stand(world: World, x: float, y: float, z: float) -> bool:
+def body_height(player: PlayerState) -> float:
+    """Total height of the body right now, mid-crouch included."""
+    return STANDING_HEIGHT + (CROUCH_HEIGHT - STANDING_HEIGHT) * player.crouch
+
+
+def eye_height(player: PlayerState) -> float:
+    """Height of the eye above the feet — where the camera sits and where a shot
+    leaves from, so it has to be the same number in both places."""
+    return PLAYER_EYE_HEIGHT + (CROUCH_EYE_HEIGHT - PLAYER_EYE_HEIGHT) * player.crouch
+
+
+def can_stand(
+    world: World, x: float, y: float, z: float, height: float = STANDING_HEIGHT
+) -> bool:
+    """Whether a body of `height` fits at `(x, y)` with its feet at `z`.
+
+    Three ways to fail: overlapping a solid cell, a floor more than one step
+    above the feet, or a ceiling too low. `height` is a parameter rather than the
+    standing constant because that is exactly what crouching changes — and it is
+    also how "you cannot stand up in here" is decided.
+    """
     x0, x1, y0, y1 = world.cells_in_radius(x, y, PLAYER_RADIUS)
-    headroom = PLAYER_EYE_HEIGHT + PLAYER_ABOVE_EYE
     for cy in range(y0, y1 + 1):
         for cx in range(x0, x1 + 1):
             if world.is_solid(cx, cy):
                 return False
             if world.floor_at(cx, cy) > z + STEP_HEIGHT:
                 return False
-            if world.ceil_at(cx, cy) < z + headroom:
+            if world.ceil_at(cx, cy) < z + height:
                 return False
     return True
 
@@ -194,21 +322,131 @@ def _support(world: World, x: float, y: float) -> tuple[float, float, bool]:
     return highest_floor, lowest_ceil, False
 
 
+def apply_impulse(player: PlayerState, dx: float, dy: float, dz: float) -> None:
+    """Add an external kick to a body's velocity.
+
+    The one way anything outside this module moves a player, and it exists for
+    exactly one caller: weapon recoil (`match._fire`). Clearing `on_ground` on an
+    upward kick is what makes a shoot-jump work at all — otherwise the vertical
+    resolve at the end of the next step lands the player again immediately,
+    before the velocity has moved them anywhere.
+    """
+    player.vel_x += dx
+    player.vel_y += dy
+    player.vel_z += dz
+    if dz > 0:
+        player.on_ground = False
+
+
+def _update_crouch(
+    world: World, player: PlayerState, move: MoveInput, dt: float
+) -> None:
+    """Advance the crouch animation, and refuse to stand up under a low ceiling.
+
+    Reads `on_ground` from the previous step, as AC's `updatecrouch` reads
+    `onfloor` — the alternative is resolving crouch after movement, which would
+    let a body change height *after* the collision test that admitted it.
+    """
+    if move.crouch and not player.crouch_held and not player.on_ground:
+        player.crouched_in_air = True
+    player.crouch_held = move.crouch
+
+    if move.crouch:
+        target = 1.0
+    elif can_stand(world, player.x, player.y, player.z, STANDING_HEIGHT):
+        target = 0.0
+    else:
+        # Nowhere to stand up into. Holding the current crouch beats popping the
+        # body through a ceiling, and it is why crouch is worth binding to a hold
+        # rather than a toggle in tight geometry.
+        target = player.crouch
+
+    rate = dt / CROUCH_TRANSITION if CROUCH_TRANSITION > 0 else 1.0
+    if target > player.crouch:
+        player.crouch = min(target, player.crouch + rate)
+    else:
+        player.crouch = max(target, player.crouch - rate)
+
+
+def _wish_direction(player: PlayerState, move: MoveInput) -> tuple[float, float]:
+    """Unit direction the player is asking to move in, in grid coordinates.
+
+    Normalised, so holding forward and strafe is not 1.41x faster than forward
+    alone. Diagonal overspeed is the accidental version of a movement tech; this
+    game has a deliberate one (the chain boost) and does not need both.
+    """
+    sin = math.sin(player.yaw)
+    cos = math.cos(player.yaw)
+    dx = cos * move.forward - sin * move.strafe
+    dy = sin * move.forward + cos * move.strafe
+    length = math.hypot(dx, dy)
+    if length < 1e-9:
+        return 0.0, 0.0
+    return dx / length, dy / length
+
+
 def step(world: World, player: PlayerState, move: MoveInput, dt: float) -> None:
     """Advance `player` by `dt` seconds. Mirrors `player.ts` `step` exactly."""
     dt = min(dt, MAX_STEP_DT)
+    if dt <= 0:
+        player.fall_speed = 0.0
+        return
+    player.t += dt
+    # An output of this step only. Cleared first so a step with no landing in it
+    # cannot report the previous one's impact a second time.
+    player.fall_speed = 0.0
 
-    sin = math.sin(player.yaw)
-    cos = math.cos(player.yaw)
-    dx = (cos * move.forward - sin * move.strafe) * MOVE_SPEED * dt
-    dy = (sin * move.forward + cos * move.strafe) * MOVE_SPEED * dt
+    _update_crouch(world, player, move, dt)
 
-    # One axis at a time, so a blocked direction slides along the wall instead of
-    # stopping dead. Testing the combined vector makes every corner sticky.
-    if dx != 0 and can_stand(world, player.x + dx, player.y, player.z):
-        player.x += dx
-    if dy != 0 and can_stand(world, player.x, player.y + dy, player.z):
-        player.y += dy
+    # -- horizontal: converge on the wish velocity -------------------------
+    #
+    # Crouched speed is AC's `chspeed`: 0.4 on the floor, and 0.4 in the air too
+    # *unless* the crouch began airborne, which is the crouch-jump exemption.
+    scale = 1.0
+    if player.crouch > 0.5 and (player.on_ground or not player.crouched_in_air):
+        scale = CROUCH_SPEED_SCALE
+    speed_cap = MOVE_SPEED * scale
+
+    wx, wy = _wish_direction(player, move)
+    response = GROUND_RESPONSE if player.on_ground else AIR_RESPONSE
+    blend = 1.0 - math.exp(-response * dt)
+    player.vel_x += (wx * speed_cap - player.vel_x) * blend
+    player.vel_y += (wy * speed_cap - player.vel_y) * blend
+
+    # -- jump, and the chained-jump boost ----------------------------------
+    if move.jump and player.on_ground:
+        if move.strafe != 0.0 and (player.t - player.landed_at) <= JUMP_CHAIN_WINDOW:
+            speed = math.hypot(player.vel_x, player.vel_y)
+            if speed > 0.1:
+                # 25% faster, but never past 125% of run speed: AC's
+                # `1.25/max(speed/fullspeed, 1)`, which is a boost below the cap
+                # and a clamp above it.
+                factor = JUMP_CHAIN_BOOST / max(speed / MOVE_SPEED, 1.0)
+                player.vel_x *= factor
+                player.vel_y *= factor
+        player.vel_z = JUMP_SPEED
+        player.on_ground = False
+        player.time_in_air = 0.0
+
+    # -- horizontal: move, one axis at a time ------------------------------
+    #
+    # Separated so a blocked direction slides along the wall instead of stopping
+    # dead — testing the combined vector once makes every corner sticky. A
+    # refused axis loses its velocity: keeping it would store up a shove that
+    # fires the instant the body clears the wall.
+    height = body_height(player)
+    dx = player.vel_x * dt
+    dy = player.vel_y * dt
+    if dx != 0:
+        if can_stand(world, player.x + dx, player.y, player.z, height):
+            player.x += dx
+        else:
+            player.vel_x = 0.0
+    if dy != 0:
+        if can_stand(world, player.x, player.y + dy, player.z, height):
+            player.y += dy
+        else:
+            player.vel_y = 0.0
 
     # Resolved before gravity, not after: `_support` reads only x and y, and
     # checking afterwards means a wedged player has already been moved down by
@@ -217,31 +455,72 @@ def step(world: World, player: PlayerState, move: MoveInput, dt: float) -> None:
     floor, ceil, enclosed = _support(world, player.x, player.y)
     if enclosed:
         # Wedged in solid geometry: hold still so the player can walk back out.
+        player.vel_x = 0.0
+        player.vel_y = 0.0
         player.vel_z = 0.0
         player.on_ground = True
         return
 
-    if move.jump and player.on_ground:
-        player.vel_z = JUMP_SPEED
-        player.on_ground = False
-    player.vel_z -= GRAVITY * dt
+    # -- vertical ----------------------------------------------------------
+    #
+    # Whether the body was already resting on the floor when this step began —
+    # read *after* the jump, which clears it. Both branches below need it, and
+    # for the same reason: "arrived on the ground" and "was already on the
+    # ground" are different events, and conflating them costs the game two
+    # mechanics. A resting body dips below the floor under gravity every single
+    # frame, so treating that as a landing would reset the chain-boost window
+    # continuously (making the timing free) and charge fall damage for standing
+    # still; and a body genuinely falling passes through the snap-down band on
+    # its way in, so treating that as a snap would mean nothing ever lands.
+    was_grounded = player.on_ground
+
+    player.time_in_air = 0.0 if was_grounded else player.time_in_air + dt
+    # Gravity ramps with time in air, as AC's `dropf` does, so a fall comes down
+    # harder than the jump went up.
+    gravity = GRAVITY * min(MAX_GRAVITY_SCALE, 1.0 + player.time_in_air / GRAVITY_RAMP)
+    player.vel_z -= gravity * dt
     player.z += player.vel_z * dt
 
     if player.z <= floor:
         player.z = floor
+        if not was_grounded:
+            # A real landing. Reported for this step only; the server turns the
+            # impact into damage, and the window this opens is what a chained
+            # jump has to be timed against.
+            player.fall_speed = -player.vel_z if player.vel_z < 0 else 0.0
+            player.landed_at = player.t
         player.vel_z = 0.0
         player.on_ground = True
+        player.time_in_air = 0.0
+        # On the floor, so the crouch-jump exemption is spent.
+        player.crouched_in_air = False
+    elif was_grounded and player.vel_z <= 0 and player.z - floor <= STEP_HEIGHT * 0.5:
+        # Walking off a small lip shouldn't launch the player into a fall: snap
+        # down. Not a landing — nothing was fallen, so it costs no health and
+        # opens no chain-boost window that was never earned.
+        player.z = floor
+        player.vel_z = 0.0
+        player.on_ground = True
+        player.time_in_air = 0.0
+        player.crouched_in_air = False
     else:
         player.on_ground = False
-        if player.vel_z <= 0 and player.z - floor <= STEP_HEIGHT * 0.5:
-            player.z = floor
-            player.vel_z = 0.0
-            player.on_ground = True
-    headroom = PLAYER_EYE_HEIGHT + PLAYER_ABOVE_EYE
-    if player.z + headroom > ceil:
-        player.z = max(floor, ceil - headroom)
+    if player.z + height > ceil:
+        player.z = max(floor, ceil - height)
         if player.vel_z > 0:
             player.vel_z = 0.0
+
+
+def fall_damage(impact: float) -> float:
+    """Health cost of landing at `impact` cubes per second.
+
+    Zero for anything a jump can produce, then linear. Kept here beside the
+    constants rather than in `match.py` so the client can show the same number
+    without a second copy of the rule.
+    """
+    if impact <= FALL_SAFE_SPEED:
+        return 0.0
+    return (impact - FALL_SAFE_SPEED) * FALL_DAMAGE_PER_SPEED
 
 
 def spawn_at(world: World, spawn) -> PlayerState:

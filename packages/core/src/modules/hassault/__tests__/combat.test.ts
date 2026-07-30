@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { WeaponSpec } from '../api';
-import { ShotController, recoilKick } from '../combat';
+import { CROUCH_KICK_SCALE, ShotController, kickVector, recoilKick } from '../combat';
 import type { SelfState } from '../net';
 
 function spec(over: Partial<WeaponSpec> = {}): WeaponSpec {
@@ -19,6 +19,7 @@ function spec(over: Partial<WeaponSpec> = {}): WeaponSpec {
     pellets: 1,
     range: 200,
     auto: true,
+    kickback: 0,
     ...over,
   };
 }
@@ -28,6 +29,7 @@ const SEMI = spec({
   id: 'sniper',
   name: 'Sniper',
   auto: false,
+  kickback: 0,
   interval: 1,
   mag: 5,
   spread: 0.002,
@@ -253,5 +255,56 @@ describe('ShotController recoil', () => {
     shots.reset();
     expect(shots.recoil(1 / 60).pitch).toBe(0);
     expect(shots.frame(1, 0, you()).fire).toBe(false);
+  });
+});
+
+/**
+ * The shooter's own recoil push — AssaultCube's `attackphysics`, and the whole of
+ * shoot-jumping.
+ *
+ * Mirrored by `test_hassault_noise.py`'s kickback tests on the server side. These
+ * two have to agree exactly or every shot mispredicts: the client applies this
+ * impulse on the frame it fires and the server applies its own after the same
+ * command, so a disagreement shows up as the shooter being yanked back into place a
+ * round trip later.
+ */
+describe('kickVector', () => {
+  const shotgun = spec({ id: 'shotgun', kickback: 9.5 });
+
+  it('pushes opposite the aim', () => {
+    // Aiming straight down must push straight up: that *is* the shoot-jump.
+    const down = kickVector(shotgun, 0, -Math.PI / 2);
+    expect(down.z).toBeCloseTo(shotgun.kickback, 6);
+    expect(Math.hypot(down.x, down.y)).toBeCloseTo(0, 6);
+
+    // Aiming east pushes west.
+    const east = kickVector(shotgun, 0, 0);
+    expect(east.x).toBeCloseTo(-shotgun.kickback, 6);
+    expect(east.z).toBeCloseTo(0, 6);
+  });
+
+  it('is braced by crouching', () => {
+    const standing = kickVector(shotgun, 0, 0, false);
+    const crouched = kickVector(shotgun, 0, 0, true);
+    expect(Math.abs(crouched.x)).toBeCloseTo(Math.abs(standing.x) * CROUCH_KICK_SCALE, 6);
+  });
+
+  it('is nothing for a weapon with no kickback, and for no weapon at all', () => {
+    expect(kickVector(spec({ kickback: 0 }), 0, -1.5)).toEqual({ x: 0, y: 0, z: 0 });
+    expect(kickVector(undefined, 0, -1.5)).toEqual({ x: 0, y: 0, z: 0 });
+  });
+
+  it('has magnitude equal to the served number, whatever the angle', () => {
+    // The one invariant worth pinning: the client must not be able to derive a
+    // larger push than the server will apply, at any aim.
+    for (const [yaw, pitch] of [
+      [0, 0],
+      [1.2, -0.7],
+      [-2.4, 1.1],
+      [3, 0.3],
+    ] as const) {
+      const kick = kickVector(shotgun, yaw, pitch);
+      expect(Math.hypot(kick.x, kick.y, kick.z)).toBeCloseTo(shotgun.kickback, 6);
+    }
   });
 });

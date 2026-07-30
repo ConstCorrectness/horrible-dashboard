@@ -10,10 +10,23 @@
 import type * as THREE from 'three';
 
 import type { PlayerRow } from './net';
-import { PLAYER_ABOVE_EYE, PLAYER_EYE_HEIGHT, PLAYER_RADIUS } from './world';
+import { CROUCH_HEIGHT, STANDING_HEIGHT } from './player';
+import { PLAYER_EYE_HEIGHT, PLAYER_RADIUS } from './world';
 
 /** Total body height, matching what the collision code reserves. */
-const BODY_HEIGHT = PLAYER_EYE_HEIGHT + PLAYER_ABOVE_EYE;
+const BODY_HEIGHT = STANDING_HEIGHT;
+
+/**
+ * How far a crouched body is squashed.
+ *
+ * The capsule is *scaled* rather than rebuilt, because a crouch is animated —
+ * `row.crouch` arrives as a fraction, and disposing and recreating a geometry per
+ * frame of the transition would be absurd. It has to be visible and it has to be
+ * right: the server rewinds a shot against exactly this height (see
+ * `resolve_shot`'s `heights`), so an avatar that stayed standing while its hitbox
+ * shrank would make cover look like a miss.
+ */
+const CROUCH_SCALE = CROUCH_HEIGHT / STANDING_HEIGHT;
 
 /** CLA sand, RVSF blue — AssaultCube's two teams, at a glance. */
 const TEAM_COLORS = [0xd9a441, 0x4c8fd4];
@@ -130,6 +143,11 @@ export class AvatarPool {
       // Same derivation as the camera: three's default forward is -Z, so a yaw
       // about +x becomes this rotation about Y.
       avatar.group.rotation.y = -row.yaw - Math.PI / 2;
+      // Squashed by however far into a crouch they are. Scaled on Y only, from the
+      // feet, because that is what crouching does — and it keeps the nameplate,
+      // which lives at the top of the group, coming down with the body.
+      const crouch = row.crouch ?? 0;
+      avatar.group.scale.y = 1 + (CROUCH_SCALE - 1) * crouch;
       // A player whose input has stopped arriving is shown translucent rather
       // than removed — they may just be lagging, and vanishing bodies are worse.
       avatar.group.traverse((obj) => {

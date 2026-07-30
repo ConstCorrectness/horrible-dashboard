@@ -25,16 +25,25 @@ import pytest
 
 from backend.modules.hassault.cgz import FHF, SOLID, SPACE
 from backend.modules.hassault.physics import (
+    CROUCH_HEIGHT,
+    CROUCH_SPEED_SCALE,
+    FALL_SAFE_SPEED,
+    JUMP_CHAIN_BOOST,
     JUMP_SPEED,
     MOVE_SPEED,
     PLAYER_ABOVE_EYE,
     PLAYER_EYE_HEIGHT,
     PLAYER_RADIUS,
+    STANDING_HEIGHT,
     STEP_HEIGHT,
     MoveInput,
     PlayerState,
     World,
+    apply_impulse,
+    body_height,
     can_stand,
+    eye_height,
+    fall_damage,
     flat_world,
     spawn_at,
     step,
@@ -265,6 +274,234 @@ def test_a_huge_dt_is_clamped():
     assert player.x - 32.0 <= MOVE_SPEED * 0.1 + 1e-9
 
 
+def _speed(player: PlayerState) -> float:
+    return math.hypot(player.vel_x, player.vel_y)
+
+
+def _run(world, player, frames: int, **kw) -> None:
+    for _ in range(frames):
+        step(world, player, MoveInput(**kw), 1 / 60)
+
+
+# ---------------------------------------------------------------------------
+# Momentum
+# ---------------------------------------------------------------------------
+
+
+def test_running_converges_on_the_speed_cap_and_no_further():
+    world = flat_world(64, floor=0, ceil=24)
+    player = PlayerState(x=8.0, y=8.0, z=0.0, on_ground=True)
+    _run(world, player, 120, forward=1.0)
+    assert _speed(player) == pytest.approx(MOVE_SPEED, abs=1e-3)
+
+
+def test_diagonal_movement_is_not_faster_than_straight():
+    """The wish direction is normalised. Diagonal overspeed is the *accidental*
+    version of a movement tech, and this game has a deliberate one."""
+    world = flat_world(64, floor=0, ceil=24)
+    straight = PlayerState(x=8.0, y=8.0, z=0.0, on_ground=True)
+    diagonal = PlayerState(x=8.0, y=8.0, z=0.0, on_ground=True)
+    _run(world, straight, 120, forward=1.0)
+    _run(world, diagonal, 120, forward=1.0, strafe=1.0)
+    assert _speed(diagonal) == pytest.approx(_speed(straight), abs=1e-6)
+
+
+def test_air_control_is_much_weaker_than_ground_control():
+    """The whole reason movement is velocity-based: in the air, momentum decides
+    where you land, not the keys."""
+    world = flat_world(64, floor=0, ceil=64)
+    ground = PlayerState(x=8.0, y=8.0, z=0.0, vel_x=MOVE_SPEED, on_ground=True)
+    air = PlayerState(x=8.0, y=8.0, z=30.0, vel_x=MOVE_SPEED, on_ground=False)
+    # Both ask to stop. The grounded one does; the airborne one barely notices.
+    _run(world, ground, 12)
+    _run(world, air, 12)
+    assert ground.vel_x < MOVE_SPEED * 0.25
+    assert air.vel_x > MOVE_SPEED * 0.7
+    # Stated as a ratio too, because that is the mechanic: the exact fraction is
+    # an exponential of two constants, but "air control is several times weaker"
+    # is the thing a change must not quietly undo.
+    assert air.vel_x > ground.vel_x * 3
+
+
+def test_gravity_ramps_with_time_in_air():
+    """AC's `dropf` grows with `timeinair`, so a fall comes down harder than the
+    jump went up. Without the ramp the two halves of a second would be equal."""
+    world = flat_world(16, floor=0, ceil=120)
+    player = PlayerState(x=8.0, y=8.0, z=110.0)
+    _run(world, player, 30)
+    first_half = 110.0 - player.z
+    before = player.z
+    _run(world, player, 30)
+    second_half = before - player.z
+    assert second_half > first_half * 1.5
+
+
+# ---------------------------------------------------------------------------
+# The chained-jump boost
+# ---------------------------------------------------------------------------
+
+
+def test_chained_strafing_hops_exceed_the_run_cap_but_are_capped():
+    world = flat_world(96, floor=0, ceil=24)
+    player = PlayerState(x=12.0, y=12.0, z=0.0, yaw=0.6, on_ground=True)
+    _run(world, player, 30, forward=1.0, strafe=1.0)
+    peak = 0.0
+    for _ in range(180):
+        step(world, player, MoveInput(forward=1.0, strafe=1.0, jump=True), 1 / 60)
+        peak = max(peak, _speed(player))
+    assert peak > MOVE_SPEED * 1.05
+    # AC's `1.25/max(speed/fullspeed, 1)` is a clamp above the cap, not a
+    # multiplier that compounds — so no amount of chaining passes 125%.
+    assert peak == pytest.approx(MOVE_SPEED * JUMP_CHAIN_BOOST, abs=1e-6)
+
+
+def test_the_boost_needs_strafe():
+    """Straight-line hopping is not a movement tech. Without this the boost is
+    just "hold jump", which is not a skill."""
+    world = flat_world(96, floor=0, ceil=24)
+    player = PlayerState(x=12.0, y=12.0, z=0.0, on_ground=True)
+    _run(world, player, 30, forward=1.0)
+    peak = 0.0
+    for _ in range(180):
+        step(world, player, MoveInput(forward=1.0, jump=True), 1 / 60)
+        peak = max(peak, _speed(player))
+    assert peak <= MOVE_SPEED + 1e-6
+
+
+def test_a_standing_jump_earns_no_boost():
+    """The window is measured from a *landing*. A body resting on the floor dips
+    below it under gravity every frame, and treating that as a landing would
+    reset the window continuously — making the timing free."""
+    world = flat_world(96, floor=0, ceil=24)
+    player = PlayerState(x=12.0, y=12.0, z=0.0, on_ground=True)
+    _run(world, player, 120, forward=1.0, strafe=1.0)  # long since any landing
+    before = _speed(player)
+    step(world, player, MoveInput(forward=1.0, strafe=1.0, jump=True), 1 / 60)
+    assert _speed(player) <= before + 1e-6
+
+
+def test_standing_still_never_reports_a_landing():
+    """`fall_speed` is an output of one step. A resting body must not report an
+    impact, or standing on the floor would cost health continuously."""
+    world = flat_world(16, floor=0, ceil=24)
+    player = PlayerState(x=8.0, y=8.0, z=0.0, on_ground=True)
+    for _ in range(60):
+        step(world, player, MoveInput(), 1 / 60)
+        assert player.fall_speed == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Crouching
+# ---------------------------------------------------------------------------
+
+
+def test_crouching_shortens_the_body_and_the_eye():
+    world = flat_world(16, floor=0, ceil=24)
+    player = PlayerState(x=8.0, y=8.0, z=0.0, on_ground=True)
+    assert body_height(player) == pytest.approx(STANDING_HEIGHT)
+    _run(world, player, 30, crouch=True)
+    assert player.crouch == pytest.approx(1.0)
+    assert body_height(player) == pytest.approx(CROUCH_HEIGHT)
+    assert eye_height(player) < PLAYER_EYE_HEIGHT
+
+
+def test_crouching_on_the_ground_costs_speed():
+    world = flat_world(64, floor=0, ceil=24)
+    player = PlayerState(x=8.0, y=8.0, z=0.0, on_ground=True)
+    _run(world, player, 120, forward=1.0, crouch=True)
+    assert _speed(player) == pytest.approx(MOVE_SPEED * CROUCH_SPEED_SCALE, abs=1e-3)
+
+
+def test_crouching_in_mid_air_does_not_cost_speed():
+    """AC's `crouchedinair` exemption — what makes a crouch-jump a way to clear a
+    gap rather than a way to fall short of it."""
+    world = flat_world(64, floor=0, ceil=64)
+    player = PlayerState(x=8.0, y=8.0, z=0.0, on_ground=True)
+    _run(world, player, 60, forward=1.0)
+    step(world, player, MoveInput(forward=1.0, jump=True), 1 / 60)
+    _run(world, player, 20, forward=1.0, crouch=True)
+    assert player.crouch == pytest.approx(1.0)
+    assert _speed(player) > MOVE_SPEED * 0.95
+
+
+def test_a_crouched_body_fits_where_a_standing_one_does_not():
+    world = flat_world(16, floor=0, ceil=5)
+    assert STANDING_HEIGHT > 5 > CROUCH_HEIGHT
+    assert not can_stand(world, 8.0, 8.0, 0.0, STANDING_HEIGHT)
+    assert can_stand(world, 8.0, 8.0, 0.0, CROUCH_HEIGHT)
+
+
+def test_you_cannot_stand_up_under_a_low_ceiling():
+    """Releasing crouch with no headroom has to be refused, or the body pops
+    through the roof — and then `_support` shoves it back down forever."""
+    world = flat_world(16, floor=0, ceil=5)
+    player = PlayerState(x=8.0, y=8.0, z=0.0, on_ground=True, crouch=1.0)
+    _run(world, player, 60, crouch=False)
+    assert player.crouch == pytest.approx(1.0)
+
+
+# ---------------------------------------------------------------------------
+# Impulses and fall damage
+# ---------------------------------------------------------------------------
+
+
+def test_an_upward_impulse_leaves_the_ground():
+    """Clearing `on_ground` is the whole trick: without it the next step's
+    vertical resolve lands the player again before the velocity moved them."""
+    world = flat_world(16, floor=0, ceil=64)
+    player = PlayerState(x=8.0, y=8.0, z=0.0, on_ground=True)
+    apply_impulse(player, 0.0, 0.0, 14.0)
+    assert player.on_ground is False
+    _run(world, player, 10)
+    assert player.z > 1.0
+
+
+def test_a_shoot_jump_gains_height_a_plain_jump_cannot():
+    world = flat_world(16, floor=0, ceil=120)
+    plain = PlayerState(x=8.0, y=8.0, z=0.0, on_ground=True)
+    boosted = PlayerState(x=8.0, y=8.0, z=0.0, on_ground=True)
+    peak_plain = 0.0
+    peak_boosted = 0.0
+    step(world, plain, MoveInput(jump=True), 1 / 60)
+    step(world, boosted, MoveInput(jump=True), 1 / 60)
+    # Fired straight down at the top of the arc, which is where it pays best.
+    apply_impulse(boosted, 0.0, 0.0, 12.0)
+    for _ in range(120):
+        step(world, plain, MoveInput(), 1 / 60)
+        step(world, boosted, MoveInput(), 1 / 60)
+        peak_plain = max(peak_plain, plain.z)
+        peak_boosted = max(peak_boosted, boosted.z)
+    assert peak_boosted > peak_plain * 1.5
+
+
+def test_a_flat_jump_never_costs_health():
+    """The threshold has to sit above what ordinary movement produces, or the
+    game charges you for playing it."""
+    world = flat_world(16, floor=0, ceil=64)
+    player = PlayerState(x=8.0, y=8.0, z=0.0, on_ground=True)
+    step(world, player, MoveInput(jump=True), 1 / 60)
+    worst = 0.0
+    for _ in range(120):
+        step(world, player, MoveInput(), 1 / 60)
+        worst = max(worst, player.fall_speed)
+    assert worst > 0.0  # it did land
+    assert fall_damage(worst) == 0.0
+
+
+def test_a_long_drop_costs_health_once():
+    world = flat_world(16, floor=0, ceil=120)
+    player = PlayerState(x=8.0, y=8.0, z=100.0)
+    impacts = []
+    for _ in range(240):
+        step(world, player, MoveInput(), 1 / 60)
+        if player.fall_speed > 0:
+            impacts.append(player.fall_speed)
+    # Exactly one landing, and it hurt.
+    assert len(impacts) == 1
+    assert impacts[0] > FALL_SAFE_SPEED
+    assert fall_damage(impacts[0]) > 0.0
+
+
 def test_enclosed_player_does_not_fall_forever():
     world = flat_world(16, floor=0, ceil=16)
     solid = World(
@@ -302,10 +539,13 @@ def test_conformance_vector(index: int):
         x=start["x"],
         y=start["y"],
         z=start["z"],
+        vel_x=start.get("vel_x", 0.0),
+        vel_y=start.get("vel_y", 0.0),
         vel_z=start.get("vel_z", 0.0),
         yaw=start.get("yaw", 0.0),
         pitch=start.get("pitch", 0.0),
         on_ground=start.get("on_ground", False),
+        crouch=start.get("crouch", 0.0),
     )
     for raw in case["steps"]:
         if "yaw" in raw:
@@ -317,15 +557,23 @@ def test_conformance_vector(index: int):
                 forward=raw.get("forward", 0.0),
                 strafe=raw.get("strafe", 0.0),
                 jump=raw.get("jump", False),
+                crouch=raw.get("crouch", False),
             ),
             raw["dt"],
         )
+        # After the step, which is where the match server applies weapon recoil
+        # (`simulate` steps, then `_handle_combat` fires).
+        if "impulse" in raw:
+            apply_impulse(player, *raw["impulse"])
     expect = case["expect"]
     tol = data["tolerance"]
     assert player.x == pytest.approx(expect["x"], abs=tol), case["name"]
     assert player.y == pytest.approx(expect["y"], abs=tol), case["name"]
     assert player.z == pytest.approx(expect["z"], abs=tol), case["name"]
+    assert player.vel_x == pytest.approx(expect["velX"], abs=tol), case["name"]
+    assert player.vel_y == pytest.approx(expect["velY"], abs=tol), case["name"]
     assert player.vel_z == pytest.approx(expect["velZ"], abs=tol), case["name"]
+    assert player.crouch == pytest.approx(expect["crouch"], abs=tol), case["name"]
     assert player.on_ground == expect["onGround"], case["name"]
 
 

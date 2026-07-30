@@ -93,6 +93,16 @@ export interface WeaponSpec {
   range: number;
   /** Whether holding the button keeps firing. */
   auto: boolean;
+  /**
+   * Cubes per second the shot shoves the **shooter**, opposite their aim.
+   *
+   * AssaultCube's recoil push, and the whole of shoot-jumping: aim at the floor
+   * and a shotgun blast reaches ledges a jump cannot. Served rather than
+   * hardcoded here because the client has to predict the identical impulse the
+   * server is about to apply — two copies of this number is a mispredict on every
+   * shot. See `kickVector` in `combat.ts`.
+   */
+  kickback: number;
 }
 
 /**
