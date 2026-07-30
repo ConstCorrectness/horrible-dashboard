@@ -7,7 +7,7 @@
     "dev": "node scripts/dev.mjs",
     "dev:web": "pnpm --filter @horrible/web dev",
     "dev:lan": "node scripts/dev.mjs --host 0.0.0.0",
-    "dev:desktop": "pnpm --filter @horrible/desktop dev",
+    "dev:desktop": "node scripts/dev-desktop.mjs",
     "build": "pnpm --filter @horrible/web build",
     "build:desktop": "pnpm --filter @horrible/desktop build",
     "build:icons": "node scripts/build_icons.mjs",

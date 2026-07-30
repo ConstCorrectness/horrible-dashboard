@@ -14,7 +14,8 @@ inside a Tauri window. **One command brings up a full stack for each:**
   backend itself (`apps/desktop/src-tauri/src/backend.rs`), reusing one already
   running on :8000.
 
-Add `pnpm dev:lan` to expose both on `0.0.0.0` for peer-fabric collaboration.
+Add `pnpm dev:lan` to expose the browser stack on `0.0.0.0` for peer-fabric
+collaboration. `dev:desktop` already binds `0.0.0.0`; `--host 127.0.0.1` opts out.
 `pnpm dev:web` runs only the frontend (assumes a backend is already up).
 
 ## Backend alone (Python / FastAPI)
@@ -56,6 +57,8 @@ pnpm dev:desktop    # from repo root (runs `tauri dev`)
 - The Tauri shell supervises the backend itself (`src-tauri/src/backend.rs`):
   it spawns uvicorn, or reuses one already running on :8000. No separate backend
   start needed.
+- Binds `0.0.0.0` by default (`scripts/dev-desktop.mjs` sets `HORRIBLE_DEV_HOST`),
+  so a paired phone can reach it. Pass `--host 127.0.0.1` for local only.
 - First build compiles Rust and takes several minutes — don't kill it for being slow.
 
 ## Verifying a change

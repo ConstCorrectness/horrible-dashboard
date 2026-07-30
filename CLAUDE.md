@@ -82,7 +82,12 @@ buffers, terminal + file explorer.
   `scripts/dev.mjs`. `--no-gameserver` (or `HORRIBLE_DEV_NO_GAMESERVER=1`) skips the
   game server. `pnpm dev:web` is UI-only; `pnpm dev:lan` exposes both on 0.0.0.0 (peer fabric).
 - `pnpm dev:desktop` — desktop layout (Tauri; **spawns/supervises the backend
-  itself** via `src-tauri/src/backend.rs` — reuses one already running on :8000)
+  itself** via `src-tauri/src/backend.rs` — reuses one already running on :8000).
+  Unlike `pnpm dev`, this **defaults to `0.0.0.0`** (the desktop node is the one you
+  pair a phone with and run the peer fabric from); `--host 127.0.0.1` opts out. The
+  knob is `HORRIBLE_DEV_HOST`, set by `scripts/dev-desktop.mjs` and read by both
+  `vite.config.ts` and `bind_host()` in `backend.rs`, whose fallback stays loopback
+  so a packaged build is never LAN-exposed.
 - `pnpm typecheck`, `pnpm lint` — whole workspace, from the root
 - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` — Rust check
 - **Android companion:** open `apps/mobile-android/` in Android Studio and run `app`.

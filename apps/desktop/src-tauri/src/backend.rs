@@ -2,7 +2,8 @@
 //!
 //! On launch a supervisor thread finds the repo checkout, picks a port (reusing
 //! an already-running backend on :8000 if there is one), spawns uvicorn bound
-//! to 127.0.0.1, waits for the port to accept connections, and restarts the
+//! to `HORRIBLE_DEV_HOST` (127.0.0.1 unless the launcher says otherwise — see
+//! `bind_host`), waits for the port to accept connections, and restarts the
 //! process with backoff if it dies (e.g. the intermittent MinGW OpenSSL
 //! crash). The frontend asks for the resulting origin via the
 //! `backend_status` command and uses absolute http/ws URLs under Tauri.
@@ -128,7 +129,13 @@ fn load_env_file(root: &Path) {
                     } else {
                         val
                     };
-                    std::env::set_var(key, val);
+                    // A real environment variable always wins over the file, so a
+                    // launcher that already set one (scripts/dev-desktop.mjs sets
+                    // HORRIBLE_DEV_HOST) is never second-guessed. Same rule as
+                    // backend/__init__.py's _load_dotenv.
+                    if std::env::var_os(key).is_none() {
+                        std::env::set_var(key, val);
+                    }
                 }
             }
         }
@@ -163,7 +170,8 @@ fn run(sup: Arc<BackendSupervisor>) {
         return;
     }
 
-    let port = match pick_port(target_port) {
+    let host = bind_host();
+    let port = match pick_port(&host, target_port) {
         Ok(port) => port,
         Err(err) => {
             sup.set_status("failed", None, Some(format!("no free port: {err}")));
@@ -180,7 +188,7 @@ fn run(sup: Arc<BackendSupervisor>) {
         }
         sup.set_status("starting", None, None);
 
-        let child = match spawn_backend(&root, port, &sup.used_uv_fallback, &stderr_tail) {
+        let child = match spawn_backend(&root, &host, port, &sup.used_uv_fallback, &stderr_tail) {
             Ok(child) => child,
             Err(err) => {
                 sup.set_status(
@@ -279,6 +287,20 @@ fn find_repo_root() -> Option<PathBuf> {
     None
 }
 
+/// The interface uvicorn binds to. `scripts/dev-desktop.mjs` (the `pnpm dev:desktop`
+/// script) sets `HORRIBLE_DEV_HOST=0.0.0.0` so the desktop node is reachable from the
+/// LAN — the Android companion, remote control and cross-node hassault matches all
+/// need that. The default stays loopback, so any launcher that does NOT ask for it
+/// (including a future packaged build) keeps the backend local-only.
+fn bind_host() -> String {
+    match std::env::var("HORRIBLE_DEV_HOST") {
+        Ok(host) if !host.trim().is_empty() => host.trim().to_string(),
+        _ => "127.0.0.1".to_string(),
+    }
+}
+
+/// Always loopback, whatever the bind host: this is the origin the *webview* uses,
+/// and it runs on this machine. A server bound to 0.0.0.0 answers on it too.
 fn origin_for(port: u16) -> String {
     format!("http://127.0.0.1:{port}")
 }
@@ -289,12 +311,16 @@ fn port_listening(port: u16) -> bool {
 }
 
 /// Prefer the configured default port (browser tabs / curl keep working); else ephemeral.
-fn pick_port(target_port: u16) -> std::io::Result<u16> {
-    if let Ok(listener) = TcpListener::bind((Ipv4Addr::LOCALHOST, target_port)) {
+///
+/// The probe binds the SAME host uvicorn will. Testing loopback while uvicorn takes
+/// 0.0.0.0 is not equivalent — a port held by another process on a different
+/// interface would pass the probe and then fail the real bind.
+fn pick_port(host: &str, target_port: u16) -> std::io::Result<u16> {
+    if let Ok(listener) = TcpListener::bind((host, target_port)) {
         drop(listener);
         return Ok(target_port);
     }
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+    let listener = TcpListener::bind((host, 0))?;
     let port = listener.local_addr()?.port();
     drop(listener);
     Ok(port)
@@ -318,6 +344,7 @@ fn sanitized_path() -> Option<String> {
 
 fn spawn_backend(
     root: &Path,
+    host: &str,
     port: u16,
     used_uv_fallback: &AtomicBool,
     stderr_tail: &Arc<Mutex<VecDeque<String>>>,
@@ -343,7 +370,7 @@ fn spawn_backend(
     cmd.args([
         "backend.app:app",
         "--host",
-        "127.0.0.1",
+        host,
         "--port",
         &port.to_string(),
     ])

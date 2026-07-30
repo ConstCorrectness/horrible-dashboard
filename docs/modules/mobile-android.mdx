@@ -227,6 +227,8 @@ Kotlin 2.0.21 with the Compose compiler plugin; dependencies are pinned in
 
 1. **Bind the backend to the LAN.** `pnpm dev` listens on `127.0.0.1` only; use
    `pnpm dev:lan` (`--host 0.0.0.0`) or the phone cannot reach `/peer-ws` at all.
+   `pnpm dev:desktop` already binds `0.0.0.0` — pairing a phone is most of why it
+   defaults that way (see [setup](../setup.mdx)).
 2. **Same network.** Phone and desktop on the same subnet, with client isolation
    off on the access point.
 3. **Allow the port through the firewall.** On Windows the first bind prompts;
