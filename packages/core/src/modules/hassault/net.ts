@@ -67,6 +67,16 @@ export interface Command {
    * server-side; see `backend/modules/hassault/weapons.py`.
    */
   viewT?: number;
+  /**
+   * Zoom step we were scoped to: 0 for none, 1-based into the weapon's
+   * `zoomLevels`.
+   *
+   * Sent with the *shot* rather than as a state change of its own, because what
+   * the server does with it is pick the cone for this trigger pull. It is
+   * clamped against the weapon actually held — see `clamp_zoom` in
+   * `backend/modules/hassault/weapons.py`.
+   */
+  scoped?: number;
 }
 
 /** The combat half of a command, decided by `ShotController` rather than by keys. */
@@ -75,6 +85,8 @@ export interface ShotIntent {
   reload: boolean;
   weapon: number;
   viewT: number;
+  /** Zoom step at the instant of the shot; 0 when not scoped. */
+  scoped: number;
 }
 
 export interface PlayerRow {
@@ -291,6 +303,10 @@ export class Predictor {
       if (shot.fire) {
         command.fire = true;
         command.viewT = shot.viewT;
+        // Only on a shot, and only when actually scoped: it decides this pull's
+        // cone and nothing else, so on every other frame it would be a number
+        // the server reads and discards sixty times a second.
+        if (shot.scoped > 0) command.scoped = shot.scoped;
       }
       if (shot.reload) command.reload = true;
       if (shot.weapon >= 0) command.weapon = shot.weapon;

@@ -548,6 +548,11 @@ reaching for a real key, but crouch genuinely wants to live on Ctrl. It is also 
 action that does *not* live in the panel's held-key set: in toggle mode it outlives the
 keypress that set it, so it gets a ref of its own.
 
+**The mouse is not in the table at all**, and the `ACTIONS` list says so rather
+than offering rows that cannot be bound: left is the trigger, right is the
+[scope](#the-snipers-scope), and the wheel cycles weapons. A keyboard rebinding
+table that listed "fire" would be a lie about what it controls.
+
 ## The weapon view model
 
 Before this there was nothing here: the player was a floating camera with a
@@ -618,15 +623,18 @@ came for stay one click deep however much settings grow:
 
 | Section | What it answers |
 | --- | --- |
-| **Play** | Map, then **Train** (alone, nothing shooting back) or **Host** (a match here, with bots) |
+| **Play** | Map, then **Train** (alone, against dummies) or **Host** (a match here, with bots) |
 | **Servers** | What is running — here, on the LAN, and on friends' machines |
 | **Friends** | Who is about, and who has invited you |
 | **Settings** | Sensitivity, field of view, volume, crouch mode |
 | **Controls** | Rebind every key |
 
-**Train is deliberately not a match.** It is one player on a map with nothing to
-shoot, which is what learning the movement wants: the chained-jump timing and the
-shoot-jump are exactly the sort of thing to practise before somebody is aiming at you.
+**Train is deliberately not a match.** It is one player on a map against static
+dummies that do not shoot back, which is what learning the movement wants: the
+chained-jump timing and the shoot-jump are exactly the sort of thing to practise
+before somebody is aiming at you. The gun works there — see
+[the training range](#the-training-range) — because the shoot-jump cannot be
+practised without one.
 The Play section also carries a short description of the movement rules, because a
 mechanic nobody is told about is a mechanic nobody uses.
 
@@ -1134,6 +1142,53 @@ Two rules do more work than they look like they do:
 Spread is sampled uniformly over the cone's *area* rather than uniformly in angle,
 or every pellet clusters at the centre and a shotgun behaves like a rifle at range.
 
+### The sniper's scope
+
+The sniper is the one weapon with a scope, and the right mouse button steps
+through it: **none → 2× → 4× → none**. A cycle rather than a hold, because the
+magnifications are discrete — holding a button for 2× and needing a *different*
+gesture for 4× would be two controls for one axis. Weapons without a scope ignore
+the button rather than consuming it.
+
+Three things move together, and all three come from the **served** `zoomLevels`
+rather than a copy in TypeScript:
+
+- **The field of view** is divided by the magnification. A scope narrows what you
+  can see; it does not enlarge anything.
+- **The mouse sensitivity** is divided by the same number, so a given movement of
+  the hand sweeps the same distance *on screen* at any zoom. Without this, 4×
+  multiplies every twitch by four and the scope is unusable at exactly the range
+  it exists for.
+- **The cone the next shot uses**, which is the mechanical half and the only part
+  the server decides.
+
+That last one is why the scope is a real choice and not a free magnifier. The
+sniper carries a second cone, `hipfire_spread`, twenty-seven times its scoped one:
+a 72-damage rifle that could be fired accurately from the hip would simply be the
+best close-quarters weapon *as well as* the best long-range one. The crosshair
+reads whichever cone is currently in force, so an unscoped sniper visibly is not
+worth trusting.
+
+The zoom step rides on the **shot**, as `scoped`, for the same reason `fire` rides
+on a movement command: what the server does with it is pick the cone for that one
+trigger pull. It is **client-owned and server-clamped** — client-owned because a
+scope changes what you can see and how far your mouse moves you, both of which
+already live on your machine, and clamped because the weapon you are holding
+decides how far it can zoom. `weapons.clamp_zoom` does that clamping, and it does
+it *there* rather than in the wire parser deliberately: the parser does not know
+which weapon the command will be applied to, so a player switching from the sniper
+to the shotgun mid-flight would otherwise carry a zoom level onto a weapon with no
+scope — which is a request for the shotgun's hip-fire penalty to be silently
+waived. The parser floors the claim at zero; the simulation owns the ceiling.
+
+The scope drops on a weapon switch, on death, and when the pause menu opens. The
+FOV is the one piece of state here whose cause is invisible, so nothing should be
+able to leave you at 4× wondering why.
+
+Bots scope too. `_choose_weapon` hands them the sniper past `LONG_RANGE`, and
+without this the hip-fire penalty would land entirely on the bots — reading as the
+bots getting worse rather than as the scope being a mechanic.
+
 ### Health, death, and what is private
 
 Health is **public**, in the shared snapshot rows: a wounded enemy is exactly the
@@ -1174,6 +1229,71 @@ of disagreement that makes a game feel dishonest. The movement block prediction
 rebases on (`you.move`) and the noises you can hear (`you.noise`) go in the private
 envelope with ammo, for the same two reasons: nobody else's business, and per-packet
 cost.
+
+## The training range
+
+**Train** enters the map alone. For a long time that also meant entering it
+unarmed: `ShotController` needs a `SelfState` to fire, offline there is nobody to
+send one, and the ammo HUD was gated behind being in a match. The result read to a
+player as "this game has no shooting" — which is a fair reading of a game where
+the trigger does nothing.
+
+`training.ts` plays the server's part locally. It owns ammo, reloads, a set of
+static dummies and the hitscan against them, and hands back **the same
+`SelfState` a snapshot would have carried**. That is the whole trick: the trigger,
+the crosshair, the recoil, the ammo counter and the view model all take the
+identical path they take in a match, because they are handed the identical object.
+A trigger that behaved differently in training is a trigger training cannot teach
+you — and shoot-jumping in particular, which is one of the techniques the mode
+exists for, cannot be practised without a working gun.
+
+**Nothing in it is authoritative and none of it goes on a wire.** In a match the
+server owns every one of these decisions and the file is not consulted. That is
+also why it can be simple: no rewind, no lag compensation, no validation, because
+there is exactly one client and it is the only thing that exists.
+
+Two details worth keeping:
+
+- **Dummies are `PlayerRow`s**, so the existing avatar pool draws them. A target
+  that rendered differently from a player would be practice against something the
+  match does not contain.
+- **They stand on the map's own spawn points**, nearest first, never the one you
+  are standing on. A bundled map guarantees every spawn is standable — that is
+  what the playability test checks — so this cannot put a dummy inside a wall on a
+  map it has never seen.
+
+### Shot geometry exists three times now
+
+`trace.ts` is a port of `raycast_world` and `ray_hits_body`, because the range has
+no server to ask where a shot stopped. That makes shot geometry a third rule with
+two implementations, after `physics.py`/`world.ts`.
+
+The answer is the same one movement gets: `physics-vectors.json` now carries
+`traces` and `bodies` alongside `cases` and `spawns`, generated from the Python and
+replayed by **both** suites. The fixture pins *agreement*; each side's own unit
+tests pin correctness. The DDA is the part that needed it — a dozen lines where an
+off-by-one on a cell boundary stops shots a fraction early, reports nothing, and
+quietly teaches a player the wrong thing about their own aim.
+
+One number is a deliberate approximation rather than a port: `falloffStart` is not
+served, because in a match the server does that arithmetic and the browser never
+needed it. Rather than widen the wire for a number only training reads, the range
+derives it from what *is* served. It only ever colours a damage figure on a dummy.
+
+### A gunless game is never a quiet state
+
+The loadout fetch used to fail into a swallowed `catch`, on the reasoning that
+movement and the map still work without weapons. They do — but an empty loadout
+also means `ShotController` bails on **every** frame, so the game silently becomes
+one where the trigger does nothing, in a real match, with nothing anywhere saying
+why. The overwhelmingly likely cause is a backend older than
+`GET /api/hassault/weapons`, which 404s here and produces a symptom that points
+nowhere near it.
+
+So the error is surfaced: a red line in the main menu and on the click-to-play
+hint, and **Host is disabled** while it stands — a match nobody can fire in wastes
+everyone's time, not just yours. Training stays open, because practising the
+movement without a gun is still practising the movement.
 
 ## Bots
 

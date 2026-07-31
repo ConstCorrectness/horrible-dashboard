@@ -27,6 +27,12 @@ from backend.modules.hassault.physics import (
     spawn_at,
     step,
 )
+from backend.modules.hassault.weapons import (
+    BODY_HEIGHT,
+    aim_vector,
+    ray_hits_body,
+    raycast_world,
+)
 
 OUT = Path("packages/core/src/modules/hassault/__tests__/physics-vectors.json")
 
@@ -392,6 +398,158 @@ SPAWN_CASES = [
 ]
 
 
+# Shot geometry is duplicated the same way movement is, now that the training
+# range traces its own shots (`packages/core/src/modules/hassault/trace.ts`).
+# The DDA is the part worth pinning: it is a dozen lines where an off-by-one on a
+# cell boundary produces shots that stop a fraction early, which nothing visibly
+# reports and which would teach a player the wrong thing about their own aim.
+#
+# Angles rather than raw direction vectors, so a case reads as "stand here and
+# look there" and a disagreement about `aim_vector` itself is also caught.
+TRACE_CASES = [
+    {
+        "name": "a level shot down a corridor stops on the far wall",
+        "world": "room",
+        "origin": [3.0, 8.0, 4.5],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "max_distance": 100.0,
+    },
+    {
+        "name": "a shot into the floor stops at the floor",
+        "world": "room",
+        "origin": [8.0, 8.0, 4.5],
+        "yaw": 0.0,
+        "pitch": -1.2,
+        "max_distance": 100.0,
+    },
+    {
+        "name": "a shot into the ceiling stops at the ceiling",
+        "world": "room",
+        "origin": [8.0, 8.0, 4.5],
+        "yaw": 0.0,
+        "pitch": 1.3,
+        "max_distance": 100.0,
+    },
+    {
+        "name": "a diagonal shot crosses cells and still finds the corner",
+        "world": "room",
+        "origin": [3.0, 3.0, 4.5],
+        "yaw": 0.7853981633974483,
+        "pitch": 0.0,
+        "max_distance": 100.0,
+    },
+    {
+        "name": "a shot that reaches its range limit reports the range",
+        "world": "room",
+        "origin": [3.0, 8.0, 4.5],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "max_distance": 2.0,
+    },
+    {
+        "name": "a shot at a step is stopped by the raised floor beyond it",
+        "world": "steps",
+        "origin": [3.0, 8.0, 1.5],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "max_distance": 100.0,
+    },
+    {
+        "name": "a shot over a step clears it",
+        "world": "steps",
+        "origin": [3.0, 8.0, 6.0],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "max_distance": 100.0,
+    },
+    {
+        "name": "a heightfield is traced as a step, not as a slope",
+        "world": "slope",
+        "origin": [3.0, 8.0, 9.0],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "max_distance": 100.0,
+    },
+    {
+        "name": "a shot straight up leaves through the ceiling of its own cell",
+        "world": "room",
+        "origin": [8.0, 8.0, 4.5],
+        "yaw": 0.0,
+        "pitch": 1.5707963267948966,
+        "max_distance": 100.0,
+    },
+    {
+        "name": "a shot backwards down the corridor stops on the near wall",
+        "world": "room",
+        "origin": [12.0, 8.0, 4.5],
+        "yaw": 3.141592653589793,
+        "pitch": 0.0,
+        "max_distance": 100.0,
+    },
+]
+
+# The body test is the other half of a shot: a cylinder, an interval intersection,
+# and two cases that are easy to get backwards — a shot that starts inside
+# somebody (point blank, a hit at zero, not a miss) and one aimed over their head.
+BODY_CASES = [
+    {
+        "name": "a body straight ahead is hit at its near face",
+        "origin": [8.0, 8.0, 4.5],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "feet": [20.0, 8.0, 0.0],
+    },
+    {
+        "name": "a shot past a body misses",
+        "origin": [8.0, 8.0, 4.5],
+        "yaw": 0.3,
+        "pitch": 0.0,
+        "feet": [20.0, 8.0, 0.0],
+    },
+    {
+        "name": "a muzzle already inside a body is point blank, not a miss",
+        "origin": [20.0, 8.0, 4.5],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "feet": [20.0, 8.0, 0.0],
+    },
+    {
+        "name": "a shot over a standing body misses",
+        "origin": [8.0, 8.0, 4.5],
+        "yaw": 0.0,
+        "pitch": 0.35,
+        "feet": [20.0, 8.0, 0.0],
+    },
+    {
+        "name": "a shot straight down into a body underfoot connects",
+        "origin": [20.0, 8.0, 9.0],
+        "yaw": 0.0,
+        "pitch": -1.5707963267948966,
+        "feet": [20.0, 8.0, 0.0],
+    },
+    # A pair, and only meaningful as one: the same shot at the same angle, which
+    # a standing body takes in the shoulders and a crouched body ducks. Pitched
+    # to land between the two heights on purpose — at any steeper angle both miss
+    # and the crouch case would pass while proving nothing.
+    {
+        "name": "a high shot still catches a standing body",
+        "origin": [8.0, 8.0, 4.5],
+        "yaw": 0.0,
+        "pitch": 0.05,
+        "feet": [20.0, 8.0, 0.0],
+    },
+    {
+        "name": "a crouched body is shorter and the same shot sails over it",
+        "origin": [8.0, 8.0, 4.5],
+        "yaw": 0.0,
+        "pitch": 0.05,
+        "feet": [20.0, 8.0, 0.0],
+        "height": 3.9,
+    },
+]
+
+
 def main() -> None:
     out_cases = []
     for case in CASES:
@@ -458,6 +616,29 @@ def main() -> None:
             }
         )
 
+    out_traces = []
+    for case in TRACE_CASES:
+        world = build(WORLDS[case["world"]])
+        direction = aim_vector(case["yaw"], case["pitch"])
+        distance = raycast_world(
+            world,
+            (case["origin"][0], case["origin"][1], case["origin"][2]),
+            direction,
+            case["max_distance"],
+        )
+        out_traces.append({**case, "expect": distance})
+
+    out_bodies = []
+    for case in BODY_CASES:
+        direction = aim_vector(case["yaw"], case["pitch"])
+        hit = ray_hits_body(
+            (case["origin"][0], case["origin"][1], case["origin"][2]),
+            direction,
+            (case["feet"][0], case["feet"][1], case["feet"][2]),
+            height=case.get("height", BODY_HEIGHT),
+        )
+        out_bodies.append({**case, "expect": hit})
+
     payload = {
         "_comment": (
             "Cross-language physics conformance vectors. Read by BOTH "
@@ -472,10 +653,13 @@ def main() -> None:
         "worlds": WORLDS,
         "cases": out_cases,
         "spawns": out_spawns,
+        "traces": out_traces,
+        "bodies": out_bodies,
     }
     OUT.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     print(
-        f"wrote {OUT} with {len(out_cases)} step cases, {len(out_spawns)} spawn cases"
+        f"wrote {OUT} with {len(out_cases)} step cases, {len(out_spawns)} spawn "
+        f"cases, {len(out_traces)} traces, {len(out_bodies)} body cases"
     )
     for c in out_cases:
         e = c["expect"]

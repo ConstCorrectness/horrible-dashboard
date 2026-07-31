@@ -140,6 +140,16 @@ class Command:
     """Server-clock ms the client was *rendering* when it fired. See `weapons.py`
     — this is what the shot is rewound to, clamped."""
     view_t: float | None = None
+    """Zoom step the client says it was scoped to: 0 for none, 1-based into the
+    weapon's `zoom_levels`.
+
+    Client-owned like the view angles, and for the same reason — the scope only
+    changes what the player can see and how far the mouse moves them, both of
+    which already live on their machine. What the server does with it is decide
+    the shot's cone, so it is clamped against the weapon actually held rather
+    than believed. See `weapons.clamp_zoom`.
+    """
+    scoped: int = 0
 
 
 @dataclass(slots=True)
@@ -714,6 +724,7 @@ class MatchRoom:
             direction,
             targets,
             self.rng,
+            spread=weapons.effective_spread(weapon, command.scoped),
             rewound_ms=max(0.0, now_ms - rewind_to),
             heights=heights,
         )

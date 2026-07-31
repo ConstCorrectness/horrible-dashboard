@@ -30,7 +30,7 @@ import {
   type BootProgress,
 } from './boot';
 import { BootOverlay } from './BootOverlay';
-import { kickVector, ShotController } from './combat';
+import { kickVector, NO_SHOT, ShotController } from './combat';
 import {
   codeMap,
   describeControls,
@@ -51,8 +51,9 @@ import {
   SENSITIVITY_KEY,
   VOLUME_KEY,
 } from './menu-panels';
-import type { NoiseEvent, PlayerRow, Vec3 } from './net';
+import type { NoiseEvent, PlayerRow, SelfState, Vec3 } from './net';
 import {
+  applyImpulse,
   applyLook,
   clampPitch,
   createPlayer,
@@ -65,6 +66,7 @@ import {
 } from './player';
 import { installReveal, type Reveal } from './reveal';
 import { MatchSession, type SessionState } from './session';
+import { TrainingRange } from './training';
 import { WeaponViewModel } from './viewmodel';
 import { World } from './world';
 
@@ -227,10 +229,37 @@ export function HorribleAssaultPanel() {
   const [net, setNet] = useState<SessionState>(EMPTY_SESSION);
   const [invitees, setInvitees] = useState<Invitee[]>([]);
   const [weapons, setWeapons] = useState<WeaponSpec[]>([]);
+  /**
+   * Why there is no loadout, when there is no loadout.
+   *
+   * This used to be a swallowed `catch`, on the reasoning that movement and the
+   * map still work without weapons. They do — but an empty loadout also means
+   * `ShotController` bails on every frame, so the game silently becomes one
+   * where the trigger does nothing, in a *match*, with nothing anywhere saying
+   * why. A gunless game is never a state to enter quietly.
+   */
+  const [loadoutError, setLoadoutError] = useState('');
   const [botSkill, setBotSkill] = useState('normal');
   const [showScores, setShowScores] = useState(false);
   /** Timestamps, compared against `Date.now()` so a stale one simply expires. */
   const [flash, setFlash] = useState({ hit: 0, killed: 0, hurt: 0 });
+  /**
+   * Our own state while training, in the same shape a snapshot delivers.
+   *
+   * Pushed from the frame loop only when one of its fields actually changes, not
+   * every frame: the magazine moves a dozen times a second at most, and a
+   * `setState` per frame would re-render the whole panel sixty times a second to
+   * redraw a number that did not move.
+   */
+  const [localYou, setLocalYou] = useState<SelfState | null>(null);
+  /**
+   * Current zoom step, mirrored out of `ShotController` for the view.
+   *
+   * The controller owns it — it is read every frame to build the command — but
+   * the FOV, the sensitivity divisor and the scope overlay are all React's
+   * business, and this is the one line between them.
+   */
+  const [scoped, setScoped] = useState(0);
 
   // ---- the pause menu and the preferences it edits --------------------------
   const [menuOpen, setMenuOpen] = useState(false);
@@ -261,12 +290,21 @@ export function HorribleAssaultPanel() {
   const sceneRef = useRef<SceneHandle | null>(null);
   const sessionRef = useRef<MatchSession | null>(null);
   const shotsRef = useRef<ShotController | null>(null);
+  /** Offline stand-in for everything a match server would own. See `training.ts`. */
+  const rangeRef = useRef<TrainingRange | null>(null);
+  /** Last pushed training state, so the frame loop can tell what changed. */
+  const localYouRef = useRef<SelfState | null>(null);
+  /** Read by the view model, which runs in the same loop and cannot await React. */
+  const localReloadingRef = useRef(false);
+  /** Last zoom step pushed to React, so the loop only pushes transitions. */
+  const scopedRef = useRef(0);
   const audioRef = useRef<GameAudio | null>(null);
   /** Bots the main menu asked for, waiting for the room to exist. `add_bot` needs a
    * room id, and the room is only ours once the welcome lands. */
   const pendingBotsRef = useRef<{ count: number; skill: string } | null>(null);
   if (sessionRef.current === null) sessionRef.current = new MatchSession();
   if (shotsRef.current === null) shotsRef.current = new ShotController();
+  if (rangeRef.current === null) rangeRef.current = new TrainingRange();
   if (audioRef.current === null) audioRef.current = new GameAudio();
 
   // The frame loop is built once and never re-created, so anything it needs to
@@ -276,7 +314,11 @@ export function HorribleAssaultPanel() {
   // Same for the input handlers, which are installed once: a rebind or a new
   // sensitivity has to reach them without tearing down pointer lock to do it.
   const sensitivityRef = useRef(sensitivity);
-  sensitivityRef.current = sensitivity;
+  // Divided by the same magnification the FOV is, so a given mouse movement
+  // sweeps the same *distance on screen* whatever the zoom. Without this, 4×
+  // multiplies every twitch by four and the scope is unusable at exactly the
+  // range it exists for. Recomputed on render, and a zoom change is a render.
+  sensitivityRef.current = sensitivity / (shotsRef.current?.magnification() ?? 1);
   const codesRef = useRef(codes);
   codesRef.current = codes;
   const crouchToggleRef = useRef(crouchToggle);
@@ -340,8 +382,12 @@ export function HorribleAssaultPanel() {
   // not exist on the first pass — the renderer loads lazily — so this re-runs when
   // it arrives.
   useEffect(() => {
-    sceneRef.current?.setFov(fov);
-  }, [fov, progress.renderer]);
+    // Divided by the magnification, which *is* the zoom: a scope narrows the
+    // field of view, it does not enlarge anything. `scoped` is in the deps
+    // because the magnification is read off the controller, which React does not
+    // otherwise watch.
+    sceneRef.current?.setFov(fov / (shotsRef.current?.magnification() ?? 1));
+  }, [fov, scoped, progress.renderer]);
 
   // The loadout, fetched rather than hardcoded: the client needs each weapon's
   // fire interval so it does not send input the server would only discard, and a
@@ -351,11 +397,18 @@ export function HorribleAssaultPanel() {
     void listWeapons()
       .then((specs) => {
         if (cancelled) return;
+        setLoadoutError(specs.length === 0 ? 'The server returned an empty loadout.' : '');
         setWeapons(specs);
         shotsRef.current?.setWeapons(specs, Math.min(2, specs.length - 1));
+        rangeRef.current?.setWeapons(specs, Math.min(2, specs.length - 1));
       })
-      .catch(() => {
-        /* no loadout means no shooting; movement and the map still work */
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        // Surfaced rather than swallowed. The overwhelmingly likely cause is a
+        // backend older than the weapons route, which 404s here and then shows
+        // up as a game where the trigger does nothing — a symptom that points
+        // nowhere near its cause unless something says this happened.
+        setLoadoutError(err instanceof Error ? err.message : String(err));
       });
     return () => {
       cancelled = true;
@@ -631,10 +684,72 @@ export function HorribleAssaultPanel() {
             session.queue(session.predictor.record(world, player, input, dt, intent, kick));
             session.predictor.decay(dt);
           } else {
-            // Offline there is nobody to resolve a hit, so this never fires — but
-            // it is read the same way, so the day it can, the gun already kicks.
-            fired = shots?.frame(now, 0, null).fire ?? false;
+            // Offline the training range plays the part of the server: it owns
+            // ammo, reloads and the dummies, and hands back the same `SelfState`
+            // a snapshot would have carried. `ShotController` therefore takes the
+            // identical path it takes in a match and needs no offline branch —
+            // which is the point, because a trigger that behaves differently in
+            // training is a trigger training cannot teach you.
+            const range = rangeRef.current;
+            const climb = shots?.recoil(dt) ?? { yaw: 0, pitch: 0 };
+            player.yaw += climb.yaw;
+            player.pitch = clampPitch(player.pitch + climb.pitch);
+            range?.update(dt);
+            // Read once and shared: `selfState` drains hitmarkers, so calling it
+            // again for the HUD would consume the markers the controller was
+            // handed and show none of them.
+            const self = range?.selfState() ?? null;
+            const intent = shots?.frame(now, 0, self) ?? NO_SHOT;
+            if (intent.reload) range?.requestReload();
+            if (intent.weapon >= 0) range?.select(intent.weapon);
+            fired = intent.fire;
+            localReloadingRef.current = self?.reloading ?? false;
+            // Only when something the HUD draws actually moved.
+            const prev = localYouRef.current;
+            if (
+              self &&
+              (prev === null ||
+                prev.ammo !== self.ammo ||
+                prev.reserve !== self.reserve ||
+                prev.reloading !== self.reloading ||
+                prev.weapon !== self.weapon)
+            ) {
+              localYouRef.current = self;
+              setLocalYou(self);
+            }
+            if (fired && range && shots) {
+              const shot = range.fire(
+                world,
+                player.x,
+                player.y,
+                player.z,
+                // The eye as an *offset* from the feet, which is what a muzzle
+                // position is built from — and which crouching lowers.
+                eyeHeight(player) - player.z,
+                player.yaw,
+                player.pitch,
+                intent.scoped,
+              );
+              if (shot) {
+                effects.shot(shot.origin, shot.ends, TEAM_COLORS[0] ?? 0xffffff, true);
+                if (shot.hits.length > 0) {
+                  const killed = shot.hits.some((h) => h.killed);
+                  setFlash((f) => ({
+                    ...f,
+                    hit: Date.now(),
+                    killed: killed ? Date.now() : f.killed,
+                  }));
+                }
+              }
+            }
             step(world, player, input, dt);
+            // After the step, matching the order `Predictor.record` uses online
+            // and the order the match server fires in. Applied before it, a
+            // shoot-jump would land somewhere training never taught you.
+            if (fired && shots) {
+              const kick = kickVector(shots.weapon, player.yaw, player.pitch, player.crouch > 0.5);
+              applyImpulse(player, kick.x, kick.y, kick.z);
+            }
           }
 
           // Our own sounds, made here rather than waited for: the server does not
@@ -661,9 +776,23 @@ export function HorribleAssaultPanel() {
           }
         }
 
+        // One line out of the controller, and only on a change: the zoom step
+        // drives the FOV, the look sensitivity and the scope overlay, all of
+        // which are React's.
+        if (shots && shots.scoped !== scopedRef.current) {
+          scopedRef.current = shots.scoped;
+          setScoped(shots.scoped);
+        }
+
         if (session) {
           session.pump(now);
-          remote = online ? session.snapshots.sample(now, session.state.playerId) : [];
+          // Offline the bodies on the map are the training dummies. They are
+          // `PlayerRow`s so they go through the same avatar pool as everybody
+          // else — a target that rendered differently from a player would be
+          // practice against something the match does not contain.
+          remote = online
+            ? session.snapshots.sample(now, session.state.playerId)
+            : (rangeRef.current?.rows() ?? []);
           avatars.sync(remote);
           if (session.pendingShots.length > 0) {
             // Teams come from the roster, not from `remote` — that one excludes
@@ -718,7 +847,9 @@ export function HorribleAssaultPanel() {
           viewmodel.update(dt, {
             speed: moving ? MOVE_SPEED : 0,
             onGround: player.onGround,
-            reloading: session?.state.you?.reloading ?? false,
+            reloading: online
+              ? (session?.state.you?.reloading ?? false)
+              : localReloadingRef.current,
             yaw: player.yaw,
             pitch: player.pitch,
             visible: alive,
@@ -957,6 +1088,10 @@ export function HorribleAssaultPanel() {
     setMenuOpen(true);
     keysRef.current.clear();
     shotsRef.current?.release();
+    // Coming back from the menu at 4× with no memory of having scoped is a
+    // disorienting way to resume, and the FOV is the one piece of state here
+    // whose cause is invisible.
+    shotsRef.current?.unscope();
     setShowScores(false);
     if (document.pointerLockElement) document.exitPointerLock();
     releaseCapture();
@@ -997,12 +1132,26 @@ export function HorribleAssaultPanel() {
       applyLook(playerRef.current, e.movementX, e.movementY, sensitivityRef.current);
     };
     const onMouseDown = (e: MouseEvent) => {
-      if (!isLocked() || e.button !== 0) return;
+      if (!isLocked()) return;
+      // Right is the scope, left is the trigger. A weapon with no scope ignores
+      // the right button entirely rather than consuming it.
+      if (e.button === 2) {
+        e.preventDefault();
+        shotsRef.current?.cycleScope();
+        return;
+      }
+      if (e.button !== 0) return;
       e.preventDefault();
       shotsRef.current?.press();
     };
     const onMouseUp = (e: MouseEvent) => {
       if (e.button === 0) shotsRef.current?.release();
+    };
+    // Pointer lock suppresses the context menu in most browsers, but not all and
+    // not on every platform — and one that opens mid-firefight steals the
+    // pointer. Cheap insurance for a button the game now uses.
+    const onContextMenu = (e: MouseEvent) => {
+      if (isLocked()) e.preventDefault();
     };
     const onWheel = (e: WheelEvent) => {
       if (!isLocked()) return;
@@ -1064,6 +1213,7 @@ export function HorribleAssaultPanel() {
     document.addEventListener('mousemove', onMouseMove);
     document.addEventListener('mousedown', onMouseDown);
     document.addEventListener('mouseup', onMouseUp);
+    document.addEventListener('contextmenu', onContextMenu);
     el.addEventListener('wheel', onWheel, { passive: false });
     // Capture phase, deliberately. The shell's dispatcher is also on `window` in
     // the capture phase, and when its Escape ladder consumes the key it calls
@@ -1078,6 +1228,7 @@ export function HorribleAssaultPanel() {
       document.removeEventListener('mousemove', onMouseMove);
       document.removeEventListener('mousedown', onMouseDown);
       document.removeEventListener('mouseup', onMouseUp);
+      document.removeEventListener('contextmenu', onContextMenu);
       el.removeEventListener('wheel', onWheel);
       window.removeEventListener('keydown', onKeyDown, true);
       window.removeEventListener('keyup', onKeyUp);
@@ -1109,14 +1260,28 @@ export function HorribleAssaultPanel() {
   /**
    * Enter the world alone, on the loaded map.
    *
-   * Not a match: no server, nothing to shoot, and noclip available. This is where
-   * the movement is learnable — the chained-jump timing and the shoot-jump are
-   * exactly the sort of thing to practise before somebody is aiming at you.
+   * Not a match: no server, and noclip available. This is where the movement is
+   * learnable — the chained-jump timing and the shoot-jump are exactly the sort
+   * of thing to practise before somebody is aiming at you, and the shoot-jump in
+   * particular cannot be practised without a working gun, which is why the range
+   * exists (`training.ts`). The dummies stand on the map's own spawn points and
+   * do not shoot back.
    */
   const train = useCallback(() => {
     sessionRef.current?.leave();
+    shotsRef.current?.reset();
+    const range = rangeRef.current;
+    const world = worldRef.current;
+    if (range) {
+      range.reset();
+      range.setWeapons(weapons, Math.min(2, weapons.length - 1));
+      // Placed relative to where we are about to stand, so the nearest dummies
+      // are the ones in front of you rather than the ones the map happens to
+      // list first.
+      if (world) range.place(world, playerRef.current.x, playerRef.current.y);
+    }
     deploy();
-  }, [deploy]);
+  }, [deploy, weapons]);
 
   /** Host a match here on the loaded map and enter it, with bots if asked. */
   const host = useCallback(
@@ -1243,13 +1408,17 @@ export function HorribleAssaultPanel() {
   }
 
   const online = net.status === 'joined';
-  const you = net.you;
+  // The socket's word in a match, the range's own in training. Same shape either
+  // way, so everything downstream — the ammo counter, the reload line, the
+  // weapon name — is written once rather than once per mode.
+  const you = online ? net.you : localYou;
   const weapon = you ? weapons[you.weapon] : undefined;
   const now = Date.now();
   const showHit = now - flash.hit < FLASH_MS;
   const showKilled = now - flash.killed < FLASH_MS * 2;
   const showHurt = now - flash.hurt < FLASH_MS * 2;
   const crosshairGap = shotsRef.current?.crosshairSpread() ?? 4;
+  const magnification = shotsRef.current?.magnification() ?? 1;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
@@ -1505,16 +1674,21 @@ export function HorribleAssaultPanel() {
                 <span style={{ color: 'var(--text-dim)' }}>
                   {describeControls(controls)} · Esc menu
                 </span>
-                {online ? (
+                <span style={{ color: 'var(--text-dim)' }}>
+                  Left fire · right scope · wheel or {keyLabel(controls.weapon1[0] ?? '1')}–
+                  {keyLabel(controls.weapon5[0] ?? '5')} weapon ·{' '}
+                  {keyLabel(controls.reload[0] ?? 'R')} reload
+                  {online ? <> · {keyLabel(controls.scores[0] ?? 'Tab')} scores</> : null}
+                </span>
+                {!online && (
                   <span style={{ color: 'var(--text-dim)' }}>
-                    Fire · wheel or {keyLabel(controls.weapon1[0] ?? '1')}–
-                    {keyLabel(controls.weapon5[0] ?? '5')} weapon ·{' '}
-                    {keyLabel(controls.reload[0] ?? 'R')} reload ·{' '}
-                    {keyLabel(controls.scores[0] ?? 'Tab')} scores
+                    Training — the dummies don&rsquo;t shoot back. Host a match from the menu to
+                    fight.
                   </span>
-                ) : (
-                  <span style={{ color: 'var(--text-dim)' }}>
-                    Training — nothing shoots back. Host a match from the menu to fight.
+                )}
+                {loadoutError && (
+                  <span style={{ color: '#f85149' }}>
+                    No loadout — the trigger will do nothing. {loadoutError}
                   </span>
                 )}
               </>
@@ -1583,6 +1757,7 @@ export function HorribleAssaultPanel() {
                 onDismissInvite={(room) => sessionRef.current?.dismissInvite(room)}
                 ready={info != null}
                 error={error}
+                loadoutError={loadoutError}
               />
             }
           />
@@ -1590,7 +1765,11 @@ export function HorribleAssaultPanel() {
 
         {locked && (
           <>
-            <Crosshair gap={crosshairGap} hit={showHit} killed={showKilled} />
+            {scoped > 0 ? (
+              <ScopeOverlay magnification={magnification} hit={showHit} killed={showKilled} />
+            ) : (
+              <Crosshair gap={crosshairGap} hit={showHit} killed={showKilled} />
+            )}
             <div
               style={{
                 position: 'absolute',
@@ -1656,7 +1835,7 @@ export function HorribleAssaultPanel() {
               </div>
             )}
 
-            {online && you && weapon && (
+            {you && weapon && (
               <div
                 style={{
                   position: 'absolute',
@@ -1760,6 +1939,114 @@ function NoiseRing({
  * roll pellets inside, so a shotgun looks like a shotgun without anyone having
  * to read the numbers.
  */
+/**
+ * The sniper's sight picture, drawn in CSS rather than as a texture.
+ *
+ * A texture would be an asset, and assets here are either someone else's
+ * copyright or something to draw by hand — the same rule the maps and the audio
+ * follow. Two radial gradients and a few hairlines is all a scope actually is.
+ *
+ * The vignette is the mechanical half, not decoration: it is what a scope
+ * *costs*. Trading peripheral vision for magnification is the decision the
+ * weapon is built around, and a zoom with a clear view all round would be a free
+ * upgrade rather than a choice.
+ */
+function ScopeOverlay({
+  magnification,
+  hit,
+  killed,
+}: {
+  magnification: number;
+  hit: boolean;
+  killed: boolean;
+}) {
+  const color = killed ? '#ff6b6b' : hit ? '#ffd166' : 'rgba(220,255,220,0.85)';
+  return (
+    <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+      {/* The blacked-out surround. `min(...)` on both axes keeps the sight
+          circular in a pane of any shape rather than stretching to an ellipse. */}
+      <div
+        style={{
+          position: 'absolute',
+          inset: 0,
+          background:
+            'radial-gradient(circle at 50% 50%, rgba(0,0,0,0) min(31vh, 31vw), ' +
+            'rgba(0,0,0,0.55) min(33vh, 33vw), rgba(0,0,0,0.97) min(36vh, 36vw))',
+        }}
+      />
+      <div
+        style={{
+          position: 'absolute',
+          left: '50%',
+          top: '50%',
+          width: 'min(66vh, 66vw)',
+          height: 'min(66vh, 66vw)',
+          transform: 'translate(-50%, -50%)',
+          borderRadius: '50%',
+          border: '1px solid rgba(0,0,0,0.85)',
+          boxShadow: 'inset 0 0 60px rgba(0,0,0,0.55)',
+        }}
+      />
+      {/* Crosshairs: full-width hairlines with a gap at the centre, so the thing
+          being aimed at is never behind the reticle drawing it. */}
+      {[
+        { left: '50%', top: 0, width: 1, height: '100%', translate: '-50%, 0' },
+        { left: 0, top: '50%', width: '100%', height: 1, translate: '0, -50%' },
+      ].map((line, i) => (
+        <div
+          key={i}
+          style={{
+            position: 'absolute',
+            left: line.left,
+            top: line.top,
+            width: line.width,
+            height: line.height,
+            transform: `translate(${line.translate})`,
+            background: color,
+            opacity: 0.5,
+            // The gap. Cut from the middle of the line itself rather than drawn
+            // as two elements per axis.
+            WebkitMaskImage:
+              i === 0
+                ? 'linear-gradient(to bottom, #000 44%, transparent 44%, transparent 56%, #000 56%)'
+                : 'linear-gradient(to right, #000 44%, transparent 44%, transparent 56%, #000 56%)',
+            maskImage:
+              i === 0
+                ? 'linear-gradient(to bottom, #000 44%, transparent 44%, transparent 56%, #000 56%)'
+                : 'linear-gradient(to right, #000 44%, transparent 44%, transparent 56%, #000 56%)',
+          }}
+        />
+      ))}
+      {/* The centre dot, which is where the shot goes. */}
+      <div
+        style={{
+          position: 'absolute',
+          left: '50%',
+          top: '50%',
+          width: 3,
+          height: 3,
+          transform: hit ? 'translate(-50%, -50%) rotate(45deg)' : 'translate(-50%, -50%)',
+          borderRadius: '50%',
+          background: color,
+        }}
+      />
+      <div
+        style={{
+          position: 'absolute',
+          left: '50%',
+          top: 'calc(50% + min(23vh, 23vw))',
+          transform: 'translateX(-50%)',
+          fontFamily: 'monospace',
+          fontSize: '0.7rem',
+          color: 'rgba(220,255,220,0.65)',
+        }}
+      >
+        {magnification}×
+      </div>
+    </div>
+  );
+}
+
 function Crosshair({ gap, hit, killed }: { gap: number; hit: boolean; killed: boolean }) {
   const color = killed ? '#ff6b6b' : hit ? '#ffd166' : 'rgba(255,255,255,0.8)';
   const arm = 6;

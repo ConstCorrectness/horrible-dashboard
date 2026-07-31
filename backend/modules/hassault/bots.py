@@ -491,6 +491,24 @@ class BotBrain:
         forward = math.cos(relative)
         strafe = math.sin(relative)
 
+        # -- scope ----------------------------------------------------------
+        #
+        # A bot that picked a scoped weapon picked it *for the range*, so it uses
+        # the scope for the same reason a player would. Without this the hip-fire
+        # penalty would land entirely on the bots — `_choose_weapon` hands them
+        # the sniper past `LONG_RANGE` and they would then fire it through a cone
+        # twenty-seven times too wide, which reads as the bots getting worse
+        # rather than as the scope being a mechanic.
+        #
+        # The second step is kept for genuinely long shots. It costs a bot
+        # nothing to be at 4× — it has no screen to lose peripheral vision on —
+        # so tying it to distance keeps the bot's zoom a consequence of the same
+        # judgement a player makes instead of a free maximum.
+        held = weapons.weapon_at(me.weapon)
+        scoped = 0
+        if held.zoom_levels and target is not None:
+            scoped = 2 if distance > LONG_RANGE * 1.5 else 1
+
         me.bot_seq += 1
         return Command(
             seq=me.bot_seq,
@@ -504,6 +522,7 @@ class BotBrain:
             fire=fire,
             reload=reload_now,
             weapon=switch,
+            scoped=scoped,
             # No rewind: a bot's input is produced here, on this tick, so the
             # world it "saw" is the world as it is.
             view_t=None,

@@ -103,6 +103,19 @@ export interface WeaponSpec {
    * shot. See `kickVector` in `combat.ts`.
    */
   kickback: number;
+  /**
+   * Magnifications the scope steps through, in order. Empty means no scope.
+   *
+   * Served for the same reason `interval` is: these divide both the FOV *and*
+   * the mouse sensitivity, so a hardcoded copy here would be an aim that is
+   * wrong only while scoped — the hardest kind of wrong to notice.
+   */
+  zoomLevels: number[];
+  /**
+   * Cone half-angle while not scoped. Equal to `spread` for every weapon
+   * without a scope, so this can be read unconditionally.
+   */
+  hipfireSpread: number;
 }
 
 /**

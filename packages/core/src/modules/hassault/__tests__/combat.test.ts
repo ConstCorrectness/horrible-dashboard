@@ -5,7 +5,7 @@ import { CROUCH_KICK_SCALE, ShotController, kickVector, recoilKick } from '../co
 import type { SelfState } from '../net';
 
 function spec(over: Partial<WeaponSpec> = {}): WeaponSpec {
-  return {
+  const weapon: WeaponSpec = {
     id: 'assault',
     name: 'Assault Rifle',
     damage: 21,
@@ -20,8 +20,15 @@ function spec(over: Partial<WeaponSpec> = {}): WeaponSpec {
     range: 200,
     auto: true,
     kickback: 0,
+    zoomLevels: [],
+    hipfireSpread: 0.02,
     ...over,
   };
+  // Derived, not defaulted: the server reports `hipfireSpread == spread` for
+  // every weapon without a scope, so a fixture that pinned it would let a case
+  // that overrides only `spread` silently describe a weapon the backend cannot
+  // produce — which is exactly how this factory got the crosshair test wrong.
+  return over.hipfireSpread === undefined ? { ...weapon, hipfireSpread: weapon.spread } : weapon;
 }
 
 const AUTO = spec();
@@ -306,5 +313,97 @@ describe('kickVector', () => {
       const kick = kickVector(shotgun, yaw, pitch);
       expect(Math.hypot(kick.x, kick.y, kick.z)).toBeCloseTo(shotgun.kickback, 6);
     }
+  });
+});
+
+/**
+ * The scope.
+ *
+ * Its accuracy half is the server's (`weapons.clamp_zoom`/`effective_spread`);
+ * what lives here is the state machine — which weapon can scope, what clears it,
+ * and that the shot actually carries the step it was taken at. A zoom that the
+ * command forgets to mention is a scope that silently does nothing.
+ */
+const SCOPED = spec({
+  id: 'sniper',
+  name: 'Sniper',
+  auto: false,
+  interval: 1,
+  mag: 5,
+  spread: 0.002,
+  hipfireSpread: 0.055,
+  zoomLevels: [2, 4],
+});
+
+describe('ShotController scope', () => {
+  it('steps through the magnifications and back to none', () => {
+    const shots = controller([SCOPED]);
+    expect(shots.magnification()).toBe(1);
+    shots.cycleScope();
+    expect([shots.scoped, shots.magnification()]).toEqual([1, 2]);
+    shots.cycleScope();
+    expect([shots.scoped, shots.magnification()]).toEqual([2, 4]);
+    shots.cycleScope();
+    expect([shots.scoped, shots.magnification()]).toEqual([0, 1]);
+  });
+
+  it('ignores the scope on a weapon that has none', () => {
+    const shots = controller([AUTO]);
+    shots.cycleScope();
+    expect(shots.scoped).toBe(0);
+    expect(shots.magnification()).toBe(1);
+  });
+
+  it('carries the zoom step on the shot that was taken at it', () => {
+    const shots = controller([SCOPED]);
+    // Twice, to the second step: a command that carried a boolean would pass
+    // this at 1x and quietly cost the server the difference between 2x and 4x.
+    shots.cycleScope();
+    shots.cycleScope();
+    shots.press();
+    const intent = shots.frame(0, 100, you({ weapon: 0, ammo: 5, mag: 5 }));
+    expect(intent.fire).toBe(true);
+    expect(intent.scoped).toBe(2);
+  });
+
+  it('drops the scope when the weapon changes', () => {
+    const shots = controller([SCOPED, AUTO]);
+    shots.cycleScope();
+    shots.select(1);
+    expect(shots.scoped).toBe(0);
+  });
+
+  it('drops a scope the server switched us out of', () => {
+    // The slot can change without us asking — a correction, a pickup — and only
+    // the frame sees it. Left alone, the FOV would stay at 4x on a rifle.
+    const shots = controller([SCOPED, AUTO]);
+    shots.cycleScope();
+    shots.cycleScope();
+    expect(shots.scoped).toBe(2);
+    shots.frame(0, 100, you({ weapon: 1, ammo: 20 }));
+    expect(shots.scoped).toBe(0);
+  });
+
+  it('drops the scope on death, so you do not respawn zoomed in', () => {
+    const shots = controller([SCOPED]);
+    shots.cycleScope();
+    shots.frame(0, 100, you({ weapon: 0, alive: false }));
+    expect(shots.scoped).toBe(0);
+  });
+
+  it('shows the hip-fire cone in the crosshair until you scope', () => {
+    // The crosshair is the only warning that an unscoped sniper is a gamble, so
+    // it has to read the cone the next shot will actually use.
+    const shots = controller([SCOPED]);
+    const hip = shots.crosshairSpread();
+    shots.cycleScope();
+    expect(shots.crosshairSpread()).toBeLessThan(hip);
+  });
+
+  it('is cleared by reset, like every other piece of trigger state', () => {
+    const shots = controller([SCOPED]);
+    shots.cycleScope();
+    shots.reset();
+    expect(shots.scoped).toBe(0);
   });
 });

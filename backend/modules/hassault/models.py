@@ -169,6 +169,15 @@ class WeaponOut(BaseModel):
     recoil push, and the whole of shoot-jumping. Served rather than duplicated in
     TypeScript because the client predicts the identical impulse."""
     kickback: float
+    """Magnifications the scope steps through, in order; empty means no scope.
+
+    The client divides both its field of view *and* its mouse sensitivity by the
+    current magnification, so a copy of these in TypeScript would be an aim that
+    is wrong only while scoped."""
+    zoomLevels: list[float] = []  # noqa: N815
+    """Cone half-angle while not scoped. Equal to `spread` for every weapon
+    without a scope, so the client can read it unconditionally."""
+    hipfireSpread: float = 0.0  # noqa: N815
 
 
 class Invitee(BaseModel):

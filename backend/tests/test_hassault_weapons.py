@@ -578,3 +578,120 @@ def test_shots_are_batched_into_the_snapshot_rather_than_sent_as_they_happen():
 def test_a_nonsense_weapon_slot_is_clamped_not_obeyed():
     assert weapons.weapon_at(-5).id == weapons.WEAPONS[0].id
     assert weapons.weapon_at(9999).id == weapons.WEAPONS[-1].id
+
+
+# -- the sniper's scope ------------------------------------------------------
+#
+# The scope is the one weapon mechanic whose *accuracy* half is server-side, so
+# these pin the boundary rather than the feel: what a client is allowed to claim,
+# and what the claim is worth once the server has clamped it.
+
+
+def test_only_the_sniper_carries_a_scope():
+    scoped = [w.id for w in weapons.WEAPONS if w.zoom_levels]
+    assert scoped == ["sniper"]
+    assert weapons.WEAPON_BY_ID["sniper"].zoom_levels == (2.0, 4.0)
+
+
+def test_a_scoped_shot_uses_the_tight_cone_and_a_hip_shot_does_not():
+    sniper = weapons.WEAPON_BY_ID["sniper"]
+    assert weapons.effective_spread(sniper, 1) == sniper.spread
+    assert weapons.effective_spread(sniper, 2) == sniper.spread
+    assert weapons.effective_spread(sniper, 0) == sniper.hipfire_spread
+    assert sniper.hipfire_spread > sniper.spread
+
+
+def test_a_weapon_without_a_scope_aims_the_same_however_scoped_it_claims_to_be():
+    """The clamp is what makes this true: switching from the sniper to the
+    shotgun must not carry a zoom level onto a weapon that has no scope, or the
+    shotgun's cone would silently collapse."""
+    shotgun = weapons.WEAPON_BY_ID["shotgun"]
+    assert weapons.clamp_zoom(shotgun, 2) == 0
+    for claim in (0, 1, 2, 99):
+        assert weapons.effective_spread(shotgun, claim) == shotgun.spread
+
+
+def test_a_zoom_step_beyond_the_scope_is_clamped_not_obeyed():
+    sniper = weapons.WEAPON_BY_ID["sniper"]
+    assert weapons.clamp_zoom(sniper, 99) == 2
+    assert weapons.clamp_zoom(sniper, -3) == 0
+
+
+def test_the_scope_is_served_so_the_client_never_hardcodes_the_magnification():
+    """`zoomLevels` divides both the client's FOV and its mouse sensitivity; a
+    second copy in TypeScript is an aim that is wrong only while scoped."""
+    served = weapons.WEAPON_BY_ID["sniper"].to_dict()
+    assert served["zoomLevels"] == [2.0, 4.0]
+    assert served["hipfireSpread"] == pytest.approx(0.055)
+    knife = weapons.WEAPON_BY_ID["knife"].to_dict()
+    assert knife["zoomLevels"] == []
+    # Reported as a real number rather than null, so the client has one rule.
+    assert knife["hipfireSpread"] == knife["spread"]
+
+
+def test_a_hip_fired_sniper_actually_scatters_and_a_scoped_one_does_not():
+    """The numbers reaching `resolve_shot`, not just the numbers on the dataclass:
+    this is the wiring that a spread override could be plumbed past."""
+    world = flat_world(32)
+    sniper = weapons.WEAPON_BY_ID["sniper"]
+    origin = (16.0, 16.0, PLAYER_EYE_HEIGHT)
+    direction = aim_vector(0.0, 0.0)
+
+    def ends(spread: float) -> list[tuple[float, float, float]]:
+        rng = random.Random(7)
+        return [
+            weapons.resolve_shot(
+                world, sniper, origin, direction, {}, rng, spread=spread
+            ).endpoints[0]
+            for _ in range(40)
+        ]
+
+    scoped = ends(weapons.effective_spread(sniper, 1))
+    hip = ends(weapons.effective_spread(sniper, 0))
+    # Compared against each other rather than against a magic constant: what
+    # matters is that the hip shot is meaningfully looser, not its exact cone.
+    scoped_spread_y = max(e[1] for e in scoped) - min(e[1] for e in scoped)
+    hip_spread_y = max(e[1] for e in hip) - min(e[1] for e in hip)
+    assert hip_spread_y > scoped_spread_y * 5
+
+
+def test_the_wire_floors_a_zoom_claim_but_leaves_the_ceiling_to_the_weapon():
+    """Mirrors the `view_t` split: the parser clamps what it can judge without
+    knowing the simulation, and no more."""
+    from backend.modules.hassault.channel import _parse_command
+
+    base = {"seq": 1, "forward": 0, "strafe": 0, "yaw": 0, "pitch": 0, "dt": 0.016}
+    assert _parse_command({**base, "scoped": 2}).scoped == 2
+    assert _parse_command({**base, "scoped": -5}).scoped == 0
+    assert _parse_command(base).scoped == 0
+    # Not rejected here — `clamp_zoom` owns the ceiling, because only the
+    # simulation knows which weapon this command lands on.
+    assert _parse_command({**base, "scoped": 999}).scoped == 999
+
+
+def test_the_route_actually_publishes_the_scope_not_just_the_dataclass():
+    """The response model is a second gate, and it fails silently.
+
+    `to_dict` carrying a field is not the same as the browser receiving it:
+    `WeaponOut` is a `response_model`, so a field missing from *it* is dropped
+    from the JSON with no error anywhere — the client then reads `undefined`,
+    the scope never opens, and every test that only checked `to_dict` still
+    passes. This asserts the wire, which is the thing the client actually gets.
+    """
+    from fastapi.testclient import TestClient
+
+    from backend.app import app
+
+    with TestClient(app) as client:
+        res = client.get("/api/hassault/weapons")
+        assert res.status_code == 200
+        served = {w["id"]: w for w in res.json()}
+
+    assert served["sniper"]["zoomLevels"] == [2.0, 4.0]
+    assert served["sniper"]["hipfireSpread"] == pytest.approx(0.055)
+    # And every other weapon reports a usable pair rather than a missing one.
+    for wid, weapon in served.items():
+        assert "zoomLevels" in weapon, wid
+        assert "hipfireSpread" in weapon, wid
+        if not weapon["zoomLevels"]:
+            assert weapon["hipfireSpread"] == weapon["spread"], wid

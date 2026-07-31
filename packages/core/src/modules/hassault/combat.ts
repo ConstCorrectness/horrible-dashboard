@@ -23,7 +23,13 @@ import type { WeaponSpec } from './api';
 import type { SelfState, ShotIntent, Vec3 } from './net';
 
 /** No shot intent at all — offline, dead, or between matches. */
-export const NO_SHOT: ShotIntent = { fire: false, reload: false, weapon: -1, viewT: 0 };
+export const NO_SHOT: ShotIntent = {
+  fire: false,
+  reload: false,
+  weapon: -1,
+  viewT: 0,
+  scoped: 0,
+};
 
 /**
  * Recoil push while crouched, from AC's `attackphysics`.
@@ -79,6 +85,14 @@ export class ShotController {
   slot = 0;
   /** Predicted magazine, so the HUD counts down on the frame you fire. */
   ammo = 0;
+  /**
+   * Zoom step: 0 unscoped, otherwise 1-based into the weapon's `zoomLevels`.
+   *
+   * Client-owned, like the view angles and for the same reason — it changes what
+   * you can see and how far the mouse moves you, both of which are already
+   * yours. The server reads it only to pick a shot's cone, and clamps it.
+   */
+  scoped = 0;
 
   private held = false;
   /** Semi-automatic weapons need the button released between shots. */
@@ -121,7 +135,36 @@ export class ShotController {
       this.wantSlot = slot;
       this.slot = slot;
       this.triggerUsed = true; // a switch does not carry the held trigger with it
+      // Nor does it carry the scope. Coming out of a switch still zoomed would
+      // leave you at 4× holding a shotgun, and the FOV is the one piece of state
+      // here you cannot see the cause of.
+      this.scoped = 0;
     }
+  }
+
+  /**
+   * Step the scope: none → each magnification in turn → none.
+   *
+   * A cycle rather than a hold, because the zoom levels are discrete: holding a
+   * button to stay at 2× and a *different* gesture to reach 4× is two controls
+   * for one axis. Weapons without a scope ignore this entirely rather than
+   * consuming the click, so the button stays free to mean something else later.
+   */
+  cycleScope(): void {
+    const levels = this.weapon?.zoomLevels ?? [];
+    if (levels.length === 0) return;
+    this.scoped = this.scoped >= levels.length ? 0 : this.scoped + 1;
+  }
+
+  /** Current magnification: 1 when unscoped, so callers can divide by it blind. */
+  magnification(): number {
+    if (this.scoped <= 0) return 1;
+    return this.weapon?.zoomLevels?.[this.scoped - 1] ?? 1;
+  }
+
+  /** Drop the scope — death, a menu, leaving a match. */
+  unscope(): void {
+    this.scoped = 0;
   }
 
   cycle(direction: number): void {
@@ -138,7 +181,7 @@ export class ShotController {
    * had — the server wins, exactly as it does for position.
    */
   frame(nowMs: number, viewT: number, you: SelfState | null): ShotIntent {
-    const intent: ShotIntent = { fire: false, reload: false, weapon: -1, viewT };
+    const intent: ShotIntent = { fire: false, reload: false, weapon: -1, viewT, scoped: 0 };
     if (this.weapons.length === 0) return intent;
 
     if (this.wantSlot >= 0) {
@@ -151,6 +194,17 @@ export class ShotController {
       this.slot = you.weapon;
       this.ammo = you.ammo;
     }
+
+    // Re-clamped every frame against whatever we are *now* holding, because the
+    // slot above may have just been overwritten by the server. A switch we did
+    // not initiate — a pickup, a correction — must drop the scope for the same
+    // reason `select` does, and only this line sees those.
+    const levels = this.weapon?.zoomLevels?.length ?? 0;
+    if (this.scoped > levels) this.scoped = 0;
+    // Dying unscopes. The respawn is somewhere else entirely, and arriving there
+    // at 4× is a way to lose a fight you have not started yet.
+    if (you && !you.alive) this.scoped = 0;
+    intent.scoped = this.scoped;
 
     if (this.wantReload) {
       this.wantReload = false;
@@ -203,11 +257,19 @@ export class ShotController {
     return { yaw, pitch: pitch - recovered };
   }
 
-  /** Crosshair gap in pixels: wider while firing, so the spread is visible. */
+  /**
+   * Crosshair gap in pixels: wider while firing, so the spread is visible.
+   *
+   * Reads the cone the *next* shot would actually use, so an unscoped sniper
+   * shows its hip-fire penalty as a crosshair you can see is too wide to trust.
+   * The alternative — drawing `spread` always — would hide the one number the
+   * scope exists to change.
+   */
   crosshairSpread(): number {
     const weapon = this.weapon;
     if (!weapon) return 4;
-    return 4 + weapon.spread * 260 + this.owed * 90;
+    const cone = this.scoped > 0 ? weapon.spread : weapon.hipfireSpread;
+    return 4 + cone * 260 + this.owed * 90;
   }
 
   reset(): void {
@@ -219,5 +281,6 @@ export class ShotController {
     this.owed = 0;
     this.pendingKick = 0;
     this.pendingYawKick = 0;
+    this.scoped = 0;
   }
 }

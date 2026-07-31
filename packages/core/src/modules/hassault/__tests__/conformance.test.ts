@@ -17,7 +17,8 @@ import { describe, expect, it } from 'vitest';
 
 import type { MapInfo } from '../api';
 import { applyImpulse, createPlayer, spawnAt, step, type PlayerState } from '../player';
-import { SOLID, SPACE, World } from '../world';
+import { aimVector, BODY_HEIGHT, raycastWorld, rayHitsBody, type Vec } from '../trace';
+import { PLAYER_RADIUS, SOLID, SPACE, World } from '../world';
 
 const PLANES = ['type', 'floor', 'ceil', 'wtex', 'ftex', 'ctex', 'vdelta', 'utex', 'tag'];
 
@@ -71,6 +72,25 @@ interface Vectors {
     world: string;
     entity: { x: number; y: number; z: number; yaw?: number };
     expect: { x: number; y: number; z: number; yaw: number; onGround: boolean };
+  }[];
+  traces: {
+    name: string;
+    world: string;
+    origin: Vec;
+    yaw: number;
+    pitch: number;
+    max_distance: number;
+    expect: number;
+  }[];
+  bodies: {
+    name: string;
+    origin: Vec;
+    yaw: number;
+    pitch: number;
+    feet: Vec;
+    height?: number;
+    /** `null` is a clean miss, which is a result and not an absent one. */
+    expect: number | null;
   }[];
 }
 
@@ -209,6 +229,57 @@ describe('cross-language spawn conformance', () => {
       expect(placed.z).toBeCloseTo(testCase.expect.z, digits);
       expect(placed.yaw).toBeCloseTo(testCase.expect.yaw, digits);
       expect(placed.onGround).toBe(testCase.expect.onGround);
+    });
+  }
+});
+
+/**
+ * Shot geometry, now that the training range traces its own shots.
+ *
+ * `trace.ts` is a third duplicate of rules the backend already implements, and
+ * the DDA in it is a dozen lines where an off-by-one on a cell boundary stops
+ * shots a fraction early — which nothing reports, and which would quietly teach
+ * a player the wrong thing about their own aim. So it is pinned like the rest.
+ */
+describe('cross-language shot trace conformance', () => {
+  it('has trace vectors to check', () => {
+    expect(vectors.traces.length).toBeGreaterThan(0);
+  });
+
+  for (const testCase of vectors.traces) {
+    it(testCase.name, () => {
+      const world = buildWorld(vectors.worlds[testCase.world]);
+      const distance = raycastWorld(
+        world,
+        testCase.origin,
+        aimVector(testCase.yaw, testCase.pitch),
+        testCase.max_distance,
+      );
+      expect(distance).toBeCloseTo(testCase.expect, -Math.log10(vectors.tolerance));
+    });
+  }
+});
+
+describe('cross-language body hit conformance', () => {
+  it('has body vectors to check', () => {
+    expect(vectors.bodies.length).toBeGreaterThan(0);
+  });
+
+  for (const testCase of vectors.bodies) {
+    it(testCase.name, () => {
+      const hit = rayHitsBody(
+        testCase.origin,
+        aimVector(testCase.yaw, testCase.pitch),
+        testCase.feet,
+        PLAYER_RADIUS,
+        testCase.height ?? BODY_HEIGHT,
+      );
+      if (testCase.expect === null) {
+        expect(hit).toBeNull();
+      } else {
+        expect(hit).not.toBeNull();
+        expect(hit as number).toBeCloseTo(testCase.expect, -Math.log10(vectors.tolerance));
+      }
     });
   }
 });

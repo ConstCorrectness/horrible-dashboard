@@ -60,7 +60,7 @@ export interface MainMenuProps {
   invites: MatchInvite[];
   botSkill: string;
   onBotSkill: (skill: string) => void;
-  /** Enter the world alone: no match, no server, nothing to shoot. */
+  /** Enter the world alone: no match and no server, against static dummies. */
   onTrain: () => void;
   /** Host a match on `mapName` and enter it, optionally with bots already in. */
   onHost: (bots: number) => void;
@@ -71,6 +71,16 @@ export interface MainMenuProps {
   /** Whether a map is loaded and playable at all. */
   ready: boolean;
   error: string | null;
+  /**
+   * Why the weapon list is missing, when it is missing.
+   *
+   * Its own field rather than folded into `error`, because it is a different
+   * severity: the map still loads and the movement still works, but nothing can
+   * shoot. Hosting is blocked on it — a match nobody can fire in wastes
+   * everyone's time, not just yours — while training stays open, because
+   * practising the movement without a gun is still practising the movement.
+   */
+  loadoutError: string;
 }
 
 export function MainMenu(props: MainMenuProps) {
@@ -106,6 +116,11 @@ export function MainMenu(props: MainMenuProps) {
 
         <div style={content}>
           {props.error && <div style={panel.error}>{props.error}</div>}
+          {props.loadoutError && (
+            <div style={panel.error}>
+              No weapons loaded — nothing will fire. {props.loadoutError}
+            </div>
+          )}
           {section === 'play' && <PlaySection {...props} />}
           {section === 'servers' && (
             <ServerBrowserPanel
@@ -246,7 +261,12 @@ function PlaySection(props: MainMenuProps) {
             <option value="normal">normal</option>
             <option value="hard">hard</option>
           </select>
-          <button onClick={() => props.onHost(bots)} disabled={!props.ready} style={primary}>
+          <button
+            onClick={() => props.onHost(bots)}
+            disabled={!props.ready || props.loadoutError !== ''}
+            title={props.loadoutError ? 'No loadout — nothing would be able to fire' : undefined}
+            style={primary}
+          >
             Host
           </button>
         </div>

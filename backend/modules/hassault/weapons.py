@@ -140,6 +140,24 @@ class Weapon:
     loses more to gravity between shots than each shot gives back.
     """
     kickback: float
+    """Magnifications the scope steps through, in order. Empty means no scope.
+
+    Served rather than hardcoded in TypeScript for the same reason `interval` is:
+    the client divides both its FOV *and* its mouse sensitivity by the current
+    magnification, and a second copy of these numbers would show up as an aim
+    that is subtly wrong only while scoped.
+    """
+    zoom_levels: tuple[float, ...] = ()
+    """Cone half-angle while *not* scoped, for a weapon that has a scope.
+
+    `None` — every weapon without a scope — means the weapon aims identically
+    either way, and `spread` is simply what it uses. Kept as its own number
+    rather than a multiplier on `spread` because the two answer different
+    questions: `spread` is how precise the weapon is when aimed properly, and
+    this is how much it punishes you for not bothering. Scaling one from the
+    other would tie a balance knob to a fix for a balance problem.
+    """
+    hipfire_spread: float | None = None
 
     @property
     def interval(self) -> float:
@@ -161,6 +179,13 @@ class Weapon:
             "range": self.range,
             "auto": self.auto,
             "kickback": self.kickback,
+            "zoomLevels": list(self.zoom_levels),
+            # Reported as a real number rather than `null`, so the client has one
+            # unconditional "what cone is this shot using" rule instead of a
+            # special case that only the sniper ever exercises.
+            "hipfireSpread": (
+                self.spread if self.hipfire_spread is None else self.hipfire_spread
+            ),
         }
 
 
@@ -249,6 +274,15 @@ WEAPONS: tuple[Weapon, ...] = (
         falloff_start=320.0,
         auto=False,
         kickback=8.0,
+        # Two steps rather than a continuous zoom: a scope is a decision, and a
+        # dial you can leave halfway is not one. 2× to find them, 4× to take the
+        # shot across the map that the 320-cube range already permits.
+        zoom_levels=(2.0, 4.0),
+        # Twenty-seven times its scoped cone. A 72-damage rifle that could be
+        # fired accurately from the hip would simply be the best close-quarters
+        # weapon as well as the best long-range one; this is what makes the scope
+        # the thing you give up mobility for rather than a free magnifier.
+        hipfire_spread=0.055,
     ),
 )
 
@@ -260,6 +294,32 @@ def weapon_at(index: int) -> Weapon:
     """The weapon in a slot, clamped. An out-of-range slot on the wire is a
     typo or a probe, not a reason to drop the player's whole input frame."""
     return WEAPONS[max(0, min(len(WEAPONS) - 1, index))]
+
+
+def clamp_zoom(weapon: Weapon, scoped: int) -> int:
+    """The zoom step this weapon can actually be at, from a client's claim.
+
+    Clamped rather than trusted, and clamped *here* rather than in the wire
+    parser: the parser does not know which weapon the command will be applied
+    to, and a player who switches from the sniper to the shotgun mid-flight
+    would otherwise carry a zoom level onto a weapon that has no scope — which
+    is a request for the shotgun's hip-fire penalty to be silently waived.
+    """
+    if scoped <= 0:
+        return 0
+    return min(scoped, len(weapon.zoom_levels))
+
+
+def effective_spread(weapon: Weapon, scoped: int) -> float:
+    """The cone this trigger pull actually uses.
+
+    Note it reads the *clamped* zoom: a weapon with no scope has no zoom levels,
+    so `clamp_zoom` has already forced `scoped` to 0 and it gets its hip-fire
+    number — which for every weapon but the sniper is simply `spread`.
+    """
+    if weapon.hipfire_spread is None or clamp_zoom(weapon, scoped) > 0:
+        return weapon.spread
+    return weapon.hipfire_spread
 
 
 # ---------------------------------------------------------------------------
@@ -628,6 +688,7 @@ def resolve_shot(
     rng: random.Random,
     rewound_ms: float = 0.0,
     heights: dict[str, float] | None = None,
+    spread: float | None = None,
 ) -> ShotResult:
     """Trace one trigger pull against the world and a set of rewound bodies.
 
@@ -641,13 +702,18 @@ def resolve_shot(
     one would be the sort of disagreement between what you see and what you hit
     that makes a shooter feel dishonest — and the head band moves down with it,
     since it is defined relative to the top of the body rather than absolutely.
+
+    `spread` overrides the weapon's own cone, which is how a scope reaches this
+    function: the caller decides whether the shooter was scoped, because that is
+    a fact about the *player* and this is pure geometry aimed at a body.
     """
     endpoints: list[tuple[float, float, float]] = []
     hits: list[PelletHit] = []
     ox, oy, oz = origin
+    cone = weapon.spread if spread is None else spread
 
     for _ in range(max(1, weapon.pellets)):
-        pdx, pdy, pdz = spread_vector(direction, weapon.spread, rng)
+        pdx, pdy, pdz = spread_vector(direction, cone, rng)
         wall = raycast_world(world, origin, (pdx, pdy, pdz), weapon.range)
 
         best: tuple[float, str] | None = None

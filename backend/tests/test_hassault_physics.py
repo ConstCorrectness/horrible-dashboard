@@ -24,6 +24,12 @@ from pathlib import Path
 import pytest
 
 from backend.modules.hassault.cgz import FHF, SOLID, SPACE
+from backend.modules.hassault.weapons import (
+    BODY_HEIGHT,
+    aim_vector,
+    ray_hits_body,
+    raycast_world,
+)
 from backend.modules.hassault.physics import (
     CROUCH_HEIGHT,
     CROUCH_SPEED_SCALE,
@@ -599,6 +605,45 @@ def test_conformance_spawn(index: int):
     assert placed.z == pytest.approx(expect["z"], abs=tol), case["name"]
     assert placed.yaw == pytest.approx(expect["yaw"], abs=tol), case["name"]
     assert placed.on_ground == expect["onGround"], case["name"]
+
+
+@pytest.mark.parametrize("index", range(len(_load_vectors()["traces"])))
+def test_conformance_shot_trace(index: int):
+    """The shot DDA, replayed by the vitest file too.
+
+    `trace.ts` exists because the training range has no server to ask where a
+    shot stopped, which makes shot geometry a third rule with two
+    implementations. An off-by-one on a cell boundary there stops shots a
+    fraction early and reports nothing at all, so it is pinned here.
+    """
+    data = _load_vectors()
+    case = data["traces"][index]
+    world = build_world(data["worlds"][case["world"]])
+    direction = aim_vector(case["yaw"], case["pitch"])
+    origin = (case["origin"][0], case["origin"][1], case["origin"][2])
+    distance = raycast_world(world, origin, direction, case["max_distance"])
+    assert distance == pytest.approx(case["expect"], abs=data["tolerance"]), case["name"]
+
+
+@pytest.mark.parametrize("index", range(len(_load_vectors()["bodies"])))
+def test_conformance_body_hit(index: int):
+    """The cylinder test, replayed by the vitest file too.
+
+    A `None` expectation is a clean miss and is asserted as one: a port that
+    returned 0.0 instead would read as a point-blank hit on every shot that
+    should have missed, which is the exact opposite of the bug and just as quiet.
+    """
+    data = _load_vectors()
+    case = data["bodies"][index]
+    direction = aim_vector(case["yaw"], case["pitch"])
+    origin = (case["origin"][0], case["origin"][1], case["origin"][2])
+    feet = (case["feet"][0], case["feet"][1], case["feet"][2])
+    hit = ray_hits_body(origin, direction, feet, height=case.get("height", BODY_HEIGHT))
+    if case["expect"] is None:
+        assert hit is None, case["name"]
+    else:
+        assert hit is not None, case["name"]
+        assert hit == pytest.approx(case["expect"], abs=data["tolerance"]), case["name"]
 
 
 # ---------------------------------------------------------------------------

@@ -91,6 +91,10 @@ def _parse_command(raw: Any) -> Command | None:
         # Range-checking is `PositionHistory.clamp`'s job — it is the only place
         # that knows the current time, and it is the security boundary.
         view_t=_num(view_t) if isinstance(view_t, (int, float)) else None,
+        # Floored to a non-negative step. The upper bound is *not* applied here:
+        # it depends on the weapon this command turns out to be applied to, which
+        # only the simulation knows — see `weapons.clamp_zoom`.
+        scoped=max(0, int(_num(raw.get("scoped")))),
     )
 
 
