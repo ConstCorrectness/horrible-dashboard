@@ -238,11 +238,11 @@ function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState('');
   const [prompt, setPrompt] = useState<SignInPrompt | null>(null);
-  const [flows, setFlows] = useState<AuthProviders>({});
+  const [providers, setProviders] = useState<AuthProviders>({ server: '', flows: {} });
 
   useEffect(() => {
     fetchAuthProviders()
-      .then(setFlows)
+      .then(setProviders)
       .catch(() => {
         /* unknown means "keep the buttons enabled" — click-time errors take over */
       });
@@ -251,9 +251,16 @@ function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
   // Only when the server *positively* reports neither flow. An older or
   // unreachable server says nothing, and that must not disable a working button.
   const unavailable = (provider: SignInProvider): boolean => {
-    const f = flows[provider];
+    const f = providers.flows[provider];
     return f != null && !f.device && !f.web;
   };
+  // A disabled button is indistinguishable from a broken one — which is exactly
+  // how this read when `pnpm dev` pointed the node at the bundled local game
+  // server, which ships with no OAuth credentials: both buttons went dead and
+  // nothing on screen said why. So say why, and name the server, because the
+  // reason lives there and not here.
+  const oauthOff = unavailable('github') && unavailable('google');
+  const passwordWorks = providers.flows.local?.password !== false;
 
   const oauth = async (provider: SignInProvider) => {
     setBusy(provider);
@@ -303,22 +310,77 @@ function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
         </button>
       ))}
 
+      {oauthOff && (
+        <div
+          style={{
+            ...label,
+            textTransform: 'none',
+            letterSpacing: 'normal',
+            fontFamily: 'inherit',
+            fontSize: '0.72rem',
+            lineHeight: 1.5,
+            textAlign: 'center',
+            color: 'var(--warn, #d9a441)',
+          }}
+        >
+          GitHub and Google sign-in aren&rsquo;t configured on the game server
+          {providers.server ? (
+            <>
+              {' '}
+              this node uses (<code style={{ fontFamily: MONO }}>{providers.server}</code>)
+            </>
+          ) : null}
+          .{passwordWorks ? ' Use email and password below.' : ''}
+        </div>
+      )}
+
       {prompt && (
         <div style={{ ...label, textAlign: 'center', lineHeight: 1.6 }}>
-          {prompt.code ? (
+          {prompt.blocked ? (
+            // Nothing opened, so do not claim anything did. The sign-in is still
+            // running and still polling — all that is missing is the user seeing
+            // the page, and their own click on this link is a gesture no
+            // pop-up blocker refuses.
             <>
-              Enter{' '}
-              <strong style={{ color: 'var(--accent, #6ea8fe)', letterSpacing: '0.1em' }}>
-                {prompt.code}
-              </strong>{' '}
-              at{' '}
+              <span style={{ color: 'var(--warn, #d9a441)' }}>
+                Your browser blocked the sign-in window.
+              </span>{' '}
+              <a
+                href={prompt.url}
+                target="_blank"
+                rel="noreferrer"
+                style={{ color: 'var(--accent, #6ea8fe)', fontWeight: 600 }}
+              >
+                Open the {prompt.code ? 'code page' : 'sign-in page'}
+              </a>
+              {prompt.code ? (
+                <>
+                  {' '}
+                  and enter{' '}
+                  <strong style={{ color: 'var(--accent, #6ea8fe)', letterSpacing: '0.1em' }}>
+                    {prompt.code}
+                  </strong>
+                </>
+              ) : null}
             </>
           ) : (
-            'Finish in the window that opened — '
+            <>
+              {prompt.code ? (
+                <>
+                  Enter{' '}
+                  <strong style={{ color: 'var(--accent, #6ea8fe)', letterSpacing: '0.1em' }}>
+                    {prompt.code}
+                  </strong>{' '}
+                  at{' '}
+                </>
+              ) : (
+                'Finish in the window that opened — '
+              )}
+              <a href={prompt.url} target="_blank" rel="noreferrer" style={{ color: 'inherit' }}>
+                {prompt.code ? prompt.url : 'reopen'}
+              </a>
+            </>
           )}
-          <a href={prompt.url} target="_blank" rel="noreferrer" style={{ color: 'inherit' }}>
-            {prompt.code ? prompt.url : 'reopen'}
-          </a>
         </div>
       )}
 

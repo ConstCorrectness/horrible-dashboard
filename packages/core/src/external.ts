@@ -29,16 +29,36 @@ function tauriInvoke(): TauriInternals['invoke'] | null {
   return internals?.invoke?.bind(internals) ?? null;
 }
 
-/** Open `url` in the user's default browser (new tab in the browser layout, the
- * system browser under the desktop shell). http/https only — the shell enforces it
- * too. */
-export async function openExternal(url: string): Promise<void> {
+/**
+ * Open `url` in the user's default browser (new tab in the browser layout, the
+ * system browser under the desktop shell). http/https only — the shell enforces
+ * it too.
+ *
+ * **Returns whether it actually opened**, and that return value is the whole
+ * point. Both underlying mechanisms fail *quietly*: `window.open` returns `null`
+ * when the pop-up blocker eats it, and the Tauri command rejects if the shell
+ * predates it. Neither throws anything a caller would notice by default, so a
+ * caller that ignored the result — as every caller here once did — turned a
+ * blocked pop-up into nothing happening at all. That is survivable for a docs
+ * link and not survivable for an OAuth flow, which then sits and polls for
+ * fifteen minutes for a page the user was never shown.
+ *
+ * Callers that merely want a link opened can still ignore the result; callers
+ * that need the user to *arrive* somewhere must check it.
+ */
+export async function openExternal(url: string): Promise<boolean> {
   const invoke = tauriInvoke();
   if (invoke) {
-    await invoke('open_external', { url });
-    return;
+    try {
+      await invoke('open_external', { url });
+      return true;
+    } catch {
+      // An older shell without the command, or the OS refusing to launch a
+      // browser. Either way the user is not looking at the page.
+      return false;
+    }
   }
-  window.open(url, '_blank', 'noopener');
+  return window.open(url, '_blank', 'noopener') !== null;
 }
 
 /**

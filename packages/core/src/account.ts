@@ -37,7 +37,23 @@ export interface AuthProviderFlows {
   password?: boolean;
 }
 
-export type AuthProviders = Partial<Record<SignInProvider | 'local', AuthProviderFlows>>;
+export type AuthProviderMap = Partial<Record<SignInProvider | 'local', AuthProviderFlows>>;
+
+/**
+ * What the node can say about signing in: which flows work, and on which server.
+ *
+ * `server` matters because a greyed-out sign-in button is otherwise
+ * unexplainable. The node resolves its game server from `GAMES_SERVER_URL`
+ * ahead of the `games.serverUrl` setting, so under `pnpm dev` it targets the
+ * bundled local game server — which ships with no OAuth credentials and reports
+ * every provider unavailable. Reading the setting would tell the browser
+ * something different and wrong.
+ */
+export interface AuthProviders {
+  server: string;
+  /** `{}` means the server couldn't say — treat every provider as available. */
+  flows: AuthProviderMap;
+}
 
 export interface Account {
   id: string;
@@ -46,8 +62,9 @@ export interface Account {
   handle?: string | null;
 }
 
-export function fetchAuthProviders(): Promise<AuthProviders> {
-  return apiGet('/games/auth/providers');
+export async function fetchAuthProviders(): Promise<AuthProviders> {
+  const raw = await apiGet<Partial<AuthProviders>>('/games/auth/providers');
+  return { server: raw.server ?? '', flows: raw.flows ?? {} };
 }
 
 interface DeviceStart {
@@ -142,6 +159,16 @@ export async function signInWithRedirect(
 export interface SignInPrompt {
   code?: string;
   url: string;
+  /**
+   * The page could not be opened for the user — a blocked pop-up, or a desktop
+   * shell that refused.
+   *
+   * The sign-in is still perfectly valid and still polling; the *only* thing
+   * missing is that nobody is looking at the consent page. So this is not an
+   * error, it is an instruction: the UI must stop saying "finish in the window
+   * that opened" and start asking the user to open it themselves.
+   */
+  blocked?: boolean;
 }
 
 /**
@@ -160,6 +187,12 @@ export interface SignInPrompt {
  * 3. Under the desktop shell the webview can't open windows at all, so URLs go to
  *    the system browser — which is also what OAuth wants there (existing sessions,
  *    and Google rejects embedded webviews outright).
+ * 4. **Every way of opening the page can fail silently**, so the result is
+ *    checked. A blocked pop-up used to leave the button reading "Waiting…" for
+ *    fifteen minutes with no browser ever appearing and no error — the flow was
+ *    running correctly the whole time, waiting on a consent page nobody had been
+ *    shown. When opening fails the prompt says so and offers the link, because
+ *    the user's own click on it is a gesture no blocker will refuse.
  */
 export async function oauthSignIn(
   provider: SignInProvider,
@@ -169,23 +202,27 @@ export async function oauthSignIn(
     ? null
     : window.open('', 'games-oauth', 'popup,width=600,height=760');
   let navigated = false;
-  const point = (url: string) => {
+  const point = (prompt: SignInPrompt) => {
     navigated = true;
-    if (popup && !popup.closed) popup.location.href = url;
-    else void openExternal(url);
+    onPrompt(prompt);
+    if (popup && !popup.closed) {
+      popup.location.href = prompt.url;
+      return;
+    }
+    // Nothing was pre-opened — either the blocker took it, or this is the
+    // desktop shell, which never opens one. Ask the platform, and if that fails
+    // too, hand the job back to the user rather than waiting on a page that is
+    // not on their screen.
+    void openExternal(prompt.url).then((opened) => {
+      if (!opened) onPrompt({ ...prompt, blocked: true });
+    });
   };
   try {
     try {
-      return await signInWithRedirect(provider, (url) => {
-        onPrompt({ url });
-        point(url);
-      });
+      return await signInWithRedirect(provider, (url) => point({ url }));
     } catch (e) {
       if (navigated) throw e;
-      return await signInWith(provider, (code, url) => {
-        onPrompt({ code, url });
-        point(url);
-      });
+      return await signInWith(provider, (code, url) => point({ code, url }));
     }
   } finally {
     if (popup && !popup.closed) popup.close();

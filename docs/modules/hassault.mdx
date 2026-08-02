@@ -687,6 +687,31 @@ shared with the games lobby rather than duplicated: a module must not import
 another module's internals, so the popup dance, the redirect-then-device fallback,
 and the desktop-shell branch live in core and both surfaces call them.
 
+### When a sign-in button does nothing
+
+Two separate ways this used to fail with no explanation at all, both fixed, and
+both worth knowing because the *symptom* is identical — you click, and no browser
+appears.
+
+**The button was disabled.** `GET /api/games/auth/providers` reports which flows
+the game server can run, and a provider with neither renders greyed out. Under
+`pnpm dev` that is every provider: `scripts/dev.mjs` sets `GAMES_SERVER_URL` to
+the **bundled local game server** (`ws://localhost:9090`), which ships with no
+OAuth credentials, and `resolve_server_url` puts the env var *ahead* of the
+`games.serverUrl` setting — so the node signs in against localhost no matter what
+the setting says. The browser could not work this out: the only URL it can read is
+the setting, which says something else. So the node now reports the URL it
+actually resolved alongside the flows (`{server, flows}`), and the sign-in card
+names it. Email+password works on that server, which is the way in.
+
+**The page could not be opened.** `openExternal` now returns whether it succeeded
+— `window.open` returns `null` when a pop-up blocker eats it, and the Tauri
+command rejects on a shell that predates it, and *neither throws*. Ignoring that
+result turned a blocked pop-up into a button that read "Waiting…" for fifteen
+minutes: the flow was running correctly the whole time, polling for a consent page
+nobody had been shown. When opening fails the prompt says so and offers the link,
+because the user's own click on it is a gesture no blocker refuses.
+
 Email+password uses stdlib **`hashlib.scrypt`** — memory-hard, and no new
 dependency (`bcrypt` is in the lock file only via the optional `chroma` extra, so
 it is absent from a default `uv sync`). Parameters are stored in the hash string

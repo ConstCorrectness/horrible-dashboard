@@ -4,8 +4,9 @@ import {
   fetchAuthProviders,
   oauthSignIn,
   signOut,
-  type AuthProviderFlows,
+  type AuthProviders,
   type SignInProvider,
+  type SignInPrompt,
 } from '../../../account';
 import { registry } from '../../../registry';
 import { gameAccent, gameIcon, gameTagline } from '../game-identity';
@@ -29,11 +30,11 @@ function SidebarProfile() {
   const [name, setName] = useState<string | null>(null);
   // `url` is the provider page to (re)open; `code` is set only for the device-code
   // fallback. Presence of either means a sign-in is in progress.
-  const [prompt, setPrompt] = useState<{ code?: string; url: string } | null>(null);
+  const [prompt, setPrompt] = useState<SignInPrompt | null>(null);
   const [busy, setBusy] = useState<SignInProvider | null>(null);
   const [err, setErr] = useState('');
   // What the game server says it can do; `{}` = unknown (keep buttons enabled).
-  const [flows, setFlows] = useState<Partial<Record<SignInProvider, AuthProviderFlows>>>({});
+  const [providers, setProviders] = useState<AuthProviders>({ server: '', flows: {} });
 
   const refresh = useCallback(() => {
     fetchStatus()
@@ -43,14 +44,14 @@ function SidebarProfile() {
   useEffect(() => refresh(), [refresh]);
   useEffect(() => {
     fetchAuthProviders()
-      .then(setFlows)
+      .then(setProviders)
       .catch(() => {});
   }, []);
 
   // A provider is only unavailable when the server *positively* reports neither flow;
   // unknown (older server, node unreachable) stays enabled.
   const unavailable = (provider: SignInProvider): boolean => {
-    const f = flows[provider];
+    const f = providers.flows[provider];
     return f != null && !f.device && !f.web;
   };
 
@@ -219,7 +220,40 @@ function SidebarProfile() {
           <span className="games-sidebar-profile-signin-label">Google</span>
         </button>
       </div>
+      {unavailable('github') && unavailable('google') && (
+        <span style={{ fontSize: '0.7rem', color: 'var(--warn, #d9a441)', marginTop: '0.2rem' }}>
+          {/* Both buttons are disabled, which on its own is indistinguishable from
+              both buttons being broken. The reason lives on the game server, so
+              name it — under `pnpm dev` that is the bundled local one, which
+              ships with no OAuth credentials. */}
+          No OAuth configured on{' '}
+          {providers.server ? <code>{providers.server}</code> : 'this game server'} — sign in with
+          email and password instead.
+        </span>
+      )}
+      {prompt && prompt.blocked && (
+        <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.2rem' }}>
+          {/* Nothing opened. Say that, rather than pointing at a popup that is
+              not there — the sign-in itself is still running and still polling. */}
+          <span style={{ color: 'var(--warn, #d9a441)' }}>Sign-in window blocked.</span>{' '}
+          <a
+            href={prompt.url}
+            target="_blank"
+            rel="noreferrer"
+            style={{ color: 'var(--accent, #6ea8fe)', fontWeight: 600 }}
+          >
+            Open the sign-in page
+          </a>
+          {prompt.code ? (
+            <>
+              {' '}
+              and enter <strong>{prompt.code}</strong>
+            </>
+          ) : null}
+        </span>
+      )}
       {prompt &&
+        !prompt.blocked &&
         (prompt.code ? (
           <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.2rem' }}>
             code <strong>{prompt.code}</strong> at{' '}

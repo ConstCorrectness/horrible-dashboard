@@ -194,20 +194,33 @@ async def _auth_poll(provider: str, device_code: str) -> dict[str, Any]:
 
 
 async def auth_providers() -> dict[str, Any]:
-    """Which sign-in flows the connected game server supports
-    (`{provider: {device, web}}`), or `{}` when it can't say — an older server
-    without the endpoint, or an unreachable one. `{}` means "unknown": the UI keeps
-    the buttons enabled and the click-time errors take over."""
+    """Which sign-in flows the connected game server supports, and **which server
+    that is**.
+
+    `{"server": url, "flows": {provider: {device, web}}}`. `flows` is `{}` when the
+    server can't say — an older one without the endpoint, or an unreachable one —
+    which means "unknown": the UI keeps the buttons enabled and the click-time
+    errors take over.
+
+    `server` is reported because a disabled sign-in button is otherwise
+    unexplainable from the browser. The URL is resolved from `GAMES_SERVER_URL`
+    **before** the `games.serverUrl` setting (see `resolve_server_url`), so under
+    `pnpm dev` this node targets the bundled local game server — which ships with
+    no OAuth credentials and therefore reports every provider unavailable. The
+    browser cannot work that out on its own: the setting it can read says
+    something else entirely.
+    """
     import httpx
 
+    server = resolve_server_url()
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
             res = await client.get(f"{_http_base()}/auth/providers")
             res.raise_for_status()
             data = res.json()
-            return data if isinstance(data, dict) else {}
+            return {"server": server, "flows": data if isinstance(data, dict) else {}}
     except Exception:  # noqa: BLE001 — availability is advisory, never an error
-        return {}
+        return {"server": server, "flows": {}}
 
 
 # ---- web (authorization-code) sign-in --------------------------------------

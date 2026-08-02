@@ -827,6 +827,37 @@ body {
   margin-top: 0.5rem;
 }
 
+.ch-token-form input {
+  padding: 0.3rem 0.6rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+}
+
+/* Onboarding method switcher: SMS / existing code / auth token */
+.ch-methods {
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 0.75rem;
+}
+
+.ch-method {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  border-radius: 6px;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.ch-method.is-active {
+  background: var(--bg-raised);
+  color: var(--text);
+}
+
 .ch-connected {
   display: flex;
   align-items: center;

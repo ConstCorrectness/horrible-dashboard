@@ -555,3 +555,66 @@ def test_google_web_flow_never_uses_the_device_client(monkeypatch) -> None:
     params = parse_qs(urlparse(url).query)
     assert params["client_id"] == ["web.apps.google"]
     assert params["redirect_uri"] == ["https://games.example/auth/google/callback"]
+
+
+# ---------------------------------------------------------------------------
+# The node's proxy: which flows, and *which server*
+# ---------------------------------------------------------------------------
+
+
+def test_the_node_reports_which_server_the_flows_describe(monkeypatch) -> None:
+    """A greyed-out sign-in button is unexplainable without this.
+
+    The node resolves its game server from `GAMES_SERVER_URL` *ahead* of the
+    `games.serverUrl` setting, so under `pnpm dev` it talks to the bundled local
+    server — which has no OAuth credentials and reports every provider
+    unavailable. The browser cannot work that out on its own: the setting it can
+    read says something else. So the resolved URL is reported alongside the flows.
+    """
+    import asyncio
+
+    from backend.modules.games import server_auth
+
+    async def fake_get(self, url, **kwargs):  # noqa: ANN001, ARG001
+        class _Res:
+            @staticmethod
+            def raise_for_status() -> None:
+                return None
+
+            @staticmethod
+            def json() -> dict:
+                return {
+                    "github": {"device": False, "web": False},
+                    "local": {"password": True},
+                }
+
+        return _Res()
+
+    import httpx
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+    monkeypatch.setattr(server_auth, "resolve_server_url", lambda: "ws://localhost:9090")
+
+    out = asyncio.run(server_auth.auth_providers())
+    assert out["server"] == "ws://localhost:9090"
+    assert out["flows"]["github"] == {"device": False, "web": False}
+
+
+def test_an_unreachable_game_server_still_names_itself(monkeypatch) -> None:
+    """`flows: {}` means "unknown", which keeps the buttons enabled — but the URL
+    is still reported, because "cannot reach X" is the single most useful thing to
+    be able to say when sign-in does nothing."""
+    import asyncio
+
+    import httpx
+
+    from backend.modules.games import server_auth
+
+    async def boom(self, url, **kwargs):  # noqa: ANN001, ARG001
+        raise httpx.ConnectError("nope")
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", boom)
+    monkeypatch.setattr(server_auth, "resolve_server_url", lambda: "wss://example.invalid")
+
+    out = asyncio.run(server_auth.auth_providers())
+    assert out == {"server": "wss://example.invalid", "flows": {}}

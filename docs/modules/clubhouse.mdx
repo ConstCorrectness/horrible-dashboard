@@ -5,9 +5,12 @@ sidebar_label: Clubhouse
 
 # Module: clubhouse
 
-Clubdeck-style onboarding for a Clubhouse account: a dashboard widget walks
-through phone number → SMS verification code → connected profile, **or** connects
-directly with an existing auth token.
+Clubdeck-style onboarding for a Clubhouse account. The widget offers three ways
+in, chosen from a switcher at the top of the card:
+
+- **Text me a code** — phone number → we ask Clubhouse to send the SMS → verification code → connected profile.
+- **I have a code** — enter a phone number _and_ a code you already hold, skipping our `/auth/start` call entirely. Use this when you requested the code from the real Clubhouse app, or when the anti-abuse gate swallowed our SMS request: `/complete_phone_number_auth` carries no server-side state from the start call, so a code obtained anywhere completes the same way.
+- **Auth token** — connect directly with an existing `auth_token` + `user_id`.
 
 **Status: implemented** — frontend in [ClubhouseWidget.tsx](file:///home/horrible/horrible-dashboard/packages/core/src/modules/clubhouse/ClubhouseWidget.tsx),
 backend in [routes.py](file:///home/horrible/horrible-dashboard/backend/modules/clubhouse/routes.py). Token-connect is verified end to end
@@ -177,9 +180,10 @@ Initiates the SMS verification process.
 
 Submits the texted code to complete authentication and retrieve the auth token.
 
-- **Request Schema:** [CompleteAuthRequest](file:///home/horrible/horrible-dashboard/backend/modules/clubhouse/models.py#L14) (`phone_number`, `verification_code`)
+- **Request Schema:** [CompleteAuthRequest](file:///home/horrible/horrible-dashboard/backend/modules/clubhouse/models.py#L14) (`phone_number`, `verification_code` — 4–8 digits; Clubhouse currently sends 6)
 - **Response Schema:** [ClubhouseStatus](file:///home/horrible/horrible-dashboard/backend/modules/clubhouse/models.py#L32)
 - **Behavior:** Stores session details (including the `auth_token` and optional `refresh_token`) inside `$HORRIBLE_DATA_DIR/clubhouse-auth.json`.
+- **No dependency on `/auth/start`:** neither this route nor `ch-auth-helper` keeps state between the two calls, so the widget's "I have a code" path posts here on its own with a code the user obtained elsewhere.
 
 ### 4. `POST /auth/token`
 
@@ -271,5 +275,5 @@ Accepts an invitation to speak from a moderator.
 
 The account widget exposes its connection status using `useAgentContext()`.
 
-- **State:** `loading`, `backend-down`, or connection state properties: `{ connected: boolean, name: string | null, username: string | null }`.
+- **State:** `loading`, `backend-down`, or connection state properties: `{ connected: boolean, name: string | null, username: string | null }`. While disconnected it also reports the chosen onboarding `method` (`sms` / `code` / `token`) and, for `sms`, the `step`.
 - **Reference:** See the [Agent Tools Documentation](../architecture/agent-tools.mdx#reading-widget-state-getagentcontext).
