@@ -73,9 +73,30 @@ freeOwnedPorts();
 
 console.log(`🚀 Starting backend and frontend dev servers on ${host}...`);
 
-// Start the FastAPI backend. Point the node's games client at the local game server
-// (below) rather than the shipped hosted default, unless the user set GAMES_SERVER_URL
-// themselves. So `pnpm dev` is self-contained; a packaged node still defaults to hosted.
+// Start the FastAPI backend.
+//
+// The node's games client is left on the shipped hosted default, the same as
+// `pnpm dev:desktop` and a packaged node. This used to force
+// GAMES_SERVER_URL=ws://localhost:9090 so `pnpm dev` was self-contained — but the
+// bundled game server below is started with no OAuth client id or secret, and the
+// env var beats the `games.serverUrl` setting, so the effect was that GitHub and
+// Google sign-in went dead in the browser layout and worked on desktop. Two
+// launchers, two different answers to "can I sign in", for a reason nothing on
+// screen could explain.
+//
+// Self-contained is still one variable away: HORRIBLE_DEV_LOCAL_GAMESERVER=1 (and
+// the bundled server still starts either way, so matches against it work as soon
+// as you point at it).
+const useLocalGameServer =
+  process.argv.includes('--local-gameserver') || process.env.HORRIBLE_DEV_LOCAL_GAMESERVER === '1';
+const gamesServerUrl =
+  process.env.GAMES_SERVER_URL || (useLocalGameServer ? 'ws://localhost:9090' : undefined);
+
+console.log(
+  `🎮 Sign-in / games server: ${gamesServerUrl ?? 'hosted default'}` +
+    (gamesServerUrl ? '' : ' (HORRIBLE_DEV_LOCAL_GAMESERVER=1 for the bundled one on :9090)'),
+);
+
 const backend = spawn(
   'uv',
   [
@@ -97,7 +118,9 @@ const backend = spawn(
     shell: useShell,
     env: {
       ...process.env,
-      GAMES_SERVER_URL: process.env.GAMES_SERVER_URL || 'ws://localhost:9090',
+      // Only set when asked: an undefined value would still register as a set
+      // key on some platforms, and the resolver treats "set" as "env wins".
+      ...(gamesServerUrl ? { GAMES_SERVER_URL: gamesServerUrl } : {}),
     },
   },
 );

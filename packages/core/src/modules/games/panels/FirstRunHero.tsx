@@ -2,8 +2,9 @@ import { useEffect, useState, type ReactNode } from 'react';
 
 import { openDrawer } from '../client-drawer';
 import { setSetting } from '../../../settings';
+import { SignInCard } from '../../../SignInCard';
+import { useAccount } from '../../../useAccount';
 import { useGames } from '../game-ws';
-import { fetchStatus, signInWith, type SignInProvider } from '../games-api';
 import { openGamesSection } from '../hub-section';
 import { findRankedMatch } from '../matchmaking';
 
@@ -68,23 +69,17 @@ const COPY: Record<Step, { title: ReactNode; sub: ReactNode }> = {
 };
 export function FirstRunHero() {
   const { matchSeats } = useGames();
+  const { account, signedIn } = useAccount();
   const [step, setStep] = useState<Step>('signin');
-  const [name, setName] = useState<string | null>(null);
-  const [prompt, setPrompt] = useState<{ code: string; url: string } | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState('');
   const [queued, setQueued] = useState(false);
+  const name = account?.display_name ?? null;
 
+  // Signed in — here, on the home page, or in HorribleAssault — means this step is
+  // done. Reading the shared store rather than fetching once on mount is what makes
+  // that true for a sign-in that happened somewhere else.
   useEffect(() => {
-    fetchStatus()
-      .then((s) => {
-        if (s.signed_in) {
-          setName(s.display_name);
-          setStep('placement');
-        }
-      })
-      .catch(() => undefined);
-  }, []);
+    if (signedIn && step === 'signin') setStep('placement');
+  }, [signedIn, step]);
 
   // The placement match went live → onboarding is done.
   useEffect(() => {
@@ -93,21 +88,6 @@ export function FirstRunHero() {
       void setSetting('games.onboarded', true);
     }
   }, [step, queued, matchSeats]);
-
-  const signIn = async (provider: SignInProvider) => {
-    setBusy(true);
-    setErr('');
-    try {
-      const display = await signInWith(provider, (code, url) => setPrompt({ code, url }));
-      setName(display);
-      setStep('placement');
-    } catch (e) {
-      setErr(String(e instanceof Error ? e.message : e));
-    } finally {
-      setBusy(false);
-      setPrompt(null);
-    }
-  };
 
   const startPlacement = () => {
     openGamesSection('board');
@@ -161,34 +141,15 @@ export function FirstRunHero() {
 
       {step === 'signin' && (
         <div className="games-hero-actions">
-          <button
-            type="button"
-            className="games-play-btn"
-            style={{ flex: '0 0 auto' }}
-            onClick={() => void signIn('github')}
-            disabled={busy}
-          >
-            {busy ? 'Signing in…' : '🐙 Sign in with GitHub'}
-          </button>
-          <button
-            type="button"
-            className="games-ghost-btn"
-            onClick={() => void signIn('google')}
-            disabled={busy}
-          >
-            Google instead
-          </button>
+          {/* Core's SignInCard. What stood here was the oldest of the three
+              sign-in copies: device-flow only, so it never opened a consent page
+              at all, and with no branch for a blocked window — its note rendered
+              "Enter code  at " with both values blank if it ever got a redirect
+              prompt. Nothing about that was visible from this file. */}
+          <SignInCard onSignedIn={() => setStep('placement')} />
           <button type="button" className="games-ghost-btn" onClick={() => setStep('placement')}>
             skip
           </button>
-          {prompt && (
-            <span className="games-hero-note">
-              Enter code <strong>{prompt.code}</strong> at{' '}
-              <a href={prompt.url} target="_blank" rel="noreferrer">
-                {prompt.url}
-              </a>
-            </span>
-          )}
         </div>
       )}
 
@@ -218,8 +179,8 @@ export function FirstRunHero() {
           </button>
         </div>
       )}
-
-      {err && <div style={{ color: 'var(--danger, #e5534b)' }}>{err}</div>}
+      {/* Sign-in errors are reported by SignInCard, next to the control that
+          raised them, rather than adrift at the bottom of the hero. */}
     </div>
   );
 }

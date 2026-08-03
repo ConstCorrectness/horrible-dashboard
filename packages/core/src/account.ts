@@ -193,14 +193,27 @@ export interface SignInPrompt {
  *    running correctly the whole time, waiting on a consent page nobody had been
  *    shown. When opening fails the prompt says so and offers the link, because
  *    the user's own click on it is a gesture no blocker will refuse.
+ * 5. **A blocked prompt outlives the attempt that raised it.** The prompt is
+ *    cleared on success only. It used to be cleared in a `finally`, which meant
+ *    the address vanished off screen the moment the flow timed out or errored —
+ *    taking the one thing the user still needed with it, at exactly the moment
+ *    they had been told to go and use it.
+ *
+ * `prefer: 'device'` skips straight to the device flow. That flow opens nothing
+ * and needs only a client id, so it is the honest answer when the machine has
+ * shown it cannot put a page on screen; until now it was reachable only by
+ * accident, when the redirect flow happened to fail first.
  */
 export async function oauthSignIn(
   provider: SignInProvider,
   onPrompt: (prompt: SignInPrompt | null) => void,
+  options: { prefer?: 'redirect' | 'device' } = {},
 ): Promise<string> {
-  const popup = isDesktopShell()
-    ? null
-    : window.open('', 'games-oauth', 'popup,width=600,height=760');
+  const deviceOnly = options.prefer === 'device';
+  const popup =
+    deviceOnly || isDesktopShell()
+      ? null
+      : window.open('', 'games-oauth', 'popup,width=600,height=760');
   let navigated = false;
   const point = (prompt: SignInPrompt) => {
     navigated = true;
@@ -218,15 +231,21 @@ export async function oauthSignIn(
     });
   };
   try {
-    try {
-      return await signInWithRedirect(provider, (url) => point({ url }));
-    } catch (e) {
-      if (navigated) throw e;
-      return await signInWith(provider, (code, url) => point({ code, url }));
+    let name: string;
+    if (deviceOnly) {
+      name = await signInWith(provider, (code, url) => point({ code, url }));
+    } else {
+      try {
+        name = await signInWithRedirect(provider, (url) => point({ url }));
+      } catch (e) {
+        if (navigated) throw e;
+        name = await signInWith(provider, (code, url) => point({ code, url }));
+      }
     }
+    onPrompt(null);
+    return name;
   } finally {
     if (popup && !popup.closed) popup.close();
-    onPrompt(null);
   }
 }
 

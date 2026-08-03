@@ -1819,6 +1819,119 @@ body {
   font-size: 0.9rem;
 }
 
+/* The intro setup flow (SetupCard): model → account → tools. Wraps the existing
+   .onboarding card as its first step, so that card keeps its own styling. */
+.setup-card {
+  width: 100%;
+  padding: 1rem 1.5rem 1.25rem;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  text-align: left;
+}
+
+.setup-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
+.setup-card-head h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.setup-dismiss {
+  margin-left: auto;
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.setup-dismiss:hover {
+  color: var(--text);
+}
+
+.setup-step {
+  margin-top: 1rem;
+}
+
+.setup-step + .setup-step {
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+}
+
+.setup-step-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.setup-step-dot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+
+.setup-step.done .setup-step-dot {
+  border-color: var(--success, #3fb950);
+  color: var(--success, #3fb950);
+}
+
+.setup-step-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.setup-step-note {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  /* Pushed right and allowed to shrink: a long list of connected tools must not
+     shove the step title out of alignment with the ones above and below it. */
+  margin-left: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.setup-step-body {
+  margin-top: 0.6rem;
+  padding-left: 1.85rem;
+}
+
+.setup-step-blurb {
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--text-dim);
+  margin: 0 0 0.75rem;
+  max-width: 56ch;
+}
+
+/* The step bodies already sit inside the card, so the nested onboarding card
+   drops its own frame rather than drawing a box inside a box. */
+.setup-step-body .onboarding {
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 0;
+}
+
+/* Left-aligned inside a step, not centred like the standalone row on home. */
+.setup-step-body .integration-row {
+  justify-content: flex-start;
+}
+
 /* Onboarding */
 .onboarding {
   width: 100%;
@@ -2229,6 +2342,83 @@ body {
   font-size: 1.2rem;
   letter-spacing: 0.18em;
   text-align: center;
+}
+
+/* ConnectionGate (packages/core/src/connectors/ConnectionGate.tsx): what a pane
+   shows instead of dead-ending on a 409. */
+.connection-gate {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  height: 100%;
+  padding: 2rem 1.5rem;
+  text-align: center;
+}
+
+.connection-gate-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.connection-gate-blurb {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  max-width: 34ch;
+  line-height: 1.45;
+}
+
+/* "Nothing opened" — the same amber the tile's error dot uses, because it is the
+   same category of thing: the flow is fine, something around it is not. */
+.integration-blocked {
+  color: var(--warn, #d9a441);
+  font-weight: 600;
+}
+
+/* CopyableLink (packages/core/src/CopyableLink.tsx). Two states in one place:
+   a link while opening still might work, then the raw address once it hasn't. */
+.copyable-link {
+  color: var(--accent, #6ea8fe);
+}
+
+.copyable-link.failed {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+  color: inherit;
+}
+
+.copyable-link-url {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.2rem 0.35rem;
+  /* Wrap, never clip: a truncated URL the user must retype is no fallback. */
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.copyable-link-btn {
+  flex: 0 0 auto;
+  font-size: 0.68rem;
+  padding: 0.2rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.copyable-link-btn:hover {
+  color: var(--text);
+  border-color: var(--accent, #6ea8fe);
 }
 
 .integration-form {
@@ -3697,6 +3887,45 @@ kbd {
   font-size: 0.75rem;
   color: var(--text-dim);
   line-height: 1.3;
+}
+
+/* The address on a "nothing could open this" toast. It must stay readable and
+   selectable however long it is — wrapping, not truncating, because a clipped
+   URL the user has to retype by hand is no fallback at all. */
+.toast-copy {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
+}
+
+.toast-copy-url {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: var(--text);
+  background: var(--bg-inset, rgba(0, 0, 0, 0.25));
+  border-radius: 4px;
+  padding: 0.2rem 0.35rem;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.toast-copy-btn {
+  flex: 0 0 auto;
+  font-size: 0.68rem;
+  padding: 0.2rem 0.45rem;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.15));
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.toast-copy-btn:hover {
+  color: var(--text);
+  border-color: var(--accent, #6ea8fe);
 }
 
 .toast-close {

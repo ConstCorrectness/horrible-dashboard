@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { listConnectors, type Connector } from '@horrible/core';
+import { onConnectRequested, refreshConnectors, useConnectors } from '@horrible/core';
 
 import { ConnectorIcon } from './connector-icons';
 import { ConnectorPopover } from './ConnectorPopover';
@@ -10,24 +10,30 @@ import { MobilePairingDialog } from './MobilePairingDialog';
  *
  * Renders nothing at all when the backend is down — home already shows one
  * backend-down message and a second would just be noise.
+ *
+ * State lives in the shared connectors store rather than here, and this component
+ * also answers `requestConnect` from anywhere in the app: it owns the only connect
+ * UI, so a pane that needs GitHub asks for it and this opens the real popover.
  */
 export function IntegrationRow() {
-  const [connectors, setConnectors] = useState<Connector[] | 'loading' | 'unavailable'>('loading');
+  const { connectors, phase } = useConnectors();
   const [open, setOpen] = useState<string | null>(null);
   const [showMobile, setShowMobile] = useState(false);
 
-  const refresh = () =>
-    listConnectors()
-      .then(setConnectors)
-      .catch(() => setConnectors('unavailable'));
+  // A pane somewhere asked for a connector. Open its popover — the same one the
+  // tile opens, so there is one connect flow and not one per caller.
+  useEffect(
+    () =>
+      onConnectRequested((id) => {
+        setOpen(id);
+        setShowMobile(false);
+      }),
+    [],
+  );
 
-  useEffect(() => {
-    void refresh();
-  }, []);
+  if (phase === 'unavailable') return null;
 
-  if (connectors === 'unavailable') return null;
-
-  if (connectors === 'loading') {
+  if (phase === 'loading') {
     // Skeletons at the tiles' final size, so the greeting and ask bar don't jump.
     return (
       <div className="integration-row" aria-busy="true">
@@ -68,7 +74,7 @@ export function IntegrationRow() {
             <ConnectorPopover
               connector={c}
               onClose={() => setOpen(null)}
-              onChanged={() => void refresh()}
+              onChanged={() => void refreshConnectors()}
             />
           )}
         </div>

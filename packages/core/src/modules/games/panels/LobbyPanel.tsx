@@ -1,90 +1,44 @@
-import { useCallback, useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 
-import {
-  fetchAuthProviders,
-  oauthSignIn,
-  signOut,
-  type AuthProviders,
-  type SignInProvider,
-  type SignInPrompt,
-} from '../../../account';
+import { signOut } from '../../../account';
+import { useAccount } from '../../../useAccount';
+import { SignInCard } from '../../../SignInCard';
 import { registry } from '../../../registry';
 import { gameAccent, gameIcon, gameTagline } from '../game-identity';
 import { useGames, gamesDisconnect, ensureConnected } from '../game-ws';
-import { fetchStatus, fetchGamesCatalog, type GameCatalogEntry } from '../games-api';
+import { fetchGamesCatalog, type GameCatalogEntry } from '../games-api';
 import { setActiveGame } from '../selected-game';
 import { ConnectionChip } from './ConnectionChip';
 import { PlaySection } from './PlaySection';
 
-import { GITHUB_MARK, GOOGLE_MARK } from '../../../provider-marks';
-
-/** Sign-in status + OAuth sign-in (GitHub or Google — two different Google accounts
- * are two distinct players, handy for testing across machines). The default is the
- * redirect flow (authorize on the provider, no code typing); when the game server
- * has no web-flow credentials the click falls back to the **device flow** (GitHub's
- * needs only the client id), and a provider the server supports with *neither* flow
- * renders disabled with the reason — no phantom popup that closes itself. Identity
- * lives on the node (the JWT is held server-side); this just reflects and toggles it. */
+/** Sign-in status, profile card and sign-out for the games sidebar.
+ *
+ * The sign-in itself is core's `SignInCard` — the same one HorribleAssault's front
+ * door and the home page's setup flow render — and the signed-in state comes from
+ * the shared account store, so a sign-in anywhere in the app is reflected here
+ * without this panel refetching or remounting. Identity lives on the node (the JWT
+ * is held server-side); this reflects and toggles it. */
 function SidebarProfile() {
   const { social } = useGames();
-  const [name, setName] = useState<string | null>(null);
-  // `url` is the provider page to (re)open; `code` is set only for the device-code
-  // fallback. Presence of either means a sign-in is in progress.
-  const [prompt, setPrompt] = useState<SignInPrompt | null>(null);
-  const [busy, setBusy] = useState<SignInProvider | null>(null);
-  const [err, setErr] = useState('');
-  // What the game server says it can do; `{}` = unknown (keep buttons enabled).
-  const [providers, setProviders] = useState<AuthProviders>({ server: '', flows: {} });
+  // The shared account, not a private copy: signing in on the home page or in
+  // HorribleAssault must land here too, and this panel used to keep its own
+  // `name` state that only a remount would correct.
+  const { account, signedIn, refresh: refreshAccount } = useAccount();
+  const name = signedIn ? account?.display_name : null;
 
-  const refresh = useCallback(() => {
-    fetchStatus()
-      .then((s) => setName(s.signed_in ? s.display_name : null))
-      .catch(() => setName(null));
-  }, []);
-  useEffect(() => refresh(), [refresh]);
-  useEffect(() => {
-    fetchAuthProviders()
-      .then(setProviders)
-      .catch(() => {});
-  }, []);
-
-  // A provider is only unavailable when the server *positively* reports neither flow;
-  // unknown (older server, node unreachable) stays enabled.
-  const unavailable = (provider: SignInProvider): boolean => {
-    const f = providers.flows[provider];
-    return f != null && !f.device && !f.web;
-  };
-
-  const onSignedIn = (display: string) => {
-    setName(display);
+  /** The play socket authenticates on connect, so a change of identity means
+   * dropping it and reconnecting — otherwise the old session keeps playing. */
+  const reconnect = () => {
     gamesDisconnect();
     setTimeout(() => {
       void ensureConnected(false);
     }, 500);
   };
 
-  // The popup dance, the redirect-then-device fallback, and the desktop-shell
-  // branch all live in the core account service now — HorribleAssault signs into
-  // the same account, and one copy of that logic is the point.
-  const signIn = async (provider: SignInProvider) => {
-    setBusy(provider);
-    setErr('');
-    try {
-      onSignedIn(await oauthSignIn(provider, setPrompt));
-    } catch (e) {
-      setErr(String(e instanceof Error ? e.message : e));
-    } finally {
-      setBusy(null);
-    }
-  };
-
   const handleSignOut = () => {
     void signOut().then(() => {
-      setName(null);
-      gamesDisconnect();
-      setTimeout(() => {
-        void ensureConnected(false);
-      }, 500);
+      refreshAccount();
+      reconnect();
     });
   };
 
@@ -190,97 +144,11 @@ function SidebarProfile() {
   return (
     <div className="games-sidebar-profile-signin-card">
       <div className="games-sidebar-profile-signin-title">Player Profile</div>
-      <div className="games-sidebar-profile-signin-buttons">
-        <button
-          type="button"
-          className="games-sidebar-profile-signin-btn"
-          onClick={() => void signIn('github')}
-          disabled={busy !== null || unavailable('github')}
-          title={
-            unavailable('github')
-              ? 'This game server has no GitHub OAuth configured (games.github.clientId)'
-              : 'Sign in with GitHub'
-          }
-        >
-          <span className="icon">{GITHUB_MARK}</span>{' '}
-          <span className="games-sidebar-profile-signin-label">GitHub</span>
-        </button>
-        <button
-          type="button"
-          className="games-sidebar-profile-signin-btn"
-          onClick={() => void signIn('google')}
-          disabled={busy !== null || unavailable('google')}
-          title={
-            unavailable('google')
-              ? 'This game server has no Google OAuth configured (games.google.clientId + GAMES_GOOGLE_CLIENT_SECRET)'
-              : 'Sign in with Google'
-          }
-        >
-          <span className="icon">{GOOGLE_MARK}</span>{' '}
-          <span className="games-sidebar-profile-signin-label">Google</span>
-        </button>
-      </div>
-      {unavailable('github') && unavailable('google') && (
-        <span style={{ fontSize: '0.7rem', color: 'var(--warn, #d9a441)', marginTop: '0.2rem' }}>
-          {/* Both buttons are disabled, which on its own is indistinguishable from
-              both buttons being broken. The reason lives on the game server, so
-              name it — under `pnpm dev` that is the bundled local one, which
-              ships with no OAuth credentials. */}
-          No OAuth configured on{' '}
-          {providers.server ? <code>{providers.server}</code> : 'this game server'} — sign in with
-          email and password instead.
-        </span>
-      )}
-      {prompt && prompt.blocked && (
-        <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.2rem' }}>
-          {/* Nothing opened. Say that, rather than pointing at a popup that is
-              not there — the sign-in itself is still running and still polling. */}
-          <span style={{ color: 'var(--warn, #d9a441)' }}>Sign-in window blocked.</span>{' '}
-          <a
-            href={prompt.url}
-            target="_blank"
-            rel="noreferrer"
-            style={{ color: 'var(--accent, #6ea8fe)', fontWeight: 600 }}
-          >
-            Open the sign-in page
-          </a>
-          {prompt.code ? (
-            <>
-              {' '}
-              and enter <strong>{prompt.code}</strong>
-            </>
-          ) : null}
-        </span>
-      )}
-      {prompt &&
-        !prompt.blocked &&
-        (prompt.code ? (
-          <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.2rem' }}>
-            code <strong>{prompt.code}</strong> at{' '}
-            <a
-              href={prompt.url}
-              target="_blank"
-              rel="noreferrer"
-              style={{ color: 'var(--accent, #6ea8fe)' }}
-            >
-              link
-            </a>
-          </span>
-        ) : (
-          <span style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.2rem' }}>
-            Finish authorizing in the popup — or{' '}
-            <a
-              href={prompt.url}
-              target="_blank"
-              rel="noreferrer"
-              style={{ color: 'var(--accent, #6ea8fe)' }}
-            >
-              open the sign-in page
-            </a>{' '}
-            if it didn’t appear.
-          </span>
-        ))}
-      {err && <span style={{ color: 'var(--danger, #e5534b)', fontSize: '0.7rem' }}>{err}</span>}
+      {/* One sign-in for the whole app (core's SignInCard). This panel used to
+          carry its own copy — provider buttons, the not-configured note, the
+          blocked-popup fallback — which had to be kept in step by hand with the
+          two in HorribleAssault and the games first-run hero. It wasn't. */}
+      <SignInCard onSignedIn={reconnect} />
     </div>
   );
 }

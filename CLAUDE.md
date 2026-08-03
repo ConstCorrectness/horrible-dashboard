@@ -78,9 +78,15 @@ buffers, terminal + file explorer.
 - `uv sync --extra geoip` — install **DB-IP GeoIP lookup** so the browser's Route view can plot traceroute hops on a map. Optional and lazy-imported; the DB-IP Lite City database (CC-BY, freely redistributable — unlike MaxMind GeoLite2, which needs an account and a license key) is downloaded once to `$HORRIBLE_DATA_DIR/geoip/dbip-city.mmdb`. Without it hops still list, they just have no coordinates.
 - `uv sync --extra browser-engine && uv run playwright install chromium` — install the real headless-Chromium engine for the **browser** module's "full mode" (server-rendered, agentic). Also an **optional extra** (lazy-imported); the `playwright install` step fetches the ~150 MB per-OS Chromium once. Gated at runtime by `HORRIBLE_ENABLE_SERVER_BROWSER=1` — without the extra or the flag, the browser stays in the light iframe mode.
 - `pnpm dev` — browser layout, full stack: starts the backend, the Vite UI (port 5173,
-  proxies /api and /ws to 8000), **and** the central game server (:9200) together via
+  proxies /api and /ws to 8000), **and** the central game server (:9090) together via
   `scripts/dev.mjs`. `--no-gameserver` (or `HORRIBLE_DEV_NO_GAMESERVER=1`) skips the
-  game server. `pnpm dev:web` is UI-only; `pnpm dev:lan` exposes both on 0.0.0.0 (peer fabric).
+  game server. Sign-in points at the **hosted** server by default, same as
+  `pnpm dev:desktop` and a packaged node — the bundled local server ships with no OAuth
+  client id or secret, so forcing the node at it (as this used to) killed GitHub/Google
+  sign-in in the browser layout while desktop kept working. `--local-gameserver` (or
+  `HORRIBLE_DEV_LOCAL_GAMESERVER=1`) points the node at the bundled one when you want a
+  self-contained stack. `pnpm dev:web` is UI-only; `pnpm dev:lan` exposes both on 0.0.0.0
+  (peer fabric).
 - `pnpm dev:desktop` — desktop layout (Tauri; **spawns/supervises the backend
   itself** via `src-tauri/src/backend.rs` — reuses one already running on :8000).
   Unlike `pnpm dev`, this **defaults to `0.0.0.0`** (the desktop node is the one you

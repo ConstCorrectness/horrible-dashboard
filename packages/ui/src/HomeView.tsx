@@ -4,12 +4,13 @@ import {
   Avatar3D,
   getAgentStatus,
   getBackendOrigin,
+  useSetting,
   type AgentStatus,
 } from '@horrible/core';
 
-import { NAME_KEY } from './home/constants';
+import { NAME_KEY, SETUP_DISMISSED_KEY } from './home/constants';
 import { IntegrationRow } from './home/IntegrationRow';
-import { OnboardingCard } from './home/OnboardingCard';
+import { SetupCard } from './home/SetupCard';
 
 export function HomeView() {
   const [status, setStatus] = useState<AgentStatus | 'loading' | 'backend-down'>('loading');
@@ -19,6 +20,7 @@ export function HomeView() {
   const [actions, setActions] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const name = localStorage.getItem(NAME_KEY);
+  const setupDismissed = useSetting<boolean>(SETUP_DISMISSED_KEY) === true;
 
   const refresh = () =>
     getAgentStatus()
@@ -85,8 +87,15 @@ export function HomeView() {
           </ul>
         )}
         {answer !== null && <div className="home-answer">{answer || '…'}</div>}
-        {typeof status === 'object' && !ready && (
-          <OnboardingCard status={status} onChanged={() => void refresh()} />
+        {/* The setup flow covers the model, the account and the connectors, so it
+            shows whenever any of the three is outstanding — not only when the agent
+            is unconfigured, which is all the old model-only card knew about. It
+            hides itself once every step is done. */}
+        {status !== 'loading' && !setupDismissed && (
+          <SetupCard
+            status={typeof status === 'object' && !ready ? status : null}
+            onChanged={() => void refresh()}
+          />
         )}
         {status === 'backend-down' &&
           // Shell-managed backend (desktop): it starts/restarts automatically,

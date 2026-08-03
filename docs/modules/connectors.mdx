@@ -405,6 +405,24 @@ the page.
 Clicking a tile opens a popover (outside-click + `Escape` to close) showing the
 granted scopes and a Disconnect, or the connect flow when unconnected.
 
+The row appears twice: standalone above the ask bar, and as **step 3 of the setup
+flow** while nothing is connected — see [Onboarding](onboarding.mdx), which also
+explains why the account and the connectors are deliberately separate steps.
+
+State lives in the shared store (`packages/core/src/connectors/store.ts`), not in
+this component. Two consequences worth knowing:
+
+- Any pane can ask `useConnector('github')` instead of calling the backend and
+  rendering whatever a 409 says, and can wrap itself in `ConnectionGate` to offer
+  the connect flow rather than a dead end.
+- This row is also the **only** connect UI. `requestConnect(id)` from anywhere
+  opens the popover here, so a pane never grows a second copy of the flow.
+
+The popover checks whether the consent page actually opened. A blocked window used
+to leave it reading "Finish signing in on the tab that opened" — a claim about a
+tab that does not exist — while the poll ran its full expiry against a page nobody
+had seen.
+
 ## Testing
 
 - `backend/tests/test_connectors.py` — the tile projection, all three kinds, the

@@ -352,6 +352,29 @@ user's existing sessions, and Google refuses OAuth inside embedded webviews
 (RFC 8252). Distinct from `browser_open_url`, which deliberately opens an
 app-owned webview window as the embedded browser's un-iframable-site escape hatch.
 
+:::danger Registering a command is only half of it
+Tauri v2 gates **app** commands behind the ACL, not just plugin ones. Every command
+in `generate_handler!` also needs an `allow-*` permission **defined** in
+`src-tauri/permissions/*.toml` and **listed** in `capabilities/default.json`. Miss
+either half and `invoke` rejects at runtime — no build error, no type error, and
+nothing in the UI.
+
+`open_external` shipped with neither. `openExternal` caught the rejection and
+returned `false`, the link bridge discarded that `false`, and the result was that
+OAuth sign-in and *every external link in the desktop app* silently did nothing.
+`acl_coverage::every_command_is_permitted_and_capable` (`src/main.rs`) now asserts
+both halves for every registered command; a new permissions TOML must be added to
+its `PERMISSION_FILES` list. See
+[Onboarding](../modules/onboarding.mdx#the-bug-that-motivated-all-of-it).
+:::
+
+**Both mechanisms fail quietly**, so `openExternal` returns whether it actually
+opened and callers that need the user to *arrive* somewhere must check it. The
+bridge reports failure through `onExternalOpenFailed`, which `AppShell` turns into
+a persistent toast carrying the URL — necessary because the bridge cancels the
+browser's own navigation before substituting its own, so a failed substitute means
+the click is simply gone.
+
 ## Dev affordance
 
 In dev builds the Frame exposes `window.__horribleFrame = { store, registry,

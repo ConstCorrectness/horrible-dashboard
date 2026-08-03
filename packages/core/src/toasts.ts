@@ -4,6 +4,13 @@ export interface Toast {
   title: string;
   message: string;
   duration?: number;
+  /**
+   * A URL the user may need to carry somewhere by hand — rendered as selectable
+   * text with a Copy button. Set by the "nothing could open this" path
+   * (`onExternalOpenFailed`), where a clickable link is precisely what has already
+   * been proven not to work, so offering another one would be the same dead end.
+   */
+  copyUrl?: string;
 }
 
 const listeners = new Set<(toasts: Toast[]) => void>();
@@ -23,9 +30,15 @@ export const toastsStore = {
   getToasts(): Toast[] {
     return toasts;
   },
-  add(type: Toast['type'], title: string, message: string, duration = 4000): void {
+  add(
+    type: Toast['type'],
+    title: string,
+    message: string,
+    duration = 4000,
+    extra: Pick<Toast, 'copyUrl'> = {},
+  ): void {
     const id = Math.random().toString(36).substring(2, 9);
-    toasts = [...toasts, { id, type, title, message, duration }];
+    toasts = [...toasts, { id, type, title, message, duration, ...extra }];
     emit();
     if (duration > 0) {
       setTimeout(() => {

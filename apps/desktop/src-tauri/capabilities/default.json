@@ -16,6 +16,7 @@
     "allow-window-start-resize-dragging",
     "allow-window-open-workspace",
     "allow-browser-open-url",
+    "allow-open-external",
     "allow-shortcuts-register",
     "allow-shortcuts-unregister-all",
     "global-shortcut:default",

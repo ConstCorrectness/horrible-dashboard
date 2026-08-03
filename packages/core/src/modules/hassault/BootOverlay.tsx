@@ -11,19 +11,10 @@
  * byte counter is the map download's own `Content-Length` (see boot.ts). Nothing
  * here is a fake progress bar waiting out a timer.
  */
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { useState, type CSSProperties, type ReactNode } from 'react';
 
-import {
-  fetchAuthProviders,
-  oauthSignIn,
-  setCallsign,
-  signInWithPassword,
-  signUpWithPassword,
-  type AuthProviders,
-  type SignInProvider,
-  type SignInPrompt,
-} from '../../account';
-import { PROVIDER_MARKS } from '../../provider-marks';
+import { setCallsign } from '../../account';
+import { SignInCard } from '../../SignInCard';
 import type { SessionInfo } from './api';
 import { bootProgress, formatBytes, statusLine, type BootPhase, type BootProgress } from './boot';
 
@@ -230,218 +221,20 @@ function Loading({
 
 // ---- sign in / sign up -------------------------------------------------------
 
+/**
+ * The front door's sign-in is now the app's one sign-in (`SignInCard` in core).
+ *
+ * This used to be its own ~200-line copy of the OAuth dance, and one of three in
+ * the repo. They had already drifted apart — this one had the blocked-popup
+ * fallback, the games first-run hero did not — which is exactly how a bug ends up
+ * living in one screen and not its twin. All that belongs here is the frame: the
+ * wordmark, and the fact that signing in happens over a real level.
+ */
 function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
-  const [mode, setMode] = useState<'in' | 'up'>('in');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [callsign, setCall] = useState('');
-  const [busy, setBusy] = useState<string | null>(null);
-  const [err, setErr] = useState('');
-  const [prompt, setPrompt] = useState<SignInPrompt | null>(null);
-  const [providers, setProviders] = useState<AuthProviders>({ server: '', flows: {} });
-
-  useEffect(() => {
-    fetchAuthProviders()
-      .then(setProviders)
-      .catch(() => {
-        /* unknown means "keep the buttons enabled" — click-time errors take over */
-      });
-  }, []);
-
-  // Only when the server *positively* reports neither flow. An older or
-  // unreachable server says nothing, and that must not disable a working button.
-  const unavailable = (provider: SignInProvider): boolean => {
-    const f = providers.flows[provider];
-    return f != null && !f.device && !f.web;
-  };
-  // A disabled button is indistinguishable from a broken one — which is exactly
-  // how this read when `pnpm dev` pointed the node at the bundled local game
-  // server, which ships with no OAuth credentials: both buttons went dead and
-  // nothing on screen said why. So say why, and name the server, because the
-  // reason lives there and not here.
-  const oauthOff = unavailable('github') && unavailable('google');
-  const passwordWorks = providers.flows.local?.password !== false;
-
-  const oauth = async (provider: SignInProvider) => {
-    setBusy(provider);
-    setErr('');
-    try {
-      await oauthSignIn(provider, setPrompt);
-      onSignedIn();
-    } catch (e) {
-      setErr(message(e));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    setBusy('local');
-    setErr('');
-    try {
-      if (mode === 'up') await signUpWithPassword(email, password, callsign.trim());
-      else await signInWithPassword(email, password);
-      onSignedIn();
-    } catch (e) {
-      setErr(message(e));
-    } finally {
-      setBusy(null);
-    }
-  };
-
   return (
     <div className="hd-boot" style={column}>
-      <Wordmark sub={mode === 'up' ? 'enlist' : 'sign in to play'} />
-
-      {(['github', 'google'] as const).map((provider) => (
-        <button
-          key={provider}
-          className="hd-boot-btn"
-          style={button}
-          onClick={() => void oauth(provider)}
-          disabled={busy != null || unavailable(provider)}
-          title={unavailable(provider) ? `${provider} sign-in is not configured` : undefined}
-        >
-          {PROVIDER_MARKS[provider]}
-          {busy === provider
-            ? 'Waiting…'
-            : `Continue with ${provider === 'github' ? 'GitHub' : 'Google'}`}
-        </button>
-      ))}
-
-      {oauthOff && (
-        <div
-          style={{
-            ...label,
-            textTransform: 'none',
-            letterSpacing: 'normal',
-            fontFamily: 'inherit',
-            fontSize: '0.72rem',
-            lineHeight: 1.5,
-            textAlign: 'center',
-            color: 'var(--warn, #d9a441)',
-          }}
-        >
-          GitHub and Google sign-in aren&rsquo;t configured on the game server
-          {providers.server ? (
-            <>
-              {' '}
-              this node uses (<code style={{ fontFamily: MONO }}>{providers.server}</code>)
-            </>
-          ) : null}
-          .{passwordWorks ? ' Use email and password below.' : ''}
-        </div>
-      )}
-
-      {prompt && (
-        <div style={{ ...label, textAlign: 'center', lineHeight: 1.6 }}>
-          {prompt.blocked ? (
-            // Nothing opened, so do not claim anything did. The sign-in is still
-            // running and still polling — all that is missing is the user seeing
-            // the page, and their own click on this link is a gesture no
-            // pop-up blocker refuses.
-            <>
-              <span style={{ color: 'var(--warn, #d9a441)' }}>
-                Your browser blocked the sign-in window.
-              </span>{' '}
-              <a
-                href={prompt.url}
-                target="_blank"
-                rel="noreferrer"
-                style={{ color: 'var(--accent, #6ea8fe)', fontWeight: 600 }}
-              >
-                Open the {prompt.code ? 'code page' : 'sign-in page'}
-              </a>
-              {prompt.code ? (
-                <>
-                  {' '}
-                  and enter{' '}
-                  <strong style={{ color: 'var(--accent, #6ea8fe)', letterSpacing: '0.1em' }}>
-                    {prompt.code}
-                  </strong>
-                </>
-              ) : null}
-            </>
-          ) : (
-            <>
-              {prompt.code ? (
-                <>
-                  Enter{' '}
-                  <strong style={{ color: 'var(--accent, #6ea8fe)', letterSpacing: '0.1em' }}>
-                    {prompt.code}
-                  </strong>{' '}
-                  at{' '}
-                </>
-              ) : (
-                'Finish in the window that opened — '
-              )}
-              <a href={prompt.url} target="_blank" rel="noreferrer" style={{ color: 'inherit' }}>
-                {prompt.code ? prompt.url : 'reopen'}
-              </a>
-            </>
-          )}
-        </div>
-      )}
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-        <div style={{ flex: 1, height: 1, background: HAIR }} />
-        <span style={label}>or</span>
-        <div style={{ flex: 1, height: 1, background: HAIR }} />
-      </div>
-
-      <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-        <input
-          style={field}
-          type="email"
-          required
-          autoComplete="email"
-          placeholder="you@example.com"
-          aria-label="Email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-        />
-        <input
-          style={field}
-          type="password"
-          required
-          minLength={8}
-          autoComplete={mode === 'up' ? 'new-password' : 'current-password'}
-          placeholder={mode === 'up' ? 'Password (8+ characters)' : 'Password'}
-          aria-label="Password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-        />
-        {mode === 'up' && (
-          <input
-            style={field}
-            placeholder="Callsign (optional)"
-            aria-label="Callsign"
-            maxLength={20}
-            value={callsign}
-            onChange={(e) => setCall(e.target.value)}
-          />
-        )}
-        <button className="hd-boot-primary" style={primary} type="submit" disabled={busy != null}>
-          {busy === 'local' ? 'Working…' : mode === 'up' ? 'Create account' : 'Sign in'}
-        </button>
-      </form>
-
-      <Err>{err}</Err>
-
-      <div style={{ ...label, textAlign: 'center' }}>
-        {mode === 'up' ? 'Already enlisted?' : 'New here?'}{' '}
-        <button
-          className="hd-boot-link"
-          style={{ ...label, color: 'var(--accent, #6ea8fe)' }}
-          onClick={() => {
-            setMode(mode === 'up' ? 'in' : 'up');
-            setErr('');
-          }}
-        >
-          {mode === 'up' ? 'Sign in' : 'Create an account'}
-        </button>
-      </div>
+      <Wordmark sub="sign in to play" />
+      <SignInCard onSignedIn={onSignedIn} />
     </div>
   );
 }

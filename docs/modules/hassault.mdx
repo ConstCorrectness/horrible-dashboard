@@ -682,35 +682,22 @@ ways in, all ending in one JWT held node-side:
 | **GitHub / Google, device flow** | Just a client id (the automatic fallback) |
 | **Email + password** | Nothing — works on a server with no OAuth configured |
 
-The OAuth halves are the core account service (`packages/core/src/account.ts`),
-shared with the games lobby rather than duplicated: a module must not import
-another module's internals, so the popup dance, the redirect-then-device fallback,
-and the desktop-shell branch live in core and both surfaces call them.
+The whole sign-in is core's **`SignInCard`** (`packages/core/src/SignInCard.tsx`)
+— the same component the games lobby and the home page's setup flow render. The
+front door owns only its frame: the wordmark, and the fact that you sign in over a
+real level.
 
-### When a sign-in button does nothing
+That is a deliberate consolidation. There used to be *three* copies of this flow
+(here, the games sidebar, the games first-run hero), and they had drifted: this one
+had a fallback for a blocked pop-up, the first-run hero did not — it called the
+device-only entry point, so it never opened a consent page at all, and its prompt
+rendered `Enter code  at ` with both values blank. A flow this fiddly duplicated
+three times is three chances to be subtly wrong in a way nobody notices until a
+user hits the worst copy. Signed-in state comes from the shared account store
+(`useAccount`), so signing in anywhere in the app is reflected everywhere at once.
 
-Two separate ways this used to fail with no explanation at all, both fixed, and
-both worth knowing because the *symptom* is identical — you click, and no browser
-appears.
-
-**The button was disabled.** `GET /api/games/auth/providers` reports which flows
-the game server can run, and a provider with neither renders greyed out. Under
-`pnpm dev` that is every provider: `scripts/dev.mjs` sets `GAMES_SERVER_URL` to
-the **bundled local game server** (`ws://localhost:9090`), which ships with no
-OAuth credentials, and `resolve_server_url` puts the env var *ahead* of the
-`games.serverUrl` setting — so the node signs in against localhost no matter what
-the setting says. The browser could not work this out: the only URL it can read is
-the setting, which says something else. So the node now reports the URL it
-actually resolved alongside the flows (`{server, flows}`), and the sign-in card
-names it. Email+password works on that server, which is the way in.
-
-**The page could not be opened.** `openExternal` now returns whether it succeeded
-— `window.open` returns `null` when a pop-up blocker eats it, and the Tauri
-command rejects on a shell that predates it, and *neither throws*. Ignoring that
-result turned a blocked pop-up into a button that read "Waiting…" for fifteen
-minutes: the flow was running correctly the whole time, polling for a consent page
-nobody had been shown. When opening fails the prompt says so and offers the link,
-because the user's own click on it is a gesture no blocker refuses.
+See [Onboarding](onboarding.mdx) for the setup flow and the failure ladder that
+sits under every "open this page" in the app.
 
 Email+password uses stdlib **`hashlib.scrypt`** — memory-hard, and no new
 dependency (`bcrypt` is in the lock file only via the optional `chroma` extra, so

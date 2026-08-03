@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import {
   beginConnect,
+  CopyableLink,
   disconnectConnector,
   openExternal,
   pollUntilDone,
@@ -31,6 +32,9 @@ export function ConnectorPopover({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(connector.error);
   const [values, setValues] = useState<Record<string, string>>({});
+  /** The consent page could not be opened — the flow is fine, the user just
+   * cannot see it. Not an error: the poll below is still running. */
+  const [blocked, setBlocked] = useState(false);
   const cancelled = useRef<AbortController | null>(null);
 
   // Close on outside click or Escape. The popover is transient chrome — trapping the
@@ -70,9 +74,20 @@ export function ConnectorPopover({
   /** Drive an oauth flow to completion: show the step, then poll. */
   const runOauth = async (first: ConnectStep) => {
     setStep(first);
+    setBlocked(false);
     // openExternal, not window.open: under the desktop shell the webview can't
     // spawn browser windows, and OAuth belongs in the system browser anyway.
-    if (first.authorize_url) void openExternal(first.authorize_url);
+    //
+    // The result is checked for the same reason the sign-in card checks it: when
+    // nothing opens, "Finish signing in on the tab that opened" is a lie about a
+    // tab that does not exist, and the poll below then runs its full expiry
+    // against a consent page the user was never shown.
+    if (first.authorize_url) {
+      const url = first.authorize_url;
+      void openExternal(url).then((opened) => {
+        if (!opened) setBlocked(true);
+      });
+    }
     const controller = new AbortController();
     cancelled.current = controller;
     const result = await pollUntilDone(connector.id, {
@@ -163,9 +178,14 @@ export function ConnectorPopover({
           <p className="home-hint">Enter this code at {step.verification_uri}:</p>
           <code className="integration-code">{step.user_code}</code>
           <p className="home-hint">
-            <a href={step.verification_uri ?? '#'} target="_blank" rel="noreferrer">
-              Open {step.verification_uri}
-            </a>{' '}
+            {step.verification_uri && (
+              <>
+                <CopyableLink
+                  url={step.verification_uri}
+                  label={`Open ${step.verification_uri}`}
+                />{' '}
+              </>
+            )}
             — this panel updates once you approve.
           </p>
         </>
@@ -189,9 +209,17 @@ export function ConnectorPopover({
           </button>
         </form>
       ) : step?.step === 'redirect' ? (
-        <p className="home-hint">
-          Finish signing in on the tab that opened — this panel updates when you&apos;re done.
-        </p>
+        blocked && step.authorize_url ? (
+          <p className="home-hint">
+            <span className="integration-blocked">Nothing opened.</span> Open the consent page
+            yourself — this panel updates when you&apos;re done.
+            <CopyableLink url={step.authorize_url} label="Open the consent page" />
+          </p>
+        ) : (
+          <p className="home-hint">
+            Finish signing in on the tab that opened — this panel updates when you&apos;re done.
+          </p>
+        )
       ) : connector.connected ? (
         <>
           <p className="home-hint">{connector.blurb}</p>

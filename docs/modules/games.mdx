@@ -1147,7 +1147,15 @@ never handed to the browser). Two OAuth flows produce it:
   webview can't open windows at all, and the system browser is what OAuth wants
   anyway (your existing GitHub/Google session; Google rejects embedded webviews).
   Authorize in the browser, then return to the app — the node's poll picks the
-  token up the same way.
+  token up the same way. That command is ACL-gated, and shipping it without its
+  permission is what once made this button (and every external link on desktop) do
+  nothing at all — see [Onboarding](onboarding.mdx#the-bug-that-motivated-all-of-it).
+
+The sign-in UI itself is core's `SignInCard`, shared with HorribleAssault and the
+home page's setup flow; the lobby sidebar and the first-run hero each used to carry
+their own copy. Signed-in state comes from the shared `useAccount` store, so a
+sign-in anywhere in the app lands here without a refetch. See
+[Onboarding](onboarding.mdx).
 
 If a cached JWT token is rejected by the game server during connection authentication, the node's client automatically signs out (deleting `.data/games_token.json`) to clear the stale token and prevent infinite loop failures. Connection and authentication errors from the game server are surfaced as toast notifications in the UI — with two exceptions to keep spectating quiet: `not_your_turn` errors are suppressed entirely (a move landing after the referee's clock resolved the turn is normal agent-protocol churn, most common in tick-based games and self-play, and the server already handles it by ignoring the move), and identical error toasts arriving within a 10-second burst collapse into one.
 

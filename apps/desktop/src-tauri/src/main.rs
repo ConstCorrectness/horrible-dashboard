@@ -53,3 +53,78 @@ fn main() {
             }
         });
 }
+
+#[cfg(test)]
+mod acl_coverage {
+    //! Every command in `generate_handler!` must also be granted by the ACL.
+    //!
+    //! Registering a command is only half of making it callable: Tauri v2 also
+    //! needs an `allow-*` permission defined in `permissions/` and listed in
+    //! `capabilities/default.json`. Miss either half and `invoke` rejects at
+    //! runtime — which is not a build error, not a type error, and not loud.
+    //!
+    //! `open_external` was added, registered, and shipped without its permission.
+    //! The frontend's `openExternal` caught the rejection and returned `false`, the
+    //! external-link bridge discarded that `false`, and the visible result was that
+    //! OAuth sign-in and every external link in the desktop app did nothing at all,
+    //! with no error anywhere. Three layers of correct-looking code, one missing
+    //! line of TOML. This test is the line of defence that costs nothing.
+
+    /// Command names listed in `main.rs`'s `generate_handler!`.
+    fn registered_commands(source: &str) -> Vec<String> {
+        let start = source
+            .find("tauri::generate_handler![")
+            .expect("generate_handler! not found");
+        let rest = &source[start..];
+        let end = rest.find(']').expect("unterminated generate_handler!");
+        rest[..end]
+            .split('\n')
+            .skip(1)
+            .filter_map(|line| {
+                let line = line.trim().trim_end_matches(',').trim();
+                if line.is_empty() {
+                    return None;
+                }
+                Some(line.rsplit("::").next().unwrap_or(line).to_string())
+            })
+            .collect()
+    }
+
+    /// Every permission TOML. Explicitly listed rather than globbed: `include_str!`
+    /// needs literal paths, so a *new* TOML file must be added here too.
+    const PERMISSION_FILES: &[&str] = &[
+        include_str!("../permissions/default.toml"),
+        include_str!("../permissions/shortcuts.toml"),
+        include_str!("../permissions/window.toml"),
+    ];
+
+    #[test]
+    fn every_command_is_permitted_and_capable() {
+        let commands = registered_commands(include_str!("main.rs"));
+        assert!(
+            commands.len() > 5,
+            "parsed too few commands ({commands:?}) — the parser is probably broken"
+        );
+
+        let permissions: String = PERMISSION_FILES.concat();
+        let capability = include_str!("../capabilities/default.json");
+
+        for command in &commands {
+            // Tauri's own convention, matching the identifiers already in use:
+            // `browser_open_url` -> `allow-browser-open-url`.
+            let identifier = format!("allow-{}", command.replace('_', "-"));
+
+            assert!(
+                permissions.contains(&format!("\"{command}\"")),
+                "command `{command}` has no permission defining it in permissions/*.toml \
+                 (expected an entry allowing \"{command}\"). Without it every \
+                 invoke('{command}') is rejected by the ACL at runtime."
+            );
+            assert!(
+                capability.contains(&format!("\"{identifier}\"")),
+                "command `{command}` is registered but `{identifier}` is not listed in \
+                 capabilities/default.json, so the ACL rejects every call to it."
+            );
+        }
+    }
+}

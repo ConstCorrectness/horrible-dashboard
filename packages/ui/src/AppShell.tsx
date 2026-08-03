@@ -8,7 +8,9 @@ import {
   hasCapability,
   installKeymap,
   layoutStore,
+  onExternalOpenFailed,
   registry,
+  setSetting,
   setShellView,
   SymbolSearchModal,
   toastsStore,
@@ -18,6 +20,7 @@ import {
 } from '@horrible/core';
 
 import { ApprovalPrompts } from './ApprovalPrompts';
+import { SETUP_DISMISSED_KEY } from './home/constants';
 import { CaptureHud } from './CaptureHud';
 import { CommandPalette } from './CommandPalette';
 import { Dialogs } from './Dialogs';
@@ -62,6 +65,24 @@ export function AppShell({
     document.title = appTitle;
   }, [appTitle]);
 
+  // A link the app cancelled and then failed to open itself. Nothing is on the
+  // user's screen at this point and no error was raised anywhere, so say so —
+  // and hand over the URL rather than another link, since links are what just
+  // failed. Persistent (duration 0): it carries the only copy of the address.
+  useEffect(
+    () =>
+      onExternalOpenFailed((url) => {
+        toastsStore.add(
+          'warning',
+          "Couldn't open that link",
+          'Your browser or the desktop shell refused to open it. Copy the address and paste it into a browser.',
+          0,
+          { copyUrl: url },
+        );
+      }),
+    [],
+  );
+
   useEffect(() => {
     // OS-window fullscreen is a phase-2 native-shell capability (F11); distinct
     // from the frame's in-window `area.fullscreen` (ctrl+space). Only register
@@ -79,6 +100,14 @@ export function AppShell({
         },
         { id: 'shell.home', title: 'Go home', run: () => setView('home') },
         { id: 'shell.workspace', title: 'Go to workspace', run: () => setView('workspace') },
+        {
+          id: 'shell.setup',
+          title: 'Show setup (model, account, tools)',
+          run: async () => {
+            await setSetting(SETUP_DISMISSED_KEY, false);
+            setView('home');
+          },
+        },
         ...(nativeFullscreen
           ? [
               {
@@ -107,6 +136,16 @@ export function AppShell({
         // (minibuffer) is the binding that genuinely must never be shadowed.
         { key: 'mod+k', command: 'shell.commandPalette' },
         ...(nativeFullscreen ? [{ key: 'f11', command: 'shell.toggleFullscreen' }] : []),
+      ],
+      settings: [
+        {
+          key: SETUP_DISMISSED_KEY,
+          title: 'Hide setup on the home page',
+          description:
+            'Hides the "Get set up" flow (local model, account, connectors) even when steps are outstanding. Reopen it with the "Show setup" command.',
+          type: 'boolean',
+          default: false,
+        },
       ],
     });
     // Opening any panel switches to the workspace and tells it which to open.

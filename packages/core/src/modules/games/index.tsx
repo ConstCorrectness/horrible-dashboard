@@ -229,7 +229,7 @@ export const gamesModule: ModuleManifest = {
       key: 'games.serverUrl',
       title: 'Game server URL',
       description:
-        'WebSocket URL of the central game server. Defaults to the hosted server; set ws://localhost:9200 to use a local one.',
+        'WebSocket URL of the central game server. Defaults to the hosted server; set ws://localhost:9090 to use the one `pnpm dev` starts. Ignored when the GAMES_SERVER_URL environment variable is set.',
       type: 'string',
       default: 'wss://horrible-games.fly.dev',
     },

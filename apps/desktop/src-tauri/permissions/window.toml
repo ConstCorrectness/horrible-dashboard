@@ -61,3 +61,13 @@ identifier = "allow-browser-open-url"
 description = "Enables the browser_open_url custom command"
 [permission.commands]
 allow = ["browser_open_url"]
+
+# Without this the ACL rejects every `invoke('open_external')`, which is not a
+# visible error: `openExternal` catches the rejection and returns false, so the
+# external-link bridge cancels the click and nothing happens. That took out OAuth
+# consent pages, docs links and the sign-in card's own fallback link at once.
+[[permission]]
+identifier = "allow-open-external"
+description = "Enables the open_external custom command"
+[permission.commands]
+allow = ["open_external"]

@@ -11,6 +11,7 @@
  */
 import { useEffect, useSyncExternalStore } from 'react';
 
+import { ConnectionGate } from '../../connectors/ConnectionGate';
 import { openBuffer } from '../editor';
 import { githubUri, splitRepo, type RepoSummary } from './api';
 import { ReadmePane } from './ReadmePane';
@@ -41,7 +42,14 @@ export function RepoViewer({ instanceId }: { instanceId?: string }) {
   if (!state.repo) {
     return (
       <div className="gh-viewer">
-        <RepoPicker onPick={(repo: RepoSummary) => void openRepo(paneId, repo)} />
+        {/* Without the connector this pane can only fail: the picker's first call
+            returns 409 and it renders the raw message, which tells the user what
+            went wrong but not what to do. The gate offers the connect flow
+            instead — the same one the home tile opens, reached through
+            `requestConnect` so this module owns no connect UI of its own. */}
+        <ConnectionGate connector="github">
+          <RepoPicker onPick={(repo: RepoSummary) => void openRepo(paneId, repo)} />
+        </ConnectionGate>
       </div>
     );
   }

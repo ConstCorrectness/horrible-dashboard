@@ -121,11 +121,17 @@ def _http_base() -> str:
 
 def _unreachable_error() -> dict[str, str]:
     """The `{error}` shape the browser already understands (see signInWithGitHub),
-    for when the central game server isn't running — a friendly message beats a 500."""
+    for when the central game server isn't running — a friendly message beats a 500.
+
+    The port here is **9090**, which is what `scripts/dev.mjs` actually starts the
+    bundled server on. This used to say 9200 — the Fly *internal* port from
+    fly.toml, which nothing local ever listens on — so following the instruction
+    produced a server the node still could not reach.
+    """
     return {
         "error": (
             f"game server unreachable at {_http_base()} — start it with "
-            "`uv run uvicorn backend.games_server.app:app --port 9200`"
+            "`uv run uvicorn backend.games_server.app:app --port 9090`"
         )
     }
 

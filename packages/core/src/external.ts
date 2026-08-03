@@ -62,12 +62,45 @@ export async function openExternal(url: string): Promise<boolean> {
 }
 
 /**
+ * Subscribers notified when a URL could not be opened for the user at all.
+ *
+ * This exists because the *last* fallback needs one too. Every other layer here
+ * hands the job down to something else — popup to system browser, system browser
+ * to a link the user clicks themselves — and the bottom of that ladder is a link
+ * click that also silently failed. At that point the only honest move left is to
+ * put the URL on screen and let the user carry it to a browser by hand.
+ */
+type ExternalOpenFailedListener = (url: string) => void;
+
+const failureListeners = new Set<ExternalOpenFailedListener>();
+
+/** Subscribe to "nothing opened". Returns an unsubscribe. */
+export function onExternalOpenFailed(listener: ExternalOpenFailedListener): () => void {
+  failureListeners.add(listener);
+  return () => failureListeners.delete(listener);
+}
+
+/** Announce that `url` could not be opened. Safe to call with no subscribers. */
+export function notifyExternalOpenFailed(url: string): void {
+  for (const listener of failureListeners) listener(url);
+}
+
+/**
  * Route every external-link click in the document through {@link openExternal}.
  * Installed once by the desktop boot (`apps/web/main.tsx` under Tauri): without it,
  * every plain `<a href="https://…">` in the app — docs links, the sign-in card's
  * fallback link, the Ollama install link — is dead on desktop. Same-origin
  * navigation and non-http(s) schemes are left alone. Capture phase, so it wins
  * even inside panels that stop propagation on bubble.
+ *
+ * **It must report failure.** This handler cancels the browser's own navigation
+ * before substituting its own, so when the substitute fails the click is simply
+ * gone. Ignoring {@link openExternal}'s result — as this did — converted one
+ * missing Tauri ACL entry (`allow-open-external`, absent from
+ * `capabilities/default.json` and `permissions/window.toml` since the command was
+ * added) into *every* external link in the desktop app doing nothing, with no
+ * error anywhere. The docblock above already said callers who need the user to
+ * arrive somewhere must check the boolean; this was the caller that didn't.
  */
 export function installExternalLinkBridge(): void {
   document.addEventListener(
@@ -85,7 +118,9 @@ export function installExternalLinkBridge(): void {
       if (parsed.origin === window.location.origin) return;
       if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return;
       event.preventDefault();
-      void openExternal(parsed.href);
+      void openExternal(parsed.href).then((opened) => {
+        if (!opened) notifyExternalOpenFailed(parsed.href);
+      });
     },
     true,
   );

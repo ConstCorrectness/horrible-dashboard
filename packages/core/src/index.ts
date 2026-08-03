@@ -6,7 +6,14 @@ export {
   type Capability,
 } from './capabilities';
 export { ApiError, apiDelete, apiGet, apiPost, apiPut } from './api';
-export { installExternalLinkBridge, isDesktopShell, openExternal } from './external';
+export { CopyableLink } from './CopyableLink';
+export {
+  installExternalLinkBridge,
+  isDesktopShell,
+  notifyExternalOpenFailed,
+  onExternalOpenFailed,
+  openExternal,
+} from './external';
 export {
   Avatar3D,
   DEFAULT_AVATAR_MOOD,
@@ -166,6 +173,19 @@ export {
   type ConnectorScope,
   type ConnectStep,
 } from './connectors/api';
+export {
+  connectorById,
+  connectorsStore,
+  onConnectRequested,
+  refreshConnectors,
+  requestConnect,
+  type ConnectorsState,
+} from './connectors/store';
+export { useConnector, useConnectors } from './connectors/useConnectors';
+export { ConnectionGate } from './connectors/ConnectionGate';
+export { accountStore, refreshAccount, type AccountState } from './account-store';
+export { useAccount } from './useAccount';
+export { SignInCard } from './SignInCard';
 export { dashboardModule } from './modules/dashboard';
 export { layoutsModule } from './modules/layouts';
 export { scratchModule } from './modules/scratch';
