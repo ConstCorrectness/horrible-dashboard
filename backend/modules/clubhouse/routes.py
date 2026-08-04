@@ -361,49 +361,69 @@ async def connect_with_token(body: TokenConnectRequest) -> ClubhouseStatus:
 async def channels() -> dict[str, Any]:
     """Live rooms right now (Clubhouse POST /get_feed_v3)."""
     auth = _require_auth()
-    raw = await _ch_authed_post(
-        "/get_feed_v3",
-        {},
-        auth["auth_token"],
-        auth["user_id"],
-        auth.get("device_id"),
-    )
-
+    
     channels_list = []
-    items = raw.get("items", []) or []
-    for item in items:
-        if "channel" in item and item["channel"]:
-            ch_raw = item["channel"]
+    cursor = None
+    seen_channels = set()
+    
+    # Fetch up to 4 pages to get a good number of live rooms
+    for _ in range(4):
+        payload = {}
+        if cursor:
+            payload["cursor"] = cursor
+            
+        raw = await _ch_authed_post(
+            "/get_feed_v3",
+            payload,
+            auth["auth_token"],
+            auth["user_id"],
+            auth.get("device_id"),
+        )
 
-            # Map social_club to club
-            club_data = None
-            if ch_raw.get("social_club"):
-                club_data = {"name": ch_raw["social_club"].get("name")}
+        items = raw.get("items", []) or []
+        for item in items:
+            if "channel" in item and item["channel"]:
+                ch_raw = item["channel"]
+                channel_id = ch_raw.get("channel")
+                
+                # Prevent duplicates across pages
+                if not channel_id or channel_id in seen_channels:
+                    continue
+                seen_channels.add(channel_id)
 
-            # Map users
-            users_list = []
-            for u in ch_raw.get("users", []):
-                users_list.append(
+                # Map social_club to club
+                club_data = None
+                if ch_raw.get("social_club"):
+                    club_data = {"name": ch_raw["social_club"].get("name")}
+
+                # Map users
+                users_list = []
+                for u in ch_raw.get("users", []):
+                    users_list.append(
+                        {
+                            "user_id": u.get("user_id"),
+                            "name": u.get("name"),
+                            "username": u.get("username"),
+                            "photo_url": u.get("photo_url"),
+                            "is_speaker": u.get("is_speaker"),
+                            "is_moderator": u.get("is_moderator", False),
+                        }
+                    )
+
+                channels_list.append(
                     {
-                        "user_id": u.get("user_id"),
-                        "name": u.get("name"),
-                        "username": u.get("username"),
-                        "photo_url": u.get("photo_url"),
-                        "is_speaker": u.get("is_speaker"),
-                        "is_moderator": u.get("is_moderator", False),
+                        "channel": channel_id,
+                        "topic": ch_raw.get("topic"),
+                        "num_speakers": ch_raw.get("num_speakers"),
+                        "num_all": ch_raw.get("num_all"),
+                        "club": club_data,
+                        "users": users_list,
                     }
                 )
-
-            channels_list.append(
-                {
-                    "channel": ch_raw.get("channel"),
-                    "topic": ch_raw.get("topic"),
-                    "num_speakers": ch_raw.get("num_speakers"),
-                    "num_all": ch_raw.get("num_all"),
-                    "club": club_data,
-                    "users": users_list,
-                }
-            )
+                
+        cursor = raw.get("cursor")
+        if not cursor:
+            break
 
     return {"channels": channels_list}
 
@@ -419,6 +439,23 @@ async def following() -> dict[str, Any]:
         auth["user_id"],
         auth.get("device_id"),
     )
+
+@router.get("/channels/{channel}/chat")
+async def get_channel_chat(channel: str) -> dict[str, Any]:
+    """Attempt to get recent chat for a channel."""
+    auth = _require_auth()
+    try:
+        res = await _ch_authed_post(
+            "/get_channel",
+            {"channel": channel},
+            auth["auth_token"],
+            auth["user_id"],
+            auth.get("device_id"),
+        )
+        return {"comments": res.get("recent_messages", [])}
+    except Exception as e:
+        print("Failed to fetch chat:", e)
+        return {"comments": []}
 
 
 @router.delete("/auth", response_model=ClubhouseStatus)

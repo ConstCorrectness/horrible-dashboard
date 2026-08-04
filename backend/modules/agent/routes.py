@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import fastapi
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
@@ -233,3 +234,18 @@ def roster() -> RosterResponse:
             for spec in list_agents()
         ]
     )
+
+@router.get("/tts")
+async def tts(text: str):
+    from backend.modules.agent.xtts_service import xtts_service
+    from fastapi.responses import Response
+    
+    audio_bytes = await xtts_service.generate_audio(text)
+    return Response(content=audio_bytes, media_type="audio/wav")
+
+@router.post("/stt")
+async def stt(file: fastapi.UploadFile):
+    from backend.modules.agent.stt_service import stt_service
+    audio_bytes = await file.read()
+    text = await stt_service.transcribe(audio_bytes)
+    return {"text": text}

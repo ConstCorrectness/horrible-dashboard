@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
+import { apiUrl } from '../../origin';
 import { useAgentContext } from '../../agent-context';
 import { toastsStore } from '../../toasts';
 import {
@@ -28,13 +29,18 @@ import { useClubhouseVoice } from './useClubhouseVoice';
 export function RoomsPanel() {
   const [state, setState] = useState<'loading' | 'disconnected' | 'ready' | 'error'>('loading');
   const [channels, setChannels] = useState<Channel[]>([]);
-  const [myUserId, setMyUserId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeRoomInfo, setActiveRoomInfo] = useState<Channel | null>(null);
   const [commentText, setCommentText] = useState('');
   const [selectedUser, setSelectedUser] = useState<ClubhouseUserProfile | null>(null);
   const [loadingProfile, setLoadingProfile] = useState(false);
+
+  // Voice Agent States
+  const [agentEnabled, setAgentEnabled] = useState(false);
+  const [isAgentSpeaking, setIsAgentSpeaking] = useState(false);
+  const [agentTranscript, setAgentTranscript] = useState<string | null>(null);
+  const [myUserId, setMyUserId] = useState<number | null>(null);
 
   // New states for extended Clubhouse functionality
   const [showStartRoomModal, setShowStartRoomModal] = useState(false);
@@ -266,12 +272,19 @@ export function RoomsPanel() {
     joinRoom,
     leaveRoom,
     toggleMute,
+    playAgentAudio,
     raiseHand,
     acceptSpeakerInvite,
     dismissSpeakerInvite,
     sendComment,
     sendReaction,
-  } = useClubhouseVoice();
+  } = useClubhouseVoice({
+    onTranscribe: (text) => {
+      if (agentEnabled) {
+        setAgentTranscript(text);
+      }
+    }
+  });
 
   const load = async () => {
     setState('loading');
@@ -321,6 +334,48 @@ export function RoomsPanel() {
       chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [comments]);
+
+  // Voice Agent Logic
+  const triggerAgentResponse = async (text: string) => {
+    if (!text || isAgentSpeaking) return;
+    try {
+      setIsAgentSpeaking(true);
+      const req = await fetch(apiUrl('/api/agent/complete'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prefix: 'You are an AI in a Clubhouse room. You hear: "' + text + '". Reply concisely as yourself: "', suffix: '"', language: 'text' }),
+      });
+      const data = await req.json();
+      
+      if (data.completion) {
+        const text = data.completion.trim();
+        await sendComment(`🤖 ${text}`);
+        await playAgentAudio(text);
+      }
+      setIsAgentSpeaking(false);
+    } catch (e) {
+      console.error('Agent response failed:', e);
+      setIsAgentSpeaking(false);
+    }
+  };
+
+  const prevCommentsLengthRef = useRef(0);
+  useEffect(() => {
+    if (comments.length > prevCommentsLengthRef.current) {
+      const newComment = comments[comments.length - 1];
+      prevCommentsLengthRef.current = comments.length;
+      if (agentEnabled && !newComment.text?.startsWith('🤖')) {
+         triggerAgentResponse(newComment.text || '');
+      }
+    }
+  }, [comments, agentEnabled, myUserId, isAgentSpeaking]);
+
+  useEffect(() => {
+    if (agentTranscript && agentEnabled) {
+      triggerAgentResponse(agentTranscript);
+      setAgentTranscript(null);
+    }
+  }, [agentTranscript, agentEnabled]);
 
   // Filter channels based on search query
   const filteredChannels = channels.filter((c) => {
@@ -1879,6 +1934,12 @@ export function RoomsPanel() {
 
           {/* Action buttons (Mute/Raise hand/Accept) */}
           <div className="ch-stage-actions-row">
+            <button
+              className={`ch-btn-action ${agentEnabled ? 'mic-active' : ''}`}
+              onClick={() => setAgentEnabled(!agentEnabled)}
+            >
+              🤖 {agentEnabled ? 'Agent ON' : 'Agent OFF'}
+            </button>
             {isCurrentUserSpeaker ? (
               <button
                 className={`ch-btn-action ${isMuted ? 'mic-muted' : 'mic-active'}`}

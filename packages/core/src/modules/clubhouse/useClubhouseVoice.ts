@@ -1,5 +1,6 @@
+import { apiUrl } from '../../origin';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import AgoraRTC, { IAgoraRTCClient, IMicrophoneAudioTrack } from 'agora-rtc-sdk-ng';
+import AgoraRTC, { IAgoraRTCClient, ILocalAudioTrack } from 'agora-rtc-sdk-ng';
 import PubNub from 'pubnub';
 import {
   joinClubhouseChannel,
@@ -16,6 +17,13 @@ import {
 const CLUBCARD_AGORA_APP_ID = '938d7e95aeaa4f4ca1f416ab40a498d9';
 const CLUBCARD_PUBNUB_SUB_KEY = 'sub-c-a4abea84-9ca3-11ea-8e71-f2b83ac9263d';
 const CLUBCARD_PUBNUB_PUB_KEY = 'pub-c-6878d382-5ae6-4494-9099-f930f938868b';
+
+export interface UseClubhouseVoiceProps {
+  onLiveUsersChange?: (users: LiveUserState[]) => void;
+  onCommentsChange?: (comments: ChatComment[]) => void;
+  onSpeakingVolumesChange?: (volumes: Record<number, number>) => void;
+  onTranscribe?: (text: string) => void;
+}
 
 export interface ChatComment {
   id: string;
@@ -39,13 +47,13 @@ export interface SpeakerInvite {
   moderatorPhoto: string | null;
 }
 
-// Per-user live state tracked inside the room
 export interface LiveUserState {
   userId: number;
   handRaised: boolean;
   isSpeaker: boolean;
   isMuted: boolean;
 }
+
 
 export interface PubNubRoomMessage {
   action?: string;
@@ -82,7 +90,7 @@ export interface PubNubRoomMessage {
   moderator_photo_url?: string | null;
 }
 
-export function useClubhouseVoice() {
+export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
   const [joined, setJoined] = useState(false);
   const [activeChannel, setActiveChannel] = useState<string | null>(null);
   const [isMuted, setIsMuted] = useState(false);
@@ -99,8 +107,16 @@ export function useClubhouseVoice() {
   // Map of uid → volume level (0–100) from Agora volume indicator
   const [speakingVolumes, setSpeakingVolumes] = useState<Record<number, number>>({});
 
+  // Audio Mixer Refs
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const agentAudioDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
+  const sttDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
+  const sttRecorderRef = useRef<MediaRecorder | null>(null);
+  const physicalMicStreamRef = useRef<MediaStream | null>(null);
+  const humanGainRef = useRef<GainNode | null>(null);
+
   const rtcClientRef = useRef<IAgoraRTCClient | null>(null);
-  const localAudioTrackRef = useRef<IMicrophoneAudioTrack | null>(null);
+  const localAudioTrackRef = useRef<ILocalAudioTrack | null>(null);
   const pubnubRef = useRef<PubNub | null>(null);
   const pingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const volumeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -150,6 +166,31 @@ export function useClubhouseVoice() {
   const joinRoom = async (channelName: string, initialUsers?: ChannelUser[]) => {
     setLoading(true);
     setError(null);
+    setComments([]);
+    setActiveReactions([]);
+
+    // Fetch historical chat
+    try {
+      const chatRes = await fetch(apiUrl(`/api/clubhouse/channels/${channelName}/chat`));
+      if (chatRes.ok) {
+        const chatData = await chatRes.json();
+        if (chatData.comments && Array.isArray(chatData.comments)) {
+          // Map the API chat format to ChatComment if needed, or assume it's close enough.
+          // Clubhouse chat messages are typically structured with user info.
+          const historicalComments = chatData.comments.map((c: any) => ({
+            id: c.message_id || c.chat_message_id || String(Math.random()),
+            userName: c.name || c.user_profile?.name || 'Unknown',
+            userPhoto: c.photo_url || c.user_profile?.photo_url || '',
+            text: c.message || c.body || '',
+            timestamp: c.timestamp || Date.now()
+          })).filter((c: ChatComment) => c.text.length > 0);
+          setComments(historicalComments.reverse()); // usually oldest first
+        }
+      }
+    } catch (e) {
+      console.error('Failed to fetch historical chat:', e);
+    }
+
     try {
       // Get own profile status first
       const status = await getClubhouseStatus();
@@ -175,6 +216,13 @@ export function useClubhouseVoice() {
         if (mediaType === 'audio') {
           const remoteAudioTrack = user.audioTrack;
           remoteAudioTrack?.play();
+          
+          if (remoteAudioTrack && audioCtxRef.current && sttDestRef.current) {
+            const track = remoteAudioTrack.getMediaStreamTrack();
+            const stream = new MediaStream([track]);
+            const source = audioCtxRef.current.createMediaStreamSource(stream);
+            source.connect(sttDestRef.current);
+          }
         }
       });
 
@@ -190,12 +238,72 @@ export function useClubhouseVoice() {
         chDetails.user_id ?? undefined
       );
 
-      // e. Create and publish microphone stream
-      const micTrack = await AgoraRTC.createMicrophoneAudioTrack();
-      localAudioTrackRef.current = micTrack;
-      await client.publish(micTrack);
-      // Join as listener by default (muted)
-      await micTrack.setEnabled(false);
+      // e. Create Audio Mixer
+      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+      const audioCtx = new AudioContext();
+      audioCtxRef.current = audioCtx;
+      
+      const dest = audioCtx.createMediaStreamDestination();
+      agentAudioDestRef.current = dest;
+      
+      const sttDest = audioCtx.createMediaStreamDestination();
+      sttDestRef.current = sttDest;
+      
+      // Start STT Recorder
+      try {
+        const recorder = new MediaRecorder(sttDest.stream);
+        sttRecorderRef.current = recorder;
+        recorder.ondataavailable = async (e) => {
+          if (e.data.size > 0 && props?.onTranscribe) {
+            const formData = new FormData();
+            formData.append('file', new File([e.data], 'chunk.webm', { type: e.data.type || 'audio/webm' }));
+            try {
+              const res = await fetch(apiUrl('/api/agent/stt'), { method: 'POST', body: formData });
+              const json = await res.json();
+              if (json.text && json.text.trim().length > 0) {
+                props.onTranscribe(json.text);
+              }
+            } catch (err) {
+              console.error('STT failed:', err);
+            }
+          }
+        };
+        recorder.start(5000);
+      } catch (err) {
+        console.error('Failed to start STT recorder:', err);
+      }
+      
+      // Get physical mic (Optional, handle missing permissions or timeouts gracefully)
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw new Error('MediaDevices API not available (requires secure context).');
+        }
+        
+        const micStream = await Promise.race([
+          navigator.mediaDevices.getUserMedia({ audio: true }),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Microphone permission timeout')), 3000))
+        ]);
+        
+        physicalMicStreamRef.current = micStream;
+        const micSource = audioCtx.createMediaStreamSource(micStream);
+        
+        const humanGain = audioCtx.createGain();
+        humanGain.gain.value = 0; // muted by default
+        humanGainRef.current = humanGain;
+        
+        micSource.connect(humanGain);
+        humanGain.connect(dest);
+        humanGain.connect(sttDest);
+      } catch (err) {
+        console.warn('Could not access physical microphone, continuing as listener:', err);
+      }
+
+      // Create and publish mixed microphone stream
+      const mixedTrack = AgoraRTC.createCustomAudioTrack({
+        mediaStreamTrack: dest.stream.getAudioTracks()[0]
+      });
+      localAudioTrackRef.current = mixedTrack;
+      await client.publish(mixedTrack);
       setIsMuted(true);
 
       // e2. Start Agora volume indicator — fires every 200ms with per-user volumes
@@ -237,12 +345,8 @@ export function useClubhouseVoice() {
         pubnub.setToken(chDetails.pubnub_token);
         pubnubRef.current = pubnub;
 
-        console.log('[PubNub] Initialized (PAMv3). userId:', myUserIdStr, 'origin:', chDetails.pubnub_origin);
-
         pubnub.addListener({
           message: (event) => {
-            console.log('[PubNub] RAW message:', { channel: event.channel, message: event.message });
-
             const msg = event.message as PubNubRoomMessage;
             if (!msg) return;
 
@@ -253,7 +357,6 @@ export function useClubhouseVoice() {
             const action = msg.action;
 
             if (action === 'join_channel') {
-              // Someone joined the room
               if (senderId != null) {
                 updateLiveUser(senderId, {
                   isSpeaker: msg.is_speaker ?? false,
@@ -261,7 +364,6 @@ export function useClubhouseVoice() {
                 });
               }
             } else if (action === 'leave_channel' || action === 'remove_speaker') {
-              // Someone left or was removed
               if (senderId != null) {
                 removeLiveUser(senderId);
               }
@@ -274,7 +376,6 @@ export function useClubhouseVoice() {
                 updateLiveUser(senderId, { handRaised: false });
               }
             } else if (action === 'make_speaker' || action === 'accept_speaker_invite') {
-              // User was promoted to speaker
               if (senderId != null) {
                 updateLiveUser(senderId, { isSpeaker: true, handRaised: false });
               }
@@ -283,7 +384,6 @@ export function useClubhouseVoice() {
                 updateLiveUser(senderId, { isMuted: msg.is_muted ?? true });
               }
             } else if (action === 'invite_speaker') {
-              // A moderator is inviting us to speak
               const targetId = msg.user_id;
               if (targetId != null && targetId === myUserId) {
                 setSpeakerInvite({
@@ -298,9 +398,7 @@ export function useClubhouseVoice() {
             if (action === 'post_to_chat' || (!action && (msg.text || msg.body || msg.message))) {
               const text = msg.text || msg.body || msg.message;
               if (text && typeof text === 'string') {
-                // Skip own messages (shown locally immediately)
                 if (senderId != null && myUserId != null && senderId === myUserId) return;
-                console.log('[PubNub] Chat message:', text);
                 setComments(prev => [
                   ...prev,
                   {
@@ -328,31 +426,15 @@ export function useClubhouseVoice() {
                 }, 3000);
               }
             }
-          },
-          signal: (event) => {
-            console.log('[PubNub] Signal:', event);
-          },
-          status: (statusEvent) => {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const s = statusEvent as any;
-            console.log('[PubNub] Status:', statusEvent.category, {
-              affectedChannels: s.affectedChannels,
-              statusCode: s.statusCode,
-              error: s.error,
-            });
           }
         });
 
-        // Subscribe only to channels in the PAMv3 token grant
         const channelsToSubscribe = [`channel_all.${channelName}`];
         if (myUserId) {
           channelsToSubscribe.push(`users.${myUserId}`);
           channelsToSubscribe.push(`channel_user.${channelName}.${myUserId}`);
         }
-        console.log('[PubNub] Subscribing to:', channelsToSubscribe);
         pubnub.subscribe({ channels: channelsToSubscribe });
-      } else {
-        console.warn('[PubNub] Not initialized — pubnub_enable:', chDetails.pubnub_enable);
       }
 
       // g. Heartbeat ping loop (every 30s)
@@ -372,7 +454,6 @@ export function useClubhouseVoice() {
       setSpeakerInvite(null);
       setSpeakingVolumes({});
 
-      // Seed live user state from the room's initial user list
       if (initialUsers) {
         seedLiveUsers(initialUsers);
       }
@@ -402,9 +483,21 @@ export function useClubhouseVoice() {
     }
 
     if (localAudioTrackRef.current) {
-      try { localAudioTrackRef.current.stop(); localAudioTrackRef.current.close(); }
-      catch (err) { console.error('Error stopping mic track:', err); }
+      localAudioTrackRef.current.close();
       localAudioTrackRef.current = null;
+    }
+    if (physicalMicStreamRef.current) {
+      physicalMicStreamRef.current.getTracks().forEach(t => t.stop());
+      physicalMicStreamRef.current = null;
+    }
+    if (sttRecorderRef.current) {
+      sttRecorderRef.current.stop();
+      sttRecorderRef.current = null;
+    }
+    
+    if (audioCtxRef.current) {
+      audioCtxRef.current.close();
+      audioCtxRef.current = null;
     }
 
     if (rtcClientRef.current) {
@@ -438,8 +531,8 @@ export function useClubhouseVoice() {
     if (!activeChannel) return;
     const nextMuteState = !isMuted;
     try {
-      if (localAudioTrackRef.current) {
-        await localAudioTrackRef.current.setEnabled(!nextMuteState);
+      if (humanGainRef.current) {
+        humanGainRef.current.gain.value = nextMuteState ? 0 : 1;
       }
       setIsMuted(nextMuteState);
       await muteClubhouseChannel(activeChannel, nextMuteState);
@@ -491,7 +584,6 @@ export function useClubhouseVoice() {
     const commentId = 'my-msg-' + Math.random().toString(36).slice(2, 9);
     const timestamp = Date.now();
 
-    // Add locally for instant feedback
     setComments(prev => [...prev, {
       id: commentId,
       userName: profile?.name || 'Anonymous',
@@ -512,12 +604,8 @@ export function useClubhouseVoice() {
     };
     try {
       await pubnubRef.current.publish({ channel: `channel_all.${activeChannel}`, message: payload });
-    } catch {
-      try {
-        await pubnubRef.current.publish({ channel: activeChannel, message: payload });
-      } catch (err2) {
-        console.error('Failed to publish comment:', err2);
-      }
+    } catch (err2) {
+      console.error('Failed to publish comment:', err2);
     }
   };
 
@@ -546,14 +634,32 @@ export function useClubhouseVoice() {
     };
     try {
       await pubnubRef.current.publish({ channel: `channel_all.${activeChannel}`, message: payload });
-    } catch {
-      try {
-        await pubnubRef.current.publish({ channel: activeChannel, message: payload });
-      } catch (err2) {
-        console.error('Failed to publish reaction:', err2);
-      }
+    } catch (err2) {
+      console.error('Failed to publish reaction:', err2);
     }
   };
+
+  // Play Agent Audio through the mixer
+  const playAgentAudio = useCallback(async (text: string) => {
+    if (!audioCtxRef.current || !agentAudioDestRef.current || !localAudioTrackRef.current) return;
+    try {
+      const url = `/api/agent/tts?text=${encodeURIComponent(text)}`;
+      const res = await fetch(url);
+      const arrayBuffer = await res.arrayBuffer();
+      const audioBuffer = await audioCtxRef.current.decodeAudioData(arrayBuffer);
+      
+      const source = audioCtxRef.current.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(agentAudioDestRef.current);
+      
+      return new Promise<void>((resolve) => {
+        source.onended = () => resolve();
+        source.start();
+      });
+    } catch (e) {
+      console.error('Failed to play agent audio:', e);
+    }
+  }, []);
 
   return {
     joined,
@@ -565,6 +671,7 @@ export function useClubhouseVoice() {
     liveUsers,
     speakerInvite,
     speakingVolumes,
+    playAgentAudio,
     loading,
     error,
     joinRoom,
