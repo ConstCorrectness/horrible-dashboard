@@ -1,6 +1,5 @@
 import io
 import torch
-import av
 import numpy as np
 import asyncio
 
@@ -28,20 +27,21 @@ class SttService:
     def _transcribe_sync(self, audio_bytes: bytes) -> str:
         self._load_model()
         
-        # Load audio from bytes and resample to 16kHz mono using PyAV
-        container = av.open(io.BytesIO(audio_bytes))
-        resampler = av.AudioResampler(format='s16p', layout='mono', rate=16000)
+        import subprocess
         
-        audio_chunks = []
-        for frame in container.decode(audio=0):
-            frame.pts = None
-            for resampled_frame in resampler.resample(frame):
-                audio_chunks.append(resampled_frame.to_ndarray().flatten())
-                
-        for resampled_frame in resampler.resample(None):
-            audio_chunks.append(resampled_frame.to_ndarray().flatten())
+        # Load audio from bytes and resample to 16kHz mono float32 using ffmpeg
+        process = subprocess.Popen(
+            ['ffmpeg', '-i', 'pipe:0', '-f', 'f32le', '-ac', '1', '-ar', '16000', 'pipe:1'],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        raw_audio, stderr = process.communicate(input=audio_bytes)
+        
+        if process.returncode != 0 or not raw_audio:
+            raise ValueError(f"FFmpeg failed to decode the audio stream: {stderr.decode()}")
             
-        data = np.concatenate(audio_chunks).astype(np.float32) / 32768.0
+        data = np.frombuffer(raw_audio, dtype=np.float32)
 
         input_features = self.processor(data, sampling_rate=16000, return_tensors="pt").input_features.to(self.device) 
         
