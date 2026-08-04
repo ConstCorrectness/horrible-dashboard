@@ -44,6 +44,7 @@ export function RoomsPanel() {
   const [sttChunkMs, setSttChunkMs] = useState(5000);
   const [agentTemperature, setAgentTemperature] = useState(0.7);
   const [agentMaxTokens, setAgentMaxTokens] = useState(150);
+  const [agentSystemPrompt, setAgentSystemPrompt] = useState("You are an AI participant in a voice chat room. Reply concisely with a natural, conversational response.");
   const [myUserId, setMyUserId] = useState<number | null>(null);
 
   // New states for extended Clubhouse functionality
@@ -357,7 +358,8 @@ export function RoomsPanel() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          prompt: `You are an AI participant in a voice chat room. Another speaker just said: "${text}". Reply concisely with a natural, conversational response.`,
+          prompt: text.trim() ? `Another speaker just said: "${text}".` : `(The room is silent. It's your turn to speak, initiate the conversation or say something interesting.)`,
+          system: agentSystemPrompt,
           temperature: agentTemperature,
           max_tokens: agentMaxTokens
         }),
@@ -1980,6 +1982,25 @@ export function RoomsPanel() {
                     <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Len:</span>
                     <input type="number" min="20" max="500" step="10" value={agentMaxTokens} onChange={(e) => setAgentMaxTokens(Number(e.target.value))} style={{ width: '50px', padding: '0.2rem', fontSize: '0.7rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d', borderRadius: '4px' }} title="Max Tokens (Length)" />
                   </div>
+                  
+                  <input 
+                    type="text" 
+                    value={agentSystemPrompt} 
+                    onChange={(e) => setAgentSystemPrompt(e.target.value)} 
+                    placeholder="System Prompt / Persona"
+                    style={{ flex: 1, minWidth: '200px', padding: '0.4rem 0.6rem', fontSize: '0.75rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d', borderRadius: '20px' }} 
+                    title="System Prompt" 
+                  />
+                  
+                  <button
+                    className="ch-btn-action"
+                    style={{ padding: '0.4rem 0.6rem', fontSize: '0.75rem', background: '#2e333d', border: 'none', borderRadius: '20px', cursor: 'pointer' }}
+                    onClick={() => triggerAgentResponse(" ")}
+                    disabled={isAgentSpeaking}
+                    title="Force the agent to speak immediately"
+                  >
+                    🗣️ Speak
+                  </button>
                 </>
               )}
             </div>

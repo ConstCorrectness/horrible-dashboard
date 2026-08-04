@@ -659,6 +659,7 @@ async def generate(
     prompt: str,
     max_tokens: int = 64,
     temperature: float = 0.2,
+    system: str | None = None,
 ) -> str:
     """One non-streaming, short completion (for editor autosuggest), normalized
     across dialects to a plain string. Token-capped to keep latency low; low
@@ -671,9 +672,14 @@ async def generate(
         if key:
             api_key_kwargs["api_key"] = key
 
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
         response = await litellm.acompletion(
             model=model,
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
             max_tokens=max_tokens,
             temperature=temperature,
             **api_key_kwargs,
@@ -681,22 +687,31 @@ async def generate(
         return response.choices[0].message.content or ""
 
     if info.dialect == "ollama":
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"num_predict": max_tokens, "temperature": temperature},
+        }
+        if system:
+            payload["system"] = system
+
         res = await client.post(
             f"{endpoint}/api/generate",
-            json={
-                "model": model,
-                "prompt": prompt,
-                "stream": False,
-                "options": {"num_predict": max_tokens, "temperature": temperature},
-            },
+            json=payload,
         )
         res.raise_for_status()
         return res.json().get("response", "")
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
     res = await client.post(
         f"{endpoint}/v1/chat/completions",
         json={
             "model": model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
             "stream": False,
             "max_tokens": max_tokens,
             "temperature": temperature,

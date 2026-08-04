@@ -52,6 +52,7 @@ class ChatRequest(BaseModel):
     prompt: str
     temperature: float = 0.2
     max_tokens: int = 64
+    system: str | None = None
 
 
 class CompleteRequest(BaseModel):

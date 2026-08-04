@@ -148,7 +148,7 @@ async def generate(req: ChatRequest) -> dict[str, str]:
     endpoint = config.endpoint or info.default_endpoint
     async with instrumented_client(timeout=30) as client:
         try:
-            completion = await P.generate(client, info, endpoint, config.model, req.prompt, max_tokens=req.max_tokens, temperature=req.temperature)
+            completion = await P.generate(client, info, endpoint, config.model, req.prompt, max_tokens=req.max_tokens, temperature=req.temperature, system=req.system)
         except httpx.HTTPError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
     return {"completion": completion}
