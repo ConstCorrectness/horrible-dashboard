@@ -41,6 +41,7 @@ export function RoomsPanel() {
   const [isAgentSpeaking, setIsAgentSpeaking] = useState(false);
   const [agentTranscript, setAgentTranscript] = useState<string | null>(null);
   const [transcriptionBuffer, setTranscriptionBuffer] = useState("");
+  const [sttChunkMs, setSttChunkMs] = useState(5000);
   const [myUserId, setMyUserId] = useState<number | null>(null);
 
   // New states for extended Clubhouse functionality
@@ -280,6 +281,7 @@ export function RoomsPanel() {
     sendComment,
     sendReaction,
   } = useClubhouseVoice({
+    sttChunkIntervalMs: sttChunkMs,
     onTranscribe: (text) => {
       if (!agentEnabled) return;
       if (text.trim().length > 0) {
@@ -1943,12 +1945,26 @@ export function RoomsPanel() {
 
           {/* Action buttons (Mute/Raise hand/Accept) */}
           <div className="ch-stage-actions-row">
-            <button
-              className={`ch-btn-action ${agentEnabled ? 'mic-active' : ''}`}
-              onClick={() => setAgentEnabled(!agentEnabled)}
-            >
-              🤖 {agentEnabled ? 'Agent ON' : 'Agent OFF'}
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <button
+                className={`ch-btn-action ${agentEnabled ? 'mic-active' : ''}`}
+                onClick={() => setAgentEnabled(!agentEnabled)}
+              >
+                🤖 {agentEnabled ? 'Agent ON' : 'Agent OFF'}
+              </button>
+              {agentEnabled && (
+                <select
+                  className="ch-btn-action"
+                  style={{ padding: '0.4rem 0.6rem', fontSize: '0.75rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d', borderRadius: '20px', cursor: 'pointer' }}
+                  value={sttChunkMs}
+                  onChange={(e) => setSttChunkMs(Number(e.target.value))}
+                >
+                  <option value={2000}>Fast (2s pause)</option>
+                  <option value={5000}>Normal (5s pause)</option>
+                  <option value={8000}>Patient (8s pause)</option>
+                </select>
+              )}
+            </div>
             {isCurrentUserSpeaker ? (
               <button
                 className={`ch-btn-action ${isMuted ? 'mic-muted' : 'mic-active'}`}

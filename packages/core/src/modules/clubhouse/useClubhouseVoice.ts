@@ -23,6 +23,7 @@ export interface UseClubhouseVoiceProps {
   onCommentsChange?: (comments: ChatComment[]) => void;
   onSpeakingVolumesChange?: (volumes: Record<number, number>) => void;
   onTranscribe?: (text: string) => void;
+  sttChunkIntervalMs?: number;
 }
 
 export interface ChatComment {
@@ -115,10 +116,12 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
   const physicalMicStreamRef = useRef<MediaStream | null>(null);
   const humanGainRef = useRef<GainNode | null>(null);
   const onTranscribeRef = useRef(props?.onTranscribe);
+  const chunkIntervalRef = useRef(props?.sttChunkIntervalMs || 5000);
 
   useEffect(() => {
     onTranscribeRef.current = props?.onTranscribe;
-  }, [props?.onTranscribe]);
+    chunkIntervalRef.current = props?.sttChunkIntervalMs || 5000;
+  }, [props?.onTranscribe, props?.sttChunkIntervalMs]);
 
   const rtcClientRef = useRef<IAgoraRTCClient | null>(null);
   const localAudioTrackRef = useRef<ILocalAudioTrack | null>(null);
@@ -279,13 +282,13 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
           
           recorder.start();
           
-          // Stop and restart after 5 seconds to ensure a fresh WebM header
+          // Stop and restart after the configured interval to ensure a fresh WebM header
           setTimeout(() => {
             if (sttRecorderRef.current === recorder && recorder.state === 'recording') {
               recorder.stop();
               startRecordingChunk();
             }
-          }, 5000);
+          }, chunkIntervalRef.current);
         };
         
         startRecordingChunk();
