@@ -31,7 +31,7 @@ class SttService:
         
         # Load audio from bytes and resample to 16kHz mono float32 using ffmpeg
         process = subprocess.Popen(
-            ['ffmpeg', '-i', 'pipe:0', '-f', 'f32le', '-ac', '1', '-ar', '16000', 'pipe:1'],
+            ['ffmpeg', '-f', 'webm', '-i', 'pipe:0', '-f', 'f32le', '-ac', '1', '-ar', '16000', 'pipe:1'],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE
