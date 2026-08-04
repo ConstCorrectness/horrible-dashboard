@@ -1,6 +1,7 @@
 import io
 import torch
-import soundfile as sf
+import av
+import numpy as np
 import asyncio
 
 class SttService:
@@ -27,17 +28,20 @@ class SttService:
     def _transcribe_sync(self, audio_bytes: bytes) -> str:
         self._load_model()
         
-        # Load audio from bytes
-        data, samplerate = sf.read(io.BytesIO(audio_bytes))
+        # Load audio from bytes and resample to 16kHz mono using PyAV
+        container = av.open(io.BytesIO(audio_bytes))
+        resampler = av.AudioResampler(format='s16p', layout='mono', rate=16000)
         
-        # Whisper expects 16000 Hz, if different we should resample, but typically we send 16k
-        if samplerate != 16000:
-            # simple subsampling if it's a multiple, else rely on librosa which we might not have
-            pass
+        audio_chunks = []
+        for frame in container.decode(audio=0):
+            frame.pts = None
+            for resampled_frame in resampler.resample(frame):
+                audio_chunks.append(resampled_frame.to_ndarray().flatten())
+                
+        for resampled_frame in resampler.resample(None):
+            audio_chunks.append(resampled_frame.to_ndarray().flatten())
             
-        # Ensure it's mono
-        if len(data.shape) > 1:
-            data = data.mean(axis=1)
+        data = np.concatenate(audio_chunks).astype(np.float32) / 32768.0
 
         input_features = self.processor(data, sampling_rate=16000, return_tensors="pt").input_features.to(self.device) 
         
