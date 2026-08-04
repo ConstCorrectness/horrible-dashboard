@@ -19,6 +19,7 @@ class XttsService:
         cmd = [
             "uv", "run", "--no-project", "--python", "3.11", 
             "--with", "TTS", "--with", "torch", "--with", "soundfile", 
+            "--with", "transformers<4.39.0",
             "python", runner_path
         ]
         
@@ -29,13 +30,21 @@ class XttsService:
             stderr=asyncio.subprocess.PIPE,
             cwd=os.path.dirname(__file__)
         )
+        
+        async def _consume_stderr():
+            while True:
+                line = await self._process.stderr.readline()
+                if not line:
+                    break
+                print(f"[XTTS Runner STDERR] {line.decode().strip()}", flush=True)
+
+        asyncio.create_task(_consume_stderr())
 
         # Wait for "READY"
         while True:
             line = await self._process.stdout.readline()
             if not line:
-                stderr_output = await self._process.stderr.read()
-                raise RuntimeError(f"XTTS runner failed to start: {stderr_output.decode()}")
+                raise RuntimeError("XTTS runner failed to start (stdout closed).")
             decoded = line.decode().strip()
             if decoded == "READY":
                 print("XTTS-v2 runner ready.")
