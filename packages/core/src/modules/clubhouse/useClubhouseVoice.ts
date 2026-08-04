@@ -666,6 +666,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       const source = audioCtxRef.current.createBufferSource();
       source.buffer = audioBuffer;
       source.connect(agentAudioDestRef.current);
+      source.connect(audioCtxRef.current.destination); // Play locally so the user hears it too
       
       return new Promise<void>((resolve) => {
         source.onended = () => resolve();
