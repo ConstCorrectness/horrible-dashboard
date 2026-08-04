@@ -251,24 +251,39 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       
       // Start STT Recorder
       try {
-        const recorder = new MediaRecorder(sttDest.stream);
-        sttRecorderRef.current = recorder;
-        recorder.ondataavailable = async (e) => {
-          if (e.data.size > 0 && props?.onTranscribe) {
-            const formData = new FormData();
-            formData.append('file', new File([e.data], 'chunk.webm', { type: e.data.type || 'audio/webm' }));
-            try {
-              const res = await fetch(apiUrl('/api/agent/stt'), { method: 'POST', body: formData });
-              const json = await res.json();
-              if (json.text && json.text.trim().length > 0) {
-                props.onTranscribe(json.text);
+        const startRecordingChunk = () => {
+          if (!sttDestRef.current) return;
+          const recorder = new MediaRecorder(sttDestRef.current.stream);
+          sttRecorderRef.current = recorder;
+          
+          recorder.ondataavailable = async (e) => {
+            if (e.data.size > 0 && props?.onTranscribe) {
+              const formData = new FormData();
+              formData.append('file', new File([e.data], 'chunk.webm', { type: e.data.type || 'audio/webm' }));
+              try {
+                const res = await fetch(apiUrl('/api/agent/stt'), { method: 'POST', body: formData });
+                const json = await res.json();
+                if (json.text && json.text.trim().length > 0) {
+                  props.onTranscribe(json.text);
+                }
+              } catch (err) {
+                console.error('STT failed:', err);
               }
-            } catch (err) {
-              console.error('STT failed:', err);
             }
-          }
+          };
+          
+          recorder.start();
+          
+          // Stop and restart after 5 seconds to ensure a fresh WebM header
+          setTimeout(() => {
+            if (sttRecorderRef.current === recorder && recorder.state === 'recording') {
+              recorder.stop();
+              startRecordingChunk();
+            }
+          }, 5000);
         };
-        recorder.start(5000);
+        
+        startRecordingChunk();
       } catch (err) {
         console.error('Failed to start STT recorder:', err);
       }
