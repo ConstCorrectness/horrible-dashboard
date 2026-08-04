@@ -24,6 +24,7 @@ import {
   initBackendOrigin,
   initCapabilities,
   initCommons,
+  explorerModule,
   initKeymapHost,
   installExternalLinkBridge,
   keymapModule,
@@ -36,6 +37,7 @@ import {
   initNetwork,
   marketplaceModule,
   networkModule,
+  peopleModule,
   socialModule,
   hassaultModule,
   recordsModule,
@@ -104,6 +106,9 @@ async function boot(): Promise<void> {
   registry.register(settingsModule);
   registry.register(keymapModule);
   registry.register(editorModule);
+  // Explorer hosts the contributed browsers; the five modules that used to each
+  // ship a left-dock list now contribute a section instead.
+  registry.register(explorerModule);
   registry.register(filesModule);
   registry.register(codeModule);
   registry.register(gitModule);
@@ -120,10 +125,13 @@ async function boot(): Promise<void> {
   registry.register(visualizerModule);
   registry.register(flowModule);
   registry.register(gamesModule);
+  // network / social / commons contribute services, settings and components but
+  // **no panes** — People is where all three surface.
   registry.register(networkModule);
   registry.register(socialModule);
-  registry.register(hassaultModule);
   registry.register(commonsModule);
+  registry.register(peopleModule);
+  registry.register(hassaultModule);
   // Dev-only agent-tool reference/validation stub (see agent-tools.md).
   if (import.meta.env.DEV) registry.register(stubModule);
 

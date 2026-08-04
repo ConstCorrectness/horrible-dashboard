@@ -108,6 +108,13 @@ function reduceFrame(frame: FrameState, action: LayoutAction): FrameState {
       return next ?? frame;
     }
 
+    case 'SET_SECTION': {
+      const next = updatePaneAnywhere(frame, action.instanceId, (pane) =>
+        pane.activeSection === action.section ? pane : { ...pane, activeSection: action.section },
+      );
+      return next ?? frame;
+    }
+
     case 'SPLIT_AREA': {
       const res = splitArea(frame.center, action.areaId, action.direction, frame.paneSeq);
       if (!res) return frame;

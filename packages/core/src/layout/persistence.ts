@@ -15,7 +15,8 @@ import {
   type Workspace as WorkspaceModel,
 } from '../workspace';
 import { workspaceStore } from '../workspace-store';
-import { createEmptyFrame } from './model';
+import { createEmptyFrame, listPanes } from './model';
+import { closeWorkspaceSessions } from './pane-lifetime';
 import { seedFromPreset, type FramePreset } from './presets';
 import { regionsFor, resolveView } from './controller';
 import { deserialize, serialize } from './serialize';
@@ -30,6 +31,13 @@ let autosaveBound = false;
 
 function knownViews(): ReadonlySet<string> {
   return new Set([...registry.panels.map((p) => p.id), ...registry.widgets.map((w) => w.id)]);
+}
+
+/** Views that may no longer sit in a dock — see `deserialize`. */
+function embeddedViews(): ReadonlySet<string> {
+  return new Set(
+    [...registry.panels, ...registry.widgets].filter((v) => v.embedded).map((v) => v.id),
+  );
 }
 
 function presetFor(id: string | null): FramePreset | undefined {
@@ -87,7 +95,7 @@ function seed(preset: FramePreset): FrameState {
 /** A workspace's frame: its stored blob if it is one of ours, else its preset
  * seed (covers pre-frame legacy blobs — discarded by design), else empty. */
 function frameOf(ws: WorkspaceModel): FrameState {
-  const restored = deserialize(ws.layout, knownViews());
+  const restored = deserialize(ws.layout, knownViews(), embeddedViews());
   if (restored) return restored;
   const preset = presetFor(ws.id);
   return preset ? seed(preset) : createEmptyFrame();
@@ -204,6 +212,9 @@ export async function renameWorkspace(id: string, name: string): Promise<void> {
 export async function removeWorkspace(id: string): Promise<void> {
   if (presetFor(id)) return; // predefined layouts reset rather than delete
   const state = await apiDeleteWorkspace(id);
+  // Deleting the workspace closes every pane in it, including the ones that were
+  // unmounted at the time — those still hold a PTY / browser session.
+  closeWorkspaceSessions(id);
   const activeId = layoutStore.getSnapshot().workspaceId;
   if (activeId === id) {
     const next = state.workspaces.find((w) => w.id === state.active) ?? state.workspaces[0] ?? null;
@@ -229,6 +240,10 @@ export async function resetLayout(): Promise<void> {
     saveTimer = null;
   }
   const frameState = seed(preset);
+  // A reseed drops whatever the user had added. Those panes are closed, not
+  // merely unmounted, so their sessions go with them — but the ones the preset
+  // still declares keep theirs.
+  closeWorkspaceSessions(id, new Set(listPanes(frameState).map((p) => p.pane.instanceId)));
   load(id, frameState);
   await saveWorkspace(id, { layout: serialize(frameState) });
 }

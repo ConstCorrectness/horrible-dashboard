@@ -20,7 +20,10 @@ parity — an "Open Editors" section, auto-reveal, and drag-and-drop — is trac
 
 ## Contributions to the layout shell
 
-- **Panels:** `files.tree` (singleton, default: left dock).
+- **Panels:** `files.tree` (singleton, `embedded`). It is the **Files** section of
+  [Explorer](explorer.mdx) rather than a left-dock strip of its own — five near-identical
+  browsers had become five rail glyphs. Still registered, so `show("files.tree")` and
+  `openPaneInArea` work unchanged.
 - **Commands:** `files.open`, `files.newFile`, `files.newFolder`, `files.rename`,
   `files.delete`, `files.refresh`, `files.openTerminalHere`,
   `files.revealActiveBuffer`; `files.revealInOS` (desktop only — registered only

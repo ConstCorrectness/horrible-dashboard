@@ -51,6 +51,8 @@ export type LayoutAction =
     }
   /** Patch one region strip on a pane (null clears the position). */
   | { type: 'SET_REGION'; instanceId: string; position: RegionPosition; region: RegionState | null }
+  /** Switch which in-pane section a pane shows. */
+  | { type: 'SET_SECTION'; instanceId: string; section: string }
   // Areas
   | { type: 'SPLIT_AREA'; areaId: string; direction: AreaSplitDirection; pane?: PaneState }
   | { type: 'JOIN_AREA'; areaId: string; direction: NavDirection; adoptTabs?: boolean }

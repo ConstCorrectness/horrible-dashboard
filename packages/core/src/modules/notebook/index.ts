@@ -1,4 +1,5 @@
-import { registry, type ModuleManifest } from '../../registry';
+import { revealSection } from '../../layout/controller';
+import type { ModuleManifest } from '../../registry';
 import { notebookAgentTools } from './agentTools';
 import { NotebookBrowser } from './panels/NotebookBrowser';
 import { NotebookEditor } from './panels/NotebookEditor';
@@ -45,6 +46,9 @@ export const notebookModule: ModuleManifest = {
       icon: '📓',
       defaultDock: 'left',
       singleton: true,
+      // A section of Explorer now — see modules/explorer. Stays registered so the
+      // region strip on `notebook.editor` keeps working unchanged.
+      embedded: true,
     },
     {
       // Non-singleton: one pane per open notebook (params: {path}).
@@ -61,11 +65,16 @@ export const notebookModule: ModuleManifest = {
       agentTools: notebookAgentTools,
     },
   ],
+  explorerSources: [
+    { id: 'notebooks', label: 'Notebooks', icon: '📓', view: 'notebook.browser', key: 'k' },
+  ],
   commands: [
     {
       id: 'notebook.open',
       title: 'Notebook: Open notebooks',
-      run: () => registry.openPanel('notebook.browser'),
+      run: () => {
+        revealSection('notebooks', 'explorer.home');
+      },
     },
   ],
   frames: [
@@ -76,7 +85,7 @@ export const notebookModule: ModuleManifest = {
       frame: {
         // Empty document area: pick a notebook from the browser in the left dock.
         center: { tabs: [] },
-        docks: { left: { tools: ['notebook.browser'], size: 280 } },
+        docks: { left: { tools: ['explorer.home'], size: 280 } },
       },
     },
   ],

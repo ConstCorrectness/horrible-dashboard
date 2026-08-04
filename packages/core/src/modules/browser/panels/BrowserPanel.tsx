@@ -17,6 +17,7 @@ import { findPaneAnywhere } from '../../../layout/model';
 import { layoutStore } from '../../../layout/store';
 import { usePaneParams } from '../../../panes';
 import { useSetting } from '../../../settings';
+import { usePaneSession } from '../../../layout/use-pane-session';
 import { windowControl } from '../../../window';
 import {
   addBookmark,
@@ -167,10 +168,27 @@ export function BrowserPanel() {
     [useFull],
   );
 
-  // Claim the shared engine while this pane is in full mode; the release only
-  // stops Chromium once the LAST browser pane lets go. Stopping unconditionally
-  // here froze every other open browser pane on a stale frame, silently.
-  useEffect(() => (useFull ? acquireSession() : undefined), [useFull]);
+  // Claim the shared engine for as long as this *pane* exists — not for as long as
+  // this component is mounted. The release only stops Chromium once the LAST
+  // browser pane lets go (stopping unconditionally froze every other open browser
+  // pane on a stale frame, silently), but tying it to the component meant a
+  // workspace switch dropped the last reference and killed the engine: you came
+  // back to a browser that had lost its page. The claim now ends when the pane is
+  // closed. See layout/pane-lifetime.
+  const claim = usePaneSession(
+    () => ({ release: null as null | (() => void) }),
+    (held) => held.release?.(),
+  );
+  useEffect(() => {
+    if (!claim) return;
+    if (useFull && !claim.release) claim.release = acquireSession();
+    // Leaving full mode gives the engine back immediately — that is a real change
+    // of intent, not an incidental unmount.
+    if (!useFull && claim.release) {
+      claim.release();
+      claim.release = null;
+    }
+  }, [useFull, claim]);
 
   // Home falls back to a blank start page when unset (default).
   const homeUrl = homePage || initialUrl;

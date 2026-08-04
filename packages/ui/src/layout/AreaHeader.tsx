@@ -42,6 +42,9 @@ const GROUP_ORDER: PaneRole[] = ['document', 'widget', 'tool'];
 function switchableViews(area: AreaNode) {
   const role = area.tabs.length ? roleOf(area.tabs[0].viewId) : null;
   const views = [...registry.panels, ...registry.widgets].filter((v) => {
+    // Embedded views are not destinations — they belong to a host pane, and
+    // offering one here would put the same content in two competing places.
+    if (v.embedded) return false;
     // A tabbed document area only switches among documents; a widget (or empty)
     // area takes any kind — switching just replaces its single pane.
     return role === 'document' && area.tabs.length > 1 ? roleOf(v.id) === 'document' : true;

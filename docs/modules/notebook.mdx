@@ -101,6 +101,43 @@ queued (`comm_q`) and **sent by the worker thread** — drained both when idle a
 mid-execution (inside `_await_reply`), so widgets stay live even while a long cell runs.
 Binary comm buffers are base64-encoded across the wire.
 
+## Kernel lifecycle: two rules teardown gets wrong
+
+The same threading rule that governs `comm_msg` governs **closing** a channel, and that
+half was missing. `stop_channels()` closes the very sockets the two pump threads
+(`_iopub_loop`, `_worker_loop`) are blocked reading — and it ran on whichever thread
+served the `restart`/`shutdown` event. Closing a zmq socket under a concurrent recv is
+undefined behaviour in libzmq, which is why the symptoms looked unrelated to each other:
+an occasional `ZMQError: not a socket`, an occasional teardown that never returned, and
+an occasional segfault. Restart was the worst case — it tore the channels down and
+immediately built new ones with both pumps still live.
+
+So `_stop_pumps` (`notebook_core/session.py`) is now the only way in: it sets `closing`,
+posts the worker's poison pill, and **joins both threads** before any channel is touched.
+Every blocking read a pump makes is capped at `POLL_INTERVAL_S`, so this returns in a
+fraction of a second; the join deadline is a deadlock bound, not a schedule. That poll
+interval is what restart/shutdown latency is made of — hence 0.25s rather than the 1s the
+sockets were originally read with. If a pump refuses to leave, teardown proceeds anyway —
+an abandoned kernel process is worse than the risk — but it is logged, because that is
+the one remaining path that can corrupt a socket.
+`restart` and `shutdown` also take a per-session lock: they both rebuild `km`/`kc`, and
+nothing else orders them.
+
+The second rule is **where** a blocking kernel call runs. Not `asyncio.to_thread`:
+that uses the loop's default executor, which is joined unconditionally by `asyncio.run`'s
+teardown *and* by `concurrent.futures`' interpreter-exit hook, neither with a timeout. A
+call that never returns therefore stopped being a stuck kernel and became a process that
+would not exit, with a traceback pointing at loop teardown. It could not be defended
+against from the caller either — `asyncio.wait_for` cancels the *await*, not the thread,
+so the orphaned worker sits in the executor and the join finds it regardless. Kernel
+calls go through `notebook_core/detach.py` instead (`run_detached` to await one,
+`fire_and_forget` for restart/shutdown), which is the same daemon-thread contract on a
+thread nobody joins. A private `ThreadPoolExecutor` would *not* be enough — the
+interpreter-exit hook joins those too.
+
+`shutdown_all` shuts every session down in parallel with a deadline, since it runs inside
+the backend's lifespan shutdown, where blocking blocks the process.
+
 ### Custom widgets (anywidget)
 
 Widgets whose model ships its own front-end — an [**anywidget**](https://anywidget.dev)
@@ -165,7 +202,7 @@ dict), `cells_changed` `{notebook}`, `mode` `{mode}`, `graph`
   side by side, split the area first and open the second from the empty area's
   view picker.
 - **Commands** — `notebook.open` (open the catalog).
-- **Regions** — `notebook.editor` hosts the notebook browser as a left region strip (`k`); the browser is also a left-dock tool.
+- **Regions** — `notebook.editor` hosts the notebook browser as a left region strip (`k`). The browser is no longer a dock tool of its own: it is the **Notebooks** section of [Explorer](explorer.mdx) (`embedded`), which is exactly the doubling `embedded` exists to remove.
 - **Layout preset** — `notebook`.
 - **Settings** — `notebook.root`, `notebook.python`, `notebook.python.version`.
 

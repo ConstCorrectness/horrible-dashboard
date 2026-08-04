@@ -1,3 +1,4 @@
+import { revealRegionView, revealSection } from '../../layout/controller';
 import { registry, type ModuleManifest } from '../../registry';
 import { notebookAgentTools } from './agentTools';
 import { ManimPane } from './panels/ManimPane';
@@ -109,6 +110,9 @@ export const trainingModule: ModuleManifest = {
       icon: '🗂',
       defaultDock: 'left',
       singleton: true,
+      // A section of Explorer now — see modules/explorer. Stays registered so the
+      // region strip on `training.notebook` keeps working unchanged.
+      embedded: true,
     },
     {
       // Non-singleton: one pane per open notebook (params: {projectId, notebook}).
@@ -137,6 +141,9 @@ export const trainingModule: ModuleManifest = {
       agentTools: notebookAgentTools,
     },
   ],
+  explorerSources: [
+    { id: 'projects', label: 'Projects', icon: '🗂', view: 'training.projects', key: 'j' },
+  ],
   widgets: [
     {
       id: 'training.metrics',
@@ -151,6 +158,10 @@ export const trainingModule: ModuleManifest = {
       component: ModelGraphPane,
       role: 'widget',
       icon: '🕸',
+      // Embedded: a companion strip of the notebook it rides on. `training.metrics`
+      // deliberately is NOT — it is seeded as the Training workspace's own center
+      // pane, so it is a destination in a way these four are not.
+      embedded: true,
     },
     {
       id: 'training.rollout',
@@ -158,6 +169,7 @@ export const trainingModule: ModuleManifest = {
       component: RolloutPane,
       role: 'widget',
       icon: '🎮',
+      embedded: true,
     },
     {
       id: 'training.manim',
@@ -165,6 +177,7 @@ export const trainingModule: ModuleManifest = {
       component: ManimPane,
       role: 'widget',
       icon: '🎬',
+      embedded: true,
     },
     {
       id: 'training.peers',
@@ -172,13 +185,16 @@ export const trainingModule: ModuleManifest = {
       component: TrainingPeersPane,
       role: 'widget',
       icon: '🤝',
+      embedded: true,
     },
   ],
   commands: [
     {
       id: 'training.open',
       title: 'Training: Open projects',
-      run: () => registry.openPanel('training.projects'),
+      run: () => {
+        revealSection('projects', 'explorer.home');
+      },
     },
     {
       id: 'training.openMetrics',
@@ -188,22 +204,22 @@ export const trainingModule: ModuleManifest = {
     {
       id: 'training.openModelGraph',
       title: 'Training: Open model architecture',
-      run: () => registry.openPanel('training.modelgraph'),
+      run: () => revealRegionView('training.modelgraph'),
     },
     {
       id: 'training.openRollout',
       title: 'Training: Open rollout stream',
-      run: () => registry.openPanel('training.rollout'),
+      run: () => revealRegionView('training.rollout'),
     },
     {
       id: 'training.openManim',
       title: 'Training: Open manim renders',
-      run: () => registry.openPanel('training.manim'),
+      run: () => revealRegionView('training.manim'),
     },
     {
       id: 'training.openPeers',
       title: 'Training: Open training peers',
-      run: () => registry.openPanel('training.peers'),
+      run: () => revealRegionView('training.peers'),
     },
   ],
   frames: [
@@ -217,7 +233,7 @@ export const trainingModule: ModuleManifest = {
           sizes: [0.65, 0.35],
           children: [{ tabs: [] }, { pane: 'training.metrics' }],
         },
-        docks: { left: { tools: ['training.projects'], size: 280 } },
+        docks: { left: { tools: ['explorer.home'], size: 280 } },
       },
     },
   ],

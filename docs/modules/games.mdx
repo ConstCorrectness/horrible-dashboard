@@ -66,7 +66,8 @@ per-move clock on the server auto-plays a safe default if a node is slow.
 The module's entry point is the **Games client** ("Games", `games.lobby`, a
 `document`, `GamesPanel`) — **the whole thing in one pane**, shaped like a console
 title (a main menu with sections) rather than a scatter of tiled documents. The
-menu (`hub-section.ts` owns the section store, `GamesSection`):
+menu is the frame engine's **`sections`** primitive, declared on `games.lobby` and
+driven through `hub-section.ts` (`GamesSection`):
 
 | Section | What it is |
 | --- | --- |
@@ -78,26 +79,40 @@ menu (`hub-section.ts` owns the section store, `GamesSection`):
 | 🏛 **Social** | Plaza · AgentTown, as sub-tabs. |
 
 Play / Board / Build were once three separate panes; the auxiliary surfaces
-(Ladder, Challenges, Replays, Players, Profile, Plaza, Town) were once separate
-`tool`/`document` panes opened onto the activity rail. The client **folds them all
-into one window** — Career and Social use an internal sub-tab strip (`SubTabbed`) to
-hold several self-contained panels; the standalone panels stay registered so a power
-user can still pop one out onto the rail. `openGamesSection(section)` is the single
-entry point every hand-off goes through (`revealBoard()` on a live match,
-`openHarnessFor(gameId)` from a game card, the `games.openBoard` / `games.openLoadout`
-commands).
+(Ladder, Challenges, Replays, Players, Profile, Plaza) were separate `tool`/`document`
+panes on the activity rail even after the client folded their components in — a
+second, competing home for content that was already here. **Those six panes are
+retired.** Career and Social use an internal sub-tab strip (`SubTabbed`) to hold
+several self-contained panels within one section. `openGamesSection(section)` is the
+single entry point every hand-off goes through (`revealBoard()` on a live match,
+`openHarnessFor(gameId)` from a game card, the `games.openBoard` /
+`games.openLoadout` commands).
+
+**The strip itself is host chrome.** `GamesPanel` renders bodies only; the frame
+engine draws the tabs, synthesizes a `section.show:games.lobby:<id>` command each,
+and persists the active section in `PaneState.activeSection` — **per pane instance,
+and across a reload**, which the module-level store it replaced could not do. The
+same state is what a keybinding, the command palette and the agent's
+`show("build")` all drive. See
+[Embedded views and sections](../architecture/windowing.mdx#embedded-views-and-sections).
+
+Retiring a pane never retires its **name**: `show("Ladder")`, `show("games.plaza")`
+and the rest still resolve, through `VIEW_ALIASES` in `layout/controller.ts`, to the
+section that now holds them. A saved *layout* is disposable and reseeds from its
+preset; the vocabulary is not.
 
 Sections are **mounted lazily and never unmounted** once visited (hidden with
 `display: none`): the builder holds unsaved code and the board holds canvas state,
 and neither should be lost by looking at the other.
 
 The two **spectator surfaces** — the **Games Log** and **Episodes** (both below) —
-live in an in-client **bottom drawer** (`ClientDrawer` in `GamesPanel`, state in
-`client-drawer.ts`), not as tiled sibling documents. It's collapsed by default and
-pops open on a live match (`revealBoard()` calls `setDrawerTab('log')`) or from a
-board button (`openDrawer('log')`); its two tabs mount `GamesLogPanel` and
-`EpisodePanel`. The `games.log` / `games.episodes` panels stay registered too, so
-they can still be opened standalone. **AgentTown** (`games.town`) is also reachable
+are the pane's **bottom region strip**, not tiled sibling documents. It is collapsed
+by default and pops open on a live match (`revealBoard()` calls `setDrawerTab('log')`)
+or from a board button (`openDrawer('log')`). `client-drawer.ts` keeps those function
+shapes but is now a thin adapter over the region API, so the strip is resizable,
+collapsible, toggled by `b`, and **persisted per pane instance** — none of which the
+hand-rolled drawer was. The `games.log` / `games.episodes` panels stay registered, so
+either can still be pulled out into an area of its own. **AgentTown** (`games.town`) is also reachable
 as the Social section's second sub-tab and as a standalone document.
 
 **Connection is implicit.** There are no Connect buttons: **▶ Play** (self-play
@@ -131,7 +146,7 @@ preset, contributed by the games module itself (`ModuleManifest.frames` in
 `modules/games/index.tsx`): its center is **just the Games client**
 (`{ pane: 'games.lobby' }`), filling the whole window. The client is itself a
 console — Play / Board / Build / Replays / Career / Social with the Log/Episodes
-drawer — so there's nothing to tile beside it. The standalone Log/Episodes panels
+region strip — so there's nothing to tile beside it. The standalone Log/Episodes panels
 stay registered so a power user can still pop one out onto the rail. Where Coding
 Harnesses tiles the surfaces for authoring, DashArena is the single-window client
 tuned for playing and watching.
@@ -296,7 +311,7 @@ runs `GAMES_ALLOW_DEV_AUTH=0` (the hosted one does) — so the toast reads *"Thi
 server requires sign-in"* instead of the raw `invalid token`, which reads like a bug.
 
 The
-**Profile** panel (`games.profile`) shows your avatar/level ring, per-game tier
+**Profile** sub-tab of the Career section (`ProfilePanel`) shows your avatar/level ring, per-game tier
 cards (MUI `Card`s with a tier `Chip` and an XP `LinearProgress`), and the
 recent match log (with loadout/model attribution and one-click replays). The
 arcade also grew a **fun pass**: a VS intro splash on match start, win confetti,
@@ -339,7 +354,7 @@ a strict visibility rule: **live = your own agent only; both sides = post-match.
 - **Board seat badges:** the server broadcasts `match_info` (seat profiles:
   handle/avatar/rating/level, bot + model markers) when a match starts, so the
   board header shows *who you're playing*, which seat is thinking, and marks you.
-- **Replays** (the `games.replays` browser panel + the `games.replay` viewer, 📼): every finished
+- **Replays** (the **Replays** section + the `games.replay` viewer, 📼): every finished
   game persists its full event log server-side — public states, actions, and **both
   seats' reasoning traces**. The viewer scrubs the board on a timeline with the two
   agents' thoughts side by side; the game-over banner links straight to it. Your
@@ -1007,8 +1022,8 @@ newspaper (a resident whose job is journalist).
 
 ## The Plaza — the human social layer
 
-Where AgentTown is a fish tank of *agents* you watch, **The Plaza** (`games.plaza`,
-a `document`, opened via the 🏛 button in the lobby or `games.openPlaza`) is where
+Where AgentTown is a fish tank of *agents* you watch, **The Plaza** (the **Social** section of `games.lobby`,
+opened via `games.openPlaza` or `show("The Plaza")`) is where
 the **real users** hang out — the answer to "signing in is dull and there's no way
 to find someone to play." It's a **Habbo-style lobby**: you enter as an avatar
 under your **account username** (the OAuth-derived handle — there's no separate
@@ -1033,7 +1048,7 @@ Two broadcasts carry everything:
 (the default landing room), **Arcade**, **The Lounge**, and **Tournament Arena**.
 The catalog is advertised to the client, so the room switcher stays data-driven.
 
-The **Players** panel (`games.players`) is the social directory that makes active
+The **Players** sub-tab of the Social section (`RosterPanel`) is the social directory that makes active
 players easy to find:
 
 - **Who's online** — the live roster with each player's room, activity, and
@@ -1246,15 +1261,13 @@ tool at a time — the rail switches between them, there is no in-dock tab strip
 | Games | `games.lobby` | document | The whole play loop in one pane, as sections: **Play** (games library, matchmaking, first-run card, open tables — connection is implicit), **Game Board** (live spectator board, dispatches by game type; auto-switches on match start; stateful idle/connecting/queue view), and **Build your agent** (code editor, tools + templates, dry run, loadout readout). |
 | Games Log | `games.log` | document | One record of the match: agent reasoning, referee events, connection, errors — filterable streams. |
 | Episodes | `games.episodes` | document | The episode as a scrubbable trajectory: per-step obs, action, reasoning, reward. Live or any past replay. |
-| Ladder | `games.ladder` | tool (left) | Per-game leaderboard. |
-| Challenges | `games.challenges` | tool (left) | The challenge track. |
-| Replays | `games.replays` | tool (left) | Browse finished matches. |
-| Players | `games.players` | tool (left) | The roster of known players. |
-| Profile | `games.profile` | tool (left) | Your player profile. |
 | Replay viewer | `games.replay` | document | Scrub a finished match with both seats' reasoning. |
 | Arcade fighter | `games.arcade` | document | Human-playable fighter cabinet. |
 | AgentTown | `games.town` | document | The fish tank: spawn your resident, watch the town, whisper nudges. |
-| The Plaza | `games.plaza` | document | The human social lobby: avatar rooms, click-to-move, speech bubbles, direct challenges. |
+
+**Retired** (merged into `games.lobby` sections, still resolvable by name via
+`VIEW_ALIASES`): `games.ladder` and `games.challenges` and `games.profile` → **Career**;
+`games.replays` → **Replays**; `games.players` and `games.plaza` → **Social**.
 
 ### Commands
 

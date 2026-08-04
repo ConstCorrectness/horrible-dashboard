@@ -198,7 +198,7 @@ panes = dash.panes.open_list()["panes"]
 ed = next(p for p in panes if p["id"] == "editor.buffer")
 src = dash.context(ed["instanceId"])["context"]   # read the editor
 # …decide something from `src`, then drive another pane…
-dash.panes.open("files.tree")
+dash.panes.open("explorer.home")
 ```
 
 **Build a focused workspace**

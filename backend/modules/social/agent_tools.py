@@ -18,7 +18,7 @@ from backend.modules.network import protocol
 from backend.modules.network.chat import chat_manager
 from backend.modules.network.hub import peer_hub
 from backend.modules.social import identity as person_identity
-from backend.modules.social import roster, store
+from backend.modules.social import handles, roster, store
 from backend.modules.social.friendcode import is_friend_code, parse_friend_code
 from backend.sdk.registry import registry
 from backend.sdk.types import AgentTool
@@ -31,6 +31,9 @@ def _resolve(who: str) -> dict[str, Any] | None:
 
     Name matching is last and exact-ish on purpose: silently picking the closest
     fuzzy match would let the agent message the wrong person.
+
+    Sync, and therefore **no `@callsign`** — that needs a directory round trip.
+    Use `resolve_row` unless you are already on a sync path.
     """
     who = who.strip()
     if not who:
@@ -45,6 +48,23 @@ def _resolve(who: str) -> dict[str, Any] | None:
     if len(matches) != 1:
         return None
     return store.get_friend_row(matches[0].person_id)
+
+
+async def resolve_row(who: str) -> dict[str, Any] | None:
+    """`_resolve`, plus `@callsign`.
+
+    The handle branch runs **first** and is exact: a callsign is globally unique
+    and the directory entry is checked against its own key fingerprint, so it is a
+    stronger name than a display name and must not lose to one.
+
+    A callsign only names someone already in the roster here — this resolves *who
+    you meant*, not *who exists*. Adding a stranger by callsign is `add_friend`.
+    """
+    who = (who or "").strip()
+    if handles.is_handle(who):
+        entry = await handles.resolve(who)
+        return store.get_friend_row(str(entry["person_id"])) if entry else None
+    return _resolve(who)
 
 
 async def list_friends(_args: dict[str, Any]) -> dict[str, Any]:
@@ -76,9 +96,9 @@ async def message_friend(args: dict[str, Any]) -> dict[str, Any]:
     text = str(args.get("text") or "").strip()
     if not text:
         return {"error": "nothing to send"}
-    row = _resolve(who)
+    row = await resolve_row(who)
     if row is None:
-        return {"error": f"no friend matching {who!r} — try their friend code"}
+        return {"error": f"no friend matching {who!r} — try their @callsign or friend code"}
     if row["status"] != "accepted":
         return {"error": f"{row['display_name']} is not an accepted friend yet"}
 
@@ -101,7 +121,7 @@ async def ask_friend_agent(args: dict[str, Any]) -> dict[str, Any]:
     prompt = str(args.get("prompt") or "").strip()
     if not prompt:
         return {"error": "no question to ask"}
-    row = _resolve(who)
+    row = await resolve_row(who)
     if row is None:
         return {"error": f"no friend matching {who!r}"}
     if row["status"] != "accepted":
@@ -143,7 +163,10 @@ def register_social_tools() -> None:
         parameters={
             "who": {
                 "type": "string",
-                "description": "Friend's name, person id, or friend code.",
+                "description": (
+                    "Who to reach: an @callsign (best — globally unique), a friend "
+                    "code (HD-XXXX-...), a person id, or their exact display name."
+                ),
             },
             "text": {"type": "string", "description": "The message to send."},
         },
@@ -161,7 +184,10 @@ def register_social_tools() -> None:
         parameters={
             "who": {
                 "type": "string",
-                "description": "Friend's name, person id, or friend code.",
+                "description": (
+                    "Who to reach: an @callsign (best — globally unique), a friend "
+                    "code (HD-XXXX-...), a person id, or their exact display name."
+                ),
             },
             "prompt": {"type": "string", "description": "The question to ask."},
         },

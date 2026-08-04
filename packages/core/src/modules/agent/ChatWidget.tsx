@@ -11,12 +11,13 @@
  * edits surface as an accept/decline diff in the editor — not here.
  * See docs/modules/agent-chat.md.
  */
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { Fragment, useEffect, useRef, useState, type FormEvent } from 'react';
 
 import { Avatar3D, DEFAULT_AVATAR_MOOD, DEFAULT_AVATAR_MOODS } from '../../Avatar3D';
 import { useSetting } from '../../settings';
 import { getAgentRoster, getAgentStatus, type AgentStatus, type RosterAgent } from './api';
-import { askAgent, type AgentTurn } from './orchestrator-client';
+import { compactHistory, MAX_HISTORY_TURNS } from './history';
+import { askAgent } from './orchestrator-client';
 import {
   createSession,
   deleteSession,
@@ -149,6 +150,14 @@ export function ChatWidget() {
   const { activeId: workspaceId } = useWorkspaces();
   const [agentId, setAgentId] = useState(() => agentForWorkspace(workspaceId));
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Index of the first turn still inside the replay window, or -1 while the whole
+  // conversation still fits. Derived from `turns` with the same bound `send` uses,
+  // so the seam drawn in the transcript is the seam the model actually gets.
+  const compactionBoundary = (() => {
+    const persisted = turns.filter((t) => t.role !== 'system' && !t.ephemeral);
+    const omitted = persisted.length - MAX_HISTORY_TURNS;
+    return omitted > 0 ? turns.indexOf(persisted[omitted]) : -1;
+  })();
   const turnsRef = useRef<ChatTurn[]>([]);
   turnsRef.current = turns;
   const activeIdRef = useRef<string | null>(null);
@@ -445,11 +454,15 @@ export function ChatWidget() {
     setBusy(true);
     await ensureSession(text);
 
-    // History is the prior real turns (text only); a new user turn and an empty
+    // History is the prior real turns (text only), **compacted** — replaying the
+    // whole transcript let the provider silently truncate from the front, taking
+    // the system prompt and group guides with it. A new user turn and an empty
     // assistant turn we stream into are appended after.
-    const history: AgentTurn[] = turnsRef.current
-      .filter((t) => t.role !== 'system' && !t.ephemeral)
-      .map((t) => ({ role: t.role as 'user' | 'assistant', content: t.text }));
+    const { history } = compactHistory(
+      turnsRef.current
+        .filter((t) => t.role !== 'system' && !t.ephemeral)
+        .map((t) => ({ role: t.role as 'user' | 'assistant', content: t.text })),
+    );
     const assistantIndex = turnsRef.current.length + 1;
     setTurns((prev) => [...prev, { role: 'user', text }, { role: 'assistant', text: '' }]);
 
@@ -546,31 +559,37 @@ export function ChatWidget() {
             edit an open buffer. Type <code>/help</code> for commands.
           </p>
         )}
-        {turns.map((turn, i) =>
-          turn.role === 'system' ? (
-            <pre key={i} className="agent-system">
-              {turn.text}
-            </pre>
-          ) : (
-            <div key={i} className={`agent-msg agent-msg-${turn.role}`}>
-              {turn.reasoning && (
-                <ReasoningBlock reasoning={turn.reasoning} hasText={!!turn.text} />
-              )}
-              {turn.actions && turn.actions.length > 0 && (
-                <ul className="agent-actions">
-                  {turn.actions.map((a, j) => (
-                    <li key={j}>✓ {a}</li>
-                  ))}
-                </ul>
-              )}
-              {(turn.text || turn.role === 'user' || (turn.role === 'assistant' && busy)) && (
-                <div className="agent-bubble">
-                  {turn.text || (turn.role === 'assistant' && busy ? '…' : '')}
-                </div>
-              )}
-            </div>
-          ),
-        )}
+        {turns.map((turn, i) => (
+          <Fragment key={i}>
+            {i === compactionBoundary && (
+              // Where the agent's memory of this conversation starts. Silent
+              // compaction is indistinguishable from an agent that forgot, so the
+              // seam is shown rather than inferred from odd answers.
+              <p className="agent-compacted">Earlier messages are no longer sent to the agent</p>
+            )}
+            {turn.role === 'system' ? (
+              <pre className="agent-system">{turn.text}</pre>
+            ) : (
+              <div className={`agent-msg agent-msg-${turn.role}`}>
+                {turn.reasoning && (
+                  <ReasoningBlock reasoning={turn.reasoning} hasText={!!turn.text} />
+                )}
+                {turn.actions && turn.actions.length > 0 && (
+                  <ul className="agent-actions">
+                    {turn.actions.map((a, j) => (
+                      <li key={j}>✓ {a}</li>
+                    ))}
+                  </ul>
+                )}
+                {(turn.text || turn.role === 'user' || (turn.role === 'assistant' && busy)) && (
+                  <div className="agent-bubble">
+                    {turn.text || (turn.role === 'assistant' && busy ? '…' : '')}
+                  </div>
+                )}
+              </div>
+            )}
+          </Fragment>
+        ))}
       </div>
       {slashMatches.length > 0 && (
         <ul className="agent-slash-suggest">

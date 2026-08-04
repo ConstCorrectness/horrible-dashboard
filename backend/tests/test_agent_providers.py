@@ -81,6 +81,37 @@ def test_openai_chat_normalizes_stringified_arguments() -> None:
     assert result.tool_calls[0].arguments == {"id": "y"}
 
 
+def test_malformed_arguments_are_reported_not_silently_emptied() -> None:
+    """A truncated or non-object payload used to collapse to `{}`, so the call ran
+    with no arguments at all — `close_pane` with no instanceId — and the model saw a
+    plain failure with no hint its JSON was to blame. Now it carries `arg_error`.
+
+    An empty payload stays an ordinary no-arg call: plenty of tools take none.
+    """
+    ok, err = P._coerce_args('{"path": "/x"}')
+    assert ok == {"path": "/x"} and err is None
+
+    for empty in ("", "   ", None):
+        args, err = P._coerce_args(empty)
+        assert args == {} and err is None, f"{empty!r} should be a valid no-arg call"
+
+    # Truncated mid-string — the classic small-model streaming failure.
+    args, err = P._coerce_args('{"path": "/x/y')
+    assert args == {} and err and "not valid JSON" in err
+
+    # Valid JSON, wrong shape.
+    args, err = P._coerce_args("[1, 2]")
+    assert args == {} and err and "must be a JSON object" in err
+
+    # And it survives onto the ToolCall the loop dispatches.
+    call = P._parse_tool_calls(
+        [{"id": "c1", "function": {"name": "close_pane", "arguments": '{"a": '}}]
+    )[0]
+    assert call.name == "close_pane"
+    assert call.arguments == {}
+    assert call.arg_error is not None
+
+
 def test_tool_result_message_keys_per_dialect() -> None:
     call = P.ToolCall(id="abc", name="open_pane", arguments={})
     ollama = P.tool_result_message(P.provider_for("ollama"), call, {"ok": True})

@@ -65,6 +65,10 @@ a custom layout engine that hybridizes VS Code and Blender:
   them a second home in a dock would just be a competing surface for the same
   content. `dockable` is for views with no host to hang off — currently
   `clubhouse.account` and `commons.directory`.
+
+  A view that has become *purely* a companion says so with **`embedded: true`**,
+  which removes the second home rather than merely discouraging it. See
+  [Embedded views and sections](#embedded-views-and-sections).
 - **Workspaces are full frames (Blender model).** A workspace persists
   *everything*: the center tree, dock visibility/sizes/contents, floating panes,
   region state, focus, fullscreen. Switching workspaces switches the whole
@@ -97,16 +101,18 @@ flowchart TD
     C --> S["SplitNode — row/column, fractional sizes"]
     S --> A["AreaNode — tabs: PaneState[], activeTab"]
     S --> S2["SplitNode (nested …)"]
-    A --> P["PaneState — instanceId, viewId, params, regions"]
+    A --> P["PaneState — instanceId, viewId, params, regions, activeSection"]
     P --> R["RegionState per position — open/size/collapsed/views/activeView"]
+    P --> SEC["activeSection — the in-pane tab, resolved against SectionDecl[]"]
 ```
 
 - **SplitNode** — a row/column of children with fractional sizes (drag the sash).
 - **AreaNode** — a leaf rectangle. Invariant: its tabs are all documents (tab
   strip), exactly one widget (no strip), or empty (view picker).
 - **PaneState** — one live pane instance (`${viewId}#${n}`); carries its params,
-  its **persisted per-instance region strips**, and — when docked — its
-  **remembered `dockSize`**.
+  its **persisted per-instance region strips**, its **`activeSection`** (see
+  [Embedded views and sections](#embedded-views-and-sections)), and — when docked —
+  its **remembered `dockSize`**.
 - **DockState** — a fixed tool dock: visible flag, px size, stacked tools, one
   active. The px `size` is a **fallback**: a docked tool that the user has
   resized carries its own `dockSize`, so a narrow file tree and a wide agent chat
@@ -117,6 +123,83 @@ flowchart TD
   `defaultDockSize` (`agent.chat` opens at 420); switching the active tool
   therefore changes the dock's extent.
 - **FloatingPane** — an in-window card over the center grid (fractional rect).
+
+### Embedded views and sections
+
+Two declarations exist to make **one pane hold what used to be several**, without
+either half of the merge going wrong: the retired surface must stop being a
+destination, and it must not stop being reachable.
+
+**`embedded: true`** (on `PanelDecl` / `WidgetDecl`) says a view exists only inside
+another pane. It stays fully registered — regions, sections, `openPaneInArea` and
+dragging a strip out into the center all keep working — but it drops out of every
+affordance that would present it as a competing home:
+
+| Surface | Effect |
+| --- | --- |
+| `pane.open:<id>` command | not synthesized (`registry.ts`) |
+| area-header type switcher / empty-area picker | filtered (`AreaHeader.tsx`) |
+| activity rails | `dockSidesOf` returns `[]`, so **embedded ⇒ never dockable** |
+| `list_available_panes` | no top-level row — listed under its host instead |
+
+The last row is the one that matters for the agent, and it is why `show` learned to
+resolve an embedded view to *where it lives*: `show("Outline")` reveals it in its
+host's region strip or section rather than failing to open it standalone. An
+embedded view that **nothing hosts** is a declaration error, and fails loudly
+(`ok: false`) rather than quietly opening a pane the flag said shouldn't exist.
+
+**`sections?: SectionDecl[]`** are in-pane tabs — the sibling of a region strip. A
+region is a *companion* beside the main content; a section *replaces* it. Each
+section declares an `id`, a `label` (what `show("friends")` matches), an optional
+pick `key`, and its body as either an inline `component` or the `view` id of a
+registered (usually embedded) view.
+
+The host owns everything a module used to hand-roll:
+
+- **`PaneState.activeSection`**, persisted **per instance** — the module singletons
+  this replaces (games' `hub-section`, the client drawer) forgot the user's choice
+  on every reload, and two panes of one view shared one value.
+- `SectionTabs` (packages/ui), rendered by `PaneHost` above the body.
+- A synthesized `section.show:<host>:<section>` command per section, plus a
+  host-scoped keybinding for any declared `key`. Regions and sections share **one
+  per-host letter space** — they share a keyboard scope, so a duplicate letter is
+  dropped with a warning rather than left to resolve arbitrarily.
+- `activeSectionOf` **resolves** rather than reads: a stored section id can outlive
+  the declaration that named it (a saved layout loads against today's code), so it
+  falls back to the default instead of rendering a strip with nothing selected.
+
+A module picks its style: a section with its own `component`/`view` is rendered by
+the host, and one with neither falls through to the host's own component, which
+switches internally via `usePaneSection()`. Both exist because a pane being merged
+usually already switches internally, and a new one usually doesn't want to.
+
+**The agent-context rule.** Unlike a region strip — which gets a synthetic instance
+id (`${host}:${position}:${viewId}`) that neither `listPanes` nor `visiblePanes`
+descends into — a section body renders inside its host's `PaneInstanceContext`, so
+its provider registers under the **real, enumerable** pane instance id. What
+follows is one rule: **exactly one live `useAgentContext` provider per pane** (the
+host component or its section bodies, never both), since they key on the same id.
+The active section **and the list of siblings** are stamped onto every snapshot
+centrally by `readPaneAgentContext`, not left to each module — a merged pane's
+snapshot is ambiguous without the first, and a module that forgot would produce a
+plausible-looking snapshot the agent then reasons about wrongly. The sibling list is
+there because most sections have no provider at all (only the mounted body can
+provide, and at most one of them does): a bare `{section}` gave the model nothing to
+answer from, and a pane that returns nothing does not produce "I don't know" — it
+produces a confident answer sourced from whatever else was in the context window.
+
+**Contributed sections.** Sections are declared by the pane that owns them, which is
+right when the tabs are the pane's own — and wrong for [Explorer](../modules/explorer.mdx),
+whose entire purpose is to be the one place you go to find *something*, wherever it
+lives. A view opts in with `explorerHost: true`, and any module (or plugin) adds a
+tab through `ModuleManifest.explorerSources`. `ExplorerSourceDecl` **is** a
+`SectionDecl`, so nothing downstream is a second mechanism.
+
+The merge happens in the `registry.panels` / `registry.widgets` getters — at **read
+time, not registration** — so module order cannot matter; the host may register
+before or after its contributors. Merged decls are memoized against a registration
+counter, because those getters run on every render path and a fresh object per call
+would defeat `useSyncExternalStore` snapshots and every memo keyed on the decl.
 
 ### The minibuffer
 
@@ -259,7 +342,20 @@ All mutations are dispatches into the layout store, exposed two ways from
 - **plain controller exports** for the frame verbs — `splitAreaBy`,
   `joinAreaDirection`, `focusAreaDirection`, `movePaneTo`, `resizeAreaPx`,
   `fullscreenArea`, `toggleRegion`, `setRegionView`, `revealRegionView`,
-  `openToolInDock`, `toggleDock`, `retargetPane`, `openDocument`, `areaHostingView`.
+  `setPaneSection`, `revealSection`,
+  `openToolInDock`, `toggleDock`, `retargetPane`, `openDocument`, `areaHostingView`,
+  and `showTarget`.
+
+`showTarget(target, where?)` is the **intent** verb sitting above all of them: it takes
+loose text (a pane title, a view id, a **section** label, a region label, a workspace
+name), resolves it with `layout/show.ts` (pure, unit-tested), then open-or-focuses,
+switches to the named section, reveals the region, or switches workspace — returning the resulting pane's agent-context snapshot. It exists
+so the agent can reach a surface in one call instead of
+`list_available_panes` → `open_pane` → `get_pane_context`; see
+[agent-tools](agent-tools.mdx#show-the-intent-verb). `VIEW_ALIASES` beside it keeps
+retired pane names resolving forever, which is deliberately a different lifetime from
+`serialize.ts`'s `RENAMED_VIEWS` (that one repairs saved layouts; this one preserves
+the agent's vocabulary).
 
 `areaHostingView(viewId)` returns the center area a view already occupies (the
 focused one when several qualify), so a module that opens **many documents of one
@@ -299,11 +395,44 @@ that genuinely wants one instance per invocation (a terminal) uses neither and
 calls `openPanel` directly.
 
 The **user's gestures**, the **keybinding commands**, and the **agent's layout
-tools** (`split_area`, `join_area`, `move_pane`, `fullscreen_area`,
+tools** (`show`, `split_area`, `join_area`, `move_pane`, `fullscreen_area`,
 `toggle_region`, `open_tool_in_dock`, `get_layout`, … relayed through
 `tool-exec.ts`) all converge on these same functions — one code path, and every
 mutation rides the store's autosave. Layout verbs stay **ungated**. See
 [agent-tools.mdx](agent-tools.mdx).
+
+## Pane lifetime: unmount is not close
+
+Only an area's **active tab** renders, and a workspace switch replaces the whole
+frame — so a pane unmounts constantly, for reasons that have nothing to do with the
+user closing anything. A React cleanup cannot tell those apart, and the panes that
+owned something expensive assumed the destructive reading: `TerminalPane` killed its
+PTY on unmount, and the browser released the last reference to the shared Chromium
+engine. **Looking at another workspace for four seconds destroyed your shell** — and
+handed back a fresh one that looked identical, which is why it read as "state was
+lost" rather than as a bug.
+
+`layout/pane-lifetime.ts` is where that distinction lives. A resource created
+through `paneSession` survives every unmount and is disposed only on a real close:
+`closePaneGuarded`, `changePaneType` (the outgoing view's resource), workspace
+delete, and the panes a `layout.reset` drops. Nothing is timer-based. The pattern is
+not new — notebook and training kernels are already process-global for exactly this
+reason ("closing a pane leaves the kernel running; reopening reattaches") — this
+generalizes it to the frontend.
+
+Two details are load-bearing:
+
+- **Keys are workspace-scoped.** `paneSeq` lives on `FrameState`, so instance ids are
+  unique only *within* a frame: two workspaces can each hold a
+  `terminal.instance#1`. A globally keyed store would hand the second one the first
+  one's shell.
+- **The terminal keeps its DOM element**, not just its session. Moving the xterm host
+  between mounts preserves the rendered scrollback exactly; rebuilding the terminal
+  around a surviving PTY would not.
+
+If a close path is ever missed the resource leaks until the page closes, where the
+backend reaps it anyway (PTYs die with their `/ws` connection). That is deliberately
+the failure we chose: strictly better than killing a live shell on every tab switch.
 
 ## Persistence
 

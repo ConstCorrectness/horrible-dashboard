@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { advertise, listAds, type TrainingAd } from '../api';
 import { subscribeChannel } from '../../../ws';
-import { registry } from '../../../registry';
+import { revealSection } from '../../../layout/controller';
 
 const dim = { color: 'var(--text-dim)' } as const;
 
@@ -135,7 +135,7 @@ export function TrainingPeersPane() {
                   {match && (
                     <button
                       title="Open a chat with this peer to hand off training"
-                      onClick={() => registry.openPanel('network.chat')}
+                      onClick={() => revealSection('messages', 'people.home')}
                     >
                       Open chat
                     </button>

@@ -13,6 +13,7 @@ import json
 import logging
 import re
 import uuid
+import weakref
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -38,9 +39,10 @@ APPROVAL_TIMEOUT_S = 300.0
 # Overridable via the settings store (no frontend change required).
 DEFAULT_TOOL_TEMPERATURE = 0.0
 
-# A weak model sometimes describes an action in prose without emitting the call. On
-# the OpenAI dialect (which has a real `tool_choice`) we give it ONE forced retry
-# when the text reads like an unemitted call — action phrasing or a named tool.
+# A weak model sometimes describes an action in prose without emitting the call, so
+# it gets ONE nudged retry when the text reads like an unemitted call — action
+# phrasing or a named tool. Runs on every dialect; OpenAI additionally gets
+# `tool_choice="required"`, which Ollama has no equivalent for.
 _ACTION_HINT = re.compile(
     r"\b(I['’]?ll|I will|I have|I'm going to|I am going to|let me|"
     r"calling|call the|use the|using the)\b",
@@ -122,53 +124,36 @@ def _looks_like_unemitted_tool_call(content: str, tools: list[dict[str, Any]]) -
     return any(name in content for name in names)
 
 
+# Deliberately short. This rides on every round, and the geometry rules it used to
+# carry (instanceIds vs view ids, split-vs-move, the region vocabulary) now live in
+# the `layout` group's guide — delivered only once the arrangement verbs are actually
+# loaded, so a turn that just reads a file no longer pays for them. `show` replaced
+# the discover-then-open dance those rules existed to steer.
 SYSTEM_PROMPT = (
-    "You are the orchestrator for horrible-dashboard, an app whose screen is a "
-    "'frame': a center grid of AREAS (Blender-style splits), three tool DOCKS "
-    "(left/right/bottom), and per-pane REGION strips. You arrange the screen by "
-    "opening/closing panes, splitting/joining/resizing areas, toggling regions "
-    "and docks, and managing workspaces, using the provided tools.\n"
+    "You are the orchestrator for horrible-dashboard. The user's screen is a 'frame' "
+    "of panes; you can show panes, read what they contain, and use tools.\n"
     "Rules:\n"
-    "- Views have a ROLE: 'document' views open as tabs in center areas, "
-    "'widget' views take a center area of their own, and 'tool' views live only "
-    "in the docks (use open_tool_in_dock for tools; open_pane routes any view "
-    "correctly). FIRST call list_available_panes to find the view whose title "
-    "matches, THEN open it by ID. Do NOT treat a view as a workspace.\n"
-    "- To arrange the screen (split_area/join_area/resize_area/move_pane/"
-    "fullscreen_area/float_pane), FIRST call get_layout (the whole frame: areas, "
-    "docks, regions, floating) or list_open_panes to get live instanceIds. "
-    "Geometry tools take an instanceId (or areaId from get_layout), NOT a view ID.\n"
-    "- REGIONS are toggleable side strips inside a pane (e.g. the editor's "
-    "Outline on its right strip). Use toggle_region {instanceId, position} and "
-    "set_region_view {instanceId, viewId}; a view's regions are listed by "
-    "list_available_panes.\n"
-    "- When placing a view at a SPECIFIC position relative to another pane (e.g. "
-    "'below/beside/next to X'), call split_area on X's instanceId with viewId set "
-    "to the new view directly — do NOT open_pane it first and try to reposition "
-    "afterward. move_pane and join_area only work on panes/areas that are ALREADY "
-    "adjacent; they cannot create a new split, so a pane opened into the wrong "
-    "spot first often cannot be fixed at all.\n"
-    "- If the user refers to a pane via a title, file name, or instance ID (e.g., "
-    "'pane:main.py' or 'pane:editor.buffer#1'), match it against list_open_panes "
-    "to find the correct instanceId to target.\n"
-    "- If the user refers to a file via an absolute or relative path prefixed "
-    "with '@' (e.g., '@absolute_path'), use that path directly with files/editor "
-    "tools.\n"
-    "- Only use list_workspaces / create_workspace / switch_workspace when the "
-    "user explicitly talks about workspaces or tabs.\n"
-    "- Ids are not guessable; always discover them with get_layout or a list_* "
-    "tool first.\n"
-    "- When the user asks ABOUT what's on screen, the layout, or a view's "
-    "contents, call get_layout first, then get_pane_context on the relevant "
-    "pane(s), and answer from what they return — do not guess.\n"
+    "- To put something on screen — 'show/open/go to X' — call show with whatever the "
+    "user called it (a pane title, a section or side-strip name, a workspace name). It "
+    "opens or focuses it and returns its contents in one step. Do NOT call "
+    "list_available_panes + open_pane + get_pane_context to do this.\n"
+    "- A pane may have SECTIONS: tabs inside one pane (People has Friends, Messages, "
+    "Discover). Name the section, not the pane — show('friends') lands on that tab. "
+    "get_pane_context takes an optional section to read a different one.\n"
+    "- When the user asks ABOUT what is on screen, answer from the workspace snapshot "
+    "you were given; use show or get_pane_context to read a pane it does not cover. "
+    "Do not guess.\n"
+    "- To REARRANGE the screen (split, move, resize, dock, fullscreen, workspaces), "
+    "first load_tools(['layout']) — those verbs are not loaded by default — and follow "
+    "the guide it returns.\n"
+    "- If the user refers to a file via a path prefixed with '@' (e.g. "
+    "'@absolute_path'), use that path directly with files/editor tools.\n"
     "- To change code in an open editor buffer (format, rewrite, fix), use "
     "editor.proposeEdit (NOT editor.applyEdit) so the user reviews the diff and "
     "accepts or declines it.\n"
-    "- Tools are organized into GROUPS. You start with the core layout tools; other "
-    "capabilities (files, editor, terminal, …) live in groups that aren't shown until "
-    "loaded. If a task needs a capability you don't see, call list_tool_groups to "
-    "discover what's available, then load_tools([...]) to enable the group(s) before "
-    "using their tools.\n"
+    "- Tools are organized into GROUPS, and you only see the ones loaded so far. If a "
+    "task needs a capability you cannot see, call list_tool_groups, then "
+    "load_tools([...]) to enable it before using its tools.\n"
     "- After acting, reply with one short sentence confirming what you did."
 )
 
@@ -199,6 +184,28 @@ def _tool(
 # tools, REGIONS are per-pane strips.
 LAYOUT_TOOLS: list[dict[str, Any]] = [
     _tool(
+        "show",
+        "Put something in front of the user and return what it contains. Give it "
+        "whatever the user called the thing — a pane title ('Friends', 'Terminal'), "
+        "a view id, a side-strip name ('Outline'), or a workspace name. It opens it, "
+        "or just focuses it if it is already on screen, and returns that pane's "
+        "current contents, so you do NOT need list_available_panes, open_pane or "
+        "get_pane_context to reach something. Use this for any 'show/open/go to X' "
+        "request; the arrangement verbs are only for moving panes around.",
+        {
+            "target": {
+                "type": "string",
+                "description": "What to show, in the user's own words.",
+            },
+            "where": {
+                "type": "string",
+                "enum": ["here", "beside", "dock"],
+                "description": "Optional placement hint. Omit for the default.",
+            },
+        },
+        ["target"],
+    ),
+    _tool(
         "list_available_panes",
         "List every view that can be opened, with id, title, role "
         "('document' = tabs in a center area, 'widget' = its own center area, "
@@ -224,7 +231,13 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
         "Read a live pane instance's current state/selection snapshot (e.g. the active "
         "editor buffer's text, a file tree's selection). Use instanceId from "
         "list_open_panes.",
-        {"instanceId": {"type": "string", "description": "Active pane instanceId"}},
+        {
+            "instanceId": {"type": "string", "description": "Active pane instanceId"},
+            "section": {
+                "type": "string",
+                "description": "Optional: read this section of a multi-section pane (switches to it)",
+            },
+        },
         ["instanceId"],
     ),
     _tool(
@@ -415,6 +428,11 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
 # an agent that never rearranges panes was paying ~16 schemas every round.
 LAYOUT_READ_TOOL_NAMES = frozenset(
     {
+        # `show` is a write in the sense that it opens panes, but it belongs in the
+        # cheap always-on set: it is the *only* way an agent without the arrangement
+        # verbs can reach a surface at all, and it replaces three of these reads for
+        # the common "show me X" turn.
+        "show",
         "list_available_panes",
         "list_workspaces",
         "list_open_panes",
@@ -554,10 +572,15 @@ META_TOOLS: list[dict[str, Any]] = [
 
 META_TOOL_NAMES = {t["function"]["name"] for t in META_TOOLS}
 
-# Cap kept only as a safety backstop now that groups load on demand. The flagship
-# training flow legitimately loads both the `training` and `notebook` groups at once
-# (core 18 + training 12 + notebook 9 = 39), so the backstop sits above that.
-TOOL_BUDGET = 44
+# Cap kept only as a safety backstop now that groups load on demand.
+#
+# 38, not 44. Small local models stop reasoning at 40+ tool definitions (see
+# docs/modules/agent-chat.mdx), so a backstop above that ceiling protected nothing —
+# it let a turn through in exactly the state the ceiling warns about. 44 existed
+# because the flagship training flow needed `training` (12) + `notebook` (9) on top of
+# an 18-tool core; with the arrangement verbs out of core that same flow is now
+# 11 + 12 + 9 = 32, so the cap can sit under the cliff without truncating real work.
+TOOL_BUDGET = 38
 
 # Human-readable blurbs for known groups; unknown groups get a generic fallback.
 _GROUP_DESCRIPTIONS: dict[str, str] = {
@@ -571,7 +594,27 @@ _GROUP_DESCRIPTIONS: dict[str, str] = {
     "terminal": "Run shell commands and manage terminal sessions.",
     "visualizer": "Render Canvas / Three.js / Babylon.js animations and stream Pygame frames.",
     "database": "Connect to and query SQL/vector databases (psql-like): list connections, inspect schema, run read queries, write/execute statements, and semantic search the app DB.",
-    "network": "Distributed peer fabric: peer monitor, peer chat, agent relay.",
+    "social": (
+        "The user's friends: list the roster with presence, message a person, or ask "
+        "a friend's own agent a question. People are named by @handle, friend code, "
+        "or display name."
+    ),
+    "mobile": "The user's paired phone: capture a photo, send it a notification.",
+    "hassault": (
+        "HorribleAssault matches: list maps and running matches, host one, invite a "
+        "friend, add/remove bots, and read a match's state and surroundings."
+    ),
+    "browser": (
+        "The embedded web browser: open a URL, read a page's content and "
+        "accessibility snapshot, scrape, click, type, and save pages or media into a "
+        "knowledge library."
+    ),
+    "library": (
+        "Personal knowledge libraries: semantic-search a library, list its sources, "
+        "and add new ones."
+    ),
+    "keymap": "Inspect and rebind keyboard shortcuts.",
+    "code": "Search the code symbol index (jumping the editor to a hit) and rebuild it.",
     "clubhouse": "Connected Clubhouse account and its live rooms.",
     "game": "Play the current game seat: read the observation, choose a legal action.",
     "observability": "Inspect live client / inbound / outbound I/O data flow.",
@@ -704,7 +747,16 @@ _GROUP_KEYWORDS: dict[str, tuple[str, ...]] = {
         "embedding",
         "similarity",
     ),
-    "network": ("peer", "node", "collab", "relay", "monitor"),
+    # No `network` entry: there are no `network.*` tools, so the group never appears
+    # in `_group_catalog` and any keywords here could never fire. The peer verbs
+    # (`list_peers`, `agent.ask_peer`) are always-on core, not a loadable group.
+    #
+    # `social` is what "who are my friends" should reach. Two deliberate omissions:
+    # "contact" (already claimed by `records` — a word in two groups preloads both,
+    # spending the budget twice) and "@" (the system prompt uses `@path` for file
+    # references, so it would preload social on nearly every file turn). Matching is
+    # substring, so "friend" already covers "friends".
+    "social": ("friend", "roster", "people", "presence"),
     "clubhouse": ("clubhouse", "room"),
     "training": (
         "train",
@@ -773,10 +825,22 @@ def _group_permitted(group: str, allowed: set[str] | None) -> bool:
 
 
 def _layout_core(spec: AgentSpec | None) -> list[dict[str, Any]]:
-    """The layout verbs an agent starts with: all 21 for the main orchestrator and
-    for any spec that asks for `layout`, otherwise just the 5 read verbs (the rest
-    are one `load_tools("layout")` away)."""
-    if spec is None or spec.tool_groups is None or "layout" in spec.tool_groups:
+    """The layout verbs an agent starts with: the cheap read set plus `show`, with
+    the 16 arrangement verbs one `load_tools("layout")` away.
+
+    **Including for `main`.** It used to keep all 21 unconditionally, on the reasoning
+    that driving the shell is its job — but that made the *loosely prompted* agent the
+    most starved one, carrying ~1.4k tokens of geometry schemas on turns that only
+    wanted to read a file. `show` covers "open/go to X" in one call, and the narrow
+    `layout` keyword list (`pane`, `dock`, `split`, …) preloads the arrangement verbs
+    on the turns that genuinely rearrange things. A spec that names `layout`
+    explicitly still opts back into all of them up front.
+    """
+    if (
+        spec is not None
+        and spec.tool_groups is not None
+        and "layout" in spec.tool_groups
+    ):
         return list(LAYOUT_TOOLS)
     return list(LAYOUT_READ_TOOLS)
 
@@ -859,7 +923,18 @@ def _group_guide(group: str) -> str | None:
     The blurb (above) answers "would this group help?"; the guide answers "how do I use
     it without getting it wrong?" — search-qualifier syntax, useless argument
     combinations, provider quirks. It's only ever delivered once a group is active, so
-    it costs nothing on turns that don't touch it."""
+    it costs nothing on turns that don't touch it.
+
+    Built-in modules are checked **first** (`guides/<group>.md`): a built-in group and
+    a connector never share a name, and this ordering is what lets `layout` — which
+    has no connector and no MCP server behind it — carry the geometry rules that used
+    to sit in the system prompt on every single round.
+    """
+    from backend.modules.agent.guides import module_guide
+
+    if text := module_guide(group):
+        return text
+
     from backend.sdk.registry import registry as _plugins
 
     if connector := _plugins.connectors.get(group):
@@ -924,6 +999,59 @@ def _preload_groups(
     return active
 
 
+#: Groups carried from one turn to the next, beyond what keywords preload. Bounded
+#: because every carried group costs schema bytes on **every** later turn, and the
+#: whole point of progressive disclosure is keeping the list under the reasoning
+#: cliff (see docs/modules/agent-chat.mdx).
+MAX_CARRIED_GROUPS = 3
+
+#: conn → agent_id → groups that agent has loaded in this session, oldest first.
+#: Keyed on the socket (weakly), so it dies with the connection and a page reload
+#: starts clean — this is a within-session convenience, not persisted state.
+_carried_groups: "weakref.WeakKeyDictionary[Any, dict[str, list[str]]]" = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _carried(conn: WsConnection, agent_id: str, history: list[Any] | None) -> set[str]:
+    """Groups this conversation already paid a `load_tools` round to discover.
+
+    Without this, `active_groups` was rebuilt from keywords every turn: the model
+    loaded `files` in turn 1, used it, and in turn 2 the tools were simply gone —
+    so a multi-turn task re-paid discovery on every single turn, and a follow-up
+    like "now delete it" arrived with nothing to delete it *with*.
+
+    Empty `history` means a new session (the widget sends the transcript it is
+    replaying), which resets the carry — that signal is exact and needs no extra
+    protocol, and it is why "New chat" genuinely starts over.
+    """
+    if not history:
+        _carried_groups.pop(conn, None)
+        return set()
+    return set(_carried_groups.get(conn, {}).get(agent_id, ()))
+
+
+def _remember_groups(conn: WsConnection, agent_id: str, groups: set[str]) -> None:
+    """Record what this turn ended up with, trimmed to `MAX_CARRIED_GROUPS`.
+
+    Trims **oldest-first**: groups held over from earlier turns keep their order,
+    anything new goes on the end, and the head falls off. The newest are the ones
+    most likely to be about the thread the conversation is currently on.
+
+    Ordering *within* a turn is arbitrary — the set carries no history — so this
+    makes no claim about which of several groups loaded in one turn mattered more.
+    It only guarantees the carry stays bounded.
+    """
+    try:
+        per_agent = _carried_groups.setdefault(conn, {})
+    except TypeError:  # a conn that can't be weak-referenced (a test double)
+        return
+    previous = per_agent.get(agent_id, [])
+    ordered = [g for g in previous if g in groups]
+    ordered += [g for g in sorted(groups) if g not in ordered]
+    per_agent[agent_id] = ordered[-MAX_CARRIED_GROUPS:]
+
+
 def _select_tools(
     conn: WsConnection,
     active_groups: set[str],
@@ -946,12 +1074,20 @@ def _select_tools(
     if stats is not None:
         stats["selected"] = len(selected)
     if len(selected) > TOOL_BUDGET:
-        logger.warning(
-            "tool list %d exceeds budget %d; truncating dynamic tools (active: %s)",
+        dropped = [t["function"]["name"] for t in selected[TOOL_BUDGET:]]
+        # ERROR, not WARNING, and naming the casualties: a truncated tool list is
+        # indistinguishable from a model that simply chose not to use the tool, so
+        # this is the only trace of *why* an agent could not do what it was asked.
+        logger.error(
+            "tool list %d exceeds budget %d; DROPPING %d tool(s): %s (active groups: %s)",
             len(selected),
             TOOL_BUDGET,
+            len(dropped),
+            ", ".join(dropped),
             sorted(active_groups),
         )
+        if stats is not None:
+            stats["dropped"] = dropped
         selected = selected[:TOOL_BUDGET]
     return selected
 
@@ -1150,23 +1286,38 @@ def _active_editor_message(context: dict[str, Any] | None) -> dict[str, Any] | N
     if not isinstance(uri, str) or uri == "(unsaved)" or not isinstance(content, str):
         return None
     title = snap.get("title") if isinstance(snap.get("title"), str) else uri
-    parts = [
-        f'The user is editing an open buffer "{title}" (uri: {uri}). Its current '
-        "full content is between the markers:",
-        "<<<BUFFER",
-        content,
-        "BUFFER>>>",
-    ]
+    # The frontend clips oversized buffers to `agent.activeBufferBudget` and flags it
+    # here. This flag is load-bearing, not cosmetic: the normal instruction below tells
+    # the model to write the COMPLETE buffer back, and doing that from a clipped copy
+    # would silently truncate the user's file. So a clipped buffer gets the opposite
+    # instruction — re-read before any whole-file write.
+    truncated = bool(snap.get("truncated"))
+    opening = (
+        f'The user is editing an open buffer "{title}" (uri: {uri}). Its content is '
+        "between the markers, but it was TOO LARGE to include and is CUT OFF:"
+        if truncated
+        else f'The user is editing an open buffer "{title}" (uri: {uri}). Its current '
+        "full content is between the markers:"
+    )
+    parts = [opening, "<<<BUFFER", content, "BUFFER>>>"]
     selection = snap.get("selection")
     sel_text = selection.get("text") if isinstance(selection, dict) else None
     if isinstance(sel_text, str) and sel_text:
         parts.append(f"The user's current selection within it is: {sel_text!r}")
-    parts.append(
-        "When the user asks to alter/refactor/fix/format this code, modify THIS "
-        "content and write the complete updated buffer back with "
-        f'editor.proposeEdit(uri="{uri}"). Do not call list_open_panes or '
-        "get_pane_context for it first — you already have its content here."
-    )
+    if truncated:
+        parts.append(
+            "Because the content above is incomplete, you must NOT write the whole "
+            "buffer back — that would delete everything past the cut. Read the full "
+            "file first (files.read, or get_pane_context on this pane), then make a "
+            "targeted edit."
+        )
+    else:
+        parts.append(
+            "When the user asks to alter/refactor/fix/format this code, modify THIS "
+            "content and write the complete updated buffer back with "
+            f'editor.proposeEdit(uri="{uri}"). Do not call list_open_panes or '
+            "get_pane_context for it first — you already have its content here."
+        )
     return {"role": "system", "content": "\n".join(parts)}
 
 
@@ -1269,6 +1420,18 @@ async def _dispatch_call(
     restricts the catalog/auto-load to its allowed groups."""
     allowed = set(spec.tool_groups) if spec and spec.tool_groups is not None else None
     name = call.name
+    # Malformed arguments are reported, never run. Executing a call whose payload
+    # failed to parse would mean running it with `{}` — a `close_pane` with no
+    # instanceId, a `files.delete` with no path — and the model would see a plain
+    # failure with no hint that its JSON was the problem. See `_coerce_args`.
+    if getattr(call, "arg_error", None):
+        logger.warning(
+            "tool %s called with unparseable arguments: %s", name, call.arg_error
+        )
+        return {
+            "error": f"could not read the arguments for {name}: {call.arg_error}. "
+            "Call it again with a single valid JSON object."
+        }
     if name == "list_tool_groups":
         return {
             "groups": _group_catalog(conn, allowed, spec),
@@ -1444,12 +1607,16 @@ async def run_agent_loop(
             )
             messages.append(result.assistant_message)
 
-            # Weak models sometimes narrate an action without emitting the call.
-            # On the OpenAI dialect, force one retry with tool_choice=required.
+            # Weak models sometimes narrate an action without emitting the call, so
+            # retry once with an explicit nudge. This deliberately runs on EVERY
+            # dialect: it used to be gated on `openai`, which meant the repair never
+            # fired for Ollama — the default local provider, and the one whose small
+            # models need it most. `tool_choice` is simply the extra leverage OpenAI
+            # offers; where it doesn't exist the re-ask alone still recovers many
+            # turns, and `chat_stream` ignores a None.
             if (
                 not result.tool_calls
                 and not forced_retry_used
-                and info.dialect == "openai"
                 and _looks_like_unemitted_tool_call(result.content, tools)
             ):
                 forced_retry_used = True
@@ -1463,7 +1630,7 @@ async def run_agent_loop(
                     tools,
                     emit,
                     temperature=temperature,
-                    tool_choice="required",
+                    tool_choice="required" if info.dialect == "openai" else None,
                     context_size=context_size,
                     max_tokens=max_tokens,
                     top_p=top_p,
@@ -1553,13 +1720,19 @@ async def run_agent_turn(
     # as the model calls load_tools (progressive disclosure, recomputed per round).
     # A specialized agent skips keyword preloading — its scope is declared: it
     # starts with spec.preload_groups and can only load within spec.tool_groups.
+    # Groups the conversation already discovered stay loaded, so a follow-up turn
+    # doesn't re-pay a load_tools round for tools it just used (`_carried`).
+    carried = set() if remote else _carried(conn, agent_id, history)
     active_groups: set[str] | None
     if remote:
         active_groups = None
     elif spec.tool_groups is None:
-        active_groups = _preload_groups(conn, prompt, history)
+        active_groups = _preload_groups(conn, prompt, history) | carried
     else:
         active_groups = set(spec.preload_groups)
+        # A carry never widens a scoped agent's reach: it can only re-activate a
+        # group the spec already allows.
+        active_groups |= {g for g in carried if g in set(spec.tool_groups)}
         # `layout` is the one group every agent can reach regardless of scope (it's
         # shell control, not a capability), so a scoped agent still gets the
         # arrangement verbs up front when the user is plainly asking to rearrange —
@@ -1619,6 +1792,10 @@ async def run_agent_turn(
             spec=spec,
             mode_override=mode_override,
         )
+        # The loop mutated `active_groups` in place as the model loaded tools —
+        # hand that forward so the next turn starts where this one ended.
+        if active_groups is not None:
+            _remember_groups(conn, agent_id, active_groups)
         await conn.send_json(
             _evt("answer", {"turnId": turn_id, "agentId": agent_id, "text": text})
         )

@@ -811,6 +811,42 @@
   color: var(--text-dim);
   font-size: 12.5px;
 }
+/* In-pane section tabs. `flex: none` and `position: sticky` so the strip stays
+   put while the pane body (which owns the scroll) moves under it. */
+.frame-section-tabs {
+  display: flex;
+  flex: none;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  gap: 2px;
+  padding: 4px 6px;
+  overflow-x: auto;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.frame-section-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.frame-section-tab:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.frame-section-tab.active {
+  background: var(--bg-raised);
+  color: var(--text);
+}
 .frame-pane-regions {
   display: flex;
   flex-direction: column;

@@ -54,6 +54,20 @@ def _canonical_record(record: dict[str, Any]) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
+def _signed_in_handle() -> str | None:
+    """This node's game-server callsign, or None when signed out.
+
+    Imported lazily: the directory must keep working on a node that never signs in
+    to the game server, and `server_auth` reaches for settings and the data dir.
+    """
+    try:
+        from backend.modules.games import server_auth
+
+        return server_auth.signed_in_callsign()
+    except Exception:  # noqa: BLE001 — a missing callsign is not an error
+        return None
+
+
 def build_record(addresses: list[str] | None = None) -> dict[str, Any] | None:
     """This node's presence record, signed by the person key.
 
@@ -73,6 +87,12 @@ def build_record(addresses: list[str] | None = None) -> dict[str, Any] | None:
         "person_id": me.person_id,
         "person_public_key": me.public_key,
         "display_name": person_identity.display_name(),
+        # The callsign, when this machine is signed in to the game server. A handle
+        # here is a **claim, not proof**: `verify_record` checks that the record was
+        # signed by the person key it names, which says nothing about who owns the
+        # callsign. The game server is the authority — resolve @handle through
+        # `handles.resolve`, never by trusting this field.
+        "handle": _signed_in_handle(),
         "node_id": node.node_id,
         "addresses": addresses or [trust.advertised_address()],
         "updated_at": time.time(),

@@ -22,7 +22,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
 from backend.games_engine.base import list_games
-from backend.games_server import auth, store
+from backend.games_server import auth, crypto, store
 from backend.games_server.hub import GameHub
 
 logger = logging.getLogger(__name__)
@@ -218,6 +218,12 @@ class _SetHandle(BaseModel):
     handle: str
 
 
+class _BindPerson(BaseModel):
+    person_id: str
+    person_public_key: str
+    sig: str
+
+
 @app.post("/auth/local/signup")
 async def local_signup(body: _LocalSignup) -> dict[str, Any]:
     """Create an email+password account. `{token, account}` on success, `{error}`
@@ -264,6 +270,56 @@ async def set_handle_route(
     if outcome == "invalid":
         return {"error": "a callsign is 3-20 characters of a-z, 0-9, - or _"}
     return {"ok": True, "account": auth.account_payload(viewer)}
+
+
+@app.post("/account/person")
+async def bind_person_route(
+    body: _BindPerson, authorization: str | None = Header(default=None)
+) -> dict[str, Any]:
+    """Bind the caller's account to their peer-fabric **person** identity.
+
+    This is what makes `@handle` a way to reach someone: the game server is the
+    only uniqueness authority every node agrees on, so it is where the mapping
+    handle → person_id has to live.
+
+    The bearer token proves *account*; the signature proves *person*. Both are
+    required — a bearer alone would let anyone claim to be any person, and a
+    signature alone would let anyone bind a person to any account. The signed
+    challenge includes the account id so a signature can't be replayed from
+    elsewhere onto a different account.
+    """
+    viewer = _viewer(authorization)
+    if viewer is None:
+        return {"error": "sign in required"}
+    if store.fingerprint_person(body.person_public_key) != body.person_id:
+        return {"error": "person_id does not match the public key"}
+    challenge = store.person_challenge(viewer, body.person_id)
+    if not crypto.verify(body.person_public_key, challenge, body.sig):
+        return {"error": "signature did not verify"}
+    outcome = store.bind_person(viewer, body.person_id, body.person_public_key)
+    if outcome == "taken":
+        return {"error": "that identity is already bound to another account"}
+    if outcome != "ok":
+        return {"error": outcome}
+    return {"ok": True, "account": auth.account_payload(viewer)}
+
+
+@app.get("/directory/resolve")
+async def directory_resolve(handle: str) -> dict[str, Any]:
+    """`@handle` → the public directory entry, so a node can add them as a friend.
+
+    Unauthenticated on purpose: a handle is already public (it is on the ladder),
+    and requiring sign-in to look one up would mean you cannot be found by someone
+    who has not signed in yet — which is exactly the person trying to add you.
+    """
+    entry = store.account_by_handle(handle)
+    return {"entry": entry} if entry else {"error": "no such callsign"}
+
+
+@app.get("/directory/search")
+async def directory_search(q: str, limit: int = 10) -> dict[str, Any]:
+    """Prefix-search callsigns. Short queries return nothing rather than everyone."""
+    return {"results": store.search_handles(q, limit), "min_prefix": store.MIN_SEARCH_PREFIX}
 
 
 # ---- web (authorization-code) sign-in --------------------------------------

@@ -1,31 +1,28 @@
 import { registry, type ModuleManifest } from '../../registry';
 import { setSetting } from '../../settings';
 import './games.css';
-import { openGamesHub, openGamesSection } from './hub-section';
-import { ChallengesPanel } from './panels/ChallengesPanel';
+import { GAMES_SECTIONS, openGamesHub, openGamesSection } from './hub-section';
 import { EpisodePanel } from './panels/EpisodePanel';
 import { FighterArcadePanel } from './panels/FighterArcadePanel';
 import { GamesLogPanel } from './panels/GamesLogPanel';
 import { GamesPanel } from './panels/GamesPanel';
-import { LeaderboardPanel } from './panels/LeaderboardPanel';
-import { PlazaPanel } from './panels/PlazaPanel';
-import { ProfilePanel } from './panels/ProfilePanel';
-import { ReplayBrowserPanel } from './panels/ReplayBrowserPanel';
 import { ReplayViewerPanel } from './panels/ReplayViewerPanel';
-import { RosterPanel } from './panels/RosterPanel';
 import { TownPanel } from './panels/TownPanel';
 
 /**
  * Games module: watch your agent play turn-based games against another user's
  * agent, refereed by the central game server.
  *
- * The **Games pane** (`games.lobby`) is the whole play loop in one pane — Play,
- * Game Board, and Build your agent as internal sections (see hub-section.ts).
- * Around it sit the two spectator surfaces you watch *while* it plays — the
- * **Games Log** (`games.log`, every match/server/agent event) and **Episodes**
- * (`games.episodes`, the step-by-step trajectory) — plus the auxiliary tools
- * (Ladder, Challenges, Replays, Players, Profile) on the left activity rail.
- * See docs/modules/games.mdx.
+ * The **Games pane** (`games.lobby`) is the whole client in one pane: Play, Board,
+ * Build, Replays, Career and Social are frame-engine **sections** (declared here,
+ * driven through hub-section.ts), and the two spectator surfaces you watch *while*
+ * it plays — **Games Log** (`games.log`) and **Episodes** (`games.episodes`) —
+ * are its **bottom region strip**.
+ *
+ * There are no longer separate Ladder / Challenges / Replays / Players / Profile /
+ * Plaza panes: every one of them rendered a component this pane already renders in
+ * a section, so they were a second home for the same content. They stay reachable
+ * by their old names through `VIEW_ALIASES` — see docs/modules/games.mdx.
  */
 export const gamesModule: ModuleManifest = {
   id: 'games',
@@ -53,6 +50,16 @@ export const gamesModule: ModuleManifest = {
       role: 'document',
       icon: '🕹',
       singleton: true,
+      // The console's menu. `GamesPanel` renders the bodies itself (each section
+      // holds live state — canvases, unsaved builder code — so they are hidden
+      // rather than unmounted); the host renders the strip and persists the choice.
+      sections: GAMES_SECTIONS,
+      // The spectator surfaces, as a real region strip: resizable, collapsible and
+      // persisted per instance, which the hand-rolled drawer was none of.
+      regions: [
+        { id: 'games.log', label: 'Games Log', icon: '📜', position: 'bottom', defaultSize: 260 },
+        { id: 'games.episodes', label: 'Episodes', icon: '🎞', position: 'bottom' },
+      ],
     },
     {
       id: 'games.log',
@@ -68,52 +75,6 @@ export const gamesModule: ModuleManifest = {
       component: EpisodePanel,
       role: 'document',
       icon: '🎞',
-      singleton: true,
-    },
-    // The former hub tabs, now standalone tool panels on the activity rail.
-    {
-      id: 'games.ladder',
-      title: 'Ladder',
-      component: LeaderboardPanel,
-      role: 'tool',
-      icon: '🏆',
-      defaultDock: 'left',
-      singleton: true,
-    },
-    {
-      id: 'games.challenges',
-      title: 'Challenges',
-      component: ChallengesPanel,
-      role: 'tool',
-      icon: '🎯',
-      defaultDock: 'left',
-      singleton: true,
-    },
-    {
-      id: 'games.replays',
-      title: 'Replays',
-      component: ReplayBrowserPanel,
-      role: 'tool',
-      icon: '📼',
-      defaultDock: 'left',
-      singleton: true,
-    },
-    {
-      id: 'games.players',
-      title: 'Players',
-      component: RosterPanel,
-      role: 'tool',
-      icon: '👥',
-      defaultDock: 'left',
-      singleton: true,
-    },
-    {
-      id: 'games.profile',
-      title: 'Profile',
-      component: ProfilePanel,
-      role: 'tool',
-      icon: '🪪',
-      defaultDock: 'left',
       singleton: true,
     },
     {
@@ -138,14 +99,6 @@ export const gamesModule: ModuleManifest = {
       component: TownPanel,
       role: 'document',
       icon: '🏘',
-      singleton: true,
-    },
-    {
-      id: 'games.plaza',
-      title: 'The Plaza',
-      component: PlazaPanel,
-      role: 'document',
-      icon: '🏛',
       singleton: true,
     },
   ],
@@ -176,7 +129,7 @@ export const gamesModule: ModuleManifest = {
     {
       id: 'games.openProfile',
       title: 'Games: Open player profile',
-      run: () => registry.openPanel('games.profile'),
+      run: () => openGamesSection('career'),
     },
     {
       id: 'games.openArcade',
@@ -196,17 +149,17 @@ export const gamesModule: ModuleManifest = {
     {
       id: 'games.openReplays',
       title: 'Games: Browse replays',
-      run: () => registry.openPanel('games.replays'),
+      run: () => openGamesSection('replays'),
     },
     {
       id: 'games.openLeaderboard',
       title: 'Games: Open ladder',
-      run: () => registry.openPanel('games.ladder'),
+      run: () => openGamesSection('career'),
     },
     {
       id: 'games.openChallenges',
       title: 'Games: Open challenge track',
-      run: () => registry.openPanel('games.challenges'),
+      run: () => openGamesSection('career'),
     },
     {
       id: 'games.openTown',
@@ -216,12 +169,12 @@ export const gamesModule: ModuleManifest = {
     {
       id: 'games.openPlaza',
       title: 'Games: Enter the Plaza',
-      run: () => registry.openPanel('games.plaza'),
+      run: () => openGamesSection('social'),
     },
     {
       id: 'games.openRoster',
       title: 'Games: Open players',
-      run: () => registry.openPanel('games.players'),
+      run: () => openGamesSection('social'),
     },
   ],
   settings: [

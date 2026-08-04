@@ -62,7 +62,12 @@ export const recordsModule: ModuleManifest = {
       defaultDock: 'left',
       defaultDockSize: 260,
       singleton: true,
+      // A section of Explorer now — see modules/explorer.
+      embedded: true,
     },
+  ],
+  explorerSources: [
+    { id: 'tables', label: 'Tables', icon: '🗃', view: 'records.list', key: 'r' },
   ],
   frames: [
     {
@@ -90,7 +95,7 @@ export const recordsModule: ModuleManifest = {
           ],
         },
         docks: {
-          left: { tools: ['records.list'], size: 260 },
+          left: { tools: ['explorer.home'], size: 260 },
           right: { tools: ['agent.chat'], size: 380 },
         },
       },
@@ -112,7 +117,7 @@ export const recordsModule: ModuleManifest = {
           ],
         },
         docks: {
-          left: { tools: ['records.list'], size: 240 },
+          left: { tools: ['explorer.home'], size: 240 },
           right: { tools: ['agent.chat'], size: 360 },
           bottom: { tools: ['observability.io'], visible: false },
         },

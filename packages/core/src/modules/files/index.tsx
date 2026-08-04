@@ -5,8 +5,9 @@
  * docs/modules/file-explorer.md.
  */
 import { dialogs } from '../../dialogs';
+import { revealSection } from '../../layout/controller';
 import { toastsStore } from '../../toasts';
-import { registry, type ModuleManifest } from '../../registry';
+import type { ModuleManifest } from '../../registry';
 import { getActiveBufferSource, openBuffer } from '../editor';
 import { openTerminal } from '../terminal';
 import { filesAgentTools } from './agentTools';
@@ -74,7 +75,7 @@ function renameSelected(): void {
     toastsStore.add('warning', 'Nothing selected', 'Select a file or folder to rename.');
     return;
   }
-  registry.openPanel('files.tree');
+  revealSection('files', 'explorer.home');
   startRename(active);
 }
 
@@ -116,7 +117,7 @@ function revealActiveBuffer(): void {
   const source = getActiveBufferSource();
   if (!source || !source.startsWith(FILE_URI)) return;
   const path = source.slice(FILE_URI.length);
-  registry.openPanel('files.tree');
+  revealSection('files', 'explorer.home');
   setRevealTarget(path);
   setSelection({ path, kind: 'file' });
 }
@@ -133,14 +134,24 @@ export const filesModule: ModuleManifest = {
       icon: '🗀',
       defaultDock: 'left',
       singleton: true,
+      // A section of Explorer now, not a dock strip of its own. Still registered
+      // so `show("files.tree")` and `openPaneInArea` keep working; the tools stay
+      // declared here because they are the *files* module's tools, and the
+      // backend groups by name prefix regardless of which view declares them.
+      embedded: true,
       agentTools: filesAgentTools,
     },
+  ],
+  explorerSources: [
+    { id: 'files', label: 'Files', icon: '🗀', view: 'files.tree', key: 'f', default: true },
   ],
   commands: [
     {
       id: 'files.open',
       title: 'Files: Open file explorer',
-      run: () => registry.openPanel('files.tree'),
+      run: () => {
+        revealSection('files', 'explorer.home');
+      },
     },
     { id: 'files.newFile', title: 'Files: New file', run: newFile },
     { id: 'files.newFolder', title: 'Files: New folder', run: newFolder },

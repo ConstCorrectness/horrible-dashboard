@@ -1,54 +1,19 @@
-import { registry, type ModuleManifest } from '../../registry';
-import { CommonsDirectory } from './CommonsDirectory';
-import { CommonsProfileEditor } from './CommonsProfileEditor';
-import { CommonsRequests } from './CommonsRequests';
+import { type ModuleManifest } from '../../registry';
 
 /**
  * The **agent commons**, frontend side: browse/search other nodes' public profiles, the
  * two-sided consent handshake, a reputation floor (block/vouch/report + trust tiers),
  * a profile editor, and an inbound-requests inbox — all over the `/ws` `commons` channel.
- * Profiles are built + signed on the backend (the node key never leaves it). See
+ * Profiles are built + signed on the backend (the node key never leaves it).
+ *
+ * It contributes **settings and components, no panes**: the directory is folded
+ * into the People pane's Discover section, requests into Requests, and the profile
+ * editor into Me — one place for people rather than one per module. See
  * docs/modules/commons.mdx and docs/architecture/agent-commons.mdx.
  */
 export const commonsModule: ModuleManifest = {
   id: 'commons',
   title: 'Commons',
-  widgets: [
-    {
-      id: 'commons.directory',
-      title: 'Commons',
-      component: CommonsDirectory,
-      role: 'widget',
-      icon: '🌐',
-      // List-shaped, and it carries its own region strips into the dock.
-      dockable: 'left',
-      regions: [
-        { id: 'commons.requests', label: 'Requests', icon: '↙', position: 'right' },
-        { id: 'commons.profile', label: 'Profile', icon: '◉', position: 'right' },
-      ],
-    },
-    {
-      id: 'commons.requests',
-      title: 'Commons Requests',
-      component: CommonsRequests,
-      role: 'widget',
-      icon: '↙',
-    },
-    {
-      id: 'commons.profile',
-      title: 'Commons Profile',
-      component: CommonsProfileEditor,
-      role: 'widget',
-      icon: '◉',
-    },
-  ],
-  commands: [
-    {
-      id: 'commons.open',
-      title: 'Commons: Open directory',
-      run: () => registry.openPanel('commons.directory'),
-    },
-  ],
   settings: [
     {
       key: 'commons.enabled',
@@ -109,6 +74,12 @@ export const commonsModule: ModuleManifest = {
     },
   ],
 };
+
+// Exported so the People pane can compose them as sections. This module keeps no
+// panes of its own — see docs/modules/commons.mdx.
+export { CommonsDirectory } from './CommonsDirectory';
+export { CommonsProfileEditor } from './CommonsProfileEditor';
+export { CommonsRequests } from './CommonsRequests';
 
 export {
   initCommons,

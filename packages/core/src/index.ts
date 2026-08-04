@@ -69,6 +69,7 @@ export type {
 } from './layout/types';
 export type { FramePreset, PresetNode } from './layout/presets';
 export {
+  activeSectionOf,
   closePaneGuarded,
   collapseRegion,
   focusAreaDirection,
@@ -87,12 +88,16 @@ export {
   openPane as openFramePane,
   openPaneInArea,
   openToolInDock,
+  readPaneAgentContext,
   regionsFor,
   resizeAreaPx,
   resolveView,
   revealRegionView,
+  revealSection,
   roleOf,
+  sectionsOf,
   setCenterMeasurer,
+  setPaneSection,
   setRegionView,
   splitAreaBy,
   toggleDock,
@@ -107,6 +112,7 @@ export {
   setPaneDirty,
   type CloseGuard,
 } from './layout/close-guards';
+export { usePaneSection, sectionOfInstance, type PaneSections } from './layout/use-sections';
 export * as framePersistence from './layout/persistence';
 export {
   useWorkspaces,
@@ -120,6 +126,7 @@ export {
   readAgentContext,
   useAgentContext,
 } from './agent-context';
+export { backendHealth, type BackendHealth } from './health';
 export { PaneParamsContext, usePaneParams, type PaneParams } from './panes';
 export { recordClientIo, telemetryStore, type IoEvent, type IoSource } from './telemetry';
 export {
@@ -145,6 +152,7 @@ export {
   type PaneRole,
   type RegionPosition,
   type RegionViewDecl,
+  type SectionDecl,
   type LayoutController,
   type ModuleManifest,
   type OpenPaneInfo,
@@ -242,6 +250,8 @@ export {
   type SelfProfile,
   type RosterSnapshot,
 } from './modules/social';
+export { explorerModule } from './modules/explorer';
+export { peopleModule } from './modules/people';
 export {
   networkModule,
   initNetwork,

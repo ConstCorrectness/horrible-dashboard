@@ -1,0 +1,12 @@
+/* Explorer's own chrome is just the section tab strip, which the host renders —
+   so this file styles only the no-browsers fallback. */
+.explorer-empty {
+  padding: 16px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.explorer-empty-hint {
+  margin-top: 6px;
+  opacity: 0.75;
+}

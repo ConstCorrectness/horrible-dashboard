@@ -131,6 +131,7 @@ _TOOLS = [
             "later rather than waiting."
         ),
         handler=_start_run,
+        group="research",
         parameters={
             "query": {"type": "string", "description": "The research question"},
             "effort": {
@@ -154,6 +155,7 @@ _TOOLS = [
             "state, token usage, error, and the report source when finished."
         ),
         handler=_run_status,
+        group="research",
         parameters={
             "run_id": {"type": "string", "description": "Optional specific run"}
         },
@@ -163,6 +165,7 @@ _TOOLS = [
         name="research.report",
         description="Fetch a finished run's report markdown by run_id.",
         handler=_run_report,
+        group="research",
         parameters={"run_id": {"type": "string"}},
         required=["run_id"],
     ),
@@ -174,6 +177,7 @@ _TOOLS = [
             "Server-side fetch — works without the browser pane."
         ),
         handler=_capture,
+        group="research",
         parameters={
             "url": {"type": "string", "description": "Page URL to capture"},
             "library": {
@@ -193,6 +197,7 @@ _TOOLS = [
             "knowledge library (text extracted and ingested for search)."
         ),
         handler=_save_pdf,
+        group="research",
         parameters={
             "url": {"type": "string", "description": "PDF URL"},
             "library": {

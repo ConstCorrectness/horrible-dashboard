@@ -294,7 +294,7 @@ async def invite_friend(who: str, room_id: str) -> dict[str, Any]:
     is untouched — the pane only ever talks to `/api/hassault`.
     """
     from backend.modules.social import roster, store
-    from backend.modules.social.agent_tools import _resolve
+    from backend.modules.social.agent_tools import resolve_row
 
     # Idempotent, and it makes the dependency safe rather than ordered: inviting
     # is reachable from an agent tool, which can run before the peer fabric has
@@ -303,7 +303,7 @@ async def invite_friend(who: str, room_id: str) -> dict[str, Any]:
     room = match_server.get(room_id)
     if room is None:
         return {"error": f"no match {room_id!r}"}
-    row = _resolve(who)
+    row = await resolve_row(who)
     if row is None:
         return {"error": f"no friend matching {who!r}"}
     if row["status"] != "accepted":

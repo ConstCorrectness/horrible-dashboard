@@ -167,8 +167,9 @@ same flow visually.
    can react to it.
 6. **Completion.** When a round returns no tool calls, the backend sends the
    authoritative `answer` then `done` (or `error` on an HTTP failure). If the model
-   *narrated* an action without emitting a call, the loop first grants **one** forced
-   retry (`tool_choice:"required"`, OpenAI dialect only) before giving up and
+   *narrated* an action without emitting a call, the loop first grants **one** nudged
+   retry — on **every** dialect, with `tool_choice:"required"` added where the provider
+   supports it — before giving up and
    answering. The widget renders the reply plus the per-turn action log, and a completed
    turn auto-saves to its [session](#sessions-persistence).
 
@@ -197,11 +198,31 @@ store (`agent.orchestrator.temperature`). Other model hyperparameters can be ove
 using setting keys `agent.orchestrator.contextSize` (context window limit, maps to Ollama's
 `num_ctx`), `agent.orchestrator.maxTokens` (maps to OpenAI's `max_tokens` / Ollama's `num_predict`),
 and `agent.orchestrator.topP` (Top P nucleus sampling). When the model still answers in prose that
-reads like an unemitted call, the loop gives it **one** forced retry with
-`tool_choice:"required"` — but only on the OpenAI dialect, which has a real
-`tool_choice` (Ollama has no reliable equivalent, so it leans on the temperature
-fix). The loop never forces a tool unconditionally: a plain conversational reply must
-stay a reply. For weak emitters, prefer a larger model (e.g. `gemma4:12b`) for the
+reads like an unemitted call, the loop gives it **one** nudged retry: a system message
+saying it described an action without emitting the call, plus
+`tool_choice:"required"` where the dialect has one. This runs on **every** dialect.
+It used to be gated on `openai`, which meant the repair never fired for **Ollama —
+the default provider**, and so never for the small local models that need it most;
+`tool_choice` is extra leverage, not the mechanism. The loop never forces a tool
+unconditionally: a plain conversational reply must stay a reply.
+
+**Malformed arguments are reported, not silently emptied.** A tool call's `arguments`
+arrive as a dict (Ollama) or a JSON string (OpenAI, and some Ollama models), and the
+streaming paths accumulate that string from deltas — so a truncated payload is a real
+failure mode. `_coerce_args` used to swallow anything unparseable into `{}`, which
+meant the call **ran with no arguments at all** (`close_pane` with no instanceId,
+`files.delete` with no path) and the model saw a plain failure with no hint its JSON
+was to blame. It now returns an error alongside the args, carried on
+`ToolCall.arg_error`, and `_dispatch_call` refuses the call — nothing is relayed to
+the browser — returning a message the model can actually act on. An *empty* payload
+is still a valid no-arg call.
+
+**Unknown tool names get a suggestion.** A name the relay can't resolve comes back
+with `didYouMean` — up to three near matches over the layout verbs plus the advertised
+manifest (`tool-names.ts`, pure and unit-tested). It matches normalized names
+(`openPane` → `open_pane`), dropped words (`list_panes` → `list_open_panes`), small
+typos, and — as a last resort — other tools in the same namespace, which is what
+rescues an invented verb like `files.remove`. For weak emitters, prefer a larger model (e.g. `gemma4:12b`) for the
 orchestrator: the **`agent.orchestrator.model`** setting overrides only the
 orchestrator's model — leave it on the configured agent model to reuse it, so
 chat/autosuggest can stay on a smaller, faster model while the tool-calling loop runs
@@ -384,6 +405,17 @@ writes it back with `editor.proposeEdit(uri=…)` — no `list_open_panes` +
 `get_pane_context` discovery first (a multi-step dance weak local models often skip).
 Unsaved scratch buffers (no uri) are excluded.
 
+This buffer rides on every turn too, and was long the **one context injection with no
+cap at all** — a single large file could dwarf everything else in a small model's
+window. `agent.activeBufferBudget` (24000 chars, `0` = unlimited) now clips it in the
+frontend. The clip sets a `truncated` flag, and honouring that flag is **safety-critical
+rather than cosmetic**: the normal message tells the model to write the *complete*
+buffer back via `editor.proposeEdit`, so doing that from a clipped copy would silently
+delete everything past the cut. A truncated snapshot therefore flips the instruction —
+the model is told the code is cut off and must re-read the file before any whole-buffer
+write. Pinned by
+`test_agent_orchestrator.py::test_truncated_buffer_forbids_writing_the_whole_file_back`.
+
 **Workspace context.** Alongside the focused pane, `askAgent` attaches
 `context.panes` — a snapshot of every *visible* pane that exposes one
 (`readVisibleAgentContexts`: each area's active tab, each visible dock's active
@@ -447,6 +479,37 @@ the editor, terminal, and file-explorer modules build on. The chat widget now
 **sessions**, and supports **slash commands**. **Next slices:** parameterized
 commands-as-tools and a fuller chat/inspector cockpit.
 
+## Multi-turn durability
+
+Two things made a long conversation degrade in ways nothing surfaced.
+
+**The transcript was replayed whole.** `agent.orchestrator.contextSize` defaults to
+the provider default, so overflow never errored — the provider truncates from the
+**front** of the message list, which is exactly where the system prompt and the
+group guides sit. A five-turn conversation on a small local model would quietly
+stop following its own instructions, and the only symptom was worse answers.
+`compactHistory` (`modules/agent/history.ts`) now keeps the last
+`MAX_HISTORY_TURNS` verbatim, caps any single oversized message (one pasted stack
+trace can outweigh the rest of the conversation), and replaces what falls out with
+one marker message. The marker is a **user** message — `_history_messages` keeps
+only user/assistant text, and an assistant announcing its own amnesia reads as
+something the assistant said — and it tells the model to ask rather than leaving a
+hole it will confidently fill. The transcript draws the same seam
+(`agent-compacted`), because silent compaction is indistinguishable from an agent
+that forgot.
+
+**Loaded tool groups reset every turn.** `active_groups` was rebuilt from prompt
+keywords each turn, so the model spent a `load_tools` round to reach `files` in turn
+one, used it, and in turn two the tools were simply gone — a follow-up like "now
+delete it" arrived with nothing to delete it *with*. `_carried` / `_remember_groups`
+keep them for the session, keyed on the socket (weakly, so a reload starts clean) and
+per `agent_id`. **Empty `history` resets the carry** — that is the widget saying "new
+chat", an exact signal needing no extra protocol. The carry is bounded to
+`MAX_CARRIED_GROUPS` and trims oldest-first, because every carried group costs schema
+bytes on every later turn and the whole point of progressive disclosure is staying
+under the 40-tool reasoning cliff. A carry never widens a scoped agent's reach: it
+can only re-activate a group `spec.tool_groups` already allows.
+
 ## Providers & HTTP endpoints
 
 The model is always a **local** server reached over HTTP — there is no cloud /
@@ -500,13 +563,18 @@ Tools belong to **groups** by name prefix (`files`, `editor`, `terminal`,
 The **layout verbs split by cost**, because they were the largest always-on block
 and most agents never rearrange anything. The five *read* verbs
 (`list_available_panes`, `list_workspaces`, `list_open_panes`, `get_layout`,
-`get_pane_context`) stay in every agent's core — any agent may need to see what the
-user is looking at. The sixteen *arrangement* verbs stay in core only for `main`
-(driving the shell is its job) and for any spec that lists `layout` in its
-`tool_groups`; every other agent gets them on demand via `load_tools("layout")`.
-Measured with the interpretability recorder's own counter, that takes a scoped
-agent's always-on core from **26 tools / 2351 tool-schema tokens to 7 / 563** —
-the 16 arrangement verbs alone were 1455 tokens on every round of every turn.
+`get_pane_context`) plus [`show`](../architecture/agent-tools.mdx#show-the-intent-verb)
+stay in every agent's core — any agent may need to see what the user is looking at, and
+`show` is how it puts something there. The sixteen *arrangement* verbs are loaded on
+demand via `load_tools("layout")`.
+
+**Including for `main`.** They used to stay in `main`'s core on the reasoning that
+driving the shell is its job — but that made the *loosely prompted* agent the most
+starved one, carrying ~1,455 tokens of geometry schemas on turns that only wanted to
+read a file. `show` covers "open/go to X" in a single call, and the narrow `layout`
+keyword list preloads the arrangement verbs on the turns that genuinely rearrange
+things. A spec that names `layout` in its `tool_groups` still opts back into all of
+them up front.
 `layout` is shell control rather than a
 capability, so it stays loadable for **every** agent regardless of scope — scoping
 only decides whether it costs schema space up front. Two traps worth knowing:
@@ -529,6 +597,32 @@ injection — nothing is ever dropped, just not-yet-loaded). `active_groups` is:
 A `TOOL_BUDGET = 38` cap remains only as a backstop (core is always kept first). The
 `/tools` command (`list_tools`→`tools`) still reports the **full** catalog, labeled
 by group, independent of what any single turn has loaded.
+
+:::caution Watch the core, not the cap
+The cap was 44 — deliberately *above* the ≤39 ceiling, so that a legitimate
+`training`+`notebook` turn would not be truncated. A backstop above the cliff protects
+nothing, though: it lets a turn through in exactly the state the cliff warns about.
+What actually keeps a turn safe is a small **always-on core**, and once the arrangement
+verbs left it that same flagship flow costs `11 + 12 + 9 = 32`, so the cap now sits at
+**38**, under the cliff, without truncating real work.
+
+Truncation is also easy to miss, which is why it now logs at **ERROR and names the
+tools it dropped** (plus a `dropped` list in the stats the
+[interpretability](interpretability.mdx) pane reads). A silently-dropped tool looks
+exactly like a model that chose not to use one.
+
+The core has come down in two steps, both measured with the interpretability
+recorder's own counter:
+
+| | tools | always-on schema |
+| --- | --- | --- |
+| Originally | 34 | — |
+| After grouping `research.*`/`arxiv.*` (see the danger note in [agent-tools](../architecture/agent-tools.mdx#a-tools-group-is-its-name-prefix)) | 26 | — |
+| After moving the arrangement verbs out | **11** | **-68%** (15,299 → 4,867 chars) |
+
+The system prompt halved alongside it (3,017 → 1,375 chars), because the geometry
+rules it used to carry moved into the `layout` group's guide.
+:::
 
 
 ## Contributions to the layout shell

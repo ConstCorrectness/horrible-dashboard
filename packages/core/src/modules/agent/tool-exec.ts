@@ -7,7 +7,6 @@
  * center **areas** hold documents/widgets, **docks** hold tools, **regions** are
  * the strips inside a pane. See docs/modules/agent-chat.md and docs/modules/repl.md.
  */
-import { readAgentContext } from '../../agent-context';
 import {
   describeLayout,
   fullscreenArea,
@@ -15,17 +14,21 @@ import {
   listOpenPanesDetailed,
   movePaneTo,
   openToolInDock,
+  readPaneAgentContext,
   resizeAreaPx,
   resolveView,
   roleOf,
+  setPaneSection,
   setRegionView,
+  showTarget,
   splitAreaBy,
   toggleDock,
   toggleRegion,
 } from '../../layout/controller';
 import type { DockSide, NavDirection, RegionPosition } from '../../layout/types';
 import { registry, type SplitDirection } from '../../registry';
-import { executeDynamicTool } from './manifest';
+import { executeDynamicTool, serializeManifest } from './manifest';
+import { LAYOUT_VERBS, nearestToolNames } from './tool-names';
 
 const SPLIT_DIRS: readonly SplitDirection[] = ['left', 'right', 'above', 'below'];
 const NAV_DIRS: readonly NavDirection[] = ['left', 'right', 'up', 'down'];
@@ -73,22 +76,33 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
     // ------------------------------------------------------------- reads
     case 'list_available_panes':
       return {
-        views: [...registry.panels, ...registry.widgets].map((v) => ({
-          id: v.id,
-          title: v.title,
-          role: roleOf(v.id),
-          ...(roleOf(v.id) === 'tool' ? { defaultDock: v.defaultDock ?? 'left' } : {}),
-          ...(v.regions?.length
-            ? {
-                regions: v.regions.map((r) => ({
-                  id: r.id,
-                  label: r.label,
-                  position: r.position ?? 'right',
-                })),
-              }
-            : {}),
-        })),
+        // Embedded views get no row of their own — they are listed under the host
+        // that owns them, below. Every one of them is still reachable by name via
+        // `show`, which is the invariant that makes merging a pane safe: the list
+        // gets shorter, the agent's vocabulary does not.
+        views: [...registry.panels, ...registry.widgets]
+          .filter((v) => !v.embedded)
+          .map((v) => ({
+            id: v.id,
+            title: v.title,
+            role: roleOf(v.id),
+            ...(roleOf(v.id) === 'tool' ? { defaultDock: v.defaultDock ?? 'left' } : {}),
+            ...(v.sections?.length
+              ? { sections: v.sections.map((s) => ({ id: s.id, label: s.label })) }
+              : {}),
+            ...(v.regions?.length
+              ? {
+                  regions: v.regions.map((r) => ({
+                    id: r.id,
+                    label: r.label,
+                    position: r.position ?? 'right',
+                  })),
+                }
+              : {}),
+          })),
       };
+    case 'show':
+      return showTarget(String(args.target ?? ''), args.where as 'here' | 'beside' | 'dock');
     case 'list_workspaces':
       return lc ? await lc.listWorkspaces() : { error: 'workspace not ready' };
     case 'list_open_panes':
@@ -96,9 +110,19 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
     case 'get_layout':
       return describeLayout();
     case 'get_pane_context': {
-      const snapshot = readAgentContext(String(args.instanceId));
+      const instanceId = String(args.instanceId);
+      // Reading a *named* section switches the pane to it first. Only the visible
+      // section is mounted, so its provider is the only one that exists — there is
+      // no way to read a background section without bringing it forward, and
+      // pretending otherwise would return the wrong section's data as if it were
+      // the one asked for.
+      const section = typeof args.section === 'string' ? args.section : null;
+      if (section && !setPaneSection(instanceId, section)) {
+        return { error: `pane ${instanceId} has no section "${section}"` };
+      }
+      const snapshot = readPaneAgentContext(instanceId);
       return snapshot === null
-        ? { error: `no agent context for pane: ${String(args.instanceId)}` }
+        ? { error: `no agent context for pane: ${instanceId}` }
         : { context: snapshot };
     }
 
@@ -215,7 +239,16 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
       // (per-widget/panel agentTools and agent-exposed commands).
       const dynamic = await executeDynamicTool(name, args);
       if (dynamic.handled) return dynamic.result;
-      return { error: `unknown tool: ${name}` };
+      // serializeManifest() rather than the raw decls: it is exactly the catalog the
+      // backend was told about, so a suggestion can never name something uncallable.
+      const near = nearestToolNames(name, [
+        ...LAYOUT_VERBS,
+        ...serializeManifest().map((t) => t.name),
+      ]);
+      return {
+        error: `unknown tool: ${name}`,
+        ...(near.length ? { didYouMean: near } : {}),
+      };
     }
   }
 }

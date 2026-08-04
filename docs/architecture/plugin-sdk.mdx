@@ -40,6 +40,8 @@ export default definePlugin({
       widgets: [{ id: 'my-plugin.thing', title: 'Thing', component: Thing, role: 'widget' }],
       commands: [{ id: 'my-plugin.doIt', title: 'My Plugin: Do it', run: () => {} }],
       settings: [{ key: 'my-plugin.size', title: 'Size', type: 'number', default: 5 }],
+      // A browser inside the Explorer pane, rather than a pane of its own.
+      explorerSources: [{ id: 'my-plugin.stuff', label: 'Stuff', component: Browser }],
       // panels?, keybindings? — same shapes built-in modules use
     };
   },
@@ -52,6 +54,15 @@ export default definePlugin({
 - **Namespacing is enforced:** every contributed command/panel/widget id **and
   setting key** must start with `<pluginId>.` — the loader rejects the plugin
   otherwise.
+- **`explorerSources`** is the one place a contribution lands inside *someone
+  else's* pane: a tab in [Explorer](../modules/explorer.mdx), beside Files and
+  Notebooks. It exists so a plugin that wants to let you browse something does not
+  have to mint another near-identical left-dock strip — the failure mode that made
+  five built-in browsers into five rail glyphs. `ExplorerSourceDecl` is a
+  `SectionDecl`, so it inherits the tab strip, the persisted active tab, the pick
+  key, and the agent's `show("stuff")`. A source declaring its own
+  `useAgentContext` would silently overwrite the host pane's single provider — see
+  the agent-context rule in [windowing](./windowing.mdx#embedded-views-and-sections).
 - The `host` handle (`PluginHost`) is the only door back into the shell:
   - `host.api.get/post/put/del` — the backend HTTP client (relative to `/api`).
   - `host.storage.get/set/remove` — key-value storage scoped to the plugin,
@@ -81,9 +92,17 @@ take the keyboard while focused. See
 A plugin's panes are first-class frame panes, just like a built-in module's.
 Every `PanelDecl`/`WidgetDecl` declares a **`role`** — `document` (tabs into a
 center area), `widget` (a center area of its own), or `tool` (lives in a dock;
-`defaultDock` picks the side) — plus an optional `icon` and `regions`
-([per-pane strips](panel-groups.mdx)). There is no separate widget board — see
-[windowing.mdx](windowing.mdx).
+`defaultDock` picks the side) — plus an optional `icon`, `regions`
+([per-pane strips](panel-groups.mdx)) and `sections` (in-pane tabs). There is no
+separate widget board — see [windowing.mdx](windowing.mdx).
+
+A view that only ever renders **inside** another pane — as a region strip or a
+section body — declares `embedded: true`. It stays registered and reachable, but
+stops being a destination: no opener command, no rail glyph, no type-switcher
+entry, and no top-level row in the agent's `list_available_panes`. See
+[Embedded views and sections](windowing.mdx#embedded-views-and-sections) for the
+full contract, including the one-provider-per-pane agent-context rule that
+`sections` imposes.
 
 A pane can also opt into the **distributed peer fabric** declaratively via the
 optional `collab` field (`CollabDecl`) on `PanelDecl`/`WidgetDecl`: it names the
@@ -101,7 +120,8 @@ surfaces the mismatch in the marketplace panel. Additive optional fields (like
 the `settings` contribution in SDK `0.2.0` and the `collab` pane field) do
 **not** bump it. Version `2` (SDK `0.4.0`) is the frame-engine contract: pane
 `role` became required, `defaultPlacement` and panel groups were removed, and
-views may declare `regions`.
+views may declare `regions`. The later `sections` and `embedded` fields are
+additive and optional, so they do not bump it either.
 
 ## Package format
 

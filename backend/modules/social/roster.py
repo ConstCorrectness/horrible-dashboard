@@ -27,7 +27,7 @@ from backend.modules.network import identity as node_identity
 from backend.modules.network import trust
 from backend.modules.network.hub import peer_hub
 from backend.modules.social import identity as person_identity
-from backend.modules.social import directory, store
+from backend.modules.social import directory, handles, store
 from backend.modules.social.friendcode import format_friend_code, resolve_person_id
 from backend.modules.social.models import (
     Friend,
@@ -90,6 +90,7 @@ def self_profile() -> SelfProfile:
         display_name=person_identity.display_name(),
         person_public_key=str(cert["person_public_key"]),
         holds_person_key=not person_identity.is_linked_device(),
+        handle=directory._signed_in_handle(),
         # Assembled through the same helper the roster uses, so "online" means the
         # same thing for your own machines as for a friend's.
         devices=[store.device_info(d, online) for d in store.list_devices(person_id)],
@@ -300,6 +301,40 @@ def reachable_nodes(person_id: str) -> list[str]:
     return [n for n in devices if n in online]
 
 
+async def resolve_target(who: str) -> tuple[str | None, str | None]:
+    """Turn whatever the user typed into a `person_id`. Returns (person_id, error).
+
+    Accepts, in order of how exact each one is:
+
+    1. **`@callsign`** — resolved through the game server's directory. Async, and
+       the only form that needs the network, which is why this function exists
+       alongside `friendcode.resolve_person_id` rather than replacing it.
+    2. a **friend code** (`HD-XXXX-…`) or a bare 16-character **person id** —
+       self-certifying and offline. `resolve_person_id` tells them apart by
+       **length**, and deliberately does not fall back to "treat it as a raw id"
+       when the checksum fails: that fallback would dial a mistyped code as if it
+       were real.
+
+    A **display name is not accepted here** — resolving one needs the roster, and
+    this runs before someone is on it. Callers that have a roster (the agent's
+    `_resolve`) try names themselves, and only when unambiguous.
+    """
+    who = (who or "").strip()
+    if not who:
+        return None, "enter a callsign or friend code"
+    if handles.is_handle(who):
+        entry = await handles.resolve(who)
+        if entry is None:
+            return None, f"no such callsign: {who}"
+        # First sighting of this person — record the name the directory gave, so the
+        # roster row is not just a 16-character id while the request is pending.
+        return str(entry["person_id"]), None
+    try:
+        return resolve_person_id(who), None
+    except ValueError as exc:
+        return None, str(exc)
+
+
 # ---- browser-driven operations ----------------------------------------------------
 
 
@@ -332,13 +367,11 @@ async def _dial(person_id: str, address: str | None) -> str | None:
 async def add_friend(
     code: str, address: str | None = None, note: str | None = None
 ) -> tuple[Friend | None, str | None]:
-    """Send a friend request to whoever owns `code`. Returns (friend, error)."""
-    if not code.strip():
-        return None, "enter a friend code"
-    try:
-        person_id = resolve_person_id(code)
-    except ValueError as exc:
-        return None, str(exc)
+    """Send a friend request to whoever owns `code` — a `@callsign` or a friend
+    code. Returns (friend, error)."""
+    person_id, error = await resolve_target(code)
+    if person_id is None:
+        return None, error
     me = person_identity.load_person()
     if person_id == me.person_id:
         return None, "that is your own friend code"

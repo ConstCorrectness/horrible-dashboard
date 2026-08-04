@@ -67,6 +67,7 @@ _TOOLS = [
             "abstracts, categories, and PDF links. Start broad, then narrow."
         ),
         handler=_search,
+        group="arxiv",
         parameters={
             "query": {"type": "string", "description": "Search terms"},
             "category": {
@@ -86,6 +87,7 @@ _TOOLS = [
         name="arxiv.get",
         description="Full metadata (complete abstract, authors, links) for one arXiv id.",
         handler=_get,
+        group="arxiv",
         parameters={
             "arxiv_id": {
                 "type": "string",
@@ -102,6 +104,7 @@ _TOOLS = [
             "arxiv.search when a paper is worth keeping."
         ),
         handler=_download,
+        group="arxiv",
         parameters={
             "arxiv_id": {"type": "string"},
             "library": {

@@ -2,7 +2,11 @@
 
 nbformat v4.5 on disk is the source of truth. Cells always carry ids so the UI,
 the kernel session, and agent tools can address them stably. Writes are atomic:
-serialize to a temp file in the same directory, then `os.replace`.
+serialize to a temp file in the same directory, then `os.replace` — via
+`backend.atomic_write`, which also handles the Windows half (a replace fails while
+a reader holds the destination open, and an open fails while a replace is in
+flight). The kernel's save debounce fires from a worker thread while panes and
+agent tools read the same file, so both halves are load-bearing here.
 
 Callers pass resolved paths (see `resolve_path` for the escape-guarded helper);
 domain modules layer their own root/model wrappers on top (e.g. `training.notebooks`
@@ -19,6 +23,7 @@ from typing import Any
 
 import nbformat
 
+from backend.atomic_write import read_text_or_none, replace_with_retry
 from backend.notebook_core.models import CellModel, NotebookModel
 
 NBFORMAT_MINOR = 5  # cell ids
@@ -51,11 +56,16 @@ def new_notebook(
 
 
 def load(path: Path) -> nbformat.NotebookNode:
+    # Read the text ourselves rather than letting nbformat open the file, so a save
+    # landing mid-open is retried instead of raising (see `backend.atomic_write`).
+    raw = read_text_or_none(path)
+    if raw is None:
+        raise FileNotFoundError(str(path))
     # Reading a legacy (< 4.5) notebook warns about missing cell ids; we fix that
     # by normalizing right after, so the read-time warning is just noise.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", nbformat.validator.MissingIDFieldWarning)
-        nb = nbformat.read(str(path), as_version=4)
+        nb = nbformat.reads(raw, as_version=4)
     # Older notebooks may predate cell ids (< 4.5): bump the minor version first —
     # normalize only assigns ids where the declared schema has them.
     nb.nbformat_minor = max(nb.nbformat_minor, NBFORMAT_MINOR)
@@ -70,7 +80,7 @@ def save(path: Path, nb: nbformat.NotebookNode) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             nbformat.write(nb, f)
-        os.replace(tmp, path)
+        replace_with_retry(tmp, path)
     except BaseException:
         try:
             os.unlink(tmp)

@@ -109,6 +109,10 @@ class ToolCall:
     id: str
     name: str
     arguments: dict[str, Any]
+    #: Set when the model's argument payload could not be parsed as a JSON object.
+    #: The call must then be reported back to the model as an error rather than run —
+    #: see `_coerce_args`.
+    arg_error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -120,26 +124,58 @@ class ChatResult:
     content: str
 
 
-def _coerce_args(raw: Any) -> dict[str, Any]:
-    """Tool-call arguments arrive as a dict (Ollama) or a JSON string (OpenAI,
-    and some Ollama models). Normalize to a dict; bad payloads become ``{}``."""
+def _coerce_args(raw: Any) -> tuple[dict[str, Any], str | None]:
+    """Tool-call arguments arrive as a dict (Ollama) or a JSON string (OpenAI, and
+    some Ollama models). Normalize to a dict, plus an error string when the payload
+    was malformed.
+
+    The error matters: this used to swallow an unparseable blob into ``{}``, so a
+    small model that emitted truncated or half-quoted JSON had its call executed with
+    **no arguments at all** — `close_pane` with no instanceId, `files.delete` with no
+    path. Silently running the wrong call is worse than failing, and the model got no
+    signal it should retry. Returning the error lets the dispatcher hand it back as a
+    tool result the model can actually recover from.
+
+    An *empty* payload (``""``/``None``) is not an error — plenty of tools take no
+    arguments.
+    """
     if isinstance(raw, dict):
-        return raw
+        return raw, None
+    if raw is None:
+        return {}, None
     if isinstance(raw, str):
+        if not raw.strip():
+            return {}, None
         try:
             parsed = json.loads(raw)
-        except ValueError:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
+        except ValueError as exc:
+            return {}, f"arguments were not valid JSON ({exc}); received: {raw[:200]!r}"
+        if not isinstance(parsed, dict):
+            return {}, (
+                f"arguments must be a JSON object, got {type(parsed).__name__}; "
+                f"received: {raw[:200]!r}"
+            )
+        return parsed, None
+    return {}, f"arguments must be a JSON object, got {type(raw).__name__}"
+
+
+def _tool_call(call_id: str, name: str, raw_args: Any) -> ToolCall:
+    """Build a ToolCall, carrying any argument-parse failure with it.
+
+    The one place calls are constructed, so the streaming paths — which accumulate
+    `arguments` as concatenated deltas and are therefore the *likeliest* source of a
+    truncated payload — cannot quietly skip the error the batch path reports.
+    """
+    args, err = _coerce_args(raw_args)
+    return ToolCall(id=call_id, name=name, arguments=args, arg_error=err)
 
 
 def _parse_tool_calls(raw_calls: list[dict[str, Any]]) -> list[ToolCall]:
     return [
-        ToolCall(
-            id=str(c.get("id") or i),
-            name=c.get("function", {}).get("name", ""),
-            arguments=_coerce_args(c.get("function", {}).get("arguments")),
+        _tool_call(
+            str(c.get("id") or i),
+            c.get("function", {}).get("name", ""),
+            c.get("function", {}).get("arguments"),
         )
         for i, c in enumerate(raw_calls)
     ]
@@ -533,9 +569,7 @@ async def _openai_chat_stream(
     reasoning, full = await extractor.flush()
     ordered = [tool_acc[i] for i in sorted(tool_acc)]
     tool_calls = [
-        ToolCall(
-            id=str(s["id"] or i), name=s["name"], arguments=_coerce_args(s["args"])
-        )
+        _tool_call(str(s["id"] or i), s["name"], s["args"])
         for i, s in enumerate(ordered)
     ]
     assistant: dict[str, Any] = {"role": "assistant", "content": full}
@@ -620,9 +654,7 @@ async def _litellm_chat_stream(
     reasoning, full = await extractor.flush()
     ordered = [tool_acc[i] for i in sorted(tool_acc)]
     tool_calls = [
-        ToolCall(
-            id=str(s["id"] or i), name=s["name"], arguments=_coerce_args(s["args"])
-        )
+        _tool_call(str(s["id"] or i), s["name"], s["args"])
         for i, s in enumerate(ordered)
     ]
     assistant: dict[str, Any] = {"role": "assistant", "content": full}

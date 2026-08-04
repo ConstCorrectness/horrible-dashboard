@@ -2832,6 +2832,17 @@ kbd {
   color: var(--text);
 }
 
+/* The seam where the agent's memory of this conversation starts. Compaction that
+   nobody can see is indistinguishable from an agent that forgot. */
+.agent-compacted {
+  margin: 10px 0;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  color: var(--text-dim);
+  font-size: 11px;
+  text-align: center;
+}
+
 .agent-system {
   margin: 0;
   padding: 0.4rem 0.6rem;

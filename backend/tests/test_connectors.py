@@ -398,6 +398,29 @@ def test_agent_tool_names_match_their_declared_group():
     )
 
 
+def test_every_namespaced_agent_tool_declares_a_group():
+    """A dotted tool that forgets `group=` is not merely mis-grouped — it is never
+    grouped at all: `provider_tools(grouped=False)` puts it in the **always-on core**,
+    so it costs schema tokens on every single turn of every agent, and the
+    `_GROUP_DESCRIPTIONS` entry naming it can never fire because `_group_catalog` only
+    walks the dynamic pool.
+
+    The sibling test above only catches a group that *disagrees* with the name. This
+    catches a missing one, which is how `research.*` (5 tools) and `arxiv.*` (3) sat in
+    the main orchestrator's core while `app.py` claimed they were grouped and
+    `researcher`'s `preload_groups` for them was a no-op.
+    """
+    ungrouped = sorted(
+        name
+        for name, tool in registry.agent_tools.items()
+        if tool.group is None and "." in name
+    )
+    assert not ungrouped, (
+        "these namespaced tools declare no `group=`, so they land in the always-on "
+        f"core and are charged to every turn: {ungrouped}"
+    )
+
+
 def test_connector_tools_are_namespaced_under_their_connector():
     """A connector's blurb and guide only reach the model if its tools group under its
     id — so the tool prefix and the connector id must agree."""

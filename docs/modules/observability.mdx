@@ -132,7 +132,10 @@ replaces its row in place rather than duplicating it.
   — compact summary (call/error counts + last few, expandable the same way).
   Part of the seeded Dashboard workspace's bottom dock (hidden by default);
   openable anywhere from the palette or the activity rail.
-- **Panels:** `observability.logs` (singleton, role `widget`) — a
+- **Panels:** `observability.logs` (singleton, role `widget`, **`embedded`** — the
+  expanded inspector behind `observability.io`'s bottom strip, reached by revealing
+  that region rather than by opening a pane of its own; see
+  [Embedded views and sections](../architecture/windowing.mdx#embedded-views-and-sections)) — a
   Wireshark-style **master-detail**: a packet-list table (time, source badge,
   method, target, status, ms, size) over an **inspector** for the selected row.
   The inspector shows General metadata, then request/response headers and bodies

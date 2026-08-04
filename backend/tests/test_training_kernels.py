@@ -32,6 +32,45 @@ class FakeConn:
         return [s["data"] for s in self.sent if s.get("event") == event]
 
 
+async def _handle(mgr, conn, message, timeout: float = 60.0):
+    """`mgr.handle`, bounded.
+
+    Every *observation* here has a deadline (`_wait`), but the thirteen `mgr.handle`
+    calls and the `shutdown_all` in the `finally` did not — so a kernel that stopped
+    responding parked the coroutine in the event loop forever, and pytest-timeout
+    killed the **whole session** with a stack dump 180 seconds later. A bounded await
+    turns that into one named failure, which is the difference between a report and a
+    mystery. Kept now that the underlying race is fixed (see `_shutdown`): this is
+    what would name the next one.
+    """
+    event = message.get("event", "?")
+    try:
+        return await asyncio.wait_for(mgr.handle(conn, message), timeout)
+    except TimeoutError:
+        raise AssertionError(
+            f"kernel manager never finished handling {event!r}"
+        ) from None
+
+
+async def _shutdown(mgr, timeout: float = 30.0) -> None:
+    """Tear the manager down without letting teardown hang the run.
+
+    This test used to fail intermittently (~1 in 6 in isolation) in two shapes: a
+    hang and a segfault. Both came from one bug — `stop_channels()` closed the zmq
+    sockets the pump threads were still reading, which is undefined behaviour in
+    libzmq. `session._stop_pumps` now joins the pumps first. The deadline stays
+    because a teardown that silently never returns is the worst thing this suite can
+    do to the rest of the run.
+    """
+    try:
+        await asyncio.wait_for(mgr.shutdown_all(), timeout)
+    except TimeoutError:
+        raise AssertionError(
+            "kernel shutdown did not finish — a kernel process is wedged "
+            "(known intermittent Windows kernel-lifecycle bug)"
+        ) from None
+
+
 async def _wait(predicate, timeout: float = 60.0, what: str = "condition"):
     async def poll():
         while True:
@@ -78,14 +117,17 @@ def test_kernel_session_end_to_end(project) -> None:
         conn = FakeConn()
         unsub = stream.subscribe_conn(conn)  # also captures the loop for fanout
         try:
-            await mgr.handle(conn, {"event": "open", "data": {"projectId": project.id}})
+            await _handle(
+                mgr, conn, {"event": "open", "data": {"projectId": project.id}}
+            )
             opened = (await _wait(lambda: conn.events("opened"), 90, "kernel start"))[0]
             key = opened["sessionKey"]
             assert opened["kernel"] == "idle"
             cid = _cell_id(conn)
 
             # --- print → stream output, done state -------------------------
-            await mgr.handle(
+            await _handle(
+                mgr,
                 conn,
                 {
                     "event": "cells",
@@ -95,8 +137,10 @@ def test_kernel_session_end_to_end(project) -> None:
                     },
                 },
             )
-            await mgr.handle(
-                conn, {"event": "run_cell", "data": {"sessionKey": key, "cellId": cid}}
+            await _handle(
+                mgr,
+                conn,
+                {"event": "run_cell", "data": {"sessionKey": key, "cellId": cid}},
             )
             await _wait(
                 lambda: [
@@ -116,13 +160,15 @@ def test_kernel_session_end_to_end(project) -> None:
 
             # --- trailing expression → execute_result -----------------------
             insert = {"op": "insert", "source": "40 + 2"}
-            await mgr.handle(
+            await _handle(
+                mgr,
                 conn,
                 {"event": "cells", "data": {"sessionKey": key, "ops": [insert]}},
             )
             session = mgr.sessions[key]
             expr_id = session.doc.cells[-1]["id"]
-            await mgr.handle(
+            await _handle(
+                mgr,
                 conn,
                 {"event": "run_cell", "data": {"sessionKey": key, "cellId": expr_id}},
             )
@@ -140,7 +186,8 @@ def test_kernel_session_end_to_end(project) -> None:
             )
 
             # --- error → traceback + error state ----------------------------
-            await mgr.handle(
+            await _handle(
+                mgr,
                 conn,
                 {
                     "event": "cells",
@@ -150,8 +197,10 @@ def test_kernel_session_end_to_end(project) -> None:
                     },
                 },
             )
-            await mgr.handle(
-                conn, {"event": "run_cell", "data": {"sessionKey": key, "cellId": cid}}
+            await _handle(
+                mgr,
+                conn,
+                {"event": "run_cell", "data": {"sessionKey": key, "cellId": cid}},
             )
             await _wait(
                 lambda: [
@@ -180,7 +229,8 @@ def test_kernel_session_end_to_end(project) -> None:
                 '"values": {"loss": 0.5}}\' + "\\n")\n'
                 "print('after')"
             )
-            await mgr.handle(
+            await _handle(
+                mgr,
                 conn,
                 {
                     "event": "cells",
@@ -191,8 +241,10 @@ def test_kernel_session_end_to_end(project) -> None:
                 },
             )
             conn.sent.clear()
-            await mgr.handle(
-                conn, {"event": "run_cell", "data": {"sessionKey": key, "cellId": cid}}
+            await _handle(
+                mgr,
+                conn,
+                {"event": "run_cell", "data": {"sessionKey": key, "cellId": cid}},
             )
             metrics = await _wait(
                 lambda: conn.events("metrics"), 60, "sentinel metric event"
@@ -223,7 +275,8 @@ def test_kernel_session_end_to_end(project) -> None:
             # long blocking C call (one `time.sleep(600)`) would NOT interrupt
             # promptly on Windows: `interrupt_main` only raises between
             # bytecodes — documented limitation; restart is the hard stop.
-            await mgr.handle(
+            await _handle(
+                mgr,
                 conn,
                 {
                     "event": "cells",
@@ -244,8 +297,10 @@ def test_kernel_session_end_to_end(project) -> None:
                 },
             )
             conn.sent.clear()
-            await mgr.handle(
-                conn, {"event": "run_cell", "data": {"sessionKey": key, "cellId": cid}}
+            await _handle(
+                mgr,
+                conn,
+                {"event": "run_cell", "data": {"sessionKey": key, "cellId": cid}},
             )
             await _wait(
                 lambda: [
@@ -257,7 +312,9 @@ def test_kernel_session_end_to_end(project) -> None:
                 "sleep cell running",
             )
             await asyncio.sleep(0.3)
-            await mgr.handle(conn, {"event": "interrupt", "data": {"sessionKey": key}})
+            await _handle(
+                mgr, conn, {"event": "interrupt", "data": {"sessionKey": key}}
+            )
             final = await _wait(
                 lambda: [
                     s
@@ -279,7 +336,7 @@ def test_kernel_session_end_to_end(project) -> None:
 
             # --- restart ------------------------------------------------------
             conn.sent.clear()
-            await mgr.handle(conn, {"event": "restart", "data": {"sessionKey": key}})
+            await _handle(mgr, conn, {"event": "restart", "data": {"sessionKey": key}})
             await _wait(
                 lambda: [
                     s for s in conn.events("kernel_status") if s["status"] == "idle"
@@ -289,6 +346,6 @@ def test_kernel_session_end_to_end(project) -> None:
             )
         finally:
             unsub()
-            await mgr.shutdown_all()
+            await _shutdown(mgr)
 
     asyncio.run(go())

@@ -32,7 +32,29 @@ export interface Friend {
   is_self: boolean;
 }
 
+export interface DirectoryEntry {
+  handle: string;
+  display_name: string;
+  person_id: string;
+  person_public_key: string;
+}
+
+export interface DirectorySearchResult {
+  results: DirectoryEntry[];
+  /** Shortest query the directory answers — say so, rather than looking broken. */
+  min_prefix: number;
+  error?: string | null;
+}
+
+export interface BindHandleResult {
+  ok: boolean;
+  handle?: string | null;
+  error?: string | null;
+}
+
 export interface SelfProfile {
+  /** The game-server callsign this machine is signed in as; null when signed out. */
+  handle?: string | null;
   person_id: string;
   friend_code: string;
   display_name: string;
@@ -92,4 +114,17 @@ export function blockFriend(personId: string): Promise<RosterSnapshot> {
 /** Claim another of your machines, using the peer-fabric invite it minted. */
 export function linkDevice(invite: string, label?: string): Promise<LinkDeviceResult> {
   return apiPost<LinkDeviceResult>('/social/devices/link', { invite, label });
+}
+
+/**
+ * Bind this machine's person identity to the signed-in game-server account, so
+ * `@callsign` resolves to it. Idempotent — safe to fire on every sign-in.
+ */
+export function bindHandle(): Promise<BindHandleResult> {
+  return apiPost<BindHandleResult>('/social/handle/bind', {});
+}
+
+/** Prefix-search callsigns. Short queries come back empty, by server policy. */
+export function searchDirectory(q: string): Promise<DirectorySearchResult> {
+  return apiGet<DirectorySearchResult>(`/social/directory/search?q=${encodeURIComponent(q)}`);
 }

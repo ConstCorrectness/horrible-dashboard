@@ -61,6 +61,24 @@ existed for the games tools until the connectors work added an invariant test
 [connector](../modules/connectors.mdx), both must also equal the connector's `id` —
 that's what lets one definition feed the home tile, the group blurb, and the guide.
 
+:::danger Forgetting `group=` is worse than getting it wrong
+A mismatched group costs a blurb. An **omitted** one costs a slot on every turn of
+every agent: `provider_tools(grouped=False)` treats a tool with `group=None` as
+**always-on core**, so its schema is charged to each round whether or not the turn has
+anything to do with it — and the `_GROUP_DESCRIPTIONS` entry naming it can never fire,
+because `_group_catalog` only walks the dynamic pool.
+
+That is exactly what `research.*` (5 tools) and `arxiv.*` (3) did: `app.py` claimed
+they were "grouped under research/arxiv", `_GROUP_DESCRIPTIONS` had entries for both,
+and `researcher`'s `preload_groups=[…, "research", "arxiv"]` was partly a no-op —
+while all 8 sat permanently in the main orchestrator's core. Fixing it took the main
+agent's always-on core from **34 tools to 26**, nearly doubling the room left under
+`TOOL_BUDGET` for capability groups.
+
+`test_connectors.py::test_every_namespaced_agent_tool_declares_a_group` now fails on a
+dotted tool with no `group=`, alongside the older mismatch test.
+:::
+
 ### Two tiers of disclosure
 
 `list_tool_groups` shows each group's one-line blurb (`_GROUP_DESCRIPTIONS`, falling
@@ -68,6 +86,49 @@ back to a connector's `blurb`); `load_tools` delivers the group's full **guide**
 SKILL.md-style markdown doc. The blurb answers "would this help?"; the guide answers
 "how do I use it without getting it wrong?". Guides ride the tool-result message, so
 they need no orchestrator plumbing of their own.
+
+**Any group can ship a guide**, not just connectors. `_group_guide` resolves
+`backend/modules/agent/guides/<group>.md` first (`agent/guides.py`, `lru_cache`'d),
+then a connector's `resolve_guide()`, then the MCP bridge. For a long time only the
+latter two existed, so every *built-in* group — `layout`, `files`, `editor`,
+`database`, `games` — had a one-line blurb and nothing else; detail that belonged in a
+guide had nowhere to go but the system prompt, where it was charged to every round of
+every turn.
+
+Guides are plain markdown so they review and diff like code. Put anything in one that
+a model gets wrong repeatedly and that would be too expensive to say on every turn:
+which argument is an instanceId rather than a view id, which combinations are useless,
+what the module calls a thing.
+
+### `show`: the intent verb
+
+Reaching a surface used to cost three rounds — `list_available_panes` (a row per
+registered view), `open_pane`, then `get_pane_context`. Three chances to emit
+malformed JSON and a large tool result, for a model whose whole window may be 8k.
+
+`show(target, where?)` collapses that to one call. `target` is loose text — a pane
+title, a view id, a **section** label, a side-strip name, a workspace name — and the
+**host** does the matching (`layout/show.ts`, pure and unit-tested; `showTarget` in
+`layout/controller.ts` acts on the result). It opens or focuses (never a second copy of
+something already visible), switches to the named section, reveals a region inside its
+host, or switches workspace, and returns the resulting pane's context snapshot inline,
+so no `get_pane_context` follow-up is needed.
+
+Because panes are being **merged** rather than deleted, `show` resolves a section
+label directly: the user says "friends", not "the People pane, Friends tab", and so
+should the model. An `embedded` view resolves to *where it lives* — its host pane and
+section — because it has no standalone home to open.
+
+Its argument is deliberately **one string**, not a discriminated union: `_coerce_args`
+turns an unparseable payload into an error, and a wide schema is more of them. The way
+to shrink a tool list is to move tools out of the always-on core, not to widen the ones
+that remain.
+
+`VIEW_ALIASES` (in `layout/controller.ts`) maps retired ids and titles to where their
+content lives now. It is deliberately **separate from `serialize.ts`'s
+`RENAMED_VIEWS`**, which repairs saved layouts: a stored arrangement is disposable and
+reseeds from its preset, but a name the agent has ever used should never stop
+resolving. Add an entry whenever a pane is merged away.
 
 ## The model: one tool path, one gate
 
@@ -235,8 +296,17 @@ declaration. It is read on a **pull** basis (not a push bus):
   instance id through `PaneInstanceContext`, keyed per pane instance.
 - Two built-in read tools (ungated) expose it: `list_open_panes()` (the
   `listOpenPanes` seam, which now reports each pane's `instanceId` and a
-  `hasContext` flag) and `get_pane_context(instanceId)`, which invokes the
+  `hasContext` flag) and `get_pane_context(instanceId, section?)`, which invokes the
   registered provider and returns its JSON snapshot.
+
+For a pane with **sections**, the active section id is stamped onto every snapshot by
+`readPaneAgentContext` — centrally, so a module can't forget it and hand back a
+snapshot that is ambiguous about which tab it describes. Passing `section` reads a
+different one, which **switches the pane to it first**: only the visible section is
+mounted, so there is no way to read a background section without bringing it forward,
+and pretending otherwise would return the wrong section's data as if it were the one
+asked for. The matching constraint on modules is **one live provider per pane** — see
+[Embedded views and sections](windowing.mdx#embedded-views-and-sections).
 
 This is how the agent "reads widget A to act on widget B": pull A's context with a
 read tool, then call a gated action tool on B. It forces per-pane-instance state

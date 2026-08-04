@@ -251,7 +251,7 @@ writes into a library, so it goes through the permission gate).
 ### Drive as a browsable root
 
 Beyond the sync, Drive **mounts** into the ordinary file tree: connecting Google makes
-a "Google Drive" root appear in the `files.tree` pane, folders expand lazily, and files
+a "Google Drive" root appear in Explorer's **Files** section, folders expand lazily, and files
 open as read-only editor buffers. `backend/modules/connectors/providers/drive_fs.py`
 registers a `gdrive:` provider with the files module's virtual-root seam — see
 [file explorer → Virtual roots](file-explorer.mdx#virtual-roots) for the mechanism, and

@@ -76,8 +76,11 @@ export function railEntries(frame: FrameState, side: DockSide): RailEntry[] {
   // Views declared (or user-assigned) for this side that aren't docked anywhere:
   // either sitting out in the center, or not open at all (dimmed, so a module
   // stays discoverable before it has ever been opened).
+  // `dockSidesOf` already returns nothing for an embedded view, so the `embedded`
+  // check here is redundant for correctness — it is kept as the readable statement
+  // of intent at the surface that would otherwise show the glyph.
   const rest = views
-    .filter((v) => !dockedAnywhere.has(v.id) && dockSidesOf(v.id)[0] === side)
+    .filter((v) => !v.embedded && !dockedAnywhere.has(v.id) && dockSidesOf(v.id)[0] === side)
     .map((v): RailEntry => {
       const elsewhere = open.find((p) => p.pane.viewId === v.id);
       return {

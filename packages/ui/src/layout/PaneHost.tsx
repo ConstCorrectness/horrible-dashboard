@@ -8,14 +8,19 @@
  */
 import { useMemo } from 'react';
 import {
+  activeSectionOf,
   layoutStore,
   PaneInstanceContext,
   PaneParamsContext,
   requestCapture,
   resolveView,
+  setPaneSection,
   type PaneCaptureDecl,
   type PaneState,
+  type SectionDecl,
 } from '@horrible/core';
+
+import { SectionTabs } from './SectionTabs';
 
 /**
  * A view's declared capture, with the deprecated `editor: true` mapped onto it —
@@ -30,6 +35,11 @@ function declaredCapture(decl: {
   return decl.editor ? { mode: 'keyboard', escape: 'passthrough' } : null;
 }
 
+/** The component of a registered view named by `SectionDecl.view`. */
+function bodyOfView(viewId: string | undefined) {
+  return viewId ? resolveView(viewId)?.component : undefined;
+}
+
 export function PaneHost({ pane, areaId }: { pane: PaneState; areaId?: string }) {
   const { viewId, instanceId, params } = pane;
 
@@ -40,7 +50,18 @@ export function PaneHost({ pane, areaId }: { pane: PaneState; areaId?: string })
   if (!decl) {
     return <div className="frame-pane-missing">Unknown pane: {viewId}</div>;
   }
-  const Component = decl.component;
+
+  // Sections: the strip is host chrome, but the *body* is the module's choice.
+  // A section that declares its own `component`/`view` gets rendered directly; one
+  // that declares neither falls through to the host's own component, which reads
+  // `usePaneSection()` and switches internally. Both styles exist because a pane
+  // being merged usually already switches internally, and a new one usually
+  // doesn't want to.
+  const sections: SectionDecl[] = decl.sections ?? [];
+  const activeSection = sections.length ? activeSectionOf(pane) : undefined;
+  const activeDecl = sections.find((s) => s.id === activeSection);
+  const sectionBody = activeDecl?.component ?? bodyOfView(activeDecl?.view);
+  const Component = sectionBody ?? decl.component;
 
   // Focus (any descendant) and pointerdown both count — a click on non-focusable
   // pane content still selects the pane. FOCUS_PANE resolves the owning area
@@ -76,6 +97,11 @@ export function PaneHost({ pane, areaId }: { pane: PaneState; areaId?: string })
           onFocusCapture={markActive}
           onPointerDownCapture={markActive}
         >
+          <SectionTabs
+            sections={sections}
+            active={activeSection}
+            onPick={(id) => setPaneSection(instanceId, id)}
+          />
           <Component />
         </div>
       </PaneParamsContext.Provider>

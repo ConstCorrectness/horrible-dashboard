@@ -11,10 +11,12 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from backend.modules.social import identity as person_identity
-from backend.modules.social import roster
+from backend.modules.social import handles, roster
 from backend.modules.social.models import (
     AddFriendRequest,
     AddFriendResult,
+    BindHandleResult,
+    DirectorySearchResult,
     LinkDeviceRequest,
     LinkDeviceResult,
     RespondRequest,
@@ -81,3 +83,34 @@ async def link_device(request: LinkDeviceRequest) -> LinkDeviceResult:
             None,
         )
     return LinkDeviceResult(ok=error is None, device=device, error=error)
+
+
+# ---- callsigns (@handle) -----------------------------------------------------------
+#
+# The bridge between the two identities a person used to have: the game server's
+# globally unique `handle` and the fabric's `person_id`. See social/handles.py.
+
+
+@router.post("/handle/bind", response_model=BindHandleResult)
+async def bind_handle() -> BindHandleResult:
+    """Prove to the game server that this account and this person are the same one.
+
+    Safe to call repeatedly — the binding is idempotent, so the UI can fire it on
+    every sign-in rather than tracking whether it has run.
+    """
+    result = await handles.publish_binding()
+    if result.get("error"):
+        return BindHandleResult(error=str(result["error"]))
+    account = result.get("account") or {}
+    return BindHandleResult(ok=True, handle=account.get("handle"))
+
+
+@router.get("/directory/search", response_model=DirectorySearchResult)
+async def search_directory(q: str) -> DirectorySearchResult:
+    """Prefix-search callsigns — the "easier way to find people".
+
+    Entries whose `person_id` is not the fingerprint of their own published key are
+    dropped in `handles.search`, so a compromised directory can withhold someone
+    but never substitute a different key for them.
+    """
+    return DirectorySearchResult(results=await handles.search(q))  # type: ignore[arg-type]

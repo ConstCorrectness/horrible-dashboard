@@ -179,7 +179,7 @@ Every request the embedded Chromium makes is now recorded as an I/O event with
 region strip** of `browser.view` — so it resizes, persists per pane instance, toggles
 from the area header or `n`, and can be **dragged out** by its region header into a
 center area of its own, where the inspector has room. The 📡 button reflects and drives
-that region rather than local state.
+that region rather than local state. It is declared **`embedded`**, so it is not a destination of its own: no opener command, no rail glyph, no type-switcher entry, and no top-level row in the agent's `list_available_panes` — it is listed under its host, and `show` reaches it by name. See [Embedded views and sections](../architecture/windowing.mdx#embedded-views-and-sections).
 
 - **Open connections** — requests currently *in flight*, pushed live on the `browser`
   channel as `connections` events. These exist only while unresolved, so they can't come

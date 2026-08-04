@@ -19,6 +19,7 @@ import re
 import shutil
 from pathlib import Path
 
+from backend.atomic_write import read_text_or_none, write_text_atomic
 from backend.modules.settings.routes import get_value
 from backend.modules.training.models import EnvironmentRefModel, ProjectModel
 
@@ -56,17 +57,29 @@ def _project_file(root: Path) -> Path:
 
 
 def _write(project: ProjectModel) -> None:
-    _project_file(Path(project.root)).write_text(
-        project.model_dump_json(indent=2), encoding="utf-8"
+    """Persist the record atomically.
+
+    Background workers call this (`_mark(project, venv_ready=True)`) while requests
+    are reading the same file. The previous `write_text` truncated first, so a read
+    landing in that window got an empty file, `_read` swallowed the `ValueError`,
+    and the route answered **404 for a project that exists** — a self-healing bug
+    that only appeared under load, surfacing as an unrelated-looking test failure.
+    """
+    write_text_atomic(
+        _project_file(Path(project.root)),
+        project.model_dump_json(indent=2),
+        suffix=".project.tmp",
     )
 
 
 def _read(directory: Path) -> ProjectModel | None:
-    path = _project_file(directory)
-    if not path.is_file():
+    # Not `is_file()` + `read_text()`: on Windows an open lands mid-replace as a
+    # PermissionError, which is "come back in a moment", not "no such project".
+    raw = read_text_or_none(_project_file(directory))
+    if raw is None:
         return None
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(raw)
     except ValueError:
         return None
     try:

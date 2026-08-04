@@ -15,9 +15,13 @@ import logging
 from typing import Any
 
 from backend.notebook_core.config import SessionConfig
+from backend.notebook_core.detach import fire_and_forget, run_detached
 from backend.notebook_core.session import KernelSession
 
 logger = logging.getLogger(__name__)
+
+#: How long `shutdown_all` waits for kernels before giving up on them.
+SHUTDOWN_TIMEOUT_S = 20.0
 
 # Events that require an existing session (used to decide when to reply "unknown
 # session" rather than silently dropping an event for a not-yet-opened key).
@@ -100,7 +104,7 @@ class KernelSessionManager:
         elif event == "run_all":
             session.enqueue_all()
         elif event == "set_mode":
-            await asyncio.to_thread(session.set_mode, str(data.get("mode", "")))
+            await run_detached(session.set_mode, str(data.get("mode", "")))
         elif event == "comm_msg":
             buffers = [base64.b64decode(b) for b in (data.get("buffers") or [])]
             session.send_comm(
@@ -109,7 +113,7 @@ class KernelSessionManager:
         elif event == "cells":
             ops = list(data.get("ops") or [])
             try:
-                await asyncio.to_thread(session.apply_ops, ops)
+                await run_detached(session.apply_ops, ops)
             except ValueError as exc:
                 await conn.send_json(
                     self._evt("error", {"sessionKey": session.key, "message": str(exc)})
@@ -117,7 +121,7 @@ class KernelSessionManager:
                 return
             # Reactive graph refresh (+ stale-def cascade when a cell was deleted).
             had_delete = any(op.get("op") == "delete" for op in ops)
-            await asyncio.to_thread(session.on_cells_changed, had_delete)
+            await run_detached(session.on_cells_changed, had_delete)
             # Everyone else re-syncs; the sender already applied optimistically.
             payload = self._evt(
                 "cells_changed",
@@ -127,12 +131,12 @@ class KernelSessionManager:
                 if sub is not conn:
                     await sub.send_json(payload)
         elif event == "interrupt":
-            await asyncio.to_thread(session.interrupt)
+            await run_detached(session.interrupt)
         elif event == "restart":
-            asyncio.create_task(asyncio.to_thread(session.restart))
+            fire_and_forget(session.restart, f"kernel-restart-{session.key}")
         elif event == "shutdown":
             self.sessions.pop(session.key, None)
-            asyncio.create_task(asyncio.to_thread(session.shutdown))
+            fire_and_forget(session.shutdown, f"kernel-shutdown-{session.key}")
 
     # --- open (generic; training overrides for its venv/error handling) ------
 
@@ -146,7 +150,7 @@ class KernelSessionManager:
             async with self._open_lock:
                 session = self.sessions.get(key)
                 if session is None:
-                    session = await asyncio.to_thread(self._create_session, data, key)
+                    session = await run_detached(self._create_session, data, key)
                     self.sessions[key] = session
         except Exception as exc:  # noqa: BLE001 — surfaced to the pane
             logger.exception("kernel open failed for %s", key)
@@ -172,7 +176,7 @@ class KernelSessionManager:
         )
         # Seed the reactive graph so the pane shows edges/diagnostics immediately.
         if session.mode == "reactive":
-            await asyncio.to_thread(session.rebuild_graph)
+            await run_detached(session.rebuild_graph)
 
     def _session_key(self, data: dict[str, Any]) -> str:
         raise NotImplementedError
@@ -210,6 +214,29 @@ class KernelSessionManager:
         return self.sessions.get(key)
 
     async def shutdown_all(self) -> None:
-        for key in list(self.sessions):
-            session = self.sessions.pop(key)
-            await asyncio.to_thread(session.shutdown)
+        """Shut every session down in parallel, bounded.
+
+        Serial `await`s meant one slow kernel delayed the rest and one *wedged*
+        kernel stopped the app from shutting down at all. `run_detached` keeps the
+        wedge off the default executor (see `detach`), and the deadline turns it
+        into a logged warning rather than a hung caller — this runs inside the
+        backend's lifespan shutdown, so blocking here blocks the process.
+        """
+        tasks = [
+            asyncio.ensure_future(
+                run_detached(session.shutdown, name=f"kernel-shutdown-{key}")
+            )
+            for key, session in [(k, self.sessions.pop(k)) for k in list(self.sessions)]
+        ]
+        if not tasks:
+            return
+        _done, pending = await asyncio.wait(tasks, timeout=SHUTDOWN_TIMEOUT_S)
+        for task in pending:
+            # Abandons the await, not the thread — that asymmetry is the point.
+            task.cancel()
+        if pending:
+            logger.warning(
+                "%d kernel(s) did not shut down within %.0fs",
+                len(pending),
+                SHUTDOWN_TIMEOUT_S,
+            )

@@ -82,8 +82,12 @@ def test_core_tools_gated_by_spec() -> None:
     names_default = {t["function"]["name"] for t in orchestrator._core_tools()}
     assert {"agent.ask_peer", "agent.delegate", "list_tool_groups"} <= names_default
 
-    # The main orchestrator keeps every layout verb — driving the shell is its job.
-    assert {"open_pane", "split_area", "get_layout"} <= names_default
+    # The main orchestrator no longer keeps the arrangement verbs either. It is the
+    # *loosely prompted* agent, so carrying ~1.4k tokens of geometry schemas on every
+    # round — including turns that only read a file — starved it worst. It keeps the
+    # cheap read set plus `show`, which covers "open/go to X" in one call.
+    assert {"show", "get_layout", "list_open_panes"} <= names_default
+    assert names_default.isdisjoint({"open_pane", "split_area", "toggle_dock"})
 
     coder = roster.get_agent("coder")
     names_coder = {t["function"]["name"] for t in orchestrator._core_tools(coder)}
@@ -183,9 +187,21 @@ def test_scoped_agent_can_load_the_layout_group() -> None:
     }
     assert {"open_pane", "split_area", "get_layout"} <= names
 
-    # The main orchestrator carries them in core, so they must not ALSO show up as a
-    # loadable group (that would double-list every layout verb).
-    assert "layout" not in {g["name"] for g in orchestrator._group_catalog(conn)}
+    # The main orchestrator no longer carries the arrangement verbs in core, so
+    # `layout` must now be a loadable group for it too — otherwise nothing could ever
+    # rearrange the shell.
+    assert "layout" in {g["name"] for g in orchestrator._group_catalog(conn)}
+
+    # But the group must contain ONLY the arrangement verbs. `_all_dynamic_tools`
+    # dedupes against the core, so the read verbs and `show` — which stay always-on —
+    # must not be double-listed and double-charged.
+    main_dynamic = {
+        t["function"]["name"]
+        for t in orchestrator._all_dynamic_tools(conn)
+        if orchestrator._group_of(t["function"]["name"]) == "layout"
+    }
+    assert {"open_pane", "split_area", "toggle_dock"} <= main_dynamic
+    assert main_dynamic.isdisjoint({"show", "get_layout", "list_open_panes"})
 
 
 def test_ungrouped_plugin_core_tools_filtered_for_scoped_agents() -> None:

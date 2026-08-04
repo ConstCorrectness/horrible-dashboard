@@ -9,7 +9,14 @@ Embedded terminals for working on a machine from inside the app.
 
 **Status: frontend implemented (D2).** The `terminal.instance` panel (xterm.js)
 binds to a backend PTY session over the `terminal` channel — input/resize up,
-output down — and kills its PTY on close. `runCommand` opens a terminal
+output down — and kills its PTY **on close, not on unmount**. That distinction is
+the whole reason a shell now survives a workspace switch: panes unmount whenever
+their tab is not active and whenever you look at another workspace, and killing the
+PTY there destroyed your cwd and anything running in it. The terminal lives in a
+`paneSession` (see [windowing](../architecture/windowing.mdx#pane-lifetime-unmount-is-not-close)),
+and its xterm element is kept and re-attached so scrollback returns intact. A
+consequence worth knowing: `initialCommand` is now typed once per *pane*, where it
+used to be retyped on every return. `runCommand` opens a terminal
 pre-running a command (via an `initialCommand` pane param). The agent's gated
 `terminal.exec` tool is D3.
 

@@ -4,14 +4,13 @@ tests never shell out to uv."""
 
 import json
 import os
-import time
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 from backend.app import app
-from backend.modules.training import envs, projects
+from backend.modules.training import envs, projects, routes
 from backend.modules.training.models import EnvironmentRefModel
 from backend.modules.training.providers.base import (
     FetchResult,
@@ -95,13 +94,20 @@ def _create(client: TestClient) -> dict:
     return res.json()
 
 
-def _wait_for(predicate, timeout=15.0) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if predicate():
-            return
-        time.sleep(0.05)
-    raise AssertionError("timed out waiting for background worker")
+def _settle(timeout: float = 60.0) -> None:
+    """Wait for the route's background workers to actually finish.
+
+    This replaces a poll-until-a-deadline helper, which was a race dressed up as a
+    test: it asked "has the file appeared in the last 15 seconds of wall clock?"
+    and so passed on an idle machine and failed on a loaded one — with a failure
+    that read like a product bug rather than a scheduling one. `join_workers`
+    returns the instant the thread finishes, so the assertions below are about the
+    work, not about how busy the CPU was.
+
+    The timeout that remains is a deadlock backstop: crossing it means a worker
+    genuinely never finished, which is worth failing on.
+    """
+    assert routes.join_workers(timeout), "training background worker never finished"
 
 
 def test_providers_lists_fake(client: TestClient) -> None:
@@ -152,11 +158,19 @@ def test_fetch_populates_data(client: TestClient, fake_provider: FakeProvider) -
     _create(client)
     res = client.post("/api/training/projects/pokemon-tcg/fetch")
     assert res.status_code == 202
-    _wait_for(lambda: fake_provider.fetched == ["pokemon-tcg"])
+
+    _settle()
+
+    assert fake_provider.fetched == ["pokemon-tcg"]
     project = projects.get_project("pokemon-tcg")
     assert project is not None
-    _wait_for(lambda: (Path(project.root) / "data" / "train.csv").is_file())
-    _wait_for(lambda: projects.get_project("pokemon-tcg").data_ready)  # type: ignore[union-attr]
+    assert (Path(project.root) / "data" / "train.csv").is_file()
+    # Re-read rather than reusing `project`: the fetch worker writes the flag
+    # through `_mark`, which re-reads under a lock, so the snapshot above is stale
+    # by design.
+    fetched = projects.get_project("pokemon-tcg")
+    assert fetched is not None, "project vanished while the fetch worker ran"
+    assert fetched.data_ready
 
 
 def test_notebook_get_and_put(client: TestClient) -> None:

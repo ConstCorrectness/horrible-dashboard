@@ -91,8 +91,10 @@ def test_turn_calls_tool_then_answers(monkeypatch) -> None:
         calls["n"] += 1
         body = json.loads(request.content)
         if calls["n"] == 1:
-            # tools are advertised; the model asks to open a pane
-            assert any(t["function"]["name"] == "open_pane" for t in body["tools"])
+            # tools are advertised; the model asks to show a pane. `show` rather
+            # than `open_pane`: the arrangement verbs are no longer advertised by
+            # default, and `show` is the one-call path a turn like this now takes.
+            assert any(t["function"]["name"] == "show" for t in body["tools"])
             return httpx.Response(
                 200,
                 json={
@@ -102,8 +104,8 @@ def test_turn_calls_tool_then_answers(monkeypatch) -> None:
                         "tool_calls": [
                             {
                                 "function": {
-                                    "name": "open_pane",
-                                    "arguments": {"id": "observability.io"},
+                                    "name": "show",
+                                    "arguments": {"target": "Data flow"},
                                 }
                             }
                         ],
@@ -130,8 +132,8 @@ def test_turn_calls_tool_then_answers(monkeypatch) -> None:
     events = conn.events()
 
     tool_calls = [d for ev, d in events if ev == "tool_call"]
-    assert tool_calls and tool_calls[0]["name"] == "open_pane"
-    assert tool_calls[0]["args"] == {"id": "observability.io"}
+    assert tool_calls and tool_calls[0]["name"] == "show"
+    assert tool_calls[0]["args"] == {"target": "Data flow"}
 
     answers = [d["text"] for ev, d in events if ev == "answer"]
     assert answers and "Data flow" in answers[0]
@@ -198,6 +200,31 @@ def test_active_editor_message_carries_open_buffer() -> None:
     )  # addressable for proposeEdit
     assert "editor.proposeEdit" in msg["content"]
     assert "'print'" in msg["content"]  # the selection is surfaced
+
+
+def test_truncated_buffer_forbids_writing_the_whole_file_back() -> None:
+    """The un-truncated message tells the model to write the COMPLETE buffer back.
+    When the frontend clips an oversized buffer to `agent.activeBufferBudget`, that
+    same instruction would silently delete everything past the cut — so a `truncated`
+    snapshot must flip the instruction, not merely carry less text."""
+    snap = {
+        "uri": "workspace-file:/x/big.py",
+        "title": "big.py",
+        "content": "line one\nline two",
+    }
+    full = orchestrator._active_editor_message({"snapshot": snap})
+    clipped = orchestrator._active_editor_message(
+        {"snapshot": {**snap, "truncated": True}}
+    )
+    assert full is not None and clipped is not None
+
+    assert "complete updated buffer" in full["content"]
+    assert "editor.proposeEdit" in full["content"]
+
+    # The clipped one says the opposite, and says why.
+    assert "complete updated buffer" not in clipped["content"]
+    assert "CUT OFF" in clipped["content"]
+    assert "must NOT write the whole buffer back" in clipped["content"]
 
 
 def test_active_editor_message_skips_unsaved_or_missing() -> None:
@@ -509,9 +536,12 @@ def test_tools_for_merges_manifest_with_layout_tools() -> None:
     # presented alongside the static layout tools.
     tools = orchestrator._tools_for(conn, prompt="run a terminal command")
     names = [t["function"]["name"] for t in tools]
-    # every static layout tool is still present...
-    for layout in orchestrator.LAYOUT_TOOLS:
+    # the always-on layout tools are still present — the cheap read set plus `show`.
+    # The 16 arrangement verbs are NOT: they moved to the loadable `layout` group, and
+    # a terminal-flavoured prompt has no reason to preload them.
+    for layout in orchestrator.LAYOUT_READ_TOOLS:
         assert layout["function"]["name"] in names
+    assert "split_area" not in names
     # ...plus the runtime-registered tool.
     assert "terminal.exec" in names
     # The schema crossed the wire; the handler never appears in the tool def.
@@ -525,11 +555,11 @@ def test_tools_for_merges_manifest_with_layout_tools() -> None:
 def test_tools_for_dedupes_by_name_static_wins() -> None:
     conn = WsConnection(websocket=None)
     # A pushed tool colliding with a static layout tool must not duplicate it.
-    conn.agent_tools = [
-        {"name": "open_pane", "description": "shadow", "kind": "command"}
-    ]
+    # `show` rather than `open_pane`: the collision that matters is with an
+    # always-on tool, and the arrangement verbs are no longer in the default set.
+    conn.agent_tools = [{"name": "show", "description": "shadow", "kind": "command"}]
     names = [t["function"]["name"] for t in orchestrator._tools_for(conn)]
-    assert names.count("open_pane") == 1
+    assert names.count("show") == 1
 
 
 def test_tools_for_skips_nameless_entries() -> None:
@@ -551,9 +581,57 @@ def test_tools_for_skips_nameless_entries() -> None:
 
 
 class _Call:
-    def __init__(self, name, arguments=None):
+    def __init__(self, name, arguments=None, arg_error=None):
         self.name = name
         self.arguments = arguments or {}
+        self.arg_error = arg_error
+
+
+def test_builtin_modules_can_ship_a_guide() -> None:
+    """The second disclosure tier used to be reachable only by connectors and MCP
+    servers, so every built-in group had a blurb and nothing else — and detail that
+    belonged in a guide had nowhere to go but the system prompt, where it was charged
+    to every round of every turn.
+
+    `layout` is the load-bearing case: it has no connector and no MCP server behind
+    it, and it now carries the geometry rules the prompt used to.
+    """
+    guide = orchestrator._group_guide("layout")
+    assert guide and "instanceId" in guide
+    # It really is the disclosed tier, delivered as a system message.
+    msg = orchestrator._guides_message({"layout"})
+    assert msg and msg["role"] == "system" and "instanceId" in msg["content"]
+
+    # A group with no guide file is silent, not an error.
+    assert orchestrator._group_guide("definitely_not_a_group") is None
+
+    # ...and connectors still resolve, so module guides didn't shadow them.
+    # Registration is a side effect of `register_connectors()`, so call it here
+    # rather than relying on another test file having done so — otherwise this
+    # assertion only holds when the whole suite runs.
+    from backend.modules.connectors.setup import register_connectors
+
+    register_connectors()
+    assert orchestrator._group_guide("github")
+
+
+def test_unparseable_arguments_are_refused_before_the_tool_runs() -> None:
+    """A call whose argument payload failed to parse must come back as an error, not
+    execute with `{}`. Running it anyway would fire the tool with every argument
+    missing — and the browser would never even be asked."""
+    conn = FakeConn(agent_tools=[{"name": "files.delete", "description": "d"}])
+    res = asyncio.run(
+        orchestrator._dispatch_call(
+            conn,
+            "t",
+            _Call("files.delete", arg_error="arguments were not valid JSON (…)"),
+            {"files"},
+        )
+    )
+    assert "error" in res
+    assert "could not read the arguments" in res["error"]
+    # Nothing was relayed to the browser.
+    assert not [s for s in conn.sent if s.get("event") == "tool_call"]
 
 
 def test_list_tool_groups_meta_lists_dynamic_groups() -> None:
@@ -866,3 +944,56 @@ def test_tool_result_resolves_pending_future() -> None:
         return fut.result()
 
     assert asyncio.run(go()) == {"callId": "abc", "ok": True, "result": 1}
+
+
+def test_loaded_tool_groups_survive_into_the_next_turn() -> None:
+    """Progressive disclosure used to reset every turn.
+
+    The model spent a `load_tools` round to reach `files` in turn 1, used it, and
+    in turn 2 the tools were simply gone — so a multi-turn task re-paid discovery
+    on every turn, and a follow-up like "now delete it" arrived with nothing to
+    delete it *with*. Groups now carry within a session.
+    """
+    conn = FakeConn()
+    # Turn 1 ended with `files` loaded.
+    orchestrator._remember_groups(conn, "main", {"files"})
+
+    # A follow-up turn (non-empty history) starts with it still active.
+    assert orchestrator._carried(conn, "main", [{"role": "user", "content": "hi"}]) == {
+        "files"
+    }
+    # A different agent on the same socket keeps its own scope.
+    assert (
+        orchestrator._carried(conn, "crm", [{"role": "user", "content": "hi"}]) == set()
+    )
+
+
+def test_a_new_session_starts_with_nothing_carried() -> None:
+    # Empty history is the widget saying "new chat" — an exact signal that needs no
+    # extra protocol, and what makes New Chat genuinely start over.
+    conn = FakeConn()
+    orchestrator._remember_groups(conn, "main", {"files", "editor"})
+    assert orchestrator._carried(conn, "main", []) == set()
+    # …and the reset is durable, not just this call.
+    assert (
+        orchestrator._carried(conn, "main", [{"role": "user", "content": "x"}]) == set()
+    )
+
+
+def test_the_carry_is_bounded_and_drops_the_oldest() -> None:
+    # Every carried group costs schema bytes on every later turn; unbounded growth
+    # walks the tool list back over the reasoning cliff progressive disclosure exists
+    # to stay under.
+    conn = FakeConn()
+    history = [{"role": "user", "content": "x"}]
+    orchestrator._remember_groups(conn, "main", {"files"})
+    orchestrator._remember_groups(conn, "main", {"files", "editor"})
+    orchestrator._remember_groups(
+        conn, "main", {"files", "editor", "database", "library"}
+    )
+    carried = orchestrator._carried(conn, "main", history)
+    assert len(carried) == orchestrator.MAX_CARRIED_GROUPS
+    # The two newcomers are the ones most likely to be about the current thread, so
+    # the oldest survivor (`files`) is what goes.
+    assert {"database", "library"} <= carried
+    assert "files" not in carried

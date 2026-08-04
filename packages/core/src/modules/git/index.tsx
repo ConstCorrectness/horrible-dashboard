@@ -21,6 +21,10 @@ export const gitModule: ModuleManifest = {
       icon: '⎇',
       defaultDock: 'right',
       singleton: true,
+      // Embedded: it follows the editor's buffer and has nothing to show without
+      // one, so a dock glyph would be a competing surface for the same content.
+      // Reached via the host's region strip (`revealRegionView` below).
+      embedded: true,
       agentTools: gitAgentTools,
     },
   ],

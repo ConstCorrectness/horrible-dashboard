@@ -36,6 +36,13 @@ export interface PaneState {
   /** Region strips keyed by position. Absent = the view declares no regions. */
   regions?: Partial<Record<RegionPosition, RegionState>>;
   /**
+   * Active in-pane section id. Persisted **per instance**, like `regions` and for
+   * the same reason: two panes of one view are two places, and the module
+   * singletons this replaces (games' `hub-section`, the client drawer) forgot the
+   * user's choice on every reload. Absent = the view declares no sections.
+   */
+  activeSection?: string;
+  /**
    * For a pane docked as a tool: the dock extent it was last dragged to, in px.
    * Remembered per tool rather than per dock so two tools sharing a side (a
    * narrow file tree and a wide agent chat) don't fight over one width. Absent

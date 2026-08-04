@@ -59,10 +59,19 @@ export function serialize(frame: FrameState): SerializedLayout {
  * frame layout (wrong schema — including legacy dockview blobs) or too corrupt
  * to salvage. `knownViews` filters out panes/regions whose views no longer
  * exist. A future `version` bump adds a `migrate(v)` step here.
+ *
+ * `embeddedViews` drops **dock** entries for views that have since been marked
+ * `embedded`. The live rule is that embedded implies never dockable
+ * (`dockSidesOf` returns `[]`), so a saved dock entry for one is a state today's
+ * code cannot produce — and it would resurrect exactly the second, competing home
+ * that embedding a view removes. It only filters docks: a *centre* pane or a
+ * region is a placement the user made deliberately and `openPaneInArea` still
+ * supports.
  */
 export function deserialize(
   blob: SerializedLayout | null | undefined,
   knownViews: ReadonlySet<string>,
+  embeddedViews: ReadonlySet<string> = new Set(),
 ): FrameState | null {
   if (!blob || typeof blob !== 'object') return null;
   if (blob.schema !== FRAME_SCHEMA) return null;
@@ -107,6 +116,11 @@ export function deserialize(
       }
       const regions = readRegions(p.regions);
       if (regions) pane.regions = regions;
+      // Kept as written, without checking it against the view's declarations:
+      // this module is deliberately registry-free. A section that has since been
+      // removed is resolved away by `activeSectionOf`, which has to handle that
+      // case regardless (sections can disappear while a pane is open).
+      if (typeof p.activeSection === 'string') pane.activeSection = p.activeSection;
       return pane;
     };
 
@@ -201,7 +215,7 @@ export function deserialize(
       const dock = d as Record<string, unknown>;
       const tools = (Array.isArray(dock.tools) ? dock.tools : [])
         .map(readPane)
-        .filter((p): p is PaneState => p !== null);
+        .filter((p): p is PaneState => p !== null && !embeddedViews.has(p.viewId));
       const activeTool =
         typeof dock.activeTool === 'string' && tools.some((t) => t.instanceId === dock.activeTool)
           ? dock.activeTool

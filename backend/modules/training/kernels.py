@@ -33,6 +33,7 @@ from backend.modules.training import notebooks, projects
 from backend.modules.training.envs import python_path, venv_ready
 from backend.modules.training.sentinel import EVENT_NAMES, LineSplitter
 from backend.notebook_core import KernelSession, KernelSessionManager, SessionConfig
+from backend.notebook_core.detach import run_detached
 
 logger = logging.getLogger(__name__)
 
@@ -108,9 +109,7 @@ class TrainingKernelManager(KernelSessionManager):
             async with self._open_lock:
                 session = self.sessions.get(key)
                 if session is None:
-                    session = await asyncio.to_thread(
-                        self._create, project_id, nb_rel, key
-                    )
+                    session = await run_detached(self._create, project_id, nb_rel, key)
                     self.sessions[key] = session
         except UnknownProjectError as exc:
             logger.warning("kernel open failed for %s: %s", key, exc)

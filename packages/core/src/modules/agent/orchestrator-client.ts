@@ -4,7 +4,7 @@
  * this executes them against the registry and replies with results. See
  * docs/modules/agent-chat.md and backend/modules/agent/orchestrator.py.
  */
-import { readActiveAgentContext } from '../../agent-context';
+import { readActiveAgentContext, type ActiveAgentContext } from '../../agent-context';
 import { readVisibleAgentContexts } from '../../layout/controller';
 import { getSetting } from '../../settings';
 import { sendChannel, subscribeChannel } from '../../ws';
@@ -14,6 +14,34 @@ import { executeTool, paneTitle } from './tool-exec';
  * a per-turn tax, not a one-off read. Both are overridable in settings. */
 const DEFAULT_CONTEXT_PANES = 6;
 const DEFAULT_CONTEXT_CHARS = 1500;
+
+/** Budget for the focused buffer's full text, which also rides on every turn and
+ * was the one context injection with no cap at all — a single large file could
+ * dwarf everything else in a small model's window. Deliberately generous, so the
+ * common case is unchanged and only genuinely huge files clip. 0 = unlimited. */
+const DEFAULT_ACTIVE_BUFFER_CHARS = 24_000;
+
+/**
+ * Clip the focused buffer's content to the budget.
+ *
+ * Marks the snapshot `truncated` when it clips, which the backend **must** honour:
+ * the un-truncated message tells the model to write the complete buffer back via
+ * `editor.proposeEdit`, and doing that from a clipped copy would silently delete the
+ * tail of the user's file. Truncation therefore changes the instruction, not just
+ * the payload — see `_active_editor_message`.
+ */
+function clipActiveBuffer(context: ActiveAgentContext | null): ActiveAgentContext | null {
+  if (!context) return null;
+  const budget = getSetting<number>('agent.activeBufferBudget') ?? DEFAULT_ACTIVE_BUFFER_CHARS;
+  if (budget <= 0) return context;
+  const snap = context.snapshot as { content?: unknown };
+  const content = snap?.content;
+  if (typeof content !== 'string' || content.length <= budget) return context;
+  return {
+    ...context,
+    snapshot: { ...context.snapshot, content: content.slice(0, budget), truncated: true },
+  };
+}
 
 export interface AgentCallbacks {
   /** The model's final natural-language reply for the turn (authoritative). */
@@ -172,7 +200,7 @@ export function askAgent(
     });
     // Attach the focused editor buffer (if any) so the backend can give the model
     // the open code up front — it can then alter it without a discovery round-trip.
-    const context = readActiveAgentContext();
+    const context = clipActiveBuffer(readActiveAgentContext());
     // …and, alongside it, what the rest of this workspace is showing, so the agent
     // a preset workspace opens as already knows what it is looking at.
     const panes =

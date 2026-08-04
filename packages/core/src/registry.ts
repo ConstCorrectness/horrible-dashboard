@@ -2,7 +2,7 @@
 // the exact same contract; re-exported here so existing imports keep working.
 import type { ComponentType } from 'react';
 
-import { regionCommandHandler } from './layout/region-bus';
+import { frameCommandHandler } from './layout/frame-bus';
 import type { FramePreset } from './layout/presets';
 
 import type {
@@ -12,6 +12,7 @@ import type {
   CollabDecl,
   CommandDecl,
   DockSide,
+  ExplorerSourceDecl,
   JSONSchema,
   KeybindingDecl,
   PaneCaptureDecl,
@@ -19,6 +20,7 @@ import type {
   PanelDecl,
   RegionPosition,
   RegionViewDecl,
+  SectionDecl,
   SettingDecl,
   SettingType,
   UseAgentContext,
@@ -32,6 +34,7 @@ export type {
   CollabDecl,
   CommandDecl,
   DockSide,
+  ExplorerSourceDecl,
   JSONSchema,
   KeybindingDecl,
   PaneCaptureDecl,
@@ -39,6 +42,7 @@ export type {
   PanelDecl,
   RegionPosition,
   RegionViewDecl,
+  SectionDecl,
   SettingDecl,
   SettingType,
   UseAgentContext,
@@ -77,6 +81,12 @@ export interface ModuleManifest {
   keybindings?: KeybindingDecl[];
   settings?: SettingDecl[];
   settingsSections?: SettingsSectionDecl[];
+  /**
+   * Browsers this module adds to the Explorer pane (the view declaring
+   * `explorerHost`). See `ExplorerSourceDecl` — the one place a module
+   * legitimately contributes a section to a pane it does not own.
+   */
+  explorerSources?: ExplorerSourceDecl[];
 }
 
 /** Top-level shell surfaces. `home` is the first-open view; `workspace` hosts panels. */
@@ -148,17 +158,25 @@ class ModuleRegistry {
   private layoutControllerImpl: LayoutController | null = null;
   private services = new Map<string, unknown>();
   private changeListeners = new Set<() => void>();
+  /** Bumped whenever the module set changes; the only cache-invalidation signal. */
+  private generation = 0;
+  private explorerCache: {
+    generation: number;
+    decls: Map<string, PanelDecl | WidgetDecl>;
+  } | null = null;
 
   /** Idempotent: re-registering the same module id is a no-op (StrictMode-safe). */
   register(manifest: ModuleManifest): void {
     if (this.modules.has(manifest.id)) return;
     this.modules.set(manifest.id, manifest);
+    this.generation += 1;
     this.changeListeners.forEach((l) => l());
   }
 
   /** Test-only: drop every registered module (mirrors `layoutStore.resetForTests`). */
   resetForTests(): void {
     this.modules.clear();
+    this.generation += 1;
     this.changeListeners.forEach((l) => l());
   }
 
@@ -191,11 +209,24 @@ class ModuleRegistry {
    * the registry never imports the controller.
    */
   private frameSynthesizedCommands(): CommandDecl[] {
-    const openers: CommandDecl[] = this.allViews.map((v) => ({
-      id: `pane.open:${v.id}`,
-      title: `Open: ${v.title}`,
-      run: () => this.openPanel(v.id),
-    }));
+    // `embedded` views get no opener: they live inside a host pane, and a command
+    // palette entry that opened one standalone would present it as a second,
+    // competing home for content that already has one. Their `region.pick:` /
+    // `section.show:` commands below are how they are reached.
+    const openers: CommandDecl[] = this.allViews
+      .filter((v) => !v.embedded)
+      .map((v) => ({
+        id: `pane.open:${v.id}`,
+        title: `Open: ${v.title}`,
+        run: () => this.openPanel(v.id),
+      }));
+    const sections: CommandDecl[] = this.allViews.flatMap((view) =>
+      (view.sections ?? []).map((s) => ({
+        id: `section.show:${view.id}:${s.id}`,
+        title: `${view.title}: ${s.label}`,
+        run: () => frameCommandHandler()?.revealSection(s.id, view.id),
+      })),
+    );
     const toggles: CommandDecl[] = [];
     const picks = new Map<string, CommandDecl>();
     for (const view of this.allViews) {
@@ -205,7 +236,7 @@ class ModuleRegistry {
         toggles.push({
           id: `region.toggle:${position}:${view.id}`,
           title: `${view.title}: Toggle ${position} region`,
-          run: () => regionCommandHandler()?.togglePosition(view.id, position),
+          run: () => frameCommandHandler()?.togglePosition(view.id, position),
         });
       }
       for (const r of view.regions) {
@@ -213,19 +244,56 @@ class ModuleRegistry {
         picks.set(r.id, {
           id: `region.pick:${r.id}`,
           title: `Toggle ${r.label}`,
-          run: () => regionCommandHandler()?.pickView(r.id),
+          run: () => frameCommandHandler()?.pickView(r.id),
         });
       }
     }
-    return [...openers, ...toggles, ...picks.values()];
+    return [...openers, ...sections, ...toggles, ...picks.values()];
   }
 
   get panels(): PanelDecl[] {
-    return [...this.modules.values()].flatMap((m) => m.panels ?? []);
+    return this.withExplorerSources([...this.modules.values()].flatMap((m) => m.panels ?? []));
   }
 
   get widgets(): WidgetDecl[] {
-    return [...this.modules.values()].flatMap((m) => m.widgets ?? []);
+    return this.withExplorerSources([...this.modules.values()].flatMap((m) => m.widgets ?? []));
+  }
+
+  /** Every `explorerSources` contribution, in module registration order. */
+  get explorerSources(): ExplorerSourceDecl[] {
+    return [...this.modules.values()].flatMap((m) => m.explorerSources ?? []);
+  }
+
+  /**
+   * Append contributed sources to the `explorerHost` view's own sections.
+   *
+   * Done at read time rather than at registration so it cannot depend on module
+   * order — Explorer may register before or after its contributors, and both must
+   * work. Everything downstream (`sectionsOf`, the synthesized `section.show:`
+   * commands and pick keys, `show`, `list_available_panes`) reads through these
+   * getters, so the sources are indistinguishable from declared sections.
+   *
+   * The result is **memoized against the registration counter**: these getters run
+   * on every render path, and returning a fresh decl object each time would break
+   * the identity that `useSyncExternalStore` snapshots and React memoization rely
+   * on. Modules that contribute nothing are returned untouched, so the identity of
+   * every other decl is preserved exactly.
+   */
+  private withExplorerSources<T extends PanelDecl | WidgetDecl>(views: T[]): T[] {
+    const sources = this.explorerSources;
+    if (!sources.length) return views;
+    if (this.explorerCache?.generation !== this.generation) {
+      this.explorerCache = { generation: this.generation, decls: new Map() };
+    }
+    const cache = this.explorerCache.decls;
+    return views.map((view) => {
+      if (!view.explorerHost) return view;
+      const cached = cache.get(view.id) as T | undefined;
+      if (cached) return cached;
+      const merged = { ...view, sections: [...(view.sections ?? []), ...sources] };
+      cache.set(view.id, merged);
+      return merged;
+    });
   }
 
   /** Predefined full-frame workspaces, in module registration order. */
@@ -241,16 +309,39 @@ class ModuleRegistry {
   /**
    * Frame-engine bindings, all scoped to the host view so they're only live
    * while one of its panes is focused: the universal position toggles
-   * (`t`/`n`/`b` = left/right/bottom region) plus each region view's declared
-   * pick letter. Letters colliding with the reserved position keys are dropped
-   * with a warning (validated here, at the single synthesis point).
+   * (`t`/`n`/`b` = left/right/bottom region) plus each region view's and
+   * section's declared pick letter. Letters colliding with the reserved position
+   * keys — or with another pick on the same host — are dropped with a warning
+   * (validated here, at the single synthesis point).
+   *
+   * Regions and sections share one per-host letter space because they share one
+   * keyboard scope: two picks on the same letter would be a binding that fires
+   * whichever the keymap happened to resolve first.
    */
   private frameSynthesizedKeybindings(): KeybindingDecl[] {
     const POSITION_KEYS = { left: 't', right: 'n', bottom: 'b' } as const;
     const out: KeybindingDecl[] = [];
     for (const view of this.allViews) {
-      if (!view.regions?.length) continue;
-      const positions = new Set(view.regions.map((r) => r.position ?? 'right'));
+      if (!view.regions?.length && !view.sections?.length) continue;
+      const taken = new Set<string>();
+      const claim = (key: string, what: string): boolean => {
+        if (key === 't' || key === 'n' || key === 'b') {
+          console.warn(
+            `[registry] ${what} on ${view.id} declares reserved key "${key}" (t/n/b are the universal position toggles) — dropped`,
+          );
+          return false;
+        }
+        if (taken.has(key)) {
+          console.warn(
+            `[registry] ${what} on ${view.id} declares key "${key}", already taken on this pane — dropped`,
+          );
+          return false;
+        }
+        taken.add(key);
+        return true;
+      };
+
+      const positions = new Set((view.regions ?? []).map((r) => r.position ?? 'right'));
       for (const position of positions) {
         out.push({
           key: POSITION_KEYS[position],
@@ -258,15 +349,19 @@ class ModuleRegistry {
           scope: view.id,
         });
       }
-      for (const r of view.regions) {
+      for (const r of view.regions ?? []) {
         if (!r.key) continue;
-        if (r.key === 't' || r.key === 'n' || r.key === 'b') {
-          console.warn(
-            `[registry] region view ${r.id} on ${view.id} declares reserved key "${r.key}" (t/n/b are the universal position toggles) — dropped`,
-          );
-          continue;
-        }
+        if (!claim(r.key, `region view ${r.id}`)) continue;
         out.push({ key: r.key, command: `region.pick:${r.id}`, scope: view.id });
+      }
+      for (const s of view.sections ?? []) {
+        if (!s.key) continue;
+        if (!claim(s.key, `section ${s.id}`)) continue;
+        out.push({
+          key: s.key,
+          command: `section.show:${view.id}:${s.id}`,
+          scope: view.id,
+        });
       }
     }
     return out;

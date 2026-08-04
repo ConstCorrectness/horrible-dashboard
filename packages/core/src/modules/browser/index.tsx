@@ -41,11 +41,13 @@ export const browserModule: ModuleManifest = {
       id: 'browser.network',
       title: 'Browser network',
       component: NetworkStrip,
-      // A region strip of `browser.view` (the 📡 toggle), but a real registered
-      // view so it can also be opened standalone or dragged out to its own area
-      // — where the full request inspector actually has room.
+      // A region strip of `browser.view` (the 📡 toggle). Embedded, because it
+      // reports on *a browser session* and has nothing to show without one — but
+      // still a real registered view, so it can be dragged out to its own area,
+      // where the full request inspector actually has room.
       role: 'widget',
       icon: '📡',
+      embedded: true,
     },
   ],
   commands: [

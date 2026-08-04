@@ -6,7 +6,8 @@
  */
 import './canvas/flow.css';
 
-import { registry, type ModuleManifest } from '../../registry';
+import { revealSection } from '../../layout/controller';
+import type { ModuleManifest } from '../../registry';
 import { FlowEditorPanel } from './panels/FlowEditorPanel';
 import { FlowLibraryPanel, openFlow } from './panels/FlowLibraryPanel';
 import { createFlow } from './flows';
@@ -34,7 +35,13 @@ export const flowModule: ModuleManifest = {
       icon: '🗂',
       defaultDock: 'left',
       singleton: true,
+      // A section of Explorer now — see modules/explorer. Stays registered so the
+      // region strip on `flow.editor` keeps working unchanged.
+      embedded: true,
     },
+  ],
+  explorerSources: [
+    { id: 'flows', label: 'Flows', icon: '🗂', view: 'flow.library', key: 'w' },
   ],
   commands: [
     {
@@ -48,7 +55,9 @@ export const flowModule: ModuleManifest = {
     {
       id: 'flow.openLibrary',
       title: 'Flow: Open library',
-      run: () => registry.openPanel('flow.library'),
+      run: () => {
+        revealSection('flows', 'explorer.home');
+      },
     },
   ],
   frames: [
@@ -58,7 +67,7 @@ export const flowModule: ModuleManifest = {
       icon: '🕸',
       frame: {
         center: { pane: 'flow.editor' },
-        docks: { left: { tools: ['flow.library'], size: 280 } },
+        docks: { left: { tools: ['explorer.home'], size: 280 } },
       },
     },
   ],

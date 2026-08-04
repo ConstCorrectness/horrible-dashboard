@@ -7,6 +7,7 @@
 import type {
   Capability,
   CommandDecl,
+  ExplorerSourceDecl,
   KeybindingDecl,
   PanelDecl,
   SettingDecl,
@@ -93,6 +94,12 @@ export interface PluginContributions {
   keybindings?: KeybindingDecl[];
   /** User-configurable settings shown on the settings page (keys namespaced). */
   settings?: SettingDecl[];
+  /**
+   * Browsers this plugin adds to the Explorer pane — a tab beside Files,
+   * Notebooks and the rest, rather than a pane of its own competing with them.
+   * See `ExplorerSourceDecl`.
+   */
+  explorerSources?: ExplorerSourceDecl[];
 }
 
 export interface HorriblePlugin {

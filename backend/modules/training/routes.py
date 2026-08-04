@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -349,6 +351,61 @@ def _progress(project_id: str, event: str):
 
 _mark_lock = threading.Lock()
 
+# In-flight background workers (venv bootstrap, dep install, dataset fetch).
+#
+# These are fire-and-forget daemon threads, which means nothing could ever wait
+# for one: no handle escaped `_start_*`. Tests had to poll a wall clock instead
+# ("is the file there yet?"), which is a race disguised as a test — it passes when
+# the machine is idle and fails when the suite is loaded, and the failure looks
+# like a product bug rather than a scheduling one.
+#
+# Tracking them costs a set and buys a real completion signal. Threads remove
+# themselves when they finish, so this stays bounded by what is actually running.
+_workers: set[threading.Thread] = set()
+_workers_lock = threading.Lock()
+
+
+def _spawn(name: str, work: Callable[[], None]) -> threading.Thread:
+    """Start a tracked background worker."""
+
+    def runner() -> None:
+        try:
+            work()
+        finally:
+            with _workers_lock:
+                _workers.discard(threading.current_thread())
+
+    thread = threading.Thread(target=runner, daemon=True, name=name)
+    with _workers_lock:
+        _workers.add(thread)
+    thread.start()
+    return thread
+
+
+def join_workers(timeout: float = 60.0) -> bool:
+    """Block until every in-flight worker has finished. False if any outlived `timeout`.
+
+    The timeout is a **deadlock backstop, not a schedule**: `join` returns the
+    instant the thread finishes, however loaded the machine is, so a caller waiting
+    on real work never fails merely because the CPU was busy. That distinction is
+    the whole point — the polling this replaced could not tell "still working" from
+    "never going to work".
+
+    Re-checks the set after each pass, since a worker may start while we are
+    waiting on another.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        with _workers_lock:
+            pending = [t for t in _workers if t.is_alive()]
+        if not pending:
+            return True
+        for thread in pending:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            thread.join(remaining)
+
 
 def _mark(project: ProjectModel, **flags: bool) -> None:
     # Re-read before writing (under a lock): the venv and fetch workers run
@@ -376,7 +433,7 @@ def _start_bootstrap(project: ProjectModel, requirements: list[str]) -> None:
             logger.exception("venv bootstrap failed for %s", project.id)
             emit("venv setup failed — see backend log")
 
-    threading.Thread(target=work, daemon=True, name=f"venv-{project.id}").start()
+    _spawn(f"venv-{project.id}", work)
 
 
 def _start_install(project: ProjectModel, packages: list[str]) -> None:
@@ -392,7 +449,7 @@ def _start_install(project: ProjectModel, packages: list[str]) -> None:
             logger.exception("dep install failed for %s", project.id)
             emit("install failed — see backend log")
 
-    threading.Thread(target=work, daemon=True, name=f"deps-{project.id}").start()
+    _spawn(f"deps-{project.id}", work)
 
 
 def _start_fetch(project: ProjectModel) -> None:
@@ -414,4 +471,4 @@ def _start_fetch(project: ProjectModel) -> None:
             logger.exception("fetch failed for %s", project.id)
             emit("fetch failed — see backend log")
 
-    threading.Thread(target=work, daemon=True, name=f"fetch-{project.id}").start()
+    _spawn(f"fetch-{project.id}", work)

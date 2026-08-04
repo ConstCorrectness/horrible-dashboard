@@ -41,6 +41,14 @@ logger = logging.getLogger(__name__)
 
 SAVE_DEBOUNCE_S = 2.0
 START_TIMEOUT_S = 60.0
+#: How long a pump blocks in a socket read before re-checking `closing`. This is what
+#: restart/shutdown latency is made of (`_stop_pumps` cannot touch a channel until both
+#: pumps are out of it), so it is short: the cost is a few no-op wakeups per second per
+#: session, and it also sets how promptly a widget `comm_msg` reaches an idle kernel.
+POLL_INTERVAL_S = 0.25
+#: How long teardown waits for the pump threads to leave the zmq sockets — a deadlock
+#: bound, not a schedule. See `_stop_pumps`.
+PUMP_JOIN_TIMEOUT_S = 5.0
 _STOP = object()  # worker-queue poison pill
 
 
@@ -130,8 +138,14 @@ class KernelSession:
         self._save_timer: threading.Timer | None = None
         self._worker: threading.Thread | None = None
         self._iopub: threading.Thread | None = None
+        # Serializes restart/shutdown. Both tear the channels down and rebuild
+        # `km`/`kc`, so overlapping them means one thread closing sockets the other
+        # is still opening — the same hazard `_stop_pumps` exists to prevent, one
+        # level up. They arrive on independent detached threads (see
+        # `notebook_core.detach`), so nothing else orders them.
+        self._lifecycle_lock = threading.RLock()
 
-    # --- lifecycle (all blocking work runs on threads) ----------------------
+    # --- start (all blocking work runs on threads) ---------------------------
 
     def start(self) -> None:
         """Spawn the kernel and the pump threads. Blocking — call off-loop."""
@@ -147,6 +161,12 @@ class KernelSession:
             self.shutdown()
             raise
         self._set_status("idle")
+        self._start_pumps()
+
+    # --- pump threads: the sole owners of the zmq sockets --------------------
+
+    def _start_pumps(self) -> None:
+        self.closing = False
         self._worker = threading.Thread(
             target=self._worker_loop, daemon=True, name=f"kernel-exec-{self.key}"
         )
@@ -156,42 +176,89 @@ class KernelSession:
         self._worker.start()
         self._iopub.start()
 
+    def _stop_pumps(self) -> bool:
+        """Bring both pump threads out of the sockets and wait for them to leave.
+
+        **A zmq socket may only be touched by one thread.** The codebase already
+        honours that for sends (`_CommSend` exists so the worker stays the shell
+        socket's sole writer) — but `stop_channels()` *closes* the very sockets the
+        pumps are blocked reading, and it ran on whichever thread called
+        restart/shutdown. Closing a socket under a concurrent recv is undefined
+        behaviour in libzmq, and all three observed outcomes are consistent with it:
+        `ZMQError: not a socket`, a teardown that never returns, and an outright
+        segfault. Restart was the worst case, because it tore the channels down and
+        immediately built new ones while both pumps were still live.
+
+        Every blocking read the pumps make is capped at `POLL_INTERVAL_S`, so both
+        notice `closing` within that and this returns in a fraction of a second.
+        Returns False if a pump would not leave: the caller proceeds anyway — an
+        abandoned kernel process is worse than the risk — but it is logged, because
+        that is the one path that can still corrupt the socket.
+        """
+        self.closing = True
+        self.exec_queue.put(_STOP)
+        current = threading.current_thread()
+        stuck: list[str] = []
+        for thread in (self._iopub, self._worker):
+            if thread is None or thread is current or not thread.is_alive():
+                continue
+            thread.join(PUMP_JOIN_TIMEOUT_S)
+            if thread.is_alive():
+                stuck.append(thread.name)
+        self._iopub = None
+        self._worker = None
+        if stuck:
+            logger.warning(
+                "kernel pump(s) still in the zmq sockets at teardown (%s): %s",
+                self.key,
+                ", ".join(stuck),
+            )
+        return not stuck
+
+    # --- lifecycle -----------------------------------------------------------
+
     def interrupt(self) -> None:
         if self.km is not None and self.km.is_alive():
             self.km.interrupt_kernel()
 
     def restart(self) -> None:
-        if self.km is None:
-            return
-        self._set_status("restarting")
-        # Drop anything still queued; the kernel state it assumed is gone.
-        self._drain_queue()
-        if self.kc is not None:
-            try:
-                self.kc.stop_channels()
-            except Exception:
-                pass
-        self.km.restart_kernel(now=True)
-        self.kc = self.km.client()
-        self.kc.start_channels()
-        self.kc.wait_for_ready(timeout=START_TIMEOUT_S)
-        self._set_status("idle")
+        with self._lifecycle_lock:
+            if self.km is None:
+                return
+            self._set_status("restarting")
+            # Drop anything still queued; the kernel state it assumed is gone.
+            self._drain_queue()
+            self._stop_pumps()
+            if self.kc is not None:
+                try:
+                    self.kc.stop_channels()
+                except Exception:
+                    pass
+            self.km.restart_kernel(now=True)
+            self.kc = self.km.client()
+            self.kc.start_channels()
+            self.kc.wait_for_ready(timeout=START_TIMEOUT_S)
+            # Clear the `_STOP` pill in case the old worker exited without eating
+            # it; a leftover would stop the new pump on its first read.
+            self._drain_queue()
+            self._start_pumps()
+            self._set_status("idle")
 
     def shutdown(self) -> None:
-        self.closing = True
-        self._drain_queue()
-        self.exec_queue.put(_STOP)
-        if self._save_timer is not None:
-            self._save_timer.cancel()
-        try:
-            if self.kc is not None:
-                self.kc.stop_channels()
-            if self.km is not None and self.km.has_kernel:
-                self.km.shutdown_kernel(now=True)
-        except Exception:  # noqa: BLE001 — teardown must not raise
-            logger.exception("kernel shutdown for %s", self.key)
-        self._set_status("dead")
-        self.save_now()
+        with self._lifecycle_lock:
+            self._drain_queue()
+            self._stop_pumps()
+            if self._save_timer is not None:
+                self._save_timer.cancel()
+            try:
+                if self.kc is not None:
+                    self.kc.stop_channels()
+                if self.km is not None and self.km.has_kernel:
+                    self.km.shutdown_kernel(now=True)
+            except Exception:  # noqa: BLE001 — teardown must not raise
+                logger.exception("kernel shutdown for %s", self.key)
+            self._set_status("dead")
+            self.save_now()
 
     def _drain_queue(self) -> None:
         try:
@@ -339,7 +406,7 @@ class KernelSession:
         while True:
             try:
                 # Short timeout so idle widget messages (comm_q) still get serviced.
-                item = self.exec_queue.get(timeout=0.2)
+                item = self.exec_queue.get(timeout=POLL_INTERVAL_S)
             except queue.Empty:
                 self._drain_comms()
                 continue
@@ -395,7 +462,7 @@ class KernelSession:
             # Service widget messages while a cell runs, so sliders stay interactive.
             self._drain_comms()
             try:
-                reply = self.kc.get_shell_msg(timeout=1)
+                reply = self.kc.get_shell_msg(timeout=POLL_INTERVAL_S)
             except queue.Empty:
                 if self.km is None or not self.km.is_alive():
                     self._set_status("dead")
@@ -410,7 +477,7 @@ class KernelSession:
     def _iopub_loop(self) -> None:
         while not self.closing:
             try:
-                msg = self.kc.get_iopub_msg(timeout=1)
+                msg = self.kc.get_iopub_msg(timeout=POLL_INTERVAL_S)
             except queue.Empty:
                 continue
             except Exception:  # noqa: BLE001 — channel torn down mid-read

@@ -1,5 +1,5 @@
 import { registry, type ModuleManifest } from '../../registry';
-import { BackendStatusWidget, WelcomeWidget } from './widgets';
+import { WelcomeWidget } from './widgets';
 
 /**
  * See docs/modules/dashboard.md. The dashboard is no longer a grid panel — it is
@@ -23,13 +23,6 @@ export const dashboardModule: ModuleManifest = {
       component: WelcomeWidget,
       role: 'widget',
       icon: '👋',
-    },
-    {
-      id: 'dashboard.backendStatus',
-      title: 'Backend status',
-      component: BackendStatusWidget,
-      role: 'widget',
-      icon: '🛰',
     },
   ],
 };

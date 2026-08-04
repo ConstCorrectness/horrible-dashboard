@@ -19,6 +19,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Generator
 
+from backend.games_server import crypto as _crypto
+
 BASE_RATING = 1200.0
 ELO_K = 32.0
 
@@ -255,6 +257,28 @@ def _m7_local_credentials(conn: sqlite3.Connection) -> None:
     )
 
 
+def _m8_person_binding(conn: sqlite3.Connection) -> None:
+    """Bind a game-server account to a peer-fabric **person**.
+
+    The two identities existed side by side and never met: the game server owned
+    the globally unique `handle` (it is the only thing all nodes agree on), while
+    the fabric owned `person_id` — so `@rob` on the ladder and `HD-XXXX-…` in the
+    friends roster were the same human with no way to know it. Binding them is
+    what lets you find someone by the name they already have.
+
+    Both directions are unique. One account is one person: sharing a handle across
+    two person keys would make `@rob` ambiguous, and letting one person claim two
+    handles would give them two names on the same ladder. Partial indexes, so the
+    (many) unbound accounts don't collide on NULL.
+    """
+    _add_column(conn, "accounts", "person_id", "TEXT")
+    _add_column(conn, "accounts", "person_public_key", "TEXT")
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_person "
+        "ON accounts(person_id) WHERE person_id IS NOT NULL"
+    )
+
+
 MIGRATIONS: list[Any] = [
     _m1_identity_and_series,
     _m2_replays,
@@ -263,6 +287,7 @@ MIGRATIONS: list[Any] = [
     _m5_task_bank,
     _m6_backfill_handles,
     _m7_local_credentials,
+    _m8_person_binding,
 ]
 
 
@@ -485,6 +510,114 @@ def ensure_handle(account_id: str, preferred: str) -> str:
         suffix = str(n)
         candidate = f"{base[: 20 - len(suffix)]}{suffix}"
     return base
+
+
+# ---- person binding (game-server account ↔ peer-fabric person) --------------
+
+
+#: Re-exported so a caller has one place to look for "the person primitives".
+fingerprint_person = _crypto.fingerprint_person
+
+
+def person_challenge(account_id: str, person_id: str) -> bytes:
+    """The bytes a binding signature covers.
+
+    It **includes the account id** on purpose: without it, a signature proving
+    "I hold this person key" could be lifted from any other context and replayed
+    to bind someone else's person to your account. Same canonical-JSON discipline
+    as the peer wire and device certs, because signer and verifier are different
+    machines running different code.
+    """
+    payload = {
+        "purpose": "horrible.account.person",
+        "account_id": account_id,
+        "person_id": person_id,
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def bind_person(account_id: str, person_id: str, person_public_key: str) -> str:
+    """Attach a person identity to an account. Returns 'ok' or 'taken'.
+
+    Idempotent for the same pair, so a node re-binding on every sign-in is free.
+    'taken' comes from the unique index rather than a pre-read, so two concurrent
+    binds can't both win.
+    """
+    init_db()
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT person_id FROM accounts WHERE id = ?", (account_id,)
+        ).fetchone()
+        if row is None:
+            return "unknown-account"
+        if row["person_id"] == person_id:
+            return "ok"
+        try:
+            conn.execute(
+                "UPDATE accounts SET person_id = ?, person_public_key = ? WHERE id = ?",
+                (person_id, person_public_key, account_id),
+            )
+        except sqlite3.IntegrityError:
+            return "taken"
+    return "ok"
+
+
+def _directory_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+    """The public slice of an account: enough to add someone, nothing more.
+
+    Deliberately narrow — this is served to anyone who asks, so it carries no
+    email, no token, no provider subject.
+    """
+    if row is None or not row["handle"]:
+        return None
+    return {
+        "handle": row["handle"],
+        "display_name": row["display_name"],
+        "person_id": row["person_id"],
+        "person_public_key": row["person_public_key"],
+    }
+
+
+def account_by_handle(handle: str) -> dict[str, Any] | None:
+    """Resolve `@handle` to its public directory entry, or None."""
+    init_db()
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM accounts WHERE handle = ?", (handle.strip().lower(),)
+        ).fetchone()
+    return _directory_row(row)
+
+
+#: Shortest prefix `search_handles` will answer. Two characters would enumerate
+#: the whole user base a few hundred queries at a time; this is a directory for
+#: finding someone you can already half-name, not a member list.
+MIN_SEARCH_PREFIX = 3
+
+
+def search_handles(query: str, limit: int = 10) -> list[dict[str, Any]]:
+    """Prefix-search handles — "an easier way to find people".
+
+    Prefix, not substring: a substring match over a short query is close enough to
+    a scrape, and `LIKE 'q%'` can use the handle index while `LIKE '%q%'` cannot.
+    Bots are excluded; they aren't people you add.
+    """
+    q = query.strip().lower().lstrip("@")
+    if len(q) < MIN_SEARCH_PREFIX:
+        return []
+    # LIKE wildcards are **escaped, not stripped**, and the length gate is applied
+    # to the raw query above. Stripping them after the check let "%%%" through as
+    # an empty prefix — `LIKE '%'`, i.e. every account in one request. And `_` is a
+    # legal handle character, so stripping it would quietly make `rob_smith`
+    # unfindable by anyone who typed the underscore.
+    escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    init_db()
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM accounts WHERE handle LIKE ? ESCAPE '\\' AND is_bot = 0 "
+            "ORDER BY handle LIMIT ?",
+            (escaped + "%", max(1, min(limit, 25))),
+        ).fetchall()
+    return [entry for row in rows if (entry := _directory_row(row)) is not None]
 
 
 # ---- ratings ---------------------------------------------------------------

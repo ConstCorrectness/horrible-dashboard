@@ -51,6 +51,22 @@ references a project that no longer exists, the kernel-open error carries an
 `unknown_project` code and the pane shows a "no longer exists" state with a **Close**
 button that drops the dead pane from the saved layout — so it self-heals on the next load.
 
+That "unreadable means not a project" rule has a sharp edge: background workers rewrite
+`project.json` (`_mark(project, venv_ready=True)`) while requests read it, and a
+`write_text` truncates before it writes. A read landing in that window saw an empty file
+and the route answered **404 for a project that exists** — a bug that only appeared under
+load and looked like anything but itself. Both sides now go through
+`backend/atomic_write.py`: writes replace atomically, and reads distinguish "no such
+record" from "someone is replacing it right now", which on Windows is a transient
+`PermissionError` rather than a missing file. Pinned by a concurrent read/write test in
+`test_training_projects.py`.
+
+Background work started by a route (`fetch`, venv bootstrap, dep install) runs on
+**tracked** daemon threads: `routes._spawn` registers each one and `routes.join_workers`
+waits for them. Nothing in the product blocks on it — it exists so tests can wait on the
+work itself rather than on a wall clock, which is what a fixed-deadline poll silently
+degrades into on a loaded machine.
+
 ## Environment providers
 
 A provider is a thin synchronous adapter behind one uniform contract
@@ -128,6 +144,12 @@ run) drives them through the `horrible_train` helper's sentinel events:
   selected run. `metrics.py` keeps a per-run ring buffer (`training.metrics.bufferPoints`,
   default 5000) so a chart opened mid-run backfills via `watch_run`, and coalesces the
   wire to ≤20 events/s per run while keeping every point server-side.
+The four panes below are declared **`embedded`**: they are companion strips of the
+notebook they ride on, reached with their region keys or the `Training: Open …`
+commands (which reveal the strip rather than opening a pane). `training.metrics` is
+deliberately **not** — it is seeded as the Training workspace's own center pane, so it
+is a destination in a way the others are not. See [Embedded views and sections](../architecture/windowing.mdx#embedded-views-and-sections).
+
 - **Architecture** (`training.modelgraph`, dagre SVG) — the layer graph from
   `horrible_train.watch(model)`: `torch.fx` topology (with tensor shapes when an
   `example=` input is given), or the `named_modules` tree when the model isn't
@@ -246,7 +268,7 @@ events, plus `metrics` / `model_graph` / `model_stats` / `frame` / `run_output` 
 
 | Contribution | Value |
 | --- | --- |
-| Panel `training.projects` | singleton hub (left): provider search → create project, project list with live venv/data status, open-notebook buttons |
+| Panel `training.projects` | singleton hub, `embedded`: the **Projects** section of [Explorer](explorer.mdx) and the left region strip of `training.notebook`. Provider search → create project, project list with live venv/data status, open-notebook buttons |
 | Panel `training.notebook` | non-singleton notebook pane (center), params `{projectId, notebook}`, opened via `openTrainingNotebook()` so it focuses/reuses rather than splitting (see [windowing](../architecture/windowing.mdx)); CodeMirror cells, run/interrupt/restart toolbar, nbformat output renderers (stream+ANSI, results, images, HTML, tracebacks) |
 | Widget `training.metrics` | live metric charts (uPlot, one per metric of the selected run; ring-buffer backfill via `watch_run`, ≤20 wire events/s per run with every point kept server-side) |
 | Widget `training.modelgraph` | model architecture graph (dagre SVG; fx/module-tree, grad-norm heatmap) |

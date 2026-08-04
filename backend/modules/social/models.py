@@ -63,6 +63,10 @@ class SelfProfile(BaseModel):
     # False on a machine linked by another device: it can act as this person but
     # cannot mint device certificates or accept new link requests.
     holds_person_key: bool = True
+    #: The game-server callsign this machine is signed in as, when it is. The one
+    #: name a person has everywhere — the ladder, HorribleAssault, and the roster.
+    #: None when signed out, which is why the friend code stays first-class.
+    handle: str | None = None
     devices: list[DeviceInfo] = Field(default_factory=list)
 
 
@@ -74,9 +78,33 @@ class RosterSnapshot(BaseModel):
 # ---- REST request/response shapes -------------------------------------------------
 
 
+class DirectoryEntry(BaseModel):
+    """A public directory hit — what `@handle` search and resolve return."""
+
+    handle: str
+    display_name: str
+    person_id: PersonId
+    person_public_key: str
+
+
+class DirectorySearchResult(BaseModel):
+    results: list[DirectoryEntry] = Field(default_factory=list)
+    #: Shortest query the directory will answer, so the UI can say so up front
+    #: rather than looking broken on a two-character search.
+    min_prefix: int = 3
+    error: str | None = None
+
+
+class BindHandleResult(BaseModel):
+    ok: bool = False
+    handle: str | None = None
+    error: str | None = None
+
+
 class AddFriendRequest(BaseModel):
-    """Add by friend code (or a raw person id). `address` short-circuits discovery
-    when you already know how to reach them — a LAN box, say."""
+    """Add by callsign (`@rob`), friend code, or a raw person id. `address`
+    short-circuits discovery when you already know how to reach them — a LAN box,
+    say."""
 
     code: str
     address: str | None = None

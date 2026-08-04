@@ -59,7 +59,7 @@ correctly and SQLite has no date type), `select` (with `options`), `url`, `email
 | `records.grid` | document | The rows as an editable table. Double-click a cell to edit. |
 | `records.form` | document | One record, field by field — and the **proposal review** surface. |
 | `records.board` | document | Kanban by the schema's `board_column`; drag a card to write that field. |
-| `records.list` | tool (left dock) | Table switcher, search, and the pending-proposal count. |
+| `records.list` | tool (`embedded`) | Table switcher, search, and the pending-proposal count. The **Tables** section of [Explorer](explorer.mdx); the CRM and Data Entry presets dock Explorer on the left. |
 
 All four contribute `useAgentContext`, which is what makes the workspace ambient
 context (see [agent-chat](agent-chat.mdx)) pay off here: the agent sees "board:

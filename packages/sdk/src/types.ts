@@ -149,6 +149,28 @@ export interface PanelDecl {
   dockable?: DockSide | DockSide[];
   /** Region strips (Blender N/T-panel style) this view hosts inside its area. */
   regions?: RegionViewDecl[];
+  /** In-pane sections (tabs) this view switches between. See `SectionDecl`. */
+  sections?: SectionDecl[];
+  /**
+   * This view accepts `explorerSources` contributed by other modules, appended
+   * after its own `sections`. Exactly one view should set it (Explorer); the flag
+   * exists so the registry resolves the host by declaration rather than by
+   * hardcoding a module's view id.
+   */
+  explorerHost?: boolean;
+  /**
+   * This view exists only *inside* another pane — as a region strip, a section
+   * body, or an explorer source — and is not a destination of its own.
+   *
+   * It stays fully registered, so regions, sections, `openPaneInArea` and
+   * dragging a strip out into the center all keep working. What it loses is
+   * every affordance that would present it as a second, competing home for the
+   * same content: no `pane.open:<id>` command, no entry in the area-header type
+   * switcher or empty-area picker, no rail glyph (embedded implies never
+   * dockable), and no top-level row in the agent's `list_available_panes` — it
+   * is listed under its host instead, so `show` still reaches it by name.
+   */
+  embedded?: boolean;
   /** Glyph for the activity rail / area-header type switcher. */
   icon?: string;
   /** For role `tool`: which dock it opens in by default. Defaults to `left`. */
@@ -212,6 +234,28 @@ export interface WidgetDecl {
   dockable?: DockSide | DockSide[];
   /** Region strips (Blender N/T-panel style) this view hosts inside its area. */
   regions?: RegionViewDecl[];
+  /** In-pane sections (tabs) this view switches between. See `SectionDecl`. */
+  sections?: SectionDecl[];
+  /**
+   * This view accepts `explorerSources` contributed by other modules, appended
+   * after its own `sections`. Exactly one view should set it (Explorer); the flag
+   * exists so the registry resolves the host by declaration rather than by
+   * hardcoding a module's view id.
+   */
+  explorerHost?: boolean;
+  /**
+   * This view exists only *inside* another pane — as a region strip, a section
+   * body, or an explorer source — and is not a destination of its own.
+   *
+   * It stays fully registered, so regions, sections, `openPaneInArea` and
+   * dragging a strip out into the center all keep working. What it loses is
+   * every affordance that would present it as a second, competing home for the
+   * same content: no `pane.open:<id>` command, no entry in the area-header type
+   * switcher or empty-area picker, no rail glyph (embedded implies never
+   * dockable), and no top-level row in the agent's `list_available_panes` — it
+   * is listed under its host instead, so `show` still reaches it by name.
+   */
+  embedded?: boolean;
   /** Glyph for the activity rail / area-header type switcher. */
   icon?: string;
   /** For role `tool`: which dock it opens in by default. Defaults to `left`. */
@@ -372,6 +416,57 @@ export type RegionPosition = 'left' | 'right' | 'bottom';
 
 /** The shell's fixed tool docks. */
 export type DockSide = 'left' | 'right' | 'bottom';
+
+/**
+ * One section of a multi-section pane — an in-pane tab, the sibling of a region
+ * strip. A region is a *companion* alongside the main content; a section
+ * *replaces* it, which is what lets several formerly-separate panes become one.
+ *
+ * The host owns the tab strip, the persisted active section (per pane instance),
+ * the synthesized `section.show:<host>:<id>` command and pick key, and the
+ * agent's ability to name a section — so a module does not hand-roll any of it.
+ * See docs/architecture/windowing.mdx.
+ */
+export interface SectionDecl {
+  /** Unique within the host pane, e.g. `play`, `friends`. */
+  id: string;
+  /** Tab text, and what `show("friends")` matches against. */
+  label: string;
+  /** Glyph for the tab; falls back to `label`'s first character. */
+  icon?: string;
+  /**
+   * Section body, given either inline as a component or as the id of a
+   * registered (usually `embedded`) view. Exactly one of the two.
+   */
+  component?: ComponentType;
+  /** View id whose component renders this section. Alternative to `component`. */
+  view?: string;
+  /**
+   * Pick letter within the host pane's focus scope. Plain letters only; must not
+   * be `t`, `n`, or `b` (the universal region-position toggles) — violations are
+   * dropped with a console warning, the same rule regions follow.
+   */
+  key?: string;
+  /** The section shown when a pane of this view first opens. First one wins. */
+  default?: boolean;
+}
+
+/**
+ * A browser a module contributes to the **Explorer** pane.
+ *
+ * Sections are declared by the pane that owns them, which is right for a pane
+ * whose tabs are its own — but wrong for Explorer, whose whole purpose is to be
+ * the one place you go to find *something*, wherever it lives. A module can't
+ * reach into another module's decl (nor should it), so Explorer publishes this
+ * extension point instead and the registry folds every contribution into its
+ * section list. Order follows module registration; a plugin's browser sits
+ * alongside the built-ins with no special casing.
+ *
+ * Structurally a `SectionDecl` — everything downstream (the tab strip, the
+ * persisted active tab, `show("notebooks")`, the pick key, the agent's section
+ * argument) is the section machinery, not a second mechanism.
+ */
+export type ExplorerSourceDecl = SectionDecl;
 
 /**
  * One view stacked in a host pane's **region** — a toggleable, resizable strip

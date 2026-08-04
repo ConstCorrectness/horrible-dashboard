@@ -32,7 +32,7 @@ you ask.
 
 | Panel | Id | Role | What |
 | --- | --- | --- | --- |
-| Provenance | `git.provenance` | singleton, right | **Blame** (follows the code locus; per-line author + session chip → conversation; click a line to jump) and **History** (recent commits, agent-authored flagged, diff on select). |
+| Provenance | `git.provenance` | singleton, **embedded** | Follows the editor's locus and shows nothing without a buffer, so it is a region strip of the editor rather than a dockable pane (see [Embedded views and sections](../architecture/windowing.mdx#embedded-views-and-sections)). **Blame** (follows the code locus; per-line author + session chip → conversation; click a line to jump) and **History** (recent commits, agent-authored flagged, diff on select). |
 
 ### Backend routes (`/api/git`)
 

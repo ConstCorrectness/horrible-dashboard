@@ -18,17 +18,22 @@ backend surface — workspace layouts persist through
 
 ## Contributions to the layout shell
 
-- **Widgets:** `dashboard.welcome` (intro card) and
-  `dashboard.backendStatus` (polls `/api/health` every 10s,
-  role `widget`). Other modules contribute more widgets
-  (`clubhouse.account`, `observability.io`).
+- **Widgets:** `dashboard.welcome` (intro card). Other modules contribute more
+  widgets (`clubhouse.account`, `observability.io`).
+
+  `dashboard.backendStatus` was **retired**: a whole center pane rendering one
+  line of health text is the clearest case of a readout becoming a destination
+  because a pane was the only way to show anything. The poll moved to
+  `backendHealth` (`packages/core/src/health.ts` — one interval for the whole
+  app, stopped when nothing is listening) and renders in the **minibuffer**
+  status line. It is **silent while healthy**: a status line that always says
+  "fine" trains you to stop reading it.
 - **Commands:** `dashboard.open` — selects the Dashboard workspace tab
   (`registry.switchWorkspace('dashboard')`).
 
-The default Dashboard is seeded on first run by the workspace
-(`DASHBOARD_PRESET` in `Workspace.tsx`): `dashboard.welcome`,
-`dashboard.backendStatus`, `observability.io` opened as panes in a 2-column
-arrangement.
+The default Dashboard is seeded on first run from the `dashboard` frame preset
+(`modules/layouts/index.ts`): `dashboard.welcome` beside `clubhouse.account`,
+with `observability.io` on the bottom rail.
 
 ## The widget contract
 

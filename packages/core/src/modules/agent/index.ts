@@ -124,6 +124,14 @@ export const agentModule: ModuleManifest = {
       type: 'number',
       default: 1500,
     },
+    {
+      key: 'agent.activeBufferBudget',
+      title: 'Focused buffer: characters',
+      description:
+        'Size limit for the focused editor buffer attached to every turn. Beyond this the agent is told the code is truncated and must re-read it before rewriting the whole file. 0 = no limit.',
+      type: 'number',
+      default: 24000,
+    },
   ],
   // The orchestrator model is a dropdown of the provider's live models (not a static
   // enum), so it's a custom section rather than a declarative SettingDecl; temperature

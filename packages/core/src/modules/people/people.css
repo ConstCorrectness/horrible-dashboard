@@ -1,0 +1,98 @@
+/* People pane. Deliberately plain: every section body is an existing panel that
+   brings its own styling, so this only styles the two new sections (Discover, Me)
+   and the shared row/field shapes they share with them. */
+.people-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  min-height: 0;
+}
+.people-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.people-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.people-hint {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.people-note {
+  margin: 0;
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--bg-raised);
+}
+.people-dim {
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+.people-online {
+  color: var(--accent, #6ea8fe);
+  font-size: 11.5px;
+}
+.people-handle {
+  font-weight: 700;
+}
+.people-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.people-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 6px;
+}
+.people-row:hover {
+  background: var(--bg-hover);
+}
+.people-row-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.people-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.people-identity-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.people-fold > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+/* A folded panel gets a bounded box of its own: these are full panels that expect
+   to fill a pane, and left unbounded they push the section's own content away. */
+.people-embed {
+  height: 320px;
+  min-height: 0;
+  overflow: auto;
+  margin-top: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}

@@ -8,7 +8,7 @@ const VIEWS = new Set([
   'records.grid',
   'records.form',
   'records.board',
-  'records.list',
+  'explorer.home',
   'research.pdfViewer',
   'browser.view',
   'agent.chat',
@@ -51,7 +51,8 @@ describe('crm frame preset', () => {
     // …and the pipeline grid must NOT be pinned (it follows the selection).
     expect(areas[0].tabs[1].params).toBeUndefined();
 
-    expect(frame.docks.left.tools.map((t) => t.viewId)).toEqual(['records.list']);
+    // Explorer, not `records.list`: the tables browser is a section of it now.
+    expect(frame.docks.left.tools.map((t) => t.viewId)).toEqual(['explorer.home']);
     expect(frame.docks.right.tools.map((t) => t.viewId)).toEqual(['agent.chat']);
   });
 });
@@ -78,7 +79,7 @@ describe('data entry frame preset', () => {
 
   it('degrades to just the form when the research module is absent', () => {
     const frame = seedFromPreset(preset, {
-      knownViews: new Set(['records.form', 'records.list']),
+      knownViews: new Set(['records.form', 'explorer.home']),
     });
     expect(areasOf(frame.center).flatMap((a) => a.tabs.map((t) => t.viewId))).toEqual([
       'records.form',

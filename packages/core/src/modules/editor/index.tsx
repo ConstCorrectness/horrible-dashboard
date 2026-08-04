@@ -161,6 +161,10 @@ export const editorModule: ModuleManifest = {
       component: RecentNotesWidget,
       role: 'widget',
       icon: '🗒',
+      // Embedded: the editor's left region strip is its home. It was never
+      // seeded anywhere or opened by a command, so the standalone entry it had
+      // in the type switcher was a duplicate nobody used.
+      embedded: true,
     },
   ],
   commands: [

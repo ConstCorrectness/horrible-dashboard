@@ -20,18 +20,15 @@ export const layoutsModule: ModuleManifest = {
       name: 'Dashboard',
       icon: '▦',
       frame: {
+        // Backend health used to take the third slot here; it is a dot in the
+        // minibuffer now, so the dashboard is welcome + the account tile, with the
+        // data-flow readout one click away on the bottom rail.
         center: {
           split: 'row',
           sizes: [0.55, 0.45],
           children: [
             { pane: 'dashboard.welcome', headerCollapsed: true },
-            {
-              split: 'column',
-              children: [
-                { pane: 'dashboard.backendStatus', headerCollapsed: true },
-                { pane: 'clubhouse.account', headerCollapsed: true },
-              ],
-            },
+            { pane: 'clubhouse.account', headerCollapsed: true },
           ],
         },
         docks: {
@@ -46,7 +43,7 @@ export const layoutsModule: ModuleManifest = {
       frame: {
         center: { pane: 'editor.buffer' },
         docks: {
-          left: { tools: ['files.tree'], size: 260 },
+          left: { tools: ['explorer.home'], size: 260 },
           right: { tools: ['agent.chat'], visible: false },
           bottom: { tools: ['terminal.instance', 'repl.console'], activeTool: 'terminal.instance' },
         },
@@ -153,13 +150,10 @@ export const layoutsModule: ModuleManifest = {
             },
           ],
         },
-        docks: {
-          left: {
-            tools: ['games.ladder', 'games.replays', 'games.players', 'games.profile'],
-            activeTool: 'games.ladder',
-            size: 280,
-          },
-        },
+        // The four games tool panes this dock used to seed (Ladder, Replays,
+        // Players, Profile) are sections of `games.lobby` now, so the dock would
+        // seed ids that no longer exist. The lobby carries them.
+        docks: {},
       },
     },
   ],

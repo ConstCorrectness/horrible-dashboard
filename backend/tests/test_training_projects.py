@@ -2,6 +2,7 @@
 
 import json
 import os
+import threading
 from pathlib import Path
 
 import pytest
@@ -129,3 +130,40 @@ def test_delete_rejects_non_slug(projects_root: Path) -> None:
 
 def test_delete_missing_returns_false(projects_root: Path) -> None:
     assert projects.delete_project("nope") is False
+
+
+def test_a_project_never_disappears_while_it_is_being_written(
+    projects_root: Path,
+) -> None:
+    """A concurrent read must never see a half-written `project.json`.
+
+    Background workers rewrite this file (`_mark(project, venv_ready=True)`) while
+    requests read it. `write_text` truncates first, so a read landing in that
+    window used to get an empty file — `_read` swallowed the `ValueError` and the
+    route answered **404 for a project that exists**. It only showed up under load,
+    as an unrelated-looking test failing in the full suite.
+    """
+    project = projects.create_project("Racy", [_ref()], "3.12")
+    stop = threading.Event()
+    misses: list[str] = []
+
+    def reader() -> None:
+        while not stop.is_set():
+            try:
+                if projects.get_project(project.id) is None:
+                    misses.append("vanished")
+                    return
+            except OSError as exc:  # a failed *read* is a miss too
+                misses.append(f"raised {exc!r}")
+                return
+
+    thread = threading.Thread(target=reader, daemon=True)
+    thread.start()
+    try:
+        for _ in range(300):
+            projects._write(project)
+    finally:
+        stop.set()
+        thread.join(10)
+
+    assert not misses, "get_project returned None for a project that exists"

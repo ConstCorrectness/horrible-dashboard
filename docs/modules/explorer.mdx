@@ -1,0 +1,106 @@
+---
+sidebar_position: 31
+sidebar_label: Explorer
+---
+
+# Module: Explorer
+
+**One place to browse things**, replacing five. `explorer.home` is a `tool` (left
+dock) whose [sections](../architecture/windowing.mdx#embedded-views-and-sections) are
+**contributed by other modules**:
+
+| Section | What it browses | Came from |
+| --- | --- | --- |
+| **Files** | The workspace file tree | `files.tree` |
+| **Notebooks** | `.ipynb` files under the notebook root | `notebook.browser` |
+| **Projects** | Training projects | `training.projects` |
+| **Flows** | Saved orchestration graphs | `flow.library` |
+| **Tables** | Record schemas | `records.list` |
+
+## Why five became one
+
+All five were the same pane wearing five hats: a narrow left-dock list you pick
+something out of and open in the center. They were separate for one structural
+reason — **there was no way for a module to contribute to another module's pane**.
+So each shipped its own, each earned its own rail glyph, and the left dock became a
+row of near-identical strips distinguished only by remembering their names.
+
+They are **not deleted**, they are `embedded`. Three of them (Notebooks, Projects,
+Flows) are also region strips of their own document pane, and that keeps working
+untouched — a notebook still carries its browser on the left. What they lose is a
+competing top-level home.
+
+## The extension point
+
+```ts
+export const myModule: ModuleManifest = {
+  explorerSources: [{ id: 'stuff', label: 'Stuff', icon: '📦', view: 'my.browser' }],
+};
+```
+
+`ExplorerSourceDecl` **is** a `SectionDecl` — everything downstream (the tab strip,
+the persisted active tab, `show("notebooks")`, the pick key, the agent's `section`
+argument) is the section machinery, not a second mechanism. Explorer opts in with
+`explorerHost: true` on its panel, so the registry resolves the host by declaration
+rather than by hardcoding a view id.
+
+The merge happens at **read time**, in `registry.panels` / `registry.widgets` — not
+at registration — so module order cannot matter. Explorer may register before or
+after its contributors and both must work. The merged declarations are memoized
+against a registration counter: these getters run on every render path, and
+returning a fresh decl object per call would defeat `useSyncExternalStore`
+snapshots and every memo keyed on the decl. A view with no contributions is passed
+through untouched.
+
+This is the one place a module legitimately contributes a section to a pane it does
+not own — and the reason a **plugin** can add a browser without a pane of its own
+(`PluginContributions.explorerSources`).
+
+## One agent-context provider
+
+Section bodies render inside the host's `PaneInstanceContext`, so they register
+under Explorer's real instance id — unlike a region strip, which gets a synthetic
+id no enumeration descends into. That makes exactly one provider per pane the rule.
+Today it is `FileTree`'s, so the file tree's snapshot now arrives under
+`explorer.home` with the active section stamped on it by `readPaneAgentContext`.
+A second contributed source adding its own `useAgentContext` would silently
+overwrite it.
+
+### Every old name still works
+
+`show("files.tree")`, `show("Notebooks")`, `show("records.list")` and the rest all
+resolve, through `VIEW_ALIASES`, to the section that holds them now. Because these
+five views still exist and are merely `embedded`, `show` would reach them through
+`hostOfEmbedded` regardless — the alias entries are what make the *titles* resolve,
+and they keep resolution to one lookup instead of a scan. Pinned by the
+table-driven test in `layout/__tests__/sections.test.ts`.
+
+## Contributions
+
+- **Panel:** `explorer.home` (`tool`, left dock, `explorerHost`).
+- **Commands:** `explorer.open`, `explorer.files`. The contributing modules keep
+  their own verbs (`files.open`, `notebook.open`, `flow.openLibrary`,
+  `training.open`) — they now `revealSection` instead of opening a pane.
+- **Agent tools:** unchanged. `files.*` stays declared on `files.tree`; the backend
+  groups tools by **name prefix**, so which view declares them is irrelevant, and
+  moving them would have silently re-grouped them.
+
+## Not done yet
+
+**Only the Files section has an agent-context payload.** The one-provider rule means
+the other four cannot add their own without clobbering it, and only the *mounted*
+body can provide at all — so `show("notebooks")` returns the section name and its
+siblings (contributed centrally by `readPaneAgentContext`), but not a listing.
+
+That shape was found by asking the local model "show me my notebooks": it correctly
+read the ambient context, correctly chose `show('notebooks')` — and then, with an
+empty payload to answer from, answered from the **editor tabs** instead and reported
+the two `.py` files open there. A pane that returns nothing does not produce "I don't
+know"; it produces a confident answer sourced from whatever else was in the window.
+Naming the sections is a floor, not a fix. The real one is for the host to delegate
+a payload per section, which needs a way for a section body to publish upward
+without owning the pane's single registration.
+
+**Restored layouts drop docked embedded views** (`deserialize`'s `embeddedViews`), so
+an old workspace loses its `files.tree` strip and gains Explorer from the preset. A
+workspace the user had customised keeps everything else.

@@ -163,7 +163,7 @@ channel is execution *telemetry* for the canvas.
   - `flow.editor` — the canvas, **multi-instance** (a Panel keyed by `flowId` param,
     so you can open several flows at once), role `document`. With no param
     it loads the active flow (creating a first one if none).
-  - `flow.library` — list of saved flows; create/open/delete (left dock, singleton).
+  - `flow.library` — list of saved flows; create/open/delete. `embedded`: the **Flows** section of [Explorer](explorer.mdx), and still the left region strip of `flow.editor`.
   - `flow.runs` — run history + per-node I/O inspector (Phase 2).
 - **Node palette:** a draggable sidebar listing the built-in node kinds; drag onto
   the canvas to add. Clicking a node opens an inspector (the trigger's prompt; the
@@ -208,7 +208,7 @@ channel is execution *telemetry* for the canvas.
 
 - **Panels:** `flow.editor` (document, multi-instance — one pane per open flow
   keyed by `flowId` param; falls back to the active flow when opened with no
-  param), `flow.library` (tool, left dock, singleton). `flow.runs` is Phase 2.
+  param), `flow.library` (tool, `embedded` — a section of [Explorer](explorer.mdx)). `flow.runs` is Phase 2.
 - **Regions:** the canvas is the document and hosts the library as its **left
   [region strip](../architecture/panel-groups.mdx)** (`f` while the canvas is
   focused) — inverted from the old grouping where the library was the hub, to

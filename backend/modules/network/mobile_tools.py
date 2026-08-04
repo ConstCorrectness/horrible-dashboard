@@ -13,12 +13,52 @@ from backend.sdk.types import AgentTool
 logger = logging.getLogger(__name__)
 
 
-async def capture_photo(_args: dict[str, Any]) -> dict[str, Any]:
+def _mobile_peers() -> list[Any]:
+    return [p for p in peer_hub.list_peers() if "mobile" in p.capabilities]
+
+
+def _pick_mobile(device: str | None) -> tuple[Any | None, dict[str, Any] | None]:
+    """Which phone a `mobile.*` tool acts on. Returns (peer, error).
+
+    These used to take the **first** phone on the fabric, which is fine with one
+    device and silently wrong with two — the moment a person links a tablet, "take
+    a photo" starts firing whichever peer happened to sort first. So: with one
+    phone, it is unambiguous and no argument is needed; with several, the tool
+    refuses and lists them rather than guessing. `device` matches a node id or a
+    label, case-insensitively.
+    """
+    peers = _mobile_peers()
+    if not peers:
+        return None, {"error": "No mobile device connected."}
+    if device:
+        wanted = device.strip().lower()
+        match = [
+            p
+            for p in peers
+            if p.node_id.lower() == wanted or str(getattr(p, "name", "")).lower() == wanted
+        ]
+        if not match:
+            return None, {
+                "error": f"no connected phone matching {device!r}",
+                "devices": [p.node_id for p in peers],
+            }
+        return match[0], None
+    if len(peers) > 1:
+        return None, {
+            "error": "several phones are connected — pass `device` to say which",
+            "devices": [
+                {"node_id": p.node_id, "name": getattr(p, "name", None)} for p in peers
+            ],
+        }
+    return peers[0], None
+
+
+async def capture_photo(args: dict[str, Any]) -> dict[str, Any]:
     """Take a photo using the connected phone's camera."""
-    peers = peer_hub.list_peers()
-    mobile = next((p for p in peers if "mobile" in p.capabilities), None)
-    if not mobile:
-        return {"error": "No mobile device connected."}
+    mobile, error = _pick_mobile(args.get("device"))
+    if error:
+        return error
+    assert mobile is not None
 
     try:
         reply = await peer_hub.request(
@@ -40,10 +80,10 @@ async def capture_photo(_args: dict[str, Any]) -> dict[str, Any]:
 async def notify_mobile(args: dict[str, Any]) -> dict[str, Any]:
     """Send a push notification and vibrate the connected phone."""
     text = str(args.get("text") or "Notification from Desktop")
-    peers = peer_hub.list_peers()
-    mobile = next((p for p in peers if "mobile" in p.capabilities), None)
-    if not mobile:
-        return {"error": "No mobile device connected."}
+    mobile, error = _pick_mobile(args.get("device"))
+    if error:
+        return error
+    assert mobile is not None
 
     await peer_hub.send_to(
         mobile.node_id,
@@ -59,6 +99,15 @@ def register_mobile_tools() -> None:
         description="Take a photo using the connected phone's camera.",
         handler=capture_photo,
         group="mobile",
+        parameters={
+            "device": {
+                "type": "string",
+                "description": (
+                    "Which phone (node id or name). Optional when only one is "
+                    "connected; required when several are."
+                ),
+            },
+        },
         side_effect=True,
     )
     registry.agent_tools["mobile.notify"] = AgentTool(
@@ -67,7 +116,14 @@ def register_mobile_tools() -> None:
         handler=notify_mobile,
         group="mobile",
         parameters={
-            "text": {"type": "string", "description": "The notification text to show."}
+            "text": {"type": "string", "description": "The notification text to show."},
+            "device": {
+                "type": "string",
+                "description": (
+                    "Which phone (node id or name). Optional when only one is "
+                    "connected; required when several are."
+                ),
+            },
         },
         required=["text"],
         side_effect=True,

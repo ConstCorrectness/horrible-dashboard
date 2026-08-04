@@ -18,6 +18,9 @@ export const observabilityModule: ModuleManifest = {
       role: 'widget',
       icon: '⊡',
       singleton: true,
+      // Embedded: the fuller inspector behind `observability.io`'s bottom strip.
+      // The compact widget is the destination; this is its expanded view.
+      embedded: true,
     },
   ],
   widgets: [

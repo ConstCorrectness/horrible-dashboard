@@ -14,6 +14,7 @@
  */
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
+  backendHealth,
   dialogsStore,
   findArea,
   layoutStore,
@@ -43,6 +44,25 @@ function useStatusText(): string {
   const paneTitle = pane ? (resolveView(pane.viewId)?.title ?? pane.viewId) : null;
   if (!workspace) return '';
   return paneTitle ? `${workspace} › ${paneTitle}` : workspace;
+}
+
+/**
+ * Backend reachability, as a dot in the status line — the successor of the
+ * `dashboard.backendStatus` pane, which spent a whole center area on one
+ * sentence. Silent while healthy: a status line that always says "fine" trains
+ * you to stop reading it.
+ */
+function BackendIndicator() {
+  const health = useSyncExternalStore(backendHealth.subscribe, backendHealth.getSnapshot);
+  if (health.reachable !== false) return null;
+  return (
+    <span
+      className="frame-minibuffer-echo frame-minibuffer-echo--error"
+      title={health.error ?? 'no response from the backend'}
+    >
+      ⚠ backend unreachable
+    </span>
+  );
 }
 
 export function Minibuffer() {
@@ -154,6 +174,7 @@ export function Minibuffer() {
   return (
     <div className="frame-minibuffer frame-minibuffer--status">
       <span className="frame-minibuffer-status">{status}</span>
+      <BackendIndicator />
       {state.echo && (
         <span
           className={`frame-minibuffer-echo${

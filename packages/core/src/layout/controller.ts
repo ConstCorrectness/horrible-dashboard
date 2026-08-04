@@ -11,12 +11,14 @@ import {
   type LayoutController,
   type OpenPaneOptions,
   type PanelDecl,
+  type SectionDecl,
   type SplitDirection,
   type WidgetDecl,
 } from '../registry';
 import { isPaneDirty, runCloseGuard } from './close-guards';
 import { getRailPrefs } from './rail-prefs';
-import { setRegionCommandHandler } from './region-bus';
+import { setFrameCommandHandler } from './frame-bus';
+import { resolveShowTarget, type ShowCandidates, type ShowTarget } from './show';
 import {
   areaOfInstance,
   collectAreas,
@@ -28,6 +30,7 @@ import {
   visiblePanes,
 } from './model';
 import * as persistence from './persistence';
+import { closePaneSession, paneSessionKey } from './pane-lifetime';
 import { layoutStore } from './store';
 import type {
   AreaNode,
@@ -78,6 +81,10 @@ export function roleOf(viewId: string): PaneRole {
 export function dockSidesOf(viewId: string): DockSide[] {
   const decl = resolveView(viewId);
   if (!decl) return [];
+  // Embedded ⇒ never dockable. A rail glyph is exactly the "second home" an
+  // embedded view is declaring it does not want, and it would be reachable by
+  // glyph while absent from every other opener — the most confusing half-state.
+  if (decl.embedded) return [];
   const declared: DockSide[] = decl.dockable
     ? [decl.dockable].flat()
     : roleOf(viewId) === 'tool'
@@ -114,6 +121,75 @@ export function regionsFor(viewId: string): PaneState['regions'] | undefined {
     };
   }
   return Object.keys(out).length ? out : undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Sections (in-pane tabs)
+// ---------------------------------------------------------------------------
+
+/** The sections a view declares, in declaration order. */
+export function sectionsOf(viewId: string): SectionDecl[] {
+  return resolveView(viewId)?.sections ?? [];
+}
+
+/** The section a freshly opened pane of `viewId` starts on, if it has any. */
+export function defaultSectionFor(viewId: string): string | undefined {
+  const decls = sectionsOf(viewId);
+  if (!decls.length) return undefined;
+  return (decls.find((s) => s.default) ?? decls[0]).id;
+}
+
+/**
+ * The section a pane is actually showing.
+ *
+ * Resolves rather than reads, because a stored `activeSection` can outlive the
+ * declaration it names — a saved layout is loaded against whatever the module
+ * declares *today*, and a plugin can be updated or uninstalled under an open
+ * pane. Falling back to the default keeps the strip coherent instead of
+ * rendering with no tab selected.
+ */
+export function activeSectionOf(pane: PaneState): string | undefined {
+  const decls = sectionsOf(pane.viewId);
+  if (!decls.length) return undefined;
+  if (pane.activeSection && decls.some((s) => s.id === pane.activeSection)) {
+    return pane.activeSection;
+  }
+  return defaultSectionFor(pane.viewId);
+}
+
+/** Switch one pane instance to a section. False when the view has no such section. */
+export function setPaneSection(instanceId: string, section: string): boolean {
+  const located = findPaneAnywhere(frame(), instanceId);
+  if (!located) return false;
+  if (!sectionsOf(located.pane.viewId).some((s) => s.id === section)) return false;
+  layoutStore.dispatch({ type: 'SET_SECTION', instanceId, section });
+  return true;
+}
+
+/**
+ * Show a section by name, opening its host pane first if it isn't open — the
+ * section-level twin of `revealRegionView`, and what `show("friends")` lands on.
+ *
+ * `hostViewId` is optional so a caller who only has a section id (a synthesized
+ * command, the agent) doesn't have to know which pane owns it. When several
+ * views declare the same section id, an explicit host wins.
+ */
+export function revealSection(section: string, hostViewId?: string): string | null {
+  const host = hostViewId
+    ? resolveView(hostViewId)
+    : [...registry.panels, ...registry.widgets].find((v) =>
+        v.sections?.some((s) => s.id === section),
+      );
+  if (!host) return null;
+  let instance = hostInstanceOf(host.id);
+  if (!instance) {
+    const id = openPane(host.id);
+    instance = id ? findPaneAnywhere(frame(), id) : null;
+  }
+  if (!instance) return null;
+  focusInstance(instance);
+  setPaneSection(instance.pane.instanceId, section);
+  return instance.pane.instanceId;
 }
 
 /** The area's hosted role: that of its first tab, or null when empty. */
@@ -233,6 +309,9 @@ export async function closePaneGuarded(idOrInstance: string): Promise<boolean> {
   // Re-check existence: the guard's dialog is async and the pane could have gone.
   if (!findPaneAnywhere(frame(), instanceId)) return false;
   layoutStore.dispatch({ type: 'REMOVE_PANE', instanceId });
+  // The one place a pane genuinely goes away, so the one place its long-lived
+  // resources are torn down. Unmount does not do this — see `pane-lifetime`.
+  closePaneSession(paneSessionKey(layoutStore.getSnapshot().workspaceId, instanceId));
   return true;
 }
 
@@ -562,6 +641,268 @@ export function areaHostingView(viewId: string): string | null {
   return pick.location.kind === 'area' ? pick.location.areaId : null;
 }
 
+/**
+ * Retired view ids/titles → where their content lives now.
+ *
+ * The counterpart to `serialize.ts`'s `RENAMED_VIEWS`, and deliberately separate from
+ * it. That map repairs saved **layouts**; this one keeps the **agent's vocabulary**
+ * working. The two have different lifetimes on purpose: a stored arrangement is
+ * disposable (it reseeds from its preset), but a name the agent — or the user talking
+ * to it — has ever used should never stop resolving.
+ *
+ * Add an entry whenever a pane is merged away.
+ */
+export const VIEW_ALIASES: Readonly<Record<string, ShowTarget>> = {
+  // Games: six panes merged into `games.lobby`'s sections. Each rendered a
+  // component the lobby already renders, so they were a second home for the same
+  // content — but "open the ladder" must keep working, for the user and the agent.
+  'games.ladder': { kind: 'view', viewId: 'games.lobby', section: 'career' },
+  Ladder: { kind: 'view', viewId: 'games.lobby', section: 'career' },
+  'games.challenges': { kind: 'view', viewId: 'games.lobby', section: 'career' },
+  Challenges: { kind: 'view', viewId: 'games.lobby', section: 'career' },
+  'games.profile': { kind: 'view', viewId: 'games.lobby', section: 'career' },
+  Profile: { kind: 'view', viewId: 'games.lobby', section: 'career' },
+  'games.replays': { kind: 'view', viewId: 'games.lobby', section: 'replays' },
+  'games.players': { kind: 'view', viewId: 'games.lobby', section: 'social' },
+  Players: { kind: 'view', viewId: 'games.lobby', section: 'social' },
+  'games.plaza': { kind: 'view', viewId: 'games.lobby', section: 'social' },
+  'The Plaza': { kind: 'view', viewId: 'games.lobby', section: 'social' },
+
+  // People: nine panes across three modules became one. The first five moved
+  // whole; the last four were infrastructure readouts, and their names now land
+  // on the nearest thing a person actually wanted — "who is around" is Friends,
+  // and the raw diagnostics fold away under Me.
+  'social.friends': { kind: 'view', viewId: 'people.home', section: 'friends' },
+  Friends: { kind: 'view', viewId: 'people.home', section: 'friends' },
+  'network.chat': { kind: 'view', viewId: 'people.home', section: 'messages' },
+  'Peer Chat': { kind: 'view', viewId: 'people.home', section: 'messages' },
+  'commons.directory': { kind: 'view', viewId: 'people.home', section: 'discover' },
+  Commons: { kind: 'view', viewId: 'people.home', section: 'discover' },
+  'commons.requests': { kind: 'view', viewId: 'people.home', section: 'requests' },
+  'Commons Requests': { kind: 'view', viewId: 'people.home', section: 'requests' },
+  'commons.profile': { kind: 'view', viewId: 'people.home', section: 'me' },
+  'Commons Profile': { kind: 'view', viewId: 'people.home', section: 'me' },
+  'network.peers': { kind: 'view', viewId: 'people.home', section: 'friends' },
+  Peers: { kind: 'view', viewId: 'people.home', section: 'friends' },
+  'network.monitor': { kind: 'view', viewId: 'people.home', section: 'me' },
+  'Peer Monitor': { kind: 'view', viewId: 'people.home', section: 'me' },
+  'network.relay': { kind: 'view', viewId: 'people.home', section: 'me' },
+  'Agent Relay': { kind: 'view', viewId: 'people.home', section: 'me' },
+  // Lobby has no successor surface: rendezvous is a service, and rooms are the
+  // hassault server browser's job. It resolves to Friends rather than nothing so
+  // the name still lands somewhere sensible instead of a did-you-mean.
+  'network.lobby': { kind: 'view', viewId: 'people.home', section: 'friends' },
+
+  // Explorer: five left-dock browsers became five sections. Unlike the games and
+  // People merges, all five views still exist and still render — they are
+  // `embedded`, so `show` would reach them through `hostOfEmbedded` anyway. These
+  // entries are what make the *titles* resolve, and they keep resolution to one
+  // lookup instead of a scan.
+  'files.tree': { kind: 'view', viewId: 'explorer.home', section: 'files' },
+  'notebook.browser': { kind: 'view', viewId: 'explorer.home', section: 'notebooks' },
+  Notebooks: { kind: 'view', viewId: 'explorer.home', section: 'notebooks' },
+  'flow.library': { kind: 'view', viewId: 'explorer.home', section: 'flows' },
+  Flows: { kind: 'view', viewId: 'explorer.home', section: 'flows' },
+  'records.list': { kind: 'view', viewId: 'explorer.home', section: 'tables' },
+  Tables: { kind: 'view', viewId: 'explorer.home', section: 'tables' },
+  'training.projects': { kind: 'view', viewId: 'explorer.home', section: 'projects' },
+  'Training Projects': { kind: 'view', viewId: 'explorer.home', section: 'projects' },
+};
+
+/** The candidate set `show` matches against, gathered from the live registry. */
+function showCandidates(): ShowCandidates {
+  const views = [...registry.panels, ...registry.widgets].map((v) => ({
+    id: v.id,
+    title: v.title,
+    sections: v.sections?.map((s) => ({ id: s.id, label: s.label })),
+    regions: v.regions?.map((r) => ({ id: r.id, label: r.label })),
+  }));
+  const workspaces = registry.framePresets.map((p) => ({ id: p.id, name: p.name }));
+  return { views, workspaces, aliases: VIEW_ALIASES };
+}
+
+/** What `show` did, handed straight back to the model. */
+export interface ShowResult {
+  ok: boolean;
+  /** What happened, in the model's own vocabulary. */
+  action?: 'focused' | 'opened' | 'revealed' | 'switched-workspace';
+  viewId?: string;
+  instanceId?: string;
+  title?: string;
+  workspaceId?: string;
+  /** The in-pane section left showing, when the pane has any. */
+  section?: string;
+  /** The pane's agent-readable snapshot, so no `get_pane_context` round is needed. */
+  context?: unknown;
+  error?: string;
+  didYouMean?: string[];
+}
+
+/**
+ * Where an `embedded` view actually lives: a region strip, or a section body.
+ *
+ * Returns null for a view that isn't embedded, and also for an embedded one that
+ * nothing hosts — a declaration mistake, and one worth leaving visible rather
+ * than papering over: the caller falls through to opening it standalone, which
+ * is at least reachable while the declaration gets fixed.
+ */
+function hostOfEmbedded(
+  viewId: string,
+):
+  | { kind: 'region'; hostViewId: string }
+  | { kind: 'section'; hostViewId: string; section: string }
+  | null {
+  if (!resolveView(viewId)?.embedded) return null;
+  const region = regionHostOf(viewId);
+  if (region) return { kind: 'region', hostViewId: region.id };
+  for (const host of [...registry.panels, ...registry.widgets]) {
+    const section = host.sections?.find((s) => s.view === viewId);
+    if (section) return { kind: 'section', hostViewId: host.id, section: section.id };
+  }
+  return null;
+}
+
+/** `{ section }` for a pane that has sections, or nothing — read after any switch. */
+function sectionResult(instanceId: string): { section?: string } {
+  const pane = findPaneAnywhere(frame(), instanceId)?.pane;
+  const section = pane ? activeSectionOf(pane) : undefined;
+  return section ? { section } : {};
+}
+
+/**
+ * A pane's agent snapshot with its active section stamped on.
+ *
+ * The section is contributed here rather than left to each pane's provider so it
+ * can't be forgotten: a merged pane's snapshot is ambiguous without it (the same
+ * `people.home` instance means something different on Friends than on Requests),
+ * and a module that omitted it would produce a plausible-looking snapshot the
+ * agent then reasons about wrongly.
+ *
+ * Providers are keyed by pane instance id, and a section body renders **inside**
+ * its host's `PaneInstanceContext` — so unlike a region strip (which gets a
+ * synthetic id no enumeration descends into), a section's provider registers
+ * under the real, listable instance id. The rule that follows: exactly one live
+ * provider per pane, i.e. the host component or its section bodies, never both.
+ */
+export function readPaneAgentContext(instanceId: string): Record<string, unknown> | null {
+  const snapshot = readAgentContext(instanceId);
+  const pane = findPaneAnywhere(frame(), instanceId)?.pane;
+  const section = pane ? activeSectionOf(pane) : undefined;
+  if (!section) return snapshot;
+  // `sections` is contributed by the shell, not by any provider — most sections
+  // have none (only the mounted body can provide, and the one-provider rule means
+  // at most one of them ever does). Without this, `show("notebooks")` came back as
+  // a bare `{section}` and the model, having nothing to answer from, answered from
+  // whatever *else* was in its context — confidently and wrongly. Naming the
+  // siblings also makes the next hop discoverable without `list_available_panes`.
+  const sections = sectionsOf(pane!.viewId).map((s) => s.id);
+  return { section, sections, ...(snapshot ?? {}) };
+}
+
+/**
+ * Reveal whatever `target` names — the agent's one high-level "put this in front of
+ * me" verb, replacing a `list_available_panes` → `open_pane` → `get_pane_context`
+ * sequence with a single call.
+ *
+ * It open-or-focuses (never opening a second copy of something already visible),
+ * reveals a region inside its host, or switches workspace, and returns the resulting
+ * pane's context snapshot inline.
+ */
+export function showTarget(target: string, where?: 'here' | 'beside' | 'dock'): ShowResult {
+  const resolved = resolveShowTarget(target, showCandidates());
+  if (!resolved) {
+    const titles = [...registry.panels, ...registry.widgets].map((v) => v.title);
+    return {
+      ok: false,
+      error: `nothing matches ${JSON.stringify(target)}`,
+      didYouMean: titles.slice(0, 3),
+    };
+  }
+
+  if (resolved.kind === 'workspace') {
+    registry.switchWorkspace(resolved.workspaceId);
+    return { ok: true, action: 'switched-workspace', workspaceId: resolved.workspaceId };
+  }
+
+  if (resolved.kind === 'region') {
+    revealRegionView(resolved.regionViewId);
+    const host = regionHostOf(resolved.regionViewId);
+    return {
+      ok: true,
+      action: 'revealed',
+      viewId: resolved.regionViewId,
+      title: resolveView(resolved.regionViewId)?.title,
+      ...(host ? { instanceId: hostInstanceOf(host.id)?.pane.instanceId } : {}),
+    };
+  }
+
+  // An embedded view has no standalone home, so "show it" means "show it where it
+  // lives". Without this the reachability invariant would fail exactly where it
+  // matters most: a name that used to open a pane would resolve, then fail to open.
+  const embeddedHost = hostOfEmbedded(resolved.viewId);
+  if (embeddedHost) {
+    if (embeddedHost.kind === 'region') {
+      revealRegionView(resolved.viewId);
+      const instanceId = hostInstanceOf(embeddedHost.hostViewId)?.pane.instanceId;
+      return {
+        ok: true,
+        action: 'revealed',
+        viewId: resolved.viewId,
+        title: resolveView(resolved.viewId)?.title,
+        ...(instanceId ? { instanceId } : {}),
+      };
+    }
+    const instanceId = revealSection(embeddedHost.section, embeddedHost.hostViewId);
+    return {
+      ok: Boolean(instanceId),
+      action: 'revealed',
+      viewId: resolved.viewId,
+      title: resolveView(resolved.viewId)?.title,
+      section: embeddedHost.section,
+      ...(instanceId
+        ? { instanceId, context: readPaneAgentContext(instanceId) }
+        : { error: `could not open ${embeddedHost.hostViewId}` }),
+    };
+  }
+
+  const decl = resolveView(resolved.viewId);
+  // Already open anywhere? Focus it — never open a second copy of something the
+  // user can already see.
+  const existing = listPanes(frame()).find((p) => p.pane.viewId === resolved.viewId);
+  if (existing) {
+    focusInstance(existing);
+    // Switch the section *before* reading context: the pane's one provider
+    // reports its active section, so reading first would describe the tab the
+    // user was on rather than the one just asked for.
+    if (resolved.section) setPaneSection(existing.pane.instanceId, resolved.section);
+    return {
+      ok: true,
+      action: 'focused',
+      viewId: resolved.viewId,
+      instanceId: existing.pane.instanceId,
+      title: decl?.title,
+      ...sectionResult(existing.pane.instanceId),
+      context: readPaneAgentContext(existing.pane.instanceId),
+    };
+  }
+
+  const instanceId =
+    where === 'dock' && isDockable(resolved.viewId)
+      ? openToolInDock(resolved.viewId)
+      : openPane(resolved.viewId);
+  if (instanceId && resolved.section) setPaneSection(instanceId, resolved.section);
+  return {
+    ok: Boolean(instanceId),
+    action: 'opened',
+    ...(instanceId ? sectionResult(instanceId) : {}),
+    viewId: resolved.viewId,
+    title: decl?.title,
+    ...(instanceId
+      ? { instanceId, context: readPaneAgentContext(instanceId) }
+      : { error: `could not open ${resolved.viewId}` }),
+  };
+}
+
 /** The area containing a pane instance, or the area itself when given its id. */
 function areaIdFor(areaOrInstanceId: string): string | null {
   const f = frame();
@@ -701,6 +1042,11 @@ function describePane(pane: PaneState): Record<string, unknown> {
     viewId: pane.viewId,
     title: resolveView(pane.viewId)?.title ?? pane.viewId,
   };
+  const sections = sectionsOf(pane.viewId);
+  if (sections.length) {
+    out.activeSection = activeSectionOf(pane);
+    out.sections = sections.map((s) => s.id);
+  }
   if (pane.regions) {
     out.regions = Object.fromEntries(
       Object.entries(pane.regions).map(([position, r]) => [
@@ -774,7 +1120,7 @@ export function readVisibleAgentContexts(
   for (const { pane, location } of ranked) {
     if (out.length >= limit) break;
     if (pane.instanceId === skipInstanceId) continue;
-    const snapshot = readAgentContext(pane.instanceId);
+    const snapshot = readPaneAgentContext(pane.instanceId);
     if (!snapshot) continue;
     out.push({
       instanceId: pane.instanceId,
@@ -860,12 +1206,15 @@ export function resizeAreaPx(
  * the Frame on mount; also wires the region command bus and the panel opener
  * target used by `registry.openPanel`. */
 export function installFrameController(): void {
-  setRegionCommandHandler({
+  setFrameCommandHandler({
     togglePosition: (hostViewId, position) => {
       const instance = hostInstanceOf(hostViewId);
       if (instance) toggleRegion(instance.pane.instanceId, position);
     },
     pickView: (regionViewId) => toggleRegionView(regionViewId),
+    revealSection: (section, hostViewId) => {
+      revealSection(section, hostViewId);
+    },
   });
 
   const controller: LayoutController = {
@@ -917,6 +1266,9 @@ export function installFrameController(): void {
       // A dock only accepts views that opted into docking; the center accepts
       // anything (a tool dragged out of a dock has to be able to live there).
       if (located.location.kind === 'dock' && !isDockable(viewId)) return false;
+      // The instance survives, but whatever the *old* view was running in it does
+      // not — switching a terminal pane to a browser must not leave a shell behind.
+      closePaneSession(paneSessionKey(layoutStore.getSnapshot().workspaceId, instanceId));
       layoutStore.dispatch({
         type: 'SET_PANE_VIEW',
         instanceId,

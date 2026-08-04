@@ -1,73 +1,28 @@
-import { registry, type ModuleManifest } from '../../registry';
-import { AgentRelayPanel } from './AgentRelayPanel';
-import { LobbyPanel } from './LobbyPanel';
+import { type ModuleManifest } from '../../registry';
 import { PeerChatPanel } from './PeerChatPanel';
-import { PeerMonitor } from './PeerMonitor';
-import { PeersWidget } from './PeersWidget';
 import { initLobby } from './lobby';
 import { initNetwork } from './ws';
 
 /**
- * The distributed peer fabric, frontend side: a Peers widget showing presence over
- * the `/ws` `network` channel, plus the settings that configure identity, transport,
- * and trust. Agent-to-agent tools (`list_peers`, `agent.ask_peer`) are backend-static
- * and need no frontend handler. See docs/modules/network.mdx.
+ * The distributed peer fabric, frontend side. It contributes **settings and
+ * services, no panes**.
+ *
+ * It used to own five: Peers, Peer Chat, Peer Monitor, Lobby and Agent Relay. Only
+ * Peer Chat was something a person wanted to *look at*, and it is now the Messages
+ * section of the People pane. The other four were infrastructure readouts that
+ * became destinations because a pane was the only way to show anything — "Peers"
+ * answered "which machines are connected" when the real question is "which of my
+ * friends is around", which People answers by person.
+ *
+ * Nothing was lost: transports, trust and rendezvous are still here as services
+ * (`ws.ts`, `lobby.ts`, `peerchat.ts`, `collab.ts`), the knobs are on the settings
+ * page, and the traffic is in observability. Agent-to-agent tools (`list_peers`,
+ * `agent.ask_peer`) are backend-static and need no frontend handler.
+ * See docs/modules/network.mdx.
  */
 export const networkModule: ModuleManifest = {
   id: 'network',
   title: 'Network',
-  widgets: [
-    {
-      id: 'network.peers',
-      title: 'Peers',
-      component: PeersWidget,
-      role: 'tool',
-      icon: '⇄',
-      defaultDock: 'right',
-      // The peer-fabric satellites as regions on the Peers tool.
-      regions: [
-        { id: 'network.chat', label: 'Peer Chat', icon: '✉', position: 'bottom' },
-        { id: 'network.monitor', label: 'Peer Monitor', icon: '◈', position: 'bottom' },
-        { id: 'network.lobby', label: 'Lobby', icon: '⊞', position: 'bottom' },
-        { id: 'network.relay', label: 'Agent Relay', icon: '⇌', position: 'bottom' },
-      ],
-    },
-    {
-      id: 'network.lobby',
-      title: 'Lobby',
-      component: LobbyPanel,
-      role: 'widget',
-      icon: '⊞',
-    },
-    {
-      id: 'network.monitor',
-      title: 'Peer Monitor',
-      component: PeerMonitor,
-      role: 'widget',
-      icon: '◈',
-    },
-    {
-      id: 'network.chat',
-      title: 'Peer Chat',
-      component: PeerChatPanel,
-      role: 'widget',
-      icon: '✉',
-    },
-    {
-      id: 'network.relay',
-      title: 'Agent Relay',
-      component: AgentRelayPanel,
-      role: 'widget',
-      icon: '⇌',
-    },
-  ],
-  commands: [
-    {
-      id: 'network.open',
-      title: 'Network: Open peers',
-      run: () => registry.openPanel('network.peers'),
-    },
-  ],
   settings: [
     {
       key: 'network.nodeName',
@@ -192,6 +147,7 @@ export const networkModule: ModuleManifest = {
   ],
 };
 
+export { PeerChatPanel };
 export { initNetwork };
 export { initLobby };
 export { subscribeCollab, collabJoin, collabLeave, collabOp, type CollabUpdate } from './collab';
