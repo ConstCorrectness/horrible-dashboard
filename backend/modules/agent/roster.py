@@ -111,6 +111,16 @@ INTAKE_PROMPT = (
 )
 
 
+WRITER_PROMPT = (
+    "You are the writer and design agent for horrible-dashboard. You specialize in "
+    "content creation, drafting blog posts (Markdown/LaTeX), and generating frontend "
+    "design templates.\n"
+    "Rules:\n"
+    "- Help the user draft and refine content in the writer.editor.\n"
+    "- Generate UI components and preview them in the design.canvas.\n"
+    "- Use publishing tools to format and push content to external platforms like Medium or Substack.\n" + _SHARED_RULES
+)
+
 def _builtin_agents() -> dict[str, AgentSpec]:
     from backend.modules.agent.orchestrator import SYSTEM_PROMPT
 
@@ -169,6 +179,14 @@ def _builtin_agents() -> dict[str, AgentSpec]:
             system_prompt=INTAKE_PROMPT,
             tool_groups=["records", "browser", "research", "library"],
             preload_groups=["records", "research"],
+        ),
+        "writer": AgentSpec(
+            id="writer",
+            name="Writer",
+            description="Content drafting, blog publishing, and frontend design generation.",
+            system_prompt=WRITER_PROMPT,
+            tool_groups=["writer", "editor", "browser", "files"],
+            preload_groups=["writer", "editor"],
         ),
     }
 

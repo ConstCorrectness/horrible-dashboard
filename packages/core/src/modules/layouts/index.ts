@@ -156,6 +156,22 @@ export const layoutsModule: ModuleManifest = {
         docks: {},
       },
     },
+    {
+      id: 'writer',
+      name: 'Writer & Design',
+      icon: '✍️',
+      agent: 'writer',
+      frame: {
+        center: {
+          tabs: ['writer.editor', 'design.canvas'],
+          active: 0,
+        },
+        docks: {
+          left: { tools: ['explorer.home', 'writer.publish'], activeTool: 'writer.publish', size: 300 },
+          right: { tools: ['agent.chat'], size: 380 },
+        },
+      },
+    },
   ],
   commands: [
     {

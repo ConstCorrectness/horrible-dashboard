@@ -210,6 +210,8 @@ export { notebookModule } from './modules/notebook';
 export { visualizerModule } from './modules/visualizer';
 export { flowModule } from './modules/flow';
 export { gamesModule } from './modules/games';
+export { writerModule } from './modules/writer';
+export { designModule } from './modules/design';
 export { codeModule, SymbolSearchModal } from './modules/code';
 export { gitModule } from './modules/git';
 export { githubModule } from './modules/github';

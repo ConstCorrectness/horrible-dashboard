@@ -58,6 +58,8 @@ import {
   trainingModule,
   notebookModule,
   visualizerModule,
+  writerModule,
+  designModule,
 } from '@horrible/core';
 import { AppShell } from '@horrible/ui';
 
@@ -125,6 +127,8 @@ async function boot(): Promise<void> {
   registry.register(visualizerModule);
   registry.register(flowModule);
   registry.register(gamesModule);
+  registry.register(writerModule);
+  registry.register(designModule);
   // network / social / commons contribute services, settings and components but
   // **no panes** — People is where all three surface.
   registry.register(networkModule);
