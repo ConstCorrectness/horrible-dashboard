@@ -340,10 +340,10 @@ export function RoomsPanel() {
     if (!text || isAgentSpeaking) return;
     try {
       setIsAgentSpeaking(true);
-      const req = await fetch(apiUrl('/api/agent/complete'), {
+      const req = await fetch(apiUrl('/api/agent/generate'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prefix: 'You are an AI in a Clubhouse room. You hear: "' + text + '". Reply concisely as yourself: "', suffix: '"', language: 'text' }),
+        body: JSON.stringify({ prompt: `You are an AI participant in a voice chat room. Another speaker just said: "${text}". Reply concisely with a natural, conversational response.` }),
       });
       const data = await req.json();
       

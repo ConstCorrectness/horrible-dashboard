@@ -136,6 +136,24 @@ async def chat(req: ChatRequest) -> StreamingResponse:
     return StreamingResponse(gen(), media_type="application/x-ndjson")
 
 
+@router.post("/generate")
+async def generate(req: ChatRequest) -> dict[str, str]:
+    """Return a complete text generation response."""
+    config = _load_config()
+    if config is None:
+        raise HTTPException(
+            status_code=409, detail="Agent not configured — finish onboarding"
+        )
+    info = P.provider_for(config.provider)
+    endpoint = config.endpoint or info.default_endpoint
+    async with instrumented_client(timeout=30) as client:
+        try:
+            completion = await P.generate(client, info, endpoint, config.model, req.prompt)
+        except httpx.HTTPError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"completion": completion}
+
+
 _COMPLETE_SYSTEM = (
     "You are an inline code/text completion engine. Continue the text at the "
     "<CURSOR> marker so it fits naturally between the text before and after it. "
