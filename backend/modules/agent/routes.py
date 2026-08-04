@@ -148,7 +148,7 @@ async def generate(req: ChatRequest) -> dict[str, str]:
     endpoint = config.endpoint or info.default_endpoint
     async with instrumented_client(timeout=30) as client:
         try:
-            completion = await P.generate(client, info, endpoint, config.model, req.prompt)
+            completion = await P.generate(client, info, endpoint, config.model, req.prompt, max_tokens=req.max_tokens, temperature=req.temperature)
         except httpx.HTTPError as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
     return {"completion": completion}
@@ -264,6 +264,12 @@ async def tts(text: str):
 @router.post("/stt")
 async def stt(file: fastapi.UploadFile):
     from backend.modules.agent.stt_service import stt_service
+    import os
     audio_bytes = await file.read()
     text = await stt_service.transcribe(audio_bytes)
+    
+    os.makedirs("scratch", exist_ok=True)
+    with open("scratch/stt_logs.txt", "a") as f:
+        f.write(f"Bytes: {len(audio_bytes)}, Transcribed: '{text}'\n")
+        
     return {"text": text}

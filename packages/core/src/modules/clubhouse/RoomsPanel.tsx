@@ -42,6 +42,8 @@ export function RoomsPanel() {
   const [agentTranscript, setAgentTranscript] = useState<string | null>(null);
   const [transcriptionBuffer, setTranscriptionBuffer] = useState("");
   const [sttChunkMs, setSttChunkMs] = useState(5000);
+  const [agentTemperature, setAgentTemperature] = useState(0.7);
+  const [agentMaxTokens, setAgentMaxTokens] = useState(150);
   const [myUserId, setMyUserId] = useState<number | null>(null);
 
   // New states for extended Clubhouse functionality
@@ -354,7 +356,11 @@ export function RoomsPanel() {
       const req = await fetch(apiUrl('/api/agent/generate'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: `You are an AI participant in a voice chat room. Another speaker just said: "${text}". Reply concisely with a natural, conversational response.` }),
+        body: JSON.stringify({ 
+          prompt: `You are an AI participant in a voice chat room. Another speaker just said: "${text}". Reply concisely with a natural, conversational response.`,
+          temperature: agentTemperature,
+          max_tokens: agentMaxTokens
+        }),
       });
       const data = await req.json();
       
@@ -1953,16 +1959,28 @@ export function RoomsPanel() {
                 🤖 {agentEnabled ? 'Agent ON' : 'Agent OFF'}
               </button>
               {agentEnabled && (
-                <select
-                  className="ch-btn-action"
-                  style={{ padding: '0.4rem 0.6rem', fontSize: '0.75rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d', borderRadius: '20px', cursor: 'pointer' }}
-                  value={sttChunkMs}
-                  onChange={(e) => setSttChunkMs(Number(e.target.value))}
-                >
-                  <option value={2000}>Fast (2s pause)</option>
-                  <option value={5000}>Normal (5s pause)</option>
-                  <option value={8000}>Patient (8s pause)</option>
-                </select>
+                <>
+                  <select
+                    className="ch-btn-action"
+                    style={{ padding: '0.4rem 0.6rem', fontSize: '0.75rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d', borderRadius: '20px', cursor: 'pointer' }}
+                    value={sttChunkMs}
+                    onChange={(e) => setSttChunkMs(Number(e.target.value))}
+                  >
+                    <option value={2000}>Fast (2s pause)</option>
+                    <option value={5000}>Normal (5s pause)</option>
+                    <option value={8000}>Patient (8s pause)</option>
+                  </select>
+                  
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                    <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Temp:</span>
+                    <input type="number" min="0" max="2" step="0.1" value={agentTemperature} onChange={(e) => setAgentTemperature(Number(e.target.value))} style={{ width: '45px', padding: '0.2rem', fontSize: '0.7rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d', borderRadius: '4px' }} title="Temperature (Creativity)" />
+                  </div>
+                  
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+                    <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Len:</span>
+                    <input type="number" min="20" max="500" step="10" value={agentMaxTokens} onChange={(e) => setAgentMaxTokens(Number(e.target.value))} style={{ width: '50px', padding: '0.2rem', fontSize: '0.7rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d', borderRadius: '4px' }} title="Max Tokens (Length)" />
+                  </div>
+                </>
               )}
             </div>
             {isCurrentUserSpeaker ? (

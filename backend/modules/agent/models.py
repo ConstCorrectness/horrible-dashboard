@@ -50,6 +50,8 @@ class AgentStatus(BaseModel):
 
 class ChatRequest(BaseModel):
     prompt: str
+    temperature: float = 0.2
+    max_tokens: int = 64
 
 
 class CompleteRequest(BaseModel):
