@@ -63,8 +63,52 @@ def _emit(event: str, data: dict[str, Any]) -> None:
             logger.exception("social subscriber failed")
 
 
+#: Who was online last time we looked, so a change can be named rather than
+#: re-sent. Presence itself is still derived (see `online_nodes`); this is only the
+#: previous *answer*, held in memory and correctly empty after a restart.
+_last_presence: dict[str, str] = {}
+
+
 def broadcast_roster() -> None:
-    _emit("roster", snapshot().model_dump())
+    """Push the roster, and name any presence that actually changed.
+
+    The snapshot alone was all that ever went out, which meant there was no "came
+    online" signal anywhere in the system — every subscriber received a complete
+    roster on every peer event and had to diff it themselves, and none of them did.
+    That is why nothing could notify you when a friend appeared, and why the agent
+    had nothing to attach a watch to.
+
+    The diff is computed here, once, rather than in each consumer: the browser, the
+    notification rules and the agent's watches all want the same answer, and three
+    independent diffs of the same snapshot is three chances to disagree about who
+    just arrived.
+    """
+    snap = snapshot()
+    _emit("roster", snap.model_dump())
+
+    global _last_presence
+    current = {f.person_id: f.presence for f in snap.friends}
+    for person_id, presence in current.items():
+        was = _last_presence.get(person_id)
+        # A person we have never seen before is not "coming online" — on the first
+        # roster after a restart that would announce every friend who happens to be
+        # connected, which is noise, not news.
+        if was is None or was == presence:
+            continue
+        friend = next((f for f in snap.friends if f.person_id == person_id), None)
+        if friend is None or friend.is_self:
+            continue
+        _emit(
+            "presence",
+            {
+                "person_id": person_id,
+                "display_name": friend.display_name,
+                "handle": friend.handle,
+                "presence": presence,
+                "online": presence == "online",
+            },
+        )
+    _last_presence = current
 
 
 # ---- snapshot ---------------------------------------------------------------------
@@ -117,6 +161,51 @@ def _grant_trust(person_id: str) -> None:
 def _revoke_trust(person_id: str, *, blocked: bool = False) -> None:
     for device in store.list_devices(person_id):
         trust.save_known_peer(device["node_id"], {"trusted": False, "blocked": blocked})
+
+
+def _on_accepted(person_id: str) -> None:
+    """Everything that happens when a friendship becomes real, in one place.
+
+    There are three ways to arrive here — we accepted, they accepted, or the two
+    requests crossed and settled themselves — and they used to each carry their own
+    copy of "grant trust". Adding a second consequence to three sites is how one of
+    them gets missed, so both live here now.
+
+    The ladder mirror is **detached**. Two of the three callers are peer-message
+    handlers running on the hub's receive loop, and `mirror_accept` talks to the
+    game server over HTTP with an 8-second timeout; awaiting it inline would stall
+    the socket that friendship arrived on for as long as the game server is slow.
+    It is also allowed to fail — see `ladder.mirror_accept` on why a missing ladder
+    half is not a failed friendship.
+    """
+    _grant_trust(person_id)
+
+    from backend.modules.social import ladder
+
+    _detach(ladder.mirror_accept(person_id))
+
+
+#: Strong references to in-flight detached work (see `_detach`).
+_mirror_tasks: set[asyncio.Task[Any]] = set()
+
+
+def _detach(coro: Any) -> None:
+    """Run `coro` in the background, holding a reference until it finishes.
+
+    Two things this exists for. The event loop keeps only a *weak* reference to a
+    task, so a bare `ensure_future` can be collected mid-flight and silently never
+    complete. And there is no loop at all in a synchronous test that calls
+    `register()` directly — closing the coroutine there keeps the "never awaited"
+    warning from firing on work that was correctly skipped.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        coro.close()
+        return
+    task = asyncio.ensure_future(coro)
+    _mirror_tasks.add(task)
+    task.add_done_callback(_mirror_tasks.discard)
 
 
 # ---- outbound: identifying ourselves ----------------------------------------------
@@ -210,7 +299,7 @@ async def handle_friend_request(
         # We each asked the other independently — that is mutual consent, so skip
         # the prompt and settle it as accepted on both sides.
         store.upsert_friend(person_id, status="accepted", display_name=display_name)
-        _grant_trust(person_id)
+        _on_accepted(person_id)
         await _send_response(person_id, accept=True)
         broadcast_roster()
         return
@@ -240,7 +329,7 @@ async def handle_friend_response(
         return
     if bool(env.data.get("accept")):
         store.set_status(person_id, "accepted")
-        _grant_trust(person_id)
+        _on_accepted(person_id)
     else:
         store.remove_friend(person_id)
     broadcast_roster()
@@ -402,7 +491,7 @@ async def respond(person_id: str, accept: bool) -> None:
         return
     if accept:
         store.set_status(person_id, "accepted")
-        _grant_trust(person_id)
+        _on_accepted(person_id)
     else:
         store.remove_friend(person_id)
     await _send_response(person_id, accept)
@@ -498,3 +587,10 @@ def register(hub: PeerHub) -> None:
         label=node_identity.node_name(),
         cert=person_identity.self_cert(),
     )
+    # Link any roster rows that predate the ladder bridge (or whose person signed up
+    # since we last looked). Detached and best-effort: `register` runs inside network
+    # startup, and a slow or absent game server must not hold up the fabric — an
+    # unreconciled roster renders fine, just without callsigns.
+    from backend.modules.social import ladder
+
+    _detach(ladder.reconcile())

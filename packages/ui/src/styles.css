@@ -1651,6 +1651,34 @@ body {
   letter-spacing: 0.03em;
 }
 
+/* The per-contributor "Advanced" fold. Indented and rule-marked so its contents
+   read as a subordinate part of the group above rather than a new group. */
+.settings-fold {
+  margin-top: 0.4rem;
+}
+
+.settings-fold > summary {
+  cursor: pointer;
+  padding: 0.3rem 0;
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  user-select: none;
+}
+
+.settings-fold > summary:hover {
+  color: var(--text);
+}
+
+.settings-fold[open] > summary {
+  color: var(--text);
+  margin-bottom: 0.2rem;
+}
+
+.settings-fold[open] {
+  border-left: 1px solid var(--border);
+  padding-left: 0.75rem;
+}
+
 .setting-row {
   display: flex;
   align-items: flex-start;

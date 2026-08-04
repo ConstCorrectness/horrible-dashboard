@@ -128,3 +128,49 @@ def test_request_reply_ping(monkeypatch, tmp_path):
 
     reply = asyncio.run(go())
     assert reply.type == protocol.PONG
+
+
+def test_pairing_is_remembered_by_both_sides(monkeypatch, tmp_path):
+    """Pairing used to be one-sided.
+
+    The acceptor wrote a `known_peers` record (`trust.evaluate` → `save_known_peer`)
+    while the dialer marked trust in memory only — so after A redeemed B's invite,
+    only B remembered, and the next time A was the one dialled B rejected it.
+
+    Both hubs in this test share one `HORRIBLE_DATA_DIR` (trust reads a process-wide
+    env var), so both records land in the same file. That is what makes the
+    assertion sharp rather than vague: a record keyed by **B's** node id can only
+    have been written by A's `handshake_dial`, because B never writes about itself.
+    """
+    from backend.modules.network import trust
+
+    hub_a, id_a = _make_hub(monkeypatch, tmp_path, "a")
+    hub_b, id_b = _make_hub(monkeypatch, tmp_path, "b", trust_mode="manual")
+
+    async def go():
+        monkeypatch.setenv("HORRIBLE_DATA_DIR", str(tmp_path / "b"))
+        _invite, token, _exp = trust.make_invite("loopback", id_b)
+        await connect_pair(hub_a, hub_b, token=token)
+        await asyncio.sleep(0.05)
+        return trust.load_known_peers()
+
+    known = asyncio.run(go())
+    assert known[id_a]["trusted"] is True  # the acceptor's record, as before
+    assert known[id_b]["trusted"] is True  # the dialer's — this is the fix
+    assert known[id_b]["via"] == "dialed"
+
+
+def test_the_directory_trust_mode_no_longer_bricks_pairing(monkeypatch, tmp_path):
+    """`directory` was offered as a trust mode and nothing implemented it, so
+    `evaluate` rejected every peer — choosing it made the node unpairable with no
+    signal. It is gone from the settings enum; a node that stored it reads as
+    `manual` rather than staying broken."""
+    from backend.modules.network import trust
+    from backend.modules.settings.routes import set_value
+
+    _fresh_identity(monkeypatch, tmp_path, "a")
+    set_value("network.trustMode", "directory")
+    assert trust.trust_mode() == trust.TRUST_MANUAL
+    # And a valid invite now pairs, where before it could not.
+    _invite, token, _exp = trust.make_invite("loopback", "somenode")
+    assert trust.evaluate("somenode", token) == (True, None)

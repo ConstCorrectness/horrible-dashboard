@@ -11,7 +11,14 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { collabJoin, collabLeave, collabOp, subscribeCollab } from './collab';
+import {
+  collabJoin,
+  collabLeave,
+  collabOp,
+  collabShare,
+  collabUnshare,
+  subscribeCollab,
+} from './collab';
 
 export interface CollabPane {
   /** The current text (authoritative while shared, local otherwise). */
@@ -24,6 +31,17 @@ export interface CollabPane {
   setShared: (on: boolean) => void;
   /** Live count of browsers in the room (this node + peers' members). */
   members: number;
+  /**
+   * The people this pane is shared **with**, by person rather than by machine.
+   * Empty means it is syncing only between your own browser tabs — which is what
+   * "shared" used to mean everywhere, while the ops went to every peer anyway.
+   */
+  people: { personId: string; name: string }[];
+  /** Share with someone. The fabric picks whichever of their machines is up. */
+  share: (personId: string) => void;
+  unshare: (personId: string) => void;
+  /** The last share failure, e.g. nobody of theirs is online. */
+  error: string | null;
 }
 
 export interface UseCollabOptions {
@@ -41,12 +59,15 @@ export function useCollab(paneKey: string, opts: UseCollabOptions = {}): CollabP
   const [text, setTextState] = useState(opts.initialText ?? '');
   const [shared, setShared] = useState(Boolean(opts.autoShare));
   const [members, setMembers] = useState(0);
+  const [people, setPeople] = useState<{ personId: string; name: string }[]>([]);
+  const [error, setError] = useState<string | null>(null);
   // Last revision the backend acked, sent as baseRev with the next edit.
   const revRef = useRef(0);
 
   useEffect(() => {
     if (!shared) {
       setMembers(0);
+      setPeople([]);
       return;
     }
     const unsub = subscribeCollab(paneKey, (update) => {
@@ -54,7 +75,17 @@ export function useCollab(paneKey: string, opts: UseCollabOptions = {}): CollabP
         setMembers(update.members ?? 0);
         return;
       }
+      if (update.kind === 'shared') {
+        setPeople(update.people ?? []);
+        return;
+      }
+      if (update.kind === 'error') {
+        setError(update.error ?? 'share failed');
+        return;
+      }
       // state / op / rejected all carry the authoritative text + rev to adopt.
+      // The two branches above return early for a reason: they carry no text, so
+      // falling through here would blank the pane and reset its revision.
       revRef.current = update.rev;
       setTextState(update.text);
       if (update.members !== undefined) setMembers(update.members);
@@ -74,5 +105,23 @@ export function useCollab(paneKey: string, opts: UseCollabOptions = {}): CollabP
     [shared, paneKey],
   );
 
-  return { text, setText, shared, setShared, members };
+  const share = useCallback(
+    (personId: string) => {
+      setError(null);
+      // Sharing with someone implies syncing: turning it on here means a pane
+      // that was local can be shared in one action rather than two.
+      setShared(true);
+      collabShare(paneKey, personId);
+    },
+    [paneKey],
+  );
+
+  const unshare = useCallback(
+    (personId: string) => {
+      collabUnshare(paneKey, personId);
+    },
+    [paneKey],
+  );
+
+  return { text, setText, shared, setShared, members, people, share, unshare, error };
 }

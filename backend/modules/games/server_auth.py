@@ -501,6 +501,153 @@ async def replay_publish(replay_id: str) -> dict[str, Any]:
         return _unreachable_error()
 
 
+# ---- profiles ----------------------------------------------------------------
+#
+# Proxied through the node for the same two reasons sign-in is: the browser talks
+# to one origin (no CORS), and the bearer token never leaves this process. Media
+# rides through as well rather than being loaded cross-origin off the game server —
+# one origin is one thing to reason about, and `/media/{sha}` is immutable so the
+# relay costs one request per image for the life of that image.
+
+
+async def profile_get(handle: str) -> dict[str, Any]:
+    """Somebody else's profile, by callsign. Unauthenticated at the far end."""
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.get(f"{_http_base()}/profile/{handle}")
+            res.raise_for_status()
+            return dict(res.json())
+    except httpx.HTTPError:
+        return _unreachable_error()
+
+
+async def profile_cards(handles: list[str]) -> dict[str, Any]:
+    """Avatar/level/status for a whole roster in one call.
+
+    Batched because the alternative is one request per friend on every render of a
+    pane that opens by default — and this node is the only thing that knows which
+    handles it wants, so the fan-in has to happen here rather than in the browser.
+    """
+    import httpx
+
+    if not handles:
+        return {"cards": {}}
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.post(
+                f"{_http_base()}/profiles/cards", json={"handles": handles}
+            )
+            res.raise_for_status()
+            return dict(res.json())
+    except httpx.HTTPError:
+        return _unreachable_error()
+
+
+async def profile_patch(patch: dict[str, Any]) -> dict[str, Any]:
+    """Update the signed-in account's own profile."""
+    import httpx
+
+    if signed_in_account() is None:
+        return {"error": "sign in first"}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.post(
+                f"{_http_base()}/profile", json=patch, headers=_bearer()
+            )
+            res.raise_for_status()
+            return dict(res.json())
+    except httpx.HTTPError:
+        return _unreachable_error()
+
+
+async def profile_upload(kind: str, mime: str, data: bytes) -> dict[str, Any]:
+    """Relay an image upload. The size and type gates live on the game server (it
+    owns the volume); this only carries the bytes and the bearer."""
+    import httpx
+
+    if signed_in_account() is None:
+        return {"error": "sign in first"}
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            res = await client.post(
+                f"{_http_base()}/profile/media",
+                params={"kind": kind},
+                content=data,
+                headers={**_bearer(), "Content-Type": mime},
+            )
+            res.raise_for_status()
+            return dict(res.json())
+    except httpx.HTTPError:
+        return _unreachable_error()
+
+
+async def profile_media(sha: str) -> tuple[bytes, str] | None:
+    """Fetch a stored image so the node can serve it to its own browser."""
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            res = await client.get(f"{_http_base()}/media/{sha}")
+            if res.status_code != 200:
+                return None
+            return res.content, res.headers.get("content-type", "image/png")
+    except httpx.HTTPError:
+        return None
+
+
+async def comments_list(handle: str, before: float | None = None) -> dict[str, Any]:
+    import httpx
+
+    params: dict[str, Any] = {}
+    if before is not None:
+        params["before"] = before
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.get(
+                f"{_http_base()}/profile/{handle}/comments", params=params
+            )
+            res.raise_for_status()
+            return dict(res.json())
+    except httpx.HTTPError:
+        return _unreachable_error()
+
+
+async def comment_add(handle: str, body: str) -> dict[str, Any]:
+    import httpx
+
+    if signed_in_account() is None:
+        return {"error": "sign in to leave a comment"}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.post(
+                f"{_http_base()}/profile/{handle}/comments",
+                json={"body": body},
+                headers=_bearer(),
+            )
+            res.raise_for_status()
+            return dict(res.json())
+    except httpx.HTTPError:
+        return _unreachable_error()
+
+
+async def comment_hide(comment_id: str) -> dict[str, Any]:
+    import httpx
+
+    if signed_in_account() is None:
+        return {"error": "sign in first"}
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.delete(
+                f"{_http_base()}/profile/comments/{comment_id}", headers=_bearer()
+            )
+            res.raise_for_status()
+            return dict(res.json())
+    except httpx.HTTPError:
+        return _unreachable_error()
+
+
 async def leaderboard(game_id: str) -> dict[str, Any]:
     import httpx
 

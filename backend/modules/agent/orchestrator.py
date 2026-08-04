@@ -600,6 +600,14 @@ _GROUP_DESCRIPTIONS: dict[str, str] = {
         "or display name."
     ),
     "mobile": "The user's paired phone: capture a photo, send it a notification.",
+    "watch": (
+        "Standing watches on people: tell the user when a friend comes online or "
+        "goes offline. Survives the turn — use it for 'let me know when X logs in'."
+    ),
+    "notify": (
+        "Notification rules: mute or unmute by category, by person, or everyone "
+        "except one person, optionally for a set time; and report what is muted."
+    ),
     "hassault": (
         "HorribleAssault matches: list maps and running matches, host one, invite a "
         "friend, add/remove bots, and read a match's state and surroundings."
@@ -757,6 +765,35 @@ _GROUP_KEYWORDS: dict[str, tuple[str, ...]] = {
     # references, so it would preload social on nearly every file turn). Matching is
     # substring, so "friend" already covers "friends".
     "social": ("friend", "roster", "people", "presence"),
+    # The two halves of "let me know when Andrew logs in, and mute any messages
+    # except for him for a bit" — that one sentence must preload both groups or it
+    # takes two turns. Phrases, not bare words, wherever the bare word is common:
+    # "know when" rather than "know", "log in" rather than "in". "presence" is
+    # deliberately left to `social` (a word in two groups spends the budget twice),
+    # and the group names themselves are implicit — "notify" already matches inside
+    # "notification" and "notifications", since matching is substring.
+    "watch": (
+        "let me know when",
+        "tell me when",
+        "ping me when",
+        "when they come online",
+        "logs in",
+        "log in",
+        "logs on",
+        "comes online",
+        "goes offline",
+        "keep an eye",
+    ),
+    "notify": (
+        "mute",
+        "unmute",
+        "silence",
+        "do not disturb",
+        "snooze",
+        "quiet",
+        "stop bothering",
+        "alert",
+    ),
     "clubhouse": ("clubhouse", "room"),
     "training": (
         "train",

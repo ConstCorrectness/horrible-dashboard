@@ -2,31 +2,37 @@ import { useEffect, useState, type ReactNode } from 'react';
 
 import { openDrawer } from '../client-drawer';
 import { setSetting } from '../../../settings';
-import { SignInCard } from '../../../SignInCard';
 import { useAccount } from '../../../useAccount';
 import { useGames } from '../game-ws';
 import { openGamesSection } from '../hub-section';
 import { findRankedMatch } from '../matchmaking';
 
-type Step = 'signin' | 'placement' | 'done';
+type Step = 'placement' | 'done';
 
 /**
  * The first-run hero in the Games pane's Play section — the wizard panel's
- * replacement, and the one surface here allowed to be loud. Two inline steps: sign
- * in → placement match, switching to the Game Board section and opening the Games
+ * replacement, and the one surface here allowed to be loud. One inline step now:
+ * the placement match, switching to the Game Board section and opening the Games
  * Log so the first thing a new player sees is their agent thinking. Sets
  * `games.onboarded` when the placement match goes live, or when dismissed.
  *
- * Each step gets its own headline, because the headline is doing the teaching: the
- * premise of the whole module (you engineer the agent, you don't play) has to land
- * before the sign-in button means anything. Display type is sized against the pane's
- * container query, not the viewport — see `.games-hero` in games.css.
+ * **Sign-in used to be step one here, and it had a skip button.** Both are gone: the
+ * pane is gated (`GamesSignIn`), so nothing signed-out reaches this component, and
+ * the skip led somewhere that did not work — its own copy promised "▶ Play works
+ * without one" while every start flow in matchmaking.ts calls `ensureConnected`
+ * against a server that refuses anonymous play. That sentence is what taught users
+ * to walk into the `invalid token` toast.
+ *
+ * The headline is doing the teaching: the premise of the whole module (you engineer
+ * the agent, you don't play) has to land before the placement match means anything.
+ * Display type is sized against the pane's container query, not the viewport — see
+ * `.games-hero` in games.css.
  */
 
 // Headline copy per step. The <em> is the italic accent word the line lands on
 // (styled by .games-hero-title em); keep it to one word — the emphasis is the point.
 const COPY: Record<Step, { title: ReactNode; sub: ReactNode }> = {
-  signin: {
+  placement: {
     title: (
       <>
         You don't play the games.
@@ -37,18 +43,6 @@ const COPY: Record<Step, { title: ReactNode; sub: ReactNode }> = {
     sub: (
       <>
         Your opponent is another player's harness — the tools they wrote, the context they fed it.
-        An account holds your ratings, replays, and friends, but ▶ Play works without one.
-      </>
-    ),
-  },
-  placement: {
-    title: (
-      <>
-        Time to <em>place</em> you.
-      </>
-    ),
-    sub: (
-      <>
         One match against a practice bot sets your opening rating. The board and your agent's live
         thoughts sit side by side — watch how it reasons before you change a thing.
       </>
@@ -69,17 +63,10 @@ const COPY: Record<Step, { title: ReactNode; sub: ReactNode }> = {
 };
 export function FirstRunHero() {
   const { matchSeats } = useGames();
-  const { account, signedIn } = useAccount();
-  const [step, setStep] = useState<Step>('signin');
+  const { account } = useAccount();
+  const [step, setStep] = useState<Step>('placement');
   const [queued, setQueued] = useState(false);
   const name = account?.display_name ?? null;
-
-  // Signed in — here, on the home page, or in HorribleAssault — means this step is
-  // done. Reading the shared store rather than fetching once on mount is what makes
-  // that true for a sign-in that happened somewhere else.
-  useEffect(() => {
-    if (signedIn && step === 'signin') setStep('placement');
-  }, [signedIn, step]);
 
   // The placement match went live → onboarding is done.
   useEffect(() => {
@@ -98,34 +85,16 @@ export function FirstRunHero() {
 
   const dismiss = () => void setSetting('games.onboarded', true);
 
-  const steps: [Step, string][] = [
-    ['signin', 'Sign in'],
-    ['placement', 'Placement match'],
-  ];
-  const idx = steps.findIndex(([s]) => s === (step === 'done' ? 'placement' : step));
-
   return (
     <div className="games-hero">
       <div className="games-hero-top">
         <span className="games-eyebrow">New here</span>
-        <span className="games-onboard-steps" style={{ marginLeft: 'auto' }}>
-          {steps.map(([s, label], i) => (
-            <span key={s} style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-              <span
-                className={`games-onboard-dot${i === idx && step !== 'done' ? ' active' : ''}${
-                  i < idx || step === 'done' ? ' done' : ''
-                }`}
-              >
-                {i < idx || step === 'done' ? '✓' : i + 1}
-              </span>
-              <span style={{ color: i === idx ? 'inherit' : 'var(--text-dim)' }}>{label}</span>
-              {i < steps.length - 1 && <span style={{ color: 'var(--text-dim)' }}>→</span>}
-            </span>
-          ))}
-        </span>
+        {/* The step dots went with the sign-in step. A progress indicator over a
+            single step measures nothing — it just took up the row. */}
         <button
           type="button"
           className="games-ghost-btn"
+          style={{ marginLeft: 'auto' }}
           onClick={dismiss}
           title="Hide this — restart via the command palette"
         >
@@ -138,20 +107,6 @@ export function FirstRunHero() {
         {step === 'placement' && name ? `Signed in as ${name}. ` : ''}
         {COPY[step].sub}
       </p>
-
-      {step === 'signin' && (
-        <div className="games-hero-actions">
-          {/* Core's SignInCard. What stood here was the oldest of the three
-              sign-in copies: device-flow only, so it never opened a consent page
-              at all, and with no branch for a blocked window — its note rendered
-              "Enter code  at " with both values blank if it ever got a redirect
-              prompt. Nothing about that was visible from this file. */}
-          <SignInCard onSignedIn={() => setStep('placement')} />
-          <button type="button" className="games-ghost-btn" onClick={() => setStep('placement')}>
-            skip
-          </button>
-        </div>
-      )}
 
       {step === 'placement' && (
         <div className="games-hero-actions">
@@ -179,8 +134,6 @@ export function FirstRunHero() {
           </button>
         </div>
       )}
-      {/* Sign-in errors are reported by SignInCard, next to the control that
-          raised them, rather than adrift at the bottom of the hero. */}
     </div>
   );
 }

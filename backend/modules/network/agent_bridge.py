@@ -34,11 +34,15 @@ logger = logging.getLogger(__name__)
 MAX_PEER_HOPS = 3
 PEER_AGENT_TIMEOUT_S = 120.0
 
+# No `ask` here, and it is no longer offered as a setting: ASK prompts a human,
+# and the human it would prompt is not the one who started the turn. It used to be
+# mapped to DEFAULT, so choosing "ask" silently granted a *higher* permission level
+# than its name promises. An unrecognized value falls back to PLAN — read-only — so
+# a stored `ask` fails closed rather than open.
 _MODE_BY_NAME = {
     "plan": Mode.PLAN,
     "default": Mode.DEFAULT,
     "acceptEdits": Mode.ACCEPT_EDITS,
-    "ask": Mode.DEFAULT,  # ASK prompts a human; remote turns auto-deny on ASK
     "autonomous": Mode.AUTONOMOUS,
 }
 

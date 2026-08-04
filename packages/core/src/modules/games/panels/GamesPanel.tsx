@@ -1,10 +1,12 @@
 import { useRef, useState, type CSSProperties, type ReactNode } from 'react';
 
+import { useAccount } from '../../../useAccount';
 import { useGames } from '../game-ws';
 import { setGamesSection, useGamesSection, type GamesSection } from '../hub-section';
 import { AgentBuilderPanel } from './AgentBuilderPanel';
 import { ChallengesPanel } from './ChallengesPanel';
 import { GameBoardPanel } from './GameBoardPanel';
+import { GamesAccountLoading, GamesNodeUnreachable, GamesSignIn } from './GamesSignIn';
 import { LeaderboardPanel } from './LeaderboardPanel';
 import { LobbyPanel } from './LobbyPanel';
 import { PlazaPanel } from './PlazaPanel';
@@ -28,6 +30,11 @@ import { TownPanel } from './TownPanel';
  * Sections are **mounted lazily but never unmounted** once visited: the builder holds
  * unsaved code and the board holds canvas state, so hidden sections are `display: none`
  * rather than torn down. See docs/modules/games.mdx.
+ *
+ * **Nothing below the gate mounts until the node is signed in.** Every start flow runs
+ * through the game server, and the hosted one refuses anonymous play, so a signed-out
+ * Lobby is a screen of dead buttons — which is exactly what it used to be. The phase
+ * ladder mirrors HorribleAssault's `bootPhase` (modules/hassault/boot.ts).
  */
 
 const SECTIONS: GamesSection[] = ['play', 'board', 'build', 'replays', 'career', 'social'];
@@ -62,6 +69,7 @@ const activeTab: CSSProperties = {
 export function GamesPanel() {
   const section = useGamesSection();
   const { board, yourTurn, over } = useGames();
+  const { signedIn, phase, refresh: refreshAccount } = useAccount();
   // Sections render only after they've been visited (so opening the client doesn't boot
   // the board's canvases or the plaza's), then stay mounted.
   const seen = useRef<Set<GamesSection>>(new Set(['play']));
@@ -69,6 +77,20 @@ export function GamesPanel() {
 
   // A live match is worth a badge on the Board tab when you're looking elsewhere.
   const live = board !== null || yourTurn !== null;
+
+  // The three not-signed-in states are genuinely different and must not be collapsed:
+  // `loading` is "we haven't asked yet" (a sign-in form here would flash and vanish),
+  // `unavailable` is "the node didn't answer" (signing in cannot fix that), and only
+  // the last is a confident signed-out. See account-store.ts.
+  const gate = !signedIn ? (
+    phase === 'loading' ? (
+      <GamesAccountLoading />
+    ) : phase === 'unavailable' ? (
+      <GamesNodeUnreachable onRetry={refreshAccount} />
+    ) : (
+      <GamesSignIn />
+    )
+  ) : null;
 
   return (
     <div
@@ -82,7 +104,8 @@ export function GamesPanel() {
       }}
     >
       <div className="games-grain" aria-hidden />
-      {live && section !== 'board' && (
+      {gate}
+      {gate === null && live && section !== 'board' && (
         <button
           type="button"
           onClick={() => setGamesSection('board')}
@@ -116,7 +139,7 @@ export function GamesPanel() {
       )}
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
         {SECTIONS.map((s) =>
-          seen.current.has(s) ? (
+          gate === null && seen.current.has(s) ? (
             <div
               key={s}
               style={{

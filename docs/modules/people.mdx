@@ -144,6 +144,35 @@ the Kotlin wire is: `backend/tests/test_games_person_binding.py` replays both co
 against the node's implementations, and asserts the two sides build byte-identical
 challenge bytes. The fixture pins *agreement*; each side's own tests pin correctness.
 
+## The Steam shape
+
+The pane got the shape Steam settled on years ago, because it answers the two
+questions people actually have at a glance: **who is around**, and **is anything
+waiting for me**.
+
+- **Friends** — one row per person: face, name, level, what they're up to, an
+  unread badge, and a `⋯` menu (View profile / Message / their machines / Remove /
+  Block). Grouped **Online** then **Offline**, with offline dimmed rather than
+  hidden — the trick that makes the list scannable. A search box appears past three
+  friends. Adding a friend, linking a machine and renaming yourself moved into a
+  fold at the bottom: they are setup, not daily use.
+- **Messages** — a conversation list with unread badges beside a thread, keyed by
+  person and persisted server-side. See [Messages](social.mdx#messages).
+- **Requests** — one inbox for friend requests *and* commons meet requests, which
+  used to be a click apart. See [Requests](social.mdx#requests-one-inbox).
+- **Profiles** — clicking a friend's name opens their
+  [profile](games.mdx#profiles--the-part-other-people-can-see) inside the pane:
+  banner, face, status, level, showcases and comment wall, with a Back button.
+
+### Faces are decoration, and must be
+
+Avatars and levels come from the game server, fetched once per roster in a single
+batched call (`profile-cards.ts` → `POST /api/games/profiles/cards`) and cached for
+the session. The roster itself is **local**, so every consumer has to work without a
+card: a friend with no callsign, a signed-out node and an unreachable game server
+are all the same case — render the name, the presence dot and an initial, carry on.
+The roster must never acquire a network dependency to draw.
+
 ## Contributions
 
 - **Widget:** `people.home` (`tool`, right dock, 5 sections). **One**
@@ -152,7 +181,14 @@ challenge bytes. The fixture pins *agreement*; each side's own tests pin correct
 - **Commands:** `people.open`, `people.find` (jumps to Discover), `people.me`.
 - **Routes:** `POST /api/social/handle/bind`, `GET /api/social/directory/search`.
 - **Game server:** `POST /account/person`, `GET /directory/resolve`,
-  `GET /directory/search`.
+  `GET /directory/search`, `POST /directory/people` (the reverse lookup: fabric
+  people → their ladder accounts, which a node needs to discover that a friend it
+  already trusts is the same human as an account it already sees),
+  `POST /profiles/cards`.
+- **Shared pieces:** `Avatar.tsx` (one face renderer, with the presence dot as a
+  child so it follows the face at any size), `profile-cards.ts` (the batched cache),
+  `conversation.ts` (which thread Messages is showing — a store rather than a prop,
+  because the two sides are sibling *sections* with no parent between them).
 - **Agent tools:** unchanged and still `social.*` — the pane was renamed, the tool
   namespace was not. Renaming it would silently re-group the tools (grouping is
   name-prefix only) and break saved permission rules and Flow graphs at once.

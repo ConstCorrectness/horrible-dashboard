@@ -39,12 +39,26 @@ def get_db_conn() -> Generator[sqlite3.Connection, None, None]:
         conn.close()
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    """Add `column` to `table` if an older install lacks it.
+
+    The probe `init_social_db`'s docstring warns about: `CREATE TABLE IF NOT EXISTS`
+    is a no-op on an existing table, so a column added after this shipped reaches
+    only fresh installs unless something explicitly ALTERs. Reading `PRAGMA
+    table_info` rather than catching the duplicate-column error keeps a real failure
+    (a locked or corrupt database) loud.
+    """
+    existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+
+
 def init_social_db() -> None:
     """Create the roster tables (idempotent).
 
     `CREATE TABLE IF NOT EXISTS` never adds a column to a table that already
     exists, so any field added after this ships needs an explicit `ALTER` probe
-    here — the same trap `init_research_db` documents.
+    here — the same trap `init_research_db` documents. See `_ensure_column`.
     """
     with get_db_conn() as conn:
         conn.execute(
@@ -78,6 +92,19 @@ def init_social_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_social_devices_person "
             "ON social_devices(person_id)"
         )
+        # The person's *ladder* identity, cached from the game server's directory.
+        #
+        # Nullable on purpose, and a null is not an error: a friend who has never
+        # signed in to the game server is still a perfectly good fabric friend, and
+        # the roster renders them without a callsign rather than hiding them. The
+        # cache exists so the Friends list can name people with the game server
+        # unreachable — the roster is local and must not acquire a network
+        # dependency to render.
+        _ensure_column(conn, "social_friends", "handle", "TEXT")
+        _ensure_column(conn, "social_friends", "account_id", "TEXT")
+        # When the ladder link was last confirmed, so a stale cache can be refreshed
+        # without re-resolving every friend on every roster build.
+        _ensure_column(conn, "social_friends", "ladder_synced_at", "REAL")
 
 
 # ---- friends ----------------------------------------------------------------------
@@ -97,6 +124,11 @@ def upsert_friend(
     Written as read-modify-write rather than `INSERT … ON CONFLICT` because callers
     routinely want to change exactly one field (a status transition, a renamed
     contact) without having to restate the rest of the row.
+
+    The ladder cache (`handle` / `account_id`) is deliberately *not* settable here —
+    it is written only by `set_ladder_identity`, which is the one caller that has
+    verified the binding. Folding it into the general-purpose upsert would let any
+    caller assert a callsign for a person.
     """
     now = time.time()
     with get_db_conn() as conn:
@@ -135,6 +167,47 @@ def upsert_friend(
                 person_id,
             ),
         )
+
+
+def set_ladder_identity(
+    person_id: str, *, handle: str | None, account_id: str | None
+) -> None:
+    """Cache the game-server identity a directory lookup proved for `person_id`.
+
+    Only ever called with an entry whose `person_id` was checked against the
+    fingerprint of the key it arrived with (`handles.resolve` / `ladder.resolve_person`),
+    so a hostile directory can withhold a binding but not invent one. No-ops when
+    the person isn't on the roster: learning a stranger's callsign is not a reason
+    to create a friend row.
+    """
+    with get_db_conn() as conn:
+        conn.execute(
+            "UPDATE social_friends SET handle = ?, account_id = ?, "
+            "ladder_synced_at = ? WHERE person_id = ?",
+            (handle, account_id, time.time(), person_id),
+        )
+
+
+def friends_missing_ladder_identity() -> list[dict[str, Any]]:
+    """Roster rows with no cached callsign yet — the reconciliation worklist."""
+    with get_db_conn() as conn:
+        rows = conn.execute(
+            "SELECT * FROM social_friends WHERE account_id IS NULL AND is_self = 0"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def person_for_account(account_id: str) -> str | None:
+    """Reverse the cache: which roster person is this game-server account?
+
+    The lookup the ladder→fabric direction needs — a `friends` frame from the game
+    server names accounts, and the roster keys on people.
+    """
+    with get_db_conn() as conn:
+        row = conn.execute(
+            "SELECT person_id FROM social_friends WHERE account_id = ?", (account_id,)
+        ).fetchone()
+    return str(row["person_id"]) if row is not None else None
 
 
 def get_friend_row(person_id: str) -> dict[str, Any] | None:
@@ -257,6 +330,11 @@ def build_friend(row: dict[str, Any], online_nodes: set[str]) -> Friend:
         presence="online" if any(d.online for d in devices) else "offline",
         devices=devices,
         is_self=bool(row["is_self"]),
+        # `.get`, not `[...]`: these columns arrive by ALTER, and a row read through
+        # an older code path (or a test fixture building a dict by hand) legitimately
+        # won't carry them.
+        handle=row.get("handle"),
+        account_id=row.get("account_id"),
     )
 
 

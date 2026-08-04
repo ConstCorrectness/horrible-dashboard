@@ -241,6 +241,22 @@ class PeerHub:
             raise LinkClosed(str(result.data.get("reason") or "auth rejected"))
 
         info = self._peer_info(ack, public_key, link, trusted=True)
+        # **Persist the trust, not just the session.** Pairing used to be
+        # one-sided: the acceptor wrote a `known_peers` record (`trust.evaluate`
+        # → `save_known_peer`) while the dialer marked trust in memory only. So
+        # after A redeemed B's invite, only B remembered — and the next time A was
+        # the one dialled, B's node had never heard of it and rejected the
+        # handshake. Pairing is mutual by nature; both ends have now met an
+        # identity they verified cryptographically in this very handshake.
+        trust.save_known_peer(
+            ack.src,
+            {
+                "trusted": True,
+                "via": "dialed",
+                "public_key": public_key,
+                "address": link.address,
+            },
+        )
         return self._register(link, info)
 
     async def accept_link(self, link: PeerLink) -> PeerSession | None:

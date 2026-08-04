@@ -31,8 +31,18 @@ import {
   useGames,
 } from '../game-ws';
 import { fetchGamesCatalog, fetchLeaderboard, type GameCatalogEntry } from '../games-api';
+import {
+  backgroundCss,
+  mediaUrl,
+  patchProfile,
+  uploadProfileImage,
+  type Showcase,
+} from '../profile-api';
+import { invalidateProfileCards } from '../../people/profile-cards';
 import { openReplay } from '../replay-focus';
 import { GamesMui } from '../mui-theme';
+import { ProfileComments } from './ProfileComments';
+import { ProfileCustomize } from './ProfileCustomize';
 
 interface MatchEntry {
   ts: number;
@@ -60,9 +70,12 @@ export function ProfilePanel() {
 
   // Custom states for editing
   const [editingAvatar, setEditingAvatar] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [editingBio, setEditingBio] = useState(false);
   const [bioInput, setBioInput] = useState('');
   const [friendIdInput, setFriendIdInput] = useState('');
+  const [customizing, setCustomizing] = useState(false);
 
   // Challenge modal states
   const [challengeTarget, setChallengeTarget] = useState<string | null>(null);
@@ -124,15 +137,31 @@ export function ProfilePanel() {
         )
       : 100;
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  /**
+   * Upload a profile picture.
+   *
+   * This used to `readAsDataURL` the file and hand the base64 string to
+   * `profileSet` as the **avatar emoji** — a column the server caps at 8
+   * characters. Every upload was therefore silently truncated to eight bytes of
+   * base64 and no picture ever appeared, with no error anywhere. The file goes to
+   * the media endpoint now and the profile stores a reference to it.
+   */
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (uploadEvent) => {
-      const base64 = uploadEvent.target?.result as string;
-      profileSet(base64, profile?.bio);
-    };
-    reader.readAsDataURL(file);
+    setUploadError(null);
+    setUploading(true);
+    try {
+      const { url } = await uploadProfileImage(file, 'avatar');
+      await patchProfile({ avatar_url: url });
+      profileGet(); // re-read the live copy so every surface sees the new artwork
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setUploading(false);
+      // Let the same file be chosen again after a failure.
+      e.target.value = '';
+    }
   };
 
   const handleSaveBio = () => {
@@ -155,15 +184,19 @@ export function ProfilePanel() {
     }
   };
 
-  const renderAvatar = (avatarStr: string, size = '4.5rem') => {
-    if (
-      avatarStr.startsWith('data:image/') ||
-      avatarStr.startsWith('http://') ||
-      avatarStr.startsWith('https://')
-    ) {
+  /**
+   * The avatar, preferring an uploaded image over the emoji fallback.
+   *
+   * `imageRef` is a stored media reference (`/media/<sha>`); `avatarStr` is the
+   * emoji that always exists. Passing a data URL still renders — an in-flight
+   * preview does that — but nothing writes one to the server any more.
+   */
+  const renderAvatar = (avatarStr: string, size = '4.5rem', imageRef?: string | null) => {
+    const src = mediaUrl(imageRef) ?? (avatarStr.startsWith('data:image/') ? avatarStr : null);
+    if (src) {
       return (
         <img
-          src={avatarStr}
+          src={src}
           alt="Profile Avatar"
           style={{
             width: size,
@@ -209,11 +242,15 @@ export function ProfilePanel() {
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-            {/* ── Steam-Style Header ── */}
+            {/* ── Steam-Style Header ──
+                The header *is* the banner: an uploaded image if there is one, else
+                the chosen preset gradient, else the neutral wash it always had. */}
             <Card
               sx={{
-                background:
-                  'linear-gradient(135deg, rgba(38,42,50,0.9) 0%, rgba(20,22,26,0.9) 100%)',
+                background: mediaUrl(profile.background_url)
+                  ? `url(${mediaUrl(profile.background_url)}) center/cover`
+                  : (backgroundCss(profile.background_id) ??
+                    'linear-gradient(135deg, rgba(38,42,50,0.9) 0%, rgba(20,22,26,0.9) 100%)'),
                 borderColor: 'divider',
               }}
             >
@@ -228,7 +265,7 @@ export function ProfilePanel() {
                 }}
               >
                 <div style={{ position: 'relative' }}>
-                  {renderAvatar(profile.avatar)}
+                  {renderAvatar(profile.avatar, '4.5rem', profile.avatar_url)}
                   <button
                     type="button"
                     style={{
@@ -262,6 +299,14 @@ export function ProfilePanel() {
                   <Typography variant="body2" sx={{ color: 'text.secondary', fontSize: '0.78rem' }}>
                     ID: {profile.account_id}
                   </Typography>
+                  {profile.status_text && (
+                    <Typography
+                      variant="body2"
+                      sx={{ fontStyle: 'italic', color: 'text.secondary', mt: 0.4 }}
+                    >
+                      {profile.status_text}
+                    </Typography>
+                  )}
                   <div
                     style={{
                       display: 'flex',
@@ -287,6 +332,34 @@ export function ProfilePanel() {
                   />
                 </div>
 
+                <Button size="small" onClick={() => setCustomizing((v) => !v)}>
+                  {customizing ? 'Done' : 'Customize'}
+                </Button>
+
+                {customizing && (
+                  <div style={{ width: '100%', marginTop: '0.8rem' }}>
+                    <ProfileCustomize
+                      profile={profile}
+                      // The tiers you've actually earned are the only honest thing
+                      // to pin: a showcase you can pick without having done it is
+                      // decoration, not a record.
+                      showcaseOptions={cards.map(
+                        (c): Showcase => ({
+                          kind: 'tier',
+                          value: c.game_id,
+                          label: `${c.name}${c.tier ? ` · ${c.tier}` : ''}`,
+                        }),
+                      )}
+                      onChanged={() => {
+                        profileGet();
+                        // Your new picture has to reach the friends list too, which
+                        // caches cards for the session.
+                        invalidateProfileCards();
+                      }}
+                    />
+                  </div>
+                )}
+
                 {editingAvatar && (
                   <div
                     style={{
@@ -308,10 +381,41 @@ export function ProfilePanel() {
                       </Typography>
                       <input
                         type="file"
-                        accept="image/*"
-                        onChange={handleFileUpload}
+                        accept="image/png,image/jpeg,image/webp,image/gif"
+                        disabled={uploading}
+                        onChange={(e) => void handleFileUpload(e)}
                         style={{ fontSize: '0.8rem' }}
                       />
+                      {uploading && (
+                        <Typography variant="caption" sx={{ display: 'block', mt: 0.5 }}>
+                          Uploading…
+                        </Typography>
+                      )}
+                      {/* Surfaced, not swallowed: the server rejects oversize files,
+                          unsupported formats and mislabelled ones, and a silent
+                          failure here is exactly what hid the old truncation bug. */}
+                      {uploadError && (
+                        <Typography
+                          variant="caption"
+                          sx={{ display: 'block', mt: 0.5, color: '#f85149' }}
+                        >
+                          {uploadError}
+                        </Typography>
+                      )}
+                      {profile.avatar_url && (
+                        <Button
+                          size="small"
+                          sx={{ mt: 0.5 }}
+                          disabled={uploading}
+                          onClick={() => {
+                            // An explicit empty string clears it; `undefined` would
+                            // mean "leave it alone" to the patch endpoint.
+                            void patchProfile({ avatar_url: '' }).then(() => profileGet());
+                          }}
+                        >
+                          Remove picture
+                        </Button>
+                      )}
                     </div>
                     <div>
                       <Typography
@@ -446,6 +550,21 @@ export function ProfilePanel() {
                     )}
                   </CardContent>
                 </Card>
+
+                {/* Your own wall. Readable while every one of your machines is
+                    off, because it lives on the game server rather than on a node
+                    — which is the whole reason comments are not a peer message. */}
+                {profile.handle && (
+                  <Card sx={{ borderColor: 'divider' }}>
+                    <CardContent>
+                      <ProfileComments
+                        handle={profile.handle}
+                        viewerAccountId={accountId}
+                        isOwner
+                      />
+                    </CardContent>
+                  </Card>
+                )}
 
                 {/* Recent Matches */}
                 <Card sx={{ borderColor: 'divider' }}>

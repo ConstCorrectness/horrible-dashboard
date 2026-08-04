@@ -30,6 +30,16 @@ export interface Friend {
   devices: DeviceInfo[];
   /** Your own linked machines appear in the roster, flagged with this. */
   is_self: boolean;
+  /**
+   * This person's game-server identity, cached on the node from the directory.
+   *
+   * `null` is a normal state, not a failure: a friend who has never signed in to
+   * the game server has no callsign, and the roster shows them by name and friend
+   * code exactly as it always did. What a non-null `handle` unlocks is their
+   * *profile* — avatar, level, comment wall — which lives on the game server.
+   */
+  handle: string | null;
+  account_id: string | null;
 }
 
 export interface DirectoryEntry {

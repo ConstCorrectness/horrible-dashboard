@@ -22,31 +22,23 @@ widget plus settings; the heavy lifting is the backend peer fabric documented in
 
 ## Contributions to the layout shell
 
-All five network widgets form the **Peer Fabric** panel group (`network.fabric`).
-The Peers tool hosts the other members as bottom region strips — toggle one into the
-workspace, click again to close ("rail") it. See
-[Panel Groups](../architecture/panel-groups.mdx) for the architecture.
+**No panes, and no widgets.** This module contributes services and settings only.
 
-- **Widget** `network.peers` (Peers) — `PeersWidget.tsx`. The group **primary** (hub).
-  Shows this node's identity and connected peers with status dots; dial a peer by
-  `ws://…/peer-ws` address, generate an invite link, or redeem one to pair. Exposes
-  presence to the local agent via `useAgentContext` (so the model can fill
-  `agent.ask_peer(peerId)`).
-- **Widget** `network.lobby` (Lobby) — `LobbyPanel.tsx`. Connect to a lobby server,
-  see hosted **rooms**, host one, or join one — joining hands off to a direct P2P
-  link (relay fallback). See [the lobby system](../architecture/network-protocol.mdx#the-lobby-system).
-- **Widget** `network.monitor` (Peer Monitor) — `PeerMonitor.tsx`. Live link health
-  per peer: transport, round-trip time, and throughput (bytes/messages in/out),
-  streamed from the backend [Peer Monitor](#peer-monitor) heartbeat.
-- **Widget** `network.chat` (Peer Chat) — `PeerChatPanel.tsx`. Direct 1:1 messaging
-  with a connected peer over the [`peerchat`](#peer-chat) channel.
-- **Widget** `network.relay` (Agent Relay) — `AgentRelayPanel.tsx`. Ask a peer's
-  agent a question and read its (gated, read-only) answer — the UI over
-  [`agent.ask_peer`](#agent-to-agent-relay).
-- **Commands** `network.open` (Open peers), `network.openLobby` (Open lobby),
-  `network.openMonitor` (Open peer monitor), `network.openChat` (Open peer chat),
-  `network.openRelay` (Ask a peer agent).
-- **Settings** (see below).
+It used to own five widgets — Peers, Peer Chat, Peer Monitor, Lobby and Agent
+Relay, grouped as a "Peer Fabric" panel group. Only one of them was something a
+person wanted to *look at*, and it is now the **Messages** section of the
+[People](people.mdx) pane. The other four were infrastructure readouts that became
+destinations because a pane was the only way to show anything — "Peers" in
+particular answered *which machines are connected* when the question people
+actually have is *which of my friends is around*, which People answers by person.
+
+Nothing was lost. The transports, trust store and rendezvous are still here as
+services (`ws.ts`, `lobby.ts`, `peerchat.ts`, `collab.ts`), the knobs are on the
+settings page, and the traffic is in [observability](observability.mdx). What went
+away is the idea that each of them deserved somewhere to live.
+
+- **Commands:** none of its own; People's commands reach every surface.
+- **Settings:** [below](#settings), split basic / advanced.
 
 ## Network-aware panes (the collab contract)
 
@@ -133,25 +125,54 @@ via `network.lobbyUrl`. See
 A `CollabRoom` (`collab.py`), keyed by an opaque `paneKey`, holds authoritative
 `text` + a monotonic `rev`. Members sync with a **rev check** — last-writer-wins,
 but no *lost* updates: an op with a stale `baseRev` is rejected and the writer
-rebases onto the authoritative state. Accepted ops are forwarded to connected peers
-(`collab_op` on the peer wire); inbound peer ops are adopted as authoritative by
-`rev` and rebroadcast to local members (not re-forwarded, so no loops). This is
+rebases onto the authoritative state. Inbound peer ops are adopted as authoritative
+by `rev` and rebroadcast to local members (not re-forwarded, so no loops). This is
 groundwork, not a CRDT — a clean seam for one later.
+
+### A share is addressed to a person
+
+You share a pane **with Andrew**, and the fabric picks whichever of his machines is
+online. Asking someone which of their own computers to send a pane to is a question
+with no good answer, and it is the same reason the roster is keyed by person.
+
+Each room tracks the **nodes it is actually shared with** (`room.peers`). A node
+lands there two ways: you shared the pane with its owner, or an op for that pane
+arrived from it — which only happens if they shared with you, and is how the far
+side learns to route edits back.
+
+:::danger The leak this replaced
+`_forward_to_peers` used to iterate `peer_hub.peers` — *every* node with a live
+session — and send the pane's full text to each. Anyone you were connected to
+received the contents of every shared pane, whether or not they had any part in
+it. "Sharing" was a global broadcast wearing the word "room".
+
+Inbound ops are now also gated on `session.info.trusted`. Knowing a pane key is not
+permission: ops are last-writer-wins, so an untrusted peer that guessed or overheard
+a key could both read the pane (we would start forwarding to them) and rewrite it.
+:::
 
 | Direction | event | data |
 |---|---|---|
 | client→server | `join` | `{ paneKey }` |
 | client→server | `leave` | `{ paneKey }` |
 | client→server | `op` | `{ paneKey, baseRev, text }` |
+| client→server | `share` | `{ paneKey, personId }` |
+| client→server | `unshare` | `{ paneKey, personId }` |
 | server→client | `state` | `{ paneKey, rev, text, members }` |
 | server→client | `op` | `{ paneKey, rev, text, from }` |
 | server→client | `presence` | `{ paneKey, members }` (occupancy changed) |
+| server→client | `shared` | `{ paneKey, people: [{ personId, name }] }` |
 | server→client | `rejected` | `{ paneKey, rev, text }` |
+| server→client | `error` | `{ paneKey, message }` (e.g. nobody of theirs is online) |
 
-The reference consumer is the **scratch** panel's "Share" toggle, which declares a
-`collab` room and drives the [`useCollab`](#network-aware-panes-the-collab-contract)
-hook (`modules/scratch/index.tsx` + `modules/network/useCollab.ts`), joining a
-well-known room so notes sync across users and showing a live editor count. See
+`shared` resolves nodes back to **people** on the backend, because the node holds
+the device→person map and a pane listing node ids would be exactly the
+machine-shaped UI the roster exists to replace.
+
+The reference consumer is the **scratch** panel's "Share with…" picker, which
+declares a `collab` room and drives the
+[`useCollab`](#network-aware-panes-the-collab-contract) hook
+(`modules/scratch/index.tsx` + `modules/network/useCollab.ts`). See
 [Scratch](scratch.mdx).
 
 ## Peer Monitor
@@ -169,22 +190,15 @@ bytes_in, bytes_out, msgs_in, msgs_out, last_seen }`.
 
 ## Peer Chat
 
-Direct 1:1 messaging with a connected peer. A browser opens a conversation over the
-`/ws` `peerchat` channel; the backend **`ChatManager`** (`chat.py`) relays the
-message to that peer over the signed peer wire (a `peer_chat` envelope) and mirrors
-it to this node's own tabs. Inbound peer messages are fanned out to every local
-browser. History is held per-peer in memory, so a reopened panel gets the recent
-backlog. Where `collab` syncs an **editable document**, `peerchat` is an
+The transport half of direct messaging: `ChatManager` (`chat.py`) relays a message
+over the signed peer wire (a `peer_chat` envelope) and mirrors it to this node's
+own tabs. Where `collab` syncs an **editable document**, `peerchat` is an
 **append-only message log**.
 
-| Direction | event | data |
-|---|---|---|
-| client→server | `open` | `{ nodeId }` (subscribe + request backlog) |
-| client→server | `send` | `{ nodeId, text }` |
-| client→server | `close` | `{ nodeId }` |
-| server→client | `history` | `{ nodeId, messages[] }` |
-| server→client | `message` | `{ id, nodeId, from, text, ts, direction }` |
-| server→client | `error` | `{ nodeId, message }` |
+Conversations are keyed by **person** and persisted in `social_messages`, not held
+in memory per node — see [Messages](social.mdx#messages) for the channel contract,
+the unread counts, and why an inbound message nobody is reading raises a
+[notification](notifications.mdx).
 
 ## Agent-to-agent relay
 
@@ -217,24 +231,67 @@ functional** — the desktop never emits a frame. See
 
 ## Settings
 
+Split **basic** and **advanced** on the settings page. The line between them: a
+basic setting is one a working install might legitimately change (what am I called,
+do I accept connections, who may pair). Advanced is NAT-traversal plumbing — TURN
+credentials, STUN hosts, relay and signalling URLs — which is either irrelevant or
+copied verbatim from whoever runs your infrastructure. Fourteen knobs at equal
+weight taught people to skim past the six that matter.
+
+### Basic
+
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `network.nodeName` | string | hostname | Display name advertised to peers. |
-| `network.advertisedAddress` | string | `""` (auto) | URL peers dial to reach this node, encoded into invites. Blank auto-detects this machine's LAN IPv4 — `localhost` would make every invite undialable from another device. Set it for a public hostname or a forwarded port. |
-| `network.enableDirect` | boolean | `true` | Accept/dial direct WebSocket peers. |
-| `network.enableLanDiscovery` | boolean | `false` | Advertise/discover via mDNS. |
-| `network.relayUrl` | string | `""` | Rendezvous broker URL (blank = off). |
-| `network.trustMode` | enum | `manual` | `manual` / `directory` / `open-lan`. |
-| `network.directoryUrl` | string | `""` | Optional directory service. |
+| `network.enableDirect` | boolean | `true` | Accept/dial direct WebSocket peers. **Restart.** |
+| `network.enableLanDiscovery` | boolean | `false` | Advertise/discover via mDNS. **Restart.** |
+| `network.trustMode` | enum | `manual` | `manual` (an invite you generated) or `open-lan`. |
 | `network.lobbyUrl` | string | `""` | Lobby server `ws://…/lobby-ws` for discovery + rooms (blank = off). |
+| `network.allowRemoteAgent` | boolean | `false` | Let a trusted peer's agent ask yours. |
+
+### Advanced
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `network.advertisedAddress` | string | `""` (auto) | URL peers dial to reach this node, encoded into invites. Blank auto-detects this machine's LAN IPv4 — `localhost` would make every invite undialable from another device. Set it for a public hostname or a forwarded port. |
+| `network.relayUrl` | string | `""` | Rendezvous broker URL (blank = off). **Restart.** |
 | `network.iceEnabled` | boolean | `false` | Gather a STUN server-reflexive candidate (public IP) alongside host/LAN candidates. |
 | `network.stunServer` | string | `stun.l.google.com:19302` | `host:port` for STUN public-IP discovery (when ICE is on); also the STUN ICE server for the WebRTC transport. |
-| `network.enableWebRtc` | boolean | `false` | Connect over a WebRTC data channel (ICE/STUN NAT traversal), SDP signaled via the lobby. Needs the backend `webrtc` extra (`uv sync --extra webrtc`); the relay stays the fallback. |
+| `network.enableWebRtc` | boolean | `false` | Connect over a WebRTC data channel, SDP signaled via the lobby. Needs `uv sync --extra webrtc`; the relay stays the fallback. **Restart.** |
 | `network.turnUrl` | string | `""` | Optional TURN relay for WebRTC (`turn:host:3478`) for NATs STUN can't punch (blank = STUN only). |
 | `network.turnUsername` | string | `""` | TURN username credential (if required). |
 | `network.turnCredential` | string | `""` | TURN password/credential (if required). |
-| `network.allowRemoteAgent` | boolean | `false` | Let a trusted peer's agent ask yours. |
-| `network.remoteAgentMode` | enum | `plan` | Permission mode for a remote turn (`plan` = read-only). |
+| `network.remoteAgentMode` | enum | `plan` | Permission mode for a remote turn (`plan` = read-only, then `acceptEdits`, `autonomous`). |
+
+**Restart** marks the four settings `build_transports()` reads once at startup. A
+transport owns a bound socket or a multicast thread, so swapping one under live
+sessions is a different job from reading a flag; before they said so, they looked
+like live switches that silently did nothing.
+
+### Two settings that were removed
+
+- **`network.directoryUrl`** had **zero readers repo-wide**. Finding people by name
+  is the [Atlas presence directory](social.mdx#the-presence-directory-mongodb-atlas)
+  and the game server's callsign directory, neither of which is configured here.
+- **`trustMode: 'directory'`** was never implemented, so `trust.evaluate` rejected
+  every peer — selecting it made the node silently unpairable. `trust_mode()` now
+  reads a stored `directory` as `manual`, so an existing config recovers rather
+  than staying broken.
+
+`remoteAgentMode: 'ask'` went the same way: ASK prompts a human, and the human it
+would prompt is not the one who started the turn. It was mapped to `default`, so
+choosing "ask" silently granted a *higher* permission level than its name promises.
+An unrecognized mode now falls back to `plan` — read-only — so a stored `ask` fails
+closed.
+
+### Pairing is mutual
+
+`handshake_dial` persists a `known_peers` record for the peer it dialled, the same
+way `trust.evaluate` does for one it accepted. It used to mark trust in memory
+only, so after A redeemed B's invite **only B remembered** — and the next time A
+was the one dialled, B's node had never heard of it and rejected the handshake.
+Both ends have verified an identity cryptographically during the handshake; both
+should write it down.
 
 Server-side state under `$HORRIBLE_DATA_DIR`: `network-identity.key`,
 `network-peers.json`, `network-invites.json`.

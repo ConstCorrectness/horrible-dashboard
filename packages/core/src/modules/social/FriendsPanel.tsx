@@ -1,7 +1,18 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 
 import { useAgentContext } from '../../agent-context';
-import { chatOpen, chatSend } from '../network/peerchat';
+import { revealSection } from '../../layout/controller';
+import { useAccount } from '../../useAccount';
+import { PublicProfile } from '../games/panels/PublicProfile';
+import { chatRequestUnread, subscribeChat } from '../network/peerchat';
+import { Avatar } from '../people/Avatar';
+import {
+  ensureProfileCards,
+  getProfileCard,
+  getProfileCards,
+  subscribeProfileCards,
+} from '../people/profile-cards';
+import { openConversation } from '../people/conversation';
 import { addFriend, linkDevice, updateSelfProfile, type Friend } from './api';
 import {
   blockViaChannel,
@@ -17,157 +28,193 @@ function useSocialState() {
   return useSyncExternalStore(subscribeSocial, getSocialState, getSocialState);
 }
 
-const DOT = (online: boolean) => ({
-  width: 8,
-  height: 8,
-  borderRadius: '50%',
-  background: online ? '#3fb950' : 'var(--text-dim)',
-  flexShrink: 0,
-});
-
-/** A friend's first connected machine — the one to route a message or invite to. */
-function liveNode(friend: Friend): string | null {
-  return friend.devices.find((d) => d.online)?.node_id ?? null;
+function useCards() {
+  return useSyncExternalStore(subscribeProfileCards, getProfileCards, getProfileCards);
 }
 
-function FriendRow({ friend }: { friend: Friend }) {
-  const [draft, setDraft] = useState('');
-  const [composing, setComposing] = useState(false);
-  const node = liveNode(friend);
+/**
+ * One person in the list: face, name, what they're up to, and the actions that
+ * follow. Steam's shape, because Steam's shape is right — the two things you want
+ * at a glance are *who is around* and *is there anything waiting for me*, and
+ * everything else belongs behind the row.
+ *
+ * The card (avatar, level) is decoration from the game server; the name, presence
+ * and every action come from the local roster, so a row still renders in full with
+ * that server unreachable.
+ */
+function FriendRow({
+  friend,
+  unread,
+  onOpenProfile,
+}: {
+  friend: Friend;
+  unread: number;
+  onOpenProfile: (handle: string) => void;
+}) {
+  const [menu, setMenu] = useState(false);
+  const card = getProfileCard(friend.handle);
+  const online = friend.presence === 'online';
+  const devices = friend.devices.filter((d) => d.online);
 
-  const send = useCallback(() => {
-    if (!node || !draft.trim()) return;
-    chatOpen(node);
-    chatSend(node, draft.trim());
-    setDraft('');
-    setComposing(false);
-  }, [node, draft]);
+  const subtitle = card?.status_text
+    ? card.status_text
+    : online
+      ? devices.length > 1
+        ? `Online · ${devices.length} devices`
+        : (devices[0]?.label ?? 'Online')
+      : 'Offline';
 
   return (
-    <li
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '0.35rem',
-        padding: '0.5rem 0',
-        borderBottom: '1px solid var(--border, #2a2a2a)',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}>
-        <span aria-label={friend.presence} style={DOT(friend.presence === 'online')} />
-        <strong style={{ color: 'var(--text)' }}>{friend.display_name}</strong>
-        {friend.is_self && (
-          <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>(you)</span>
-        )}
-        <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>
-          {friend.devices.length} device{friend.devices.length === 1 ? '' : 's'}
-        </span>
+    <li className="friend-row" data-online={online ? 'true' : 'false'}>
+      <Avatar
+        name={friend.display_name}
+        emoji={card?.avatar}
+        imageRef={card?.avatar_url}
+        size={34}
+        online={online}
+        showPresence
+      />
+      <div className="friend-row-main">
+        <div className="friend-row-name">
+          <strong>{friend.display_name}</strong>
+          {friend.is_self && <span className="friend-row-tag">you</span>}
+          {card && <span className="friend-row-level">Lv {card.level}</span>}
+          {unread > 0 && <span className="friend-row-unread">{unread}</span>}
+        </div>
+        <span className="friend-row-sub">{subtitle}</span>
+      </div>
 
-        <span style={{ marginLeft: 'auto', display: 'flex', gap: '0.35rem' }}>
-          {friend.status === 'pending_in' && (
-            <>
-              <button onClick={() => respondViaChannel(friend.person_id, true)}>Accept</button>
-              <button onClick={() => respondViaChannel(friend.person_id, false)}>Decline</button>
-            </>
+      {friend.status === 'pending_in' ? (
+        <span className="friend-row-actions">
+          <button onClick={() => respondViaChannel(friend.person_id, true)}>Accept</button>
+          <button onClick={() => respondViaChannel(friend.person_id, false)}>Decline</button>
+        </span>
+      ) : friend.status === 'pending_out' ? (
+        <span className="friend-row-sub">requested…</span>
+      ) : (
+        <span className="friend-row-actions">
+          <button
+            title="Message"
+            onClick={() => {
+              openConversation(friend.person_id);
+              revealSection('messages', 'people.home');
+            }}
+          >
+            ✉
+          </button>
+          <button title="More" onClick={() => setMenu((m) => !m)}>
+            ⋯
+          </button>
+        </span>
+      )}
+
+      {menu && (
+        <ul className="friend-menu">
+          {friend.handle && (
+            <li>
+              <button
+                onClick={() => {
+                  setMenu(false);
+                  onOpenProfile(friend.handle!);
+                }}
+              >
+                View profile
+              </button>
+            </li>
           )}
-          {friend.status === 'pending_out' && (
-            <span style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>requested…</span>
-          )}
-          {friend.status === 'accepted' && !friend.is_self && (
+          <li>
             <button
-              disabled={!node}
-              title={node ? 'Send a message' : 'Offline'}
-              onClick={() => setComposing((c) => !c)}
+              onClick={() => {
+                setMenu(false);
+                openConversation(friend.person_id);
+                revealSection('messages', 'people.home');
+              }}
             >
               Message
             </button>
+          </li>
+          {/* Each machine of theirs, so "my other computer" stays reachable — the
+              one place a node id is still a useful thing to show. */}
+          {friend.devices.length > 0 && (
+            <li className="friend-menu-devices">
+              {friend.devices.map((d) => (
+                <span key={d.node_id} title={d.node_id} data-online={d.online ? 'true' : 'false'}>
+                  {d.online ? '●' : '○'} {d.label}
+                </span>
+              ))}
+            </li>
           )}
-          {friend.status !== 'pending_in' && (
-            <button onClick={() => removeViaChannel(friend.person_id)} title="Remove">
-              ✕
-            </button>
-          )}
-          {friend.status !== 'blocked' && !friend.is_self && (
-            <button onClick={() => blockViaChannel(friend.person_id)} title="Block">
-              ⊘
-            </button>
-          )}
-        </span>
-      </div>
-
-      {/* Each machine listed under the person, so "my other computer" is dialable. */}
-      {friend.devices.length > 0 && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', paddingLeft: '1rem' }}>
-          {friend.devices.map((d) => (
-            <span
-              key={d.node_id}
-              title={d.node_id}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.3rem',
-                fontSize: '0.72rem',
-                color: 'var(--text-dim)',
+          <li>
+            <button
+              onClick={() => {
+                setMenu(false);
+                removeViaChannel(friend.person_id);
               }}
             >
-              <span style={DOT(d.online)} />
-              {d.label}
-            </span>
-          ))}
-        </div>
-      )}
-
-      {composing && (
-        <form
-          style={{ display: 'flex', gap: '0.4rem', paddingLeft: '1rem' }}
-          onSubmit={(e) => {
-            e.preventDefault();
-            send();
-          }}
-        >
-          <input
-            autoFocus
-            value={draft}
-            placeholder={`Message ${friend.display_name}…`}
-            onChange={(e) => setDraft(e.target.value)}
-            style={{ flex: 1, fontSize: '0.8rem' }}
-          />
-          <button type="submit" disabled={!draft.trim()}>
-            Send
-          </button>
-        </form>
+              Remove friend
+            </button>
+          </li>
+          {!friend.is_self && (
+            <li>
+              <button
+                onClick={() => {
+                  setMenu(false);
+                  blockViaChannel(friend.person_id);
+                }}
+              >
+                Block
+              </button>
+            </li>
+          )}
+        </ul>
       )}
     </li>
   );
 }
 
 /**
- * The friends roster: who you know, which of their machines are online, and the
- * actions that follow from that (accept, message, remove).
+ * The friends roster: who you know, who's around, and what's waiting.
  *
  * Friending is person-level — a friend with a desktop and a laptop is one row with
  * two devices, not two rows. Accepting grants those machines fabric trust, which is
- * what lets peer chat, shared panes, and agent-to-agent questions work between
- * friends without a second pairing step. See docs/modules/social.mdx.
+ * what lets peer chat, shared panes and agent-to-agent questions work between
+ * friends without a second pairing step.
+ *
+ * **Incoming friend requests are not here.** They live in the Requests section
+ * alongside the commons ones, because two separate request inboxes in one pane is
+ * how you end up ignoring both. See docs/modules/social.mdx.
  */
 export function FriendsPanel() {
   const { roster } = useSocialState();
+  useCards();
+  const { account } = useAccount();
   const [code, setCode] = useState('');
   const [address, setAddress] = useState('');
   const [invite, setInvite] = useState('');
   const [name, setName] = useState('');
+  const [filter, setFilter] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [unread, setUnread] = useState<Record<string, number>>({});
+  const [viewing, setViewing] = useState<string | null>(null);
 
   useEffect(() => {
     initSocial();
     requestRoster();
+    chatRequestUnread();
+    return subscribeChat((event) => {
+      if (event.kind === 'unread') setUnread(event.counts ?? {});
+    });
   }, []);
 
   const me = roster?.self_profile;
-  const friends = roster?.friends ?? [];
-  const pending = friends.filter((f) => f.status === 'pending_in');
+  const friends = useMemo(() => roster?.friends ?? [], [roster]);
+
+  // One batched card fetch for the whole roster, rather than one per row.
+  useEffect(() => {
+    void ensureProfileCards([me?.handle, ...friends.map((f) => f.handle)]);
+  }, [friends, me?.handle]);
 
   // Let the local agent see the roster, so it can resolve "ask Rob's agent" or
   // "message my laptop" to a concrete person and node.
@@ -176,9 +223,11 @@ export function FriendsPanel() {
     friends: friends.map((f) => ({
       personId: f.person_id,
       name: f.display_name,
+      handle: f.handle,
       status: f.status,
       presence: f.presence,
       isSelf: f.is_self,
+      unread: unread[f.person_id] ?? 0,
       nodes: f.devices.map((d) => ({ nodeId: d.node_id, label: d.label, online: d.online })),
     })),
   }));
@@ -219,161 +268,191 @@ export function FriendsPanel() {
     window.setTimeout(() => setCopied(false), 1500);
   }, [me]);
 
-  return (
-    <div
-      className="social-friends"
-      style={{
-        padding: '1rem',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '1rem',
-        height: '100%',
-        overflow: 'auto',
-      }}
-    >
-      <section>
-        <h3 style={{ margin: '0 0 0.35rem' }}>You</h3>
-        {me ? (
-          <>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <strong style={{ color: 'var(--text)' }}>{me.display_name}</strong>
-              <code
-                style={{
-                  fontSize: '0.85rem',
-                  letterSpacing: '0.04em',
-                  color: 'var(--text)',
-                  background: 'var(--bg-alt, #1a1a1a)',
-                  padding: '0.15rem 0.4rem',
-                  borderRadius: 4,
-                }}
-              >
-                {me.friend_code}
-              </code>
-              <button onClick={copyCode}>{copied ? 'Copied' : 'Copy'}</button>
-            </div>
-            <p style={{ margin: '0.35rem 0 0', fontSize: '0.75rem', color: 'var(--text-dim)' }}>
-              Share this code so someone can add you. It identifies you, not one computer — every
-              machine you link answers to it.
-            </p>
-            {!me.holds_person_key && (
-              <p style={{ margin: '0.35rem 0 0', fontSize: '0.75rem', color: '#d29922' }}>
-                This machine was linked by another device, so it can’t link further machines or
-                rename you.
-              </p>
-            )}
-            <form
-              style={{ display: 'flex', gap: '0.4rem', marginTop: '0.5rem' }}
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (name.trim()) {
-                  void updateSelfProfile(name.trim()).then(() => {
-                    setName('');
-                    requestRoster();
-                  });
-                }
-              }}
-            >
-              <input
-                value={name}
-                placeholder={`Rename (currently “${me.display_name}”)`}
-                onChange={(e) => setName(e.target.value)}
-                style={{ flex: 1, fontSize: '0.8rem' }}
-              />
-              <button type="submit" disabled={!name.trim() || !me.holds_person_key}>
-                Rename
-              </button>
-            </form>
-          </>
-        ) : (
-          <p style={{ color: 'var(--text-dim)' }}>Loading your identity…</p>
-        )}
-      </section>
+  if (viewing) {
+    return (
+      <div className="social-friends">
+        <PublicProfile
+          handle={viewing}
+          viewerAccountId={account?.id ?? null}
+          onBack={() => setViewing(null)}
+        />
+      </div>
+    );
+  }
 
-      {pending.length > 0 && (
-        <section>
-          <h3 style={{ margin: '0 0 0.35rem' }}>Requests ({pending.length})</h3>
-          <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-            {pending.map((f) => (
-              <FriendRow key={f.person_id} friend={f} />
-            ))}
-          </ul>
-        </section>
+  const listed = friends.filter((f) => f.status === 'accepted' || f.status === 'pending_out');
+  const needle = filter.trim().toLowerCase();
+  const matching = needle
+    ? listed.filter(
+        (f) =>
+          f.display_name.toLowerCase().includes(needle) ||
+          (f.handle ?? '').toLowerCase().includes(needle),
+      )
+    : listed;
+  const online = matching.filter((f) => f.presence === 'online');
+  const offline = matching.filter((f) => f.presence !== 'online');
+  const myCard = getProfileCard(me?.handle);
+
+  return (
+    <div className="social-friends">
+      {me ? (
+        <header className="friends-me">
+          <Avatar
+            name={me.display_name}
+            emoji={myCard?.avatar}
+            imageRef={myCard?.avatar_url}
+            size={40}
+          />
+          <div className="friends-me-text">
+            <strong>{me.display_name}</strong>
+            {me.handle ? (
+              <button
+                type="button"
+                className="friends-me-handle"
+                title="View your profile"
+                onClick={() => setViewing(me.handle!)}
+              >
+                @{me.handle}
+              </button>
+            ) : (
+              <span className="people-dim">not signed in to the ladder</span>
+            )}
+          </div>
+          <button onClick={copyCode} title={me.friend_code}>
+            {copied ? 'Copied' : 'Friend code'}
+          </button>
+        </header>
+      ) : (
+        <p className="people-dim">Loading your identity…</p>
       )}
 
-      <section>
-        <h3 style={{ margin: '0 0 0.35rem' }}>
-          Friends ({friends.filter((f) => f.status === 'accepted').length})
-        </h3>
-        {friends.filter((f) => f.status !== 'pending_in').length === 0 ? (
-          <p style={{ color: 'var(--text-dim)', fontSize: '0.85rem' }}>
-            No friends yet. Add someone with their friend code below.
-          </p>
-        ) : (
-          <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-            {friends
-              .filter((f) => f.status !== 'pending_in')
-              .map((f) => (
-                <FriendRow key={f.person_id} friend={f} />
+      {listed.length > 3 && (
+        <input
+          className="friends-filter"
+          value={filter}
+          placeholder="Search friends…"
+          onChange={(e) => setFilter(e.target.value)}
+        />
+      )}
+
+      {listed.length === 0 ? (
+        <p className="people-dim">No friends yet. Add someone with their friend code below.</p>
+      ) : (
+        <>
+          <h4 className="friends-group">Online ({online.length})</h4>
+          {online.length === 0 ? (
+            <p className="people-dim">Nobody right now.</p>
+          ) : (
+            <ul className="friends-list">
+              {online.map((f) => (
+                <FriendRow
+                  key={f.person_id}
+                  friend={f}
+                  unread={unread[f.person_id] ?? 0}
+                  onOpenProfile={setViewing}
+                />
               ))}
-          </ul>
-        )}
-      </section>
+            </ul>
+          )}
+          {offline.length > 0 && (
+            <>
+              <h4 className="friends-group">Offline ({offline.length})</h4>
+              <ul className="friends-list friends-list-offline">
+                {offline.map((f) => (
+                  <FriendRow
+                    key={f.person_id}
+                    friend={f}
+                    unread={unread[f.person_id] ?? 0}
+                    onOpenProfile={setViewing}
+                  />
+                ))}
+              </ul>
+            </>
+          )}
+        </>
+      )}
 
-      <section style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-        <h3 style={{ margin: 0 }}>Add a friend</h3>
-        <form
-          style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}
-          onSubmit={(e) => {
-            e.preventDefault();
-            void submitAdd();
-          }}
-        >
-          <input
-            value={code}
-            placeholder="HD-XXXX-XXXX-XXXX-XXXX-XXXX"
-            spellCheck={false}
-            onChange={(e) => setCode(e.target.value)}
-          />
-          <input
-            value={address}
-            placeholder="optional: ws://their-host:8000/peer-ws (needed off your network)"
-            spellCheck={false}
-            onChange={(e) => setAddress(e.target.value)}
-            style={{ fontSize: '0.8rem' }}
-          />
-          <button type="submit" disabled={!code.trim() || busy}>
-            {busy ? 'Sending…' : 'Send friend request'}
-          </button>
-        </form>
-      </section>
+      <details className="people-fold">
+        <summary>Add a friend, link a machine, rename yourself</summary>
+        <div className="friends-admin">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void submitAdd();
+            }}
+          >
+            <label className="people-label">Add a friend</label>
+            <input
+              value={code}
+              placeholder="HD-XXXX-XXXX-XXXX-XXXX-XXXX"
+              spellCheck={false}
+              onChange={(e) => setCode(e.target.value)}
+            />
+            <input
+              value={address}
+              placeholder="optional: ws://their-host:8000/peer-ws (needed off your network)"
+              spellCheck={false}
+              onChange={(e) => setAddress(e.target.value)}
+            />
+            <button type="submit" disabled={!code.trim() || busy}>
+              {busy ? 'Sending…' : 'Send friend request'}
+            </button>
+          </form>
 
-      <section style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-        <h3 style={{ margin: 0 }}>Link another of your machines</h3>
-        <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-dim)' }}>
-          Generate an invite in the Peers widget on the other computer, then paste it here. It joins
-          your identity rather than becoming a separate friend.
-        </p>
-        <form
-          style={{ display: 'flex', gap: '0.4rem' }}
-          onSubmit={(e) => {
-            e.preventDefault();
-            void submitLink();
-          }}
-        >
-          <input
-            value={invite}
-            placeholder="paste that machine’s invite"
-            spellCheck={false}
-            onChange={(e) => setInvite(e.target.value)}
-            style={{ flex: 1 }}
-          />
-          <button type="submit" disabled={!invite.trim() || busy || !me?.holds_person_key}>
-            Link
-          </button>
-        </form>
-      </section>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void submitLink();
+            }}
+          >
+            <label className="people-label">Link another of your machines</label>
+            <p className="people-hint">
+              Generate an invite on the other computer, then paste it here. It joins your identity
+              rather than becoming a separate friend.
+            </p>
+            <input
+              value={invite}
+              placeholder="paste that machine’s invite"
+              spellCheck={false}
+              onChange={(e) => setInvite(e.target.value)}
+            />
+            <button type="submit" disabled={!invite.trim() || busy || !me?.holds_person_key}>
+              Link
+            </button>
+          </form>
 
-      {error && <p style={{ color: '#f85149', fontSize: '0.8rem', margin: 0 }}>{error}</p>}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (name.trim()) {
+                void updateSelfProfile(name.trim()).then(() => {
+                  setName('');
+                  requestRoster();
+                });
+              }
+            }}
+          >
+            <label className="people-label">Rename yourself</label>
+            <input
+              value={name}
+              placeholder={me ? `currently “${me.display_name}”` : ''}
+              onChange={(e) => setName(e.target.value)}
+            />
+            <button type="submit" disabled={!name.trim() || !me?.holds_person_key}>
+              Rename
+            </button>
+          </form>
+
+          {me && !me.holds_person_key && (
+            <p className="people-note">
+              This machine was linked by another device, so it can’t link further machines or rename
+              you.
+            </p>
+          )}
+        </div>
+      </details>
+
+      {error && <p className="friends-error">{error}</p>}
     </div>
   );
 }

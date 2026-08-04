@@ -29,6 +29,28 @@ Keys are namespaced like every other contributed id — `<module>.<name>`, and
 setting keys too). The `SettingDecl`/`SettingType` types live in
 `@horribledashboard/sdk` so built-in modules and plugins share one shape.
 
+## The advanced fold
+
+A declaration may mark itself `advanced: true`:
+
+```ts
+{ key: 'network.turnCredential', title: 'TURN credential', description: '…',
+  type: 'string', default: '', advanced: true }
+```
+
+Each owner's settings are partitioned and the advanced ones render inside a
+collapsed `<details>` fold below the basic ones. The count is in the summary, so
+nothing is hidden — it is folded, not removed.
+
+The line is **not** "obscure": it is *would a working install legitimately change
+this?* The [network](network.mdx#settings) module is the case that forced it —
+fourteen knobs at equal weight, of which eight are NAT-traversal plumbing copied
+verbatim from whoever runs your infrastructure. Presenting those beside "what is
+this machine called" taught people to skim past the six that matter.
+
+`advanced` is on `SettingDecl` in `@horribledashboard/sdk`, so plugins get the fold
+for free through the same re-export every other setting field rides.
+
 ## Schema on the frontend, values on the backend
 
 The **schema and defaults live in the frontend declarations**; the backend is a

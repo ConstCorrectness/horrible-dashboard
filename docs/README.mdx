@@ -194,6 +194,13 @@ layout shell and how it behaves in the browser vs the desktop app:
   checksummed friend code you share, and device certificates binding each machine to
   you. Accepting a friend grants their devices fabric trust, which is what makes peer
   chat, shared panes, and agent-to-agent questions work with no second pairing step.
+- [Notifications](modules/notifications.mdx) — **Implemented.** Proactive messages,
+  and the rules that decide which of them reach you. Presence is diffed once in the
+  roster so "came online" is a real signal; a mute is checked at the **producer**, so
+  a silenced notification never crosses the socket; and `agent_watches` is the first
+  thing in the app that can hold an instruction past the end of a chat turn — which is
+  what makes "let me know when Andrew logs in, and mute any messages except for him
+  for a bit" a sentence the agent can carry out rather than acknowledge and forget.
 - [HorribleAssault](modules/hassault.mdx) — **Map pipeline, renderer, netcode and friends
   integration implemented.** An AssaultCube remix as a dashboard pane, with our own client
   and netcode replacing its ENet/master-server stack. Reads the `.cgz` map format (a port

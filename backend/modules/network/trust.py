@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import secrets
 import socket
@@ -18,12 +19,17 @@ from typing import Any
 
 from backend.modules.settings.routes import get_value
 
+logger = logging.getLogger(__name__)
+
 INVITE_TTL_S = 24 * 3600
 
 # Trust modes (setting `network.trustMode`):
 #   manual    — a peer must present a valid, unredeemed invite token to pair
-#   directory — identities vouched for by the configured directory service
 #   open-lan  — accept any peer reachable (demo / trusted LAN only)
+#
+# `directory` was a third mode. Nothing implemented it, so it rejected every peer
+# and made the node unpairable; it is no longer offered, and `trust_mode`
+# normalizes a stored one to `manual`. The constant stays only for that mapping.
 TRUST_MANUAL = "manual"
 TRUST_DIRECTORY = "directory"
 TRUST_OPEN_LAN = "open-lan"
@@ -119,7 +125,22 @@ def is_trusted(node_id: str) -> bool:
 
 
 def trust_mode() -> str:
-    return str(get_value("network.trustMode", TRUST_MANUAL))
+    """The pairing policy, with the one dead value normalized away.
+
+    `directory` was offered as a third mode and nothing ever implemented it, so
+    `evaluate` rejected every peer — choosing it made the node quietly unpairable.
+    It is gone from the settings enum, but a node that stored it must not stay
+    broken, so it is read as `manual`.
+    """
+    mode = str(get_value("network.trustMode", TRUST_MANUAL))
+    if mode == TRUST_DIRECTORY:
+        logger.warning(
+            "network.trustMode was %r, which was never implemented — using %r",
+            TRUST_DIRECTORY,
+            TRUST_MANUAL,
+        )
+        return TRUST_MANUAL
+    return mode
 
 
 def lan_ip() -> str | None:
@@ -175,6 +196,4 @@ def evaluate(node_id: str, token: str | None) -> tuple[bool, str | None]:
             save_known_peer(node_id, {"trusted": True, "via": "token"})
             return True, None
         return False, "pairing required"
-    if mode == TRUST_DIRECTORY:
-        return False, "directory service not configured"
     return False, "untrusted"

@@ -17,7 +17,7 @@ import time
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
-from fastapi import FastAPI, Header, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
@@ -319,7 +319,198 @@ async def directory_resolve(handle: str) -> dict[str, Any]:
 @app.get("/directory/search")
 async def directory_search(q: str, limit: int = 10) -> dict[str, Any]:
     """Prefix-search callsigns. Short queries return nothing rather than everyone."""
-    return {"results": store.search_handles(q, limit), "min_prefix": store.MIN_SEARCH_PREFIX}
+    return {
+        "results": store.search_handles(q, limit),
+        "min_prefix": store.MIN_SEARCH_PREFIX,
+    }
+
+
+class _PersonLookup(BaseModel):
+    person_ids: list[str] = []
+
+
+# ---- profiles: the part other people can see -------------------------------
+#
+# Your *own* profile still rides the `/game-ws` `profile_get`/`profile_set` frames —
+# it is live state you already hold a socket for. Everyone else's is HTTP, and that
+# split is the point: a profile you can only read over a game socket is a profile
+# you can only read while playing, which is why nobody could see anyone's bio.
+
+
+class _ProfilePatch(BaseModel):
+    """Every field optional and patch-style: absent means "leave it alone".
+
+    Clearing artwork is an explicit empty string, never a null — otherwise "don't
+    touch my background" and "remove my background" would be the same request.
+    """
+
+    avatar: str | None = None
+    bio: str | None = None
+    avatar_url: str | None = None
+    background_url: str | None = None
+    background_id: str | None = None
+    status_text: str | None = None
+    showcase: list[dict[str, Any]] | None = None
+
+
+class _CommentBody(BaseModel):
+    body: str = ""
+
+
+class _CardLookup(BaseModel):
+    handles: list[str] = []
+
+
+@app.post("/profiles/cards")
+async def profile_cards_route(body: _CardLookup) -> dict[str, Any]:
+    """Avatar, level and status for many people at once — what a *list* needs.
+
+    POST rather than GET for the same two reasons as `/directory/people`: a
+    roster's worth of names is too long for a query string, and who someone's
+    friends are does not belong in a request log.
+
+    Declared before `/profile/{handle}` is irrelevant here (different prefix), but
+    it is still batched-only: there is deliberately no way to walk it.
+    """
+    return {"cards": store.profile_cards(body.handles)}
+
+
+@app.get("/profile/{handle}")
+async def get_profile_route(handle: str) -> dict[str, Any]:
+    """Somebody else's profile, by callsign. Unauthenticated — a profile is public,
+    the same way the ladder that shows their rating is."""
+    profile = store.profile_by_handle(handle)
+    if profile is None:
+        return {"error": "no such player"}
+    return {"profile": profile}
+
+
+@app.post("/profile")
+async def patch_profile_route(
+    body: _ProfilePatch, authorization: str | None = Header(default=None)
+) -> dict[str, Any]:
+    """Update the caller's own profile."""
+    viewer = _viewer(authorization)
+    if viewer is None:
+        return {"error": "sign in required"}
+    return {
+        "profile": store.upsert_profile(
+            viewer,
+            avatar=body.avatar,
+            bio=body.bio,
+            avatar_url=body.avatar_url,
+            background_url=body.background_url,
+            background_id=body.background_id,
+            status_text=body.status_text,
+            showcase=body.showcase,
+        )
+    }
+
+
+@app.post("/profile/media")
+async def upload_media_route(
+    request: Request,
+    kind: str = "avatar",
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Upload a profile image. Body is the raw bytes; `Content-Type` declares the
+    format and is checked against the bytes themselves.
+
+    Raw body rather than multipart because there is exactly one file and no other
+    fields — multipart would add a parser (and a dependency) to carry nothing.
+    """
+    viewer = _viewer(authorization)
+    if viewer is None:
+        return {"error": "sign in required"}
+    if kind not in ("avatar", "background"):
+        return {"error": "kind must be 'avatar' or 'background'"}
+    mime = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    # Read with the cap in hand: an unbounded `await request.body()` would buffer
+    # whatever a caller sends before we ever get to reject it.
+    data = b""
+    async for chunk in request.stream():
+        data += chunk
+        if len(data) > store.MEDIA_MAX_BYTES:
+            return {"error": f"image is larger than {store.MEDIA_MAX_BYTES // 1024} KB"}
+    return store.store_media(viewer, kind, mime, data)
+
+
+@app.get("/media/{sha}")
+async def get_media_route(sha: str) -> Response:
+    """Serve a stored image. Content-addressed, so it is immutable and cacheable
+    forever — a profile view costs one request the first time and none after."""
+    found = store.get_media(sha)
+    if found is None:
+        return Response(status_code=404)
+    data, mime = found
+    return Response(
+        content=data,
+        media_type=mime,
+        headers={"Cache-Control": "public, max-age=31536000, immutable", "ETag": sha},
+    )
+
+
+@app.get("/profile/{handle}/comments")
+async def list_comments_route(
+    handle: str, before: float | None = None
+) -> dict[str, Any]:
+    """A profile's comment wall, newest first."""
+    profile = store.profile_by_handle(handle)
+    if profile is None:
+        return {"error": "no such player"}
+    return {
+        "comments": store.list_comments(profile["account_id"], before=before),
+        "page": store.COMMENT_PAGE,
+    }
+
+
+@app.post("/profile/{handle}/comments")
+async def add_comment_route(
+    handle: str, body: _CommentBody, authorization: str | None = Header(default=None)
+) -> dict[str, Any]:
+    """Leave a comment on someone's wall. Signing in is required — an anonymous
+    wall post is a spam vector with no upside."""
+    viewer = _viewer(authorization)
+    if viewer is None:
+        return {"error": "sign in required"}
+    profile = store.profile_by_handle(handle)
+    if profile is None:
+        return {"error": "no such player"}
+    comment = store.add_comment(profile["account_id"], viewer, body.body)
+    if comment is None:
+        return {"error": "comment was empty"}
+    return {"comment": comment}
+
+
+@app.delete("/profile/comments/{comment_id}")
+async def hide_comment_route(
+    comment_id: str, authorization: str | None = Header(default=None)
+) -> dict[str, Any]:
+    """Hide a comment. The wall's owner or the comment's author may; nobody else."""
+    viewer = _viewer(authorization)
+    if viewer is None:
+        return {"error": "sign in required"}
+    if not store.hide_comment(comment_id, viewer):
+        return {"error": "not yours to remove"}
+    return {"ok": True}
+
+
+@app.post("/directory/people")
+async def directory_people(body: _PersonLookup) -> dict[str, Any]:
+    """Fabric `person_id`s → their ladder accounts, for the ones that have one.
+
+    POST rather than GET despite being a read: a roster's worth of person ids is
+    both too long for a query string and exactly the kind of thing that should not
+    sit in server logs and browser history. Nothing here is secret — it is the same
+    public slice `/directory/resolve` serves — but a list of *who someone's friends
+    are* is a different disclosure from any single entry in it, and URLs leak by
+    default.
+
+    Unauthenticated for the same reason `/directory/resolve` is: the entries are
+    public, and the caller is a node reconciling its own roster.
+    """
+    found = store.accounts_by_person(list(body.person_ids or []))
+    return {"people": found, "max": store.MAX_PERSON_LOOKUP}
 
 
 # ---- web (authorization-code) sign-in --------------------------------------

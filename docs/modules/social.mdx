@@ -141,8 +141,8 @@ never stalls the shared receive loop.
 
 ### Storage
 
-`social_friends` and `social_devices` in `$HORRIBLE_DATA_DIR/app.db`, joined on
-`person_id`. The roster is **local**: a friendship is a pair of signed public keys
+`social_friends`, `social_devices` and `social_messages` in
+`$HORRIBLE_DATA_DIR/app.db`, joined on `person_id`. The roster is **local**: a friendship is a pair of signed public keys
 this node chose to trust, so it keeps working on a LAN with no internet and
 survives any directory service disappearing. A directory is only ever consulted to
 answer "what address is this person at right now" — never "who are my friends".
@@ -150,6 +150,89 @@ answer "what address is this person at right now" — never "who are my friends"
 Both tables are created with `CREATE TABLE IF NOT EXISTS`, which never adds a
 column to a table that already exists — any field added later needs an explicit
 `ALTER` probe in `init_social_db`.
+
+## One person, one friends list
+
+There used to be two friend systems that did not know about each other:
+
+|       | Fabric roster                            | Ladder (game server)          |
+| ----- | ---------------------------------------- | ----------------------------- |
+| Key   | `person_id` (`HD-XXXX-…`)                | `account_id` + `@callsign`    |
+| Where | local `app.db`, per node                 | the hosted game server        |
+| Has   | presence, device certs, **fabric trust** | avatar, bio, xp, level        |
+| Lacks | **any profile data at all**              | any trust or transport        |
+
+They met at exactly one point — `accounts.person_id`, the binding written when you
+sign in — and nothing was built on it. So the People pane's Messages tab listed raw
+machines by `node_name` while Friends listed people, and "peer" felt broken: a peer
+is a *device*, a friend is a *person*, and the UI mixed them.
+
+Now `social_friends` caches each friend's `handle` and `account_id`
+(`set_ladder_identity`, filled in by `ladder.reconcile`), and one roster row is one
+human on both systems. Two rules keep that from becoming a hole:
+
+- **Every resolved entry is re-checked** against its own key fingerprint
+  (`person_identity.fingerprint(key) == person_id`) before it is written. A
+  directory can withhold a record; it must never be able to point you at an
+  impostor.
+- **Ladder friendship never grants fabric trust.** Trust comes from accepting a
+  friend request on the fabric, where you have verified a device certificate.
+  Mirroring it the other way would let the game server's friends list open peer
+  connections on your node.
+
+A friend with no `handle` is a completely normal roster row, not a failure: they
+have simply never signed in to the game server. They render by display name and
+friend code, exactly as before. What a handle unlocks is the **profile** — their
+avatar, level and comment wall (see [games](games.mdx)).
+
+## Messages
+
+Direct messages are keyed by **person** and written to
+`social_messages` in `app.db`.
+
+What that replaces: conversations lived in an in-memory `deque(maxlen=200)` keyed
+by `node_id`. Three consequences, each of which read as the app being broken:
+
+1. **Restarting the backend erased every conversation.**
+2. **A friend on two machines was two conversations** — message their laptop, get a
+   reply from their desktop, and the thread forked.
+3. **There was no unread count**, because nothing knew what you had read.
+
+The `node_id` is still recorded on each message, as the route it took rather than
+as its identity. Sending is addressed to a person and the backend picks whichever
+of their machines is online; you are never asked which of someone's own computers
+to send to.
+
+An inbound message **nobody is looking at** raises a notification through
+[`notifications.service.notify`](notifications.mdx), which is where the mute rules
+are enforced — that is what makes *"mute any messages except for Andrew"* mean
+something. A message arriving in the conversation you have open is marked read on
+arrival and raises nothing.
+
+A message from a node with no device row (a stranger, or a peer paired before this
+layer existed) is still delivered — just unfiled, in memory, with a null
+`personId`. An unfiled message beats a dropped one.
+
+| `peerchat` event | Direction | Meaning |
+| --- | --- | --- |
+| `open` | → | subscribe and fetch a conversation (marks it read) |
+| `send` | → | send to a person; the node picks the machine |
+| `read` | → | mark a conversation read without opening it |
+| `unread` | → | subscribe to badges only, for a friends list |
+| `history` / `message` / `unread` / `error` | ← | backlog, one message, badge counts, failure |
+
+## Requests: one inbox
+
+Incoming **friend requests** and commons **meet requests** both land in the
+People pane's Requests section. They used to be a click apart — friend requests
+rendered inside the Friends list, meet requests had their own section — which is
+how you end up ignoring both.
+
+They stay visibly distinct, because they grant genuinely different access: a
+friend request is from someone who already has your friend code and accepting
+grants their machines fabric trust, while a meet request is from a *stranger*
+found through the [commons](commons.mdx) and keeps its own consent handshake and
+trust tiers.
 
 ## Trust, and what friendship actually grants
 
@@ -270,7 +353,12 @@ Grouped under the `social` prefix (the orchestrator groups by name prefix).
 
 `social.message` routes through the chat manager rather than straight onto the
 wire, so an agent-sent message lands in the same conversation history the panel
-shows instead of vanishing.
+shows instead of vanishing — and it addresses a **person**, so the manager picks
+a live machine rather than the agent guessing at a node id.
+
+The `watch.*` and `notify.*` tools in [notifications](notifications.mdx) are the
+other half of the social surface: they are what let *"let me know when Andrew logs
+in"* survive the end of a chat turn.
 
 Name resolution is exact (case-insensitive) and refuses ambiguous matches —
 silently picking the closest fuzzy match would let the agent message the wrong
@@ -290,6 +378,10 @@ identity and networking lives on the backend.
   to a machine you have never met needs the presence directory below. With Atlas
   unconfigured, supply their `ws://…/peer-ws` address once; known devices are
   redialed from their stored address automatically after that.
+- **Profiles need the game server.** Avatars, levels and comment walls come from
+  the ladder, so a friend with no callsign renders with an initial and no level,
+  and every face falls back to an initial when that server is unreachable. The
+  roster itself is local and always renders — that separation is deliberate.
 - The person key is stored unencrypted at `$HORRIBLE_DATA_DIR/social-person.key`
   (mode `0600`), matching the node identity key. It is not in the Fernet secrets
   store.

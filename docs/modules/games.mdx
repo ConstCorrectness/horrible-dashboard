@@ -71,7 +71,7 @@ driven through `hub-section.ts` (`GamesSection`):
 
 | Section | What it is |
 | --- | --- |
-| 🕹 **Play** | Pick a game, find a match / practice, sign in (`LobbyPanel`). |
+| 🕹 **Play** | Pick a game, find a match / practice (`LobbyPanel`). |
 | ▦ **Game Board** | The live match (`GameBoardPanel`). |
 | 🛠 **Build** | The agent editor + loadout (`AgentBuilderPanel`). |
 | 📼 **Replays** | Browse and watch replays (`ReplayBrowserPanel`). |
@@ -87,6 +87,9 @@ several self-contained panels within one section. `openGamesSection(section)` is
 single entry point every hand-off goes through (`revealBoard()` on a live match,
 `openHarnessFor(gameId)` from a game card, the `games.openBoard` /
 `games.openLoadout` commands).
+
+**Nothing above renders until you are signed in.** `GamesPanel` puts a sign-in gate
+(`GamesSignIn`) in front of every section — see [Sign-in is a gate](#sign-in-is-a-gate).
 
 **The strip itself is host chrome.** `GamesPanel` renders bodies only; the frame
 engine draws the tabs, synthesizes a `section.show:games.lobby:<id>` command each,
@@ -172,10 +175,13 @@ one game at a time, and the button starts the one you're looking at.
 
 Three things about it are load-bearing:
 
-- **Quick Play means self-play against your own agent** (`playVsOwnAgent`). That is
-  the only start flow needing neither a sign-in nor the central game server, so the
-  loudest button in the module can't be a dead end for a first-time player. Ranked,
-  practice bots and open tables are one click further in, on the selected game's
+- **Quick Play means self-play against your own agent** (`playVsOwnAgent`) — the
+  lowest-ceremony start, needing no opponent and no queue, so the loudest button in
+  the module can't be a dead end for a first-time player. It still runs on the central
+  game server (`ensureConnected(true)`) and still needs a sign-in like everything else;
+  this page used to claim it needed neither, which is part of how a signed-out Lobby
+  survived as long as it did. Ranked, practice bots and open tables are one click
+  further in, on the selected game's
   card. Every start still routes through `matchmaking.ts` — the hero is a new
   caller, not a new path — and it performs the same `setSelectedGame` +
   `setActiveGame` handshake the sidebar does, so the harness and board follow.
@@ -271,31 +277,67 @@ template this look came from hard-sets `reduceMotion = false`; that's an
 accessibility regression, and it was deliberately not imported.
 :::
 
+## Sign-in is a gate
+
+`GamesPanel` renders **only** a sign-in screen (`GamesSignIn.tsx`) until the node
+holds a game-server session. No Lobby, no Board, no Build.
+
+This is not caution, it is accuracy. **Every** start flow in `matchmaking.ts` —
+`playVsOwnAgent` included — calls `ensureConnected`, and the hosted game server runs
+`GAMES_ALLOW_DEV_AUTH=0`, so the dev token the node otherwise falls back to is
+refused. A signed-out Lobby was therefore a screen of live-looking buttons that
+could only ever produce `invalid token`. The gate is **unconditional**, including
+against a local server that *would* accept anonymous play: one rule is explainable,
+and "sometimes you need an account" is the state that produced the bug.
+
+Three not-signed-in states are kept distinct, because collapsing them blames the
+wrong party (`account-store.ts`):
+
+| `phase` | Screen | Why separate |
+| --- | --- | --- |
+| `loading` | "Checking your sign-in…" | A form that flashes up and vanishes reads as a fault. |
+| `unavailable` | "Can't reach this node" + retry | The **backend** didn't answer. No amount of signing in fixes that. |
+| `ready`, signed out | `SignInCard` | The only state a sign-in actually resolves. |
+
+The screen names the server it will sign in to (`server` from `useAccount()`), since
+sign-in and play resolve the same URL — if that isn't the server you expect, *that*
+is the fault, not the sign-in. The form itself is core's shared
+[`SignInCard`](#the-sign-in-ui); this module does not carry a copy.
+
+The mirror image of the gate is `auth_invalid`: when the node clears a rejected token
+(`channel.py`), `game-ws.ts` calls `refreshAccount()`, so the pane returns to the gate
+in the same beat as the toast. Without it the toast said *"sign in again"* while the
+sidebar went on showing the old display name and a **Sign out** button.
+
+The backend keeps its dev-token fallback (`server_auth._play_token`) — the test suite
+and the agent tools rely on it. The gate is a **UI** contract; the server contract is
+unchanged.
+
 ## Onboarding — the first-run card
 
-First-run players get a **first-run hero** at the top of the hub's Play tab (until
-the `games.onboarded` setting flips — there is no separate wizard panel). It is the
-loudest surface in the module by design, and the headline is doing the teaching:
-each step gets its own serif line landing on an italic accent-coloured word, because
-the premise — *you engineer the agent, you don't play* — has to land before the
-sign-in button means anything. Inline steps (`FirstRunHero.tsx`):
+Past the gate, first-run players get a **first-run hero** at the top of the hub's Play
+tab (until the `games.onboarded` setting flips — there is no separate wizard panel).
+It is the loudest surface in the module by design, and the headline is doing the
+teaching: a serif line landing on an italic accent-coloured word, because the premise
+— *you engineer the agent, you don't play* — has to land before the placement match
+means anything.
 
-1. **Sign in** — GitHub or Google OAuth (redirect flow by default, device-code
-   fallback available); your account lives on the
-   central game server. Your **handle** is derived from your OAuth username (the
-   GitHub login, or a Google email's local part) and locked at sign-in. (The
-   username is folded to the `a-z 0-9 _ -` charset and made unique server-side.)
-2. **Starter harness** — pick an avatar plus a starter template
-   (`GET /games/loadout-templates`) and ship it as your loadout's first version
-   (the avatar claim rides the real `ensureConnected` ack, no timers).
-3. **Placement** — one click queues a placement match (instant practice-bot
-   pairing), switching to the Game Board section and opening the Games Log, so
-   the first thing a new player sees is their agent thinking.
+One step remains (`FirstRunHero.tsx`): **placement** — one click queues a placement
+match (instant practice-bot pairing), switching to the Game Board section and opening
+the Games Log, so the first thing a new player sees is their agent thinking. Your
+**handle** is already set by then: every sign-in flow derives one (the GitHub login, a
+Google email's local part, or the address you signed up with), folded to the
+`a-z 0-9 _ -` charset and made unique server-side.
 
-Every step is skippable, and a **dismiss** link hides the card for players who
-are just exploring (also setting `games.onboarded`); the
-`games.restartOnboarding` command clears the flag and reopens the hub.
-Local self-play still needs no account; ranked/online play does.
+A **dismiss** link hides the card for players who are just exploring (also setting
+`games.onboarded`); the `games.restartOnboarding` command clears the flag and reopens
+the hub.
+
+:::note Sign-in used to be step one of this card, with a **skip** button
+Its own copy promised *"▶ Play works without one"*. That was never true against the
+hosted server, and the skip walked players straight into the `invalid token` toast.
+The gate owns sign-in now, so nothing signed-out reaches this component.
+:::
 
 **Sign-in token & server resolution.** The node holds the game server's JWT
 server-side (`.data/games_token.json`, never sent to the browser) and presents it on
@@ -304,11 +346,13 @@ server-side (`.data/games_token.json`, never sent to the browser) and presents i
 setting), so the node can't sign in to one server and play against another — a mismatch
 the play server rejects as `invalid token`. If the server rejects the token anyway
 (expired, or signed by a secret a redeploy rotated), the node **clears the stale token**
-and the UI drops back to signed-out with a "sign in again" prompt (`channel.py`), rather
-than silently failing every connect. When there is **no** stored token, the same
+and the pane drops back to the sign-in gate with a "sign in again" toast (`channel.py`),
+rather than silently failing every connect. When there is **no** stored token, the same
 rejection means something different — the node offered the dev token and this server
 runs `GAMES_ALLOW_DEV_AUTH=0` (the hosted one does) — so the toast reads *"This game
 server requires sign-in"* instead of the raw `invalid token`, which reads like a bug.
+Reaching that message from the browser now takes a token going stale mid-session; it is
+otherwise the agent tools' and `dash`'s path.
 
 The
 **Profile** sub-tab of the Career section (`ProfilePanel`) shows your avatar/level ring, per-game tier
@@ -543,7 +587,7 @@ editing always follows the game you selected instead of drifting onto a stale on
 find, focus, or swap back — and the builder's **← Play** button returns to the Play
 section. **Lock in** validates + saves, then plays the **VS lock-in ceremony**
 (`VsCeremony.tsx` — your agent vs a self-play mirror, ember vs cyan); **Enter arena**
-starts a real self-play match (`matchmaking.playVsOwnAgent`, no sign-in needed), which
+starts a real self-play match (`matchmaking.playVsOwnAgent`), which
 switches to the Game Board section and opens the Games Log.
 
 Under `games.policy = agent`, `AgentPolicy` becomes a bounded tool loop: it advertises
@@ -1070,6 +1114,84 @@ connection controls it) and joining auto-connects the node — no separate Conne
 step. Say-length caps and per-account presence are the v1 rate limits; presence is
 dropped on disconnect (a human who left has left, no sleep-in-place).
 
+## Profiles — the part other people can see
+
+A profile is **artwork, a status line, a bio, a level, pinned showcases, and a
+comment wall**, and it lives on the game server rather than on either node. That is
+the whole point: it is the only always-on machine, so a profile reads while every
+one of that person's computers is off, and someone can write on your wall while you
+are away. A peer-to-peer profile would only be visible when both people happened to
+be online, which is a chat, not a page.
+
+### The read that had no endpoint
+
+`GET /profile/{handle}` did not exist. Profiles were live state on a game socket,
+readable only by their owner and only while playing — which is why the Plaza's
+player card shipped with a **hardcoded placeholder paragraph** standing in for
+everyone's bio. Your own profile still arrives over `/game-ws` as live state
+(`profile_get`/`profile_set`); everyone else's is HTTP and unauthenticated, the same
+way the ladder that shows their rating is.
+
+| Route (game server) | Purpose |
+| --- | --- |
+| `GET /profile/{handle}` | Somebody else's profile |
+| `POST /profile` | Patch your own (every field optional) |
+| `POST /profiles/cards` | Avatar/level/status for **many** handles at once |
+| `POST /profile/media?kind=avatar\|background` | Upload an image (raw body) |
+| `GET /media/{sha}` | Serve one, immutable + ETag |
+| `GET,POST /profile/{handle}/comments` | The wall |
+| `DELETE /profile/comments/{id}` | Hide one (owner or author) |
+
+All of them are proxied through the node under `/api/games/…`, so the browser talks
+to one origin and never handles the bearer token.
+
+`/profiles/cards` is **POST and batched** for the same two reasons as
+`/directory/people`: a roster's worth of names is too long for a query string, and
+who someone's friends are does not belong in a request log. It exists because a
+friends list wants a face and a level per row, and one profile fetch per friend on
+every render of a pane that opens by default is not a thing to ship. It is capped
+at 100 and there is deliberately no way to walk it.
+
+### Uploads
+
+Images go to the volume under `$HORRIBLE_DATA_DIR/media/<sha256>`, content-addressed,
+with a 256 KB cap and a MIME allowlist.
+
+:::danger An image endpoint on a server with a volume is an arbitrary-write primitive
+Four things have to hold, and each fails silently:
+
+- the declared `Content-Type` is **checked against the bytes' magic number**, never
+  believed;
+- **SVG is not an image** here — it executes script — and is rejected;
+- a `sha` from the URL is never concatenated into a path;
+- the size cap is applied **while streaming**, not after an unbounded read.
+
+Each has a test in `backend/tests/test_games_profiles.py`.
+:::
+
+The `avatar` column stays an emoji, capped at 8 characters. The bug was not the cap:
+the frontend `readAsDataURL`'d the file and wrote the base64 into that column, so
+**every upload was silently truncated to eight bytes of base64** and no picture ever
+appeared, with no error anywhere. Uploads now POST the file itself and the profile
+stores a reference.
+
+### Backgrounds are gradients
+
+The presets are **CSS gradients, not image files**: they cost no bytes, no volume
+space and no moderation, they scale to any pane width, and they cannot be someone
+else's copyright — the same rule [HorribleAssault](hassault.mdx)'s maps and audio
+follow. An upload overrides whichever preset is picked.
+
+Clearing artwork is an explicit **empty string**, never a null: otherwise "don't
+touch my background" and "remove my background" would be the same request.
+
+### The wall
+
+`profile_comments` rows carry an **author account**, so a comment survives the
+commenter going away. Hiding is a soft `hidden` flag rather than a delete, and it is
+available to the wall's owner *and* the comment's author — a wall owner moderating
+their page must not be able to erase the record of what was said to them.
+
 ## Identity & ladder
 
 A node authenticates to the server with a token on `/game-ws`. Signing in mints the
@@ -1154,8 +1276,10 @@ never handed to the browser). Two OAuth flows produce it:
   are dropped. See [observability](observability.mdx#the-one-exception-password-bodies).
   :::
 - **Dev token** (fallback) — when not signed in, the token *is* the account id, so
-  local play and tests need no OAuth. Disable it with `GAMES_ALLOW_DEV_AUTH=0` to
-  require real sign-in.
+  tests, the agent tools and `dash` need no OAuth. Disable it with
+  `GAMES_ALLOW_DEV_AUTH=0` to require real sign-in (the hosted server does). The
+  **browser can no longer reach this path**: the pane is gated, so a signed-out
+  session never gets as far as connecting.
 - **On the desktop shell** the consent page opens in the **system browser** (via the
   shell's `open_external` command — see
   [windowing.mdx](../architecture/windowing.mdx)) rather than a popup: the Tauri
@@ -1166,11 +1290,14 @@ never handed to the browser). Two OAuth flows produce it:
   permission is what once made this button (and every external link on desktop) do
   nothing at all — see [Onboarding](onboarding.mdx#the-bug-that-motivated-all-of-it).
 
+### The sign-in UI
+
 The sign-in UI itself is core's `SignInCard`, shared with HorribleAssault and the
 home page's setup flow; the lobby sidebar and the first-run hero each used to carry
-their own copy. Signed-in state comes from the shared `useAccount` store, so a
-sign-in anywhere in the app lands here without a refetch. See
-[Onboarding](onboarding.mdx).
+their own copy. In this module it is rendered by the pane's gate
+([Sign-in is a gate](#sign-in-is-a-gate)) and nowhere else. Signed-in state comes from
+the shared `useAccount` store, so a sign-in anywhere in the app lands here without a
+refetch. See [Onboarding](onboarding.mdx).
 
 If a cached JWT token is rejected by the game server during connection authentication, the node's client automatically signs out (deleting `.data/games_token.json`) to clear the stale token and prevent infinite loop failures. Connection and authentication errors from the game server are surfaced as toast notifications in the UI — with two exceptions to keep spectating quiet: `not_your_turn` errors are suppressed entirely (a move landing after the referee's clock resolved the turn is normal agent-protocol churn, most common in tick-based games and self-play, and the server already handles it by ignoring the move), and identical error toasts arriving within a 10-second burst collapse into one.
 

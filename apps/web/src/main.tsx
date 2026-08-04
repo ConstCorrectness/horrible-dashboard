@@ -35,6 +35,9 @@ import {
   loadSettings,
   initLobby,
   initNetwork,
+  initNotifications,
+  initSocial,
+  notificationsModule,
   marketplaceModule,
   networkModule,
   peopleModule,
@@ -129,6 +132,7 @@ async function boot(): Promise<void> {
   // **no panes** — People is where all three surface.
   registry.register(networkModule);
   registry.register(socialModule);
+  registry.register(notificationsModule);
   registry.register(commonsModule);
   registry.register(peopleModule);
   registry.register(hassaultModule);
@@ -158,6 +162,14 @@ async function boot(): Promise<void> {
   initNetwork();
   initLobby();
   initCommons();
+  // The roster, and the notifications the fabric raises against it. Both belong at
+  // boot rather than on a pane mount: `initSocial` used to run only when the
+  // Friends tab was opened, so a friend request that arrived before you went
+  // looking for one was never announced — and a watch that fires ("Andrew is
+  // online") has to reach you while you are doing something else, or it is not a
+  // notification.
+  initSocial();
+  initNotifications();
   // Listen for permission-approval prompts the gate raises during a turn.
   initApprovalListener();
 

@@ -75,6 +75,14 @@ function SettingRow({ decl }: { decl: SettingDecl }) {
 /**
  * The settings page: every setting declared by a module or plugin, grouped by
  * the contributor that declared it (VS Code Settings editor style).
+ *
+ * Within a group, anything marked `advanced` drops into a collapsed **Advanced**
+ * fold. That exists because a handful of contributors — the network module above
+ * all — declare more infrastructure knobs (TURN credentials, STUN hosts, relay and
+ * signalling URLs) than settings a working install ever touches, and a page where
+ * the rare and the routine sit at the same weight teaches you to skim past both.
+ * The fold is presentation only: an advanced setting is stored, read and reset like
+ * any other, and an override survives the fold being shut.
  */
 export function SettingsPanel() {
   const settings = registry.settings;
@@ -96,14 +104,28 @@ export function SettingsPanel() {
           No settings yet — modules and plugins contribute their own here.
         </p>
       )}
-      {[...groups.entries()].map(([owner, decls]) => (
-        <section key={owner} className="settings-group">
-          <h3>{owner}</h3>
-          {decls.map((decl) => (
-            <SettingRow key={decl.key} decl={decl} />
-          ))}
-        </section>
-      ))}
+      {[...groups.entries()].map(([owner, decls]) => {
+        const basic = decls.filter((d) => !d.advanced);
+        const advanced = decls.filter((d) => d.advanced);
+        return (
+          <section key={owner} className="settings-group">
+            <h3>{owner}</h3>
+            {basic.map((decl) => (
+              <SettingRow key={decl.key} decl={decl} />
+            ))}
+            {advanced.length > 0 && (
+              <details className="settings-fold">
+                {/* The count is on the summary on purpose: a fold that doesn't say
+                    how much it hides is a fold people never open. */}
+                <summary>Advanced ({advanced.length})</summary>
+                {advanced.map((decl) => (
+                  <SettingRow key={decl.key} decl={decl} />
+                ))}
+              </details>
+            )}
+          </section>
+        );
+      })}
       {registry.settingsSections.map((section) => {
         const Section = section.component;
         return (

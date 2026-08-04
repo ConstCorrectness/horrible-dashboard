@@ -51,6 +51,15 @@ class Friend(BaseModel):
     # True when this person is *you* — your own linked machines show up in the
     # roster so "play against my other computer" needs no special case.
     is_self: bool = False
+    #: This person's game-server identity, cached locally from the directory.
+    #:
+    #: None means "we have not linked them to a ladder account", which is a normal
+    #: state and not a failure — a friend who has never signed in to the game server
+    #: has no callsign to show. The roster renders them by display name and friend
+    #: code, exactly as before. What `handle` unlocks is the *profile*: with it the
+    #: UI can fetch their avatar, level and comment wall.
+    handle: str | None = None
+    account_id: str | None = None
 
 
 class SelfProfile(BaseModel):

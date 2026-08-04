@@ -1,6 +1,7 @@
-import { useEffect } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 
 import { useCollab } from '../network';
+import { getSocialState, subscribeSocial } from '../social/ws';
 import { registry, type ModuleManifest } from '../../registry';
 
 /**
@@ -21,9 +22,18 @@ const STORAGE_KEY = 'horrible.scratch';
 const SHARE_KEY = 'scratch:shared';
 
 function ScratchPanel() {
-  const { text, setText, shared, setShared, members } = useCollab(SHARE_KEY, {
-    initialText: localStorage.getItem(STORAGE_KEY) ?? '',
-  });
+  const { text, setText, shared, setShared, members, people, share, unshare, error } = useCollab(
+    SHARE_KEY,
+    { initialText: localStorage.getItem(STORAGE_KEY) ?? '' },
+  );
+  const { roster } = useSyncExternalStore(subscribeSocial, getSocialState, getSocialState);
+  const [picking, setPicking] = useState(false);
+
+  // Only friends with a machine up can be shared with: the pane goes to a live
+  // node, and offering someone who is offline would be offering a failure.
+  const candidates = (roster?.friends ?? []).filter(
+    (f) => f.status === 'accepted' && f.presence === 'online' && !f.is_self,
+  );
 
   useEffect(() => {
     if (shared) return; // while shared, the room is the source of truth
@@ -49,10 +59,51 @@ function ScratchPanel() {
         </label>
         {shared && (
           <span style={{ color: 'var(--text-dim)' }}>
-            live with peers · {members} {members === 1 ? 'editor' : 'editors'}
+            {members} {members === 1 ? 'editor' : 'editors'} here
+            {people.length > 0 && ` · with ${people.map((p) => p.name).join(', ')}`}
           </span>
         )}
+        {/* Share with a *person*, not with "peers". The note used to go to every
+            node you had a link with the moment Share was ticked. */}
+        <button
+          type="button"
+          style={{ marginLeft: 'auto', fontSize: '0.72rem' }}
+          onClick={() => setPicking((p) => !p)}
+        >
+          Share with…
+        </button>
       </div>
+
+      {picking && (
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: '0.35rem',
+            padding: '0.35rem 0.5rem',
+            borderBottom: '1px solid var(--border)',
+            fontSize: '0.72rem',
+          }}
+        >
+          {candidates.length === 0 && (
+            <span style={{ color: 'var(--text-dim)' }}>No friends online to share with.</span>
+          )}
+          {candidates.map((f) => {
+            const already = people.some((p) => p.personId === f.person_id);
+            return (
+              <button
+                key={f.person_id}
+                type="button"
+                onClick={() => (already ? unshare(f.person_id) : share(f.person_id))}
+              >
+                {already ? '✓ ' : ''}
+                {f.display_name}
+              </button>
+            );
+          })}
+          {error && <span style={{ color: '#f85149' }}>{error}</span>}
+        </div>
+      )}
       <textarea
         className="scratch"
         value={text}

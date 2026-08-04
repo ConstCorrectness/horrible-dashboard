@@ -250,6 +250,21 @@ export {
   type SelfProfile,
   type RosterSnapshot,
 } from './modules/social';
+export {
+  notificationsModule,
+  initNotifications,
+  getNotifications,
+  subscribeNotifications,
+  unreadCount,
+  markAllRead,
+  dismissNotification,
+  canNotifyDesktop,
+  desktopPermission,
+  ensureDesktopPermission,
+  showDesktopNotification,
+  type NotificationItem,
+  type PermissionState,
+} from './modules/notifications';
 export { explorerModule } from './modules/explorer';
 export { peopleModule } from './modules/people';
 export {
@@ -263,6 +278,8 @@ export {
   collabJoin,
   collabLeave,
   collabOp,
+  collabShare,
+  collabUnshare,
   type CollabUpdate,
   type PeerInfo,
   type NodeIdentity,

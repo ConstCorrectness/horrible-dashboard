@@ -21,7 +21,14 @@ logger = logging.getLogger(__name__)
 
 def build_transports() -> list[Transport]:
     """The transports this node runs, per settings. Direct is on by default; relay
-    and LAN discovery are opt-in (a relay needs a broker URL; LAN needs multicast)."""
+    and LAN discovery are opt-in (a relay needs a broker URL; LAN needs multicast).
+
+    **Read once, at startup.** Toggling any of these settings does nothing until
+    the backend restarts — a transport owns a bound socket or a multicast thread,
+    and swapping one under live sessions is a different job from reading a flag.
+    The four settings say "Takes effect on restart" for exactly this reason;
+    before that they looked like live switches that silently did nothing.
+    """
     transports: list[Transport] = []
     if get_value("network.enableDirect", True):
         transports.append(DirectWsTransport())
@@ -76,6 +83,13 @@ async def start_network() -> None:
     from backend.modules.social import register_social
 
     register_social(peer_hub)
+    # Notification rules and standing watches. After social, because it subscribes
+    # to the roster's presence events — the "came online" signal a watch fires on.
+    from backend.modules.notifications import register_notifications
+    from backend.modules.notifications.agent_tools import register_notification_tools
+
+    register_notifications()
+    register_notification_tools()
     # HorribleAssault: match invites, and playing in a friend's match on their
     # node. Registered after social because an invite is addressed to a person.
     from backend.modules.hassault import fabric as hassault_fabric

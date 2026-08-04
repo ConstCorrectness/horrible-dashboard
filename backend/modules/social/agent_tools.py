@@ -98,17 +98,21 @@ async def message_friend(args: dict[str, Any]) -> dict[str, Any]:
         return {"error": "nothing to send"}
     row = await resolve_row(who)
     if row is None:
-        return {"error": f"no friend matching {who!r} — try their @callsign or friend code"}
+        return {
+            "error": f"no friend matching {who!r} — try their @callsign or friend code"
+        }
     if row["status"] != "accepted":
         return {"error": f"{row['display_name']} is not an accepted friend yet"}
 
-    nodes = roster.reachable_nodes(row["person_id"])
-    if not nodes:
-        return {"error": f"{row['display_name']} has no machine online right now"}
     # Routed through the chat manager rather than straight onto the wire, so an
-    # agent-sent message lands in the same conversation history the panel shows.
-    await chat_manager.send_to_peer(nodes[0], text)
-    return {"ok": True, "sent_to": row["display_name"], "via_node": nodes[0]}
+    # agent-sent message lands in the same conversation the panel shows — and is
+    # addressed to the *person*, so the manager picks whichever of their machines
+    # is up rather than the agent guessing at a node.
+    try:
+        sent = await chat_manager.send_to_person(row["person_id"], text)
+    except KeyError:
+        return {"error": f"{row['display_name']} has no machine online right now"}
+    return {"ok": True, "sent_to": row["display_name"], "via_node": sent["nodeId"]}
 
 
 async def ask_friend_agent(args: dict[str, Any]) -> dict[str, Any]:

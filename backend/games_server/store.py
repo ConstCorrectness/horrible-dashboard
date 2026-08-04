@@ -11,10 +11,13 @@ Ratings are 2-player zero-sum ELO for now (tic-tac-toe/chess/etc.); multi-player
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
 import sqlite3
 import time
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Generator
@@ -279,6 +282,69 @@ def _m8_person_binding(conn: sqlite3.Connection) -> None:
     )
 
 
+def _m9_rich_profiles(conn: sqlite3.Connection) -> None:
+    """Profiles worth visiting: artwork, a status line, showcases, and a comment wall.
+
+    A profile was four fields (avatar, bio, xp, and a derived level) and could only
+    be read *by its owner* — there was no endpoint to fetch someone else's, which is
+    why the Plaza's player card rendered a hardcoded placeholder bio for everyone.
+    A profile nobody else can look at is not a profile.
+
+    Three shapes here:
+
+    - `avatar_url` / `background_url` alongside the existing `avatar`. The emoji
+      column stays and stays 8 characters — it is a *fallback*, and the roster and
+      Plaza render it inline where an image would be too heavy. What was broken was
+      the frontend writing a base64 data URL into it and the server truncating that
+      to 8 characters, so every upload silently became garbage. Images are files now
+      (`profile_media`), and these hold a reference to one.
+    - `profile_comments` — the Steam-shaped part. Keyed by account, not by person or
+      session, precisely so a comment outlives its author being offline. `hidden`
+      rather than a DELETE so a wall owner can moderate without destroying evidence.
+    - `profile_media` — content-addressed blobs. `sha256` is the primary key, so the
+      same image uploaded twice is stored once, and `account_id` records who put it
+      there for quota and cleanup.
+    """
+    _add_column(conn, "player_profiles", "avatar_url", "TEXT")
+    _add_column(conn, "player_profiles", "background_url", "TEXT")
+    _add_column(conn, "player_profiles", "background_id", "TEXT")
+    _add_column(conn, "player_profiles", "status_text", "TEXT NOT NULL DEFAULT ''")
+    #: JSON: which showcases the owner has pinned, and in what order.
+    _add_column(conn, "player_profiles", "showcase", "TEXT")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS profile_comments (
+            id         TEXT PRIMARY KEY,
+            account_id TEXT NOT NULL,   -- whose wall
+            author_id  TEXT NOT NULL,   -- who wrote it
+            body       TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            hidden     INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_profile_comments_wall "
+        "ON profile_comments(account_id, created_at DESC)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS profile_media (
+            sha256     TEXT PRIMARY KEY,
+            account_id TEXT NOT NULL,
+            kind       TEXT NOT NULL,   -- 'avatar' | 'background'
+            mime       TEXT NOT NULL,
+            bytes      INTEGER NOT NULL,
+            created_at REAL NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_profile_media_account "
+        "ON profile_media(account_id)"
+    )
+
+
 MIGRATIONS: list[Any] = [
     _m1_identity_and_series,
     _m2_replays,
@@ -288,6 +354,7 @@ MIGRATIONS: list[Any] = [
     _m6_backfill_handles,
     _m7_local_credentials,
     _m8_person_binding,
+    _m9_rich_profiles,
 ]
 
 
@@ -586,6 +653,51 @@ def account_by_handle(handle: str) -> dict[str, Any] | None:
             "SELECT * FROM accounts WHERE handle = ?", (handle.strip().lower(),)
         ).fetchone()
     return _directory_row(row)
+
+
+#: How many people one directory lookup may ask about. A roster is tens of rows;
+#: this is comfortably above that and well below "enumerate everyone".
+MAX_PERSON_LOOKUP = 100
+
+
+def accounts_by_person(person_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """The reverse of `account_by_handle`: fabric people → their ladder accounts.
+
+    A node holds a roster keyed by `person_id` and needs to know which of those
+    people are on the ladder — the direction `/directory/resolve` cannot answer,
+    because it starts from a callsign the node does not yet have. Without it a node
+    would have to guess handles to discover that a friend it already trusts is the
+    same human as an account it already sees.
+
+    Batched deliberately: reconciling a roster is inherently N lookups, and N
+    requests to answer one question is how a cold start turns into a thundering
+    herd. Capped so a caller cannot ask about the whole user base in one go, and it
+    returns only `_directory_row`'s public slice — the same fields
+    `/directory/resolve` already serves to anyone, so this exposes no new
+    information, only a second index into it.
+
+    Unmatched ids are simply absent from the result; a person with no ladder
+    account is normal, not an error.
+    """
+    ids = [p.strip() for p in person_ids if p and p.strip()][:MAX_PERSON_LOOKUP]
+    if not ids:
+        return {}
+    init_db()
+    placeholders = ",".join("?" for _ in ids)
+    with get_conn() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM accounts WHERE person_id IN ({placeholders})",  # noqa: S608 — placeholders are generated, ids are bound
+            ids,
+        ).fetchall()
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        entry = _directory_row(row)
+        if entry is not None:
+            # `account_id` is added on top of the public slice: a node needs it to
+            # address the ladder's friend protocol, and it is not a secret (it rides
+            # in every roster and match frame already).
+            out[str(row["person_id"])] = {**entry, "account_id": row["id"]}
+    return out
 
 
 #: Shortest prefix `search_handles` will answer. Two characters would enumerate
@@ -1126,11 +1238,37 @@ def _next_threshold(level: int) -> int | None:
     return LEVEL_THRESHOLDS[level] if level < len(LEVEL_THRESHOLDS) else None
 
 
-def _profile_view(account_id: str, avatar: str, bio: str, xp: int) -> dict[str, Any]:
+#: Profile text caps. `status_text` is a one-liner under your name — long enough
+#: for "afk til 6" and short enough that it can't be a second bio.
+BIO_MAX = 280
+STATUS_MAX = 80
+#: An emoji or two. This is the *fallback* avatar rendered inline in rosters; an
+#: uploaded image lives in `avatar_url`. Writing an image here is what used to
+#: truncate every upload to 8 bytes of base64.
+AVATAR_EMOJI_MAX = 8
+
+
+def _profile_view(
+    account_id: str,
+    avatar: str,
+    bio: str,
+    xp: int,
+    *,
+    avatar_url: str | None = None,
+    background_url: str | None = None,
+    background_id: str | None = None,
+    status_text: str = "",
+    showcase: Any = None,
+) -> dict[str, Any]:
     level = level_for_xp(xp)
     return {
         "account_id": account_id,
         "avatar": avatar,
+        "avatar_url": avatar_url,
+        "background_url": background_url,
+        "background_id": background_id,
+        "status_text": status_text,
+        "showcase": showcase or [],
         "bio": bio,
         "xp": xp,
         "level": level,
@@ -1139,53 +1277,207 @@ def _profile_view(account_id: str, avatar: str, bio: str, xp: int) -> dict[str, 
     }
 
 
+#: Every column `_profile_view` needs, in one place so the three readers can't drift.
+_PROFILE_COLUMNS = (
+    "avatar, bio, xp, avatar_url, background_url, background_id, status_text, showcase"
+)
+
+
+def _view_from_row(account_id: str, row: sqlite3.Row | None) -> dict[str, Any]:
+    if row is None:
+        return _profile_view(account_id, "🙂", "", 0)
+    try:
+        showcase = json.loads(row["showcase"]) if row["showcase"] else []
+    except ValueError:
+        showcase = []
+    return _profile_view(
+        account_id,
+        row["avatar"],
+        row["bio"],
+        row["xp"],
+        avatar_url=row["avatar_url"],
+        background_url=row["background_url"],
+        background_id=row["background_id"],
+        status_text=row["status_text"] or "",
+        showcase=showcase,
+    )
+
+
 def get_profile(account_id: str) -> dict[str, Any]:
-    """A player's gamified profile (avatar, bio, xp, derived level, handle).
+    """A player's profile (artwork, bio, status, xp, derived level, handle).
     Returns sane defaults for an account that has never touched the Plaza."""
     init_db()
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT avatar, bio, xp FROM player_profiles WHERE account_id = ?",
+            f"SELECT {_PROFILE_COLUMNS} FROM player_profiles WHERE account_id = ?",  # noqa: S608 — fixed column list, not user input
             (account_id,),
         ).fetchone()
         account = conn.execute(
-            "SELECT handle FROM accounts WHERE id = ?", (account_id,)
+            "SELECT handle, display_name FROM accounts WHERE id = ?", (account_id,)
         ).fetchone()
-    view = (
-        _profile_view(account_id, "🙂", "", 0)
-        if row is None
-        else _profile_view(account_id, row["avatar"], row["bio"], row["xp"])
-    )
+    view = _view_from_row(account_id, row)
     view["handle"] = account["handle"] if account else None
+    view["display_name"] = account["display_name"] if account else account_id
     return view
 
 
+def profile_by_handle(handle: str) -> dict[str, Any] | None:
+    """Somebody *else's* profile, looked up by callsign.
+
+    The endpoint that did not exist. Without it there was no way to see another
+    player's bio or artwork, which is why the Plaza's player card shipped with a
+    hardcoded placeholder paragraph standing in for everyone's.
+
+    Returns None for an unknown handle rather than an empty profile — "no such
+    player" and "a player who has written nothing" are different answers.
+    """
+    init_db()
+    with get_conn() as conn:
+        account = conn.execute(
+            "SELECT id, handle, display_name FROM accounts WHERE handle = ?",
+            (handle.strip().lower(),),
+        ).fetchone()
+        if account is None:
+            return None
+        row = conn.execute(
+            f"SELECT {_PROFILE_COLUMNS} FROM player_profiles WHERE account_id = ?",  # noqa: S608 — fixed column list, not user input
+            (account["id"],),
+        ).fetchone()
+    view = _view_from_row(account["id"], row)
+    view["handle"] = account["handle"]
+    view["display_name"] = account["display_name"]
+    return view
+
+
+#: How many profiles one card lookup may ask about. Same reasoning and the same
+#: ceiling as `MAX_PERSON_LOOKUP`: a roster is tens of rows, and this must not
+#: become a way to enumerate the player base.
+MAX_PROFILE_CARDS = 100
+
+
+def profile_cards(handles: list[str]) -> dict[str, dict[str, Any]]:
+    """The small slice of many profiles a *list* needs, in one query.
+
+    A friends list wants an avatar, a level and a status line per row. Fetching
+    each one with `profile_by_handle` is one request per friend, on every render of
+    a pane that opens by default — so the roster gets one batched call instead, and
+    the full profile stays a separate fetch made when someone actually opens one.
+
+    Unknown handles are simply absent from the result: a friend who has never
+    signed in to the game server is a normal thing to have, not an error, and the
+    roster renders them from local data.
+    """
+    init_db()
+    wanted = [h.strip().lower() for h in handles if h and h.strip()][:MAX_PROFILE_CARDS]
+    if not wanted:
+        return {}
+    placeholders = ",".join("?" * len(wanted))
+    with get_conn() as conn:
+        rows = conn.execute(
+            f"SELECT a.id, a.handle, a.display_name, {_PROFILE_COLUMNS}"  # noqa: S608 — fixed column list; handles are bound
+            " FROM accounts a LEFT JOIN player_profiles p ON p.account_id = a.id"
+            f" WHERE a.handle IN ({placeholders})",
+            wanted,
+        ).fetchall()
+    cards: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        # A LEFT JOIN miss is a real row with null profile columns, not a null row —
+        # so it cannot be handed to `_view_from_row`, which only defaults when the
+        # whole row is absent. An account that has never opened the Plaza is the
+        # common case here, not an edge one.
+        view = _profile_view(
+            row["id"],
+            row["avatar"] or "🙂",
+            row["bio"] or "",
+            row["xp"] or 0,
+            avatar_url=row["avatar_url"],
+            status_text=row["status_text"] or "",
+        )
+        cards[row["handle"]] = {
+            "handle": row["handle"],
+            "display_name": row["display_name"],
+            "avatar": view["avatar"],
+            "avatar_url": view["avatar_url"],
+            "status_text": view["status_text"],
+            "level": view["level"],
+            "xp": view["xp"],
+        }
+    return cards
+
+
 def upsert_profile(
-    account_id: str, *, avatar: str | None = None, bio: str | None = None
+    account_id: str,
+    *,
+    avatar: str | None = None,
+    bio: str | None = None,
+    avatar_url: str | None = None,
+    background_url: str | None = None,
+    background_id: str | None = None,
+    status_text: str | None = None,
+    showcase: Any = None,
 ) -> dict[str, Any]:
-    """Create or patch a profile's avatar/bio (XP is only earned via `add_xp`)."""
+    """Create or patch a profile. XP is only ever earned via `add_xp`.
+
+    Every field is patch-style: `None` leaves it alone. Clearing an image is
+    therefore an explicit empty string, not a `None` — otherwise "don't touch the
+    background" and "remove the background" would be the same request.
+    """
     init_db()
     with get_conn() as conn:
         row = conn.execute(
-            "SELECT avatar, bio, xp FROM player_profiles WHERE account_id = ?",
+            f"SELECT {_PROFILE_COLUMNS} FROM player_profiles WHERE account_id = ?",  # noqa: S608 — fixed column list, not user input
             (account_id,),
         ).fetchone()
-        cur_avatar = row["avatar"] if row else "🙂"
-        cur_bio = row["bio"] if row else ""
-        cur_xp = row["xp"] if row else 0
-        new_avatar = avatar if avatar is not None else cur_avatar
-        new_bio = bio if bio is not None else cur_bio
+        cur = _view_from_row(account_id, row)
+        new = {
+            "avatar": (avatar if avatar is not None else cur["avatar"])[
+                :AVATAR_EMOJI_MAX
+            ],
+            "bio": (bio if bio is not None else cur["bio"])[:BIO_MAX],
+            "avatar_url": avatar_url if avatar_url is not None else cur["avatar_url"],
+            "background_url": background_url
+            if background_url is not None
+            else cur["background_url"],
+            "background_id": background_id
+            if background_id is not None
+            else cur["background_id"],
+            "status_text": (
+                status_text if status_text is not None else cur["status_text"]
+            )[:STATUS_MAX],
+            "showcase": json.dumps(
+                showcase if showcase is not None else cur["showcase"]
+            ),
+        }
         conn.execute(
             """
-            INSERT INTO player_profiles (account_id, avatar, bio, xp, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO player_profiles (
+                account_id, avatar, bio, xp, updated_at,
+                avatar_url, background_url, background_id, status_text, showcase
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(account_id) DO UPDATE SET
                 avatar = excluded.avatar, bio = excluded.bio,
-                updated_at = excluded.updated_at
+                updated_at = excluded.updated_at,
+                avatar_url = excluded.avatar_url,
+                background_url = excluded.background_url,
+                background_id = excluded.background_id,
+                status_text = excluded.status_text,
+                showcase = excluded.showcase
             """,
-            (account_id, new_avatar, new_bio, cur_xp, time.time()),
+            (
+                account_id,
+                new["avatar"],
+                new["bio"],
+                cur["xp"],
+                time.time(),
+                new["avatar_url"] or None,
+                new["background_url"] or None,
+                new["background_id"] or None,
+                new["status_text"],
+                new["showcase"],
+            ),
         )
-    return _profile_view(account_id, new_avatar, new_bio, cur_xp)
+    return get_profile(account_id)
 
 
 def _add_xp(conn: sqlite3.Connection, account_id: str, amount: int) -> None:
@@ -1207,6 +1499,212 @@ def add_xp(account_id: str, amount: int) -> dict[str, Any]:
     with get_conn() as conn:
         _add_xp(conn, account_id, amount)
     return get_profile(account_id)
+
+
+# ---- profile comments ------------------------------------------------------
+
+#: A wall post, not an essay. Long enough for a real message, short enough that the
+#: wall stays scannable and one person can't monopolise it.
+COMMENT_MAX = 1000
+#: How many a wall returns at once.
+COMMENT_PAGE = 50
+
+
+def add_comment(account_id: str, author_id: str, body: str) -> dict[str, Any] | None:
+    """Leave a comment on `account_id`'s wall. Returns the stored comment, or None
+    if the body was empty or the wall's owner does not exist.
+
+    Deliberately does **not** require the author to be a friend. A profile wall is
+    the public part of a profile — gating it on friendship would make it invisible
+    exactly where it is useful, on the profile of someone you just played. Abuse is
+    handled by the owner (`hide_comment`), which is the same shape Steam uses.
+    """
+    text = (body or "").strip()[:COMMENT_MAX]
+    if not text:
+        return None
+    init_db()
+    comment_id = uuid.uuid4().hex
+    now = time.time()
+    with get_conn() as conn:
+        owner = conn.execute(
+            "SELECT id FROM accounts WHERE id = ?", (account_id,)
+        ).fetchone()
+        if owner is None:
+            return None
+        conn.execute(
+            "INSERT INTO profile_comments (id, account_id, author_id, body, created_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (comment_id, account_id, author_id, text, now),
+        )
+    return {
+        "id": comment_id,
+        "account_id": account_id,
+        "author_id": author_id,
+        "body": text,
+        "created_at": now,
+    }
+
+
+def list_comments(
+    account_id: str, limit: int = COMMENT_PAGE, before: float | None = None
+) -> list[dict[str, Any]]:
+    """A wall, newest first, with each author's current name and avatar joined in.
+
+    Joined rather than denormalised at write time so a comment shows who its author
+    *is*, not who they were called when they wrote it — the same reason the roster
+    reads names live.
+    """
+    init_db()
+    with get_conn() as conn:
+        rows = conn.execute(
+            """
+            SELECT c.id, c.account_id, c.author_id, c.body, c.created_at,
+                   a.display_name AS author_name, a.handle AS author_handle,
+                   COALESCE(p.avatar, '🙂') AS author_avatar,
+                   p.avatar_url AS author_avatar_url
+            FROM profile_comments c
+            LEFT JOIN accounts a ON a.id = c.author_id
+            LEFT JOIN player_profiles p ON p.account_id = c.author_id
+            WHERE c.account_id = ? AND c.hidden = 0 AND (? IS NULL OR c.created_at < ?)
+            ORDER BY c.created_at DESC
+            LIMIT ?
+            """,
+            (account_id, before, before, min(int(limit), COMMENT_PAGE)),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def hide_comment(comment_id: str, actor_id: str) -> bool:
+    """Hide a comment. The **wall's owner or the comment's author** may; nobody else.
+
+    Hidden, not deleted: a wall owner moderating their own page should not be able
+    to destroy the record of what was said to them, and an author retracting their
+    own words is the same operation from the reader's side.
+    """
+    init_db()
+    with get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE profile_comments SET hidden = 1 "
+            "WHERE id = ? AND (account_id = ? OR author_id = ?)",
+            (comment_id, actor_id, actor_id),
+        )
+        return cur.rowcount > 0
+
+
+# ---- profile media ---------------------------------------------------------
+
+#: Per-image cap. The server is one small machine with a volume, and a profile
+#: picture that needs more than this is not a profile picture.
+MEDIA_MAX_BYTES = 256 * 1024
+#: Formats we will store. Allowlist, never a blocklist — and no SVG, which is a
+#: script-execution surface dressed as an image.
+MEDIA_MIME: dict[str, str] = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+}
+#: How many images one account may keep. Uploading past it evicts their oldest.
+MEDIA_PER_ACCOUNT = 12
+
+
+def media_dir() -> Path:
+    path = Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")) / "media"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def media_path(sha: str) -> Path:
+    return media_dir() / sha
+
+
+def store_media(account_id: str, kind: str, mime: str, data: bytes) -> dict[str, Any]:
+    """Persist an uploaded image, content-addressed. Returns `{sha256, url, ...}`
+    or `{error}`.
+
+    Content-addressed so re-uploading the same picture costs nothing and so the URL
+    is immutable — which is what lets `GET /media/{sha}` be cached forever instead
+    of revalidated on every profile view.
+
+    The MIME is taken from the **caller's declaration checked against the bytes**,
+    not from the filename: an allowlist keyed on a client-supplied extension is not
+    an allowlist.
+    """
+    if mime not in MEDIA_MIME:
+        return {"error": f"unsupported image type {mime!r}"}
+    if not data:
+        return {"error": "empty upload"}
+    if len(data) > MEDIA_MAX_BYTES:
+        return {"error": f"image is larger than {MEDIA_MAX_BYTES // 1024} KB"}
+    if _sniff_mime(data) != mime:
+        return {"error": "file content does not match its declared type"}
+
+    sha = hashlib.sha256(data).hexdigest()
+    init_db()
+    path = media_path(sha)
+    if not path.exists():
+        path.write_bytes(data)
+    now = time.time()
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO profile_media (sha256, account_id, kind, mime, bytes, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(sha256) DO NOTHING",
+            (sha, account_id, kind, mime, len(data), now),
+        )
+        stale = conn.execute(
+            "SELECT sha256 FROM profile_media WHERE account_id = ? "
+            "ORDER BY created_at DESC LIMIT -1 OFFSET ?",
+            (account_id, MEDIA_PER_ACCOUNT),
+        ).fetchall()
+        for row in stale:
+            conn.execute("DELETE FROM profile_media WHERE sha256 = ?", (row["sha256"],))
+            # Only unlink once no row anywhere still references the blob — two
+            # accounts uploading the same image share one file.
+            still = conn.execute(
+                "SELECT 1 FROM profile_media WHERE sha256 = ?", (row["sha256"],)
+            ).fetchone()
+            if still is None:
+                media_path(row["sha256"]).unlink(missing_ok=True)
+    return {"sha256": sha, "url": f"/media/{sha}", "mime": mime, "bytes": len(data)}
+
+
+def get_media(sha: str) -> tuple[bytes, str] | None:
+    """Blob + MIME for a stored image, or None. `sha` is validated as hex here
+    because it lands in a filesystem path — a `..` would otherwise walk out of the
+    media directory."""
+    if not re.fullmatch(r"[0-9a-f]{64}", sha or ""):
+        return None
+    init_db()
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT mime FROM profile_media WHERE sha256 = ?", (sha,)
+        ).fetchone()
+    if row is None:
+        return None
+    path = media_path(sha)
+    if not path.is_file():
+        return None
+    return path.read_bytes(), str(row["mime"])
+
+
+#: Magic-number prefixes, so a declared MIME can be checked against real bytes.
+_MAGIC: tuple[tuple[bytes, str], ...] = (
+    (b"\x89PNG\r\n\x1a\n", "image/png"),
+    (b"\xff\xd8\xff", "image/jpeg"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+)
+
+
+def _sniff_mime(data: bytes) -> str | None:
+    """The image type the bytes actually are, or None."""
+    for magic, mime in _MAGIC:
+        if data.startswith(magic):
+            return mime
+    # WebP is RIFF-framed: "RIFF" then 4 size bytes then "WEBP".
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
 
 
 # ---- Plaza: friendships ----------------------------------------------------
@@ -1275,9 +1773,20 @@ def remove_friend(account_id: str, other: str) -> None:
 
 
 def _friend_row_view(conn: sqlite3.Connection, other_id: str) -> dict[str, Any]:
+    """One friend, as the roster shows them.
+
+    Carries `handle` and `person_id` alongside the account id because those are the
+    two names a *human* has: the callsign the ladder shows, and the fabric person the
+    friends roster keys on. Without them the node receives a list of `account_id`s it
+    cannot match against its own `social_friends` rows, which is precisely how the
+    same person came to occupy two unrelated friend lists. Both are nullable — an
+    account that never bound a person key is still a perfectly good ladder friend.
+    """
     row = conn.execute(
         """
         SELECT COALESCE(a.display_name, ?) AS display_name,
+               a.handle    AS handle,
+               a.person_id AS person_id,
                COALESCE(p.avatar, '🙂') AS avatar,
                COALESCE(p.xp, 0) AS xp
         FROM (SELECT ? AS id) x
@@ -1289,6 +1798,8 @@ def _friend_row_view(conn: sqlite3.Connection, other_id: str) -> dict[str, Any]:
     return {
         "account_id": other_id,
         "display_name": row["display_name"],
+        "handle": row["handle"],
+        "person_id": row["person_id"],
         "avatar": row["avatar"],
         "level": level_for_xp(row["xp"]),
     }

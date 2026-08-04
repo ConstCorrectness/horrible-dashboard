@@ -9,11 +9,13 @@
  */
 import { useSyncExternalStore } from 'react';
 
+import { refreshAccount } from '../../account-store';
 import { toastsStore } from '../../toasts';
 import { sendChannel, subscribeChannel } from '../../ws';
 import { resetArenaView } from './arena-view';
 import { setDrawerTab } from './client-drawer';
 import { openGamesSection } from './hub-section';
+import type { PlayerProfile } from './profile-api';
 import { sfx } from './sfx';
 
 /** Pop the Game Board when a match becomes live: the board is a section of the
@@ -235,17 +237,24 @@ export interface FriendEntry {
   online?: boolean;
 }
 
-/** Your gamified profile (avatar + XP + derived level + unique handle). */
-export interface Profile {
-  account_id: string;
-  avatar: string;
-  bio: string;
-  handle?: string | null;
-  xp: number;
-  level: number;
-  level_floor: number;
-  next_level_xp: number | null;
-}
+/**
+ * Your own profile, as the live `profile` frame carries it.
+ *
+ * Structurally the same as `PlayerProfile` in profile-api.ts, which is how
+ * *another* player's profile arrives (over HTTP, so it works when they're
+ * offline). Kept as its own declaration because this one is the socket's wire
+ * shape; if they drift, the profile page is the thing that notices.
+ */
+/**
+ * Your own profile, as the `PROFILE` frame carries it.
+ *
+ * The **same object** the HTTP profile endpoints return — the frame is literally
+ * `store.get_profile(...)` — so it is an alias rather than a second declaration.
+ * It used to be its own interface with every new field optional, which meant the
+ * two drifted silently: a field added to one was `undefined` in the other with no
+ * type error anywhere.
+ */
+export type Profile = PlayerProfile;
 
 /** An incoming game challenge from another user (host already opened the table). */
 export interface SocialInvite {
@@ -410,6 +419,12 @@ subscribeChannel('games', (msg) => {
   switch (msg.event) {
     case 'error': {
       const text = (d.message as string) ?? 'Games error';
+      // The node has already deleted the rejected token (channel.py) — re-read the
+      // account so every surface agrees we're signed out and the pane falls back to
+      // its sign-in gate. Without this the toast said "sign in again" while the
+      // sidebar went on showing the old display name and a Sign out button, because
+      // nothing in the browser ever consumed `auth_invalid`.
+      if (String(d.code ?? '') === 'auth_invalid') void refreshAccount();
       if (SILENT_ERROR_CODES.has(String(d.code ?? ''))) {
         console.debug('[games] suppressed server error:', d.code, text);
         break;

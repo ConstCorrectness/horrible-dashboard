@@ -2622,58 +2622,9 @@
   border-color: var(--text-dim);
 }
 
-.games-sidebar-profile-signin-card {
-  padding: 0.8rem;
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-  background: rgba(0, 0, 0, 0.08);
-}
-
-.games-sidebar-profile-signin-title {
-  font-size: 0.68rem;
-  font-weight: 800;
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.games-sidebar-profile-signin-buttons {
-  display: flex;
-  gap: 0.4rem;
-}
-
-.games-sidebar-profile-signin-btn {
-  flex: 1;
-  background: var(--bg-hover, #262a32);
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: 6px;
-  padding: 0.4rem;
-  font-size: 0.75rem;
-  font-weight: 700;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.3rem;
-  transition: all 0.15s ease;
-}
-
-.games-sidebar-profile-signin-btn:hover {
-  background: var(--border);
-}
-
-/* An unavailable provider (the game server reports neither sign-in flow) renders
-   disabled with the reason in its tooltip — visibly so, not just unresponsively. */
-.games-sidebar-profile-signin-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-.games-sidebar-profile-signin-btn:disabled:hover {
-  background: var(--bg-hover, #262a32);
-}
+/* The `.games-sidebar-profile-signin-*` rules that stood here are gone with the
+   sidebar's sign-in branch — the pane is gated now (GamesSignIn), so the sidebar
+   only ever renders for a signed-in node. */
 
 .games-console-tile {
   background: rgba(255, 255, 255, 0.01);
@@ -2712,34 +2663,13 @@
 
 @container games-lobby-root (max-width: 340px) {
   .games-sidebar-profile-info,
-  .games-sidebar-profile-actions,
-  .games-sidebar-profile-signin-title,
-  .games-sidebar-profile-signin-label,
-  .games-sidebar-profile-signin-btn span:not(.icon) {
+  .games-sidebar-profile-actions {
     display: none !important;
   }
 
   .games-sidebar-profile {
     align-items: center;
     padding: 0.6rem 0.2rem;
-  }
-
-  .games-sidebar-profile-signin-card {
-    padding: 0.6rem 0.2rem;
-    align-items: center;
-  }
-
-  .games-sidebar-profile-signin-buttons {
-    flex-direction: column;
-    width: 100%;
-    align-items: center;
-  }
-
-  .games-sidebar-profile-signin-btn {
-    padding: 0.35rem;
-    width: 36px;
-    display: flex;
-    justify-content: center;
   }
 }
 
@@ -2751,4 +2681,329 @@
 }
 .games-match-log-row:hover {
   background: rgba(255, 255, 255, 0.02);
+}
+
+/* ---- The sign-in gate (GamesSignIn.tsx) -------------------------------------
+ *
+ * The front door of the whole pane, so it takes the pane: it is a flex sibling of
+ * the sections container and claims the same `flex: 1`, which is what stops it
+ * rendering as a strip at the top with empty space beneath.
+ *
+ * It reuses the hero's type scale (.games-hero-title / -sub) rather than defining
+ * its own — this is the same voice, one screen earlier — but not `.games-hero`
+ * itself, which is the Quick Play slideshow's box and carries a min-height and
+ * bottom alignment that make no sense here. */
+.games-gate {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  padding: 1.5rem;
+  container-type: inline-size;
+}
+
+/* Centred with `margin: auto`, NOT `align-items: center` on the parent. A flex item
+   centred by alignment and taller than its scroll container has its overflow pushed
+   off the *start* edge, where it cannot be scrolled to — in a short pane that hid the
+   headline and the provider buttons with no way to reach them. Auto margins distribute
+   only leftover space, so they collapse to zero instead of going negative. */
+.games-gate-body {
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  width: min(30rem, 100%);
+}
+
+/* The server the node will sign in to AND play against — see resolve_server_url.
+   Quiet, but present: a sign-in that lands on the wrong server is otherwise
+   indistinguishable from one that failed. */
+.games-gate-server {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+
+.games-gate-server code {
+  font-size: 0.72rem;
+  opacity: 0.85;
+}
+
+.games-gate-card {
+  margin-top: 0.35rem;
+}
+
+/* ---- profile pages -------------------------------------------------------
+   Shared by the public profile (someone else's) and the owner's customization
+   view, so a profile looks the same wherever it is opened from: the People
+   pane, the Plaza, or the games pane. */
+.profile-page {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  height: 100%;
+  overflow: auto;
+  min-height: 0;
+}
+
+.profile-page-empty {
+  padding: 1rem;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  gap: 0.5rem;
+}
+
+/* Fixed height rather than an aspect ratio: this pane can be 300px wide in the
+   right dock or 1200px in the centre, and a banner that grows with width eats
+   the whole pane at one of those sizes. */
+.profile-banner {
+  position: relative;
+  height: 96px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  background-position: center;
+  background-size: cover;
+}
+
+.profile-back {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  font-size: 0.75rem;
+  background: rgb(0 0 0 / 45%);
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.profile-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0 0.25rem;
+  /* Pulled up over the banner, Steam-style, so the face straddles the two. */
+  margin-top: -2.25rem;
+}
+
+.profile-head .people-avatar {
+  border: 3px solid var(--bg);
+}
+
+.profile-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  flex: 1;
+  padding-top: 2.25rem;
+}
+
+.profile-head-text h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.profile-head-actions {
+  display: flex;
+  gap: 0.35rem;
+  padding-top: 2.25rem;
+}
+
+.profile-handle {
+  font-size: 0.78rem;
+  color: var(--accent, #6ea8fe);
+}
+
+.profile-status {
+  margin: 0.2rem 0 0;
+  font-size: 0.82rem;
+  font-style: italic;
+  color: var(--text-dim);
+}
+
+.profile-level {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  font-size: 0.78rem;
+  font-weight: 700;
+  margin-top: 0.3rem;
+}
+
+.profile-xp {
+  font-weight: 400;
+  color: var(--text-dim);
+}
+
+.profile-xpbar {
+  height: 5px;
+  width: min(280px, 100%);
+  border-radius: 999px;
+  background: var(--bg-raised);
+  overflow: hidden;
+}
+
+.profile-xpbar span {
+  display: block;
+  height: 100%;
+  background: var(--accent, #6ea8fe);
+}
+
+.profile-bio {
+  margin: 0;
+  padding: 0 0.25rem;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.profile-showcases {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0 0.25rem;
+}
+
+.profile-showcase {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  min-width: 90px;
+}
+
+.profile-showcase-kind {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-dim);
+}
+
+.profile-showcase-label {
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.profile-comments {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.5rem 0.25rem 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.profile-comments-title {
+  margin: 0;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-dim);
+}
+
+.profile-comment-form {
+  display: flex;
+  gap: 0.4rem;
+  align-items: flex-end;
+}
+
+.profile-comment-form textarea {
+  flex: 1;
+  min-width: 0;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 0.82rem;
+}
+
+.profile-comments-empty {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.profile-comments-error {
+  margin: 0;
+  font-size: 0.78rem;
+  color: #f85149;
+}
+
+.profile-comment-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.profile-comment {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.profile-comment-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.profile-comment-body p {
+  margin: 0.1rem 0 0;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.profile-comment-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+
+.profile-comment-meta strong {
+  font-size: 0.78rem;
+  color: var(--text);
+}
+
+.profile-comment-hide {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 0.75rem;
+}
+
+/* ---- profile customization ------------------------------------------------ */
+.profile-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.profile-bg-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.profile-bg-swatch {
+  width: 56px;
+  height: 32px;
+  border-radius: 5px;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+}
+
+.profile-bg-swatch[data-selected='true'] {
+  border-color: var(--accent, #6ea8fe);
 }

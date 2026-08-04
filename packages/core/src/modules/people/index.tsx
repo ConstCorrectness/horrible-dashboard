@@ -1,10 +1,10 @@
 import { revealSection } from '../../layout/controller';
 import { registry, type ModuleManifest } from '../../registry';
-import { CommonsRequests } from '../commons';
 import { PeerChatPanel } from '../network/PeerChatPanel';
 import { FriendsPanel } from '../social/FriendsPanel';
 import { DiscoverSection } from './DiscoverSection';
 import { MeSection } from './MeSection';
+import { RequestsSection } from './RequestsSection';
 import './people.css';
 
 /**
@@ -56,7 +56,7 @@ export const peopleModule: ModuleManifest = {
         { id: 'friends', label: 'Friends', icon: '👥', component: FriendsPanel, default: true },
         { id: 'messages', label: 'Messages', icon: '✉', component: PeerChatPanel, key: 'm' },
         { id: 'discover', label: 'Discover', icon: '🔎', component: DiscoverSection, key: 'd' },
-        { id: 'requests', label: 'Requests', icon: '↙', component: CommonsRequests, key: 'r' },
+        { id: 'requests', label: 'Requests', icon: '↙', component: RequestsSection, key: 'r' },
         { id: 'me', label: 'Me', icon: '🪪', component: MeSection },
       ],
     },
@@ -84,4 +84,13 @@ export const peopleModule: ModuleManifest = {
   ],
 };
 
-export { DiscoverSection, MeSection };
+export { DiscoverSection, MeSection, RequestsSection };
+export { Avatar } from './Avatar';
+export { getConversation, openConversation, subscribeConversation } from './conversation';
+export {
+  ensureProfileCards,
+  getProfileCard,
+  getProfileCards,
+  invalidateProfileCards,
+  subscribeProfileCards,
+} from './profile-cards';

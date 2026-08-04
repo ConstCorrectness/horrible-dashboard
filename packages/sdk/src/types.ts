@@ -389,6 +389,20 @@ export interface SettingDecl {
   default: string | number | boolean;
   /** Allowed values when `type === 'enum'`; ignored otherwise. */
   enumValues?: string[];
+  /**
+   * Tuck this setting into the contributor's collapsed **Advanced** fold instead of
+   * its main list.
+   *
+   * For the knobs that are correct to leave alone: infrastructure a working setup
+   * never touches (TURN credentials, STUN hosts, relay URLs), and anything whose
+   * wrong value degrades quietly rather than loudly. It is a *presentation* hint
+   * only — an advanced setting reads, writes, and resets exactly like any other, and
+   * a user override keeps working whether or not the fold is open.
+   *
+   * It is not a substitute for a good `description`. If a setting needs a warning,
+   * write the warning.
+   */
+  advanced?: boolean;
 }
 
 /** Envelope for every message on the shared `/ws` socket. */

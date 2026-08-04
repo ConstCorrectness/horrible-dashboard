@@ -2,7 +2,6 @@ import { useEffect, useState, type CSSProperties } from 'react';
 
 import { signOut } from '../../../account';
 import { useAccount } from '../../../useAccount';
-import { SignInCard } from '../../../SignInCard';
 import { registry } from '../../../registry';
 import { gameAccent, gameIcon, gameTagline } from '../game-identity';
 import { useGames, gamesDisconnect, ensureConnected } from '../game-ws';
@@ -11,13 +10,14 @@ import { setActiveGame } from '../selected-game';
 import { ConnectionChip } from './ConnectionChip';
 import { PlaySection } from './PlaySection';
 
-/** Sign-in status, profile card and sign-out for the games sidebar.
+/** Profile card and sign-out for the games sidebar.
  *
- * The sign-in itself is core's `SignInCard` — the same one HorribleAssault's front
- * door and the home page's setup flow render — and the signed-in state comes from
- * the shared account store, so a sign-in anywhere in the app is reflected here
- * without this panel refetching or remounting. Identity lives on the node (the JWT
- * is held server-side); this reflects and toggles it. */
+ * There is no sign-in branch here any more: the pane is gated (`GamesSignIn`), so
+ * this only ever renders for a signed-in node. The state still comes from the shared
+ * account store rather than a private copy, which is what makes a sign-out here — or
+ * an `auth_invalid` arriving on the games channel — put the gate back up immediately.
+ * Identity lives on the node (the JWT is held server-side); this reflects and
+ * toggles it. */
 function SidebarProfile() {
   const { social } = useGames();
   // The shared account, not a private copy: signing in on the home page or in
@@ -94,61 +94,53 @@ function SidebarProfile() {
         )
       : 100;
 
-  if (name) {
-    return (
-      <div className="games-sidebar-profile">
-        <div className="games-sidebar-profile-expanded">
-          <div
-            className="games-sidebar-profile-avatar-container"
-            onClick={() => registry.openPanel('games.profile')}
-            title="Open Full Profile"
-          >
-            {renderAvatar(profile?.avatar ?? '👤')}
-          </div>
-          <div className="games-sidebar-profile-info">
-            <span className="games-sidebar-profile-name" title={name}>
-              {name}
-            </span>
-            {profile && (
-              <>
-                <div className="games-sidebar-profile-level">
-                  <span>Lv {profile.level}</span>
-                  <span style={{ opacity: 0.7, fontSize: '0.65rem' }}>{profile.xp} XP</span>
-                </div>
-                <div className="games-sidebar-profile-xp-bar" title={`${pct}% to next level`}>
-                  <div
-                    className="games-sidebar-profile-xp-progress"
-                    style={{ width: `${Math.max(4, pct)}%` }}
-                  />
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-        <div className="games-sidebar-profile-actions">
-          <button
-            type="button"
-            className="games-sidebar-profile-btn"
-            onClick={() => registry.openPanel('games.profile')}
-          >
-            🪪 Profile
-          </button>
-          <button type="button" className="games-sidebar-profile-btn" onClick={handleSignOut}>
-            Sign out
-          </button>
-        </div>
-      </div>
-    );
-  }
+  // Belt and braces: the gate above means `name` is set, but the account can go away
+  // mid-session (sign-out, or a token the server rejects) and this renders one frame
+  // before the gate does.
+  if (!name) return null;
 
   return (
-    <div className="games-sidebar-profile-signin-card">
-      <div className="games-sidebar-profile-signin-title">Player Profile</div>
-      {/* One sign-in for the whole app (core's SignInCard). This panel used to
-          carry its own copy — provider buttons, the not-configured note, the
-          blocked-popup fallback — which had to be kept in step by hand with the
-          two in HorribleAssault and the games first-run hero. It wasn't. */}
-      <SignInCard onSignedIn={reconnect} />
+    <div className="games-sidebar-profile">
+      <div className="games-sidebar-profile-expanded">
+        <div
+          className="games-sidebar-profile-avatar-container"
+          onClick={() => registry.openPanel('games.profile')}
+          title="Open Full Profile"
+        >
+          {renderAvatar(profile?.avatar ?? '👤')}
+        </div>
+        <div className="games-sidebar-profile-info">
+          <span className="games-sidebar-profile-name" title={name}>
+            {name}
+          </span>
+          {profile && (
+            <>
+              <div className="games-sidebar-profile-level">
+                <span>Lv {profile.level}</span>
+                <span style={{ opacity: 0.7, fontSize: '0.65rem' }}>{profile.xp} XP</span>
+              </div>
+              <div className="games-sidebar-profile-xp-bar" title={`${pct}% to next level`}>
+                <div
+                  className="games-sidebar-profile-xp-progress"
+                  style={{ width: `${Math.max(4, pct)}%` }}
+                />
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+      <div className="games-sidebar-profile-actions">
+        <button
+          type="button"
+          className="games-sidebar-profile-btn"
+          onClick={() => registry.openPanel('games.profile')}
+        >
+          🪪 Profile
+        </button>
+        <button type="button" className="games-sidebar-profile-btn" onClick={handleSignOut}>
+          Sign out
+        </button>
+      </div>
     </div>
   );
 }

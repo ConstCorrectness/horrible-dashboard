@@ -1,0 +1,189 @@
+---
+sidebar_position: 33
+sidebar_label: Notifications
+---
+
+# Module: notifications
+
+:::note This module contributes no panes
+It is a service plus one setting. Notifications arrive as toasts (and, on desktop,
+as OS notifications); the rules that decide which ones arrive live on the backend
+and are edited by talking to the agent.
+:::
+
+Proactive messages: a friend you asked to be told about coming online, an invite,
+a message that arrived while you were doing something else. Two halves:
+
+- **`backend/modules/notifications/`** — the rules. What gets through
+  (`store.py`), the single delivery door (`service.py`), and the agent tools that
+  write rules in plain language (`agent_tools.py`).
+- **`packages/core/src/modules/notifications/`** — the arrival. A `/ws` channel
+  subscriber that raises a toast and, if permitted, an OS notification.
+
+## What was missing before this
+
+Three gaps, each of which made the feature impossible rather than merely absent:
+
+1. **No "came online" signal.** `roster.broadcast_roster()` pushed the whole
+   snapshot on every peer event and diffed nothing, so no subscriber could tell
+   *arrived* from *still here*.
+2. **Nothing could hold a standing instruction.** There was no watch, rule or
+   trigger table anywhere — `tasks/queue.py` is fire-once, and the flow canvas's
+   cron/webhook triggers are documentation, not code. *"Let me know when Andrew
+   logs in"* had nothing to attach to.
+3. **No mute of any kind.** The only `mute` in the repository was a microphone.
+
+## Presence is diffed once, in the roster
+
+`social/roster.broadcast_roster()` now compares the new snapshot against the
+previous *answer* and emits a `presence` event naming what changed:
+
+```json
+{ "person_id": "…", "display_name": "Andrew", "presence": "online", "online": true }
+```
+
+The diff lives there rather than in each consumer because the browser, the
+notification rules and the agent's watches all want the same answer, and three
+independent diffs of one snapshot are three chances to disagree about who just
+arrived.
+
+**A person seen for the first time is not "coming online."** `_last_presence`
+starts empty and is correctly empty after a restart, so the first roster would
+otherwise announce every friend who happens to be connected — noise, not news.
+Presence itself is still *derived* from the hub's connection table and never
+stored; `_last_presence` is only the previous answer, held in memory.
+
+## The mute check runs at the producer
+
+`service.notify()` is the single door every proactive message goes through, and
+`store.is_muted()` is checked **inside it**, before anything is sent:
+
+```mermaid
+flowchart LR
+  E[event] --> N["service.notify()"]
+  N --> M{"is_muted?"}
+  M -- yes --> D[dropped, nothing sent]
+  M -- no --> W["ws.broadcast_event('notifications')"]
+  W --> T[toast]
+  W --> O[OS notification]
+```
+
+That placement is the design. Filter in the browser instead and a muted
+notification has already crossed the socket and buzzed a phone before the filter
+ran.
+
+`person_id` on a notification is therefore **not decoration** — it is what a
+per-person mute matches on. Omit it and "mute Andrew" cannot apply to a
+notification that is about Andrew.
+
+### Rule shapes
+
+`notification_mutes` rows are scoped three ways, and the third is the one the
+feature exists for:
+
+| Rule                          | Silences                        |
+| ----------------------------- | ------------------------------- |
+| `category`                    | everything in that category     |
+| `category` + `person_id`      | that category, from that person |
+| `category` + `except_person`  | that category from **everyone but** that person |
+
+`except_person` is what makes *"mute any messages except for him"* one rule
+instead of a mute per friend plus a promise to undo them all later. `expires_at`
+is what makes *"for a bit"* expressible; expired rules are swept on read, because
+there is no other clock in the module and an expired rule is indistinguishable
+from one that was never there.
+
+`CATEGORIES` is closed on purpose (`message`, `presence`, `invite`,
+`friend_request`, `watch`, `all`). An open vocabulary means a typo in an
+agent-authored rule silently mutes nothing, forever, with no error.
+
+## Watches
+
+`agent_watches` is a standing instruction evaluated against events rather than a
+clock: `kind` names the event, `subject` names who it is about, `predicate` says
+what to wait for (`{"online": true}` for an arrival, `false` for a departure), and
+`one_shot` decides whether it survives firing.
+
+A one-shot is retired **whether or not it was delivered** — a watch the user muted
+is one they chose not to hear, not one still owed to them.
+
+Presence is deliberately *not* notified about by default. A toast every time any
+friend's laptop connects is the notification everyone turns off first; making it
+opt-in per person is the whole point of a watch.
+
+## Agent tools
+
+The sentence this exists for:
+
+> let me know when Andrew logs in, and mute any messages except for him for a bit
+
+resolves to `watch.create` + `notify.mute` in **one turn**.
+
+| Tool                            | Does                                                    |
+| ------------------------------- | ------------------------------------------------------- |
+| `watch.create`                  | tell me when someone comes online (or goes offline)     |
+| `watch.list` / `watch.cancel`   | inspect and revoke                                      |
+| `notify.mute` / `notify.unmute` | by category, by person, or everyone-except-one          |
+| `notify.status`                 | what is currently silenced, and for how much longer      |
+
+Names resolve through `social/agent_tools._resolve`, which already accepts a
+callsign, friend code or display name and **refuses an ambiguous name rather than
+guessing** — exactly the behaviour "when Andrew logs in" needs.
+
+:::warning Two conventions here fail silently
+**A tool's group is its name prefix, not its `group=` field.** The orchestrator
+computes it with `name.split(".", 1)[0]`, so `watch.create` lands in group `watch`
+whatever `group=` says; the field only decides core-vs-deferred. Name and group
+must agree.
+
+**None of these may be core.** The always-on core is 11 tools against a budget of
+38, because local models stop reasoning past roughly 40 definitions. Six
+always-loaded tools for an occasional feature would cost every turn in the app.
+:::
+
+Both groups register a blurb in `_GROUP_DESCRIPTIONS` and keywords in
+`_GROUP_KEYWORDS` so the ask stays one-shot. The keywords are phrases, not bare
+words, wherever the bare word is common — `"let me know when"` rather than
+`"know"`. `"presence"` is left to the `social` group: a word in two groups
+preloads both and spends the budget twice.
+
+## Arrival, frontend side
+
+`initNotifications()` subscribes to the `notifications` channel and to `system` —
+the latter has been broadcast to since remote control landed
+(`network/remote_control.py`) with **nothing listening**, so every "say" relayed
+from a paired phone was dropped on arrival.
+
+It is called at boot in `apps/web/src/main.tsx`, next to `initSocial()`, which was
+itself only ever called from the Friends tab's mount. A notification you receive
+only once the right pane is open is not a notification.
+
+### OS notifications
+
+`notifyDesktop` has always checked `Notification.permission === 'granted'`, and
+`Notification.requestPermission()` appeared **nowhere in the repository** — so on
+a fresh profile that branch was a permanent no-op. `desktop.ts` asks for the
+permission **lazily, on the first notification the user opted into**, never at
+boot: a permission prompt on page load is the one every browser vendor tells you
+not to show, and a `denied` answer is sticky, so a badly-timed ask permanently
+costs the feature.
+
+Gated by the `notifications.system` capability (desktop only) and the
+`notifications.desktop` setting.
+
+## Settings
+
+| Key                      | Default | Meaning                                                |
+| ------------------------ | ------- | ------------------------------------------------------ |
+| `notifications.desktop`  | `true`  | Also raise an OS notification, asking permission once. |
+
+The *rules* are deliberately not settings. A mute has a scope and a duration that
+no boolean on a settings page could hold, and it is enforced at the producer —
+which is server-side, where a setting read in the browser could not reach.
+
+## Tests
+
+`backend/tests/test_notifications.py` pins the three things that fail silently:
+the producer-side mute check, the `except_person` inversion, and that every tool
+is grouped with a group matching its prefix. It also pins the presence diff
+itself, including that a first sighting announces nothing.

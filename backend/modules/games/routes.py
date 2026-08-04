@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request, Response
 
 from backend.games_engine.base import list_games
 from backend.modules.games import server_auth
@@ -386,6 +386,83 @@ async def web_login_poll_route(provider: str) -> dict[str, Any]:
 def signout_route() -> dict[str, bool]:
     server_auth.sign_out()
     return {"ok": True}
+
+
+# ---- profiles ----------------------------------------------------------------
+#
+# All proxied so the browser talks to one origin and never sees the bearer token.
+# Ordering matters here the same way it does for `/auth/local` above: the literal
+# `/profile/media` and `/profile/comments/...` segments are declared **before**
+# `/profile/{handle}`, or `handle` captures them.
+
+
+@router.post("/profiles/cards")
+async def profile_cards_route(body: dict[str, Any]) -> dict[str, Any]:
+    """Avatar, level and status for many callsigns at once — what a friends list
+    needs, in one request rather than one per row."""
+    handles = body.get("handles") or []
+    return await server_auth.profile_cards([str(h) for h in handles])
+
+
+@router.post("/profile")
+async def profile_patch_route(body: dict[str, Any]) -> dict[str, Any]:
+    """Update the signed-in account's own profile (artwork, bio, status, showcase)."""
+    return await server_auth.profile_patch(body)
+
+
+@router.post("/profile/media")
+async def profile_media_upload_route(
+    request: Request, kind: str = "avatar"
+) -> dict[str, Any]:
+    """Relay a profile image upload. The gates (size, type, quota) are the game
+    server's — it owns the volume — so this only carries bytes and identity."""
+    mime = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    return await server_auth.profile_upload(kind, mime, await request.body())
+
+
+@router.get("/profile/media/{sha}")
+async def profile_media_route(sha: str) -> Response:
+    """Serve a profile image through the node, so images come from one origin.
+
+    Content-addressed upstream, so this is safe to cache for a long time: the URL
+    can never come to mean different bytes.
+    """
+    found = await server_auth.profile_media(sha)
+    if found is None:
+        return Response(status_code=404)
+    data, mime = found
+    return Response(
+        content=data,
+        media_type=mime,
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
+
+
+@router.delete("/profile/comments/{comment_id}")
+async def profile_comment_hide_route(comment_id: str) -> dict[str, Any]:
+    """Hide a comment. The wall's owner or its author may; the game server checks."""
+    return await server_auth.comment_hide(comment_id)
+
+
+@router.get("/profile/{handle}")
+async def profile_route(handle: str) -> dict[str, Any]:
+    """Somebody else's profile by callsign — the read that had no endpoint, which
+    is why the Plaza card used to show a placeholder bio for every player."""
+    return await server_auth.profile_get(handle)
+
+
+@router.get("/profile/{handle}/comments")
+async def profile_comments_route(
+    handle: str, before: float | None = None
+) -> dict[str, Any]:
+    return await server_auth.comments_list(handle, before=before)
+
+
+@router.post("/profile/{handle}/comments")
+async def profile_comment_add_route(
+    handle: str, body: dict[str, Any]
+) -> dict[str, Any]:
+    return await server_auth.comment_add(handle, str(body.get("body") or ""))
 
 
 @router.get("/replays")

@@ -6,8 +6,12 @@ the outbound WebSocket to `commons.serverUrl`, builds + signs this node's
 `CommonsProfile` from settings, keeps the directory/search snapshot the frontend
 renders (fanned out over the `/ws` `commons` channel), and exposes search.
 
-This is **Phase 2** of docs/architecture/agent-commons.mdx (browse/search end to end).
-The consent handshake (request-to-meet → peer link) is Phase 3 and not here yet.
+Covers browse/search **and** the consent handshake (request-to-meet → accept →
+peer link) with trust tiers — this docstring claimed the handshake was "Phase 3 and
+not here yet" long after `respond` and `_tier` shipped. See
+docs/architecture/agent-commons.mdx for the phase map itself; a docstring that
+tracks a roadmap goes stale the moment the roadmap moves, so this one names what
+the file does instead.
 
 See docs/modules/commons.mdx and backend/modules/network/commons_server.py.
 """

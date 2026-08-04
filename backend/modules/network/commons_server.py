@@ -9,8 +9,10 @@ module's vector store ([vectorstore](../database/vectorstore.py)). Profiles are
 self-signed (Ed25519), so the index
 verifies but cannot forge them — and a federated/DHT index could re-serve them later.
 
-This is **Phase 1** of docs/architecture/agent-commons.mdx (profiles + search). The
-consent handshake, reputation, and the node-side `CommonsClient` are later phases.
+Profiles + vector search, plus relaying the consent handshake between nodes. Both
+the handshake and the node-side `CommonsClient` exist (`commons.py`); this docstring
+claimed they were "later phases" well after they shipped. The phase map lives in
+docs/architecture/agent-commons.mdx, not here.
 
 Run separately from a node's own backend:
 

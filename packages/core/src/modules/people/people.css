@@ -86,6 +86,328 @@
   font-size: 12px;
   color: var(--text-dim);
 }
+/* ---- faces ---------------------------------------------------------------
+   One avatar rule for every surface that shows a person. The presence dot is a
+   child of the avatar rather than a sibling so it follows the face wherever it
+   is used, at whatever size, without each call site re-deriving the offset. */
+.people-avatar {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 50%;
+  overflow: visible;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  line-height: 1;
+  user-select: none;
+}
+.people-avatar img {
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+}
+.people-avatar-dot {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 30%;
+  height: 30%;
+  min-width: 8px;
+  min-height: 8px;
+  border-radius: 50%;
+  background: var(--text-dim);
+  border: 2px solid var(--bg);
+}
+.people-avatar[data-online='true'] .people-avatar-dot {
+  background: #3fb950;
+}
+
+/* ---- friends list --------------------------------------------------------- */
+.social-friends {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  height: 100%;
+  overflow: auto;
+  min-height: 0;
+}
+.friends-me {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.friends-me-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.friends-me-handle {
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  font-size: 11.5px;
+  color: var(--accent, #6ea8fe);
+  cursor: pointer;
+}
+.friends-filter {
+  width: 100%;
+}
+.friends-group {
+  margin: 6px 0 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.friends-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+/* Offline friends stay legible but recede — Steam's trick, and the reason the
+   list reads at a glance instead of being scanned. */
+.friends-list-offline {
+  opacity: 0.62;
+}
+.friend-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 6px;
+}
+.friend-row:hover {
+  background: var(--bg-hover);
+}
+.friend-row-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.friend-row-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.friend-row-name strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.friend-row[data-online='true'] .friend-row-name strong {
+  color: var(--accent, #6ea8fe);
+}
+.friend-row-tag,
+.friend-row-level {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.friend-row-unread {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--accent, #2f6fed);
+  border-radius: 999px;
+  padding: 0 6px;
+  margin-left: auto;
+}
+.friend-row-sub {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.friend-row-actions {
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+}
+.friend-row:hover .friend-row-actions,
+.friend-row:focus-within .friend-row-actions {
+  opacity: 1;
+}
+.friend-menu {
+  position: absolute;
+  right: 6px;
+  top: 100%;
+  z-index: 5;
+  list-style: none;
+  margin: 2px 0 0;
+  padding: 4px;
+  min-width: 160px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 35%);
+}
+.friend-menu button {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 4px 6px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  border-radius: 4px;
+}
+.friend-menu button:hover {
+  background: var(--bg-hover);
+}
+.friend-menu-devices {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  margin: 4px 0;
+}
+.friends-admin {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 6px;
+}
+.friends-admin form {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.friends-error {
+  margin: 0;
+  font-size: 12px;
+  color: #f85149;
+}
+
+/* ---- messages ------------------------------------------------------------- */
+.chat-pane {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+.chat-people {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  width: 148px;
+  flex-shrink: 0;
+  overflow: auto;
+  border-right: 1px solid var(--border);
+}
+.chat-person {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 5px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.chat-person:hover {
+  background: var(--bg-hover);
+}
+.chat-person[data-active='true'] {
+  background: var(--bg-raised);
+}
+.chat-person-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+.chat-unread {
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--accent, #2f6fed);
+  border-radius: 999px;
+  padding: 0 5px;
+}
+.chat-thread {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.chat-log {
+  flex: 1;
+  overflow: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.chat-msg {
+  display: flex;
+  flex-direction: column;
+  max-width: 80%;
+}
+.chat-msg[data-dir='out'] {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+.chat-msg span {
+  padding: 5px 9px;
+  border-radius: 10px;
+  font-size: 12.5px;
+  background: var(--bg-raised);
+  word-break: break-word;
+}
+.chat-msg[data-dir='out'] span {
+  background: var(--accent, #2f6fed);
+  color: #fff;
+}
+.chat-msg em {
+  font-size: 10px;
+  font-style: normal;
+  color: var(--text-dim);
+  padding: 0 4px;
+}
+.chat-error {
+  font-size: 11.5px;
+  color: #f85149;
+  padding: 0 8px;
+}
+.chat-compose {
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  border-top: 1px solid var(--border);
+}
+.chat-compose input {
+  flex: 1;
+  min-width: 0;
+}
+
 /* A folded panel gets a bounded box of its own: these are full panels that expect
    to fill a pane, and left unbounded they push the section's own content away. */
 .people-embed {
