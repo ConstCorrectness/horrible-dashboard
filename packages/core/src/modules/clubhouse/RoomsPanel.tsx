@@ -40,6 +40,7 @@ export function RoomsPanel() {
   const [agentEnabled, setAgentEnabled] = useState(false);
   const [isAgentSpeaking, setIsAgentSpeaking] = useState(false);
   const [agentTranscript, setAgentTranscript] = useState<string | null>(null);
+  const [transcriptionBuffer, setTranscriptionBuffer] = useState("");
   const [myUserId, setMyUserId] = useState<number | null>(null);
 
   // New states for extended Clubhouse functionality
@@ -280,8 +281,16 @@ export function RoomsPanel() {
     sendReaction,
   } = useClubhouseVoice({
     onTranscribe: (text) => {
-      if (agentEnabled) {
-        setAgentTranscript(text);
+      if (!agentEnabled) return;
+      if (text.trim().length > 0) {
+        setTranscriptionBuffer(prev => prev ? `${prev} ${text.trim()}` : text.trim());
+      } else {
+        setTranscriptionBuffer(prev => {
+          if (prev.trim().length > 0) {
+            setAgentTranscript(prev);
+          }
+          return "";
+        });
       }
     }
   });

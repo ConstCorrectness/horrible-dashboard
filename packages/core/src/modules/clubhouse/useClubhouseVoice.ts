@@ -268,8 +268,8 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
               try {
                 const res = await fetch(apiUrl('/api/agent/stt'), { method: 'POST', body: formData });
                 const json = await res.json();
-                if (json.text && json.text.trim().length > 0) {
-                  onTranscribeRef.current(json.text);
+                if (onTranscribeRef.current) {
+                  onTranscribeRef.current(json.text || "");
                 }
               } catch (err) {
                 console.error('STT failed:', err);
