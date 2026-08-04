@@ -18,7 +18,7 @@ class XttsService:
         # We use uv run to run it in a python 3.11 environment with TTS installed
         cmd = [
             "uv", "run", "--no-project", "--python", "3.11", 
-            "--with", "TTS", "--with", "torch", "--with", "soundfile", 
+            "--with", "TTS", "--with", "torch<2.6", "--with", "soundfile", 
             "--with", "transformers<4.39.0",
             "python", runner_path
         ]
