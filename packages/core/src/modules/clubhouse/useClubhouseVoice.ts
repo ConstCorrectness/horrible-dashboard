@@ -114,6 +114,11 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
   const sttRecorderRef = useRef<MediaRecorder | null>(null);
   const physicalMicStreamRef = useRef<MediaStream | null>(null);
   const humanGainRef = useRef<GainNode | null>(null);
+  const onTranscribeRef = useRef(props?.onTranscribe);
+
+  useEffect(() => {
+    onTranscribeRef.current = props?.onTranscribe;
+  }, [props?.onTranscribe]);
 
   const rtcClientRef = useRef<IAgoraRTCClient | null>(null);
   const localAudioTrackRef = useRef<ILocalAudioTrack | null>(null);
@@ -257,14 +262,14 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
           sttRecorderRef.current = recorder;
           
           recorder.ondataavailable = async (e) => {
-            if (e.data.size > 0 && props?.onTranscribe) {
+            if (e.data.size > 0 && onTranscribeRef.current) {
               const formData = new FormData();
               formData.append('file', new File([e.data], 'chunk.webm', { type: e.data.type || 'audio/webm' }));
               try {
                 const res = await fetch(apiUrl('/api/agent/stt'), { method: 'POST', body: formData });
                 const json = await res.json();
                 if (json.text && json.text.trim().length > 0) {
-                  props.onTranscribe(json.text);
+                  onTranscribeRef.current(json.text);
                 }
               } catch (err) {
                 console.error('STT failed:', err);
