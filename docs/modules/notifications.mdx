@@ -94,8 +94,14 @@ there is no other clock in the module and an expired rule is indistinguishable
 from one that was never there.
 
 `CATEGORIES` is closed on purpose (`message`, `presence`, `invite`,
-`friend_request`, `watch`, `all`). An open vocabulary means a typo in an
+`friend_request`, `watch`, `review`, `all`). An open vocabulary means a typo in an
 agent-authored rule silently mutes nothing, forever, with no error.
+
+`review` is raised by [records](records.mdx) when an agent files a field proposal.
+It is a notification rather than a pane-local badge for the same reason `watch` is:
+propose is the write path that is safe to run unattended, so the user being
+somewhere else is its normal case — and an extraction run filing forty of them has
+to be silenceable like anything else.
 
 ## Watches
 

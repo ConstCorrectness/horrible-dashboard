@@ -58,10 +58,14 @@ DBA_PROMPT = (
 
 RESEARCHER_PROMPT = (
     "You are the research agent for horrible-dashboard. You specialize in finding "
-    "and collecting information: browsing the web (browser tools), searching the "
-    "user's knowledge libraries (library tools), searching arXiv (arxiv tools), "
-    "and searching connected GitHub and Google Drive accounts.\n"
+    "and collecting information: searching the open web (search tools), browsing it "
+    "(browser tools), searching the user's knowledge libraries (library tools), "
+    "searching arXiv (arxiv tools), and searching connected GitHub and Google Drive "
+    "accounts.\n"
     "Rules:\n"
+    "- search.web is the sub-second lookup for a fact or a starting URL; search.deep "
+    "takes seconds and fans out, so reach for it only when one query will not "
+    "settle the question.\n"
     "- Ground answers in what the tools return — quote or cite the source page/"
     "repo/document, do not answer from memory when a lookup is one call away.\n"
     "- Use browser.save / research.capture / research.savePdf / arxiv.download to "
@@ -72,27 +76,13 @@ RESEARCHER_PROMPT = (
     'report on Z"), start a durable deep-research run with research.start — it '
     "investigates in the background and files a cited report; give the user the "
     "run id and point them at the Deep Research console rather than blocking.\n"
+    "- To put a finding into one of the user's tables, use records.propose (never "
+    "records.commit): it files a per-field diff with your citation that the user "
+    "accepts in the Review pane. Call records.listSchemas first — field keys are "
+    "not guessable.\n"
     "- Summarize findings concisely; link the sources.\n" + _SHARED_RULES
 )
 
-
-CRM_PROMPT = (
-    "You are the CRM agent for horrible-dashboard. You keep the user's records "
-    "straight: contacts, deals and the activity log behind them. The record tables "
-    "are yours to read and write through the records tools, and you can enrich them "
-    "from the open web (browser, search) and from the user's connected GitHub and "
-    "Google accounts.\n"
-    "Rules:\n"
-    "- Call records.listSchemas before anything else — field keys are not guessable, "
-    "and the user may have renamed or added fields.\n"
-    "- Enriching a record from an outside source (a company page, a profile, a "
-    "search result) is a records.propose, not a records.commit: the user reviews "
-    "what you found, per field, with your citation next to it.\n"
-    "- records.commit is for bookkeeping the user explicitly asked for — moving a "
-    "deal's stage, logging a call they just described.\n"
-    "- Never invent a contact detail. If a lookup found nothing, say so and leave "
-    "the field empty.\n" + _SHARED_RULES
-)
 
 INTAKE_PROMPT = (
     "You are the data-entry agent for horrible-dashboard. The user has a source "
@@ -146,21 +136,31 @@ def _builtin_agents() -> dict[str, AgentSpec]:
         "researcher": AgentSpec(
             id="researcher",
             name="Researcher",
-            description="Web browsing, library RAG, arXiv, deep-research runs, "
-            "and connected GitHub/Google accounts.",
+            description="Web search and browsing, library RAG, arXiv, deep-research "
+            "runs, connected GitHub/Google accounts, and filing what it finds into "
+            "the user's tables.",
             system_prompt=RESEARCHER_PROMPT,
-            tool_groups=["browser", "library", "github", "google", "research", "arxiv"],
+            # Two groups here are load-bearing for the workspaces this agent backs,
+            # and both were dead buttons before: Research and Web Ops dock the Review
+            # pane (`records` — it could show a proposal but not file one), and Web
+            # Ops docks the search panel (`search` — the pane's own results were
+            # unreachable to the agent sitting beside it).
+            tool_groups=[
+                "browser",
+                "search",
+                "library",
+                "github",
+                "google",
+                "research",
+                "arxiv",
+                "records",
+            ],
             preload_groups=["research", "library", "arxiv"],
         ),
-        "crm": AgentSpec(
-            id="crm",
-            name="CRM",
-            description="Contacts, deals and activity: keeps the record tables "
-            "current and enriches them from the web and connected accounts.",
-            system_prompt=CRM_PROMPT,
-            tool_groups=["records", "browser", "search", "github", "google", "library"],
-            preload_groups=["records"],
-        ),
+        # No `crm` agent. Enriching a table from the open web is what `researcher`
+        # already does — it carries `records` alongside browser/search/github/google
+        # — so a second agent for it was a persona, not a capability, and its prompt
+        # hardcoded a contacts/deals model the substrate never required.
         "intake": AgentSpec(
             id="intake",
             name="Data Entry",

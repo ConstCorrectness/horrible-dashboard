@@ -650,7 +650,7 @@ _GROUP_DESCRIPTIONS: dict[str, str] = {
     ),
     "arxiv": "Search arXiv, read abstracts, and download papers into the library.",
     "records": (
-        "The user's own record tables (CRM contacts and deals, intake forms, any "
+        "The user's own record tables (papers to read, contacts, intake forms, any "
         "row-shaped data): read them, propose field values for review, and define "
         "new tables."
     ),

@@ -205,6 +205,9 @@ export { stubModule } from './modules/stub';
 export { databaseModule } from './modules/database';
 export { libraryModule } from './modules/library';
 export { recordsModule } from './modules/records';
+// Started at boot, not on pane mount: a proposal that arrives while you are looking
+// at something else is the normal case for an unattended extraction.
+export { initRecordsWatch } from './modules/records/store';
 export { researchModule } from './modules/research';
 export { searchModule } from './modules/search';
 export { docsModule } from './modules/docs';

@@ -34,8 +34,18 @@ from backend.modules.database.app_db import ensure_app_db_dir
 #: typo in an agent-authored rule silently mutes nothing, forever, with no error.
 #: `watch` is here because a fired watch is delivered as a notification like any
 #: other, and a category the producer emits but no rule can name would be one the
-#: user is unable to silence short of muting everything.
-CATEGORIES = ("message", "presence", "invite", "friend_request", "watch", "all")
+#: user is unable to silence short of muting everything. `review` is the same case:
+#: an agent filing a record proposal needs to reach the user who is looking at
+#: something else, and an unattended extraction run must be muteable.
+CATEGORIES = (
+    "message",
+    "presence",
+    "invite",
+    "friend_request",
+    "watch",
+    "review",
+    "all",
+)
 
 
 @contextmanager

@@ -85,7 +85,7 @@ describe('preset agent bindings', () => {
   it('names only agents the backend roster can resolve', () => {
     // A typo here is silent at runtime (unknown ids fall back to `main`), so the
     // built-in roster ids are asserted rather than trusted.
-    const builtins = new Set(['main', 'coder', 'dba', 'researcher', 'crm', 'intake']);
+    const builtins = new Set(['main', 'coder', 'dba', 'researcher', 'intake']);
     for (const frame of layoutsModule.frames ?? []) {
       if (frame.agent) expect(builtins, `preset ${frame.id}`).toContain(frame.agent);
     }

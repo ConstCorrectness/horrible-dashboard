@@ -73,8 +73,8 @@ def remove_schema(schema_id: str, drop_table: bool = False) -> dict[str, bool]:
 
 @router.post("/seed")
 def post_seed(ids: list[str] | None = None) -> dict[str, Any]:
-    """Create the built-in CRM/intake schemas that don't exist yet. Idempotent —
-    the CRM and Data Entry workspaces call it every time they open."""
+    """Create any starter schemas that don't exist yet. Idempotent — the frontend
+    calls it once per session when it finds an empty catalog."""
     return {"created": seed_builtin_schemas(ids)}
 
 

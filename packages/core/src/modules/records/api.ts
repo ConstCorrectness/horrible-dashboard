@@ -80,7 +80,7 @@ export function deleteSchema(id: string, dropTable = false): Promise<{ ok: boole
   return apiDelete(`/records/schemas/${id}?drop_table=${dropTable}`);
 }
 
-/** Create the built-in CRM/intake schemas that don't exist yet. Idempotent. */
+/** Create any starter schemas that don't exist yet. Idempotent. */
 export function seedSchemas(ids?: string[]): Promise<{ created: string[] }> {
   return apiPost('/records/seed', ids ?? null);
 }

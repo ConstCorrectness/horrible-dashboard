@@ -26,34 +26,13 @@ function presetFor(id: string) {
   return preset!;
 }
 
-describe('crm frame preset', () => {
-  const preset = presetFor('crm');
-
-  it('opens as the crm agent', () => {
-    expect(preset.agent).toBe('crm');
-  });
-
-  it('seeds board + record + activity log, with the board active', () => {
-    const frame = seedFromPreset(preset, { knownViews: VIEWS });
-    const areas = areasOf(frame.center);
-    expect(areas.flatMap((a) => a.tabs.map((t) => t.viewId))).toEqual([
-      'records.board',
-      'records.grid',
-      'records.form',
-      'records.grid',
-    ]);
-    expect(areas[0].tabs[areas[0].activeTab].viewId).toBe('records.board');
-
-    // The activity log is pinned to its own schema — without the params it would
-    // be a second view of whatever table the rail is on.
-    const activityGrid = areas[areas.length - 1].tabs[0];
-    expect(activityGrid.params).toEqual({ schemaId: 'activities' });
-    // …and the pipeline grid must NOT be pinned (it follows the selection).
-    expect(areas[0].tabs[1].params).toBeUndefined();
-
-    // Explorer, not `records.list`: the tables browser is a section of it now.
-    expect(frame.docks.left.tools.map((t) => t.viewId)).toEqual(['explorer.home']);
-    expect(frame.docks.right.tools.map((t) => t.viewId)).toEqual(['agent.chat']);
+describe('records frame presets', () => {
+  // The `crm` preset is deliberately gone: a contacts/deals pipeline presumed a
+  // sales workflow the substrate never required, and it was the reason a generic
+  // table store read as CRM software. The review surface lives in the workspaces
+  // where the reading happens instead — see the layouts module's own test.
+  it('contributes Data Entry and nothing else', () => {
+    expect(recordsModule.frames?.map((f) => f.id)).toEqual(['intake']);
   });
 });
 
@@ -64,14 +43,18 @@ describe('data entry frame preset', () => {
     expect(preset.agent).toBe('intake');
   });
 
-  it('seeds the source document beside the form, half and half', () => {
+  it('seeds the source document beside the review surface, half and half', () => {
     const frame = seedFromPreset(preset, { knownViews: VIEWS });
     const areas = areasOf(frame.center);
     expect(areas.flatMap((a) => a.tabs.map((t) => t.viewId))).toEqual([
       'research.pdfViewer',
       'browser.view',
       'records.form',
+      'records.grid',
     ]);
+    // Review is what this workspace is for; the rows sit behind it as a tab.
+    const right = areas[areas.length - 1];
+    expect(right.tabs[right.activeTab].viewId).toBe('records.form');
     expect(frame.center.kind === 'split' && frame.center.sizes).toEqual([0.5, 0.5]);
     expect(frame.docks.right.tools.map((t) => t.viewId)).toEqual(['agent.chat']);
     expect(frame.docks.bottom.visible).toBe(false);

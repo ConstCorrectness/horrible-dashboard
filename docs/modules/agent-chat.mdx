@@ -283,9 +283,21 @@ sessions. Built-ins (`backend/modules/agent/roster.py`):
 | `main`       | unrestricted (keyword preloading, delegate)  | by prompt keywords | session mode  |
 | `coder`      | files, editor, terminal, code, symbols       | editor, files, symbols | `acceptEdits` |
 | `dba`        | database, symbols                            | database           | session mode  |
-| `researcher` | browser, library, github, google, research, arxiv | research, library, arxiv | session mode  |
-| `crm`        | records, browser, search, github, google, library | records            | session mode  |
+| `researcher` | browser, search, library, github, google, research, arxiv, records | research, library, arxiv | session mode  |
 | `intake`     | records, browser, research, library           | records, research  | session mode  |
+
+Two of `researcher`'s groups are load-bearing for the workspaces it backs, and both
+were **dead buttons** before: Research and Web Ops dock the Review pane (`records` —
+it could display a proposal but not file one), and Web Ops docks the search panel
+(`search` — the pane's own results were unreachable to the agent beside it). A
+docked pane whose agent lacks the matching group is the failure mode to watch for
+when adding a preset.
+
+There is deliberately **no `crm` agent**. It existed to enrich contacts and deals
+from the open web, which is what `researcher` already does now that it carries
+`records` alongside browser/search/github/google — so it was a persona rather than
+a capability, and its prompt hardcoded a contacts/deals model the records substrate
+never required. See [records](records.mdx).
 
 Mechanics (`run_agent_turn(agent_id=…)`):
 
@@ -295,7 +307,8 @@ Mechanics (`run_agent_turn(agent_id=…)`):
   `agent.delegate` are core only for specs that declare them (`main`).
 - **A workspace picks the agent.** A `FramePreset` may declare `agent: '<id>'`, and
   the docked chat opens as that agent for that workspace — Data Ops as the `dba`,
-  CRM as `crm`, Data Entry as `intake`. Choosing another from the picker is a
+  Research and Web Ops as `researcher`, Data Entry as `intake`. Choosing another
+  from the picker is a
   per-workspace override (kept in `localStorage`, keyed by workspace id) so it
   survives switching away and back; the declared agent is the default, not a lock.
   See [windowing](../architecture/windowing.mdx).
@@ -422,8 +435,9 @@ write. Pinned by
 tool, floating panes; background tabs are unmounted, so their state isn't readable
 anyway). The backend formats it as a compact index just before the user turn
 (`_workspace_context_message`). This is what makes a preset workspace a role rather
-than furniture: the CRM agent already knows which record is open, and the intake
-agent which document is on screen, without spending a `list_open_panes` +
+than furniture: the researcher already knows which row the Review pane has open,
+and the intake agent which document is on screen, without spending a
+`list_open_panes` +
 `get_pane_context` round on it. It rides on **every** turn, so it is budgeted —
 `agent.workspaceContext` (on/off), `agent.workspaceContextPanes` (6) and
 `agent.workspaceContextBudget` (1500 chars per pane, clipping oversized *fields*

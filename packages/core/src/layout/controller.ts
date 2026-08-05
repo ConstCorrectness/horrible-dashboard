@@ -1105,8 +1105,9 @@ export function describeLayout(): Record<string, unknown> {
 /**
  * The workspace's ambient agent context: a snapshot of every pane the user can
  * actually see that exposes one. This is what makes a workspace a *role* rather
- * than furniture — the agent in the CRM workspace knows which record is open
- * without spending a `list_open_panes` + `get_pane_context` round-trip on it.
+ * than furniture — the agent in the Research workspace knows which row the Review
+ * pane has open, and which document is on screen beside it, without spending a
+ * `list_open_panes` + `get_pane_context` round-trip on it.
  *
  * Budgeted by the caller, not here: `limit` caps how many panes are attached (the
  * ones nearest the user first — floating, then docks, then center) and `maxChars`

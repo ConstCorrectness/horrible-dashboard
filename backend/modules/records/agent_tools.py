@@ -5,8 +5,9 @@ The important distinction is `records.propose` vs `records.commit`. Propose is n
 side-effecting: it files a reviewable diff and returns immediately, which is what
 makes "read this invoice and fill the form" safe to run unattended. Commit writes
 straight through and is therefore gated by the permission system. The `intake`
-agent's prompt forbids commit outright; the `crm` agent may use it for the
-bookkeeping writes a human would only rubber-stamp.
+agent's prompt forbids commit outright, and `researcher` is told to propose rather
+than commit for anything it found on the open web — commit is for the bookkeeping
+writes a human explicitly asked for and would only rubber-stamp.
 
 Group name is the tool-name prefix (`records.`) — `AgentTool.group` does not name
 the group, it only marks the tool as progressively disclosed.
@@ -130,6 +131,22 @@ async def _propose(args: dict[str, Any]) -> dict[str, Any]:
         )
     except (store.RecordsError, ValueError) as exc:
         return {"error": str(exc)}
+    # Announce it. The `records` /ws channel already updates an *open* review pane,
+    # but the whole point of propose is that it is safe to run unattended — so the
+    # one case that matters is the user looking at something else entirely. Routed
+    # through the notification service (like network chat does) rather than raised
+    # locally, so the mute rules apply: an extraction run filing forty proposals
+    # must be silenceable. Function-scoped import, same as `network/chat.py`.
+    from backend.modules.notifications.service import notify
+
+    schema = store.get_schema(proposal.schema_id)
+    await notify(
+        "review",
+        f"{len(fields)} field(s) to review",
+        f"{schema.name if schema else proposal.schema_id}"
+        f"{f' · {source}' if source else ''}",
+        data={"proposalId": proposal.id, "schemaId": proposal.schema_id},
+    )
     return {
         "proposalId": proposal.id,
         "status": "awaiting review",
@@ -203,9 +220,10 @@ _TOOLS: list[AgentTool] = [
     AgentTool(
         name="records.listSchemas",
         description=(
-            "List the user's record tables (CRM contacts, deals, intake forms, …) "
-            "with each one's fields, types and row count. Call this first — field "
-            "keys are not guessable and every other records tool needs them."
+            "List the user's record tables (papers to read, contacts, intake forms, "
+            "anything row-shaped) with each one's fields, types and row count. Call "
+            "this first — field keys are not guessable and every other records tool "
+            "needs them."
         ),
         handler=_list_schemas,
         group="records",

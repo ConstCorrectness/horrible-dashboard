@@ -5,8 +5,8 @@
  * Two modes, and the distinction matters. Unpinned, the grid follows the shared
  * selection — one table, one open record, three views of it. Pinned via
  * `params.schemaId`, it is a standalone table with its own rows and its own
- * selection: that's how the CRM workspace shows the activity log under the record
- * form without the log stealing the workspace's active table.
+ * selection: that's how a workspace can show a fixed table (an activity log, say)
+ * beside the shared one without it stealing the workspace's active table.
  */
 import { useCallback, useEffect, useState } from 'react';
 

@@ -145,7 +145,7 @@ export function ChatWidget() {
   const [busy, setBusy] = useState(false);
   // The roster agent this pane is talking to; each agent keeps its own sessions.
   // It follows the *workspace*: a preset declares the persona its layout is for
-  // (`FramePreset.agent`), so switching to CRM or Data Ops switches who answers.
+  // (`FramePreset.agent`), so switching to Data Entry or Data Ops switches who answers.
   const [roster, setRoster] = useState<RosterAgent[]>([]);
   const { activeId: workspaceId } = useWorkspaces();
   const [agentId, setAgentId] = useState(() => agentForWorkspace(workspaceId));

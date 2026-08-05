@@ -1,10 +1,11 @@
-"""The built-in starter schemas behind the CRM and Data Entry workspaces.
+"""The starter schemas a records pane offers on a node that has none.
 
-Seeded on demand (`POST /api/records/seed`, called when one of those workspaces
-first opens) rather than at boot: a node that never opens the CRM shouldn't grow
-three empty tables in its app database. Seeding is idempotent and never touches a
-schema that already exists — these are starting points the user is expected to
-edit, not a fixed model.
+Seeded on demand (`POST /api/records/seed`, when a records pane finds an empty
+catalog) rather than at boot: a node that never opens records shouldn't grow four
+empty tables in its app database. Seeding is idempotent and never touches a schema
+that already exists — these are starting points the user is expected to edit or
+delete, not a fixed model, and `records.schema` ("Table setup") is how they define
+their own.
 """
 
 from __future__ import annotations

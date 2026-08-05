@@ -4,14 +4,26 @@ title: Records
 
 # Records
 
-User-defined tables — CRM contacts and deals, intake forms, anything row-shaped —
-as three views of one store, plus an agent write path that **proposes** rather than
-commits.
+User-defined tables — papers to read, job applications, contacts, anything
+row-shaped — as views of one store, plus an agent write path that **proposes**
+rather than commits.
 
 The module is deliberately generic. There is no CRM module and no data-entry
-module: there is one `records` substrate, and CRM and Data Entry are *schemas and
-layouts* on top of it. Adding "track my job applications" is a schema, not a
-feature.
+module: there is one `records` substrate, and a schema is all a new use case takes.
+Adding "track my job applications" is a schema, not a feature.
+
+The **review surface is the point of the module**, not the grid. An agent reading a
+document proposes field values with citations; you accept them one by one. That is
+why the panes are docked into the workspaces where reading happens — Research, Web
+Ops and Data Entry — rather than living in a records-only workspace.
+
+A pipeline workspace (`crm`) and a matching roster agent used to exist, and both
+were removed. They presumed a sales workflow the substrate never required, and they
+were the reason a generic table store read as CRM software. The agent in particular
+was a persona rather than a capability: enriching a table from the open web is what
+`researcher` does, now that it carries `records` alongside browser/search/github/
+google. Nothing was lost — a contacts table is still a schema you can create in
+**Table setup**, and the same agent will fill it in.
 
 ## Storage: real tables in `app.db`
 
@@ -54,24 +66,50 @@ correctly and SQLite has no date type), `select` (with `options`), `url`, `email
 
 ## Panes
 
-| view id | role | what it is |
-| --- | --- | --- |
-| `records.grid` | document | The rows as an editable table. Double-click a cell to edit. |
-| `records.form` | document | One record, field by field — and the **proposal review** surface. |
-| `records.board` | document | Kanban by the schema's `board_column`; drag a card to write that field. |
-| `records.list` | tool (`embedded`) | Table switcher, search, and the pending-proposal count. The **Tables** section of [Explorer](explorer.mdx); the CRM and Data Entry presets dock Explorer on the left. |
+| view id | title | role | what it is |
+| --- | --- | --- | --- |
+| `records.grid` | **Rows** | document | The rows as an editable table. Double-click a cell to edit. |
+| `records.form` | **Review** | document | The **proposal review** surface, and one record field by field. |
+| `records.board` | **Board** | document | Kanban by the schema's `board_column`; drag a card to write that field. |
+| `records.schema` | **Table setup** | document | Define or reshape a table: name, icon, fields, row label, board column. |
+| `records.list` | **Tables** | tool (`embedded`) | Table switcher, search, "+ New table", and the review queue. The **Tables** section of [Explorer](explorer.mdx). |
 
-All four contribute `useAgentContext`, which is what makes the workspace ambient
+The titles are deliberate. The module, the pane and the row were all called some
+inflection of "record", which said nothing about any of them; `records.form` is
+named **Review** because that is its actual job, and being a data-entry form is
+secondary.
+
+All of them contribute `useAgentContext`, which is what makes the workspace ambient
 context (see [agent-chat](agent-chat.mdx)) pay off here: the agent sees "board:
-deals, form: contact 42 open, 3 empty fields" with no tool round-trip.
+papers, form: row 42 open, 3 empty fields" with no tool round-trip.
 
 **Pinned vs shared grids.** Unpinned, the grid follows the shared selection — one
-active table, one open record, three views of it. Given `params.schemaId` it
-becomes a standalone table with its own rows and its own selection. That's not a
-detail: the CRM workspace shows the activity log under the record form, and without
-pinning the log would hijack the workspace's active table for the board and form
-too. A pinned grid listens to the `records` `/ws` channel directly (`onRowEvent`)
-since the shared store only tracks the active schema.
+active table, one open record, several views of it. Given `params.schemaId` it
+becomes a standalone table with its own rows and its own selection, so a second
+grid can show a fixed table beside the shared one without hijacking it. A pinned
+grid listens to the `records` `/ws` channel directly (`onRowEvent`) since the shared
+store only tracks the active schema.
+
+## Defining a table
+
+`records.schema` ("Table setup") is reached from the **+ New table** button in the
+Tables rail, the ⚙ beside the active table, or the `records.newTable` command.
+
+It exists because `createSchema`/`updateSchema`/`deleteSchema` shipped in `api.ts`
+with **no caller at all**: a table could only be defined by the agent or by hand
+over HTTP, and the rail's empty state pointed at a *workspace* because there was no
+action to point at. A substrate whose only author is the agent is one the user
+cannot start using on their own.
+
+Two backend rules the pane surfaces rather than hides:
+
+- The **id is the physical table name**, so it is pattern-validated, narrower than
+  the display name, and immutable after creation. The pane shows `rec_<id>` as you
+  type, because that name is how the table is reached from the
+  [database](database.mdx) console.
+- **Field removal is additive-only.** Removing a field here drops the declaration
+  and keeps the column. Dropping a table asks twice, and keeps the rows unless you
+  say otherwise — the catalog row is cheap to recreate, the rows are not.
 
 ## The propose/approve loop
 
@@ -110,6 +148,29 @@ Why it works this way:
 - Field keys are validated at *propose* time, so a bad extraction fails in the
   agent's tool result rather than sitting in the queue until someone hits Accept.
 
+### Arrival is announced, not just broadcast
+
+The `records` `/ws` channel updates an **already-open** review pane. That is not
+enough on its own, because propose is explicitly the write path that is safe to run
+unattended — which makes "the user is looking at something else" its normal case,
+not its edge case. Two things follow:
+
+- **The watch starts at boot** (`initRecordsWatch` in `main.tsx`), not on pane
+  mount. It used to start only when a records pane mounted, so a proposal filed
+  while you were elsewhere was received by nobody and counted on nothing. Same bug,
+  and the same fix, as `initSocial` — see [notifications](notifications.mdx).
+- **Propose raises a `review` notification** through
+  `notifications.service.notify`, so it reaches the bell, a toast and (optionally)
+  the OS. It goes through the service rather than being raised locally so the mute
+  rules apply at the producer: an extraction run filing forty proposals must be
+  silenceable.
+
+The rail's badge counts **every** table, not the selected one. `getProposals()` is
+schema-filtered on purpose — the review pane must not hijack an open record with an
+unrelated diff — but the badge reads `getAllProposals()`, because an agent files
+against whatever table it was asked about, and a queue you can only find by first
+guessing the right table is one you never find.
+
 This mirrors the editor's `proposeEdit` diff — the same convention for any agent
 write a human should see first.
 
@@ -133,25 +194,31 @@ The group name **is** the `records.` name prefix. `AgentTool.group` only marks a
 tool as progressively disclosed; it does not name the group (see
 [agent-tools](../architecture/agent-tools.mdx)).
 
-## Workspaces
+## Where the panes live
 
-Both declare their agent, so switching to them switches who answers.
+The module owns **one** workspace and contributes its review surface to three:
 
-- **CRM** (`crm`, agent `crm`) — board + grid tabbed on the left, the record form
-  and a pinned activity grid on the right, tables rail left, agent right. The `crm`
-  agent scopes to `records, browser, search, github, google, library`: it enriches
-  a contact from the open web or a connected account, and proposes what it found.
-- **Data Entry** (`intake`, agent `intake`) — the source document (PDF viewer or
-  browser) and the form, half and half, because the workflow is reading one and
-  confirming the other and neither is secondary. The `intake` agent is forbidden
-  `records.commit` by its prompt: it proposes, cites, and never invents a value
-  that isn't in the document.
+- **Data Entry** (`intake`, agent `intake`) — the module's own preset. The source
+  document (PDF viewer or browser) and Review, half and half, because the workflow
+  is reading one and confirming the other and neither is secondary. The `intake`
+  agent is forbidden `records.commit` by its prompt: it proposes, cites, and never
+  invents a value that isn't in the document.
+- **Research** and **Web Ops** (in the `layouts` module, agent `researcher`) — the
+  Review pane tabs with the library panel, because those are the two things you do
+  with a finding: keep the page, or put its fields in a table. Reviewing an
+  extraction beside the document it came from is the whole reason the records panes
+  are docked here rather than in a workspace of their own.
 
-The built-in schemas (`contacts`, `deals` with a `stage` board, `activities`,
+That last one has a dependency worth stating: `researcher`'s `tool_groups` includes
+`records`. A reading workspace that can *show* a proposal but whose agent cannot
+*file* one is a dead button.
+
+The starter schemas (`contacts`, `deals` with a `stage` board, `activities`,
 `intake`) are seeded on demand the first time a records pane finds an empty
 catalog — at most once per session, so a user who deleted every table isn't fought
-by re-seeding — never at boot, so a node that never opens the CRM doesn't grow four
-empty tables. They're starting points, expected to be edited.
+by re-seeding — never at boot, so a node that never opens records doesn't grow four
+empty tables. They are starting points, expected to be edited or deleted; the
+`records.seed` command re-creates any that are missing.
 
 ## HTTP + `/ws`
 

@@ -1,15 +1,22 @@
 /**
- * The records rail tool: pick a table, search it, and see what's awaiting review.
- * The pending-proposal count belongs here rather than only in the form, because an
- * agent can file a proposal against a record the user isn't currently looking at.
+ * The records rail tool: pick a table, search it, define a new one, and see what is
+ * awaiting review.
+ *
+ * The pending-review banner counts **every** table, not the selected one. That is
+ * the whole point of it: an agent files against whatever table it was asked about,
+ * not whichever one you happen to have open, so a queue you can only find by first
+ * guessing the right table is one you would never find. Clicking the banner jumps
+ * to the table holding the oldest proposal.
  */
 import { useEffect } from 'react';
 
 import { useAgentContext } from '../../agent-context';
+import { registry } from '../../registry';
 import { rowTitle } from './api';
 import {
   getActiveSchema,
-  getProposals,
+  getAllProposals,
+  getPendingBySchema,
   getRows,
   getSchemas,
   getSearch,
@@ -33,17 +40,35 @@ export function RecordList() {
   const active = getActiveSchema();
   const rows = getRows();
   const selectedId = getSelectedRowId();
-  const pending = getProposals().length;
+  const pending = getAllProposals();
+  const pendingBySchema = getPendingBySchema();
 
   useAgentContext(() => ({
     pane: 'records.list',
     schemas: schemas.map((s) => ({ id: s.id, name: s.name, rows: s.count ?? null })),
     activeSchema: active?.id ?? null,
-    pendingProposals: pending,
+    pendingProposals: pending.length,
   }));
+
+  /** Jump to the table holding the oldest pending proposal and open the review. */
+  const goToReview = () => {
+    const oldest = pending[pending.length - 1];
+    if (!oldest) return;
+    if (oldest.schema_id !== active?.id) setActiveSchema(oldest.schema_id);
+    if (oldest.record_id) selectRow(oldest.record_id);
+    registry.openPanel('records.form');
+  };
+
+  const newTable = () => registry.openPanel('records.schema', { params: { schemaId: 'new' } });
 
   return (
     <div className="rec-list">
+      {pending.length > 0 && (
+        <button className="rec-pending" onClick={goToReview}>
+          {pending.length} field set{pending.length === 1 ? '' : 's'} awaiting review →
+        </button>
+      )}
+
       <div className="rec-list-schemas">
         {schemas.map((schema) => (
           <button
@@ -54,21 +79,41 @@ export function RecordList() {
             <span>
               {schema.icon ?? '▤'} {schema.name}
             </span>
-            <span className="rec-dim">{schema.count ?? ''}</span>
+            <span className="rec-schema-meta">
+              {pendingBySchema[schema.id] ? (
+                <span className="rec-dot" title={`${pendingBySchema[schema.id]} awaiting review`}>
+                  ●
+                </span>
+              ) : null}
+              <span className="rec-dim">{schema.count ?? ''}</span>
+            </span>
           </button>
         ))}
+
         {schemas.length === 0 && (
           <div className="rec-dim rec-pad">
-            No tables yet — open the CRM or Data Entry workspace, or ask the agent to create one.
+            No tables yet. A table is just columns you name — papers to read, job applications,
+            anything row-shaped. The agent can then fill one in for you.
           </div>
         )}
       </div>
 
-      {pending > 0 && (
-        <div className="rec-pending">
-          {pending} proposal{pending === 1 ? '' : 's'} awaiting review
-        </div>
-      )}
+      <div className="rec-list-tools">
+        <button className="rec-btn rec-btn-wide" onClick={newTable}>
+          + New table
+        </button>
+        {active && (
+          <button
+            className="rec-btn rec-btn-quiet"
+            title={`Edit the fields of ${active.name}`}
+            onClick={() =>
+              registry.openPanel('records.schema', { params: { schemaId: active.id } })
+            }
+          >
+            ⚙
+          </button>
+        )}
+      </div>
 
       {active && (
         <>

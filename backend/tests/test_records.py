@@ -188,6 +188,39 @@ def test_propose_tool_accepts_flat_and_cited_field_shapes() -> None:
     assert store.count_rows("contacts") == 0
 
 
+def test_propose_raises_a_notification(monkeypatch) -> None:
+    """Propose is the "safe to run unattended" write path, which makes "the user is
+    looking at something else" its normal case. The `records` /ws channel only
+    updates an already-open review pane, so without this the proposal reaches
+    nobody and shows on no counter — the bug that left a real proposal sitting
+    unseen. Routed through the notification service so mutes still apply."""
+    store.save_schema(_contacts())
+    sent: list[tuple[str, str, str]] = []
+
+    async def fake_notify(category, title, body, **kwargs):
+        sent.append((category, title, body))
+        return True
+
+    monkeypatch.setattr("backend.modules.notifications.service.notify", fake_notify)
+    tool = {t.name: t for t in agent_tools._TOOLS}["records.propose"]
+    _run(tool.handler, {"schema": "contacts", "fields": {"name": "Ada"}})
+
+    assert len(sent) == 1
+    category, title, body = sent[0]
+    assert category == "review"
+    assert "1 field" in title
+    # Names the table, so the notification says which review is waiting.
+    assert "Contacts" in body
+
+
+def test_review_is_a_muteable_category() -> None:
+    """A category the producer emits but no rule can name is one the user cannot
+    silence short of muting everything — see the note on CATEGORIES."""
+    from backend.modules.notifications import store as notif_store
+
+    assert "review" in notif_store.CATEGORIES
+
+
 def test_records_tools_are_named_for_their_group() -> None:
     """The orchestrator groups tools by name prefix; `AgentTool.group` only marks a
     tool as progressively disclosed. A mismatch here silently splits the group."""

@@ -1,6 +1,6 @@
-"""Records module: user-defined tables (CRM, intake, anything row-shaped) stored as
-real tables in the app database, with an agent write path that proposes rather than
-commits. See docs/modules/records.mdx."""
+"""Records module: user-defined tables (anything row-shaped) stored as real tables
+in the app database, with an agent write path that proposes rather than commits.
+See docs/modules/records.mdx."""
 
 from backend.modules.records.agent_tools import register_records_tools
 from backend.modules.records.proposals import push_records_events

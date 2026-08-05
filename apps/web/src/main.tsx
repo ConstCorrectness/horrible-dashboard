@@ -36,6 +36,7 @@ import {
   initLobby,
   initNetwork,
   initNotifications,
+  initRecordsWatch,
   initSocial,
   notificationsModule,
   marketplaceModule,
@@ -172,6 +173,12 @@ async function boot(): Promise<void> {
   // notification.
   initSocial();
   initNotifications();
+  // Same reason as initSocial, and the same bug it fixed: the records watch used to
+  // start only when a records pane mounted, so an agent proposal filed while you
+  // were looking at anything else was received by nobody and showed up on no
+  // counter. Propose is explicitly the "safe to run unattended" write path, which
+  // makes "you were elsewhere" its normal case rather than its edge case.
+  initRecordsWatch();
   // Listen for permission-approval prompts the gate raises during a turn.
   initApprovalListener();
 

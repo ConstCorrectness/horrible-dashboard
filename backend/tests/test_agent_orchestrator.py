@@ -964,7 +964,7 @@ def test_loaded_tool_groups_survive_into_the_next_turn() -> None:
     }
     # A different agent on the same socket keeps its own scope.
     assert (
-        orchestrator._carried(conn, "crm", [{"role": "user", "content": "hi"}]) == set()
+        orchestrator._carried(conn, "dba", [{"role": "user", "content": "hi"}]) == set()
     )
 
 

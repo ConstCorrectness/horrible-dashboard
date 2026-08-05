@@ -1,12 +1,14 @@
 /**
- * Records module: user-defined tables — CRM contacts and deals, intake forms,
- * anything row-shaped — as three views of one store (grid, form, board) plus a
- * rail. The rows are real SQLite tables in the app database, so everything here is
- * also visible from the database console's `app` connection.
+ * Records module: user-defined tables — papers to read, job applications, contacts,
+ * anything row-shaped — as views of one store (rows, review, board) plus a rail and
+ * a table designer. The rows are real SQLite tables in the app database, so
+ * everything here is also visible from the database console's `app` connection.
  *
- * The two workspaces it owns are the point: **CRM** is the pipeline, and **Data
- * Entry** is a source document beside a form the agent fills by *proposing* values
- * you accept field by field. See docs/modules/records.mdx.
+ * The **Review** pane is the point of the module, not the grid: an agent reading a
+ * document proposes field values with citations, and you accept them one by one.
+ * That is why the review surface is docked into the workspaces where reading
+ * actually happens (Research, Web Ops, Data Entry) rather than living in a
+ * records-only workspace of its own. See docs/modules/records.mdx.
  */
 import { registry, type ModuleManifest } from '../../registry';
 import { seedSchemas } from './api';
@@ -15,6 +17,7 @@ import { RecordForm } from './RecordForm';
 import { RecordGrid } from './RecordGrid';
 import { RecordList } from './RecordList';
 import { refreshSchemas } from './store';
+import { TableSetup } from './TableSetup';
 
 /** Create the built-in tables if they're missing, then reload the rail. Called
  * when a records workspace opens — idempotent, and never touches an existing
@@ -34,17 +37,28 @@ export const recordsModule: ModuleManifest = {
   panels: [
     {
       id: 'records.grid',
-      title: 'Records',
+      // "Rows" rather than "Records": the module, the pane and the row were all
+      // called some inflection of "record", which said nothing about any of them.
+      title: 'Rows',
       component: RecordGrid,
       role: 'document',
       icon: '▤',
     },
     {
       id: 'records.form',
-      title: 'Record',
+      // Named for its actual job. It is the proposal-review surface first and a
+      // data-entry form second — see the propose/approve loop in the docs.
+      title: 'Review',
       component: RecordForm,
       role: 'document',
       icon: '📋',
+    },
+    {
+      id: 'records.schema',
+      title: 'Table setup',
+      component: TableSetup,
+      role: 'document',
+      icon: '⚙',
     },
     {
       id: 'records.board',
@@ -66,45 +80,19 @@ export const recordsModule: ModuleManifest = {
       embedded: true,
     },
   ],
-  explorerSources: [
-    { id: 'tables', label: 'Tables', icon: '🗃', view: 'records.list', key: 'r' },
-  ],
+  explorerSources: [{ id: 'tables', label: 'Tables', icon: '🗃', view: 'records.list', key: 'r' }],
+  // One workspace, not two. The old `crm` preset arranged a contacts/deals pipeline
+  // that presumed a sales workflow the substrate never actually required — and it
+  // was the reason a generic table store read as CRM software. The review surface
+  // now docks into the workspaces where the reading happens instead (Research and
+  // Web Ops, in modules/layouts), so an extraction is reviewed beside the document
+  // it came from rather than a workspace switch away.
   frames: [
-    {
-      id: 'crm',
-      name: 'CRM',
-      icon: '👥',
-      // Pipeline first (the board is how you think about deals), the open record
-      // beside it, and the activity log under that — logging a call shouldn't cost
-      // a navigation. The CRM agent docks right to enrich what's selected.
-      agent: 'crm',
-      frame: {
-        center: {
-          split: 'row',
-          sizes: [0.6, 0.4],
-          children: [
-            { tabs: ['records.board', 'records.grid'], active: 0 },
-            {
-              split: 'column',
-              sizes: [0.55, 0.45],
-              children: [
-                { pane: 'records.form' },
-                { pane: 'records.grid', params: { schemaId: 'activities' } },
-              ],
-            },
-          ],
-        },
-        docks: {
-          left: { tools: ['explorer.home'], size: 260 },
-          right: { tools: ['agent.chat'], size: 380 },
-        },
-      },
-    },
     {
       id: 'intake',
       name: 'Data Entry',
       icon: '📥',
-      // Source left, form right, half and half: the whole workflow is reading one
+      // Source left, review right, half and half: the whole workflow is reading one
       // and confirming the other, and neither is secondary.
       agent: 'intake',
       frame: {
@@ -113,7 +101,7 @@ export const recordsModule: ModuleManifest = {
           sizes: [0.5, 0.5],
           children: [
             { tabs: ['research.pdfViewer', 'browser.view'], active: 0 },
-            { pane: 'records.form' },
+            { tabs: ['records.form', 'records.grid'], active: 0 },
           ],
         },
         docks: {
@@ -127,8 +115,13 @@ export const recordsModule: ModuleManifest = {
   commands: [
     {
       id: 'records.open',
-      title: 'Records: Open table grid',
+      title: 'Records: Open table rows',
       run: () => registry.openPanel('records.grid'),
+    },
+    {
+      id: 'records.openReview',
+      title: 'Records: Open review',
+      run: () => registry.openPanel('records.form'),
     },
     {
       id: 'records.openBoard',
@@ -136,8 +129,13 @@ export const recordsModule: ModuleManifest = {
       run: () => registry.openPanel('records.board'),
     },
     {
+      id: 'records.newTable',
+      title: 'Records: New table…',
+      run: () => registry.openPanel('records.schema', { params: { schemaId: 'new' } }),
+    },
+    {
       id: 'records.seed',
-      title: 'Records: Create the built-in tables (contacts, deals, activities, intake)',
+      title: 'Records: Create the starter tables (contacts, deals, activities, intake)',
       run: () => void ensureSeeded(),
     },
   ],

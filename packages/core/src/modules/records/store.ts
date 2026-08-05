@@ -13,12 +13,15 @@ import { useSyncExternalStore } from 'react';
 import { subscribeChannel, type WsMessage } from '../../ws';
 import {
   createRow as apiCreateRow,
+  createSchema as apiCreateSchema,
   deleteRow as apiDeleteRow,
+  deleteSchema as apiDeleteSchema,
   listProposals,
   listRows,
   listSchemas,
   seedSchemas,
   updateRow as apiUpdateRow,
+  updateSchema as apiUpdateSchema,
   type Proposal,
   type RecordRow,
   type RecordSchema,
@@ -86,6 +89,23 @@ export function getProposals(): Proposal[] {
   return proposals.filter((p) => p.schema_id === activeSchemaId);
 }
 
+/** Every pending proposal, across all tables. The rail's badge counts *this*, not
+ * `getProposals()` — an agent files against whatever table it was asked about, not
+ * whichever one you happen to have selected, and a review queue you can only see
+ * by first guessing the right table is one you will never see. */
+export function getAllProposals(): Proposal[] {
+  return proposals;
+}
+
+/** Pending count per schema id, for the per-table markers in the rail. */
+export function getPendingBySchema(): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const proposal of proposals) {
+    counts[proposal.schema_id] = (counts[proposal.schema_id] ?? 0) + 1;
+  }
+  return counts;
+}
+
 /** The proposal the form should be showing: one against the selected row, else a
  * new-row proposal. Reviewing is per record, so an unrelated pending proposal on
  * another row must not hijack the open form. */
@@ -131,9 +151,9 @@ export async function refreshSchemas(): Promise<void> {
     }
     error = null;
     if (!activeSchemaId || !schemas.some((s) => s.id === activeSchemaId)) {
-      // Prefer a table with a board: it's the one with a workflow, and it's what
-      // makes the CRM workspace open on the pipeline rather than on whichever
-      // table sorts first (which would render the board pane's empty state).
+      // Prefer a table with a board: it's the one with a workflow, and it means a
+      // workspace opens on something the Board pane can actually draw rather than
+      // on whichever table sorts first (which would render its empty state).
       activeSchemaId = (schemas.find((s) => s.board_column) ?? schemas[0])?.id ?? null;
       if (activeSchemaId) void refreshRows();
     }
@@ -241,6 +261,63 @@ export async function removeRow(recordId: string): Promise<void> {
     error = message(err);
   }
   emit();
+}
+
+// --- schema actions ----------------------------------------------------------
+// These three wrap the API calls that shipped with no caller at all: until now a
+// table could only be defined by the agent or by hand over HTTP, which is why the
+// rail's empty state pointed at a *workspace* instead of at an action.
+
+/** Define a new table and select it. Returns the id, or null on failure. */
+export async function addSchema(schema: RecordSchema): Promise<string | null> {
+  try {
+    const created = await apiCreateSchema(schema);
+    error = null;
+    await refreshSchemas();
+    setActiveSchema(created.id);
+    return created.id;
+  } catch (err) {
+    error = message(err);
+    emit();
+    return null;
+  }
+}
+
+/** Rewrite a table's declaration. Additive on the backend: new fields become
+ * columns, a dropped field only disappears from the UI (see store.py). */
+export async function editSchema(schemaId: string, patch: Partial<RecordSchema>): Promise<boolean> {
+  try {
+    await apiUpdateSchema(schemaId, patch);
+    error = null;
+    await refreshSchemas();
+    if (schemaId === activeSchemaId) await refreshRows();
+    return true;
+  } catch (err) {
+    error = message(err);
+    emit();
+    return false;
+  }
+}
+
+/** Forget a table. `dropData` also drops the physical `rec_*` table — without it
+ * the rows survive, which is the backend's default and the recoverable choice. */
+export async function removeSchema(schemaId: string, dropData = false): Promise<boolean> {
+  try {
+    await apiDeleteSchema(schemaId, dropData);
+    error = null;
+    if (schemaId === activeSchemaId) {
+      activeSchemaId = null;
+      rows = [];
+      selectedRowId = null;
+    }
+    proposals = proposals.filter((p) => p.schema_id !== schemaId);
+    await refreshSchemas();
+    return true;
+  } catch (err) {
+    error = message(err);
+    emit();
+    return false;
+  }
 }
 
 /** Drop a closed proposal from the queue (after accept/reject). */

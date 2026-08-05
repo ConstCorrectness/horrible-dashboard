@@ -91,6 +91,11 @@ That split is a latency contract, not a quality knob. An eight-second tool call 
 middle of a chat turn is unusable, so the interactive agent gets `search.web` (quick)
 by default and research subagents get the deep path.
 
+The `search` group is scoped to `main` and **`researcher`** (see
+[agent-chat](agent-chat.mdx)). The latter is not optional decoration: the Web Ops
+workspace docks this module's panel *and* opens as `researcher`, so without it the
+agent sitting beside the search results could not run a search itself.
+
 ## Ranking
 
 Fusion is **rank-based** (Reciprocal Rank Fusion, `search/fusion.py`), never

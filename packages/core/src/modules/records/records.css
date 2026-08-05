@@ -390,12 +390,166 @@
   font-weight: 600;
 }
 
+/* The review banner is a button now (it jumps to the waiting proposal) and sits at
+   the top of the rail rather than under the table list — it counts every table, so
+   it is not a property of whichever one is selected. */
 .rec-pending {
   flex: 0 0 auto;
-  padding: 0.25rem 0.6rem;
+  padding: 0.35rem 0.6rem;
+  border: none;
+  border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--accent) 12%, transparent);
   color: var(--accent);
+  cursor: pointer;
+  font: inherit;
   font-size: 0.75rem;
+  font-weight: 600;
+  text-align: left;
+}
+
+.rec-pending:hover {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.rec-schema-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.rec-dot {
+  color: var(--accent);
+  font-size: 0.6rem;
+  line-height: 1;
+}
+
+.rec-list-tools {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 0.3rem;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.rec-btn-wide {
+  flex: 1 1 auto;
+}
+
+.rec-btn-quiet {
+  background: transparent;
+  opacity: 0.75;
+}
+
+.rec-btn-quiet:hover {
+  opacity: 1;
+}
+
+.rec-btn-danger {
+  border-color: color-mix(in srgb, var(--danger, #d9534f) 55%, transparent);
+  color: var(--danger, #d9534f);
+}
+
+/* --- table setup --------------------------------------------------------- */
+
+.rec-setup {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.rec-setup-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+
+.rec-setup-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.rec-setup-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.rec-setup-row .rec-input {
+  width: auto;
+  min-width: 8rem;
+}
+
+.rec-input-icon {
+  width: 3rem;
+  min-width: 3rem;
+  text-align: center;
+}
+
+.rec-input-key {
+  width: 8rem;
+  min-width: 6rem;
+  font-family: var(--font-mono, monospace);
+}
+
+.rec-input-type {
+  width: 9rem;
+  min-width: 7rem;
+}
+
+.rec-setup-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.rec-setup-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.2rem;
+}
+
+.rec-setup-field {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.rec-setup-field .rec-input {
+  width: auto;
+  flex: 1 1 7rem;
+  min-width: 6rem;
+}
+
+.rec-setup-flag {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  opacity: 0.8;
+  white-space: nowrap;
+}
+
+.rec-setup-problems {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+.rec-setup-note {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.5;
 }
 
 .rec-search {

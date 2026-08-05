@@ -56,6 +56,11 @@ export const layoutsModule: ModuleManifest = {
       // Discovery on the left (console/arxiv/browser tab together), reading on
       // the right (viewers above the library) — opening a paper never steals
       // the console. The researcher agent docks right, one keystroke away.
+      //
+      // `records.form` (Review) tabs with the library because they are the two
+      // things you do with a finding: keep the page, or put its fields in a table.
+      // Reviewing an extraction beside the document it came from is the whole
+      // reason the records panes are here rather than in a workspace of their own.
       frame: {
         center: {
           split: 'row',
@@ -70,7 +75,7 @@ export const layoutsModule: ModuleManifest = {
               sizes: [0.65, 0.35],
               children: [
                 { tabs: ['research.pdfViewer', 'research.pageViewer'] },
-                { pane: 'library.panel' },
+                { tabs: ['library.panel', 'records.form'], active: 0 },
               ],
             },
           ],
@@ -120,7 +125,10 @@ export const layoutsModule: ModuleManifest = {
             {
               split: 'column',
               sizes: [0.5, 0.5],
-              children: [{ pane: 'library.panel' }, { pane: 'research.pageViewer' }],
+              children: [
+                { tabs: ['library.panel', 'records.form'], active: 0 },
+                { pane: 'research.pageViewer' },
+              ],
             },
           ],
         },
