@@ -215,6 +215,64 @@ def test_shell_circuit_breakers() -> None:
     assert _exec(":(){ :|:& };:", mode=Mode.AUTONOMOUS) is Decision.ASK
 
 
+# --- stored-rule migration across a tool rename -----------------------------
+
+
+def test_rename_moves_shared_notebook_verbs_to_training() -> None:
+    from backend.modules.agent.permission_store import rename_in_rule
+
+    # A `notebook.run_cell` grant was made when training's identically-named tool
+    # was the one that actually ran; it must follow the tool, not the name.
+    assert rename_in_rule("notebook.run_cell") == "training.run_cell"
+    assert (
+        rename_in_rule("notebook.insert_cell(proj-1)") == "training.insert_cell(proj-1)"
+    )
+    # Reactive-notebook-only verbs never collided, so they keep meaning what they said.
+    assert rename_in_rule("notebook.set_mode") == "notebook.set_mode"
+    # The stopgap name the collision forced rejoins its own group.
+    assert rename_in_rule("nb.list_cells") == "notebook.list_cells"
+    # Untouched tools pass through, specifier and all.
+    assert rename_in_rule("terminal.exec(npm run *)") == "terminal.exec(npm run *)"
+
+
+def test_rename_leaves_a_specifier_containing_dots_alone() -> None:
+    from backend.modules.agent.permission_store import rename_in_rule
+
+    # Only the head is a tool name; a specifier may contain anything.
+    assert rename_in_rule("notebook.run_cell(a.b(c))") == "training.run_cell(a.b(c))"
+    assert (
+        rename_in_rule("files.read(notebook.run_cell)")
+        == "files.read(notebook.run_cell)"
+    )
+
+
+def test_migration_rewrites_once_and_dedupes(monkeypatch) -> None:
+    from backend.modules.agent import permission_store as PS
+
+    store: dict[str, object] = {
+        PS.KEY_ALLOW: ["notebook.run_cell", "training.run_cell", "terminal.exec"],
+        PS.KEY_ASK: [],
+        PS.KEY_DENY: [],
+    }
+    writes: list[str] = []
+    monkeypatch.setattr(PS, "get_value", lambda k, d=None: store.get(k, d))
+
+    def _set(key: str, value: object) -> None:
+        store[key] = value
+        writes.append(key)
+
+    monkeypatch.setattr(PS, "set_value", _set)
+
+    PS.load_rules()
+    # The renamed rule collapses into the one that already used the new name.
+    assert store[PS.KEY_ALLOW] == ["training.run_cell", "terminal.exec"]
+    assert writes == [PS.KEY_ALLOW]
+
+    # Idempotent: a second load is a no-op, so this costs nothing after the first.
+    PS.load_rules()
+    assert writes == [PS.KEY_ALLOW]
+
+
 def test_shell_split_and_wrapper_units() -> None:
     from backend.modules.agent import shell
 

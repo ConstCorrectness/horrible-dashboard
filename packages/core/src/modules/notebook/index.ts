@@ -1,6 +1,7 @@
 import { revealSection } from '../../layout/controller';
 import type { ModuleManifest } from '../../registry';
 import { notebookAgentTools } from './agentTools';
+import { openNotebook } from './open';
 import { NotebookBrowser } from './panels/NotebookBrowser';
 import { NotebookEditor } from './panels/NotebookEditor';
 
@@ -67,6 +68,34 @@ export const notebookModule: ModuleManifest = {
   ],
   explorerSources: [
     { id: 'notebooks', label: 'Notebooks', icon: '📓', view: 'notebook.browser', key: 'k' },
+  ],
+  /**
+   * Right-clicking an `.ipynb` in the *file tree* offers to open it as a notebook
+   * rather than as text. This module contributes it, because the files module has
+   * no business knowing which extensions some other module can handle — that is
+   * the whole reason the menu is assembled from providers instead of being a list
+   * baked into the tree.
+   *
+   * `order: 1` puts it after the files module's own items. It is deliberately not
+   * *instead* of "Open": a notebook is still a JSON file, and opening the raw text
+   * is how you fix one the editor can't load.
+   */
+  contextMenu: [
+    {
+      kind: 'files.node',
+      order: 1,
+      items: (target) => {
+        const path = String(target.path ?? '');
+        if (target.nodeKind === 'dir' || !path.toLowerCase().endsWith('.ipynb')) return [];
+        return [
+          {
+            id: 'notebook.openHere',
+            label: 'Open as Notebook',
+            run: () => openNotebook(path),
+          },
+        ];
+      },
+    },
   ],
   commands: [
     {

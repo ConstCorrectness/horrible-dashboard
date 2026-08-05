@@ -31,6 +31,9 @@ import {
 } from '@codemirror/autocomplete';
 
 import { dialogs } from '../../dialogs';
+import { enabledDocSources, lookupDocs } from '../../docs/chain';
+import { renderDocEntry, symbolAt } from '../../docs/cm-docs';
+import { renderMarkdown } from '../../docs/markdown';
 import { sendChannel, subscribeChannel, type WsMessage } from '../../ws';
 import { getBuffer } from './buffers';
 import {
@@ -146,128 +149,6 @@ function markupText(doc: MarkupContent | undefined): string {
 // Named HTML entities that turn up in LSP docstrings (servers convert RST/plain
 // docstrings to markdown, aligning columns with `&nbsp;` and escaping `<`/`>`/`&`).
 // We decode these to their characters so they don't render literally as `&nbsp;`.
-const NAMED_ENTITIES: Record<string, string> = {
-  amp: '&',
-  lt: '<',
-  gt: '>',
-  quot: '"',
-  apos: "'",
-  nbsp: ' ',
-  hellip: '…',
-  mdash: '—',
-  ndash: '–',
-  lsquo: '‘',
-  rsquo: '’',
-  ldquo: '“',
-  rdquo: '”',
-  times: '×',
-  copy: '©',
-};
-
-/** Decode named + numeric (`&#123;` / `&#x1F;`) HTML entities to their characters.
- * Only well-formed `&name;`/`&#num;` refs are touched; a bare `&` is left as-is.
- * Runs *before* `escapeHtml`, so a decoded `<`/`>`/`&` is re-escaped to visible
- * text — decoding never opens an injection hole. */
-function decodeEntities(s: string): string {
-  if (!s.includes('&')) return s;
-  return s.replace(/&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);/g, (m, body: string) => {
-    if (body[0] === '#') {
-      const cp =
-        body[1] === 'x' || body[1] === 'X'
-          ? parseInt(body.slice(2), 16)
-          : parseInt(body.slice(1), 10);
-      return Number.isFinite(cp) && cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : m;
-    }
-    return NAMED_ENTITIES[body] ?? m;
-  });
-}
-
-/** Escape the HTML-significant characters so text can't inject markup. Any HTML
- * entities the source already carries are decoded first (see `decodeEntities`) —
- * decode-then-escape renders them as their characters, safely. */
-function escapeHtml(s: string): string {
-  return decodeEntities(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-/** Inline markdown → HTML on an already-escaped string: inline code, bold, italics,
- * and links flattened to their text (doc panes aren't a place to navigate away). */
-function renderInline(escaped: string): string {
-  return escaped
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>')
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1');
-}
-
-/** Render a small subset of markdown (fenced/inline code, headings, bullet lists,
- * bold/italics, paragraphs) to a safe DOM node. Every user-supplied span is
- * HTML-escaped before any tag is added, so the built string carries only our own
- * markup — no XSS surface from a docstring. Used for completion doc panes and hover. */
-function renderMarkdown(md: string): HTMLElement {
-  const container = document.createElement('div');
-  const lines = md.replace(/\r\n/g, '\n').split('\n');
-  let html = '';
-  let listOpen = false;
-  let i = 0;
-  const closeList = (): void => {
-    if (listOpen) {
-      html += '</ul>';
-      listOpen = false;
-    }
-  };
-  const isBlockStart = (l: string): boolean =>
-    /^\s*```/.test(l) || /^#{1,6}\s/.test(l) || /^\s*[-*+]\s/.test(l);
-  while (i < lines.length) {
-    const line = lines[i];
-    if (/^\s*```/.test(line)) {
-      closeList();
-      const buf: string[] = [];
-      i++;
-      while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) buf.push(lines[i++]);
-      i++; // skip the closing fence
-      html += `<pre><code>${escapeHtml(buf.join('\n'))}</code></pre>`;
-      continue;
-    }
-    const heading = line.match(/^(#{1,6})\s+(.*)$/);
-    if (heading) {
-      closeList();
-      const level = heading[1].length;
-      html += `<h${level}>${renderInline(escapeHtml(heading[2]))}</h${level}>`;
-      i++;
-      continue;
-    }
-    const item = line.match(/^\s*[-*+]\s+(.*)$/);
-    if (item) {
-      if (!listOpen) {
-        html += '<ul>';
-        listOpen = true;
-      }
-      html += `<li>${renderInline(escapeHtml(item[1]))}</li>`;
-      i++;
-      continue;
-    }
-    if (line.trim() === '') {
-      closeList();
-      i++;
-      continue;
-    }
-    closeList();
-    const para: string[] = [line];
-    i++;
-    while (i < lines.length && lines[i].trim() !== '' && !isBlockStart(lines[i])) {
-      para.push(lines[i++]);
-    }
-    html += `<p>${renderInline(escapeHtml(para.join(' ')))}</p>`;
-  }
-  closeList();
-  container.innerHTML = html;
-  return container;
-}
 
 /** Map a file extension to an LSP languageId the backend has a server for, or null
  * (no LSP). Kept in sync with `LSP_SERVERS` in the backend manager. */
@@ -1302,9 +1183,34 @@ export function lspExtension(opts: LspOptions): Extension {
     return p.complete(context);
   };
 
-  const hover = hoverTooltip((_view, pos) =>
-    opts.hover === false || !ref.plugin?.initialized ? null : ref.plugin.hover(pos),
-  );
+  /**
+   * Hover documentation: the language server first, then the rest of the chain.
+   *
+   * The server is authoritative for a project's own code and knows nothing about
+   * a package that isn't installed in the interpreter it was started with — which
+   * is most of what people hover. Falling through to the offline symbol index and
+   * (if enabled) the web turns "no tooltip at all" into an answer, and the popup
+   * says which source produced it.
+   *
+   * `lsp` is dropped from the fallback order because it is *this* branch; letting
+   * the chain re-enter it would ask the same server the same question twice.
+   */
+  const hover = hoverTooltip(async (view, pos) => {
+    if (opts.hover === false) return null;
+    if (ref.plugin?.initialized) {
+      const tip = await ref.plugin.hover(pos);
+      if (tip) return tip;
+    }
+    const code = view.state.doc.toString();
+    const { text: symbol, from, to } = symbolAt(code, pos);
+    if (!symbol) return null;
+    const sources = enabledDocSources().filter((s) => s !== 'lsp');
+    if (!sources.length) return null;
+    const { entries } = await lookupDocs({ symbol, code, cursorPos: pos, sources });
+    const entry = entries[0];
+    if (!entry) return null;
+    return { pos: from, end: to, above: true, create: () => ({ dom: renderDocEntry(entry) }) };
+  });
 
   // F12 jumps to definition (same-file: move the cursor; cross-file: open it).
   const gotoDefinition = keymap.of([

@@ -292,8 +292,9 @@ declaration. It is read on a **pull** basis (not a push bus):
 - A pane component registers a snapshot provider via the `useAgentContext(() =>
   snapshot)` hook (`packages/core/src/agent-context.ts`). The provider registry
   lives in **core** so feature modules (which live in core) can import the hook
-  without a core→ui cycle; `packages/ui`'s `PanelHost` only supplies the live
-  instance id through `PaneInstanceContext`, keyed per pane instance.
+  without a core→ui cycle; `packages/ui`'s `PaneHost` supplies the live instance id
+  through `PaneInstanceContext` and, around a section body it renders itself, the
+  section id through `SectionInstanceContext`. Providers are keyed by the **pair**.
 - Two built-in read tools (ungated) expose it: `list_open_panes()` (the
   `listOpenPanes` seam, which now reports each pane's `instanceId` and a
   `hasContext` flag) and `get_pane_context(instanceId, section?)`, which invokes the
@@ -305,8 +306,14 @@ snapshot that is ambiguous about which tab it describes. Passing `section` reads
 different one, which **switches the pane to it first**: only the visible section is
 mounted, so there is no way to read a background section without bringing it forward,
 and pretending otherwise would return the wrong section's data as if it were the one
-asked for. The matching constraint on modules is **one live provider per pane** — see
+asked for. A pane-level provider and the mounted section's provider **merge**,
+section last — see
 [Embedded views and sections](windowing.mdx#embedded-views-and-sections).
+
+A section with no provider is reported as `hasPayload: false` rather than as an
+empty object. That distinction matters more than it looks: a pane that returns
+nothing does not make a model answer "I don't know", it makes it answer from
+whatever else is in the context window.
 
 This is how the agent "reads widget A to act on widget B": pull A's context with a
 read tool, then call a gated action tool on B. It forces per-pane-instance state

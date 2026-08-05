@@ -63,6 +63,10 @@ flowchart TB
   `when` conditions, precedence, which pane has focus, **input capture** (a game
   or terminal taking the keyboard and giving it back), the Escape ladder, and the
   chords the browser/OS steal before we see them.
+- [Context menus](architecture/context-menus.mdx) — one right-click menu assembled
+  per target from module-declared providers, plus the measure-then-place layer that
+  keeps it on screen at a window edge (it replaces four hand-rolled menus, two of
+  which positioned themselves against hardcoded guesses at their own size).
 - [Plugin SDK](architecture/plugin-sdk.mdx) — the public **frontend** plugin
   contract (`@horribledashboard/sdk`): package format, authoring guide, runtime
   shims, versioning, trust model, catalog/install lifecycle.
@@ -172,6 +176,10 @@ layout shell and how it behaves in the browser vs the desktop app:
   dedupe, rank fusion, fetch + rerank), and a **focused crawler** that indexes a
   curated set of ML sites and API docs into the node's own vector collection —
   queried as just another engine, so local hits fuse with live web hits.
+- [Documentation popup](modules/docs-popup.mdx) — hover and <kbd>Shift</kbd>+<kbd>Tab</kbd>
+  documentation in the editor and in notebook cells, resolved through a configurable
+  chain: the **live kernel** (Jupyter `inspect_request`), the language server, the
+  offline package/stdlib index, and a guarded web search.
 - [Notebook](modules/notebook.mdx) — **Phases 0–3 implemented.** A domain-neutral reactive
   `.ipynb` notebook (JupyterLab cells + a marimo-style reactive dataflow mode with cascade
   re-execution and stale-variable deletion) with **interactive ipywidgets** (native

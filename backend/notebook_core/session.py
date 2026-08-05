@@ -49,6 +49,9 @@ POLL_INTERVAL_S = 0.25
 #: How long teardown waits for the pump threads to leave the zmq sockets — a deadlock
 #: bound, not a schedule. See `_stop_pumps`.
 PUMP_JOIN_TIMEOUT_S = 5.0
+#: How long a docs lookup waits for its `inspect_reply`. Short on purpose: it backs
+#: a tooltip, and its caller has other documentation sources to fall through to.
+INSPECT_TIMEOUT_S = 3.0
 _STOP = object()  # worker-queue poison pill
 
 
@@ -58,6 +61,27 @@ class _DeleteDefs:
 
     def __init__(self, names: list[str]) -> None:
         self.names = names
+
+
+class _Inspect:
+    """A side-queue item: an `inspect_request` (Jupyter's Shift-Tab documentation)
+    for the docs popup.
+
+    Carries its own reply queue rather than returning through the emit path,
+    because a doc lookup is a request/response the HTTP caller waits on, not a
+    broadcast to every subscriber of the notebook.
+
+    Like `_CommSend`, it is serviced by the worker thread — the sole owner of the
+    zmq shell socket — and for the same reason it is serviced *even mid-execution*:
+    a docstring you can only read while no cell is running is a docstring you
+    cannot read while debugging, which is when you want it.
+    """
+
+    def __init__(self, code: str, cursor_pos: int, detail_level: int) -> None:
+        self.code = code
+        self.cursor_pos = cursor_pos
+        self.detail_level = detail_level
+        self.result: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
 
 
 class _CommSend:
@@ -133,6 +157,13 @@ class KernelSession:
         self.comm_q: queue.Queue[_CommSend] = (
             queue.Queue()
         )  # browser→kernel widget msgs
+        self.inspect_q: queue.Queue[_Inspect] = queue.Queue()  # docs-popup lookups
+        # msg_id -> the waiter for that inspect_reply. Shell replies are read by
+        # whichever loop happens to be pumping, so they are routed by id rather
+        # than assumed to belong to the read that found them; without this the
+        # execute path's `_await_reply` would silently swallow an inspect reply
+        # that arrived while a cell was running.
+        self.inspect_pending: dict[str, _Inspect] = {}
         self.comms: dict[str, dict[str, Any]] = {}  # comm_id -> {target, state}
         self.msg_to_cell: dict[str, str] = {}
         self._save_timer: threading.Timer | None = None
@@ -409,6 +440,13 @@ class KernelSession:
                 item = self.exec_queue.get(timeout=POLL_INTERVAL_S)
             except queue.Empty:
                 self._drain_comms()
+                self._service_inspects()
+                # Only pump the shell channel when a lookup is actually outstanding.
+                # An unconditional read here would race `_await_reply` for the
+                # execute_reply — the two loops never run at once (both are this
+                # thread), but a reply consumed by the wrong one is gone.
+                if self.inspect_pending:
+                    self._drain_inspect_replies()
                 continue
             if item is _STOP or self.closing:
                 return
@@ -454,23 +492,108 @@ class KernelSession:
         )
         self.save_now()
 
-    def _await_reply(self, msg_id: str) -> dict[str, Any]:
-        """Block (worker thread) until the execute_reply for `msg_id` arrives.
-        No overall cap — cells legitimately run for a long time; interrupt or a
-        dead kernel are the exits."""
-        while not self.closing:
-            # Service widget messages while a cell runs, so sliders stay interactive.
-            self._drain_comms()
+    def _service_inspects(self) -> None:
+        """Send any queued `inspect_request`s. Worker thread only — this writes to
+        the shell socket."""
+        while True:
+            try:
+                item = self.inspect_q.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                msg_id = self.kc.inspect(
+                    item.code,
+                    cursor_pos=item.cursor_pos,
+                    detail_level=item.detail_level,
+                )
+                self.inspect_pending[msg_id] = item
+            except Exception:  # noqa: BLE001 — a doc lookup must not kill the worker
+                logger.exception("inspect_request failed (%s)", self.key)
+                item.result.put({"status": "error"})
+
+    def _drain_inspect_replies(self) -> None:
+        """Read shell replies while lookups are outstanding and nothing is executing.
+
+        Bounded by the pending count so a burst of unrelated replies cannot spin
+        here; anything unrecognised is dropped, exactly as `_await_reply` has
+        always done with replies it wasn't waiting for.
+        """
+        for _ in range(len(self.inspect_pending)):
             try:
                 reply = self.kc.get_shell_msg(timeout=POLL_INTERVAL_S)
             except queue.Empty:
                 if self.km is None or not self.km.is_alive():
                     self._set_status("dead")
+                    self._fail_pending_inspects()
+                return
+            self._route_shell(reply)
+
+    def _route_shell(self, reply: dict[str, Any]) -> bool:
+        """Deliver a shell reply that isn't the one a caller is waiting for.
+
+        Returns True when it was consumed here. Replies are matched by parent
+        msg_id, so an inspect reply that lands in the middle of a cell execution
+        reaches the lookup that asked for it instead of being dropped on the floor.
+        """
+        msg_id = reply.get("parent_header", {}).get("msg_id")
+        item = self.inspect_pending.pop(str(msg_id), None)
+        if item is None:
+            return False
+        item.result.put(reply.get("content", {}))
+        return True
+
+    def _await_reply(self, msg_id: str) -> dict[str, Any]:
+        """Block (worker thread) until the execute_reply for `msg_id` arrives.
+        No overall cap — cells legitimately run for a long time; interrupt or a
+        dead kernel are the exits."""
+        while not self.closing:
+            # Service widget messages while a cell runs, so sliders stay interactive,
+            # and doc lookups, so Shift-Tab works while something is running.
+            self._drain_comms()
+            self._service_inspects()
+            try:
+                reply = self.kc.get_shell_msg(timeout=POLL_INTERVAL_S)
+            except queue.Empty:
+                if self.km is None or not self.km.is_alive():
+                    self._set_status("dead")
+                    self._fail_pending_inspects()
                     return {"status": "error"}
                 continue
             if reply.get("parent_header", {}).get("msg_id") == msg_id:
                 return reply.get("content", {})
+            self._route_shell(reply)
         return {"status": "error"}
+
+    def _fail_pending_inspects(self) -> None:
+        """Release every waiting lookup when the kernel dies. Without this they sit
+        on their queues until the caller's own timeout, one dead lookup per press."""
+        for item in list(self.inspect_pending.values()):
+            item.result.put({"status": "error"})
+        self.inspect_pending.clear()
+
+    def inspect(
+        self, code: str, cursor_pos: int, detail_level: int = 0
+    ) -> dict[str, Any]:
+        """Ask the kernel to describe the symbol at `cursor_pos` (Jupyter's Shift-Tab).
+
+        Blocking; call off the event loop. Returns the raw `inspect_reply` content
+        (`{status, found, data}`), or `{"status": "error"}` on timeout or a dead
+        kernel — the docs chain treats both the same way and moves to its next
+        source, so this never needs to distinguish them.
+        """
+        if self.kc is None or self.closing or self.status == "dead":
+            return {"status": "error"}
+        item = _Inspect(code, cursor_pos, detail_level)
+        self.inspect_q.put(item)
+        try:
+            # A bound, unlike `_await_reply`: nobody waits ten seconds for a
+            # tooltip, and the caller has other sources to try.
+            return item.result.get(timeout=INSPECT_TIMEOUT_S)
+        except queue.Empty:
+            self.inspect_pending = {
+                k: v for k, v in self.inspect_pending.items() if v is not item
+            }
+            return {"status": "error"}
 
     # --- iopub pump -----------------------------------------------------------
 

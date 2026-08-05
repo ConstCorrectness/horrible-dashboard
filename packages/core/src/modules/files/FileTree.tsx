@@ -7,15 +7,15 @@
  * Disk changes arrive live over the `files` watch channel. See
  * docs/modules/file-explorer.md.
  */
-import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react';
-import { createPortal } from 'react-dom';
+import { useEffect, useRef, useSyncExternalStore } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 
 import { useAgentContext } from '../../agent-context';
-import { dialogs } from '../../dialogs';
 import { registry } from '../../registry';
 import { openBuffer } from '../editor';
-import { bufferUriFor, deleteEntry, isVirtualPath, joinPath, parentDir, renameEntry } from './api';
+import { openContextMenu } from '../../overlay/context-menu';
+import { deleteSelection } from './actions';
+import { bufferUriFor, isVirtualPath, joinPath, parentDir, renameEntry } from './api';
 import { fileIcon } from './icons';
 import {
   cancelRename,
@@ -42,7 +42,6 @@ import {
   selectRange,
   selectSingle,
   setRevealTarget,
-  setSelection,
   startRename,
   subscribeFiles,
   toggleExpanded,
@@ -66,10 +65,6 @@ function sep(path: string): string {
   return path.includes('\\') ? '\\' : '/';
 }
 
-function basename(path: string): string {
-  return path.split(/[\\/]/).pop() ?? path;
-}
-
 /** Expand every ancestor directory of `target` so a reveal can scroll to it. */
 function expandAncestors(target: string): void {
   const s = sep(target);
@@ -85,12 +80,6 @@ function expandAncestors(target: string): void {
   selectSingle(target);
 }
 
-interface MenuState {
-  x: number;
-  y: number;
-  row: Row;
-}
-
 export function FileTree() {
   useSyncExternalStore(subscribeFiles, filesVersion);
   const rows = visibleRows();
@@ -99,7 +88,6 @@ export function FileTree() {
   const active = getActivePath();
   const renaming = getRenaming();
   const revealTarget = getRevealTarget();
-  const [menu, setMenu] = useState<MenuState | null>(null);
   const typeahead = useRef<{ buf: string; at: number }>({ buf: '', at: 0 });
   const parentRef = useRef<HTMLDivElement>(null);
 
@@ -152,31 +140,17 @@ export function FileTree() {
   };
 
   const onRowContextMenu = (e: React.MouseEvent, row: Row) => {
-    e.preventDefault();
+    // Right-clicking outside the selection retargets it first — acting on a row
+    // the user cannot see highlighted is how "delete" hits the wrong thing.
     if (!selected.has(row.path)) selectSingle(row.path);
-    setMenu({ x: e.clientX, y: e.clientY, row });
-  };
-
-  const deleteSelection = async () => {
-    const paths = selected.size ? [...selected] : active ? [active] : [];
-    if (paths.length === 0) return;
-    const label = paths.length === 1 ? paths[0] : `${paths.length} items`;
-    const ok = await dialogs.confirm({
-      title: 'Delete',
-      message: `Delete ${label}? This can't be undone.`,
-      confirmLabel: 'Delete',
-      danger: true,
-    });
-    if (!ok) return;
-    for (const p of paths) {
-      try {
-        await deleteEntry(p, kindFor(p) === 'dir');
-      } catch {
-        /* surfaced by the watch re-list; skip */
-      }
+    // The row *is* the target; what can be done to it is the providers' business.
+    // If nothing offered an item, fall through to the browser's own menu rather
+    // than swallowing the gesture.
+    if (
+      openContextMenu(e, { kind: 'files.node', path: row.path, nodeKind: row.kind, name: row.name })
+    ) {
+      e.preventDefault();
     }
-    setSelection(null);
-    refreshTree();
   };
 
   const commitRename = (row: Row, value: string) => {
@@ -326,14 +300,6 @@ export function FileTree() {
           })}
         </div>
       </div>
-      {menu && (
-        <FileContextMenu
-          state={menu}
-          onClose={() => setMenu(null)}
-          onRename={() => startRename(menu.row.path)}
-          onDelete={() => void deleteSelection()}
-        />
-      )}
     </div>
   );
 }
@@ -407,82 +373,5 @@ function FileRow({
       {git && !renaming && <span className={`git-badge git-${git}`}>{GIT_BADGE[git]}</span>}
       {loading && <span className="file-loading">…</span>}
     </div>
-  );
-}
-
-function FileContextMenu({
-  state,
-  onClose,
-  onRename,
-  onDelete,
-}: {
-  state: MenuState;
-  onClose: () => void;
-  onRename: () => void;
-  onDelete: () => void;
-}) {
-  const { x, y, row } = state;
-  const readOnly = isVirtualPath(row.path);
-  const targetDir = row.kind === 'dir' ? row.path : parentDir(row.path);
-
-  useEffect(() => {
-    const onDown = (e: globalThis.MouseEvent) => {
-      if (!(e.target as Element).closest?.('.file-ctx-menu')) onClose();
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('mousedown', onDown);
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('mousedown', onDown);
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [onClose]);
-
-  const run = (fn: () => void) => () => {
-    onClose();
-    fn();
-  };
-
-  // Clamp within the viewport (flip up if near the bottom).
-  const style: CSSProperties = {
-    left: Math.min(x, window.innerWidth - 200),
-    ...(y > window.innerHeight - 260 ? { bottom: window.innerHeight - y } : { top: y }),
-  };
-
-  return createPortal(
-    <div className="file-ctx-menu" style={style}>
-      {row.kind === 'file' && (
-        <button onClick={run(() => openBuffer(bufferUriFor(row.path)))}>Open</button>
-      )}
-      {/* A virtual root is read-only and has no local directory behind it, so
-          everything that writes or shells out is omitted rather than shown disabled —
-          there is no state in which they'd become available. */}
-      {!readOnly && (
-        <>
-          <button onClick={run(() => void registry.runCommand('files.newFile'))}>New File</button>
-          <button onClick={run(() => void registry.runCommand('files.newFolder'))}>
-            New Folder
-          </button>
-          <div className="file-ctx-sep" />
-          <button onClick={run(onRename)}>Rename</button>
-          <button className="danger" onClick={run(onDelete)}>
-            Delete
-          </button>
-        </>
-      )}
-      <div className="file-ctx-sep" />
-      <button onClick={run(() => void navigator.clipboard?.writeText(row.path))}>Copy Path</button>
-      {!readOnly && (
-        <button onClick={run(() => void registry.runCommand('files.openTerminalHere'))}>
-          Open Terminal Here
-        </button>
-      )}
-      <span className="file-ctx-target" title={targetDir}>
-        {basename(targetDir)}
-      </span>
-    </div>,
-    document.body,
   );
 }

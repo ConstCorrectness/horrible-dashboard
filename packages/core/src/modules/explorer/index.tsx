@@ -30,11 +30,12 @@ import './explorer.css';
  * legitimately contributes a section to a pane it does not own, and the reason a
  * plugin can add a browser without a pane of its own. See `ExplorerSourceDecl`.
  *
- * **One agent-context provider.** Section bodies render inside this pane's
- * instance id, so two providers would silently overwrite each other. Today that
- * one is `FileTree`'s — which is why the file tree's snapshot now arrives under
- * `explorer.home` rather than `files.tree`, with the active section stamped on it
- * by `readPaneAgentContext`. See docs/architecture/windowing.mdx.
+ * **Agent context is per section.** Section bodies render inside this pane's
+ * instance id — which is why the file tree's snapshot arrives under
+ * `explorer.home` rather than `files.tree` — but providers are keyed by instance
+ * *and* section, so each source registers its own without clobbering its
+ * neighbours. A source with none is reported as `hasPayload: false` rather than
+ * silence. See docs/architecture/windowing.mdx.
  */
 function ExplorerEmpty(): ReactElement {
   // Only reachable if every contributing module is disabled — an assembly whose

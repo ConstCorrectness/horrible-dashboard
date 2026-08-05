@@ -4,6 +4,7 @@ import type { ComponentType } from 'react';
 
 import { frameCommandHandler } from './layout/frame-bus';
 import type { FramePreset } from './layout/presets';
+import type { ContextMenuProvider } from './overlay/context-menu';
 
 import type {
   AgentCommandDecl,
@@ -87,6 +88,13 @@ export interface ModuleManifest {
    * legitimately contributes a section to a pane it does not own.
    */
   explorerSources?: ExplorerSourceDecl[];
+  /**
+   * Right-click menu items this module offers, by target kind. A module may
+   * contribute to a surface it does not own — that is the point: the file tree
+   * should not have to know which modules can do something with a `.ipynb`.
+   * See `ContextMenuProvider` and docs/architecture/context-menus.mdx.
+   */
+  contextMenu?: ContextMenuProvider[];
 }
 
 /** Top-level shell surfaces. `home` is the first-open view; `workspace` hosts panels. */
@@ -190,6 +198,11 @@ class ModuleRegistry {
     return () => {
       this.changeListeners.delete(listener);
     };
+  }
+
+  /** Every module's declared context-menu providers, in registration order. */
+  get contextMenuProviders(): ContextMenuProvider[] {
+    return [...this.modules.values()].flatMap((m) => m.contextMenu ?? []);
   }
 
   get commands(): CommandDecl[] {

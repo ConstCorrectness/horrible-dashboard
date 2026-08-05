@@ -295,10 +295,14 @@ export type AgentContextSnapshot = Record<string, unknown>;
 /**
  * Host hook signature: a pane instance registers a provider returning its
  * current agent-readable snapshot. The host keys providers by pane instance id
- * and invokes one on demand for `get_pane_context`. Implemented in packages/ui;
- * declared here so modules and plugins code against a stable contract.
+ * **and section**, and merges them (section last) on demand for
+ * `get_pane_context`. Implemented in packages/ui; declared here so modules and
+ * plugins code against a stable contract.
+ *
+ * `section` is inferred from the enclosing section body and only needs passing
+ * from a pane that switches sections internally — see `SectionInstanceContext`.
  */
-export type UseAgentContext = (provider: () => AgentContextSnapshot) => void;
+export type UseAgentContext = (provider: () => AgentContextSnapshot, section?: string) => void;
 
 /**
  * How much of the input a view takes while focused.

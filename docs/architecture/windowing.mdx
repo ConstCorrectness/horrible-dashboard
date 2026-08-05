@@ -176,17 +176,28 @@ usually already switches internally, and a new one usually doesn't want to.
 **The agent-context rule.** Unlike a region strip — which gets a synthetic instance
 id (`${host}:${position}:${viewId}`) that neither `listPanes` nor `visiblePanes`
 descends into — a section body renders inside its host's `PaneInstanceContext`, so
-its provider registers under the **real, enumerable** pane instance id. What
-follows is one rule: **exactly one live `useAgentContext` provider per pane** (the
-host component or its section bodies, never both), since they key on the same id.
+its provider registers under the **real, enumerable** pane instance id. Providers
+are therefore keyed by **instance _and_ section**: `PaneHost` supplies the section
+id through `SectionInstanceContext` around a body it renders itself, and
+`useAgentContext` takes it from there (a pane that switches sections internally
+passes it explicitly instead — its own registration is pane-level, and stamping the
+host with the active section would put it and its inner bodies back on one key).
+
+Keying on the instance alone was a silent-overwrite bug: whichever provider mounted
+last won, its unmount restored nothing, and the workaround was a standing rule that
+a pane may have only one. Now a pane-level snapshot and the mounted section's
+**merge**, section last, and reads are pinned to the *active* section so a provider
+that outlives its switch cannot answer for the tab that replaced it.
+
 The active section **and the list of siblings** are stamped onto every snapshot
 centrally by `readPaneAgentContext`, not left to each module — a merged pane's
 snapshot is ambiguous without the first, and a module that forgot would produce a
 plausible-looking snapshot the agent then reasons about wrongly. The sibling list is
-there because most sections have no provider at all (only the mounted body can
-provide, and at most one of them does): a bare `{section}` gave the model nothing to
-answer from, and a pane that returns nothing does not produce "I don't know" — it
-produces a confident answer sourced from whatever else was in the context window.
+there because many sections still have no provider at all (only the *mounted* body
+can provide): a bare `{section}` gave the model nothing to answer from, and a pane
+that returns nothing does not produce "I don't know" — it produces a confident
+answer sourced from whatever else was in the context window. `hasPayload: false`
+now names that case explicitly.
 
 **Contributed sections.** Sections are declared by the pane that owns them, which is
 right when the tabs are the pane's own — and wrong for [Explorer](../modules/explorer.mdx),

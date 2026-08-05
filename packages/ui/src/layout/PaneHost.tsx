@@ -14,6 +14,7 @@ import {
   PaneParamsContext,
   requestCapture,
   resolveView,
+  SectionInstanceContext,
   setPaneSection,
   type PaneCaptureDecl,
   type PaneState,
@@ -102,7 +103,13 @@ export function PaneHost({ pane, areaId }: { pane: PaneState; areaId?: string })
             active={activeSection}
             onPick={(id) => setPaneSection(instanceId, id)}
           />
-          <Component />
+          {/* The section slot is supplied only when *we* render the section body.
+              Falling through to the pane's own component leaves it null: that
+              component is pane-level, and stamping the active section on it would
+              put it and any body it renders internally back on one key. */}
+          <SectionInstanceContext.Provider value={sectionBody ? (activeSection ?? null) : null}>
+            <Component />
+          </SectionInstanceContext.Provider>
         </div>
       </PaneParamsContext.Provider>
     </PaneInstanceContext.Provider>

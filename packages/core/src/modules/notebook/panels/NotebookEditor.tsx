@@ -220,6 +220,7 @@ export function NotebookEditor() {
           <Cell
             key={cell.id}
             cell={cell}
+            notebookPath={path}
             runState={state.runStates[cell.id]}
             diagnostics={diagByCell.get(cell.id)}
             widgetManager={widgetManager}
@@ -278,6 +279,7 @@ function Cell({
   onRun,
   onDelete,
   onAddBelow,
+  notebookPath,
 }: {
   cell: NotebookCell;
   runState?: CellRunState;
@@ -287,6 +289,8 @@ function Cell({
   onRun: () => void;
   onDelete: () => void;
   onAddBelow: (type: 'code' | 'markdown') => void;
+  /** Threaded down so a cell's docs popup can ask this notebook's own kernel. */
+  notebookPath?: string;
 }) {
   const [hover, setHover] = useState(false);
   const isCode = cell.cell_type === 'code';
@@ -330,6 +334,7 @@ function Cell({
             language={isCode ? 'python' : 'markdown'}
             onChange={onChange}
             onRun={isCode ? onRun : () => setEditingMd(false)}
+            notebookPath={notebookPath}
           />
         ) : (
           <div

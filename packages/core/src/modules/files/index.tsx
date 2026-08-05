@@ -10,14 +10,14 @@ import { toastsStore } from '../../toasts';
 import type { ModuleManifest } from '../../registry';
 import { getActiveBufferSource, openBuffer } from '../editor';
 import { openTerminal } from '../terminal';
+import type { ContextMenuItem, ContextTarget } from '../../overlay/context-menu';
+import { deleteSelection, selectionPaths } from './actions';
 import { filesAgentTools } from './agentTools';
-import { createEntry, deleteEntry, isVirtualPath, joinPath, listRoots, parentDir } from './api';
+import { bufferUriFor, createEntry, isVirtualPath, joinPath, listRoots, parentDir } from './api';
 import { FileTree } from './FileTree';
 import {
   getActivePath,
-  getSelectedPaths,
   getSelection,
-  kindFor,
   refreshTree,
   setRevealTarget,
   setSelection,
@@ -25,6 +25,57 @@ import {
 } from './store';
 
 const FILE_URI = 'workspace-file:';
+
+/**
+ * The file tree's own right-click items.
+ *
+ * The shape the old inline menu established and this keeps: a virtual root (a
+ * mounted Drive) is **read-only and has no local directory behind it**, so
+ * everything that writes or shells out is *omitted* rather than shown disabled —
+ * there is no state in which those become available, and a permanently greyed row
+ * only invites the user to keep trying it.
+ */
+function filesNodeItems(target: ContextTarget): ContextMenuItem[] {
+  const path = String(target.path ?? '');
+  if (!path) return [];
+  const isDir = target.nodeKind === 'dir';
+  const readOnly = isVirtualPath(path);
+  const count = selectionPaths().length;
+  const items: ContextMenuItem[] = [];
+
+  if (!isDir) {
+    items.push({ id: 'files.open', label: 'Open', run: () => openBuffer(bufferUriFor(path)) });
+  }
+  if (!readOnly) {
+    items.push(
+      { id: 'files.newFile', label: 'New File', run: newFile },
+      { id: 'files.newFolder', label: 'New Folder', run: newFolder },
+      { id: 'files.rename', label: 'Rename', hint: 'F2', run: () => startRename(path) },
+      {
+        id: 'files.delete',
+        // The label counts, because a multi-selection right-clicked on one of its
+        // rows deletes all of them — the menu is the last place to say so.
+        label: count > 1 ? `Delete ${count} items` : 'Delete',
+        danger: true,
+        run: () => void deleteSelection(),
+      },
+    );
+  }
+  items.push({
+    id: 'files.copyPath',
+    label: 'Copy Path',
+    hint: parentDir(path).split(/[\\/]/).pop(),
+    run: () => void navigator.clipboard?.writeText(path),
+  });
+  if (!readOnly) {
+    items.push({
+      id: 'files.openTerminalHere',
+      label: 'Open Terminal Here',
+      run: openTerminalHere,
+    });
+  }
+  return items;
+}
 
 /** The directory new entries should be created in: the selected dir, the selected
  * file's parent, or the first workspace root. */
@@ -79,31 +130,23 @@ function renameSelected(): void {
   startRename(active);
 }
 
-/** Palette entry: delete the whole multi-selection (the tree's context menu /
- * Delete key share this behavior via the view). */
+/**
+ * Palette entry: delete the whole multi-selection. The Delete key and the context
+ * menu run the same `deleteSelection`; the only thing this adds is the toast for
+ * an empty selection, which a palette invocation needs (there is no row under the
+ * cursor to explain itself) and the other two do not.
+ *
+ * This used to be a second copy of the confirm-and-delete loop, drifting from the
+ * tree's own by exactly one behaviour: it ignored the active row when nothing was
+ * multi-selected, so the palette and the menu disagreed about what "the selection"
+ * meant.
+ */
 async function deleteSelected(): Promise<void> {
-  const paths = [...getSelectedPaths()];
-  if (paths.length === 0) {
+  if (selectionPaths().length === 0) {
     toastsStore.add('warning', 'Nothing selected', 'Select a file or folder to delete.');
     return;
   }
-  const label = paths.length === 1 ? paths[0] : `${paths.length} items`;
-  const ok = await dialogs.confirm({
-    title: 'Delete',
-    message: `Delete ${label}? This can't be undone.`,
-    confirmLabel: 'Delete',
-    danger: true,
-  });
-  if (!ok) return;
-  for (const p of paths) {
-    try {
-      await deleteEntry(p, kindFor(p) === 'dir');
-    } catch {
-      /* surfaced by the watch re-list; skip */
-    }
-  }
-  setSelection(null);
-  refreshTree();
+  await deleteSelection();
 }
 
 /** Open a terminal rooted at the selected directory (or the first root). */
@@ -145,6 +188,8 @@ export const filesModule: ModuleManifest = {
   explorerSources: [
     { id: 'files', label: 'Files', icon: '🗀', view: 'files.tree', key: 'f', default: true },
   ],
+  // `order: 0` — the owning module's items come first; other modules append.
+  contextMenu: [{ kind: 'files.node', order: 0, items: filesNodeItems }],
   commands: [
     {
       id: 'files.open',

@@ -183,14 +183,26 @@ consumer that virtualizes those rows and wires the interactions:
 | **Flattened row model** | `visibleRows()` walks roots → expanded children into a flat `Row[]`, which makes keyboard nav, multi-select, and virtualization fall out cheaply |
 | **File icons**          | `icons.ts` maps extension → a colored category tag (`.file-icon`/`.ic-*` in `styles.css`); folders use an open/closed glyph |
 | **Inline rename (F2)**  | the active row becomes an `<input>`; Enter commits via `renameEntry`, Esc cancels |
-| **Context menu**        | right-click → Open / New File / New Folder / Rename / Delete / Copy Path / Open Terminal Here (portaled, viewport-clamped) |
+| **Context menu**        | right-click → Open / New File / New Folder / Rename / Delete / Copy Path / Open Terminal Here, contributed as a `files.node` provider (see [Context menus](../architecture/context-menus.mdx)) |
 | **Multi-select**        | Ctrl/Cmd-click toggles, Shift-click selects a range along the visible order; the set drives multi-delete |
 | **Keyboard nav**        | ↑/↓ move the active row, ←/→ collapse/expand, Enter opens, F2 renames, Delete removes, and printable keys type-ahead-jump |
 | **Virtualized tree**    | `@tanstack/react-virtual` over the flat rows, so large directories stay smooth |
 
 The palette commands (`files.rename`, `files.delete`) and the context menu share
 this behavior — rename starts the same inline edit, delete removes the whole
-selection.
+selection. They now share the **implementation** too: `deleteSelection` lives in
+`modules/files/actions.ts`, not in a `FileTree` closure, because a menu provider
+has no component to read it from. That collapsed a second copy of the
+confirm-and-delete loop which had drifted by one behaviour — the palette's ignored
+the active row when nothing was multi-selected, so the two disagreed about what
+"the selection" meant.
+
+The tree no longer renders a menu of its own. It reports the row as a target
+(`{kind: 'files.node', path, nodeKind, name}`) and the items come from providers —
+which is how the **notebook** module contributes *Open as Notebook* on a `.ipynb`
+without the files module knowing anything about notebooks. A right-click outside
+the current selection retargets it first: acting on a row the user cannot see
+highlighted is how *Delete* hits the wrong thing.
 
 ### Git decorations
 

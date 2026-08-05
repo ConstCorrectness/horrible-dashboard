@@ -629,9 +629,17 @@ _GROUP_DESCRIPTIONS: dict[str, str] = {
     "training": (
         "Build & train neural networks: search/create Kaggle/HF/Gym projects, "
         "per-project venvs, install deps, start/stop training runs, push to "
-        "Kaggle kernels or Colab, render manim explainers."
+        "Kaggle kernels or Colab, render manim explainers — and read, edit, and "
+        "execute the cells of the open TRAINING notebook (addressed by projectId)."
     ),
-    "notebook": "Read, edit, and execute cells of the open training notebook.",
+    # These two are different notebooks, and the blurbs are what the model picks a
+    # group by. The training notebook's cell tools used to sit in this group under
+    # `notebook.*` names, which is what the old wording described; they are
+    # `training.*` now.
+    "notebook": (
+        "Read, edit, and execute cells of the open REACTIVE notebook (addressed by "
+        "file path), and set its execution mode."
+    ),
     "symbols": (
         "Semantic + exact lookup over the symbol/docs index: installed package "
         "APIs (signatures, docstrings), database schemas, and this app's docs."

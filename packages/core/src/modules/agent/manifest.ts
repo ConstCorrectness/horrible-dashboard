@@ -29,6 +29,23 @@ function allAgentTools(): AgentToolDecl[] {
   return [...registry.panels, ...registry.widgets].flatMap((d) => d.agentTools ?? []);
 }
 
+/**
+ * Tool names declared more than once across the registry, each with the count.
+ *
+ * A duplicate is never benign. `executeDynamicTool` resolves by `find`, so the
+ * first registration wins and every later one is uncallable — silently, and with
+ * the winner decided by module registration order rather than by anything a reader
+ * of either module could see. Two `notebook.*` sets (the reactive notebook's and
+ * the training notebook's) shipped this way: same names, different stores,
+ * different session argument, and calls landing in whichever module `main.tsx`
+ * happened to register first.
+ */
+export function duplicateToolNames(tools: ReadonlyArray<{ name: string }>): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const t of tools) counts.set(t.name, (counts.get(t.name) ?? 0) + 1);
+  return new Map([...counts].filter(([, n]) => n > 1));
+}
+
 /** Build the manifest from the current registry. Handlers are dropped. */
 export function serializeManifest(): SerializedTool[] {
   const tools: SerializedTool[] = allAgentTools().map((t) => ({
@@ -48,6 +65,15 @@ export function serializeManifest(): SerializedTool[] {
       sideEffect: c.agent.sideEffect,
       kind: 'command',
     });
+  }
+  // ERROR, not warn, and named: the failure mode is a tool that is simply never
+  // reached, which from the outside is indistinguishable from a model choosing not
+  // to call it. This is the only trace.
+  for (const [name, count] of duplicateToolNames(tools)) {
+    console.error(
+      `agent manifest: tool "${name}" is declared ${count} times; ` +
+        'only the first registration is callable. Namespace it by owning module.',
+    );
   }
   return tools;
 }

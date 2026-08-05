@@ -221,25 +221,52 @@ on demand or by keyword) so they don't bloat the model's tool budget:
   `list_projects`, `project_status` (read-only); `create_project`, `fetch_data`,
   `install_deps`, `start_run`, `stop_run`, `push`, `render_manim` (side-effecting, gated
   by the agent permission engine with a `specifierTemplate` like `{provider}:{ref}`).
-- **`notebook` — frontend tools** (`agentTools` on the `training.notebook` panel). Full
-  cell CRUD + execute against the pane's session store: `notebook.list_cells`,
+- **`training` — frontend tools** (`agentTools` on the `training.notebook` panel). Full
+  cell CRUD + execute against the pane's session store: `training.list_cells`,
   `read_cell`, `kernel_status` (read-only); `insert_cell`, `edit_cell`, `delete_cell`,
   `run_cell` (waits ≤120s, returns outputs/traceback), `run_all`, `interrupt`, `restart`.
+
+  These were `notebook.*` until they collided with the [reactive notebook](notebook.mdx),
+  which declares the same seven verbs against a different store with a different session
+  argument (`path`, not `projectId`). The frontend resolves a tool call by name with
+  `find` and this module registers first, so *these* won and the reactive notebook's were
+  unreachable — silently, decided by registration order in `main.tsx`. They are grouped
+  by name prefix, so moving them to `training.*` both ends the collision and files them
+  with the rest of this module. A `duplicateToolNames` check in the manifest now logs any
+  recurrence, and stored permission rules naming the old tools are migrated on load
+  (`permission_store.rename_in_rule`) — a `notebook.run_cell` grant was a grant over
+  *this* notebook, and must follow the tool rather than the name.
 
 The orchestrator changes are generic (`backend/modules/agent/orchestrator.py`): `AgentTool`
 gained an optional `group` field (`backend/sdk/types.py`) — `None` keeps a plugin tool in
 the always-loaded core (unchanged), a set group moves it into the progressive-disclosure
 pool. `_GROUP_KEYWORDS` preloads `training` on "kaggle/train/dataset/gym/…" and `notebook`
-on "notebook/cell/kernel/…"; `TOOL_BUDGET` was bumped to 44 to fit both groups at once.
+on "notebook/cell/kernel/…". Now that the cell verbs are `training.*`, this flow needs
+only the one group — but a prompt naming both notebooks preloads both, and with the cell
+tools counted in `training` that is over `TOOL_BUDGET`; see the note below.
 `open_pane` now accepts optional `params`, so the agent opens the notebook pane bound to a
 project (`open_pane("training.notebook", {params: {projectId, notebook}})`).
 
 **Flow**: keyword-preload `training` → `search_environments` → `create_project` (approval
 gate, specifier `provider:ref`) → `fetch_data` → `open_pane(training.notebook, params)` →
-`split_area` for the metrics pane → `notebook.insert_cell`/`run_cell` to build the
+`split_area` for the metrics pane → `training.insert_cell`/`run_cell` to build the
 starter. Verified end to end against a live Ollama model: the ask reaches
 `training.create_project`, the gate fires with the right specifier, and on approval the
 project + scaffolded notebook land on disk.
+
+### Open: the two groups no longer fit together
+
+This flow used to span `training` (12) + `notebook` (10 cell verbs) on top of an 11-tool
+core. With the cell verbs moved, the flow is one group of 22 and needs `notebook` not at
+all — strictly better. But a group's own name is an implicit preload keyword, so the
+phrase "training notebook" still preloads **both**: 11 + 22 + 9 = 42 against a
+`TOOL_BUDGET` of 38, and the backstop drops the last four (loudly — it logs them at
+ERROR — but it drops them).
+
+The budget deliberately sits under the ~40-tool reasoning cliff, so raising it is not the
+answer. The real options are to split `training` (project/venv/run management is a
+different job from cell editing), or to merge the two notebooks behind one tool set with
+a target argument. Both are larger than the rename and neither is done.
 
 ## Backend surface
 

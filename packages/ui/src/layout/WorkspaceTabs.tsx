@@ -4,16 +4,17 @@
  * create one, and a right-click menu (rename / reset preset / delete custom).
  * Replaces the old rail-as-switcher.
  */
-import { useEffect, useState } from 'react';
-import { createPortal } from 'react-dom';
 import {
+  addContextMenuProvider,
   dialogs,
   framePersistence,
   hasCapability,
+  openContextMenu,
   registry,
   toastsStore,
   useWorkspaces,
   windowControl,
+  type ContextMenuItem,
 } from '@horrible/core';
 
 import { WindowControls } from './WindowChrome';
@@ -22,42 +23,79 @@ import { WindowControls } from './WindowChrome';
 // it needs the frame styles itself; Vite dedupes the double import.
 import './frame.css';
 
-interface Menu {
-  x: number;
-  y: number;
-  workspaceId: string;
-  workspaceName: string;
-  isPreset: boolean;
+/**
+ * The workspace tab menu. Registered on the shared registry rather than rendered
+ * inline: the strip now only says *which workspace* was right-clicked, and this
+ * decides what can be done to it.
+ *
+ * `isPreset` is the whole contextual difference — a preset workspace can be reset
+ * to its declaration but never deleted (its tab would come straight back from the
+ * manifest), and a custom one is the reverse. Showing both and disabling one would
+ * be a lie in both directions.
+ */
+addContextMenuProvider({
+  kind: 'workspace.tab',
+  items: (target) => {
+    const id = String(target.workspaceId ?? '');
+    const name = String(target.workspaceName ?? id);
+    const items: ContextMenuItem[] = [];
+    if (hasCapability('window.perWorkspace')) {
+      items.push({
+        id: 'workspace.openInWindow',
+        label: 'Open in new window',
+        run: () => void windowControl()?.openWorkspaceWindow(id),
+      });
+    }
+    items.push({ id: 'workspace.rename', label: 'Rename', run: () => void renameWorkspace(id, name) });
+    items.push(
+      target.isPreset
+        ? { id: 'workspace.reset', label: 'Reset to preset', run: () => void resetWorkspace(id) }
+        : {
+            id: 'workspace.delete',
+            label: 'Delete',
+            danger: true,
+            run: () => void removeWorkspace(id, name),
+          },
+    );
+    return items;
+  },
+});
+
+async function renameWorkspace(id: string, currentName: string): Promise<void> {
+  const name = await dialogs.prompt({
+    title: 'Rename workspace',
+    defaultValue: currentName,
+    confirmLabel: 'Rename',
+  });
+  if (name?.trim()) await framePersistence.renameWorkspace(id, name.trim());
+}
+
+async function removeWorkspace(id: string, name: string): Promise<void> {
+  const ok = await dialogs.confirm({
+    title: 'Delete workspace',
+    message: `“${name}” and its layout will be removed. This can't be undone.`,
+    confirmLabel: 'Delete',
+    danger: true,
+  });
+  if (ok) {
+    await framePersistence.removeWorkspace(id);
+    toastsStore.add('info', 'Workspace deleted', `“${name}” was removed.`);
+  }
+}
+
+async function resetWorkspace(id: string): Promise<void> {
+  await framePersistence.switchWorkspace(id);
+  await framePersistence.resetLayout();
 }
 
 export function WorkspaceTabs() {
   const { workspaces, activeId } = useWorkspaces();
-  const [menu, setMenu] = useState<Menu | null>(null);
   // When a native shell grants `chrome.workspaceTabs`, this strip IS the
   // (undecorated) window's titlebar: `data-tauri-drag-region` on the empty strip
   // space moves the window and maximizes on double-click (handled natively by
   // the webview), and it hosts the min/max/close controls. Interactive children
   // (tabs, buttons) aren't drag regions, so their clicks still land.
   const nativeChrome = hasCapability('chrome.workspaceTabs');
-  // window.perWorkspace: a workspace can be popped out into its own OS window.
-  const nativeWindows = hasCapability('window.perWorkspace');
-
-  const openInWindow = (id: string) => {
-    setMenu(null);
-    void windowControl()?.openWorkspaceWindow(id);
-  };
-
-  useEffect(() => {
-    if (!menu) return;
-    const close = () => setMenu(null);
-    window.addEventListener('mousedown', close);
-    window.addEventListener('keydown', close);
-    return () => {
-      window.removeEventListener('mousedown', close);
-      window.removeEventListener('keydown', close);
-    };
-  }, [menu]);
-
   const presets = registry.framePresets;
   const presetIds = new Set(presets.map((p) => p.id));
   const entries = [
@@ -66,36 +104,6 @@ export function WorkspaceTabs() {
       .filter((w) => !presetIds.has(w.id))
       .map((w) => ({ id: w.id, label: w.name, glyph: undefined as string | undefined })),
   ];
-
-  const rename = async (id: string, currentName: string) => {
-    setMenu(null);
-    const name = await dialogs.prompt({
-      title: 'Rename workspace',
-      defaultValue: currentName,
-      confirmLabel: 'Rename',
-    });
-    if (name?.trim()) await framePersistence.renameWorkspace(id, name.trim());
-  };
-
-  const remove = async (id: string, name: string) => {
-    setMenu(null);
-    const ok = await dialogs.confirm({
-      title: 'Delete workspace',
-      message: `“${name}” and its layout will be removed. This can't be undone.`,
-      confirmLabel: 'Delete',
-      danger: true,
-    });
-    if (ok) {
-      await framePersistence.removeWorkspace(id);
-      toastsStore.add('info', 'Workspace deleted', `“${name}” was removed.`);
-    }
-  };
-
-  const reset = async (id: string) => {
-    setMenu(null);
-    await framePersistence.switchWorkspace(id);
-    await framePersistence.resetLayout();
-  };
 
   return (
     <header
@@ -125,9 +133,8 @@ export function WorkspaceTabs() {
             onClick={() => registry.switchWorkspace(entry.id)}
             onContextMenu={(e) => {
               e.preventDefault();
-              setMenu({
-                x: e.clientX,
-                y: e.clientY,
+              openContextMenu(e, {
+                kind: 'workspace.tab',
                 workspaceId: entry.id,
                 workspaceName: entry.label,
                 isPreset: presetIds.has(entry.id),
@@ -147,39 +154,6 @@ export function WorkspaceTabs() {
         </button>
       </div>
       {nativeChrome && <WindowControls />}
-      {menu &&
-        createPortal(
-          <div
-            className="frame-menu frame-menu--context"
-            style={{ left: menu.x, top: menu.y }}
-            onMouseDown={(e) => e.stopPropagation()}
-          >
-            {nativeWindows && (
-              <button className="frame-menu-item" onClick={() => openInWindow(menu.workspaceId)}>
-                Open in new window
-              </button>
-            )}
-            <button
-              className="frame-menu-item"
-              onClick={() => void rename(menu.workspaceId, menu.workspaceName)}
-            >
-              Rename
-            </button>
-            {menu.isPreset ? (
-              <button className="frame-menu-item" onClick={() => void reset(menu.workspaceId)}>
-                Reset to preset
-              </button>
-            ) : (
-              <button
-                className="frame-menu-item frame-menu-item--danger"
-                onClick={() => void remove(menu.workspaceId, menu.workspaceName)}
-              >
-                Delete
-              </button>
-            )}
-          </div>,
-          document.body,
-        )}
     </header>
   );
 }

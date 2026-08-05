@@ -124,6 +124,8 @@ export {
   hasAgentContext,
   PaneInstanceContext,
   readAgentContext,
+  SectionInstanceContext,
+  sectionsWithAgentContext,
   useAgentContext,
 } from './agent-context';
 export { backendHealth, type BackendHealth } from './health';
@@ -205,6 +207,21 @@ export { libraryModule } from './modules/library';
 export { recordsModule } from './modules/records';
 export { researchModule } from './modules/research';
 export { searchModule } from './modules/search';
+export { docsModule } from './modules/docs';
+export {
+  DEFAULT_DOC_SOURCES,
+  DOC_SOURCE_IDS,
+  enabledDocSources,
+  lookupDocs,
+  parseDocSources,
+  setLspDocResolver,
+  type DocEntry,
+  type DocLookupRequest,
+  type DocLookupResult,
+  type DocSourceId,
+} from './docs/chain';
+export { docsHover, docsKeymap, renderDocEntry, symbolAt } from './docs/cm-docs';
+export { renderMarkdown as renderDocMarkdown } from './docs/markdown';
 export { trainingModule } from './modules/training';
 export { notebookModule } from './modules/notebook';
 export { visualizerModule } from './modules/visualizer';
@@ -347,6 +364,27 @@ export {
 } from './locus';
 export { toastsStore, type Toast } from './toasts';
 export { closeTransientChrome, hasTransientChrome, registerTransient } from './transient';
+export {
+  placeLayer,
+  type Align,
+  type Placement,
+  type PlacementRequest,
+  type Rect,
+  type Side,
+  type Viewport,
+} from './overlay/placement';
+export {
+  addContextMenuProvider,
+  closeContextMenu,
+  contextMenuStore,
+  itemsForTarget,
+  openContextMenu,
+  resetContextMenuProviders,
+  type ContextMenuItem,
+  type ContextMenuProvider,
+  type ContextTarget,
+  type OpenContextMenu,
+} from './overlay/context-menu';
 export {
   dialogs,
   dialogsStore,

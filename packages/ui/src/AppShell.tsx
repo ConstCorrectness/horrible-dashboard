@@ -23,6 +23,7 @@ import { ApprovalPrompts } from './ApprovalPrompts';
 import { SETUP_DISMISSED_KEY } from './home/constants';
 import { CaptureHud } from './CaptureHud';
 import { CommandPalette } from './CommandPalette';
+import { ContextMenuLayer } from './overlay/ContextMenu';
 import { Dialogs } from './Dialogs';
 import { Toasts } from './Toasts';
 import { HomeView } from './HomeView';
@@ -30,6 +31,7 @@ import { Frame } from './layout/Frame';
 import { WindowResizeHandles } from './layout/WindowChrome';
 import { DetachedTitlebar, WorkspaceTabs } from './layout/WorkspaceTabs';
 import './styles.css';
+import './overlay/docs.css';
 
 /**
  * The shell: the workspace tab strip on top (always visible, Blender-style),
@@ -230,6 +232,9 @@ export function AppShell({
       <ApprovalPrompts />
       <Toasts />
       <Dialogs />
+      {/* Last, so the menu paints over every other layer; it renders into a portal
+          on document.body anyway, but source order settles ties at equal z-index. */}
+      <ContextMenuLayer />
     </div>
   );
 }

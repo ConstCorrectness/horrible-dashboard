@@ -56,15 +56,16 @@ This is the one place a module legitimately contributes a section to a pane it d
 not own — and the reason a **plugin** can add a browser without a pane of its own
 (`PluginContributions.explorerSources`).
 
-## One agent-context provider
+## Agent context per section
 
 Section bodies render inside the host's `PaneInstanceContext`, so they register
 under Explorer's real instance id — unlike a region strip, which gets a synthetic
-id no enumeration descends into. That makes exactly one provider per pane the rule.
-Today it is `FileTree`'s, so the file tree's snapshot now arrives under
-`explorer.home` with the active section stamped on it by `readPaneAgentContext`.
-A second contributed source adding its own `useAgentContext` would silently
-overwrite it.
+id no enumeration descends into. Providers are keyed by instance **and section**,
+so each source registers its own; `FileTree`'s arrives under `explorer.home` with
+the active section stamped on it by `readPaneAgentContext`. This used to be keyed
+by instance alone, which made "exactly one provider per pane" a standing rule and
+meant a second contributed source adding its own `useAgentContext` would silently
+overwrite the first.
 
 ### Every old name still works
 
@@ -87,19 +88,22 @@ table-driven test in `layout/__tests__/sections.test.ts`.
 
 ## Not done yet
 
-**Only the Files section has an agent-context payload.** The one-provider rule means
-the other four cannot add their own without clobbering it, and only the *mounted*
-body can provide at all — so `show("notebooks")` returns the section name and its
-siblings (contributed centrally by `readPaneAgentContext`), but not a listing.
+**Only the Files section has an agent-context payload.** The clobbering half of this
+is fixed — the other four can each register their own now — but none of them do yet,
+and only the *mounted* body can provide at all. So `show("notebooks")` still returns
+the section name, its siblings, and `hasPayload: false` (contributed centrally by
+`readPaneAgentContext`), but not a listing.
 
 That shape was found by asking the local model "show me my notebooks": it correctly
 read the ambient context, correctly chose `show('notebooks')` — and then, with an
 empty payload to answer from, answered from the **editor tabs** instead and reported
 the two `.py` files open there. A pane that returns nothing does not produce "I don't
 know"; it produces a confident answer sourced from whatever else was in the window.
-Naming the sections is a floor, not a fix. The real one is for the host to delegate
-a payload per section, which needs a way for a section body to publish upward
-without owning the pane's single registration.
+Naming the sections is a floor, not a fix. The mechanism for the real one now
+exists — a section body registers under its own key — so what is left is for each
+source to write a provider. The remaining gap is a *background* section, which has
+no mounted body and so can only be answered by a declarative, module-scope payload
+on `SectionDecl`.
 
 **Restored layouts drop docked embedded views** (`deserialize`'s `embeddedViews`), so
 an old workspace loses its `files.tree` strip and gains Explorer from the preset. A

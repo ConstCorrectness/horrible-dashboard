@@ -59,6 +59,7 @@ import {
   terminalModule,
   databaseModule,
   trainingModule,
+  docsModule,
   notebookModule,
   visualizerModule,
 } from '@horrible/core';
@@ -124,6 +125,7 @@ async function boot(): Promise<void> {
   registry.register(researchModule);
   registry.register(searchModule);
   registry.register(trainingModule);
+  registry.register(docsModule);
   registry.register(notebookModule);
   registry.register(visualizerModule);
   registry.register(flowModule);

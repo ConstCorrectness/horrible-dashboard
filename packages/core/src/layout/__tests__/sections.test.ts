@@ -330,16 +330,18 @@ describe('sections', () => {
   });
 
   it('reports the active section and its siblings even with no provider', async () => {
-    // Most sections have no `useAgentContext` — only the mounted body can provide,
-    // and the one-provider rule means at most one of them ever does. A bare
-    // `{section}` left the model with nothing to answer from, so it answered from
-    // whatever *else* was in its context: confidently, and wrongly.
+    // Many sections have no `useAgentContext` — only the mounted body can provide
+    // at all. A bare `{section}` left the model with nothing to answer from, so it
+    // answered from whatever *else* was in its context: confidently, and wrongly.
+    // `hasPayload: false` says so out loud, because an empty snapshot reads as
+    // silence rather than as "nothing to report".
     const { readPaneAgentContext } = await import('../controller');
     const instanceId = openPane('s.host')!;
     setPaneSection(instanceId, 'requests');
     expect(readPaneAgentContext(instanceId)).toEqual({
       section: 'requests',
       sections: ['play', 'friends', 'requests'],
+      hasPayload: false,
     });
   });
 

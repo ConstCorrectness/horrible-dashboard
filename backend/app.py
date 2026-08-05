@@ -101,6 +101,7 @@ from backend.modules.hassault import router as hassault_router
 from backend.modules.social import handle_social_message, subscribe_social_conn
 from backend.modules.social import router as social_router
 from backend.modules.notebook import handle_notebook_message, notebook_manager
+from backend.modules.docs import router as docs_router
 from backend.modules.notebook import router as notebook_router
 from backend.modules.keymap import router as keymap_router
 from backend.modules.notes import router as notes_router
@@ -215,6 +216,7 @@ app.include_router(browser_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(files_router, prefix="/api")
 app.include_router(notebook_router, prefix="/api")
+app.include_router(docs_router, prefix="/api")
 app.include_router(notes_router, prefix="/api")
 app.include_router(clubhouse_router, prefix="/api")
 app.include_router(telemetry_router, prefix="/api")

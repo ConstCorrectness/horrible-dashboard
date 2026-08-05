@@ -3,6 +3,13 @@
  * the session store — which drives the ws kernel protocol — so the agent can build,
  * run, and debug a notebook alongside the user. Cell CRUD, execute, and mode.
  *
+ * `list_cells` was briefly `nb.list_cells` to dodge a collision with the training
+ * module's identically-named tool. That fixed the symptom and cost the tool its
+ * group: the orchestrator groups by the namespace before the first dot, so `nb`
+ * became a one-tool group no `notebook` keyword could preload — effectively hiding
+ * it. The collision is now resolved by owner (training's are `training.*`), so the
+ * whole set is back under one prefix.
+ *
  * Session resolution: an explicit `path` arg wins; otherwise the sole open notebook
  * is used (the common case), and ambiguity is reported so the agent picks.
  */
@@ -77,7 +84,7 @@ const pathParam: Record<string, JSONSchema> = {
 
 export const notebookAgentTools: AgentToolDecl[] = [
   {
-    name: 'nb.list_cells',
+    name: 'notebook.list_cells',
     description:
       'List the cells of the open notebook (id, type, first line, execution count, run state, whether it errored).',
     params: { type: 'object', properties: { ...pathParam } },

@@ -216,10 +216,28 @@ dict), `cells_changed` `{notebook}`, `mode` `{mode}`, `graph`
   sends keep widgets live during execution.
 - **Phase 3** *(done, minus the reactive bridge)* — custom `anywidget` (`_esm`/`_css`)
   views via `AnyWidgetView`, `comm_info` reattach-resync (backend comm snapshot → frontend
-  seed), and agent tools (`nb.list_cells`, `notebook.read_cell`/`insert_cell`/`edit_cell`/
+  seed), and agent tools (`notebook.list_cells`/`read_cell`/`insert_cell`/`edit_cell`/
   `delete_cell`/`run_cell`/`run_all`/`set_mode`/`kernel_status`). Classic AMD-bundle
   `@jupyter-widgets` views remain a fallback. **Deferred:** an opt-in bridge from widget
   values into reactive re-runs.
+
+## Documentation in cells
+
+Cells had no hover, no completion, and no docs at all — `CellEditor` wired only
+history, a keymap, and a language. They now have the
+[documentation popup](docs-popup.mdx): hover, plus <kbd>Shift</kbd>+<kbd>Tab</kbd>
+into an inline panel under the cell.
+
+A cell asks `kernel` first and gets an answer about the object that **actually
+exists in its namespace**, which is strictly better than anything a language
+server could say — and it drops `lsp` from its chain entirely, since a cell has no
+language server and leaving it in would spend a step on a resolver that is never
+registered.
+
+The kernel side is `KernelSession.inspect`, and the care it needs (worker-thread
+affinity, routing shell replies by parent msg_id so an execute reply and an
+inspect reply cannot eat each other) is described in
+[Documentation popup](docs-popup.mdx#the-kernel-source-and-the-threading-trap).
 
 ## Browser vs desktop
 

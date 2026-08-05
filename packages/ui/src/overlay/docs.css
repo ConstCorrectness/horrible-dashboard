@@ -1,0 +1,74 @@
+/* The documentation popup (core/docs/cm-docs.ts): hover + Shift-Tab, in the editor
+ * and in notebook cells. The markdown body reuses the LSP hover styling in
+ * styles.css; these are the parts that hover does not have — the signature header,
+ * the source attribution, and the notebook cell's inline panel. */
+
+.cm-docs-popup {
+  max-width: 480px;
+  max-height: 320px;
+  overflow: auto;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.cm-docs-signature {
+  margin: 0 0 0.4rem;
+  padding: 0.25rem 0.4rem;
+  border-radius: 4px;
+  background: var(--surface-2, rgba(127, 127, 127, 0.12));
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.95em;
+  white-space: pre-wrap;
+}
+
+.cm-docs-popup p {
+  margin: 0 0 0.4rem;
+}
+
+.cm-docs-popup p:last-child {
+  margin-bottom: 0;
+}
+
+.cm-docs-popup pre {
+  margin: 0 0 0.4rem;
+  padding: 0.35rem 0.5rem;
+  overflow: auto;
+  border-radius: 4px;
+  background: var(--surface-2, rgba(127, 127, 127, 0.12));
+}
+
+.cm-docs-popup code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.95em;
+}
+
+/* Which source answered. Small and dim: it matters when the answer looks wrong,
+ * and should be out of the way the rest of the time. */
+.cm-docs-source {
+  margin-top: 0.4rem;
+  padding-top: 0.3rem;
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.cm-docs-source a {
+  color: inherit;
+}
+
+/* The notebook cell's Shift-Tab panel: inline under the cell rather than floating,
+ * because it is meant to stay put while you edit against what it says. */
+.cell-docs-panel {
+  max-height: 260px;
+  overflow: auto;
+  margin: 0.25rem 0 0.4rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-raised);
+  font-size: 0.8rem;
+  cursor: pointer;
+}

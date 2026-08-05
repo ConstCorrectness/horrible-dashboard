@@ -536,10 +536,14 @@ body {
   color: var(--text-dim);
 }
 
-.file-ctx-menu {
+/* The shared context menu (overlay/ContextMenu.tsx). One menu for every
+ * right-click in the app; `left`/`top`/`max-height` come from `placeLayer`, so
+ * nothing here may set them. */
+.ctx-menu {
   position: fixed;
   z-index: 1000;
-  min-width: 180px;
+  min-width: 190px;
+  max-width: 340px;
   display: flex;
   flex-direction: column;
   padding: 0.25rem;
@@ -548,9 +552,22 @@ body {
   border-radius: 6px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   font-size: 0.85rem;
+  /* `placeLayer` caps the height when the menu cannot fit; without this the
+   * overflowing tail would simply be drawn past the window edge. */
+  overflow-y: auto;
+  outline: none;
 }
 
-.file-ctx-menu button {
+.ctx-menu-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.ctx-menu-item {
+  display: grid;
+  grid-template-columns: 1rem 1fr auto auto;
+  align-items: center;
+  gap: 0.35rem;
   text-align: left;
   background: transparent;
   border: none;
@@ -559,28 +576,45 @@ body {
   border-radius: 4px;
   cursor: pointer;
   font: inherit;
+  white-space: nowrap;
 }
 
-.file-ctx-menu button:hover {
+/* Hover and keyboard focus are the same state — the pointer sets `activeIndex`
+ * too, so a menu driven by both never shows two highlighted rows. */
+.ctx-menu-item.is-active:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
-.file-ctx-menu button.danger {
+.ctx-menu-item:disabled {
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.ctx-menu-item.is-danger {
   color: var(--danger, #e06c75);
 }
 
-.file-ctx-sep {
+.ctx-menu-check,
+.ctx-menu-more {
+  color: var(--text-dim);
+  font-size: 0.75rem;
+}
+
+.ctx-menu-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ctx-menu-hint {
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  padding-left: 0.75rem;
+}
+
+.ctx-menu-sep {
   height: 1px;
   background: var(--border);
   margin: 0.25rem 0;
-}
-
-.file-ctx-target {
-  padding: 0.25rem 0.5rem 0.1rem;
-  margin-top: 0.2rem;
-  border-top: 1px solid var(--border);
-  color: var(--text-dim);
-  font-size: 0.7rem;
 }
 
 /* Indexed-packages settings section (editor/IndexedPackages.tsx): framework versions

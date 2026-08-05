@@ -1,10 +1,17 @@
 /**
- * Frontend agent tools for the training notebook (group `notebook`). They act on
+ * Frontend agent tools for the training notebook (group `training`). They act on
  * the session store — which drives the ws kernel protocol — so the agent can build
  * and debug the notebook alongside the user. Full cell CRUD + execute.
  *
  * Session resolution: an explicit `projectId` arg wins; otherwise the sole open
  * session is used (the common case), and ambiguity is reported so the agent picks.
+ *
+ * **These are `training.*`, not `notebook.*`.** They used to share the reactive
+ * notebook's namespace while addressing a different store with a different session
+ * arg (`projectId` vs `path`), and the orchestrator groups tools by name prefix —
+ * so seven names existed twice, dispatch went to whichever module the registry
+ * happened to reach first, and the loser was uncallable. The group they belong in
+ * is `training`, which already exists and already has preload keywords.
  */
 import type { AgentToolDecl, JSONSchema } from '@horribledashboard/sdk';
 
@@ -82,7 +89,7 @@ const projectIdParam: Record<string, JSONSchema> = {
 
 export const notebookAgentTools: AgentToolDecl[] = [
   {
-    name: 'notebook.list_cells',
+    name: 'training.list_cells',
     description:
       'List the cells of the open training notebook (id, type, first line, execution count, run state, whether it errored).',
     params: { type: 'object', properties: { ...projectIdParam } },
@@ -93,7 +100,7 @@ export const notebookAgentTools: AgentToolDecl[] = [
     },
   },
   {
-    name: 'notebook.read_cell',
+    name: 'training.read_cell',
     description:
       'Read a cell in full: its source and outputs (including any error traceback text).',
     params: {
@@ -110,7 +117,7 @@ export const notebookAgentTools: AgentToolDecl[] = [
     },
   },
   {
-    name: 'notebook.kernel_status',
+    name: 'training.kernel_status',
     description: 'The kernel status of the open notebook (starting|idle|busy|restarting|dead).',
     params: { type: 'object', properties: { ...projectIdParam } },
     handler: (args) => {
@@ -120,7 +127,7 @@ export const notebookAgentTools: AgentToolDecl[] = [
     },
   },
   {
-    name: 'notebook.insert_cell',
+    name: 'training.insert_cell',
     description: 'Insert a new cell. Position by afterCellId or index (default: end).',
     params: {
       type: 'object',
@@ -171,7 +178,7 @@ export const notebookAgentTools: AgentToolDecl[] = [
     },
   },
   {
-    name: 'notebook.edit_cell',
+    name: 'training.edit_cell',
     description: 'Replace the source of an existing cell.',
     params: {
       type: 'object',
@@ -194,7 +201,7 @@ export const notebookAgentTools: AgentToolDecl[] = [
     },
   },
   {
-    name: 'notebook.delete_cell',
+    name: 'training.delete_cell',
     description: 'Delete a cell by id.',
     params: {
       type: 'object',
@@ -215,7 +222,7 @@ export const notebookAgentTools: AgentToolDecl[] = [
     },
   },
   {
-    name: 'notebook.run_cell',
+    name: 'training.run_cell',
     description:
       'Run a code cell and wait for it to finish (up to 120s), returning its outputs and error traceback if any.',
     params: {
@@ -236,7 +243,7 @@ export const notebookAgentTools: AgentToolDecl[] = [
     },
   },
   {
-    name: 'notebook.run_all',
+    name: 'training.run_all',
     description: 'Run every code cell in order.',
     params: { type: 'object', properties: { ...projectIdParam } },
     sideEffect: true,
@@ -251,7 +258,7 @@ export const notebookAgentTools: AgentToolDecl[] = [
     },
   },
   {
-    name: 'notebook.interrupt',
+    name: 'training.interrupt',
     description: 'Interrupt the running kernel.',
     params: { type: 'object', properties: { ...projectIdParam } },
     sideEffect: true,
@@ -267,7 +274,7 @@ export const notebookAgentTools: AgentToolDecl[] = [
     },
   },
   {
-    name: 'notebook.restart',
+    name: 'training.restart',
     description: 'Restart the kernel (clears execution state).',
     params: { type: 'object', properties: { ...projectIdParam } },
     sideEffect: true,

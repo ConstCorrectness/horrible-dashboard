@@ -778,25 +778,30 @@ function sectionResult(instanceId: string): { section?: string } {
  * and a module that omitted it would produce a plausible-looking snapshot the
  * agent then reasons about wrongly.
  *
- * Providers are keyed by pane instance id, and a section body renders **inside**
- * its host's `PaneInstanceContext` — so unlike a region strip (which gets a
- * synthetic id no enumeration descends into), a section's provider registers
- * under the real, listable instance id. The rule that follows: exactly one live
- * provider per pane, i.e. the host component or its section bodies, never both.
+ * Providers are keyed by pane instance **and section**, and a section body renders
+ * **inside** its host's `PaneInstanceContext` — so unlike a region strip (which
+ * gets a synthetic id no enumeration descends into), a section's provider
+ * registers under the real, listable instance id. The pane-level and section-level
+ * snapshots merge (section last); reading is pinned to the *active* section so a
+ * provider that outlived its switch cannot answer for the tab that replaced it.
  */
 export function readPaneAgentContext(instanceId: string): Record<string, unknown> | null {
-  const snapshot = readAgentContext(instanceId);
   const pane = findPaneAnywhere(frame(), instanceId)?.pane;
   const section = pane ? activeSectionOf(pane) : undefined;
+  const snapshot = readAgentContext(instanceId, section);
   if (!section) return snapshot;
-  // `sections` is contributed by the shell, not by any provider — most sections
-  // have none (only the mounted body can provide, and the one-provider rule means
-  // at most one of them ever does). Without this, `show("notebooks")` came back as
-  // a bare `{section}` and the model, having nothing to answer from, answered from
-  // whatever *else* was in its context — confidently and wrongly. Naming the
-  // siblings also makes the next hop discoverable without `list_available_panes`.
+  // `sections` is contributed by the shell, not by any provider — many sections
+  // have none (only the mounted body can provide at all). Without this,
+  // `show("notebooks")` came back as a bare `{section}` and the model, having
+  // nothing to answer from, answered from whatever *else* was in its context —
+  // confidently and wrongly. Naming the siblings also makes the next hop
+  // discoverable without `list_available_panes`.
+  //
+  // `hasPayload: false` says the same thing out loud for the section itself: an
+  // empty snapshot does not read as "nothing to report", it reads as silence, and
+  // silence is what the model fills in from elsewhere.
   const sections = sectionsOf(pane!.viewId).map((s) => s.id);
-  return { section, sections, ...(snapshot ?? {}) };
+  return { section, sections, hasPayload: snapshot !== null, ...(snapshot ?? {}) };
 }
 
 /**

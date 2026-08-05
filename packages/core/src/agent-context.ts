@@ -9,12 +9,38 @@
  *
  * Lives in core (not ui) so feature modules — which live in core — can import the
  * hook without a core→ui cycle; ui only supplies the instance id via the context.
+ *
+ * **Providers are keyed by pane instance *and section*.** A section body renders
+ * inside its host's `PaneInstanceContext` (deliberately — that is what puts its
+ * provider under a real, enumerable instance id rather than a synthetic one), so
+ * a flat instance-id key made two providers on one pane silently overwrite each
+ * other: last mount won, and nothing was restored when it unmounted. Splitting
+ * the key lets a pane-level provider and the mounted section's provider coexist
+ * and merge, which is what a merged pane needs — the host describes the pane, the
+ * section describes the tab.
  */
 import { createContext, useContext, useEffect, useRef } from 'react';
 
 import type { AgentContextSnapshot } from '@horribledashboard/sdk';
 
-const providers = new Map<string, () => AgentContextSnapshot>();
+type Provider = () => AgentContextSnapshot;
+
+/**
+ * One pane instance's registrations: the pane-level provider (if the host
+ * component registers one) plus the section-scoped ones.
+ *
+ * `sections` holds at most one entry in practice — only the *mounted* section
+ * body can register, and React runs the outgoing body's cleanup before the
+ * incoming one's effect — but it is a map rather than a single slot so that a
+ * switch mid-flight degrades to a stale read of the wrong tab instead of a lost
+ * registration, and so a caller that knows the active section can ask for it.
+ */
+interface PaneProviders {
+  pane?: Provider;
+  sections: Map<string, Provider>;
+}
+
+const providers = new Map<string, PaneProviders>();
 
 /**
  * The live pane instance id for the subtree a pane renders into. The workspace
@@ -23,15 +49,54 @@ const providers = new Map<string, () => AgentContextSnapshot>();
  */
 export const PaneInstanceContext = createContext<string | null>(null);
 
-/** Read a pane instance's current snapshot, or `null` if it exposes none. */
-export function readAgentContext(instanceId: string): AgentContextSnapshot | null {
-  const provider = providers.get(instanceId);
-  return provider ? provider() : null;
+/**
+ * The section id a body is rendering as, or `null` for the pane's own component.
+ *
+ * `PaneHost` supplies this **only** around a section body it renders itself (one
+ * that declared a `component`/`view`). A pane that switches sections internally
+ * gets `null` here — its own registration is legitimately pane-level — and an
+ * inner body that wants its own slot passes the section id to `useAgentContext`
+ * explicitly. Providing it around the host component instead would put the host
+ * and its inner bodies back on one key, which is the bug this replaces.
+ */
+export const SectionInstanceContext = createContext<string | null>(null);
+
+/**
+ * Read a pane instance's current snapshot, or `null` if it exposes none.
+ *
+ * Merges the pane-level snapshot with the mounted section's, section last: where
+ * both describe the same key the more specific one wins. Pass `section` to read a
+ * named one and ignore any other registration — callers that know which tab is
+ * active should, so a provider that outlives its switch can't answer for the tab
+ * that replaced it.
+ */
+export function readAgentContext(
+  instanceId: string,
+  section?: string,
+): AgentContextSnapshot | null {
+  const entry = providers.get(instanceId);
+  if (!entry) return null;
+  const parts: AgentContextSnapshot[] = [];
+  if (entry.pane) parts.push(entry.pane());
+  if (section === undefined) {
+    for (const provider of entry.sections.values()) parts.push(provider());
+  } else {
+    const provider = entry.sections.get(section);
+    if (provider) parts.push(provider());
+  }
+  if (!parts.length) return null;
+  return Object.assign({}, ...parts) as AgentContextSnapshot;
 }
 
-/** Whether a pane instance currently exposes agent context. */
+/** Whether a pane instance currently exposes agent context (pane-level or section). */
 export function hasAgentContext(instanceId: string): boolean {
-  return providers.has(instanceId);
+  const entry = providers.get(instanceId);
+  return !!entry && (!!entry.pane || entry.sections.size > 0);
+}
+
+/** The section ids of a pane instance that currently expose their own snapshot. */
+export function sectionsWithAgentContext(instanceId: string): string[] {
+  return [...(providers.get(instanceId)?.sections.keys() ?? [])];
 }
 
 // --- Ambient "active" context -------------------------------------------------
@@ -69,18 +134,41 @@ export function readActiveAgentContext(): ActiveAgentContext | null {
  * `provider` is always invoked (kept in a ref) without re-registering each
  * render; the registration is removed on unmount. No-op when rendered outside a
  * pane (no instance id in context).
+ *
+ * `section` defaults to the enclosing `SectionInstanceContext`, so a section body
+ * the host renders needs no argument. Pass it explicitly from a pane that switches
+ * sections internally — its bodies render under the host's own (null) section, and
+ * without an id they would share the host's slot.
  */
-export const useAgentContext: import('@horribledashboard/sdk').UseAgentContext = (provider) => {
+export const useAgentContext: import('@horribledashboard/sdk').UseAgentContext = (
+  provider,
+  section,
+) => {
   const instanceId = useContext(PaneInstanceContext);
+  const ambientSection = useContext(SectionInstanceContext);
+  const sectionId = section ?? ambientSection;
   const ref = useRef(provider);
   ref.current = provider;
   useEffect(() => {
     if (!instanceId) return;
     const get = (): AgentContextSnapshot => ref.current();
-    providers.set(instanceId, get);
+    let entry = providers.get(instanceId);
+    if (!entry) {
+      entry = { sections: new Map() };
+      providers.set(instanceId, entry);
+    }
+    if (sectionId === null) entry.pane = get;
+    else entry.sections.set(sectionId, get);
     return () => {
+      const current = providers.get(instanceId);
+      if (!current) return;
       // Only clear if still ours (a remount may have replaced it already).
-      if (providers.get(instanceId) === get) providers.delete(instanceId);
+      if (sectionId === null) {
+        if (current.pane === get) delete current.pane;
+      } else if (current.sections.get(sectionId) === get) {
+        current.sections.delete(sectionId);
+      }
+      if (!current.pane && current.sections.size === 0) providers.delete(instanceId);
     };
-  }, [instanceId]);
+  }, [instanceId, sectionId]);
 };
