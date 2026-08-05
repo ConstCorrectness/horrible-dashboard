@@ -47,6 +47,13 @@ class SttService:
         
         predicted_ids = self.model.generate(input_features)
         transcription = self.processor.batch_decode(predicted_ids, skip_special_tokens=True)[0]
-        return transcription.strip()
+        text = transcription.strip()
+        
+        # Whisper hallucinations on pure silence often result in these phrases
+        hallucinations = ["you", "Thank you.", "Thank you", "Thanks for watching.", "I'm going to.", "I'm going to"]
+        if text.strip(" .") in ["you", "Thank you", "Thanks for watching", "I'm going to"]:
+            return ""
+            
+        return text
 
 stt_service = SttService()
