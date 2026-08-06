@@ -1954,13 +1954,15 @@ export function RoomsPanel() {
           {/* Action buttons (Mute/Raise hand/Accept) */}
           <div className="ch-stage-actions-row">
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <button
-                className={`ch-btn-action ${agentEnabled ? 'mic-active' : ''}`}
-                onClick={() => setAgentEnabled(!agentEnabled)}
-              >
-                🤖 {agentEnabled ? 'Agent ON' : 'Agent OFF'}
-              </button>
-              {agentEnabled && (
+              {isCurrentUserSpeaker && (
+                <>
+                  <button
+                    className={`ch-btn-action ${agentEnabled ? 'mic-active' : ''}`}
+                    onClick={() => setAgentEnabled(!agentEnabled)}
+                  >
+                    🤖 {agentEnabled ? 'Agent ON' : 'Agent OFF'}
+                  </button>
+                  {agentEnabled && (
                 <>
                   <select
                     className="ch-btn-action"
@@ -2002,6 +2004,8 @@ export function RoomsPanel() {
                     🗣️ Speak
                   </button>
                 </>
+              )}
+              </>
               )}
             </div>
             {isCurrentUserSpeaker ? (

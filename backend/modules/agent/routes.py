@@ -255,11 +255,11 @@ def roster() -> RosterResponse:
 
 @router.get("/tts")
 async def tts(text: str):
-    from backend.modules.agent.xtts_service import xtts_service
+    from backend.modules.agent.edge_tts_service import edge_tts_service
     from fastapi.responses import Response
     
-    audio_bytes = await xtts_service.generate_audio(text)
-    return Response(content=audio_bytes, media_type="audio/wav")
+    audio_bytes = await edge_tts_service.generate_audio(text)
+    return Response(content=audio_bytes, media_type="audio/mpeg")
 
 @router.post("/stt")
 async def stt(file: fastapi.UploadFile):
