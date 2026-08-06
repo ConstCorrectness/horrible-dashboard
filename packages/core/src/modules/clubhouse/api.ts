@@ -118,6 +118,23 @@ export function getClubhouseChannelDetails(channel: string): Promise<Channel> {
   return apiGet<Channel>(`/clubhouse/channels/${channel}`);
 }
 
+export interface ChatComment {
+  message?: string;
+  text?: string;
+  user_profile?: {
+    name?: string;
+    photo_url?: string;
+  };
+  from_name?: string;
+  from_photo_url?: string;
+  time_created?: string;
+  [key: string]: any;
+}
+
+export function getClubhouseChannelChat(channel: string): Promise<{ comments: ChatComment[] }> {
+  return apiGet<{ comments: ChatComment[] }>(`/clubhouse/channels/${channel}/chat`);
+}
+
 export interface ClubhouseUserProfile {
   user_id: number;
   name: string | null;

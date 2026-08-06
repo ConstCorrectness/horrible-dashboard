@@ -10,6 +10,7 @@ import {
   setClubhouseHand,
   acceptClubhouseSpeaker,
   getClubhouseStatus,
+  getClubhouseChannelChat,
   JoinChannelResult,
   ChannelUser,
 } from './api';
@@ -480,6 +481,23 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       if (initialUsers) {
         seedLiveUsers(initialUsers);
       }
+      
+      try {
+        const chatRes = await getClubhouseChannelChat(channelName);
+        if (chatRes.comments && chatRes.comments.length > 0) {
+          const mappedComments = chatRes.comments.map(msg => ({
+            id: msg.message_id || String(Math.random()),
+            userName: msg.user_profile?.name || msg.from_name || 'Anonymous',
+            userPhoto: msg.user_profile?.photo_url || msg.from_photo_url || null,
+            text: msg.message || msg.text || msg.body || '',
+            timestamp: msg.time_created ? new Date(msg.time_created).getTime() : Date.now()
+          })).filter(c => c.text);
+          // Only take last 50 messages to prevent huge lists
+          setComments(mappedComments.slice(-50));
+        }
+      } catch (err) {
+        console.warn('Failed to fetch initial chat history:', err);
+      }
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : String(e);
       setError(errMsg);
@@ -618,6 +636,8 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     const payload = {
       action: 'post_to_chat',
       text,
+      message: text,
+      body: text,
       user_profile: {
         name: profile?.name || 'Anonymous',
         photo_url: profile?.photoUrl || null,
