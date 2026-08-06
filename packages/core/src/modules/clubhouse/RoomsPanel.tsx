@@ -59,6 +59,17 @@ export function RoomsPanel() {
   const [peopleSearchQuery, setPeopleSearchQuery] = useState('');
   const [peopleSearchResults, setPeopleSearchResults] = useState<SearchUserResult[]>([]);
   const [loadingPeople, setLoadingPeople] = useState(false);
+  
+  // Toggleable nested panels for the room view
+  const [panelsOpen, setPanelsOpen] = useState({
+    participants: true,
+    chat: true,
+    agent: false
+  });
+
+  const togglePanel = (panel: keyof typeof panelsOpen) => {
+    setPanelsOpen(prev => ({ ...prev, [panel]: !prev[panel] }));
+  };
 
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [followingUsers, setFollowingUsers] = useState<FollowUser[]>([]);
@@ -1825,21 +1836,33 @@ export function RoomsPanel() {
         <div className="ch-room-scroller">
           {/* Participants Area */}
           <div className="ch-participants-section">
-            {/* Speakers */}
-            <div className="ch-section-heading">
-              <span>Speakers ({speakers.length})</span>
+            <div 
+              className="ch-section-heading" 
+              style={{ cursor: 'pointer', display: 'flex', justifyContent: 'space-between' }}
+              onClick={() => togglePanel('participants')}
+            >
+              <span>👥 Participants ({speakers.length + audience.length})</span>
+              <span>{panelsOpen.participants ? '▼' : '▶'}</span>
             </div>
-            <div className="ch-speakers-grid">{speakers.map((u) => renderUserCard(u, true))}</div>
-
-            {/* Audience */}
-            {audience.length > 0 && (
+            
+            {panelsOpen.participants && (
               <>
-                <div className="ch-section-heading">
-                  <span>Audience ({audience.length})</span>
-                </div>
-                <div className="ch-listeners-grid">
-                  {audience.map((u) => renderUserCard(u, false))}
-                </div>
+                {/* Speakers */}
+                {speakers.length > 0 && (
+                  <div className="ch-speakers-grid">{speakers.map((u) => renderUserCard(u, true))}</div>
+                )}
+
+                {/* Audience */}
+                {audience.length > 0 && (
+                  <>
+                    <div className="ch-section-heading" style={{ marginTop: '1rem', borderTop: 'none', background: 'transparent', padding: '0 1rem' }}>
+                      <span style={{ fontSize: '0.7rem', color: '#64748b' }}>Audience ({audience.length})</span>
+                    </div>
+                    <div className="ch-listeners-grid">
+                      {audience.map((u) => renderUserCard(u, false))}
+                    </div>
+                  </>
+                )}
               </>
             )}
           </div>
@@ -1849,14 +1872,21 @@ export function RoomsPanel() {
             <div
               className="ch-section-heading"
               style={{
-                padding: '0.75rem 1rem 0.25rem 1rem',
+                padding: '0.75rem 1rem',
                 background: '#111317',
                 borderBottom: '1px solid rgba(255,255,255,0.03)',
+                cursor: 'pointer',
+                display: 'flex',
+                justifyContent: 'space-between'
               }}
+              onClick={() => togglePanel('chat')}
             >
-              <span>Live Chat</span>
+              <span>💬 Live Chat</span>
+              <span>{panelsOpen.chat ? '▼' : '▶'}</span>
             </div>
-            <div className="ch-chat-scroll">
+            
+            {panelsOpen.chat && (
+              <div className="ch-chat-scroll">
               {comments.length === 0 ? (
                 <div className="ch-chat-empty">
                   💬
@@ -1900,6 +1930,98 @@ export function RoomsPanel() {
               )}
               <div ref={chatEndRef} />
             </div>
+            )}
+          </div>
+
+          {/* Agent Settings Panel */}
+          <div className="ch-agent-section">
+            <div
+              className="ch-section-heading"
+              style={{
+                padding: '0.75rem 1rem',
+                background: '#111317',
+                borderBottom: '1px solid rgba(255,255,255,0.03)',
+                cursor: 'pointer',
+                display: 'flex',
+                justifyContent: 'space-between',
+                borderTop: '1px solid rgba(255,255,255,0.03)',
+              }}
+              onClick={() => togglePanel('agent')}
+            >
+              <span>🤖 AI Agent Settings</span>
+              <span>{panelsOpen.agent ? '▼' : '▶'}</span>
+            </div>
+            
+            {panelsOpen.agent && (
+              <div style={{ padding: '1rem', background: 'rgba(0,0,0,0.2)', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span style={{ fontSize: '0.85rem' }}>Enable Voice Agent</span>
+                  <button
+                    className={`ch-btn-action ${agentEnabled ? 'mic-active' : ''}`}
+                    onClick={() => setAgentEnabled(!agentEnabled)}
+                    style={{ padding: '0.4rem 0.8rem', fontSize: '0.75rem' }}
+                  >
+                    {agentEnabled ? 'ON' : 'OFF'}
+                  </button>
+                </div>
+                
+                {agentEnabled && (
+                  <>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                      <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>System Prompt / Persona:</span>
+                      <textarea 
+                        value={agentSystemPrompt} 
+                        onChange={(e) => setAgentSystemPrompt(e.target.value)} 
+                        placeholder="System Prompt / Persona"
+                        style={{ width: '100%', minHeight: '60px', padding: '0.5rem', fontSize: '0.75rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d', borderRadius: '8px', resize: 'vertical' }} 
+                      />
+                    </div>
+                    
+                    <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                        <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Pause Detection:</span>
+                        <select
+                          style={{ padding: '0.4rem', fontSize: '0.75rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d', borderRadius: '4px' }}
+                          value={sttChunkMs}
+                          onChange={(e) => setSttChunkMs(Number(e.target.value))}
+                        >
+                          <option value={2000}>Fast (2s pause)</option>
+                          <option value={5000}>Normal (5s pause)</option>
+                          <option value={8000}>Patient (8s pause)</option>
+                        </select>
+                      </div>
+                      
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                        <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Temperature:</span>
+                        <input type="number" min="0" max="2" step="0.1" value={agentTemperature} onChange={(e) => setAgentTemperature(Number(e.target.value))} style={{ width: '60px', padding: '0.4rem', fontSize: '0.75rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d', borderRadius: '4px' }} />
+                      </div>
+                      
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+                        <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Max Tokens:</span>
+                        <input type="number" min="20" max="500" step="10" value={agentMaxTokens} onChange={(e) => setAgentMaxTokens(Number(e.target.value))} style={{ width: '70px', padding: '0.4rem', fontSize: '0.75rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d', borderRadius: '4px' }} />
+                      </div>
+                    </div>
+                    
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
+                      <button
+                        className="ch-btn-action"
+                        style={{ padding: '0.5rem 1rem', fontSize: '0.8rem', background: '#2e333d', border: 'none', borderRadius: '20px', cursor: 'pointer' }}
+                        onClick={() => triggerAgentResponse(" ")}
+                        disabled={isAgentSpeaking || !isCurrentUserSpeaker}
+                        title={!isCurrentUserSpeaker ? "Must be a speaker to use agent voice" : "Force speak"}
+                      >
+                        🗣️ Speak Now
+                      </button>
+                    </div>
+                    {!isCurrentUserSpeaker && (
+                      <p style={{ fontSize: '0.7rem', color: '#ef4444', margin: '0', textAlign: 'right' }}>
+                        ⚠️ You must be on stage to use the Agent's voice.
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -1954,59 +2076,6 @@ export function RoomsPanel() {
           {/* Action buttons (Mute/Raise hand/Accept) */}
           <div className="ch-stage-actions-row">
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              {isCurrentUserSpeaker && (
-                <>
-                  <button
-                    className={`ch-btn-action ${agentEnabled ? 'mic-active' : ''}`}
-                    onClick={() => setAgentEnabled(!agentEnabled)}
-                  >
-                    🤖 {agentEnabled ? 'Agent ON' : 'Agent OFF'}
-                  </button>
-                  {agentEnabled && (
-                <>
-                  <select
-                    className="ch-btn-action"
-                    style={{ padding: '0.4rem 0.6rem', fontSize: '0.75rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d', borderRadius: '20px', cursor: 'pointer' }}
-                    value={sttChunkMs}
-                    onChange={(e) => setSttChunkMs(Number(e.target.value))}
-                  >
-                    <option value={2000}>Fast (2s pause)</option>
-                    <option value={5000}>Normal (5s pause)</option>
-                    <option value={8000}>Patient (8s pause)</option>
-                  </select>
-                  
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                    <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Temp:</span>
-                    <input type="number" min="0" max="2" step="0.1" value={agentTemperature} onChange={(e) => setAgentTemperature(Number(e.target.value))} style={{ width: '45px', padding: '0.2rem', fontSize: '0.7rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d', borderRadius: '4px' }} title="Temperature (Creativity)" />
-                  </div>
-                  
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
-                    <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Len:</span>
-                    <input type="number" min="20" max="500" step="10" value={agentMaxTokens} onChange={(e) => setAgentMaxTokens(Number(e.target.value))} style={{ width: '50px', padding: '0.2rem', fontSize: '0.7rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d', borderRadius: '4px' }} title="Max Tokens (Length)" />
-                  </div>
-                  
-                  <input 
-                    type="text" 
-                    value={agentSystemPrompt} 
-                    onChange={(e) => setAgentSystemPrompt(e.target.value)} 
-                    placeholder="System Prompt / Persona"
-                    style={{ flex: 1, minWidth: '200px', padding: '0.4rem 0.6rem', fontSize: '0.75rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d', borderRadius: '20px' }} 
-                    title="System Prompt" 
-                  />
-                  
-                  <button
-                    className="ch-btn-action"
-                    style={{ padding: '0.4rem 0.6rem', fontSize: '0.75rem', background: '#2e333d', border: 'none', borderRadius: '20px', cursor: 'pointer' }}
-                    onClick={() => triggerAgentResponse(" ")}
-                    disabled={isAgentSpeaking}
-                    title="Force the agent to speak immediately"
-                  >
-                    🗣️ Speak
-                  </button>
-                </>
-              )}
-              </>
-              )}
             </div>
             {isCurrentUserSpeaker ? (
               <button
