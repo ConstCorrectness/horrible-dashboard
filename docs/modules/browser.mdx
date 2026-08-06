@@ -10,7 +10,7 @@ rendered inline. It works in **both** layouts (the `apps/web` browser build and 
 Tauri desktop build) with no per-platform fork — behavior branches on a
 [capability](../architecture/layout-shell.mdx), never a `__TAURI__` check.
 
-It has **two rendering engines**, selected by the `browser.engine` setting:
+It has **three rendering engines**, selected by the `browser.engine` setting:
 
 - **iframe** (default, always available) — the page renders in a cross-origin
   `<iframe>`. Light and zero-dependency, but opaque: we can't read the DOM, persist
@@ -25,8 +25,19 @@ It has **two rendering engines**, selected by the `browser.engine` setting:
   the app's trust model, and the server holding the **live DOM** is what makes the
   browser inherently agentic (the agent is handed content + an accessibility snapshot and
   can scrape/click/type). Opt-in and gated — see [Full engine](#full-engine-real-chromium).
+- **native** (desktop only, `browser.nativeWebview`) — a **real child webview** the Tauri
+  shell composites over the pane's rectangle. Fastest of the three by a wide margin (no
+  frame encode, no decode, native scrolling and input) and no site can refuse it. The
+  price is that it is **not part of the HTML layer**: the OS paints it above everything
+  the app draws, and the agent cannot read it. See
+  [Native webview overlay](#native-webview-overlay-desktop).
 
-`auto` (the default) uses **full** when the backend reports it enabled, else **iframe**.
+`auto` (the default) prefers **full** when the backend reports it enabled, then **native**
+on the desktop, then **iframe**. Full is preferred over native on purpose: the agent's
+browser tools drive the backend session, so showing the native overlay while the engine is
+available would leave the human and the agent looking at two different pages with one URL
+bar between them. Native is a strict upgrade on the iframe, so `auto` reaches for it only
+when the backend engine is off; picking it over a live engine is an explicit setting.
 
 ## Contributions to the layout shell
 
@@ -38,7 +49,7 @@ It has **two rendering engines**, selected by the `browser.engine` setting:
   only fires in a focused browser pane and never shadows a global shortcut.
 - **Settings:** `browser.homePage` (URL for the Home button; blank shows a start page),
   `browser.readerModeDefault` (open every page in reader mode), `browser.engine`
-  (`auto` | `full` | `iframe` — the rendering engine, see above), and
+  (`auto` | `full` | `native` | `iframe` — the rendering engine, see above), and
   `browser.saveLibrary` (which library 📥 Save files into).
 
 ## The pane
@@ -395,17 +406,63 @@ through per-command futures, and frames are relayed to the loop with
 (`$HORRIBLE_DATA_DIR/browser/<profile>`) persists cookies, cache, localStorage,
 IndexedDB, and site data across restarts.
 
+**Frames come from CDP `Page.startScreencast`**, not a screenshot poll. Chromium pushes
+a frame when the page actually *changes* rather than on our timer, encodes it inside the
+browser process, and attaches the viewport geometry the panel needs. Its
+`screencastFrameAck` handshake is also real backpressure: Chromium holds frame N+1 until
+N is acked, so a slow socket throttles the producer instead of growing a queue. The
+screencast rides the **same CDP session** as the network instrumentation.
+
+Three things about that path are easy to get wrong and are pinned by tests:
+
+- **`maxWidth`/`maxHeight` must equal the viewport.** Let Chromium scale the frame and
+  frame pixels stop being page pixels, so every relayed click lands somewhere else —
+  silently, because a downscaled frame still looks like a valid page.
+- **The ack is queued by the frame handler and sent by the pump**, never sent inline.
+  The handler runs on the Playwright dispatcher greenlet, where re-entering the driver
+  can deadlock. For the same reason it reads `page.url` (a cached attribute) but never
+  calls `page.title()` (a round trip) — the pump refreshes a cached title instead.
+- **Sync Playwright only dispatches CDP events while inside a driver call**, and the
+  command loop's `queue.get()` is not one. So an idle page needs `_pump` — a short
+  `wait_for_timeout` that yields to the dispatcher — or frames would simply never
+  arrive. This is the non-obvious cost of the sync API and the reason the loop looks
+  the way it does.
+
+If the screencast can't be armed (no CDP session, or a Chromium that rejects it) the
+session falls back to the original `page.screenshot()` poll at
+`_IDLE_FRAME_INTERVAL_S`, skipping byte-identical frames.
+
 **`browser` `/ws` channel.** The session pushes `frame` events
-(`{frame: <data:image/jpeg>, url, title}`) after every interaction plus on an idle
-cadence (byte-identical frames are skipped). The panel relays input back as
+(`{frame: <data:image/jpeg>, url, title, metadata}`), where `metadata` carries CDP's
+`deviceWidth`/`deviceHeight`, `pageScaleFactor`, `offsetTop`, `scrollOffset{X,Y}` and
+`timestamp` (absent on fallback-poll frames). The panel relays input back as
 `navigate` / `back` / `forward` / `reload` / `click{x,y}` / `scroll{dx,dy}` /
 `type{text}` / `key{key}`; agent ops (`content` / `snapshot` / `scrape` / `click_ref` /
 `type_ref` / `screenshot` / `info`) carry an `id` and get a correlated `result` event —
 so the frontend `session.ts` request/reply layer serves both the human panel and the
 agent tools off one shared session.
 
-**Coordinates** are scaled by the panel from the rendered `<img>` to the fixed
-1280×800 backend viewport.
+**Painting.** Frames are JPEG **stills**, so the frontend decodes with WebCodecs'
+`ImageDecoder` (falling back to `createImageBitmap`) and blits onto a `<canvas>` on
+`requestAnimationFrame`. There is deliberately **no `VideoDecoder`**: CDP screencast
+emits `jpeg`/`png` only, with no H.264/VP8 elementary stream for it to accept. An
+OffscreenCanvas worker would buy nothing either — the expensive half (JPEG decode) is
+already off-thread in both APIs, and the remaining half is a GPU blit.
+
+Two rules the pipeline depends on: **only the newest frame matters** (a frame arriving
+mid-decode replaces the pending one rather than queueing, so a slow decode drops frames
+instead of accumulating latency), and **every decoded frame must be `close()`d** —
+`ImageBitmap`/`VideoFrame` hold GPU memory that GC does not promptly reclaim, and
+leaking one per frame exhausts it in minutes.
+
+**Viewport & coordinates.** The viewport is **not fixed**: a `ResizeObserver` on the pane
+pushes its real size through the `resize` op to `page.set_viewport_size` (debounced —
+each resize costs a Chromium relayout plus a screencast restart, since `maxWidth`/
+`maxHeight` are fixed at start time). Sizes come from a `getBoundingClientRect()` in the
+browser, so the backend **clamps** rather than trusts them: a collapsed pane reports 0,
+and nothing upstream should be able to ask Chromium for a 60000px surface. Clicks are
+then scaled against the **frame's own** `deviceWidth`/`deviceHeight`, which keeps the
+mapping correct through a resize even before the next frame lands.
 
 **Keyboard.** The viewport takes `keyboard` [capture](../architecture/keybindings.mdx#input-capture)
 while focused: unmodified keys go to the remote page (this is a browser — `t` has
@@ -445,6 +502,49 @@ The main backend isn't containerized (it runs on the user's machine), so there's
 Dockerfile change. Without the extra, `GET /api/browser/engine` reports
 `installed: false` and the panel stays iframe-only.
 
+## Native webview overlay (desktop)
+
+`browser.nativeWebview` renders a page in a **real child webview** that the Tauri shell
+parks over the pane's rectangle (`apps/desktop/src-tauri/src/webview.rs`;
+`NativeBrowserView.tsx` is the frontend half, and renders nothing but a placeholder
+`<div>`). No iframe restrictions, no frame encode or decode, native scrolling and input.
+
+It is built on Tauri's multi-webview API (`Window::add_child`), which is gated behind
+the crate's **`unstable` feature** — so `tauri` is pinned to `~2.11` rather than floating:
+an overlay that stops compiling is better than one that quietly changes behaviour.
+
+**The overlay is not part of the HTML layer.** The OS composites it *above* everything
+the frontend draws, and no z-index reaches it. That is the defining property of the
+approach, not a bug to be fixed, and it drives the whole design:
+
+- Geometry must be **pushed, not inherited** — a `ResizeObserver` plus capture-phase
+  `scroll`/`resize` listeners keep the native surface glued to the placeholder
+  (`ResizeObserver` fires on size, but an ancestor scrolling or a sibling pane
+  collapsing *moves* the element without resizing it).
+- Anything drawing over that region must **claim suppression** via
+  `suppressNativeOverlays()` (`packages/core/src/modules/browser/overlay.ts`), which
+  hides the overlay for as long as it's held. The command palette does this; **any new
+  full-window UI must too**, or it will open behind the page. The registry is
+  reference-counted so a dropdown closing inside a modal doesn't un-hide it early.
+- **Invisible is not unmounted.** A pane on a non-visible workspace still owns its
+  native surface, which would otherwise float over whatever replaced it — so an
+  `IntersectionObserver` and `visibilitychange` hide it as well.
+
+Lifetime is the **pane's**, not the component's. A workspace switch unmounts panes (see
+[`unmount-is-not-close`](../architecture/layout-shell.mdx)), and destroying the webview
+there would drop the user's page, scroll position and logged-in state — so
+`usePaneSession` ties `close_browser_webview` to the pane actually closing, and
+`create_browser_webview` is idempotent so a remount re-points the existing surface.
+
+Only `http`/`https` URLs load, enforced in Rust: a child webview steered at
+`file:`/`tauri:` would run against local resources with app privileges. All five commands
+are `async` because `add_child` dispatches to the main thread and blocks on the reply —
+a sync command already runs there and would deadlock the app.
+
+Two things the overlay deliberately does **not** do: the agent cannot read it (it's out
+of process, so `browser.*` tools still drive the backend session), and back/forward come
+from the pane's locally tracked nav stack, since a child webview exposes no history API.
+
 ## Browser vs desktop
 
 | | Browser build | Desktop (Tauri) |
@@ -452,17 +552,25 @@ Dockerfile change. Without the extra, `GET /api/browser/engine` reports
 | Inline framable sites | ✅ iframe | ✅ iframe |
 | Reader mode (any site) | ✅ | ✅ |
 | Full Chromium engine (any site, live DOM, agentic) | ✅ (gated + extra) | ✅ (gated + extra) |
+| Native in-pane webview (any site, fastest, not agent-readable) | ❌ | ✅ (`browser.nativeWebview`) |
 | Blocked-site escape (iframe mode) | Open in new tab (`window.open`) | **Native browser window** (`browser.nativeWindow`) |
 
 The full engine renders **the same backend Chromium** in both builds, so it's the
-general answer to framing-blocked sites; the native-window pop-out remains an
-iframe-mode escape hatch on desktop.
+general answer to framing-blocked sites; the native overlay is the desktop's faster
+in-pane alternative when the engine is off, and the native-window pop-out remains an
+iframe-mode escape hatch.
 
 ## Known limitations / future
 
-- Frame streaming is functional but not buttery — a CDP `Page.startScreencast`
-  (paint-driven frames) is the planned upgrade. Chromium is heavy, so full mode is
-  bounded (one context per connection, released on disconnect).
+- Frames are **not HiDPI**. The screencast captures at the CSS-pixel viewport, so on a
+  2× display the image is upscaled and soft. The fix is a `deviceScaleFactor` on the
+  context plus `Emulation.setDeviceMetricsOverride`, which needs the click mapping to
+  learn the difference between CSS and device pixels — currently they're assumed equal.
+- Frame streaming is now paint-driven (CDP `Page.startScreencast`) rather than polled,
+  but it's still JPEG stills over a JSON socket: `WsConnection` has no binary path, so
+  every frame pays base64's ~33%. A real encoded stream would need server-side H.264
+  (PyAV/ffmpeg) and a licensing call, and was deliberately not taken. Chromium is heavy,
+  so full mode stays bounded (one context per connection, released on disconnect).
 - Deferred full-engine work: in-pane **tabs** (multiple pages per context), a smart URL
   bar / start page with favicons & titles, a history/bookmarks manager, and
   multi-profile switching.
@@ -478,7 +586,10 @@ iframe-mode escape hatch on desktop.
   the user's own browser and are invisible to the backend.
 - Iframe-block detection is best-effort; in iframe mode the manual escapes are always
   shown rather than auto-triggered.
-- A **true in-pane native webview** on desktop (Tauri's `unstable` multi-webview) is
-  superseded by the server engine and deferred.
+- The **native overlay** can't be read by the agent, has no back/forward history API,
+  and is invisible to the network view — it's a fast renderer, not an agentic one. It
+  also rides Tauri's `unstable` multi-webview, so a Tauri upgrade needs it re-checked.
+  Any new full-window UI must call `suppressNativeOverlays()` or it will render behind
+  the page; nothing enforces that automatically.
 - Not to be confused with the external **Claude-in-Chrome** automation, which drives the
   user's *real* Chrome; this module renders pages *inside* the dashboard.

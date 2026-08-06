@@ -201,6 +201,13 @@ export { layoutsModule } from './modules/layouts';
 export { scratchModule } from './modules/scratch';
 export { mcpModule } from './modules/mcp';
 export { browserModule } from './modules/browser';
+// Native overlays (the browser's child webview) composite ABOVE the HTML layer, so
+// any full-window UI must claim suppression while it is up or it renders underneath.
+export {
+  suppressNativeOverlays,
+  nativeOverlaysSuppressed,
+  subscribeNativeOverlaySuppression,
+} from './modules/browser/overlay';
 export { stubModule } from './modules/stub';
 export { databaseModule } from './modules/database';
 export { libraryModule } from './modules/library';

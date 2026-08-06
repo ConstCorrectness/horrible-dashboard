@@ -311,3 +311,217 @@ def test_media_op_harvests_describing_text(live_session) -> None:
     assert img["alt"] == "Backoff chart"
     # Caption first, then the nearest heading — most- to least-specific.
     assert img["context"] == ["Exponential backoff over time", "Retry strategies"]
+
+
+# ---- screencast + viewport (no Chromium) -----------------------------------
+
+
+class FakeCdp:
+    """Stands in for a Playwright CDP session: records sends, replays handlers."""
+
+    def __init__(self, fail_on: set[str] | None = None) -> None:
+        self.sent: list[tuple[str, dict[str, Any]]] = []
+        self.handlers: dict[str, Any] = {}
+        self.fail_on = fail_on or set()
+
+    def send(self, method: str, params: dict[str, Any] | None = None) -> None:
+        if method in self.fail_on:
+            raise RuntimeError(f"{method} unavailable")
+        self.sent.append((method, params or {}))
+
+    def on(self, event: str, handler: Any) -> None:
+        self.handlers[event] = handler
+
+    def methods(self) -> list[str]:
+        return [m for m, _ in self.sent]
+
+
+def _session_with_cdp(
+    fail_on: set[str] | None = None,
+) -> tuple[BrowserSession, FakeCdp]:
+    session = BrowserSession(FakeConn())  # type: ignore[arg-type]
+    cdp = FakeCdp(fail_on)
+    session._cdp = cdp
+    return session, cdp
+
+
+def test_screencast_starts_pinned_to_the_viewport() -> None:
+    """maxWidth/maxHeight must match the viewport exactly.
+
+    If Chromium is allowed to scale the frame, frame pixels and page pixels stop
+    being the same units and every relayed click lands somewhere else — silently,
+    because a downscaled frame still looks like a valid page.
+    """
+    session, cdp = _session_with_cdp()
+    session._viewport = {"width": 900, "height": 640}
+
+    session._start_screencast()
+
+    assert session._screencast is True
+    method, params = cdp.sent[0]
+    assert method == "Page.startScreencast"
+    assert params["maxWidth"] == 900
+    assert params["maxHeight"] == 640
+    assert params["format"] == "jpeg"
+
+
+def test_screencast_failure_falls_back_to_the_poll() -> None:
+    """A Chromium that refuses the screencast must still render, via the old poll."""
+    session, _cdp = _session_with_cdp(fail_on={"Page.startScreencast"})
+
+    session._start_screencast()
+
+    assert session._screencast is False
+
+
+def test_frames_are_acked_so_chromium_keeps_producing() -> None:
+    """CDP holds frame N+1 until N is acked, so a dropped ack freezes the stream.
+
+    The ack is deliberately not sent from inside the frame handler (that runs on the
+    Playwright dispatcher greenlet, where re-entering the driver can deadlock), so
+    this pins the two halves: the handler *queues* an ack, the pump *sends* it.
+    """
+    session, cdp = _session_with_cdp()
+    session._start_screencast()
+
+    session._on_screencast_frame(
+        {"data": "AAAA", "sessionId": 7, "metadata": {"deviceWidth": 800}}
+    )
+    assert session._pending_acks == [7], "the handler must not send the ack itself"
+
+    session._drain_acks()
+    assert ("Page.screencastFrameAck", {"sessionId": 7}) in cdp.sent
+    assert session._pending_acks == [], "a drained ack must not be sent twice"
+
+
+def test_frame_carries_page_geometry() -> None:
+    """The panel scales clicks by the frame's own deviceWidth/Height, so the
+    metadata has to survive the relay — without it the panel falls back to a
+    guess and every click on a resized pane is off."""
+    conn = FakeConn()
+    session = BrowserSession(conn)  # type: ignore[arg-type]
+    session._cdp = FakeCdp()
+    emitted: list[tuple[str, dict[str, Any]]] = []
+    session._emit_nowait = lambda event, data: emitted.append((event, data))  # type: ignore[method-assign]
+
+    session._on_screencast_frame(
+        {
+            "data": "QUJD",
+            "sessionId": 1,
+            "metadata": {
+                "deviceWidth": 1024,
+                "deviceHeight": 768,
+                "pageScaleFactor": 1,
+                "scrollOffsetY": 240,
+            },
+        }
+    )
+
+    event, data = emitted[0]
+    assert event == "frame"
+    assert data["frame"].startswith("data:image/jpeg;base64,QUJD")
+    assert data["metadata"]["deviceWidth"] == 1024
+    assert data["metadata"]["deviceHeight"] == 768
+    assert data["metadata"]["scrollOffsetY"] == 240
+
+
+class FakePage:
+    def __init__(self) -> None:
+        self.viewports: list[dict[str, int]] = []
+
+    def set_viewport_size(self, size: dict[str, int]) -> None:
+        self.viewports.append(size)
+
+
+def test_resize_clamps_untrusted_sizes() -> None:
+    """Sizes come from a getBoundingClientRect() in the browser, so they're input,
+    not fact: a collapsed pane reports 0 and a bug upstream could ask for a surface
+    big enough to take the renderer down."""
+    session, _cdp = _session_with_cdp()
+    page = FakePage()
+
+    assert session._resize(page, 0, 0) == {"width": 200, "height": 200}
+    assert session._resize(page, 99_999, 99_999) == {"width": 4096, "height": 4096}
+
+
+def test_resize_rearms_the_screencast() -> None:
+    """maxWidth/maxHeight are fixed when the screencast starts, so a resize that
+    didn't restart it would keep delivering frames letterboxed to the old size."""
+    session, cdp = _session_with_cdp()
+    session._start_screencast()
+    page = FakePage()
+
+    session._resize(page, 640, 480)
+
+    assert page.viewports == [{"width": 640, "height": 480}]
+    assert cdp.methods().count("Page.stopScreencast") == 1
+    starts = [p for m, p in cdp.sent if m == "Page.startScreencast"]
+    assert starts[-1]["maxWidth"] == 640 and starts[-1]["maxHeight"] == 480
+
+
+def test_resize_to_the_same_size_is_a_no_op() -> None:
+    """A ResizeObserver fires on every layout pass; an unchanged size must not cost
+    a Chromium relayout and a screencast restart."""
+    session, cdp = _session_with_cdp()
+    session._start_screencast()
+    page = FakePage()
+
+    session._resize(page, 640, 480)
+    before = len(cdp.sent)
+    session._resize(page, 640, 480)
+
+    assert len(cdp.sent) == before
+    assert len(page.viewports) == 1
+
+
+@pytest.mark.timeout(90)
+def test_live_frames_come_from_the_screencast(live_session) -> None:
+    """End-to-end proof the screencast is actually the frame source.
+
+    The other live tests only assert that *a* frame arrived, which the fallback
+    screenshot poll would satisfy too — so a broken screencast would silently
+    degrade to the old behaviour and every test would stay green. The metadata is
+    the tell: only CDP frames carry it.
+    """
+    loop, sess, conn = live_session
+
+    async def drive():
+        await sess.submit("navigate", {"url": _PAGE})
+        # Let the pump run so queued screencast frames are dispatched and acked.
+        await asyncio.sleep(0.5)
+
+    loop.run_until_complete(drive())
+
+    assert sess._screencast is True, "screencast failed to arm; fell back to the poll"
+    frames = _events(conn, "frame")
+    assert frames, "no frame streamed"
+    with_meta = [f for f in frames if f.get("metadata", {}).get("deviceWidth")]
+    assert with_meta, f"no frame carried CDP metadata (got {frames[0].keys()})"
+    # The viewport the session was launched with, reported back by Chromium itself.
+    assert with_meta[-1]["metadata"]["deviceWidth"] == 1280
+    assert with_meta[-1]["metadata"]["deviceHeight"] == 800
+
+
+@pytest.mark.timeout(90)
+def test_live_resize_changes_the_reported_viewport(live_session) -> None:
+    """A resize must reach Chromium and come back in the frame metadata — that
+    round trip is what the panel's click mapping trusts."""
+    loop, sess, conn = live_session
+
+    async def drive():
+        await sess.submit("navigate", {"url": _PAGE})
+        applied = await sess.submit("resize", {"width": 900, "height": 600})
+        await asyncio.sleep(0.5)
+        return applied
+
+    applied = loop.run_until_complete(drive())
+    assert applied == {"width": 900, "height": 600}
+
+    sized = [
+        f["metadata"]["deviceWidth"]
+        for f in _events(conn, "frame")
+        if f.get("metadata", {}).get("deviceWidth")
+    ]
+    assert 900 in sized, (
+        f"no frame reported the new viewport (saw {sorted(set(sized))})"
+    )

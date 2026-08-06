@@ -1,0 +1,35 @@
+# Permissions for the native child-webview overlay (see src/webview.rs) backing
+# the `browser.nativeWebview` capability. Custom app commands are ACL-gated here
+# just like the window commands; each needs an `allow-*` permission listed in
+# capabilities/default.json, and a new file in this directory must also be added
+# to PERMISSION_FILES in main.rs (include_str! can't be globbed).
+
+[[permission]]
+identifier = "allow-create-browser-webview"
+description = "Enables the create_browser_webview custom command"
+[permission.commands]
+allow = ["create_browser_webview"]
+
+[[permission]]
+identifier = "allow-update-browser-webview-bounds"
+description = "Enables the update_browser_webview_bounds custom command"
+[permission.commands]
+allow = ["update_browser_webview_bounds"]
+
+[[permission]]
+identifier = "allow-set-browser-webview-visible"
+description = "Enables the set_browser_webview_visible custom command"
+[permission.commands]
+allow = ["set_browser_webview_visible"]
+
+[[permission]]
+identifier = "allow-navigate-browser-webview"
+description = "Enables the navigate_browser_webview custom command"
+[permission.commands]
+allow = ["navigate_browser_webview"]
+
+[[permission]]
+identifier = "allow-close-browser-webview"
+description = "Enables the close_browser_webview custom command"
+[permission.commands]
+allow = ["close_browser_webview"]

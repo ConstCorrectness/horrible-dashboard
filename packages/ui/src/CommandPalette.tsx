@@ -3,6 +3,7 @@ import {
   bindingsFor,
   labelSpec,
   registry,
+  suppressNativeOverlays,
   tryParseSpec,
   useKeyContext,
   useKeymap,
@@ -41,6 +42,11 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       inputRef.current?.focus();
     }
   }, [open]);
+
+  // A native child webview (the browser pane's overlay) is composited by the OS
+  // above the HTML layer, so the palette would open *behind* it no matter what
+  // z-index it carries. Claim suppression while open; the release un-hides it.
+  useEffect(() => (open ? suppressNativeOverlays() : undefined), [open]);
 
   if (!open) return null;
 

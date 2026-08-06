@@ -34,6 +34,7 @@ import {
 } from '../api';
 import { acquireSession, sendInput } from '../session';
 import { FullBrowserView } from './FullBrowserView';
+import { NativeBrowserView } from './NativeBrowserView';
 
 import { SaveToLibrary } from './SaveToLibrary';
 
@@ -90,12 +91,21 @@ export function BrowserPanel() {
   const enginePref = useSetting<string>('browser.engine') ?? 'auto';
   const saveLibrary = (useSetting<string>('browser.saveLibrary') ?? 'default').trim() || 'default';
 
-  // Whether to run the real backend Chromium engine ("full mode") vs the light
-  // iframe. In `auto` we use the engine only when the backend reports it enabled;
-  // `full`/`iframe` force it. Resolved once on mount (the gate is process-wide).
+  // Which of the three renderers to use. `full` is the backend's headless Chromium
+  // streamed here; `native` is a real child webview the desktop shell overlays on
+  // this pane; `iframe` is the light embedded frame.
+  //
+  // `auto` prefers **full over native** even on the desktop, deliberately. The
+  // agent's browser tools (read/snapshot/scrape/click) drive the backend session,
+  // so a pane showing the native overlay would leave the human and the agent
+  // looking at two different pages — the same URL bar driving two engines. Native
+  // is a strict upgrade over the iframe, so `auto` reaches for it only when the
+  // backend engine is off; choosing it while the engine is available is an
+  // explicit setting, not something we do behind the user's back.
+  const canNative = hasCapability('browser.nativeWebview');
   const [engineOn, setEngineOn] = useState(false);
   useEffect(() => {
-    if (enginePref === 'iframe') {
+    if (enginePref === 'iframe' || enginePref === 'native') {
       setEngineOn(false);
       return;
     }
@@ -103,7 +113,9 @@ export function BrowserPanel() {
       .then((s) => setEngineOn(enginePref === 'full' ? true : s.enabled))
       .catch(() => setEngineOn(false));
   }, [enginePref]);
-  const useFull = enginePref !== 'iframe' && engineOn;
+  const useFull = enginePref !== 'iframe' && enginePref !== 'native' && engineOn;
+  const useNative = !useFull && canNative && (enginePref === 'native' || enginePref === 'auto');
+  const [nativeError, setNativeError] = useState<string | null>(null);
 
   const initialUrl = typeof params.url === 'string' ? params.url : '';
   const [nav, setNav] = useState<Nav>(() =>
@@ -217,14 +229,17 @@ export function BrowserPanel() {
   useEffect(() => {
     if (!current) return;
     setInput(current);
-    if (!useFull) setLoading(true); // full mode streams frames; no iframe onLoad
+    // Only the iframe reports load completion. Full mode streams frames and the
+    // native overlay loads out of process, so neither ever clears this — leaving
+    // "loading…" pinned on screen forever.
+    if (!useFull && !useNative) setLoading(true);
     setReader(null);
     setReaderError(null);
     recordHistory(current, liveMeta?.title || current).catch(() => {});
     if (readerDefault) loadReader(current);
     // Re-runs on navigation (current) and reload; readerDefault/loadReader are
     // read once per run by design, not reactive deps.
-  }, [current, reloadKey, readerDefault, loadReader, useFull, liveMeta?.title]);
+  }, [current, reloadKey, readerDefault, loadReader, useFull, useNative, liveMeta?.title]);
 
   // Register this pane as the focus target for the global focus-url-bar command.
   useEffect(() => {
@@ -427,6 +442,22 @@ export function BrowserPanel() {
         </div>
       )}
 
+      {/* The native overlay failed to attach — the render below has already fallen
+          back to the iframe, so say why rather than letting the mode silently
+          change under the user. */}
+      {nativeError && (
+        <div
+          style={{
+            padding: '0.3rem 0.5rem',
+            fontSize: '0.72rem',
+            color: 'var(--text-dim)',
+            borderBottom: '1px solid var(--border)',
+          }}
+        >
+          Native view unavailable ({nativeError}) — using the embedded frame.
+        </div>
+      )}
+
       {/* History dropdown */}
       {showHistory && (
         <div
@@ -514,6 +545,11 @@ export function BrowserPanel() {
             </div>
           ) : useFull && current ? (
             <FullBrowserView url={fullTarget} navSeq={navSeq} onMeta={setLiveMeta} />
+          ) : useNative && current && !nativeError ? (
+            // Native history isn't readable from the shell (there's no back/forward
+            // on a child webview), so this shares the iframe's locally tracked nav
+            // stack rather than deferring to the engine the way full mode does.
+            <NativeBrowserView url={current} navSeq={reloadKey} onError={setNativeError} />
           ) : current ? (
             <iframe
               key={`${reloadKey}:${current}`}

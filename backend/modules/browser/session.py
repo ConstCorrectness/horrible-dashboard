@@ -15,6 +15,17 @@ Key decisions (see docs/modules/browser.mdx):
   (see the `windows-reload-breaks-subprocess-spawn` memory); Chromium is a subprocess,
   so we drive it from a plain thread and talk to it over a queue, relaying frames to the
   event loop with `run_coroutine_threadsafe` (mirrors `visualizer/runner.py`).
+- **Frames come from CDP `Page.startScreencast`**, not a `page.screenshot()` poll.
+  Chromium pushes a frame when the page actually *changes* rather than on our timer,
+  encodes it inside the browser process, and carries the viewport metadata
+  (`deviceWidth/Height`, `pageScaleFactor`, `scrollOffset`) the panel needs to map a
+  click back to page space. Its `screencastFrameAck` handshake is also real
+  backpressure: Chromium won't send frame N+1 until we've acked N, so a slow socket
+  throttles the producer instead of growing an unbounded queue. The old screenshot
+  poll survives as `_poll_frame`, used only when screencast can't be started.
+
+  Note screencast emits **JPEG/PNG stills** — there is no H.264/VP8 stream, so the
+  frontend decodes with `ImageDecoder`/`createImageBitmap`, not `VideoDecoder`.
 - **Persistent context** under `$HORRIBLE_DATA_DIR/browser/<profile>` → cookies, cache,
   localStorage, IndexedDB and site data survive restarts.
 - **Egress policy**: every request is gated through `fetch._check_host_public`, so the
@@ -44,17 +55,46 @@ from backend.modules.ws import WsConnection
 logger = logging.getLogger(__name__)
 
 _GATE_ENV = "HORRIBLE_ENABLE_SERVER_BROWSER"
-_VIEWPORT = {"width": 1280, "height": 800}
+_DEFAULT_VIEWPORT = {"width": 1280, "height": 800}
 _JPEG_QUALITY = 55
-# Idle cadence: re-screenshot even without input so async page updates (SPA renders,
-# animations, late-loading images) reach the panel without spamming the socket.
+
+# Bounds for a client-requested viewport. The frontend derives these from a pane's
+# `getBoundingClientRect()`, so they are untrusted input: a degenerate or enormous
+# size would either crash the renderer or make Chromium allocate a huge surface.
+_MIN_VIEWPORT = 200
+_MAX_VIEWPORT = 4096
+
+# Idle cadence for the **fallback** screenshot poll (screencast unavailable):
+# re-screenshot even without input so async page updates reach the panel.
 _IDLE_FRAME_INTERVAL_S = 0.6
+
+# Screencast pump. Sync Playwright dispatches CDP events only while the greenlet is
+# inside a Playwright call — and the command loop's `queue.get()` is not one, so an
+# idle page would never deliver a frame. `_pump` spends this long inside
+# `wait_for_timeout`, which yields to the dispatcher; the queue wait before it is
+# short so a real command still preempts promptly. Net effect: frames surface within
+# ~one pump of Chromium producing them, at ~20 driver round-trips/sec.
+_PUMP_MS = 30
+_QUEUE_WAIT_S = 0.005
+# How often the pump re-reads `page.title()` (a driver round trip) for the frame
+# handler's cache. A title changes once per navigation; the pump runs ~20×/sec.
+_TITLE_REFRESH_S = 0.5
+
 _NAV_TIMEOUT_MS = 20_000
 _SEND_TIMEOUT_S = 5.0
 
 # Ops that return a value to the caller (agent tools). Everything else is a
 # human interaction whose only effect is the next frame.
-_RESULT_OPS = {"content", "snapshot", "scrape", "screenshot", "eval", "info", "media"}
+_RESULT_OPS = {
+    "content",
+    "snapshot",
+    "scrape",
+    "screenshot",
+    "eval",
+    "info",
+    "media",
+    "resize",
+}
 
 # Network observability caps. A page can fire hundreds of requests; `_MAX_INFLIGHT`
 # bounds the in-flight map against a request that never completes, and
@@ -238,8 +278,28 @@ class BrowserSession:
         self._closing = False
         self._started = threading.Event()
         self._start_error: str | None = None
-        # Skip re-sending a byte-identical frame (idle ticks on a static page).
+        # Skip re-sending a byte-identical frame. Only the fallback poll needs this
+        # (screencast fires on damage, so a repeat frame is genuinely a new paint).
         self._last_frame_hash: int | None = None
+        # --- screencast ---
+        # The CDP session driving both network instrumentation and the frame stream.
+        self._cdp: Any = None
+        # False until `Page.startScreencast` succeeds; while false the command loop
+        # falls back to the screenshot poll.
+        self._screencast = False
+        # Session ids awaiting `Page.screencastFrameAck`. The ack is deliberately
+        # *not* sent from inside the frame handler: that handler runs on the
+        # Playwright dispatcher greenlet, and re-entering the driver from it can
+        # deadlock. `_pump` drains this instead, ~30ms later — well inside the
+        # window that keeps Chromium producing frames.
+        self._pending_acks: list[int] = []
+        # Live viewport, resizable by the client (see the `resize` op).
+        self._viewport = dict(_DEFAULT_VIEWPORT)
+        # Title/URL cache. The frame handler can't call `page.title()` (a driver
+        # round trip, re-entrant from the dispatcher), so the pump refreshes both.
+        self._title = ""
+        self._page_url = ""
+        self._title_at = 0.0
         # Resolved-host cache for the egress route (getaddrinfo per request is costly).
         self._host_ok: dict[str, bool] = {}
         # Network observability (worker-thread state; see the handlers below).
@@ -323,7 +383,7 @@ class BrowserSession:
             context = pw.chromium.launch_persistent_context(
                 user_data_dir=str(_profile_dir(self.profile)),
                 headless=True,
-                viewport=_VIEWPORT,
+                viewport=dict(self._viewport),
                 args=["--disable-blink-features=AutomationControlled"],
             )
             context.set_default_timeout(_NAV_TIMEOUT_MS)
@@ -395,22 +455,126 @@ class BrowserSession:
     # loop rather than called directly.
 
     def _attach_cdp(self, context: Any, page: Any) -> None:
-        """Subscribe to `Network.responseReceived` for per-request connection detail.
+        """Open the CDP session that carries both network detail and the frame stream.
 
         Chromium already measures DNS/TCP/TLS/TTFB timing, the peer's IP, the
         negotiated HTTP version and the full certificate for every request — the
         Playwright API just doesn't expose it. One CDP session recovers all of it and
-        sends no extra packets.
+        sends no extra packets, and the same session carries the screencast.
 
-        Best-effort by design: this is an inspector, and a browser that renders pages
-        without a waterfall beats one that fails to start because a CDP call moved.
+        Both halves are best-effort and independent: this is an inspector *and* a
+        viewer, and a browser that renders without a waterfall (or falls back to the
+        screenshot poll) beats one that fails to start because a CDP call moved.
         """
         try:
-            session = context.new_cdp_session(page)
-            session.send("Network.enable")
-            session.on("Network.responseReceived", self._on_cdp_response)
+            self._cdp = context.new_cdp_session(page)
+            self._cdp.send("Network.enable")
+            self._cdp.on("Network.responseReceived", self._on_cdp_response)
         except Exception as exc:  # noqa: BLE001
             logger.info("CDP network instrumentation unavailable: %s", exc)
+            self._cdp = None
+            return
+        self._start_screencast()
+
+    # ---- frame stream (CDP screencast) --------------------------------------
+
+    def _start_screencast(self) -> None:
+        """Begin (or restart) the screencast at the current viewport size.
+
+        `maxWidth`/`maxHeight` pin the frame to the viewport so Chromium never scales
+        it — the panel's coordinate mapping depends on frame pixels and page pixels
+        being the same units, and a silently downscaled frame would put every click
+        in the wrong place.
+        """
+        if self._cdp is None:
+            return
+        try:
+            self._cdp.on("Page.screencastFrame", self._on_screencast_frame)
+            self._cdp.send(
+                "Page.startScreencast",
+                {
+                    "format": "jpeg",
+                    "quality": _JPEG_QUALITY,
+                    "maxWidth": int(self._viewport["width"]),
+                    "maxHeight": int(self._viewport["height"]),
+                    "everyNthFrame": 1,
+                },
+            )
+            self._screencast = True
+        except Exception as exc:  # noqa: BLE001 — fall back to the screenshot poll
+            logger.info("CDP screencast unavailable, using screenshot poll: %s", exc)
+            self._screencast = False
+
+    def _restart_screencast(self) -> None:
+        """Re-arm the screencast after a viewport change (maxWidth/Height are fixed
+        at start time, so a resize needs a stop/start to stop being letterboxed)."""
+        if self._cdp is None or not self._screencast:
+            return
+        try:
+            self._cdp.send("Page.stopScreencast")
+        except Exception:  # noqa: BLE001 — already stopped / page gone
+            pass
+        self._screencast = False
+        self._pending_acks.clear()
+        self._start_screencast()
+
+    def _on_screencast_frame(self, event: dict[str, Any]) -> None:
+        """Relay one screencast frame to the panel and queue its ack.
+
+        Runs on the Playwright dispatcher greenlet, so it does **no** driver I/O:
+        `page.url` is a cached attribute (safe), `page.title()` would be a round trip
+        (not), and the ack is deferred to `_pump`. The emit itself is fire-and-forget
+        onto the event loop — blocking here would stall the dispatcher, and CDP's
+        ack handshake is already the backpressure.
+        """
+        try:
+            data = event.get("data")
+            if not data:
+                return
+            session_id = event.get("sessionId")
+            if session_id is not None:
+                self._pending_acks.append(int(session_id))
+            meta = event.get("metadata") or {}
+            self._emit_nowait(
+                "frame",
+                {
+                    "frame": "data:image/jpeg;base64," + str(data),
+                    "url": self._page_url,
+                    "title": self._title,
+                    # Page-space geometry for the panel's input mapping. `deviceWidth`
+                    # /`deviceHeight` are the CSS-pixel viewport the frame covers —
+                    # authoritative, and the reason the panel no longer hardcodes
+                    # 1280×800. `scrollOffset` lets a click be resolved against the
+                    # document rather than the viewport.
+                    "metadata": {
+                        "deviceWidth": meta.get("deviceWidth"),
+                        "deviceHeight": meta.get("deviceHeight"),
+                        "pageScaleFactor": meta.get("pageScaleFactor"),
+                        "offsetTop": meta.get("offsetTop"),
+                        "scrollOffsetX": meta.get("scrollOffsetX"),
+                        "scrollOffsetY": meta.get("scrollOffsetY"),
+                        "timestamp": meta.get("timestamp"),
+                    },
+                },
+            )
+        except Exception:  # noqa: BLE001 — a bad frame must never kill the stream
+            logger.debug("screencast frame handling failed", exc_info=True)
+
+    def _drain_acks(self) -> None:
+        """Ack every frame received since the last pump.
+
+        Chromium stops producing until the outstanding frame is acked, so a dropped
+        ack silently freezes the stream — hence the blanket except: a failed ack is
+        logged, not raised, and the next frame re-arms.
+        """
+        if self._cdp is None or not self._pending_acks:
+            return
+        acks, self._pending_acks = self._pending_acks, []
+        for session_id in acks:
+            try:
+                self._cdp.send("Page.screencastFrameAck", {"sessionId": session_id})
+            except Exception:  # noqa: BLE001
+                logger.debug("screencast ack failed", exc_info=True)
 
     def _on_cdp_response(self, event: dict[str, Any]) -> None:
         """Stash one response's connection detail for `_on_response` to pick up.
@@ -535,12 +699,26 @@ class BrowserSession:
         self._emit_connections()
 
     def _loop_commands(self, page: Any) -> None:
-        """Pump commands; on idle, refresh the frame so async updates surface."""
+        """Pump commands and, between them, drive the frame stream.
+
+        Two shapes depending on how frames are produced:
+
+        - **screencast** — Chromium pushes frames on its own, but sync Playwright
+          only dispatches CDP events while the greenlet is inside a driver call. So
+          idling means a short queue wait followed by `_pump`, which spends `_PUMP_MS`
+          inside `wait_for_timeout` (the dispatch window) and acks what arrived.
+        - **fallback poll** — no screencast, so idling means the original
+          screenshot-every-`_IDLE_FRAME_INTERVAL_S` behaviour.
+        """
         while not self._closing:
+            wait = _QUEUE_WAIT_S if self._screencast else _IDLE_FRAME_INTERVAL_S
             try:
-                cmd = self._queue.get(timeout=_IDLE_FRAME_INTERVAL_S)
+                cmd = self._queue.get(timeout=wait)
             except queue.Empty:
-                self._capture_frame(page)
+                if self._screencast:
+                    self._pump(page)
+                else:
+                    self._poll_frame(page)
                 continue
             if cmd is None:
                 return
@@ -550,7 +728,42 @@ class BrowserSession:
             except Exception as exc:  # noqa: BLE001
                 cmd.future.set_exception(exc)
             # Every op (human interaction or agent op) may have changed the view.
-            self._capture_frame(page)
+            # Under screencast Chromium will push the resulting paint by itself; the
+            # pump only has to give the dispatcher a window to deliver it.
+            if self._screencast:
+                self._pump(page)
+            else:
+                self._poll_frame(page)
+
+    def _pump(self, page: Any) -> None:
+        """Give the CDP dispatcher a window to deliver frames, then ack them.
+
+        `wait_for_timeout` is the cheapest driver call that yields to the dispatcher.
+        Ordering matters: acks are drained *after* the wait, so frames delivered
+        during this window are acked in this pass rather than one pump later.
+        """
+        try:
+            page.wait_for_timeout(_PUMP_MS)
+            self._page_url = page.url
+        except Exception:  # noqa: BLE001 — page navigating/closing; try next tick
+            return
+        self._drain_acks()
+        self._refresh_title(page)
+
+    def _refresh_title(self, page: Any) -> None:
+        """Keep the cached title fresh for the frame handler (which can't ask).
+
+        Throttled: `page.title()` is a driver round trip and the pump runs ~20×/sec,
+        but a title changes at most once per navigation. `_TITLE_REFRESH_S` keeps it
+        responsive without spending a round trip per frame.
+        """
+        now = time.monotonic()
+        if now - self._title_at < _TITLE_REFRESH_S:
+            return
+        self._title_at = now
+        title = _safe_title(page)
+        if title:
+            self._title = title
 
     def _dispatch(self, page: Any, op: str, args: dict[str, Any]) -> Any:
         if op == "navigate":
@@ -599,6 +812,8 @@ class BrowserSession:
             if not server_browser_enabled():
                 raise RuntimeError("browser engine not enabled")
             return {"result": page.evaluate(str(args.get("js", "")))}
+        if op == "resize":
+            return self._resize(page, args.get("width"), args.get("height"))
         if op == "info":
             return {"url": page.url, "title": page.title()}
         raise ValueError(f"unknown browser op: {op}")
@@ -746,7 +961,15 @@ class BrowserSession:
 
         return "data:image/jpeg;base64," + base64.b64encode(raw).decode("ascii")
 
-    def _capture_frame(self, page: Any) -> None:
+    def _poll_frame(self, page: Any) -> None:
+        """Fallback frame source: screenshot the page and emit it if it changed.
+
+        Only reached when `Page.startScreencast` couldn't be armed (no CDP session,
+        or a Chromium that rejected it). Keeps the blocking emit — with no ack
+        handshake to throttle the producer, backpressuring the worker against a slow
+        socket is the only thing bounding the queue. Frames carry no `metadata`, so
+        the panel falls back to the viewport it asked for.
+        """
         try:
             raw = page.screenshot(type="jpeg", quality=_JPEG_QUALITY)
         except Exception:  # noqa: BLE001 — mid-navigation / closed page; try next tick
@@ -758,10 +981,29 @@ class BrowserSession:
         import base64
 
         uri = "data:image/jpeg;base64," + base64.b64encode(raw).decode("ascii")
+        self._page_url = page.url
         if not self._emit_threadsafe(
             "frame", {"frame": uri, "url": page.url, "title": _safe_title(page)}
         ):
             self._closing = True
+
+    def _resize(self, page: Any, width: Any, height: Any) -> dict[str, int]:
+        """Resize the live viewport to match the pane, and re-arm the screencast.
+
+        The values come from a `getBoundingClientRect()` in the browser, so they are
+        clamped rather than trusted — a collapsed pane reports 0, and a mistake
+        upstream shouldn't ask Chromium for a 60000px surface.
+        """
+        w = max(_MIN_VIEWPORT, min(_MAX_VIEWPORT, int(width)))
+        h = max(_MIN_VIEWPORT, min(_MAX_VIEWPORT, int(height)))
+        if (w, h) == (self._viewport["width"], self._viewport["height"]):
+            return {"width": w, "height": h}
+        page.set_viewport_size({"width": w, "height": h})
+        self._viewport = {"width": w, "height": h}
+        # maxWidth/maxHeight are fixed when the screencast starts, so a resize that
+        # didn't re-arm would keep delivering frames letterboxed to the old size.
+        self._restart_screencast()
+        return {"width": w, "height": h}
 
 
 def _safe_title(page: Any) -> str:

@@ -4,6 +4,7 @@
 
 mod backend;
 mod shortcuts;
+mod webview;
 mod window;
 
 use std::sync::Arc;
@@ -25,6 +26,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(supervisor)
+        .manage(webview::BrowserWebviews::default())
         .invoke_handler(tauri::generate_handler![
             backend::backend_status,
             shortcuts::shortcuts_register,
@@ -39,7 +41,12 @@ fn main() {
             window::window_start_resize_dragging,
             window::window_open_workspace,
             window::browser_open_url,
-            window::open_external
+            window::open_external,
+            webview::create_browser_webview,
+            webview::update_browser_webview_bounds,
+            webview::set_browser_webview_visible,
+            webview::navigate_browser_webview,
+            webview::close_browser_webview
         ])
         .build(tauri::generate_context!())
         .expect("error while building horrible-dashboard")
@@ -96,6 +103,7 @@ mod acl_coverage {
         include_str!("../permissions/default.toml"),
         include_str!("../permissions/shortcuts.toml"),
         include_str!("../permissions/window.toml"),
+        include_str!("../permissions/webview.toml"),
     ];
 
     #[test]

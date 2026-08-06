@@ -17,6 +17,7 @@ export const DESKTOP_CAPABILITIES: Capability[] = [
   'shortcuts.global',
   'tray',
   'browser.nativeWindow',
+  'browser.nativeWebview',
 ];
 
 let active = new Set<Capability>();

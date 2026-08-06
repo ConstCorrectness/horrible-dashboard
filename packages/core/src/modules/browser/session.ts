@@ -22,10 +22,31 @@ import type { WsMessage } from '@horribledashboard/sdk';
 
 import { sendChannel, subscribeChannel } from '../../ws';
 
+/**
+ * Page-space geometry attached to a screencast frame, straight from CDP.
+ *
+ * `deviceWidth`/`deviceHeight` are the CSS-pixel viewport the frame covers — the
+ * authoritative scale for mapping a click on the rendered image back to the page,
+ * and the reason the panel no longer hardcodes 1280×800. Absent on frames from the
+ * fallback screenshot poll, where the client's requested viewport is the best guess.
+ */
+export interface FrameMetadata {
+  deviceWidth: number | null;
+  deviceHeight: number | null;
+  pageScaleFactor: number | null;
+  offsetTop: number | null;
+  scrollOffsetX: number | null;
+  scrollOffsetY: number | null;
+  /** Chromium's capture timestamp (seconds since epoch), for staleness checks. */
+  timestamp: number | null;
+}
+
 export interface BrowserFrame {
   frame: string; // data:image/jpeg;base64 URI
   url: string;
   title: string;
+  /** Present on screencast frames; absent on fallback-poll frames. */
+  metadata?: FrameMetadata;
 }
 
 /** One interactable element from an agent `snapshot`. */
@@ -218,6 +239,13 @@ export const engine = {
   clickRef: (ref: number) => requestOp<null>('click_ref', { ref }),
   typeRef: (ref: number, text: string) => requestOp<null>('type_ref', { ref, text }),
   info: (): Promise<{ url: string; title: string }> => requestOp('info'),
+  /**
+   * Resize the live Chromium viewport to match the pane. Returns the size actually
+   * applied — the backend clamps, so a collapsed pane (0×0) or an absurd request
+   * comes back as something sane rather than being honoured.
+   */
+  resize: (width: number, height: number): Promise<{ width: number; height: number }> =>
+    requestOp('resize', { width, height }),
 };
 
 // How many browser panes are currently mounted and relying on the shared session.

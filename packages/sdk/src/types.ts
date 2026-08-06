@@ -23,7 +23,13 @@ export type Capability =
   // The embedded browser can pop a page out to a real native OS window (a true
   // browser, bypassing iframe X-Frame-Options/CSP). Desktop-only; the browser
   // build leaves the window seam null and falls back to opening a new tab.
-  | 'browser.nativeWindow';
+  | 'browser.nativeWindow'
+  // The embedded browser can overlay a **native child webview** on its pane, so a
+  // page renders at native speed with no iframe restrictions and no frame streaming.
+  // Desktop-only (Tauri multi-webview). Distinct from `browser.nativeWindow`, which
+  // pops a page out to a separate OS window: this one stays inside the pane, at the
+  // cost of compositing above the HTML layer — see src-tauri/src/webview.rs.
+  | 'browser.nativeWebview';
 
 /**
  * Minimal JSON Schema subset used to describe an agent tool's arguments to the

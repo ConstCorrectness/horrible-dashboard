@@ -26,5 +26,12 @@ export function createTauriWindowControl(): WindowControl {
       invoke<void>('window_start_resize_dragging', { direction: edge }),
     openWorkspaceWindow: (workspaceId) => invoke<void>('window_open_workspace', { workspaceId }),
     openBrowserWindow: (url) => invoke<void>('browser_open_url', { url }),
+    browserWebview: {
+      create: (id, url, bounds) => invoke<void>('create_browser_webview', { id, url, bounds }),
+      updateBounds: (id, bounds) => invoke<void>('update_browser_webview_bounds', { id, bounds }),
+      setVisible: (id, visible) => invoke<void>('set_browser_webview_visible', { id, visible }),
+      navigate: (id, url) => invoke<void>('navigate_browser_webview', { id, url }),
+      close: (id) => invoke<void>('close_browser_webview', { id }),
+    },
   };
 }

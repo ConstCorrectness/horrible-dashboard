@@ -23,6 +23,39 @@ export type ResizeEdge =
   | 'south-east'
   | 'south-west';
 
+/** Pane rectangle in logical (CSS) pixels — what `getBoundingClientRect()` reports. */
+export interface WebviewBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * `browser.nativeWebview` — a real child webview overlaid on a browser pane.
+ *
+ * Grouped rather than flattened onto {@link WindowControl}: these five drive one
+ * feature and are meaningless individually. Gate on the `browser.nativeWebview`
+ * capability before reaching for them; the property is absent in the browser build.
+ *
+ * The overlay is composited by the OS **above** the HTML layer, so it cannot be
+ * z-indexed under anything the app draws. {@link setVisible} is how callers yield
+ * that region — for the command palette, modals, pane drags, or a workspace switch.
+ * See apps/desktop/src-tauri/src/webview.rs.
+ */
+export interface BrowserWebviewControl {
+  /** Create (or re-point and show) the overlay owned by pane `id`. Idempotent. */
+  create(id: string, url: string, bounds: WebviewBounds): Promise<void>;
+  /** Follow the pane as it moves or resizes. */
+  updateBounds(id: string, bounds: WebviewBounds): Promise<void>;
+  /** Show/hide without destroying — preserves the page, its scroll and its JS state. */
+  setVisible(id: string, visible: boolean): Promise<void>;
+  /** Point the overlay at a new URL (URL bar, bookmark, history, home). */
+  navigate(id: string, url: string): Promise<void>;
+  /** Destroy the overlay. */
+  close(id: string): Promise<void>;
+}
+
 export interface WindowControl {
   /** Is the OS window currently borderless-fullscreen? */
   isFullscreen(): Promise<boolean>;
@@ -51,6 +84,10 @@ export interface WindowControl {
   // native window (a true browser, so sites that refuse iframing still open).
   /** Open `url` in a new decorated native browser window. */
   openBrowserWindow(url: string): Promise<void>;
+
+  // browser.nativeWebview — a native child webview overlaid on a browser pane.
+  /** Present only on hosts granting `browser.nativeWebview`. */
+  browserWebview?: BrowserWebviewControl;
 }
 
 let control: WindowControl | null = null;

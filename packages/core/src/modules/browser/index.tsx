@@ -92,9 +92,9 @@ export const browserModule: ModuleManifest = {
       key: 'browser.engine',
       title: 'Rendering engine',
       description:
-        'full = real headless Chromium server-rendered from the backend (reads the live DOM, persists cookies/cache, agent can scrape/act); iframe = the light embedded frame. auto uses full when the backend has it enabled (HORRIBLE_ENABLE_SERVER_BROWSER=1) and falls back to iframe.',
+        'full = real headless Chromium server-rendered from the backend (reads the live DOM, persists cookies/cache, agent can scrape/act); native = a real child webview overlaid on the pane (desktop only — fastest and no iframe restrictions, but it paints above app UI and the agent cannot read it); iframe = the light embedded frame. auto prefers full when the backend has it enabled (HORRIBLE_ENABLE_SERVER_BROWSER=1), then native on the desktop, then iframe.',
       type: 'enum',
-      enumValues: ['auto', 'full', 'iframe'],
+      enumValues: ['auto', 'full', 'native', 'iframe'],
       default: 'auto',
     },
   ],
