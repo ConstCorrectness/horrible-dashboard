@@ -676,14 +676,32 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       source.connect(agentAudioDestRef.current);
       source.connect(audioCtxRef.current.destination); // Play locally so the user hears it too
       
+      const wasMuted = isMuted;
+      if (wasMuted && activeChannel) {
+        try {
+          await muteClubhouseChannel(activeChannel, false);
+        } catch (e) {
+          console.error('Failed to unmute channel for agent TTS:', e);
+        }
+      }
+
       return new Promise<void>((resolve) => {
-        source.onended = () => resolve();
+        source.onended = async () => {
+          if (wasMuted && activeChannel) {
+            try {
+              await muteClubhouseChannel(activeChannel, true);
+            } catch (e) {
+              console.error('Failed to restore mute state after agent TTS:', e);
+            }
+          }
+          resolve();
+        };
         source.start();
       });
     } catch (e) {
       console.error('Failed to play agent audio:', e);
     }
-  }, []);
+  }, [isMuted, activeChannel]);
 
   return {
     joined,

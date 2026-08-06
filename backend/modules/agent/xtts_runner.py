@@ -15,7 +15,8 @@ def main():
     config.load_json(os.path.join(model_dir, "config.json"))
     model = Xtts.init_from_config(config)
     model.load_checkpoint(config, checkpoint_dir=model_dir, eval=True)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # Force CPU to avoid CUDA OOM alongside local LLMs
+    device = "cpu"
     model = model.to(device)
     
     speakers_file = os.path.join(model_dir, "speakers_xtts.pth")
