@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { gameAccent, gameHeroImage, gameIcon, gameTagline } from '../game-identity';
 import { type GameCatalogEntry } from '../games-api';
-import { playVsOwnAgent } from '../matchmaking';
+import { startWithSavedSetup } from '../matchmaking';
 import { setActiveGame } from '../selected-game';
 
 /**
@@ -57,7 +57,7 @@ export function GamesHero({
     // hero for one game while the harness and board sit on another.
     setSelectedGame(current.id);
     setActiveGame(current.id);
-    void playVsOwnAgent(current.id);
+    void startWithSavedSetup(current.id, current.default_policy);
   }, [current, setSelectedGame]);
 
   if (!current) {

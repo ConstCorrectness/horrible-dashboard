@@ -56,8 +56,12 @@ def test_bot_policy_executes_script() -> None:
     kinds = [s["kind"] for s in steps]
     assert kinds == ["assistant", "tool_result", "chose"]
 
-    # Test running with first tool (no tool named "bot")
-    loadout_first_tool = Loadout(
+    # A tool that is NOT the bot is never run as one. This used to assert the
+    # opposite — that the loadout's *first* tool played — which is the bug the
+    # default bot tool replaces: a helper returning analysis rather than a move
+    # answered illegally every turn and degraded to random, silently, in ranked
+    # matches too. Now the default random-legal bot plays instead.
+    loadout_helper_only = Loadout(
         game_id="t",
         tools=[
             ToolDef(
@@ -68,9 +72,11 @@ def test_bot_policy_executes_script() -> None:
         ],
     )
     steps = []
-    policy = BotPolicy(trace=steps.append, load_loadout=lambda _g: loadout_first_tool)
+    policy = BotPolicy(trace=steps.append, load_loadout=lambda _g: loadout_helper_only)
     chosen = asyncio.run(policy.choose({"board": []}, LEGAL, "t"))
-    assert chosen == "8"
+    assert chosen in IDS
+    # The default bot answered directly — nothing had to fall back to random.
+    assert not any(s["kind"].startswith("fallback") for s in steps)
 
     # Test bot policy robust fallback to RandomPolicy on runtime error
     loadout_error = Loadout(

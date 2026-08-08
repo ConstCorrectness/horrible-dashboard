@@ -1,5 +1,5 @@
 """The ranked queue: rating-window pairing, bot backfill, placement fast-path,
-and tier-gated difficulties."""
+and rating-derived difficulty."""
 
 from __future__ import annotations
 
@@ -120,8 +120,13 @@ def test_bot_backfill_after_deadline(monkeypatch) -> None:
     asyncio.run(go())
 
 
-def test_hard_difficulty_is_tier_locked() -> None:
+def test_difficulty_is_derived_from_rating_not_requested(monkeypatch) -> None:
+    """A client asking for `hard` is not rejected and is not obeyed: difficulty
+    comes off the player's own rating. A bronze player gets `standard` even when
+    their client asks for `hard`; a diamond player gets `expert` without asking."""
+
     async def go() -> None:
+        monkeypatch.setenv("GAMES_QUEUE_BOT_S", "0")  # solo → instant bot backfill
         hub = GameHub(move_timeout_s=0)
         _give_rating("bronzey", "tictactoe", 1000)  # bronze, placed
         a_conn, a = await _auth(hub, "bronzey")
@@ -129,16 +134,46 @@ def test_hard_difficulty_is_tier_locked() -> None:
             a,
             {"type": models.QUEUE_JOIN, "game_id": "tictactoe", "difficulty": "hard"},
         )
-        assert a_conn.last(models.ERROR)["code"] == "tier_locked"
+        assert a_conn.last(models.ERROR) is None
+        found = a_conn.last(models.MATCH_FOUND)
+        assert found is not None
+        assert hub._tables[found["table_id"]].ruleset.difficulty == "standard"
 
-        # A gold player gets in.
-        _give_rating("goldy", "tictactoe", 1300)
-        g_conn, g = await _auth(hub, "goldy")
+        _give_rating("shiny", "tictactoe", 1600)  # diamond
+        d_conn, d = await _auth(hub, "shiny")
+        await hub.handle(d, {"type": models.QUEUE_JOIN, "game_id": "tictactoe"})
+        found = d_conn.last(models.MATCH_FOUND)
+        assert found is not None
+        assert hub._tables[found["table_id"]].ruleset.difficulty == "expert"
+
+    asyncio.run(go())
+
+
+def test_one_queue_per_game_pairs_across_old_difficulty_buckets() -> None:
+    """The regression the split buckets caused: two players of the same strength
+    queuing the same game must pair, whatever difficulty their clients ask for."""
+
+    async def go() -> None:
+        hub = GameHub(move_timeout_s=0)
+        _give_rating("ay", "tictactoe", 1300)
+        _give_rating("bee", "tictactoe", 1300)
+        a_conn, a = await _auth(hub, "ay")
+        _b_conn, b = await _auth(hub, "bee")
         await hub.handle(
-            g,
-            {"type": models.QUEUE_JOIN, "game_id": "tictactoe", "difficulty": "hard"},
+            a, {"type": models.QUEUE_JOIN, "game_id": "tictactoe", "difficulty": "hard"}
         )
-        assert g_conn.last(models.ERROR) is None
+        await hub.handle(
+            b,
+            {
+                "type": models.QUEUE_JOIN,
+                "game_id": "tictactoe",
+                "difficulty": "standard",
+            },
+        )
+        found = a_conn.last(models.MATCH_FOUND)
+        assert found is not None
+        assert found["opponent"] is not None  # each other, not a bot
+        assert not hub.matchmaker._entries
 
     asyncio.run(go())
 

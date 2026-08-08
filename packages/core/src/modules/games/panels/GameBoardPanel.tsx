@@ -13,7 +13,7 @@ import {
   type SeatProfile,
 } from '../game-ws';
 import { fetchGamesCatalog, type GameCatalogEntry } from '../games-api';
-import { playVsOwnAgent } from '../matchmaking';
+import { startWithSavedSetup } from '../matchmaking';
 import { phaseLabel } from '../phase-label';
 import { openReplay } from '../replay-focus';
 import { ArenaBoard } from './ArenaBoard';
@@ -261,7 +261,7 @@ function IdleBoard() {
                       '--tile-accent': accent,
                     } as React.CSSProperties
                   }
-                  onClick={() => void playVsOwnAgent(g.id)}
+                  onClick={() => void startWithSavedSetup(g.id, g.default_policy)}
                 >
                   <span style={{ fontSize: '1.6rem' }}>{gameIcon(g.id)}</span>
                   <span style={{ fontSize: '0.78rem', fontWeight: 700, textAlign: 'center' }}>

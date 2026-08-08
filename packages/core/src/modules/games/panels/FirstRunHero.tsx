@@ -5,7 +5,7 @@ import { setSetting } from '../../../settings';
 import { useAccount } from '../../../useAccount';
 import { useGames } from '../game-ws';
 import { openGamesSection } from '../hub-section';
-import { findRankedMatch } from '../matchmaking';
+import { startPlacement as beginPlacement } from '../matchmaking';
 
 type Step = 'placement' | 'done';
 
@@ -79,7 +79,7 @@ export function FirstRunHero() {
   const startPlacement = () => {
     openGamesSection('board');
     openDrawer('log');
-    void findRankedMatch('tictactoe', 'standard', true);
+    void beginPlacement('tictactoe');
     setQueued(true);
   };
 

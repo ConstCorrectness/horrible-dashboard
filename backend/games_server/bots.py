@@ -63,8 +63,20 @@ def bot_account_id(game_id: str, tier: str) -> str:
 
 
 def _ttt_best_move(board: list[str | None], me: int) -> str:
-    """Full minimax on the 3x3 board (marks 'X'/'O'; seat 0 = X)."""
+    """Full minimax on the 3x3 board (marks 'X'/'O'; seat 0 = X).
+
+    Memoised on (board, side to move). The search is unchanged — same values, same
+    first-best tie-break, so the bot plays exactly as it always did — but an empty
+    board goes from ~550k nodes to ~5.5k distinct states. At one move per turn that
+    was invisible; the Train section's episode runner calls this thousands of times
+    in a row, where 238ms/move made a 200-episode run impossible.
+
+    The cache is per call (a local dict, not `functools.cache` on a module-level
+    function) because the board is a mutable list and the entries are worthless
+    across turns anyway — the win is entirely within one search.
+    """
     marks = ("X", "O")
+    memo: dict[tuple[tuple[str | None, ...], int], int] = {}
 
     def winner(b: list[str | None]) -> str | None:
         lines = (
@@ -83,6 +95,15 @@ def _ttt_best_move(board: list[str | None], me: int) -> str:
         return None
 
     def score(b: list[str | None], turn: int) -> int:
+        key = (tuple(b), turn)
+        cached = memo.get(key)
+        if cached is not None:
+            return cached
+        value = _score_uncached(b, turn)
+        memo[key] = value
+        return value
+
+    def _score_uncached(b: list[str | None], turn: int) -> int:
         w = winner(b)
         if w is not None:
             return 1 if w == marks[me] else -1

@@ -23,13 +23,14 @@ import { findPaneAnywhere, listPanes } from '../../layout/model';
 import { layoutStore } from '../../layout/store';
 import { usePaneSection } from '../../layout/use-sections';
 
-export type GamesSection = 'play' | 'board' | 'build' | 'replays' | 'career' | 'social';
+export type GamesSection = 'play' | 'board' | 'train' | 'build' | 'replays' | 'career' | 'social';
 
 export const GAMES_VIEW_ID = 'games.lobby';
 
 export const SECTION_LABEL: Record<GamesSection, string> = {
   play: 'Play',
   board: 'Game Board',
+  train: 'Train',
   build: 'Build',
   replays: 'Replays',
   career: 'Career',
@@ -39,13 +40,16 @@ export const SECTION_LABEL: Record<GamesSection, string> = {
 export const SECTION_ICON: Record<GamesSection, string> = {
   play: '🕹',
   board: '▦',
+  train: '🎯',
   build: '🛠',
   replays: '📼',
   career: '🪪',
   social: '🏛',
 };
 
-const SECTION_IDS = ['play', 'board', 'build', 'replays', 'career', 'social'] as const;
+// Train sits between the board and the builder on purpose: it is where you go
+// after watching a match go wrong and before editing the harness.
+const SECTION_IDS = ['play', 'board', 'train', 'build', 'replays', 'career', 'social'] as const;
 
 /** Section declarations for the manifest — one source of truth for id/label/icon. */
 export const GAMES_SECTIONS = SECTION_IDS.map((id) => ({

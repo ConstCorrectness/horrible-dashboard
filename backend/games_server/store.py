@@ -42,6 +42,13 @@ TIERS: list[tuple[str, float]] = [
 ]
 
 # Which tier unlocks each game difficulty on the ranked queue.
+#
+# This is a *derivation* table, not a menu. The queue used to ask players which
+# difficulty they wanted and reject the ones their tier had not unlocked, which
+# split one thin pool three ways to gate a knob only task games even read. Now
+# `derive_difficulty` reads it in reverse: your rating picks your difficulty, the
+# way ELO already picks your opponent. The gates survive as the thing the UI shows
+# you climbing towards.
 DIFFICULTY_GATES: dict[str, str] = {
     "standard": "bronze",
     "hard": "gold",
@@ -67,6 +74,38 @@ def tier_at_least(tier: str, gate: str) -> bool:
     if tier not in order or gate not in order:
         return False
     return order.index(tier) >= order.index(gate)
+
+
+def derive_difficulty(rating: float, placement_games: int) -> str:
+    """The difficulty a player of this strength plays at — the hardest one their
+    tier has unlocked. Players in placement always get `standard`: their rating is
+    not yet meaningful, so reading a difficulty off it would be noise."""
+    tier = tier_for(rating, placement_games)
+    if tier == "placement":
+        return "standard"
+    # Hardest first, so the first gate the tier clears wins.
+    for name, gate in sorted(
+        DIFFICULTY_GATES.items(),
+        key=lambda kv: [t for t, _f in TIERS].index(kv[1]),
+        reverse=True,
+    ):
+        if tier_at_least(tier, gate):
+            return name
+    return "standard"
+
+
+def delta_preview(rating: float, opponent_rating: float) -> dict[str, int]:
+    """What a win/draw/loss against an opponent of this rating would move you.
+
+    The same ELO the referee applies after the game (`record_result`), run forwards
+    so the Fight button can show the stakes *before* you commit. Rounded the way the
+    displayed rating is, so the preview and the post-game toast agree.
+    """
+    expected = _expected(rating, opponent_rating)
+    return {
+        outcome: round(ELO_K * (score - expected))
+        for outcome, score in (("win", 1.0), ("draw", 0.5), ("loss", 0.0))
+    }
 
 
 def get_db_path() -> Path:

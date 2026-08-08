@@ -1,45 +1,37 @@
 import { useEffect, useState } from 'react';
 
-import Card from '@mui/material/Card';
-import CardContent from '@mui/material/CardContent';
 import Button from '@mui/material/Button';
-import Chip from '@mui/material/Chip';
 import Typography from '@mui/material/Typography';
-import ToggleButton from '@mui/material/ToggleButton';
-import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 
-import Tooltip from '@mui/material/Tooltip';
-import Select from '@mui/material/Select';
-import MenuItem from '@mui/material/MenuItem';
-
-import { useSetting, setSetting } from '../../../settings';
 import { claimChallengeDraft, onChallengeDraft, type ChallengeTarget } from '../challenge-draft';
 import { requestChallenges } from '../challenge-focus';
 import { gamesListTables, useGames, gamesQueueLeave, type TableInfo } from '../game-ws';
 import { type GameCatalogEntry } from '../games-api';
-import {
-  hostOpenTable,
-  joinTableLive,
-  playVsBot,
-  playVsOwnAgent,
-  watchTableLive,
-  findRankedMatch,
-} from '../matchmaking';
+import { joinTableLive, watchTableLive } from '../matchmaking';
 import { openHarnessFor } from '../selected-game';
+import { openGamesSection } from '../hub-section';
 import { ChallengeDraftCard, IncomingOfferCard } from './ChallengeCards';
 import { gameAccent, gameIcon } from '../game-identity';
 import { FirstRunHero } from './FirstRunHero';
 import { GamesHero } from './GamesHero';
+import { MatchSetupCard } from './MatchSetup';
 import { GamesMui } from '../mui-theme';
+import { useSetting } from '../../../settings';
 
-// Practice-bot difficulty tiers (server-hosted opponents). Values match the
-// server's bot tiers; labels pair a difficulty word with the bot's persona.
-const BOT_TIERS: { value: string; label: string }[] = [
-  { value: 'bronze', label: '🥉 Easy · Rusty' },
-  { value: 'silver', label: '🥈 Medium · Circuit' },
-  { value: 'gold', label: '🥇 Hard · Aurum' },
-  { value: 'platinum', label: '💠 Expert · Nemesis' },
-];
+/**
+ * The hub's default section: **start a match**.
+ *
+ * Everything about *how* a match is configured now lives in one place —
+ * `MatchSetupCard`, the two-seat VS card. This file is the surround: the empty
+ * state, the incoming-challenge cards, the dev-kit shortcuts and the server
+ * browser.
+ *
+ * It used to hold the configuration itself, in duplicate: a MOVE POLICY toggle
+ * group rendered twice from the same state, a queue difficulty rendered twice
+ * (once as toggles, once as a dropdown), two Deselect buttons, and four start
+ * buttons whose meaning depended on a control under a different heading. All of
+ * that collapsed into the seat card. See docs/modules/games.mdx.
+ */
 
 const GAME_DESCRIPTIONS: Record<string, string> = {
   tictactoe:
@@ -151,9 +143,81 @@ function ServerRow({
   );
 }
 
-/**
- * The hub's default tab: start a match.
- */
+/** The server browser, shared by the empty state and the per-game view. */
+function ServerBrowser({
+  title,
+  tables,
+  nameOf,
+  connected,
+  emptyHint,
+}: {
+  title: string;
+  tables: TableInfo[];
+  nameOf: (id: string) => string;
+  connected: boolean;
+  emptyHint: string;
+}) {
+  return (
+    <>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          marginBottom: '0.4rem',
+          marginTop: '1rem',
+        }}
+      >
+        <Typography variant="subtitle2" sx={{ fontWeight: 800, color: 'text.secondary' }}>
+          {title}
+        </Typography>
+        <Button
+          size="small"
+          color="inherit"
+          onClick={() => gamesListTables()}
+          sx={{ py: 0.1, minWidth: 0, textTransform: 'none' }}
+        >
+          ↻ Refresh List
+        </Button>
+      </div>
+
+      <div className="games-server-browser">
+        <div className="games-server-header">
+          <span>Server</span>
+          <span>Status</span>
+          <span>Players</span>
+          <span>Ping</span>
+          <span>Action</span>
+        </div>
+
+        {tables.length === 0 ? (
+          <div
+            style={{
+              padding: '2rem 1rem',
+              textAlign: 'center',
+              color: 'var(--text-dim)',
+              fontSize: '0.8rem',
+            }}
+          >
+            {connected
+              ? emptyHint
+              : 'Servers appear once connected — that happens automatically when you play.'}
+          </div>
+        ) : (
+          tables.map((t) => (
+            <ServerRow
+              key={t.id}
+              table={t}
+              gameName={nameOf(t.game_id)}
+              gameIcon={gameIcon(t.game_id)}
+            />
+          ))
+        )}
+      </div>
+    </>
+  );
+}
+
 export function PlaySection({
   games,
   selectedGame,
@@ -163,21 +227,9 @@ export function PlaySection({
   selectedGame: string | null;
   setSelectedGame: (id: string | null) => void;
 }) {
-  const { connected, tables, queue, lastRating } = useGames();
+  const { connected, tables, queue } = useGames();
   const [draft, setDraft] = useState<ChallengeTarget | null>(() => claimChallengeDraft());
-  const [playMode, setPlayMode] = useState<'casual' | 'ranked'>('casual');
-  const [difficulty, setDifficulty] = useState<string>('standard');
-  const [botTier, setBotTier] = useState<string>('bronze');
   const onboarded = useSetting<boolean>('games.onboarded') === true;
-  // Move policy is a property of the GAME now: resolve the per-game override, then
-  // the game's declared default (from the catalog), then the legacy global setting.
-  // Writes go to the per-game key so switching games doesn't clobber another's choice.
-  const policyKey = selectedGame ? `games.policy.${selectedGame}` : 'games.policy';
-  const policyOverride = useSetting<string>(policyKey);
-  const globalPolicy = useSetting<string>('games.policy') ?? 'random';
-  const selectedEntry = selectedGame ? games.find((g) => g.id === selectedGame) : undefined;
-  const policy = policyOverride ?? selectedEntry?.default_policy ?? globalPolicy;
-  const setPolicy = (val: string) => void setSetting(policyKey, val);
 
   useEffect(() => onChallengeDraft(setDraft), []);
 
@@ -185,11 +237,14 @@ export function PlaySection({
     if (connected) gamesListTables();
   }, [connected]);
 
-  // Build a name lookup from catalog
   const nameOf = (id: string) => games.find((g) => g.id === id)?.name ?? id;
-
-  // Filter tables by selected game (null = show all)
   const filteredTables = selectedGame ? tables.filter((t) => t.game_id === selectedGame) : tables;
+  const g = selectedGame ? games.find((x) => x.id === selectedGame) : undefined;
+
+  // The setup card shows the queue for the game you are looking at. A queue for a
+  // *different* game would otherwise vanish when you browse away from it, so it
+  // gets a banner of its own here.
+  const strayQueue = queue && queue.gameId !== selectedGame ? queue : null;
 
   return (
     <GamesMui>
@@ -198,687 +253,107 @@ export function PlaySection({
       <IncomingOfferCard games={games} />
       {draft && <ChallengeDraftCard target={draft} games={games} onDone={() => setDraft(null)} />}
 
-      {/* ── Active Queue Radar Banner ── */}
-      {queue && (
-        <Card
-          className="games-ranked-card active-queue"
-          sx={{
-            mb: 2,
-            display: 'flex',
-            alignItems: 'center',
-            p: 1.5,
-            gap: 2,
-            borderColor: 'primary.main',
-          }}
-        >
-          <div className="games-radar-scan" style={{ width: 40, height: 40, flexShrink: 0 }}>
-            <div className="games-radar-line" />
-          </div>
-          <div style={{ flex: 1 }}>
-            <Typography variant="subtitle2" sx={{ color: 'primary.main', fontWeight: 800 }}>
-              🏁 Matchmaking Search Active
-            </Typography>
-            <Typography variant="body2" sx={{ fontSize: '0.8rem' }}>
-              Searching {nameOf(queue.gameId)} ({queue.difficulty})…{' '}
-              <strong>{queue.waitingS}s</strong>
-            </Typography>
-            <Typography variant="body2" sx={{ fontSize: '0.7rem', color: 'text.secondary' }}>
-              Window: ±{Math.round(queue.window)} MMR
-            </Typography>
-          </div>
-          <Button variant="outlined" color="error" onClick={() => gamesQueueLeave()}>
-            Leave Queue
+      {strayQueue && (
+        <div className="games-stray-queue">
+          <span className="games-radar-scan">
+            <span className="games-radar-line" />
+          </span>
+          <span>
+            Queued for <strong>{nameOf(strayQueue.gameId)}</strong> · {strayQueue.waitingS}s
+          </span>
+          <Button size="small" color="inherit" onClick={() => setSelectedGame(strayQueue.gameId)}>
+            Show
           </Button>
-        </Card>
+          <Button size="small" color="error" onClick={() => gamesQueueLeave()}>
+            Leave
+          </Button>
+        </div>
       )}
 
-      {!selectedGame ? (
+      {!g ? (
         <>
-          {/* The empty state: a cycling hero for the catalog with Quick Play on it. */}
           <GamesHero games={games} setSelectedGame={setSelectedGame} />
-
-          {/* Server Browser Table Header */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              marginBottom: '0.4rem',
-              marginTop: '1rem',
-            }}
-          >
-            <Typography variant="subtitle2" sx={{ fontWeight: 800, color: 'text.secondary' }}>
-              🌐 Active Server Browser (All Games)
+          <ServerBrowser
+            title="🌐 Active Server Browser (All Games)"
+            tables={filteredTables}
+            nameOf={nameOf}
+            connected={connected}
+            emptyHint="No servers running yet. Select a game from the library on the left to set up a match or host a table."
+          />
+        </>
+      ) : (
+        <>
+          <div className="games-play-topbar">
+            <Typography variant="body2" sx={{ color: 'text.secondary', fontSize: '0.78rem' }}>
+              {GAME_DESCRIPTIONS[g.id] ??
+                `Play ${g.name} against other agents or practice with your own.`}
             </Typography>
             <Button
-              size="small"
+              variant="text"
               color="inherit"
-              onClick={() => gamesListTables()}
-              sx={{ py: 0.1, minWidth: 0, textTransform: 'none' }}
+              size="small"
+              sx={{ textTransform: 'none', fontSize: '0.75rem', flex: '0 0 auto' }}
+              onClick={() => setSelectedGame(null)}
             >
-              ↻ Refresh List
+              🌐 Deselect Game
             </Button>
           </div>
 
-          {/* Server Browser Table */}
-          <div className="games-server-browser">
-            <div className="games-server-header">
-              <span>Server</span>
-              <span>Status</span>
-              <span>Players</span>
-              <span>Ping</span>
-              <span>Action</span>
-            </div>
+          <MatchSetupCard game={g} />
 
-            {filteredTables.length === 0 ? (
-              <div
-                style={{
-                  padding: '2rem 1rem',
-                  textAlign: 'center',
-                  color: 'var(--text-dim)',
-                  fontSize: '0.8rem',
-                }}
-              >
-                {connected
-                  ? 'No servers running yet. Select a game from the library on the left to start a match or host a server.'
-                  : 'Servers appear once connected — that happens automatically when you play.'}
-              </div>
-            ) : (
-              filteredTables.map((t) => (
-                <ServerRow
-                  key={t.id}
-                  table={t}
-                  gameName={nameOf(t.game_id)}
-                  gameIcon={gameIcon(t.game_id)}
-                />
-              ))
-            )}
+          <div className="games-devkit">
+            <button
+              type="button"
+              className="games-devkit-card"
+              style={{ '--tile-accent': gameAccent(g.id) } as React.CSSProperties}
+              onClick={() => openHarnessFor(g.id)}
+            >
+              <span className="games-devkit-icon" aria-hidden>
+                🛠
+              </span>
+              <span className="games-devkit-title">Build</span>
+              <span className="games-devkit-hint">
+                Author agent policy code, equip tools, ground docs.
+              </span>
+            </button>
+            <button
+              type="button"
+              className="games-devkit-card"
+              style={{ '--tile-accent': gameAccent(g.id) } as React.CSSProperties}
+              onClick={() => openGamesSection('train')}
+            >
+              <span className="games-devkit-icon" aria-hidden>
+                🎯
+              </span>
+              <span className="games-devkit-title">Train</span>
+              <span className="games-devkit-hint">
+                Run one turn against a sample position and read the trace. No stakes.
+              </span>
+            </button>
+            <button
+              type="button"
+              className="games-devkit-card"
+              style={{ '--tile-accent': gameAccent(g.id) } as React.CSSProperties}
+              onClick={() => requestChallenges(g.id)}
+            >
+              <span className="games-devkit-icon" aria-hidden>
+                📋
+              </span>
+              <span className="games-devkit-title">Challenges</span>
+              <span className="games-devkit-hint">
+                Scenario-grade the harness against known-correct positions.
+              </span>
+            </button>
           </div>
+
+          <ServerBrowser
+            title={`🌐 Active Server Browser (${g.name} servers)`}
+            tables={filteredTables}
+            nameOf={nameOf}
+            connected={connected}
+            emptyHint={`No ${g.name} servers running. Pick "Open Table" on the setup card to host one.`}
+          />
         </>
-      ) : (
-        (() => {
-          const g = games.find((x) => x.id === selectedGame);
-          if (!g) return null;
-          const gameMMR = lastRating && lastRating.game_id === g.id ? lastRating : null;
-          const accent = gameAccent(g.id);
-          return (
-            <>
-              {/* Play Mode & Difficulty Controls Row ── */}
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '1rem',
-                  marginBottom: '1rem',
-                  flexWrap: 'wrap',
-                }}
-              >
-                <div>
-                  <Typography
-                    variant="caption"
-                    sx={{ display: 'block', color: 'text.secondary', mb: 0.5, fontWeight: 700 }}
-                  >
-                    PLAY MODE
-                  </Typography>
-                  <ToggleButtonGroup
-                    value={playMode}
-                    exclusive
-                    onChange={(_, val) => val && setPlayMode(val)}
-                    size="small"
-                  >
-                    <ToggleButton value="casual" sx={{ px: 2, py: 0.5 }}>
-                      🎮<span className="games-toggle-label"> Casual Practice</span>
-                    </ToggleButton>
-                    <ToggleButton value="ranked" sx={{ px: 2, py: 0.5 }}>
-                      🏁<span className="games-toggle-label"> Ranked Matchmaking</span>
-                    </ToggleButton>
-                  </ToggleButtonGroup>
-                </div>
-
-                <div>
-                  <Typography
-                    variant="caption"
-                    sx={{ display: 'block', color: 'text.secondary', mb: 0.5, fontWeight: 700 }}
-                  >
-                    <Tooltip
-                      title="How your seat picks moves. Takes effect on your next game — never mid-match."
-                      arrow
-                    >
-                      <span>MOVE POLICY ⓘ</span>
-                    </Tooltip>
-                  </Typography>
-                  <ToggleButtonGroup
-                    value={policy}
-                    exclusive
-                    onChange={(_, val) => val && setPolicy(val)}
-                    size="small"
-                  >
-                    <ToggleButton value="random" sx={{ px: 1.5, py: 0.5 }}>
-                      🎲<span className="games-toggle-label"> Random</span>
-                    </ToggleButton>
-                    <ToggleButton value="agent" sx={{ px: 1.5, py: 0.5 }}>
-                      🧠<span className="games-toggle-label"> Agent</span>
-                    </ToggleButton>
-                    <ToggleButton value="bot" sx={{ px: 1.5, py: 0.5 }}>
-                      🤖<span className="games-toggle-label"> Bot</span>
-                    </ToggleButton>
-                    <ToggleButton value="manual" sx={{ px: 1.5, py: 0.5 }}>
-                      🎮<span className="games-toggle-label"> Manual</span>
-                    </ToggleButton>
-                  </ToggleButtonGroup>
-                </div>
-
-                {playMode === 'ranked' && (
-                  <div>
-                    <Typography
-                      variant="caption"
-                      sx={{ display: 'block', color: 'text.secondary', mb: 0.5, fontWeight: 700 }}
-                    >
-                      QUEUE DIFFICULTY
-                    </Typography>
-                    <ToggleButtonGroup
-                      value={difficulty}
-                      exclusive
-                      onChange={(_, val) => val && setDifficulty(val)}
-                      size="small"
-                    >
-                      <ToggleButton value="standard" sx={{ py: 0.5 }}>
-                        ⚔️<span className="games-toggle-label"> Standard</span>
-                      </ToggleButton>
-                      <ToggleButton value="hard" sx={{ py: 0.5 }}>
-                        🔒<span className="games-toggle-label"> Hard</span>
-                      </ToggleButton>
-                      <ToggleButton value="expert" sx={{ py: 0.5 }}>
-                        💎<span className="games-toggle-label"> Expert</span>
-                      </ToggleButton>
-                    </ToggleButtonGroup>
-                  </div>
-                )}
-
-                <Button
-                  variant="text"
-                  color="inherit"
-                  size="small"
-                  sx={{ mt: 'auto', mb: 0.2, ml: 'auto' }}
-                  onClick={() => setSelectedGame(null)}
-                >
-                  🌐 Deselect Game
-                </Button>
-              </div>
-
-              {/* Selected Game Card */}
-              <Card
-                sx={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  mb: 2,
-                  borderColor: accent,
-                  boxShadow: `0 0 16px ${accent}20`,
-                  background: 'var(--bg-raised)',
-                  overflow: 'hidden',
-                }}
-              >
-                {/* Hero Header Area */}
-                <div
-                  className="games-hero-header"
-                  style={{
-                    position: 'relative',
-                    padding: '2rem 1.5rem',
-                    background: `linear-gradient(135deg, ${accent}25 0%, var(--bg-raised) 100%)`,
-                    borderBottom: '1px solid var(--border)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '1.5rem',
-                    overflow: 'hidden',
-                  }}
-                >
-                  {/* Glowing background effect */}
-                  <div
-                    style={{
-                      position: 'absolute',
-                      top: '50%',
-                      left: '2rem',
-                      transform: 'translateY(-50%)',
-                      width: '120px',
-                      height: '120px',
-                      borderRadius: '50%',
-                      background: accent,
-                      filter: 'blur(50px)',
-                      opacity: 0.18,
-                      pointerEvents: 'none',
-                    }}
-                  />
-
-                  {/* Game Icon Container */}
-                  <div
-                    style={{
-                      fontSize: '3rem',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      width: '4.8rem',
-                      height: '4.8rem',
-                      borderRadius: '16px',
-                      background: 'rgba(255, 255, 255, 0.03)',
-                      border: `1px solid ${accent}40`,
-                      boxShadow: `0 8px 32px ${accent}15`,
-                      zIndex: 1,
-                      flexShrink: 0,
-                    }}
-                  >
-                    {gameIcon(g.id)}
-                  </div>
-
-                  {/* Title & Info */}
-                  <div style={{ flex: 1, zIndex: 1, minWidth: 0 }}>
-                    <div
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.8rem',
-                        flexWrap: 'wrap',
-                      }}
-                    >
-                      <Typography variant="h5" sx={{ fontWeight: 950, color: 'text.primary' }}>
-                        {g.name}
-                      </Typography>
-                      {gameMMR?.tier ? (
-                        <Chip
-                          size="small"
-                          color="primary"
-                          variant="outlined"
-                          label={`${gameMMR.tier} · ${Math.round(gameMMR.rating ?? 1200)} MMR`}
-                          sx={{ fontWeight: 800, borderColor: `${accent}80`, color: accent }}
-                        />
-                      ) : (
-                        <Chip
-                          size="small"
-                          variant="outlined"
-                          label="Unrated · 1200 MMR"
-                          sx={{ fontWeight: 800, color: 'text.secondary' }}
-                        />
-                      )}
-                    </div>
-                    <Typography
-                      variant="body2"
-                      sx={{
-                        color: 'text.secondary',
-                        fontSize: '0.82rem',
-                        maxWidth: '650px',
-                        lineHeight: 1.5,
-                        mt: 1,
-                      }}
-                    >
-                      {GAME_DESCRIPTIONS[g.id] ??
-                        `Play ${g.name} against other agents or practice with your own.`}
-                    </Typography>
-                  </div>
-                </div>
-
-                {/* Control Bar: Move Policy */}
-                <div
-                  style={{
-                    padding: '0.75rem 1.5rem',
-                    borderBottom: '1px solid var(--border)',
-                    background: 'rgba(0, 0, 0, 0.1)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: '1rem',
-                    flexWrap: 'wrap',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                    <Typography
-                      variant="caption"
-                      sx={{ color: 'text.secondary', fontWeight: 800, letterSpacing: '0.05em' }}
-                    >
-                      MOVE POLICY:
-                    </Typography>
-                    <ToggleButtonGroup
-                      value={policy}
-                      exclusive
-                      onChange={(_, val) => val && setPolicy(val)}
-                      size="small"
-                    >
-                      <ToggleButton value="random" sx={{ px: 1.5, py: 0.25, fontSize: '0.75rem' }}>
-                        🎲 Random
-                      </ToggleButton>
-                      <ToggleButton value="agent" sx={{ px: 1.5, py: 0.25, fontSize: '0.75rem' }}>
-                        🧠 Agent
-                      </ToggleButton>
-                      <ToggleButton value="bot" sx={{ px: 1.5, py: 0.25, fontSize: '0.75rem' }}>
-                        🤖 Bot
-                      </ToggleButton>
-                      <ToggleButton value="manual" sx={{ px: 1.5, py: 0.25, fontSize: '0.75rem' }}>
-                        🎮 Manual
-                      </ToggleButton>
-                    </ToggleButtonGroup>
-                  </div>
-
-                  <Button
-                    variant="text"
-                    color="inherit"
-                    size="small"
-                    sx={{
-                      textTransform: 'none',
-                      fontSize: '0.75rem',
-                      opacity: 0.7,
-                      '&:hover': { opacity: 1 },
-                    }}
-                    onClick={() => setSelectedGame(null)}
-                  >
-                    🌐 Deselect Game
-                  </Button>
-                </div>
-
-                {/* Action Modules Columns */}
-                <div
-                  style={{
-                    padding: '1.5rem',
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))',
-                    gap: '1.5rem',
-                  }}
-                >
-                  {/* Left Column: Development & Configuration */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                    <Typography
-                      variant="subtitle2"
-                      sx={{
-                        fontWeight: 800,
-                        color: 'text.secondary',
-                        letterSpacing: '0.08em',
-                        textTransform: 'uppercase',
-                        fontSize: '0.75rem',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.4rem',
-                      }}
-                    >
-                      🛠️ Agent Strategy & Dev Kit
-                    </Typography>
-
-                    {/* Edit Harness Action Box */}
-                    <Card
-                      sx={{
-                        background: 'rgba(255, 255, 255, 0.01)',
-                        border: '1px solid var(--border)',
-                        boxShadow: 'none',
-                        transition: 'all 0.2s ease',
-                        '&:hover': {
-                          background: 'rgba(255, 255, 255, 0.02)',
-                          borderColor: `${accent}40`,
-                        },
-                      }}
-                    >
-                      <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
-                        <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>
-                          Configure Strategy (Edit Harness)
-                        </Typography>
-                        <Typography
-                          variant="caption"
-                          color="text.secondary"
-                          sx={{ display: 'block', mb: 1.5, lineHeight: 1.4 }}
-                        >
-                          Author agent policy code, equip tools, ground docs, and refine decision
-                          heuristics.
-                        </Typography>
-                        <Button
-                          variant="outlined"
-                          size="small"
-                          fullWidth
-                          onClick={() => openHarnessFor(g.id)}
-                          sx={{ fontWeight: 700, borderColor: 'divider' }}
-                        >
-                          Open Workspace
-                        </Button>
-                      </CardContent>
-                    </Card>
-
-                    {/* Challenges Action Box */}
-                    <Card
-                      sx={{
-                        background: 'rgba(255, 255, 255, 0.01)',
-                        border: '1px solid var(--border)',
-                        boxShadow: 'none',
-                        transition: 'all 0.2s ease',
-                        '&:hover': {
-                          background: 'rgba(255, 255, 255, 0.02)',
-                          borderColor: `${accent}40`,
-                        },
-                      }}
-                    >
-                      <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
-                        <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>
-                          Scenario Grader (Challenges)
-                        </Typography>
-                        <Typography
-                          variant="caption"
-                          color="text.secondary"
-                          sx={{ display: 'block', mb: 1.5, lineHeight: 1.4 }}
-                        >
-                          Run scenario-grading tests against your agent harness to verify decision
-                          correctness.
-                        </Typography>
-                        <Button
-                          variant="outlined"
-                          size="small"
-                          fullWidth
-                          onClick={() => requestChallenges(g.id)}
-                          sx={{ fontWeight: 700, borderColor: 'divider' }}
-                        >
-                          Run Challenge Track
-                        </Button>
-                      </CardContent>
-                    </Card>
-                  </div>
-
-                  {/* Right Column: Battle Arena */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                    <Typography
-                      variant="subtitle2"
-                      sx={{
-                        fontWeight: 800,
-                        color: 'text.secondary',
-                        letterSpacing: '0.08em',
-                        textTransform: 'uppercase',
-                        fontSize: '0.75rem',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.4rem',
-                      }}
-                    >
-                      ⚔️ Battle Arena
-                    </Typography>
-
-                    {/* Ranked Matchmaking Box */}
-                    <Card
-                      sx={{
-                        background: 'color-mix(in srgb, var(--accent) 2%, transparent)',
-                        border: `1px solid ${accent}25`,
-                        boxShadow: 'none',
-                        position: 'relative',
-                        overflow: 'hidden',
-                      }}
-                    >
-                      <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
-                        <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>
-                          Ranked Matchmaking
-                        </Typography>
-                        <Typography
-                          variant="caption"
-                          color="text.secondary"
-                          sx={{ display: 'block', mb: 1.5, lineHeight: 1.4 }}
-                        >
-                          Queue to match against other live player agents. Increases MMR and climbs
-                          leaderboard.
-                        </Typography>
-
-                        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                          <div style={{ flex: 1 }}>
-                            <Select
-                              value={difficulty}
-                              onChange={(e) => setDifficulty(e.target.value)}
-                              size="small"
-                              fullWidth
-                              sx={{ fontSize: '0.78rem' }}
-                            >
-                              <MenuItem value="standard">Standard Difficulty</MenuItem>
-                              <MenuItem value="hard">Hard Difficulty</MenuItem>
-                              <MenuItem value="expert">Expert Difficulty</MenuItem>
-                            </Select>
-                          </div>
-                          <Button
-                            variant="contained"
-                            color="primary"
-                            disabled={!!queue}
-                            onClick={() => void findRankedMatch(g.id, difficulty)}
-                            sx={{ fontWeight: 800, px: 2, py: 0.8 }}
-                          >
-                            Find Match
-                          </Button>
-                        </div>
-                      </CardContent>
-                    </Card>
-
-                    {/* Practice Zone Box */}
-                    <Card
-                      sx={{
-                        background: 'rgba(255, 255, 255, 0.01)',
-                        border: '1px solid var(--border)',
-                        boxShadow: 'none',
-                      }}
-                    >
-                      <CardContent sx={{ p: 2, '&:last-child': { pb: 2 } }}>
-                        <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>
-                          Practice & Hosting
-                        </Typography>
-                        <Typography
-                          variant="caption"
-                          color="text.secondary"
-                          sx={{ display: 'block', mb: 1.5, lineHeight: 1.4 }}
-                        >
-                          Play unrated practice sessions against your own agent configuration or
-                          practice bots.
-                        </Typography>
-
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-                          <Button
-                            variant="outlined"
-                            onClick={() => void playVsOwnAgent(g.id)}
-                            sx={{ fontWeight: 700, fontSize: '0.78rem', py: 0.5 }}
-                            fullWidth
-                          >
-                            Play vs My Agent
-                          </Button>
-
-                          <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'stretch' }}>
-                            <Button
-                              variant="outlined"
-                              color="secondary"
-                              onClick={() => void playVsBot(g.id, botTier)}
-                              sx={{ fontWeight: 700, flex: 1, fontSize: '0.78rem', py: 0.5 }}
-                            >
-                              🤖 Test vs Bot
-                            </Button>
-                            <Select
-                              value={botTier}
-                              onChange={(e) => setBotTier(e.target.value)}
-                              size="small"
-                              sx={{ fontSize: '0.78rem', width: '130px' }}
-                            >
-                              {BOT_TIERS.map((t) => (
-                                <MenuItem key={t.value} value={t.value} sx={{ fontSize: '0.8rem' }}>
-                                  {t.label}
-                                </MenuItem>
-                              ))}
-                            </Select>
-                          </div>
-
-                          <Button
-                            variant="text"
-                            onClick={() => void hostOpenTable(g.id)}
-                            sx={{
-                              fontWeight: 700,
-                              color: 'text.secondary',
-                              textTransform: 'none',
-                              fontSize: '0.72rem',
-                              py: 0.25,
-                              mt: 0.25,
-                              '&:hover': { color: 'text.primary' },
-                            }}
-                            size="small"
-                          >
-                            🌐 Host Open Server Table
-                          </Button>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  </div>
-                </div>
-              </Card>
-
-              {/* Server Browser Table Header */}
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  marginBottom: '0.4rem',
-                  marginTop: '1rem',
-                }}
-              >
-                <Typography variant="subtitle2" sx={{ fontWeight: 800, color: 'text.secondary' }}>
-                  🌐 Active Server Browser ({nameOf(selectedGame)} servers)
-                </Typography>
-                <Button
-                  size="small"
-                  color="inherit"
-                  onClick={() => gamesListTables()}
-                  sx={{ py: 0.1, minWidth: 0, textTransform: 'none' }}
-                >
-                  ↻ Refresh List
-                </Button>
-              </div>
-
-              {/* Server Browser Table */}
-              <div className="games-server-browser">
-                <div className="games-server-header">
-                  <span>Server</span>
-                  <span>Status</span>
-                  <span>Players</span>
-                  <span>Ping</span>
-                  <span>Action</span>
-                </div>
-
-                {filteredTables.length === 0 ? (
-                  <div
-                    style={{
-                      padding: '2rem 1rem',
-                      textAlign: 'center',
-                      color: 'var(--text-dim)',
-                      fontSize: '0.8rem',
-                    }}
-                  >
-                    {connected
-                      ? `No ${nameOf(selectedGame)} servers running. Click "Host Server" on its card to start one.`
-                      : 'Servers appear once connected — that happens automatically when you play.'}
-                  </div>
-                ) : (
-                  filteredTables.map((t) => (
-                    <ServerRow
-                      key={t.id}
-                      table={t}
-                      gameName={nameOf(t.game_id)}
-                      gameIcon={gameIcon(t.game_id)}
-                    />
-                  ))
-                )}
-              </div>
-            </>
-          );
-        })()
       )}
     </GamesMui>
   );

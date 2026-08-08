@@ -37,6 +37,7 @@ class Policy(Protocol):
         observation: dict[str, Any],
         legal_actions: list[dict[str, Any]],
         game_id: str | None = None,
+        seat: int | None = None,
     ) -> str: ...
 
 
@@ -53,6 +54,7 @@ class RandomPolicy:
         observation: dict[str, Any],
         legal_actions: list[dict[str, Any]],
         game_id: str | None = None,
+        seat: int | None = None,
     ) -> str:
         return self._rng.choice(_ids(legal_actions))
 
@@ -110,6 +112,7 @@ class AgentPolicy:
         observation: dict[str, Any],
         legal_actions: list[dict[str, Any]],
         game_id: str | None = None,
+        seat: int | None = None,
     ) -> str:
         ids = _ids(legal_actions)
         try:
@@ -128,6 +131,7 @@ class AgentPolicy:
         observation: dict[str, Any],
         legal_actions: list[dict[str, Any]],
         game_id: str | None = None,
+        seat: int | None = None,
     ) -> str | None:
         """One full harness drive with NO random fallback and no exception
         swallowing — the dry-run tester's entry point (see dryrun.py). Returns the
@@ -377,14 +381,20 @@ def _prose_id(content: str, ids: list[str]) -> str | None:
 
 
 class BotPolicy:
-    """Runs a Python script/bot defined as a tool in the harness.
+    """Runs the harness's **script** seat: a Python policy, in the RL sense.
 
-    If the harness has a tool named 'bot' (or if we look for the first tool),
-    we compile and call it, passing the current observation.
+    The bot is the tool named `bot` (or the loadout's first tool if there is none).
+    Three code shapes are accepted — `class Agent`, `def act(obs, info)`, and the
+    legacy `def run(args, obs)` — resolved by `bot_sdk.compile_bot`; see that module
+    for what each one is handed.
 
-    The bot tool can return:
-    - a single string or integer (the chosen action id)
-    - a dictionary or list, which we serialize to JSON if needed
+    The compiled bot is **cached for the life of this policy object**, which the
+    client rebuilds at each match boundary. That is what lets a `class Agent` hold
+    state across the turns of one match without leaking it into the next.
+
+    Any failure (won't compile, raises, returns nothing legal) falls back to a random
+    legal move so a table never hangs — the same bargain `AgentPolicy` makes. The
+    reason is traced, so the Games Log says *why* rather than just playing oddly.
     """
 
     def __init__(
@@ -396,6 +406,9 @@ class BotPolicy:
         self._trace = trace
         self._load_loadout = load_loadout or get_loadout
         self._fallback = fallback or RandomPolicy()
+        self._bot: Any = None
+        self._bot_key: str | None = None
+        self._started = False
 
     def _emit(self, kind: str, **fields: Any) -> None:
         if self._trace is None:
@@ -410,21 +423,59 @@ class BotPolicy:
         observation: dict[str, Any],
         legal_actions: list[dict[str, Any]],
         game_id: str | None = None,
+        seat: int | None = None,
     ) -> str:
         ids = _ids(legal_actions)
         try:
-            chosen = await self._run(observation, legal_actions, ids, game_id)
+            chosen = await self._run(observation, legal_actions, ids, game_id, seat)
         except Exception as exc:
             logger.debug("BotPolicy failed; using fallback", exc_info=True)
             self._emit("fallback_reason", error=str(exc))
             chosen = None
 
         if chosen in ids:
-            return chosen
+            return chosen  # type: ignore[return-value]
 
-        fallback = await self._fallback.choose(observation, legal_actions, game_id)
+        fallback = await self._fallback.choose(
+            observation, legal_actions, game_id, seat
+        )
         self._emit("fallback", action_id=fallback)
         return fallback
+
+    def _resolve_bot(self, key: str) -> Any:
+        """Compile (once per match) the loadout's bot tool.
+
+        `bot_tool_of` always returns something — `<game>.bot`, `bot`, or the default
+        random-legal-move baseline. It used to fall back to the loadout's *first*
+        tool, which is normally a helper returning analysis rather than a move: that
+        answered illegally every turn and degraded to random anyway, silently, in
+        ranked matches too.
+        """
+        from backend.modules.games.bot_sdk import compile_bot
+        from backend.modules.games.loadout import bot_tool_of
+
+        if self._bot is not None and self._bot_key == key:
+            return self._bot
+
+        loadout = self._load_loadout(key)
+        bot_tool = bot_tool_of(loadout, key)
+        try:
+            bot = compile_bot(bot_tool.code, f"<loadout:{bot_tool.name}>")
+        except Exception as exc:
+            raise ValueError(
+                f"Bot script {bot_tool.name!r} failed to load: {exc}"
+            ) from exc
+
+        self._bot, self._bot_key, self._started = bot, key, False
+        self._emit(
+            "assistant",
+            content=(
+                f"Running bot script {bot_tool.name!r} "
+                f"({'legacy run()' if bot.legacy else bot.shape} shape)"
+            ),
+            tool_calls=[],
+        )
+        return bot
 
     async def _run(
         self,
@@ -432,67 +483,36 @@ class BotPolicy:
         legal_actions: list[dict[str, Any]],
         ids: list[str],
         game_id: str | None,
+        seat: int | None,
     ) -> str | None:
+        from backend.games_engine.env_adapter import adapter_for
+        from backend.modules.games.bot_sdk import build_info, coerce_action
+
         key = game_id or str(observation.get("game") or "default")
-        loadout = self._load_loadout(key)
-        from backend.modules.games.loadout import HarnessRuntime
+        bot = self._resolve_bot(key)
 
-        runtime = HarnessRuntime(loadout)
+        # The legacy shape read legal moves off the observation; keep doing that so
+        # existing bots see exactly what they always did.
+        obs_for_bot = dict(observation)
+        obs_for_bot.setdefault("legal_actions", legal_actions)
+        info = build_info(obs_for_bot, legal_actions, key, seat)
 
-        bot_tool = None
+        if not self._started:
+            self._started = True
+            bot.reset(obs_for_bot, info)
 
-        for t in loadout.tools:
-            if t.name == "bot":
-                bot_tool = t
-                break
+        result = bot.act(obs_for_bot, info)
+        if hasattr(result, "__await__"):
+            result = await result
+        self._emit("tool_result", name="bot", result=_clip(result))
 
-        if bot_tool is None and loadout.tools:
-            bot_tool = loadout.tools[0]
-
-        if bot_tool is None:
+        chosen = coerce_action(result, ids, adapter_for(key))
+        if chosen is None:
             raise ValueError(
-                f"No custom tools defined in the harness for '{key}' to run as a bot."
+                f"bot returned {result!r}, which is not one of the legal actions {ids}"
             )
-
-        if not runtime.has(bot_tool.name):
-            err = runtime.compile_error(bot_tool.name) or "failed to compile"
-            raise ValueError(f"Bot script {bot_tool.name!r} compiler error: {err}")
-
-        self._emit(
-            "assistant",
-            content=f"Running bot script '{bot_tool.name}'...",
-            tool_calls=[],
-        )
-
-        obs_copy = dict(observation)
-        if "legal_actions" not in obs_copy:
-            obs_copy["legal_actions"] = legal_actions
-
-        res = await runtime.call(bot_tool.name, {}, obs_copy)
-
-        if isinstance(res, dict) and "error" in res:
-            self._emit("tool_result", name=bot_tool.name, result=res)
-            raise ValueError(f"Bot script {bot_tool.name!r} failed: {res['error']}")
-
-        self._emit("tool_result", name=bot_tool.name, result=_clip(res))
-
-        if isinstance(res, (dict, list)):
-            if isinstance(res, dict) and "action" in res:
-                action_val = res["action"]
-            elif isinstance(res, dict) and "action_id" in res:
-                action_val = res["action_id"]
-            else:
-                action_val = res
-
-            if isinstance(action_val, (dict, list)):
-                action_id = json.dumps(action_val)
-            else:
-                action_id = str(action_val)
-        else:
-            action_id = str(res)
-
-        self._emit("chose", action_id=action_id)
-        return action_id
+        self._emit("chose", action_id=chosen)
+        return chosen
 
 
 def make_policy(name: str, trace: TraceFn | None = None) -> Policy:

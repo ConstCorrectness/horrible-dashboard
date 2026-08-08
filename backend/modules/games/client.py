@@ -660,7 +660,7 @@ class _PlayerConn:
                 payload = solve_open_action(open_action, observation)
         else:
             action_id = await self._policy.choose(
-                observation, legal, msg.get("game_id")
+                observation, legal, msg.get("game_id"), self._my_seat
             )
         # Since we run detached, the turn may have been superseded while the policy
         # thought (server timeout auto-played, game ended): drop a stale answer.

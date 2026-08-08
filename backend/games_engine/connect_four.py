@@ -11,12 +11,22 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
+
+from gymnasium import spaces
+
 from backend.games_engine.base import (
     TERMINAL,
     Action,
     GameSpec,
     GameState,
     register_game,
+)
+from backend.games_engine.env_adapter import (
+    TrainingSpec,
+    int_id_adapter,
+    mark_grid_encoder,
+    register_adapter,
 )
 
 COLS = 7
@@ -130,4 +140,30 @@ SPEC = register_game(
         factory=ConnectFour,
         default_policy="agent",
     )
+)
+
+# 42 cells, 7 actions (one per column). The observation is the grid **as the wire
+# emits it** — top row first — because that is what a policy is handed in a live
+# match; encoding a different orientation here than `public_state` produces would
+# train a policy on a board it never actually sees.
+ADAPTER = register_adapter(
+    "connect_four",
+    int_id_adapter(
+        n_actions=COLS,
+        observation_space=spaces.Box(
+            low=-1, high=1, shape=(ROWS * COLS,), dtype=np.int8
+        ),
+        encode_obs=mark_grid_encoder(_MARKS, size=ROWS * COLS),
+        training=TrainingSpec(
+            default_episodes=100,
+            max_episodes=2_000,
+            # 4.5 trillion states: a tabular learner is the wrong tool and would
+            # only teach the wrong lesson.
+            in_app_optimizer=False,
+            hint=(
+                "Too large to tabulate — write a heuristic (threats, forks, centre "
+                "control) or train a net against the Env in a notebook."
+            ),
+        ),
+    ),
 )

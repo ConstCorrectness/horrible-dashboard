@@ -71,8 +71,9 @@ driven through `hub-section.ts` (`GamesSection`):
 
 | Section | What it is |
 | --- | --- |
-| 🕹 **Play** | Pick a game, find a match / practice (`LobbyPanel`). |
+| 🕹 **Play** | Pick a game, set up the match on the VS card (`LobbyPanel`). |
 | ▦ **Game Board** | The live match (`GameBoardPanel`). |
+| 🎯 **Train** | No-stakes room: sample position + full dry run (`TrainingSection`). |
 | 🛠 **Build** | The agent editor + loadout (`AgentBuilderPanel`). |
 | 📼 **Replays** | Browse and watch replays (`ReplayBrowserPanel`). |
 | 🪪 **Career** | Profile · Ladder · Challenges, as sub-tabs. |
@@ -361,16 +362,74 @@ recent match log (with loadout/model attribution and one-click replays). The
 arcade also grew a **fun pass**: a VS intro splash on match start, win confetti,
 series pips, rating toasts, and optional bleeps (`games.sound`).
 
+## The match setup card
+
+The Play section's centrepiece (`MatchSetupCard`) is **two seats and a button**. The
+left seat is *how you play* (your `Driver` — 🎮 You / 🧠 My Agent / 🤖 My Script /
+🎲 Random), the right seat is *who you play* (`Opponent` — 🏁 Ranked / 🤖 Practice
+Bot / 👤 Open Table / 🪞 Mirror), and the button's label is **generated from both**
+by `describeSetup`.
+
+That shape is load-bearing. The screen it replaced had a MOVE POLICY toggle group
+*rendered twice from the same state*, a PLAY MODE toggle, a QUEUE DIFFICULTY control
+also rendered twice (once as toggles, once as a dropdown), two Deselect buttons and
+four start buttons — with nothing saying how any of them combined. **"Play vs My
+Agent" was the worst of it**: it opened a *self-play* table where the node holds both
+seats, so what it actually did depended on the policy toggle elsewhere on the page.
+Manual policy meant "you vs your agent"; agent policy meant "your agent vs itself";
+random meant dice vs dice. One button, three different games.
+
+Two rules keep it honest:
+
+- The Fight label is `describeSetup(setup)`, never a fixed string — "My Agent vs You"
+  and "My Agent vs My Agent (self-play)" are visibly different setups now.
+- The mirror opponent carries **its own driver as a field**, which is precisely what
+  was missing. There is no global that a button's meaning depends on.
+
+`startMatch(setup)` in `matchmaking.ts` is the single entry point every start flow
+goes through; `ensureConnected(true)` (self-play) fires for `mirror` and nothing
+else. Seat choices persist per game in settings (`seat.ts`: `games.policy.<id>`,
+`games.opponent.<id>`, `games.botTier.<id>`, `games.mirrorDriver.<id>`), and
+`startWithSavedSetup` is what the hero's Quick Play, the builder's Test Match and the
+board's empty state call — so one choice made once on the card is what every other
+start button honours, instead of each hardcoding self-play.
+
+A game's `allowed_policies` (long carried on `GameSpec`, never read by the UI until
+now) strikes through the drivers it forbids, with the reason on hover rather than a
+mute disabled button.
+
 ## The ranked ladder — placements, tiers, matchmaking
 
-The lobby's **🏁 Ranked** card is the main mode: pick a game and difficulty and hit
-**Find match**. The queue pairs you by rating (window widens the longer you wait) and
-backfills with a **practice bot** at your level when nobody's around — instantly
-during your five **placement matches**, whose exact ratings stay masked on the ladder.
-After placement you carry a **tier** (bronze → grandmaster) shown on the ladder, seat
-badges, and rating toasts; `hard`/`expert` queue difficulties unlock at gold/diamond.
-Every rated game pushes a `rating_update` toast (±delta, tier, XP). See
+Ranked is **one queue per game, and one button**: put `🏁 Ranked` in the opponent
+seat and hit **Fight**. The queue pairs you by rating (window widens the longer you
+wait) and backfills with a **practice bot** at your level when nobody's around —
+instantly during your five **placement matches**, whose exact ratings stay masked on
+the ladder. After placement you carry a **tier** (bronze → grandmaster) shown on the
+ladder, seat badges, and rating toasts. Every rated game pushes a `rating_update`
+toast (±delta, tier, XP). See
 [game-server.mdx](../architecture/game-server.mdx) for thresholds and mechanics.
+
+**Difficulty is derived, never chosen.** It used to be a third thing the player
+picked, which bucketed the queue by `(game, difficulty)` and rejected combinations
+their tier had not unlocked. That was wrong twice over: it split one already-thin
+pool three ways — so the rating window widened forever waiting for a partner who was
+queueing one bucket over — and it asked the player a question their rating already
+answers. `store.derive_difficulty` reads `DIFFICULTY_GATES` in reverse (the hardest
+difficulty your tier has cleared), a pairing takes it from the pair's **mean**
+rating, and the gates survive as progression the UI shows you climbing towards.
+The wire still accepts a `difficulty` on `queue_join` and ignores it, so an older
+client does not break.
+
+**Ranked is agent-only** (`rankedRefusal`). The premise of the module is that the
+human competes by engineering the harness, not by playing; a person hand-playing the
+rated ladder measures a different thing and would pollute the ELO every other feature
+reads. `manual` and `random` seats are refused *with the reason shown on the card*
+rather than by a silently disabled button. Practice, mirror, open tables and Training
+all take them happily.
+
+`queue_status` carries the live `pool` size, the `median_wait_s` and a
+`delta_preview` (`store.delta_preview` — the same ELO the referee applies, run
+forwards) so the Fight button can state the stakes before you commit.
 
 ## Challenging players — negotiation, series, rematch
 
@@ -496,18 +555,17 @@ Switching takes effect **between games, not mid-match**: the primary seat re-res
 its policy for the specific game at each match boundary (the `match_info` event, which
 carries the `game_id`) and rebuilds if it changed, so a switch never disturbs a game
 in progress and no reconnect is needed. AgentTown, having no match boundary, honors a
-switch on its next tick. The self-play sparring seat below never follows the setting —
-it stays `random` so the demo keeps running. The Play section's **Move policy** toggle
-(shown once a game is selected) writes the per-game override key, so flipping it there
-changes _this_ game's policy without clobbering another's.
+switch on its next tick. The policy is chosen on the **VS card's left seat** (see
+[The match setup card](#the-match-setup-card)), which writes the per-game override
+key, so setting it there changes _this_ game's policy without clobbering another's.
 
-**Self-play** (what ▶ Play connects as) seats a second "sparring" partner from the
-same node so a full match runs with a single user — handy for demos. The server
-still just referees two independent players.
+**Self-play** is the `🪞 Mirror` opponent: a second "sparring" partner from the same
+node, so a full match runs with a single user. Unlike before, the mirror seat carries
+**its own driver** — the sparring partner is whatever you set it to rather than
+always `random`.
 
-**Test vs a bot** (casual practice, `matchmaking.playVsBot`): the Play section's
-**🤖 Test Vs Bot** button — with an adjacent difficulty dropdown — starts an
-**unrated** table and asks the server to seat a [practice bot](../architecture/game-server.mdx)
+**Test vs a bot** (the `🤖 Practice Bot` opponent) starts an **unrated** table and
+asks the server to seat a [practice bot](../architecture/game-server.mdx)
 of the chosen tier in the other seat. The tiers are the server's pinned ladder
 anchors, so difficulty is real (blunder rate + search depth): 🥉 Easy · Rusty,
 🥈 Medium · Circuit, 🥇 Hard · Aurum, 💠 Expert · Nemesis. Mechanically it's a bare
@@ -516,6 +574,155 @@ account seat (not self-play), and `_create_table` calls `seat_bot` once the huma
 seated. Because the table is unrated, testing against a bot never moves your rating
 (unlike the ranked queue, which also backfills with these bots — there by *rating*,
 scored — when no human shows). An unknown tier is ignored and the table stays open.
+
+## Training — the no-stakes room
+
+**🎯 Train** (`TrainingSection`) is a peer of Play, not a corner of the builder.
+The loop you actually iterate in is *set up a position → run one turn → read what
+happened → change something → run it again*, and it has nothing to do with an
+opponent — which is why fighting games have shipped a Training Mode for thirty
+years. The machinery already existed; it was buried three scrolls into the Build
+section, where you only found it if you already knew it was there.
+
+Three blocks, in the order you need them:
+
+1. **What your agent is handed** — `ObservationInspector`, fed by the cheap
+   `GET /games/sample-observation` (no loadout, no model, no agent run), so
+   resampling by seed is instant.
+2. **Run it a few hundred times** — `TrainingRunner` (`POST /api/games/train/run`),
+   the fast inner loop: N headless episodes against a sparring partner, reporting
+   win/draw/loss, mean reward, a reward curve and the illegal-action count. A rated
+   match tells you one bit every couple of minutes; 200 episodes tell you a win rate
+   in about a second.
+3. **Watch one turn think** — `DryRunSection` (`POST /api/games/dry-run`): the whole
+   loadout, the real model, the full trace, and crucially **no random fallback**, so
+   a broken harness fails visibly here instead of quietly playing a random move in a
+   live match.
+
+Training reads the **saved** loadout — "what would my agent do right now". The
+builder's own dry-run panel remains the one that tests *unsaved* edits; the two are
+deliberately different questions.
+
+### What the runner measures, and why those three numbers
+
+- **Seats alternate every episode.** Going first is worth a great deal in these
+  games, so a win rate measured only as X is not a win rate.
+- **Illegal actions are reported, never repaired.** Choosing outside
+  `info["action_mask"]` ends that episode at −1 and increments a counter.
+  Substituting a legal move — the tempting kindness — would hide the single most
+  common bug in a new policy behind a slightly worse win rate.
+- **The reward curve** is what distinguishes a *learning* agent from a fixed one. A
+  flat line means your `observe()` is not doing anything.
+
+The bot is compiled **once per run**, not once per episode, so a `class Agent` keeps
+its state across episodes — which is exactly what makes an in-pane tabular learner
+possible. A per-episode recompile would have quietly made learning impossible while
+looking correct.
+
+## The RL environment — Gymnasium, honestly mapped
+
+A script bot is a **policy** in the reinforcement-learning sense, and the module now
+says so in the standard vocabulary. `gymnasium` is a real dependency
+(`backend/games_engine/env.py`, `env_adapter.py`), so stable-baselines3, CleanRL and
+friends work against these environments unmodified — both shipped environments pass
+Gymnasium's own `check_env` conformance suite, which is what makes that claim
+testable rather than aspirational.
+
+**Playing and training are two different objects, on purpose.** Gymnasium inverts
+control: the agent calls `env.step()` and the world advances on demand. A ranked
+match cannot work that way — the opponent is a person on another machine, and the
+world advances when the *server* says so. So:
+
+| | Object | Used by |
+| --- | --- | --- |
+| **Playing** (incl. ranked) | a policy — `act(obs, info) -> action` | `BotPolicy`, every live seat |
+| **Training** | `HorribleEnv(gym.Env)` — `reset()` / `step()` | the Train runner, your own notebook |
+
+Train in the Env, ship the same `act` to the ladder. That is how RL practice already
+works (`model.predict(obs)` is the policy; the Env is the gym), so nothing has been
+invented here. In `HorribleEnv` the **opponent lives inside the environment** — from
+your policy's point of view it is part of the world's dynamics — which is what makes
+this a single-agent Env rather than a multi-agent one.
+
+### Three decisions worth knowing
+
+**Only `decision_class: "policy"` games have an environment.** For a `reasoner` game
+the action is a patch, an answer, a golfed program — an open action carrying a
+payload. `spaces.Discrete(n)` cannot describe that, and pretending otherwise would be
+the same silent reinterpretation the [database](database.mdx) module's vector drivers
+refuse. `GET /api/games/env/{game_id}` answers `has_env: false` with the reason, and
+the Train section says so plainly rather than rendering a runner that cannot work.
+
+**Action sets are dynamic, so the space is fixed and the mask moves.** Our
+`legal_actions` changes every turn; Gymnasium has no concept for that. The convention
+— PettingZoo's, and what every masked-PPO implementation looks for by name — is a
+constant `Discrete(n)` plus an `action_mask` in `info`. `EnvAdapter.mask_for` derives
+it generically from `to_index`, so a game declares the mapping once.
+
+**Observations are seat-relative, not board-absolute.** `encode_obs(obs, seat)`
+returns +1 for the seat's own pieces and −1 for the opponent's, so a policy trained as
+X plays O for free. A policy that has to be told which side it is has to learn each
+side separately, which is the thing self-play is supposed to avoid.
+
+`TrainingSpec` on each adapter declares what that game supports — whether headless
+self-play is safe to loop at all (the native ViZDoom engines are not), sensible
+episode defaults, whether an in-app optimiser is a reasonable ambition, and the hint
+the Train section shows. Tic-tac-toe says yes to a tabular learner; Connect Four says
+"4.5 trillion states — write a heuristic or train a net against the Env in a
+notebook", because a tabular learner there would only teach the wrong lesson.
+
+## The script seat — three accepted bot shapes
+
+`bot_sdk.compile_bot` resolves a bot **by inspection**, in this order:
+
+| Shape | Gets `info`? | Lifecycle | Notes |
+| --- | --- | --- | --- |
+| `class Agent` with `act(self, obs, info)` | yes | `reset` + `observe` | instantiated once per match/run, so it may hold state |
+| `def act(obs, info)` | yes | none | a stateless policy function |
+| `def run(args, obs)` | **no** | none | **legacy, fully supported**; `args` was always `{}` |
+
+### There is always a bot tool
+
+Every loadout the node hands out carries one, injected on **read** by
+`_with_default_bot` — no migration, and deleting it gets it back rather than
+silently costing you your script seat. The default is a uniformly random legal
+move: the baseline every policy is measured against, and the first thing a real bot
+has to beat.
+
+This replaces a fallback that quietly did real damage. `BotPolicy` used to look for
+a tool named exactly `bot` and, failing that, run the loadout's **first** tool —
+normally a *helper* (`board_scanner` returns `{"win_at": ..., "block_at": ...}`),
+not a move. That answered illegally every single turn and degraded to a random move
+anyway, silently, in ranked matches included. The Train runner made it visible for
+the first time: 200 episodes, 200 illegal actions, 0% wins.
+
+Resolution is now `<game_id>.bot` → `bot` → the default, shared by
+`loadout.bot_tool_of` and the Train section's `botToolOf`. The per-game name is not
+decoration: shipped harnesses use it (`fighter.bot`) and the Build panel always
+resolved it, while the policy never did — so a fighter harness ran whichever tool
+happened to be first. The two agree now, and a helper tool is never run as a bot.
+
+The legacy shape is not deprecated-in-name-only: every shipped template used it and
+people have saved harnesses written against it, so breaking those to tidy an
+interface would be a poor trade. What the modern shapes get is everything the old one
+lacked — `action_mask`, the encoded seat-relative `obs`, `legal_actions`, the seat,
+and a terminal reward via `observe()`. That is the actual reason to upgrade.
+
+**`bot_sdk.build_info` and `HorribleEnv._info` must produce identical keys.** A
+policy reads the same dict when training and when playing; a key present in one and
+absent in the other is a bug that only surfaces in a rated match, which is the worst
+possible place to find it. `test_games_env.py` pins the equivalence.
+
+Return values may be an action **id string** or an **integer index** into the action
+space (what a trained network emits); `coerce_action` handles numpy scalars and
+`{"action": ...}` wrappers. It checks `bool` before `int` — `True == 1` in Python and
+would otherwise silently mean "action 1" — and only reads an integer as a space index
+when the game *has* a space, rather than guessing.
+
+**Both kinds of coding are ranked.** A script seat and an LLM-agent seat both queue
+rated (`rankedRefusal` refuses only `manual` and `random`): writing the policy
+yourself and engineering an agent that writes it are two ways to play the same game,
+and the ladder measures both.
 
 ## Agent harness — the skill game
 

@@ -10,12 +10,22 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
+
+from gymnasium import spaces
+
 from backend.games_engine.base import (
     TERMINAL,
     Action,
     GameSpec,
     GameState,
     register_game,
+)
+from backend.games_engine.env_adapter import (
+    TrainingSpec,
+    int_id_adapter,
+    mark_grid_encoder,
+    register_adapter,
 )
 
 # The eight lines that win.
@@ -108,4 +118,25 @@ SPEC = register_game(
         factory=TicTacToe,
         default_policy="agent",
     )
+)
+
+# The reference RL environment too: nine cells, nine actions, and an action id that
+# is already the cell index. Small enough that an in-app tabular learner genuinely
+# converges, which is what makes it the game to learn the contract on.
+ADAPTER = register_adapter(
+    "tictactoe",
+    int_id_adapter(
+        n_actions=9,
+        observation_space=spaces.Box(low=-1, high=1, shape=(9,), dtype=np.int8),
+        encode_obs=mark_grid_encoder(_MARKS, size=9),
+        training=TrainingSpec(
+            default_episodes=200,
+            max_episodes=5_000,
+            in_app_optimizer=True,
+            hint=(
+                "9 cells, 9 actions, ~5k states — a tabular Q-learner solves this "
+                "in-pane. Start by beating Rusty, then try never losing."
+            ),
+        ),
+    ),
 )

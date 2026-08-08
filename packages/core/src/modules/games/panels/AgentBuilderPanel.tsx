@@ -24,7 +24,7 @@ import {
   type MovePolicy,
 } from '../games-api';
 import { setGamesSection } from '../hub-section';
-import { playVsOwnAgent } from '../matchmaking';
+import { startWithSavedSetup } from '../matchmaking';
 import { setActiveGame, useActiveGame } from '../selected-game';
 import { BootcampSection } from './BootcampSection';
 import { CodeEditor } from './CodeEditor';
@@ -240,7 +240,7 @@ export function AgentBuilderPanel() {
   // section; also open the Games Log so the reasoning streams as the agent plays.
   const enterArena = useCallback(() => {
     setVsOpen(false);
-    void playVsOwnAgent(gameId);
+    void startWithSavedSetup(gameId);
     openDrawer('log');
   }, [gameId]);
 

@@ -27,6 +27,7 @@ from backend.modules.games.models import (
     DevicePollRequest,
     DryRunRequest,
     DryRunResponse,
+    EnvInfoResponse,
     GameInfo,
     GamesStatus,
     LocalLoginRequest,
@@ -40,6 +41,9 @@ from backend.modules.games.models import (
     TestToolResponse,
     ToolDefModel,
     ToolDiagnostic,
+    TrainingCapability,
+    TrainRunRequest,
+    TrainRunResponse,
     ValidateLoadoutResponse,
 )
 from backend.modules.settings.routes import get_value
@@ -71,8 +75,16 @@ def status() -> GamesStatus:
     account = server_auth.signed_in_account()
     return GamesStatus(
         connected=games_client.connected,
+        # The live session's id when there is one, else the id in the stored token.
+        # It used to be *only* the former, so a signed-in node that had not yet
+        # opened a play socket reported no account id at all — and connection is
+        # implicit, so that is the normal state of a freshly-opened client. Anything
+        # that identifies "me" in server data (the ladder row on the match setup
+        # card, `account.id` in the shared account store) had nothing to match on.
         account_id=(
-            games_client._primary.account_id if games_client.connected else None
+            games_client._primary.account_id
+            if games_client.connected
+            else (account["id"] if account else None)
         ),
         # `signed_in` is false once the stored JWT is past its expiry, not merely
         # when the token file is missing — otherwise a month-old session reads as
@@ -291,6 +303,63 @@ async def dry_run_route(body: DryRunRequest) -> DryRunResponse:
     except KeyError as exc:
         reason = str(exc.args[0]) if exc.args else f"unknown game {body.game_id!r}"
         return DryRunResponse(ok=False, error=reason)
+
+
+@router.get("/env/{game_id}", response_model=EnvInfoResponse)
+def env_info_route(game_id: str) -> EnvInfoResponse:
+    """Does this game have an RL environment, and what does it look like?
+
+    The Train section branches on `has_env`: a `reasoner` game has none, and saying
+    so plainly is better than rendering a runner that cannot work."""
+    from backend.games_engine.env_adapter import adapter_for
+
+    adapter = adapter_for(game_id)
+    if adapter is None:
+        return EnvInfoResponse(
+            game_id=game_id,
+            has_env=False,
+            reason=(
+                "This is a reasoner game — its actions are payloads (a patch, an "
+                "answer), not points in an action space. Use the single-turn dry "
+                "run instead."
+            ),
+        )
+    return EnvInfoResponse(
+        game_id=game_id,
+        has_env=True,
+        observation_space=str(adapter.observation_space),
+        n_actions=adapter.n_actions,
+        training=TrainingCapability(
+            self_play=adapter.training.self_play,
+            default_episodes=adapter.training.default_episodes,
+            max_episodes=adapter.training.max_episodes,
+            in_app_optimizer=adapter.training.in_app_optimizer,
+            hint=adapter.training.hint,
+        ),
+    )
+
+
+@router.post("/train/run", response_model=TrainRunResponse)
+async def train_run_route(body: TrainRunRequest) -> TrainRunResponse:
+    """Play a script bot for N headless episodes and report how it did.
+
+    Runs on a worker thread: the loop is CPU-bound Python (the engine, the practice
+    bot's search, and the player's own policy), so leaving it on the event loop
+    would stall every other request — including the websocket that is streaming a
+    live match."""
+    import asyncio
+
+    from backend.modules.games import trainer
+
+    result = await asyncio.to_thread(
+        trainer.run_episodes,
+        body.game_id,
+        body.code,
+        opponent=body.opponent,
+        episodes=body.episodes,
+        seed=body.seed,
+    )
+    return TrainRunResponse(**result.to_wire())
 
 
 @router.get("/sample-observation", response_model=SampleObservationResponse)

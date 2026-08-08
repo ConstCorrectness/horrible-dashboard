@@ -5,21 +5,8 @@ import CardHeader from '@mui/material/CardHeader';
 import CardContent from '@mui/material/CardContent';
 import CardActions from '@mui/material/CardActions';
 import Button from '@mui/material/Button';
-import Chip from '@mui/material/Chip';
-import Typography from '@mui/material/Typography';
-import ToggleButton from '@mui/material/ToggleButton';
-import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 
-import { gameIcon } from '../game-identity';
-import {
-  challengeOffer,
-  challengeRespond,
-  dismissOffer,
-  gamesQueueLeave,
-  useGames,
-  type Ruleset,
-} from '../game-ws';
-import { findRankedMatch } from '../matchmaking';
+import { challengeOffer, challengeRespond, dismissOffer, useGames, type Ruleset } from '../game-ws';
 import { type ChallengeTarget } from '../challenge-draft';
 import { type GameCatalogEntry } from '../games-api';
 import { GamesMui } from '../mui-theme';
@@ -257,100 +244,6 @@ export function ChallengeDraftCard({
             Cancel
           </Button>
         </CardActions>
-      </Card>
-    </GamesMui>
-  );
-}
-
-/** The ranked hero: pick a game + difficulty and Find Match (live queue timer). */
-export function RankedCard({ games }: { games: GameCatalogEntry[] }) {
-  const { queue, lastRating } = useGames();
-  const [gameId, setGameId] = useState('tictactoe');
-  const [difficulty, setDifficulty] = useState('standard');
-
-  if (queue) {
-    return (
-      <GamesMui>
-        <Card className="games-ranked-card active-queue" variant="elevation" sx={{ mb: 1 }}>
-          <div className="games-radar-scan">
-            <div className="games-radar-line" />
-          </div>
-          <div style={{ flex: 1 }}>
-            <Typography component="span" sx={{ color: '#c084fc', fontWeight: 800 }}>
-              🏁 Ranked Matchmaking
-            </Typography>
-            <div style={{ fontSize: '0.8rem', marginTop: '0.15rem' }}>
-              Searching {queue.gameId} ({queue.difficulty})… <strong>{queue.waitingS}s</strong>
-            </div>
-            <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', marginTop: '0.1rem' }}>
-              Window: ±{Math.round(queue.window)} MMR
-            </div>
-          </div>
-          <Button variant="outlined" color="error" onClick={() => gamesQueueLeave()}>
-            Leave Queue
-          </Button>
-        </Card>
-      </GamesMui>
-    );
-  }
-  return (
-    <GamesMui>
-      <Card sx={{ mb: 1 }}>
-        <CardHeader
-          title={<Typography sx={{ fontWeight: 800 }}>🏁 Ranked</Typography>}
-          action={
-            lastRating?.tier ? (
-              <Chip
-                color="primary"
-                variant="outlined"
-                label={`${lastRating.tier}${lastRating.rating ? ` · ${Math.round(lastRating.rating)}` : ''}`}
-                title={`after your last ${lastRating.game_id} game`}
-              />
-            ) : undefined
-          }
-          sx={{ pb: 0.5 }}
-        />
-        <CardContent sx={{ py: 0.5 }}>
-          <ToggleButtonGroup
-            exclusive
-            value={gameId}
-            onChange={(_e, v) => v && setGameId(v)}
-            sx={{ flexWrap: 'wrap', gap: 0.5, mb: 1 }}
-            size="small"
-          >
-            {games.map((g) => (
-              <ToggleButton key={g.id} value={g.id} sx={{ textTransform: 'none', gap: 0.5 }}>
-                <span>{gameIcon(g.id)}</span>
-                {g.name}
-              </ToggleButton>
-            ))}
-          </ToggleButtonGroup>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <ToggleButtonGroup
-              exclusive
-              value={difficulty}
-              onChange={(_e, v) => v && setDifficulty(v)}
-              size="small"
-            >
-              <ToggleButton value="standard" sx={{ textTransform: 'none' }}>
-                ⚔️ Standard
-              </ToggleButton>
-              <ToggleButton value="hard" sx={{ textTransform: 'none' }}>
-                🔒 Hard
-              </ToggleButton>
-              <ToggleButton value="expert" sx={{ textTransform: 'none' }}>
-                💎 Expert
-              </ToggleButton>
-            </ToggleButtonGroup>
-            <Button
-              variant="contained"
-              sx={{ ml: 'auto' }}
-              onClick={() => void findRankedMatch(gameId, difficulty)}
-            >
-              Find match
-            </Button>
-          </div>
-        </CardContent>
       </Card>
     </GamesMui>
   );

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import random
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 # Sentinels for `current_player()`. Real seats are non-negative ints (0, 1, …).
 CHANCE = -1  # a random event only the server resolves (deal/shuffle)

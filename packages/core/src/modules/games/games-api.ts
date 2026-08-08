@@ -254,3 +254,70 @@ export {
   type SignInPrompt,
   type SignInProvider,
 } from '../../account';
+
+/**
+ * A game's **RL environment** — the Gymnasium seam.
+ *
+ * `has_env` is false for every `reasoner` game (bug hunt, RAG race, code golf,
+ * test duel): their action is a payload — a patch, an answer — not a point in an
+ * action space, so there is nothing to declare and the Train section says so
+ * rather than rendering a runner that cannot work.
+ */
+export interface TrainingCapability {
+  self_play: boolean;
+  default_episodes: number;
+  max_episodes: number;
+  /** Whether a learner that converges *in the pane* is a sensible ambition here. */
+  in_app_optimizer: boolean;
+  hint: string;
+}
+
+export interface EnvInfo {
+  game_id: string;
+  has_env: boolean;
+  reason: string | null;
+  observation_space: string | null;
+  n_actions: number | null;
+  training: TrainingCapability | null;
+}
+
+export function fetchEnvInfo(gameId: string): Promise<EnvInfo> {
+  return apiGet(`/games/env/${encodeURIComponent(gameId)}`);
+}
+
+/** One headless training run: N episodes of a script bot against a chosen opponent. */
+export interface TrainRunResult {
+  ok: boolean;
+  error: string | null;
+  /** Which bot shape was detected: `agent` | `act` | `run` (legacy). */
+  shape: string;
+  episodes: number;
+  wins: number;
+  draws: number;
+  losses: number;
+  /** Moves outside the action mask. Counted, never silently repaired. */
+  illegal: number;
+  truncated: number;
+  mean_reward: number;
+  curve: number[];
+  elapsed_ms: number;
+  stopped_early: boolean;
+  sample: {
+    episode: number;
+    seat: number;
+    reward: number;
+    illegal: boolean;
+    moves: { seat: number; action?: string; illegal?: boolean; returned?: string }[];
+    final: Record<string, unknown> | null;
+  } | null;
+}
+
+export function runTraining(body: {
+  game_id: string;
+  code: string;
+  opponent: string;
+  episodes: number;
+  seed?: number;
+}): Promise<TrainRunResult> {
+  return apiPost('/games/train/run', { seed: 0, ...body });
+}

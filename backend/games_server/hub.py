@@ -865,10 +865,11 @@ class GameHub:
                 models.error("bad_game", f"unknown game {game_id!r}")
             )
             return
+        # `difficulty` is accepted and ignored: it is derived from rating now (see
+        # matchmaking.py), and older clients still put it on the wire.
         error = await self.matchmaker.join(
             session,
             game_id,
-            difficulty=str(msg.get("difficulty") or "standard"),
             placement=bool(msg.get("placement")),
         )
         if error is not None:

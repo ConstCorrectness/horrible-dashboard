@@ -204,10 +204,94 @@ def _active_body(entry: dict[str, Any]) -> dict[str, Any]:
     return next(iter(versions.values()), {})
 
 
+# ---- the default bot tool ----------------------------------------------------
+
+# The script seat's baseline: a uniformly random legal move.
+#
+# Every harness has one, always. Before this, a loadout with no `bot` tool made
+# `BotPolicy` fall back to running the loadout's **first** tool — which is normally
+# a *helper* (`board_scanner` returns `{"win_at": ..., "block_at": ...}`), not a
+# move. That answered illegally every single turn and silently degraded to a random
+# move anyway, in ranked matches included. Guaranteeing the tool exists removes the
+# guess: the fallback and the baseline are now the same visible, editable thing.
+#
+# Written in the modern `act(obs, info)` shape so a new player's first sight of the
+# contract is the contract, and reading `info["legal_actions"]` rather than the
+# action mask so it works for every game — including reasoner games, which have no
+# action space at all.
+DEFAULT_BOT_TOOL_NAME = "bot"
+
+DEFAULT_BOT_CODE = '''\
+import random
+
+
+def act(obs, info):
+    """Pick a uniformly random legal move.
+
+    This is the baseline every policy is measured against — beating it is the
+    first thing a real bot has to do. Replace the body with your own logic:
+
+        info["legal_actions"]  every move you may make right now
+        info["action_mask"]    same thing as a 0/1 vector (games with an RL env)
+        info["obs"]            the encoded, seat-relative observation
+        obs                    the raw observation dict
+
+    Return an action id, or an integer index into the action space. For a bot that
+    remembers things between turns, use `class Agent` with an `act(self, obs, info)`
+    method instead — it also gets `reset()` and `observe(reward, terminated, info)`.
+    """
+    return random.choice(info["legal_actions"])["id"]
+'''
+
+
+def default_bot_tool() -> ToolDef:
+    return ToolDef(
+        name=DEFAULT_BOT_TOOL_NAME,
+        description="Your script seat: picks a move from the legal set.",
+        code=DEFAULT_BOT_CODE,
+    )
+
+
+def bot_tool_of(loadout: Loadout, game_id: str | None = None) -> ToolDef:
+    """The tool the **script seat** runs.
+
+    Resolution is `<game_id>.bot` → `bot` → the default random bot. The per-game
+    name is not decoration: shipped harnesses use it (`fighter.bot`) and the Build
+    panel has always resolved it, while the policy only ever looked for `bot` — so
+    a fighter harness ran whichever tool happened to be first. The two now agree.
+
+    Never returns None and never falls through to "some other tool": a helper that
+    returns analysis is not a move, and running one as though it were is exactly the
+    failure this replaces.
+    """
+    by_name = {t.name: t for t in loadout.tools}
+    if game_id and f"{game_id}.bot" in by_name:
+        return by_name[f"{game_id}.bot"]
+    if DEFAULT_BOT_TOOL_NAME in by_name:
+        return by_name[DEFAULT_BOT_TOOL_NAME]
+    return default_bot_tool()
+
+
+def _with_default_bot(loadout: Loadout) -> Loadout:
+    """Guarantee a bot tool on every loadout that leaves this module.
+
+    Injected on **read** rather than written into storage, so existing saved
+    harnesses gain it with no migration and a player who deletes it gets it back
+    rather than silently losing their script seat.
+    """
+    names = {t.name for t in loadout.tools}
+    if DEFAULT_BOT_TOOL_NAME in names or f"{loadout.game_id}.bot" in names:
+        return loadout
+    loadout.tools.append(default_bot_tool())
+    return loadout
+
+
 def get_loadout(game_id: str) -> Loadout:
     """The **active version** of the loadout for `game_id`, falling back to the
     user's `default` loadout and, failing that, to the game's **shipped starter
-    harness** so a fresh player's agent already has a working default."""
+    harness** so a fresh player's agent already has a working default.
+
+    Whatever the source, the result carries a bot tool (see `_with_default_bot`)."""
     entry = _entry_for(_read_all(), game_id)
     if entry is None:
         # Lazy import avoids a module-load cycle (templates is imported by routes).
@@ -215,9 +299,9 @@ def get_loadout(game_id: str) -> Loadout:
 
         body = default_loadout_for(game_id)
         if body is not None:
-            return Loadout.from_wire(game_id, body)
-        return Loadout(game_id=game_id)
-    return Loadout.from_wire(game_id, _active_body(entry))
+            return _with_default_bot(Loadout.from_wire(game_id, body))
+        return _with_default_bot(Loadout(game_id=game_id))
+    return _with_default_bot(Loadout.from_wire(game_id, _active_body(entry)))
 
 
 def active_version_id(game_id: str) -> str | None:

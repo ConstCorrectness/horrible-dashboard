@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class GameInfo(BaseModel):
@@ -178,3 +178,61 @@ class LocalLoginRequest(BaseModel):
 
 class SetCallsignRequest(BaseModel):
     callsign: str
+
+
+# ---- the RL environment (Train section) --------------------------------------
+
+
+class TrainingCapability(BaseModel):
+    """What kind of training a game supports, so the Train UI can shape itself per
+    game instead of offering one loop for everything. Mirrors `TrainingSpec` in
+    backend/games_engine/env_adapter.py, which is the source of truth."""
+
+    self_play: bool = True
+    default_episodes: int = 200
+    max_episodes: int = 5_000
+    in_app_optimizer: bool = False
+    hint: str = ""
+
+
+class EnvInfoResponse(BaseModel):
+    """A game's RL environment, or the honest absence of one.
+
+    `has_env` is False for every `reasoner` game — their action is a payload (a
+    patch, an answer), not a point in a space — and the Train section branches on
+    it rather than showing a broken runner."""
+
+    game_id: str
+    has_env: bool
+    reason: str | None = None
+    observation_space: str | None = None
+    n_actions: int | None = None
+    training: TrainingCapability | None = None
+
+
+class TrainRunRequest(BaseModel):
+    game_id: str
+    # The bot code to run. Sent explicitly (rather than read from the saved
+    # loadout) so the Train section can exercise unsaved edits.
+    code: str
+    # "random" or "bot:<tier>".
+    opponent: str = "bot:bronze"
+    episodes: int = 100
+    seed: int = 0
+
+
+class TrainRunResponse(BaseModel):
+    ok: bool
+    error: str | None = None
+    shape: str = ""
+    episodes: int = 0
+    wins: int = 0
+    draws: int = 0
+    losses: int = 0
+    illegal: int = 0
+    truncated: int = 0
+    mean_reward: float = 0.0
+    curve: list[float] = Field(default_factory=list)
+    elapsed_ms: int = 0
+    stopped_early: bool = False
+    sample: dict[str, Any] | None = None

@@ -14,6 +14,7 @@ import { ProfilePanel } from './ProfilePanel';
 import { ReplayBrowserPanel } from './ReplayBrowserPanel';
 import { RosterPanel } from './RosterPanel';
 import { TownPanel } from './TownPanel';
+import { TrainingSection } from './TrainingSection';
 
 /**
  * **The Games client** (`games.lobby`) — one pane that is the whole game client, in the
@@ -37,7 +38,7 @@ import { TownPanel } from './TownPanel';
  * ladder mirrors HorribleAssault's `bootPhase` (modules/hassault/boot.ts).
  */
 
-const SECTIONS: GamesSection[] = ['play', 'board', 'build', 'replays', 'career', 'social'];
+const SECTIONS: GamesSection[] = ['play', 'board', 'train', 'build', 'replays', 'career', 'social'];
 
 /* Styles for the *sub*-tabs inside the Career and Social sections. The section strip
    itself is host chrome (`SectionTabs`); these are one level down, inside a body.
@@ -164,6 +165,8 @@ function SectionBody({ section }: { section: GamesSection }) {
       return <LobbyPanel />;
     case 'board':
       return <GameBoardPanel />;
+    case 'train':
+      return <TrainingSection />;
     case 'build':
       return <AgentBuilderPanel />;
     case 'replays':

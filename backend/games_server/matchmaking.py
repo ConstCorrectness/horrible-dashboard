@@ -1,14 +1,23 @@
 """The ranked matchmaking queue.
 
-One bucket per `(game_id, difficulty)`. Pairing is rating-window based: a fresh
-entry looks ±75 around its rating, widening by +50 every 10 seconds waiting, so
-close matches happen fast and lopsided ones only when the pool is thin. When no
-human appears within the backfill deadline (`GAMES_QUEUE_BOT_S`, default 45s) — or
-immediately for a **placement** run — the queue seats a practice bot at the
-nearest tier instead, so ranked always works solo.
+**One bucket per game.** Pairing is rating-window based: a fresh entry looks ±75
+around its rating, widening by +50 every 10 seconds waiting, so close matches
+happen fast and lopsided ones only when the pool is thin. When no human appears
+within the backfill deadline (`GAMES_QUEUE_BOT_S`, default 45s) — or immediately
+for a **placement** run — the queue seats a practice bot at the nearest tier
+instead, so ranked always works solo.
 
-Difficulty gating: `standard` is open to everyone; harder difficulties unlock by
-tier (`store.DIFFICULTY_GATES`) — the skill curve made structural.
+Difficulty is **derived, never chosen** (`store.derive_difficulty`). It used to be
+a third thing the player picked, which bucketed the queue by `(game, difficulty)`
+and rejected combinations their tier had not unlocked. That was wrong twice over:
+it split one already-thin pool three ways — so the window widened forever waiting
+for a partner who was queuing one bucket over — and it asked the player a question
+their rating already answers. Only task games (`task_bank.pick_task`) read the
+value at all; board games ignore it entirely. The pair's mean rating picks it now,
+and the tier gates survive purely as progression the UI shows you climbing towards.
+
+`queue_status` carries the live pool size, the median wait and an ELO delta preview
+so the Fight button can state the stakes before the player commits.
 
 The hub owns one `Matchmaker` and runs `sweep()` on a short interval task (the
 AgentTown loop pattern); pairing calls back into the hub to host + seat tables.
@@ -47,8 +56,8 @@ class _Entry:
     session: "Session"
     account_id: str
     game_id: str
-    difficulty: str
     rating: float
+    placement_games: int
     placement: bool
     joined_at: float = field(default_factory=time.time)
     last_status: float = 0.0
@@ -93,28 +102,22 @@ class Matchmaker:
         self,
         session: "Session",
         game_id: str,
-        difficulty: str = "standard",
         placement: bool = False,
     ) -> dict[str, Any] | None:
-        """Enter the queue. Returns an error dict (for the caller to send) when the
-        difficulty is tier-locked; None on success."""
+        """Enter the game's one queue. Returns an error dict (for the caller to
+        send) on refusal; None on success — no refusal exists today, but the shape
+        is kept so the hub's error path stays wired."""
         assert session.account_id is not None
         rating_row = store.get_rating(session.account_id, game_id)
         rating = rating_row["rating"] if rating_row else store.BASE_RATING
         placement_games = rating_row["placement_games"] if rating_row else 0
         tier = store.tier_for(rating, placement_games)
-        gate = store.DIFFICULTY_GATES.get(difficulty, "bronze")
-        if difficulty != "standard" and not store.tier_at_least(tier, gate):
-            return {
-                "code": "tier_locked",
-                "message": f"{difficulty} unlocks at {gate} (you are {tier})",
-            }
         self._entries[session.session_id] = _Entry(
             session=session,
             account_id=session.account_id,
             game_id=game_id,
-            difficulty=difficulty,
             rating=rating,
+            placement_games=placement_games,
             placement=placement or tier == "placement",
         )
         await self.sweep()
@@ -131,12 +134,13 @@ class Matchmaker:
     async def sweep(self) -> None:
         """Pair compatible entries, backfill stale ones with bots, push statuses."""
         now = time.time()
-        # Buckets keep pairing O(bucket²) on tiny pools — fine at this scale.
-        buckets: dict[tuple[str, str], list[_Entry]] = {}
+        # One bucket per game. Buckets keep pairing O(bucket²) on tiny pools — fine
+        # at this scale.
+        buckets: dict[str, list[_Entry]] = {}
         for entry in self._entries.values():
-            buckets.setdefault((entry.game_id, entry.difficulty), []).append(entry)
+            buckets.setdefault(entry.game_id, []).append(entry)
 
-        for (game_id, difficulty), entries in buckets.items():
+        for game_id, entries in buckets.items():
             entries.sort(key=lambda e: e.joined_at)
             paired: set[str] = set()
             for i, a in enumerate(entries):
@@ -150,7 +154,7 @@ class Matchmaker:
                     gap = abs(a.rating - b.rating)
                     if gap <= min(a.window(now), b.window(now)):
                         paired.update((a.session.session_id, b.session.session_id))
-                        await self._start_match(game_id, difficulty, a, b)
+                        await self._start_match(game_id, a, b)
                         break
                 else:
                     # No human partner: placement runs get a bot instantly, everyone
@@ -158,39 +162,65 @@ class Matchmaker:
                     waited = now - a.joined_at
                     if a.placement or waited >= _bot_backfill_s():
                         paired.add(a.session.session_id)
-                        await self._start_bot_match(game_id, difficulty, a)
+                        await self._start_bot_match(game_id, a)
             for sid in paired:
                 self._entries.pop(sid, None)
 
-        # Periodic queue_status so the Find Match button can show a live timer.
+        # Periodic queue_status so the Fight button can show a live timer, how busy
+        # the pool actually is, and what the match is worth.
         for entry in self._entries.values():
             if now - entry.last_status >= STATUS_EVERY_S:
                 entry.last_status = now
                 try:
-                    await entry.session.conn.send_json(
-                        {
-                            "type": "queue_status",
-                            "game_id": entry.game_id,
-                            "difficulty": entry.difficulty,
-                            "waiting_s": int(now - entry.joined_at),
-                            "window": entry.window(now),
-                        }
-                    )
+                    await entry.session.conn.send_json(self.status_payload(entry, now))
                 except Exception:
                     logger.debug("queue_status send failed", exc_info=True)
 
-    async def _start_match(
-        self, game_id: str, difficulty: str, a: _Entry, b: _Entry
-    ) -> None:
-        await self._hub.start_queue_match(game_id, difficulty, a.session, b.session)
+    def status_payload(self, entry: _Entry, now: float) -> dict[str, Any]:
+        """One entry's `queue_status`. The pool count and median wait are measured
+        over that entry's own game bucket — the number that decides whether waiting
+        is worth it."""
+        peers = [e for e in self._entries.values() if e.game_id == entry.game_id]
+        waits = sorted(now - e.joined_at for e in peers)
+        median = waits[len(waits) // 2] if waits else 0.0
+        # Preview against the middle of the band we are actually searching, since
+        # that is the opponent the player is most likely to be handed.
+        return {
+            "type": "queue_status",
+            "game_id": entry.game_id,
+            "difficulty": store.derive_difficulty(entry.rating, entry.placement_games),
+            "waiting_s": int(now - entry.joined_at),
+            "window": entry.window(now),
+            "pool": len(peers),
+            "median_wait_s": int(median),
+            "rating": round(entry.rating),
+            "delta_preview": store.delta_preview(entry.rating, entry.rating),
+        }
 
-    async def _start_bot_match(
-        self, game_id: str, difficulty: str, entry: _Entry
-    ) -> None:
+    async def _start_match(self, game_id: str, a: _Entry, b: _Entry) -> None:
+        await self._hub.start_queue_match(
+            game_id, _pair_difficulty(a, b), a.session, b.session
+        )
+
+    async def _start_bot_match(self, game_id: str, entry: _Entry) -> None:
         tier = _nearest_bot_tier(entry.rating)
         await self._hub.start_queue_match(
-            game_id, difficulty, entry.session, None, bot_tier=tier
+            game_id,
+            store.derive_difficulty(entry.rating, entry.placement_games),
+            entry.session,
+            None,
+            bot_tier=tier,
         )
+
+
+def _pair_difficulty(a: _Entry, b: _Entry) -> str:
+    """The difficulty for a pairing: derived from the pair's **mean** rating, so a
+    match sits at the level the two of them actually play at rather than at the
+    stronger player's."""
+    mean_rating = (a.rating + b.rating) / 2.0
+    return store.derive_difficulty(
+        mean_rating, min(a.placement_games, b.placement_games)
+    )
 
 
 def _nearest_bot_tier(rating: float) -> str:

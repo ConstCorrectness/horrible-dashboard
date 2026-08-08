@@ -101,12 +101,24 @@ export interface ChallengeIncoming {
   ruleset: Ruleset;
 }
 
-/** Your live ranked-queue slot (null when not queued). */
+/** Your live ranked-queue slot (null when not queued).
+ *
+ * `difficulty` is **reported, not requested** — the server derives it from your
+ * rating (see backend/games_server/matchmaking.py), so this is a readout of what
+ * you were placed at rather than something the UI chose. `pool`/`medianWaitS` and
+ * `deltaPreview` arrive with the first `queue_status`, ~5s in; the optimistic slot
+ * set by `gamesQueueJoin` leaves them undefined until then. */
 export interface QueueState {
   gameId: string;
   difficulty: string;
   waitingS: number;
   window: number;
+  /** Players queued for this game right now, you included. */
+  pool?: number;
+  medianWaitS?: number;
+  rating?: number;
+  /** ELO movement a win/draw/loss would cause, at your current rating. */
+  deltaPreview?: { win: number; draw: number; loss: number };
 }
 
 /** Between-games score of a best-of-N series. */
@@ -507,16 +519,24 @@ subscribeChannel('games', (msg) => {
       }
       break;
     }
-    case 'queue_status':
+    case 'queue_status': {
+      const preview = d.delta_preview as Record<string, number> | undefined;
       set({
         queue: {
           gameId: String(d.game_id ?? ''),
           difficulty: String(d.difficulty ?? 'standard'),
           waitingS: Number(d.waiting_s ?? 0),
           window: Number(d.window ?? 0),
+          pool: d.pool === undefined ? undefined : Number(d.pool),
+          medianWaitS: d.median_wait_s === undefined ? undefined : Number(d.median_wait_s),
+          rating: d.rating === undefined ? undefined : Number(d.rating),
+          deltaPreview: preview
+            ? { win: Number(preview.win), draw: Number(preview.draw), loss: Number(preview.loss) }
+            : undefined,
         },
       });
       break;
+    }
     case 'match_found': {
       const opp = d.opponent as SeatProfile | null;
       toastsStore.add(
@@ -787,10 +807,13 @@ export function gamesRunChallenges(gameId: string): void {
 
 // ---- ranked queue + negotiation ---------------------------------------------
 
-export function gamesQueueJoin(gameId: string, difficulty = 'standard', placement = false): void {
-  sendChannel('games', 'queue_join', { gameId, difficulty, placement });
-  // Optimistic slot so the Find Match button flips immediately.
-  set({ queue: { gameId, difficulty, waitingS: 0, window: 75 } });
+/** Enter the game's one ranked queue. There is no difficulty argument: the server
+ * derives it from your rating, and asking used to split the pool three ways. */
+export function gamesQueueJoin(gameId: string, placement = false): void {
+  sendChannel('games', 'queue_join', { gameId, placement });
+  // Optimistic slot so the Fight button flips immediately. `difficulty` is filled
+  // in by the first real queue_status; 'standard' is only a placeholder label.
+  set({ queue: { gameId, difficulty: 'standard', waitingS: 0, window: 75 } });
 }
 
 export function gamesQueueLeave(): void {
