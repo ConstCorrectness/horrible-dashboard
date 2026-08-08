@@ -371,6 +371,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
 
         pubnub.addListener({
           message: (event) => {
+            console.log('PubNub Message Received:', event);
             const msg = event.message as PubNubRoomMessage;
             if (!msg) return;
 
@@ -453,11 +454,14 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
           }
         });
 
-        const channelsToSubscribe = [`channel_all.${channelName}`];
-        if (myUserId) {
-          channelsToSubscribe.push(`users.${myUserId}`);
-          channelsToSubscribe.push(`channel_user.${channelName}.${myUserId}`);
-        }
+        const channelsToSubscribe = [
+          `channel_all.${channelName}`,
+          `channel_user.${channelName}.${myUserId}`,
+          `channel_chat.${channelName}`,
+          `chat_${channelName}`,
+          `chat.${channelName}`,
+          `users.${myUserId}`
+        ];
         pubnub.subscribe({ channels: channelsToSubscribe });
       }
 
