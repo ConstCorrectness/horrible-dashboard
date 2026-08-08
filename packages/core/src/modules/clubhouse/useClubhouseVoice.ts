@@ -11,8 +11,10 @@ import {
   acceptClubhouseSpeaker,
   getClubhouseStatus,
   getClubhouseChannelChat,
+  sendChannelMessage,
   JoinChannelResult,
   ChannelUser,
+  ApiChatComment
 } from './api';
 
 const CLUBCARD_AGORA_APP_ID = '938d7e95aeaa4f4ca1f416ab40a498d9';
@@ -24,6 +26,7 @@ export interface UseClubhouseVoiceProps {
   onCommentsChange?: (comments: ChatComment[]) => void;
   onSpeakingVolumesChange?: (volumes: Record<number, number>) => void;
   onTranscribe?: (text: string) => void;
+  onBargeIn?: () => void;
   sttChunkIntervalMs?: number;
 }
 
@@ -79,6 +82,7 @@ export interface PubNubRoomMessage {
   } | null;
   from_name?: string | null;
   from_photo_url?: string | null;
+  from_user_id?: number | null;
   // Room event payloads
   user_id?: number | null;
   club_id?: number | null;
@@ -117,12 +121,21 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
   const physicalMicStreamRef = useRef<MediaStream | null>(null);
   const humanGainRef = useRef<GainNode | null>(null);
   const onTranscribeRef = useRef(props?.onTranscribe);
+  const onBargeInRef = useRef(props?.onBargeIn);
+  
+  // VAD & Agent Audio control
+  const vadIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const agentAudioSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const isAgentSpeakingRef = useRef(false);
+  const agentTtsAbortControllerRef = useRef<AbortController | null>(null);
+  
   const chunkIntervalRef = useRef(props?.sttChunkIntervalMs || 5000);
 
   useEffect(() => {
     onTranscribeRef.current = props?.onTranscribe;
+    onBargeInRef.current = props?.onBargeIn;
     chunkIntervalRef.current = props?.sttChunkIntervalMs || 5000;
-  }, [props?.onTranscribe, props?.sttChunkIntervalMs]);
+  }, [props?.onTranscribe, props?.onBargeIn, props?.sttChunkIntervalMs]);
 
   const rtcClientRef = useRef<IAgoraRTCClient | null>(null);
   const localAudioTrackRef = useRef<ILocalAudioTrack | null>(null);
@@ -184,16 +197,14 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       if (chatRes.ok) {
         const chatData = await chatRes.json();
         if (chatData.comments && Array.isArray(chatData.comments)) {
-          // Map the API chat format to ChatComment if needed, or assume it's close enough.
-          // Clubhouse chat messages are typically structured with user info.
-          const historicalComments = chatData.comments.map((c: any) => ({
-            id: c.message_id || c.chat_message_id || String(Math.random()),
-            userName: c.name || c.user_profile?.name || 'Unknown',
-            userPhoto: c.photo_url || c.user_profile?.photo_url || '',
-            text: c.message || c.body || '',
-            timestamp: c.timestamp || Date.now()
+          const newComments = chatData.comments.map((c: ApiChatComment) => ({
+            id: c.time_created || Math.random().toString(),
+            userName: c.from_name || c.user_profile?.name || 'Unknown',
+            userPhoto: c.from_photo_url || c.user_profile?.photo_url || null,
+            text: c.message || c.text || '',
+            timestamp: c.time_created ? Date.parse(c.time_created) : Date.now()
           })).filter((c: ChatComment) => c.text.length > 0);
-          setComments(historicalComments.reverse()); // usually oldest first
+          setComments(newComments.reverse()); // usually oldest first
         }
       }
     } catch (e) {
@@ -248,7 +259,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       );
 
       // e. Create Audio Mixer
-      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+      const AudioContext = window.AudioContext || (window as unknown as { webkitAudioContext: typeof window.AudioContext }).webkitAudioContext;
       const audioCtx = new AudioContext();
       audioCtxRef.current = audioCtx;
       
@@ -258,8 +269,19 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       const sttDest = audioCtx.createMediaStreamDestination();
       sttDestRef.current = sttDest;
       
-      // Start STT Recorder
+      // Start STT Recorder with VAD
       try {
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 256;
+        sttDest.stream.getAudioTracks().forEach(track => {
+          const stream = new MediaStream([track]);
+          const src = audioCtx.createMediaStreamSource(stream);
+          src.connect(analyser);
+        });
+        
+        let silenceTicks = 0;
+        let isSpeaking = false;
+        
         const startRecordingChunk = () => {
           if (!sttDestRef.current) return;
           const recorder = new MediaRecorder(sttDestRef.current.stream);
@@ -272,8 +294,8 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
               try {
                 const res = await fetch(apiUrl('/api/agent/stt'), { method: 'POST', body: formData });
                 const json = await res.json();
-                if (onTranscribeRef.current) {
-                  onTranscribeRef.current(json.text || "");
+                if (onTranscribeRef.current && json.text && json.text.trim()) {
+                  onTranscribeRef.current(json.text.trim());
                 }
               } catch (err) {
                 console.error('STT failed:', err);
@@ -282,19 +304,63 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
           };
           
           recorder.start();
-          
-          // Stop and restart after the configured interval to ensure a fresh WebM header
-          setTimeout(() => {
-            if (sttRecorderRef.current === recorder && recorder.state === 'recording') {
-              recorder.stop();
-              startRecordingChunk();
-            }
-          }, chunkIntervalRef.current);
         };
         
         startRecordingChunk();
+        
+        vadIntervalRef.current = setInterval(() => {
+          const dataArray = new Uint8Array(analyser.frequencyBinCount);
+          analyser.getByteFrequencyData(dataArray);
+          let sum = 0;
+          for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+          const avgVolume = sum / dataArray.length;
+          
+          if (avgVolume > 5) {
+            // Human is speaking
+            if (!isSpeaking && onBargeInRef.current) {
+              onBargeInRef.current();
+            }
+            isSpeaking = true;
+            silenceTicks = 0;
+            
+            // Barge-in: Stop agent if it's currently speaking
+            if (isAgentSpeakingRef.current) {
+              console.log("BARGE-IN DETECTED! Stopping agent audio.");
+              if (agentAudioSourceRef.current) {
+                try {
+                  agentAudioSourceRef.current.stop();
+                } catch {
+                  /* ignore */
+                }
+              }
+              if (agentTtsAbortControllerRef.current) {
+                try {
+                  agentTtsAbortControllerRef.current.abort();
+                } catch {
+                  /* ignore */
+                }
+              }
+              isAgentSpeakingRef.current = false;
+            }
+          } else {
+            // Silence
+            if (isSpeaking) {
+              silenceTicks++;
+              if (silenceTicks > 15) { // ~750ms of silence at 50ms interval
+                isSpeaking = false;
+                silenceTicks = 0;
+                // End of speech detected, send chunk!
+                if (sttRecorderRef.current && sttRecorderRef.current.state !== 'inactive') {
+                  sttRecorderRef.current.stop();
+                  startRecordingChunk();
+                }
+              }
+            }
+          }
+        }, 50);
+
       } catch (err) {
-        console.error('Failed to start STT recorder:', err);
+        console.error('Failed to start VAD STT recorder:', err);
       }
       
       // Get physical mic (Optional, handle missing permissions or timeouts gracefully)
@@ -376,7 +442,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
             if (!msg) return;
 
             const sender = msg.user_profile || msg.user || {};
-            const senderId = sender.user_id ?? msg.user_id;
+            const senderId = sender.user_id ?? msg.user_id ?? msg.from_user_id;
 
             // --- Room signaling events ---
             const action = msg.action;
@@ -410,7 +476,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
               }
             } else if (action === 'invite_speaker') {
               const targetId = msg.user_id;
-              if (targetId != null && targetId === myUserId) {
+              if (targetId != null && Number(targetId) === Number(myUserId)) {
                 setSpeakerInvite({
                   moderatorId: msg.moderator_id ?? (senderId ?? 0),
                   moderatorName: msg.moderator_name || sender.name || 'A moderator',
@@ -420,10 +486,10 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
             }
 
             // --- Chat messages ---
-            if (action === 'post_to_chat' || (!action && (msg.text || msg.body || msg.message))) {
+            if (action === 'chat_message' || action === 'chat' || action === 'post_to_chat' || action === 'new_channel_message' || (!action && (msg.text || msg.body || msg.message))) {
               const text = msg.text || msg.body || msg.message;
               if (text && typeof text === 'string') {
-                if (senderId != null && myUserId != null && senderId === myUserId) return;
+                if (senderId != null && myUserId != null && Number(senderId) === Number(myUserId)) return;
                 setComments(prev => [
                   ...prev,
                   {
@@ -441,7 +507,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
             if (action === 'react' || (!action && (msg.emoji || msg.reaction))) {
               const emoji = msg.emoji || msg.reaction;
               if (emoji && typeof emoji === 'string') {
-                if (senderId != null && myUserId != null && senderId === myUserId) return;
+                if (senderId != null && myUserId != null && Number(senderId) === Number(myUserId)) return;
                 const reactionId = String(event.timetoken || Math.random());
                 const x = 15 + Math.random() * 70;
                 const y = 80 + Math.random() * 10;
@@ -457,9 +523,6 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         const channelsToSubscribe = [
           `channel_all.${channelName}`,
           `channel_user.${channelName}.${myUserId}`,
-          `channel_chat.${channelName}`,
-          `chat_${channelName}`,
-          `chat.${channelName}`,
           `users.${myUserId}`
         ];
         pubnub.subscribe({ channels: channelsToSubscribe });
@@ -525,6 +588,10 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     if (volumeIntervalRef.current) {
       clearInterval(volumeIntervalRef.current);
       volumeIntervalRef.current = null;
+    }
+    if (vadIntervalRef.current) {
+      clearInterval(vadIntervalRef.current);
+      vadIntervalRef.current = null;
     }
 
     if (localAudioTrackRef.current) {
@@ -637,22 +704,11 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       timestamp
     }]);
 
-    const payload = {
-      action: 'post_to_chat',
-      text,
-      message: text,
-      body: text,
-      user_profile: {
-        name: profile?.name || 'Anonymous',
-        photo_url: profile?.photoUrl || null,
-        user_id: profile?.userId || null
-      },
-      timestamp
-    };
     try {
-      await pubnubRef.current.publish({ channel: `channel_all.${activeChannel}`, message: payload });
+      await sendChannelMessage(activeChannel, text);
     } catch (err2) {
       console.error('Failed to publish comment:', err2);
+      throw err2;
     }
   };
 
@@ -690,15 +746,23 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
   const playAgentAudio = useCallback(async (text: string) => {
     if (!audioCtxRef.current || !agentAudioDestRef.current || !localAudioTrackRef.current) return;
     try {
+      isAgentSpeakingRef.current = true;
+      agentTtsAbortControllerRef.current = new AbortController();
       const url = `/api/agent/tts?text=${encodeURIComponent(text)}`;
-      const res = await fetch(url);
+      const res = await fetch(url, { signal: agentTtsAbortControllerRef.current.signal });
       const arrayBuffer = await res.arrayBuffer();
       const audioBuffer = await audioCtxRef.current.decodeAudioData(arrayBuffer);
+      
+      // Clear the abort controller after successful fetch
+      agentTtsAbortControllerRef.current = null;
       
       const source = audioCtxRef.current.createBufferSource();
       source.buffer = audioBuffer;
       source.connect(agentAudioDestRef.current);
       source.connect(audioCtxRef.current.destination); // Play locally so the user hears it too
+      
+      agentAudioSourceRef.current = source;
+      isAgentSpeakingRef.current = true;
       
       const wasMuted = isMuted;
       if (wasMuted && activeChannel) {
@@ -711,6 +775,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
 
       return new Promise<void>((resolve) => {
         source.onended = async () => {
+          isAgentSpeakingRef.current = false;
           if (wasMuted && activeChannel) {
             try {
               await muteClubhouseChannel(activeChannel, true);
@@ -723,6 +788,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         source.start();
       });
     } catch (e) {
+      isAgentSpeakingRef.current = false;
       console.error('Failed to play agent audio:', e);
     }
   }, [isMuted, activeChannel]);

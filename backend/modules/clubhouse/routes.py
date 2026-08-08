@@ -34,6 +34,7 @@ from backend.modules.clubhouse.models import (
     StartAuthRequest,
     StartAuthResult,
     TokenConnectRequest,
+    SendChannelMessageRequest,
 )
 from backend.modules.telemetry.instrument import instrumented_client
 
@@ -207,9 +208,7 @@ async def _ch_authed_post(
             message = res.json().get("error_message") or message
         except (ValueError, AttributeError):
             pass
-        status_code = (
-            res.status_code if res.status_code in (400, 401, 403, 429) else 502
-        )
+        status_code = res.status_code if 400 <= res.status_code < 500 else 502
         raise HTTPException(status_code=status_code, detail=f"Clubhouse: {message}")
     return res.json()
 
@@ -239,9 +238,7 @@ async def _ch_authed_get(
             message = res.json().get("error_message") or message
         except (ValueError, AttributeError):
             pass
-        status_code = (
-            res.status_code if res.status_code in (400, 401, 403, 429) else 502
-        )
+        status_code = res.status_code if 400 <= res.status_code < 500 else 502
         raise HTTPException(status_code=status_code, detail=f"Clubhouse: {message}")
     return res.json()
 
@@ -271,7 +268,7 @@ async def _ch_post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
             message = res.json().get("error_message") or message
         except (ValueError, AttributeError):
             pass
-        status = res.status_code if res.status_code in (400, 401, 403, 429) else 502
+        status = res.status_code if 400 <= res.status_code < 500 else 502
         raise HTTPException(status_code=status, detail=f"Clubhouse: {message}")
     return res.json()
 
@@ -421,7 +418,7 @@ async def channels() -> dict[str, Any]:
                     }
                 )
                 
-        cursor = raw.get("cursor")
+        cursor = raw.get("next_cursor") or raw.get("cursor")
         if not cursor:
             break
 
@@ -624,7 +621,7 @@ async def accept_speaker(
     auth = _require_auth()
     return await _ch_authed_post(
         "/accept_speaker_invite",
-        {"channel": channel, "user_id": body.user_id},
+        {"channel": channel, "user_id": auth["user_id"]},
         auth["auth_token"],
         auth["user_id"],
         auth.get("device_id"),
@@ -694,6 +691,18 @@ async def invite_user(channel: str, body: InviteUserRequest) -> dict[str, Any]:
     return await _ch_authed_post(
         "/invite_to_existing_channel",
         {"channel": channel, "user_id": body.user_id},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+@router.post("/send_channel_message")
+async def send_channel_message(body: SendChannelMessageRequest) -> dict[str, Any]:
+    """Send a message to the active channel."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/send_channel_message",
+        {"channel": body.channel, "message": body.message},
         auth["auth_token"],
         auth["user_id"],
         auth.get("device_id"),

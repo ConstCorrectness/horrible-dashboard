@@ -118,7 +118,7 @@ export function getClubhouseChannelDetails(channel: string): Promise<Channel> {
   return apiGet<Channel>(`/clubhouse/channels/${channel}`);
 }
 
-export interface ChatComment {
+export interface ApiChatComment {
   message?: string;
   text?: string;
   user_profile?: {
@@ -128,11 +128,11 @@ export interface ChatComment {
   from_name?: string;
   from_photo_url?: string;
   time_created?: string;
-  [key: string]: any;
+  [key: string]: unknown;
 }
 
-export function getClubhouseChannelChat(channel: string): Promise<{ comments: ChatComment[] }> {
-  return apiGet<{ comments: ChatComment[] }>(`/clubhouse/channels/${channel}/chat`);
+export function getClubhouseChannelChat(channel: string): Promise<{ comments: ApiChatComment[] }> {
+  return apiGet<{ comments: ApiChatComment[] }>(`/clubhouse/channels/${channel}/chat`);
 }
 
 export interface ClubhouseUserProfile {
@@ -194,5 +194,12 @@ export function inviteToClubhouseChannel(channel: string, userId: number): Promi
 
 export function searchClubhouseUsers(query: string): Promise<{ users: SearchUserResult[] }> {
   return apiGet<{ users: SearchUserResult[] }>(`/clubhouse/users/search?query=${encodeURIComponent(query)}`);
+}
+
+export function sendChannelMessage(channel: string, message: string): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/send_channel_message`, {
+    channel,
+    message
+  });
 }
 

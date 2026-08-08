@@ -40,11 +40,12 @@ export function RoomsPanel() {
   const [agentEnabled, setAgentEnabled] = useState(false);
   const [isAgentSpeaking, setIsAgentSpeaking] = useState(false);
   const [agentTranscript, setAgentTranscript] = useState<string | null>(null);
-  const [transcriptionBuffer, setTranscriptionBuffer] = useState("");
   const [sttChunkMs, setSttChunkMs] = useState(5000);
   const [agentTemperature, setAgentTemperature] = useState(0.7);
   const [agentMaxTokens, setAgentMaxTokens] = useState(150);
   const [agentSystemPrompt, setAgentSystemPrompt] = useState("You are an AI participant in a voice chat room. Reply concisely with a natural, conversational response.");
+  const [agentRespondsToChat, setAgentRespondsToChat] = useState(false);
+  const [agentRespondsToVoice, setAgentRespondsToVoice] = useState(true);
   const [myUserId, setMyUserId] = useState<number | null>(null);
 
   // New states for extended Clubhouse functionality
@@ -288,17 +289,18 @@ export function RoomsPanel() {
     sendReaction,
   } = useClubhouseVoice({
     sttChunkIntervalMs: sttChunkMs,
+    onBargeIn: () => {
+      console.log('Barge-in occurred, aborting LLM if generating...');
+      if (agentAbortControllerRef.current) {
+        agentAbortControllerRef.current.abort();
+        agentAbortControllerRef.current = null;
+      }
+      setIsAgentSpeaking(false);
+    },
     onTranscribe: (text) => {
       if (!agentEnabled) return;
       if (text.trim().length > 0) {
-        setTranscriptionBuffer(prev => prev ? `${prev} ${text.trim()}` : text.trim());
-      } else {
-        setTranscriptionBuffer(prev => {
-          if (prev.trim().length > 0) {
-            setAgentTranscript(prev);
-          }
-          return "";
-        });
+        setAgentTranscript(text.trim());
       }
     }
   });
@@ -352,21 +354,31 @@ export function RoomsPanel() {
     }
   }, [comments]);
 
+  const agentAbortControllerRef = useRef<AbortController | null>(null);
+
   // Voice Agent Logic
-  const triggerAgentResponse = async (text: string) => {
+  const triggerAgentResponse = async (text: string, source: 'chat' | 'voice' = 'voice') => {
     if (!text || isAgentSpeaking) return;
     try {
       setIsAgentSpeaking(true);
+      agentAbortControllerRef.current = new AbortController();
+      
+      const promptText = text.trim() 
+        ? (source === 'chat' ? `Another user just typed in chat: "${text}".` : `Another speaker just said: "${text}".`)
+        : `(The room is silent. It's your turn to speak, initiate the conversation or say something interesting.)`;
+
       const req = await fetch(apiUrl('/api/agent/generate'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: agentAbortControllerRef.current.signal,
         body: JSON.stringify({ 
-          prompt: text.trim() ? `Another speaker just said: "${text}".` : `(The room is silent. It's your turn to speak, initiate the conversation or say something interesting.)`,
+          prompt: promptText,
           system: agentSystemPrompt,
           temperature: agentTemperature,
           max_tokens: agentMaxTokens
         }),
       });
+      agentAbortControllerRef.current = null;
       const data = await req.json();
       
       if (data.completion) {
@@ -386,18 +398,18 @@ export function RoomsPanel() {
     if (comments.length > prevCommentsLengthRef.current) {
       const newComment = comments[comments.length - 1];
       prevCommentsLengthRef.current = comments.length;
-      if (agentEnabled && !newComment.text?.startsWith('🤖')) {
-         triggerAgentResponse(newComment.text || '');
+      if (agentEnabled && agentRespondsToChat && !newComment.text?.startsWith('🤖')) {
+         triggerAgentResponse(newComment.text || '', 'chat');
       }
     }
-  }, [comments, agentEnabled, myUserId, isAgentSpeaking]);
+  }, [comments, agentEnabled, agentRespondsToChat, myUserId, isAgentSpeaking]);
 
   useEffect(() => {
-    if (agentTranscript && agentEnabled) {
-      triggerAgentResponse(agentTranscript);
+    if (agentTranscript && agentEnabled && agentRespondsToVoice) {
+      triggerAgentResponse(agentTranscript, 'voice');
       setAgentTranscript(null);
     }
-  }, [agentTranscript, agentEnabled]);
+  }, [agentTranscript, agentEnabled, agentRespondsToVoice]);
 
   // Filter channels based on search query
   const filteredChannels = channels.filter((c) => {
@@ -425,8 +437,17 @@ export function RoomsPanel() {
   const handleSendComment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!commentText.trim()) return;
-    await sendComment(commentText.trim());
+    
+    // Optimistically clear the input, but we don't optimistically add it yet
+    // since the hook already does optimistic adding.
+    const textToSend = commentText.trim();
     setCommentText('');
+    
+    try {
+      await sendComment(textToSend);
+    } catch (err: unknown) {
+      toastsStore.add('error', 'Failed to send message', err instanceof Error ? err.message : String(err));
+    }
   };
 
   const REACTIONS = ['❤️', '😂', '👍', '🙌', '👏', '🔥'];
@@ -1944,6 +1965,27 @@ export function RoomsPanel() {
                 
                 {agentEnabled && (
                   <div style={{ padding: '1rem', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '1rem' }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem', color: '#f1f5f9', cursor: 'pointer' }}>
+                        <input 
+                          type="checkbox" 
+                          checked={agentRespondsToVoice} 
+                          onChange={(e) => setAgentRespondsToVoice(e.target.checked)} 
+                          style={{ accentColor: 'var(--accent)' }}
+                        />
+                        Respond to Voice (Stage)
+                      </label>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem', color: '#f1f5f9', cursor: 'pointer' }}>
+                        <input 
+                          type="checkbox" 
+                          checked={agentRespondsToChat} 
+                          onChange={(e) => setAgentRespondsToChat(e.target.checked)} 
+                          style={{ accentColor: 'var(--accent)' }}
+                        />
+                        Respond to Live Chat
+                      </label>
+                    </div>
+
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
                       <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>System Prompt / Persona:</span>
                       <textarea 
