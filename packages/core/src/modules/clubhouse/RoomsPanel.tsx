@@ -60,16 +60,8 @@ export function RoomsPanel() {
   const [peopleSearchResults, setPeopleSearchResults] = useState<SearchUserResult[]>([]);
   const [loadingPeople, setLoadingPeople] = useState(false);
   
-  // Toggleable nested panels for the room view
-  const [panelsOpen, setPanelsOpen] = useState({
-    participants: true,
-    chat: true,
-    agent: false
-  });
-
-  const togglePanel = (panel: keyof typeof panelsOpen) => {
-    setPanelsOpen(prev => ({ ...prev, [panel]: !prev[panel] }));
-  };
+  // Use a horizontal tab bar for the room view instead of vertical accordions
+  const [activeRoomTab, setActiveRoomTab] = useState<'participants' | 'chat' | 'agent'>('participants');
 
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [followingUsers, setFollowingUsers] = useState<FollowUser[]>([]);
@@ -1833,60 +1825,62 @@ export function RoomsPanel() {
         </div>
 
         {/* Main Content Area */}
-        <div className="ch-room-scroller">
-          {/* Participants Area */}
-          <div className="ch-participants-section">
-            <div 
-              className="ch-section-heading" 
-              style={{ cursor: 'pointer', display: 'flex', justifyContent: 'space-between' }}
-              onClick={() => togglePanel('participants')}
+        <div className="ch-room-scroller" style={{ display: 'flex', flexDirection: 'column' }}>
+          
+          {/* Horizontal Tabs */}
+          <div style={{ display: 'flex', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+            <button 
+              onClick={() => setActiveRoomTab('participants')}
+              style={{ flex: 1, padding: '0.75rem', background: activeRoomTab === 'participants' ? '#1d2026' : 'transparent', color: activeRoomTab === 'participants' ? '#fff' : '#94a3b8', border: 'none', cursor: 'pointer', fontWeight: activeRoomTab === 'participants' ? 600 : 400 }}
             >
-              <span>👥 Participants ({speakers.length + audience.length})</span>
-              <span>{panelsOpen.participants ? '▼' : '▶'}</span>
-            </div>
-            
-            {panelsOpen.participants && (
-              <>
+              👥 Participants ({speakers.length + audience.length})
+            </button>
+            <button 
+              onClick={() => setActiveRoomTab('chat')}
+              style={{ flex: 1, padding: '0.75rem', background: activeRoomTab === 'chat' ? '#1d2026' : 'transparent', color: activeRoomTab === 'chat' ? '#fff' : '#94a3b8', border: 'none', cursor: 'pointer', fontWeight: activeRoomTab === 'chat' ? 600 : 400 }}
+            >
+              💬 Live Chat
+            </button>
+            <button 
+              onClick={() => setActiveRoomTab('agent')}
+              style={{ flex: 1, padding: '0.75rem', background: activeRoomTab === 'agent' ? '#1d2026' : 'transparent', color: activeRoomTab === 'agent' ? '#fff' : '#94a3b8', border: 'none', cursor: 'pointer', fontWeight: activeRoomTab === 'agent' ? 600 : 400 }}
+            >
+              🤖 Agent Settings
+            </button>
+          </div>
+
+          <div style={{ flex: 1, overflowY: 'auto', position: 'relative' }}>
+            {/* Participants Area */}
+            {activeRoomTab === 'participants' && (
+              <div className="ch-participants-section">
                 {/* Speakers */}
                 {speakers.length > 0 && (
-                  <div className="ch-speakers-grid">{speakers.map((u) => renderUserCard(u, true))}</div>
+                  <>
+                    <div className="ch-section-heading" style={{ borderTop: 'none', background: 'transparent', padding: '1rem 1rem 0.5rem 1rem' }}>
+                      <span style={{ fontSize: '0.75rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Speakers ({speakers.length})</span>
+                    </div>
+                    <div className="ch-speakers-grid">{speakers.map((u) => renderUserCard(u, true))}</div>
+                  </>
                 )}
 
                 {/* Audience */}
                 {audience.length > 0 && (
                   <>
-                    <div className="ch-section-heading" style={{ marginTop: '1rem', borderTop: 'none', background: 'transparent', padding: '0 1rem' }}>
-                      <span style={{ fontSize: '0.7rem', color: '#64748b' }}>Audience ({audience.length})</span>
+                    <div className="ch-section-heading" style={{ marginTop: '0.5rem', borderTop: 'none', background: 'transparent', padding: '1rem 1rem 0.5rem 1rem' }}>
+                      <span style={{ fontSize: '0.75rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Audience ({audience.length})</span>
                     </div>
                     <div className="ch-listeners-grid">
                       {audience.map((u) => renderUserCard(u, false))}
                     </div>
                   </>
                 )}
-              </>
+              </div>
             )}
-          </div>
 
-          {/* Chat / Comments Feed */}
-          <div className="ch-chat-section">
-            <div
-              className="ch-section-heading"
-              style={{
-                padding: '0.75rem 1rem',
-                background: '#111317',
-                borderBottom: '1px solid rgba(255,255,255,0.03)',
-                cursor: 'pointer',
-                display: 'flex',
-                justifyContent: 'space-between'
-              }}
-              onClick={() => togglePanel('chat')}
-            >
-              <span>💬 Live Chat</span>
-              <span>{panelsOpen.chat ? '▼' : '▶'}</span>
-            </div>
-            
-            {panelsOpen.chat && (
-              <div className="ch-chat-scroll">
+            {/* Chat / Comments Feed */}
+            {activeRoomTab === 'chat' && (
+              <div className="ch-chat-section" style={{ height: '100%' }}>
+                <div className="ch-chat-scroll" style={{ height: '100%' }}>
               {comments.length === 0 ? (
                 <div className="ch-chat-empty">
                   💬
@@ -1930,58 +1924,41 @@ export function RoomsPanel() {
               )}
               <div ref={chatEndRef} />
             </div>
-            )}
           </div>
+          )}
 
-          {/* Agent Settings Panel */}
-          <div className="ch-agent-section">
-            <div
-              className="ch-section-heading"
-              style={{
-                padding: '0.75rem 1rem',
-                background: '#111317',
-                borderBottom: '1px solid rgba(255,255,255,0.03)',
-                cursor: 'pointer',
-                display: 'flex',
-                justifyContent: 'space-between',
-                borderTop: '1px solid rgba(255,255,255,0.03)',
-              }}
-              onClick={() => togglePanel('agent')}
-            >
-              <span>🤖 AI Agent Settings</span>
-              <span>{panelsOpen.agent ? '▼' : '▶'}</span>
-            </div>
-            
-            {panelsOpen.agent && (
-              <div style={{ padding: '1rem', background: 'rgba(0,0,0,0.2)', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span style={{ fontSize: '0.85rem' }}>Enable Voice Agent</span>
+            {/* Agent Settings Panel */}
+            {activeRoomTab === 'agent' && (
+            <div className="ch-agent-section">
+              <div style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '1rem', background: 'rgba(255,255,255,0.03)', borderRadius: '8px' }}>
+                  <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>Enable Voice Agent</span>
                   <button
                     className={`ch-btn-action ${agentEnabled ? 'mic-active' : ''}`}
                     onClick={() => setAgentEnabled(!agentEnabled)}
-                    style={{ padding: '0.4rem 0.8rem', fontSize: '0.75rem' }}
+                    style={{ padding: '0.5rem 1rem', fontSize: '0.8rem' }}
                   >
-                    {agentEnabled ? 'ON' : 'OFF'}
+                    {agentEnabled ? '🤖 ON' : '🤖 OFF'}
                   </button>
                 </div>
                 
                 {agentEnabled && (
-                  <>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                      <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>System Prompt / Persona:</span>
+                  <div style={{ padding: '1rem', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                      <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>System Prompt / Persona:</span>
                       <textarea 
                         value={agentSystemPrompt} 
                         onChange={(e) => setAgentSystemPrompt(e.target.value)} 
                         placeholder="System Prompt / Persona"
-                        style={{ width: '100%', minHeight: '60px', padding: '0.5rem', fontSize: '0.75rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d', borderRadius: '8px', resize: 'vertical' }} 
+                        style={{ width: '100%', minHeight: '80px', padding: '0.75rem', fontSize: '0.8rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d', borderRadius: '8px', resize: 'vertical' }} 
                       />
                     </div>
                     
                     <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                        <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Pause Detection:</span>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', flex: 1, minWidth: '120px' }}>
+                        <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>Pause Detection:</span>
                         <select
-                          style={{ padding: '0.4rem', fontSize: '0.75rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d', borderRadius: '4px' }}
+                          style={{ width: '100%', padding: '0.5rem', fontSize: '0.8rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d', borderRadius: '4px' }}
                           value={sttChunkMs}
                           onChange={(e) => setSttChunkMs(Number(e.target.value))}
                         >
@@ -1991,21 +1968,21 @@ export function RoomsPanel() {
                         </select>
                       </div>
                       
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                        <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Temperature:</span>
-                        <input type="number" min="0" max="2" step="0.1" value={agentTemperature} onChange={(e) => setAgentTemperature(Number(e.target.value))} style={{ width: '60px', padding: '0.4rem', fontSize: '0.75rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d', borderRadius: '4px' }} />
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', flex: 1, minWidth: '100px' }}>
+                        <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>Temperature:</span>
+                        <input type="number" min="0" max="2" step="0.1" value={agentTemperature} onChange={(e) => setAgentTemperature(Number(e.target.value))} style={{ width: '100%', padding: '0.5rem', fontSize: '0.8rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d', borderRadius: '4px' }} />
                       </div>
                       
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                        <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>Max Tokens:</span>
-                        <input type="number" min="20" max="500" step="10" value={agentMaxTokens} onChange={(e) => setAgentMaxTokens(Number(e.target.value))} style={{ width: '70px', padding: '0.4rem', fontSize: '0.75rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d', borderRadius: '4px' }} />
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', flex: 1, minWidth: '100px' }}>
+                        <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>Max Tokens:</span>
+                        <input type="number" min="20" max="500" step="10" value={agentMaxTokens} onChange={(e) => setAgentMaxTokens(Number(e.target.value))} style={{ width: '100%', padding: '0.5rem', fontSize: '0.8rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d', borderRadius: '4px' }} />
                       </div>
                     </div>
                     
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '1rem' }}>
                       <button
                         className="ch-btn-action"
-                        style={{ padding: '0.5rem 1rem', fontSize: '0.8rem', background: '#2e333d', border: 'none', borderRadius: '20px', cursor: 'pointer' }}
+                        style={{ padding: '0.6rem 1.2rem', fontSize: '0.85rem', background: '#2e333d', border: 'none', borderRadius: '20px', cursor: 'pointer' }}
                         onClick={() => triggerAgentResponse(" ")}
                         disabled={isAgentSpeaking || !isCurrentUserSpeaker}
                         title={!isCurrentUserSpeaker ? "Must be a speaker to use agent voice" : "Force speak"}
@@ -2014,13 +1991,14 @@ export function RoomsPanel() {
                       </button>
                     </div>
                     {!isCurrentUserSpeaker && (
-                      <p style={{ fontSize: '0.7rem', color: '#ef4444', margin: '0', textAlign: 'right' }}>
+                      <p style={{ fontSize: '0.75rem', color: '#ef4444', margin: '0', textAlign: 'right' }}>
                         ⚠️ You must be on stage to use the Agent's voice.
                       </p>
                     )}
-                  </>
+                  </div>
                 )}
               </div>
+            </div>
             )}
           </div>
         </div>
