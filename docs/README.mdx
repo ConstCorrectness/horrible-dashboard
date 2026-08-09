@@ -188,6 +188,11 @@ layout shell and how it behaves in the browser vs the desktop app:
   **agent tools** on the shared `notebook_core` kernel engine; the opt-in widget→reactive
   bridge is the deferred tail.
 - [Visualizer](modules/visualizer.mdx)
+- [Karaoke](modules/karaoke.mdx) — **Implemented.** A PiKaraoke-shaped karaoke
+  machine: yt-dlp search/download into a local song library, a per-singer queue, a
+  stage pane, and ffmpeg pitch shift. The session is process-global and broadcast,
+  so every pane (and any phone on the LAN) is a renderer and the agent can run the
+  room with no pane open.
 - [Flow canvas](modules/flow-canvas.mdx) — **Phase 0/1 implemented.** A node-graph
   canvas (n8n-style) for composing runnable multi-agent orchestrations over the
   existing orchestrator loop, tool surface, and permission gate.

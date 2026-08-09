@@ -693,7 +693,7 @@ export const VIEW_ALIASES: Readonly<Record<string, ShowTarget>> = {
   // the name still lands somewhere sensible instead of a did-you-mean.
   'network.lobby': { kind: 'view', viewId: 'people.home', section: 'friends' },
 
-  // Explorer: five left-dock browsers became five sections. Unlike the games and
+  // Explorer: five left-dock browsers became sections. Unlike the games and
   // People merges, all five views still exist and still render — they are
   // `embedded`, so `show` would reach them through `hostOfEmbedded` anyway. These
   // entries are what make the *titles* resolve, and they keep resolution to one
@@ -701,12 +701,16 @@ export const VIEW_ALIASES: Readonly<Record<string, ShowTarget>> = {
   'files.tree': { kind: 'view', viewId: 'explorer.home', section: 'files' },
   'notebook.browser': { kind: 'view', viewId: 'explorer.home', section: 'notebooks' },
   Notebooks: { kind: 'view', viewId: 'explorer.home', section: 'notebooks' },
-  'flow.library': { kind: 'view', viewId: 'explorer.home', section: 'flows' },
-  Flows: { kind: 'view', viewId: 'explorer.home', section: 'flows' },
-  'records.list': { kind: 'view', viewId: 'explorer.home', section: 'tables' },
-  Tables: { kind: 'view', viewId: 'explorer.home', section: 'tables' },
   'training.projects': { kind: 'view', viewId: 'explorer.home', section: 'projects' },
   'Training Projects': { kind: 'view', viewId: 'explorer.home', section: 'projects' },
+  // Two of those five moved on again, out of Explorer and onto the document they
+  // belong to, as region strips. The name still has to land — a pane that leaves
+  // one home for another must never become unreachable, which is the same
+  // invariant that put it here in the first place.
+  'flow.library': { kind: 'region', regionViewId: 'flow.library' },
+  Flows: { kind: 'region', regionViewId: 'flow.library' },
+  'records.list': { kind: 'region', regionViewId: 'records.list' },
+  Tables: { kind: 'region', regionViewId: 'records.list' },
 };
 
 /** The candidate set `show` matches against, gathered from the live registry. */
@@ -945,6 +949,32 @@ export function splitAreaBy(
   };
   layoutStore.dispatch({ type: 'INSERT_PANE', areaId: newAreaId, pane });
   return pane.instanceId;
+}
+
+/**
+ * Split an area and **move** one of its tabs into the new half — VS Code's
+ * "Split Right" on a tab, and the verb behind the same item on the tab menu.
+ *
+ * Deliberately not `splitAreaBy`: that one *copies* the active view into the new
+ * area, which is right for "give me another editor" and wrong here. A tab dragged
+ * or sent to a split must arrive as itself — the same instance, its scroll
+ * position, its buffer, its live socket — or the user has two of something they
+ * meant to have one of.
+ *
+ * Returns the new area's id, or null if the split didn't happen.
+ */
+export function moveTabToSplit(
+  areaId: string,
+  instanceId: string,
+  direction: SplitDirection,
+): string | null {
+  const before = layoutStore.getSnapshot();
+  const after = layoutStore.dispatch({ type: 'SPLIT_AREA', areaId, direction });
+  if (after === before) return null;
+  const newAreaId = after.frame.focusedAreaId;
+  if (!newAreaId) return null;
+  layoutStore.dispatch({ type: 'UNDOCK_PANE_TO_AREA', instanceId, areaId: newAreaId });
+  return newAreaId;
 }
 
 export function joinAreaDirection(areaOrInstanceId: string, direction: NavDirection): boolean {

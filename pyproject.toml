@@ -39,6 +39,12 @@ dependencies = [
     "dnspython>=2.8.0",
     "pymongo>=4.17.0",
     "gymnasium>=1.3.0",
+    # The karaoke module's search + download. A core dep rather than an extra
+    # because it is the whole point of that module and it's a pure-Python wheel
+    # (no native build, no browser binary) — the cost of shipping it is a few MB.
+    # It is still lazy-imported: `import yt_dlp` is ~1s of module scanning, and
+    # most sessions never open the karaoke pane.
+    "yt-dlp>=2025.1.15",
 ]
 
 [project.optional-dependencies]

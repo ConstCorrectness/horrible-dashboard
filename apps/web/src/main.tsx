@@ -27,6 +27,7 @@ import {
   explorerModule,
   initKeymapHost,
   installExternalLinkBridge,
+  karaokeModule,
   keymapModule,
   layoutsModule,
   libraryModule,
@@ -122,6 +123,7 @@ async function boot(): Promise<void> {
   registry.register(replModule);
   registry.register(databaseModule);
   registry.register(libraryModule);
+  registry.register(karaokeModule);
   registry.register(recordsModule);
   registry.register(researchModule);
   registry.register(searchModule);

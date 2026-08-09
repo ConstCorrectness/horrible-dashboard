@@ -68,6 +68,8 @@ from backend.modules.search.crawl import queue_handlers as _crawl_queue_handlers
 from backend.modules.library import push_library_events
 from backend.modules.library import queue_handlers as _library_queue_handlers  # noqa: F401 — registers the ingest task handlers on import (see its docstring)
 from backend.modules.interpretability import router as interpretability_router
+from backend.modules.karaoke import register_agent_tools as register_karaoke_tools
+from backend.modules.karaoke import router as karaoke_router
 from backend.modules.library import router as library_router
 from backend.modules.records import (
     init_records_db,
@@ -203,6 +205,7 @@ app.include_router(agent_router, prefix="/api")
 app.include_router(workspace_router, prefix="/api")
 app.include_router(database_router, prefix="/api")
 app.include_router(library_router, prefix="/api")
+app.include_router(karaoke_router, prefix="/api")
 app.include_router(records_router, prefix="/api")
 app.include_router(artifacts_router, prefix="/api")
 app.include_router(research_router, prefix="/api")
@@ -256,6 +259,10 @@ register_connectors()
 # Register the symdex module's backend agent tools (grouped under `symbols`): the
 # semantic symbol/docs/schema retrieval the coder and dba agents preload.
 register_symdex_tools()
+
+# Register the karaoke agent tools (grouped under `karaoke`): the session lives on
+# the server, so these run the room with no karaoke pane open anywhere.
+register_karaoke_tools()
 
 # Register the research module's backend agent tools (grouped under `research`):
 # page capture and PDF filing that work with no browser pane attached.

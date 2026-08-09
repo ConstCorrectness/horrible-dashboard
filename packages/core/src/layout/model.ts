@@ -495,6 +495,37 @@ export function setActiveTab(root: LayoutNode, areaId: string, index: number): L
   return found && next ? next : null;
 }
 
+/**
+ * Move one tab within its area, splice-style: the tab at `from` is pulled out and
+ * re-inserted so it ends up at `to` in the *resulting* list.
+ *
+ * `activeTab` is carried by identity, not by index — it is a position, and every
+ * naive reorder bug is the same one: the user drags a background tab past the
+ * active one and the area silently switches to a different pane. Which pane is on
+ * screen must not change because the strip was rearranged.
+ */
+export function reorderTab(
+  root: LayoutNode,
+  areaId: string,
+  from: number,
+  to: number,
+): LayoutNode | null {
+  let found = false;
+  const next = replaceNode(root, areaId, (node) => {
+    const area = node as AreaNode;
+    const n = area.tabs.length;
+    if (from < 0 || from >= n || to < 0 || to >= n || from === to) return area;
+    found = true;
+    const active = area.tabs[area.activeTab];
+    const tabs = [...area.tabs];
+    const [moved] = tabs.splice(from, 1);
+    tabs.splice(to, 0, moved);
+    const activeTab = active ? tabs.indexOf(active) : area.activeTab;
+    return { ...area, tabs, activeTab: activeTab >= 0 ? activeTab : 0 };
+  });
+  return found && next ? next : null;
+}
+
 // ---------------------------------------------------------------------------
 // Frame-level pane lookups/edits (center + docks + floating)
 // ---------------------------------------------------------------------------

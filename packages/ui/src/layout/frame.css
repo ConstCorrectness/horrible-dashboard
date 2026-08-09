@@ -795,6 +795,38 @@
 .frame-area-tab-close:hover {
   color: var(--text);
 }
+/* Insertion marker for a tab drag. A left border rather than a background tint:
+   the question the user is asking mid-drag is "between which two", and a
+   highlighted tab answers "on top of that one". */
+.frame-area-tab--drop {
+  box-shadow: inset 2px 0 0 0 var(--accent);
+}
+.frame-area-tab-add {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.frame-area-tab-add-btn {
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1;
+  padding: 4px 6px;
+  cursor: pointer;
+  /* Always present but quiet: it is a per-group affordance, and a strip of loud
+     plus signs across a split layout reads as clutter. */
+  opacity: 0.5;
+}
+.frame-area-tab-add:hover .frame-area-tab-add-btn,
+.frame-area-header:hover .frame-area-tab-add-btn {
+  opacity: 1;
+}
+.frame-area-tab-add-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
 
 /* ---------------------------------------------------------------- pane host */
 .frame-pane-host {

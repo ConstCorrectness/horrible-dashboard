@@ -153,6 +153,18 @@ export function FileTree() {
     }
   };
 
+  /**
+   * Right-click on the empty space below the last row. Bubbling means this also
+   * fires for a row click, so it bails when the row handler already opened a
+   * menu — checked via `defaultPrevented` rather than a stopPropagation in the
+   * row, because a row that swallowed the event would also stop the browser menu
+   * from appearing on a target no provider answered for.
+   */
+  const onBackgroundContextMenu = (e: React.MouseEvent) => {
+    if (e.defaultPrevented) return;
+    if (openContextMenu(e, { kind: 'files.background' })) e.preventDefault();
+  };
+
   const commitRename = (row: Row, value: string) => {
     const name = value.trim();
     cancelRename();
@@ -268,7 +280,13 @@ export function FileTree() {
       {!rootsError && rows.length === 0 && (
         <div className="file-tree-empty">No workspace roots — configure them in Settings.</div>
       )}
-      <div className="file-tree-rows" ref={parentRef} tabIndex={0} onKeyDown={onKeyDown}>
+      <div
+        className="file-tree-rows"
+        ref={parentRef}
+        tabIndex={0}
+        onKeyDown={onKeyDown}
+        onContextMenu={onBackgroundContextMenu}
+      >
         <div style={{ height: rowVirt.getTotalSize(), position: 'relative', width: '100%' }}>
           {rowVirt.getVirtualItems().map((vi) => {
             const row = rows[vi.index];

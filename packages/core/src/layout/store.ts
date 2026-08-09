@@ -17,6 +17,7 @@ import {
   joinArea,
   removePane,
   removePaneAnywhere,
+  reorderTab,
   resizeArea,
   setActiveTab,
   setSplitSizes,
@@ -65,6 +66,11 @@ function reduceFrame(frame: FrameState, action: LayoutAction): FrameState {
     case 'SET_ACTIVE_TAB': {
       const center = setActiveTab(frame.center, action.areaId, action.index);
       return center ? { ...frame, center, focusedAreaId: action.areaId } : frame;
+    }
+
+    case 'REORDER_TAB': {
+      const center = reorderTab(frame.center, action.areaId, action.from, action.to);
+      return center ? { ...frame, center } : frame;
     }
 
     case 'SET_PANE_VIEW': {

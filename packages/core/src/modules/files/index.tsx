@@ -16,6 +16,7 @@ import { filesAgentTools } from './agentTools';
 import { bufferUriFor, createEntry, isVirtualPath, joinPath, listRoots, parentDir } from './api';
 import { FileTree } from './FileTree';
 import {
+  collapseAll,
   getActivePath,
   getSelection,
   refreshTree,
@@ -75,6 +76,26 @@ function filesNodeItems(target: ContextTarget): ContextMenuItem[] {
     });
   }
   return items;
+}
+
+/**
+ * The tree's **background** menu — right-clicking the empty space below the last
+ * row, which VS Code treats as a first-class target and this used to swallow.
+ *
+ * It is a separate kind rather than `files.node` with a null path because the two
+ * genuinely differ: there is no row to act on, so everything row-scoped (open,
+ * rename, delete, copy path) is absent, and the create verbs fall back to the
+ * first writable root instead of the clicked directory. Reusing the node kind
+ * would have meant a menu whose every second item was disabled.
+ */
+function filesBackgroundItems(): ContextMenuItem[] {
+  return [
+    { id: 'files.newFile', label: 'New File', run: newFile },
+    { id: 'files.newFolder', label: 'New Folder', run: newFolder },
+    { id: 'files.openTerminalHere', label: 'Open Terminal Here', run: openTerminalHere },
+    { id: 'files.refresh', label: 'Refresh', run: () => refreshTree() },
+    { id: 'files.collapseAll', label: 'Collapse All', run: collapseAll },
+  ];
 }
 
 /** The directory new entries should be created in: the selected dir, the selected
@@ -189,7 +210,10 @@ export const filesModule: ModuleManifest = {
     { id: 'files', label: 'Files', icon: '🗀', view: 'files.tree', key: 'f', default: true },
   ],
   // `order: 0` — the owning module's items come first; other modules append.
-  contextMenu: [{ kind: 'files.node', order: 0, items: filesNodeItems }],
+  contextMenu: [
+    { kind: 'files.node', order: 0, items: filesNodeItems },
+    { kind: 'files.background', order: 0, items: filesBackgroundItems },
+  ],
   commands: [
     {
       id: 'files.open',
@@ -203,6 +227,7 @@ export const filesModule: ModuleManifest = {
     { id: 'files.rename', title: 'Files: Rename', run: renameSelected },
     { id: 'files.delete', title: 'Files: Delete', run: deleteSelected },
     { id: 'files.refresh', title: 'Files: Refresh tree', run: () => refreshTree() },
+    { id: 'files.collapseAll', title: 'Files: Collapse all folders', run: collapseAll },
     {
       id: 'files.openTerminalHere',
       title: 'Files: Open terminal here',

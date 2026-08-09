@@ -5,26 +5,34 @@ import { registry, type ModuleManifest } from '../../registry';
 import './explorer.css';
 
 /**
- * **Explorer** — one place to browse things, replacing five.
+ * **Explorer** — one place to browse a workspace, replacing three.
  *
  * | Retired pane | Section |
  * | --- | --- |
  * | `files.tree` | **Files** |
  * | `notebook.browser` | **Notebooks** |
  * | `training.projects` | **Projects** |
- * | `flow.library` | **Flows** |
- * | `records.list` | **Tables** |
  *
- * All five were the same pane wearing five hats: a narrow left-dock list you pick
+ * All three were the same pane wearing three hats: a narrow left-dock list you pick
  * something out of and open in the center. They were separate because there was no
  * way for a module to contribute to another module's pane — so each shipped its
  * own, each earned its own rail glyph, and the left dock became a row of near
  * identical strips you had to remember the names of.
  *
- * They are **not deleted**, they are `embedded`: still registered, so the three
- * that are also region strips of their document pane (Notebooks, Projects, Flows)
- * keep working exactly as before, and `show("notebooks")` still resolves. What
- * they lose is a competing top-level home.
+ * They are **not deleted**, they are `embedded`: still registered, so the two
+ * that are also region strips of their document pane (Notebooks, Projects) keep
+ * working exactly as before, and `show("notebooks")` still resolves. What they
+ * lose is a competing top-level home.
+ *
+ * **`flow.library` and `records.list` are deliberately not here.** They were, and
+ * that was the merge overreaching: Explorer answers "what is in this workspace",
+ * and the three sections above are all trees over the same rooted content. A saved
+ * flow and a table schema are not — each is a switcher for one document type, and
+ * means nothing except beside the canvas or grid it re-points. Both now live as a
+ * left region strip on their own document instead (`flow.editor`, the three
+ * `records.*` documents), which is where a per-document switcher belongs. Their
+ * names still resolve, via `VIEW_ALIASES` — leaving Explorer must not cost
+ * reachability any more than joining it did.
  *
  * The extension point is `ModuleManifest.explorerSources` — the one place a module
  * legitimately contributes a section to a pane it does not own, and the reason a

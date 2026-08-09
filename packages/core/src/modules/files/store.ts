@@ -110,6 +110,19 @@ export function toggleExpanded(path: string): void {
   else expand(path);
 }
 
+/**
+ * Fold every directory shut, leaving the roots. The cached listings are kept —
+ * re-expanding a directory should be instant, and this is a *view* operation, not
+ * an invalidation. Refresh is the verb for the other one.
+ */
+export function collapseAll(): void {
+  if (expanded.size === 0) return;
+  expanded.clear();
+  // Roots stay open, or the tree collapses to nothing and reads as broken.
+  for (const root of roots) expanded.add(root.path);
+  emit();
+}
+
 /** Re-list the roots and every expanded directory in place (after a watch event
  * or an explicit refresh). Keeps existing rows visible until the new listing
  * arrives, so there's no collapse/flash. */

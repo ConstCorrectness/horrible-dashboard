@@ -121,12 +121,29 @@ row that has moved is pointing at the wrong thing.
 
 ## Built-in target kinds
 
-| kind             | payload                                  | contributors        |
-| ---------------- | ---------------------------------------- | ------------------- |
-| `files.node`     | `path`, `nodeKind`, `name`               | files, **notebook** |
-| `rail`           | `side`, `entries[]`, `hidden[]`          | shell               |
-| `rail.glyph`     | `viewId`, `title`, `dockSide`            | shell               |
-| `workspace.tab`  | `workspaceId`, `workspaceName`, `isPreset` | shell             |
+| kind              | payload                                    | contributors        |
+| ----------------- | ------------------------------------------ | ------------------- |
+| `files.node`      | `path`, `nodeKind`, `name`                 | files, **notebook** |
+| `files.background`| *(none)*                                   | files               |
+| `rail`            | `side`, `entries[]`, `hidden[]`            | shell               |
+| `rail.glyph`      | `viewId`, `title`, `dockSide`              | shell               |
+| `workspace.tab`   | `workspaceId`, `workspaceName`, `isPreset` | shell               |
+| `area.tab`        | `areaId`, `instanceId`, `viewId`, `title`  | shell               |
+
+`files.background` is the empty space below the last row of the tree, which the
+tree used to swallow. It is a **separate kind** rather than `files.node` with a
+null path, because the two genuinely differ: there is no row, so every row-scoped
+verb (open, rename, delete, copy path) is absent, and the create verbs fall back to
+the first writable root instead of the clicked directory. Reusing the node kind
+would have produced a menu whose every second item was permanently grey — exactly
+what *absent, not disabled* exists to prevent. The tree's row handler runs first
+and this one checks `defaultPrevented`, so a row click never opens both.
+
+`area.tab` is a document tab in a centre area's strip. Its bulk-close items read
+the tab list from the store **when they run**, and close by instance id rather than
+by index: every close is guarded and may prompt, so the strip can shift under a
+half-finished *Close Others*, and closing by position would then start eating the
+wrong panes.
 
 `files.node` is the one to copy: the **notebook** module contributes *Open as
 Notebook* for a `.ipynb` without the files module knowing anything about it, and

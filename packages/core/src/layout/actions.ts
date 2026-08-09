@@ -30,6 +30,11 @@ export type LayoutAction =
    */
   | { type: 'UNDOCK_PANE_TO_AREA'; instanceId: string; areaId: string }
   | { type: 'SET_ACTIVE_TAB'; areaId: string; index: number }
+  /**
+   * Drag-reorder one tab inside its own area. Purely positional — which pane is
+   * showing is preserved across the move (see `reorderTab`).
+   */
+  | { type: 'REORDER_TAB'; areaId: string; from: number; to: number }
   /** Swap a pane's view in place (change-pane-type); geometry/instanceId kept. */
   | {
       type: 'SET_PANE_VIEW';

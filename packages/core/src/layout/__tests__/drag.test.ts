@@ -6,8 +6,8 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { registry } from '../../registry';
-import { openToolInDock } from '../controller';
-import { dropPaneOnArea, paneDrag } from '../drag';
+import { openPaneInArea, openToolInDock } from '../controller';
+import { dropPaneOnArea, dropPaneOnTab, paneDrag } from '../drag';
 import { collectAreas, findPaneAnywhere } from '../model';
 import { seedFromPreset, type FramePreset } from '../presets';
 import { layoutStore } from '../store';
@@ -39,6 +39,9 @@ beforeAll(() => {
         defaultDock: 'right',
         singleton: true,
       },
+      // Non-singleton on purpose: the tab-strip tests need an area holding
+      // several panes, and every singleton above is refused a second copy.
+      { id: 'd.multi', title: 'Multi', component: Stub, role: 'document' },
     ],
   });
 });
@@ -151,5 +154,48 @@ describe('dropPaneOnArea', () => {
     // must produce a fresh docked instance rather than being refused.
     expect(openToolInDock('d.tool', 'left')).not.toBeNull();
     expect(frame().docks.left.tools).toHaveLength(1);
+  });
+});
+
+describe('dropPaneOnTab', () => {
+  /** The doc area, loaded with three tabs so a reorder has somewhere to go. */
+  function docArea() {
+    return collectAreas(frame().center).find((a) => a.tabs.length > 0)!;
+  }
+
+  beforeEach(() => {
+    const areaId = docArea().id;
+    openPaneInArea('d.multi', areaId);
+    openPaneInArea('d.multi', areaId);
+  });
+
+  it('reorders a tab within its own area', () => {
+    const area = docArea();
+    const moved = area.tabs[0].instanceId;
+    dropPaneOnTab({ kind: 'pane', instanceId: moved, viewId: 'd.doc', title: 'Doc' }, area.id, 2);
+    expect(docArea().tabs.map((t) => t.instanceId)[2]).toBe(moved);
+  });
+
+  it('lands a pane from elsewhere at the dropped position, not the end', () => {
+    const tool = dockedTool();
+    const area = docArea();
+    dropPaneOnTab(
+      { kind: 'pane', instanceId: tool.instanceId, viewId: 'd.tool', title: 'Tool' },
+      area.id,
+      0,
+    );
+    expect(docArea().tabs[0].instanceId).toBe(tool.instanceId);
+  });
+
+  it('clamps an index past the end rather than refusing the drop', () => {
+    const tool = dockedTool();
+    const area = docArea();
+    const id = dropPaneOnTab(
+      { kind: 'pane', instanceId: tool.instanceId, viewId: 'd.tool', title: 'Tool' },
+      area.id,
+      99,
+    );
+    expect(id).toBe(tool.instanceId);
+    expect(docArea().tabs.at(-1)!.instanceId).toBe(tool.instanceId);
   });
 });

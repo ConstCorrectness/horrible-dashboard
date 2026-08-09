@@ -5,30 +5,48 @@ sidebar_label: Explorer
 
 # Module: Explorer
 
-**One place to browse things**, replacing five. `explorer.home` is a `tool` (left
-dock) whose [sections](../architecture/windowing.mdx#embedded-views-and-sections) are
-**contributed by other modules**:
+**One place to browse a workspace**, replacing three. `explorer.home` is a `tool`
+(left dock) whose [sections](../architecture/windowing.mdx#embedded-views-and-sections)
+are **contributed by other modules**:
 
 | Section | What it browses | Came from |
 | --- | --- | --- |
 | **Files** | The workspace file tree | `files.tree` |
 | **Notebooks** | `.ipynb` files under the notebook root | `notebook.browser` |
 | **Projects** | Training projects | `training.projects` |
-| **Flows** | Saved orchestration graphs | `flow.library` |
-| **Tables** | Record schemas | `records.list` |
 
-## Why five became one
+## Why three became one
 
-All five were the same pane wearing five hats: a narrow left-dock list you pick
+All three were the same pane wearing three hats: a narrow left-dock list you pick
 something out of and open in the center. They were separate for one structural
 reason — **there was no way for a module to contribute to another module's pane**.
 So each shipped its own, each earned its own rail glyph, and the left dock became a
 row of near-identical strips distinguished only by remembering their names.
 
-They are **not deleted**, they are `embedded`. Three of them (Notebooks, Projects,
-Flows) are also region strips of their own document pane, and that keeps working
-untouched — a notebook still carries its browser on the left. What they lose is a
-competing top-level home.
+They are **not deleted**, they are `embedded`. Two of them (Notebooks, Projects) are
+also region strips of their own document pane, and that keeps working untouched — a
+notebook still carries its browser on the left. What they lose is a competing
+top-level home.
+
+## What is deliberately *not* here
+
+`flow.library` (**Flows**) and `records.list` (**Tables**) were sections here, and
+that was the merge overreaching. Explorer answers **"what is in this workspace"**,
+and the three sections above are all trees over the same rooted content: you
+navigate them to find a thing and open it. A saved flow and a table schema are not
+that. Each is a **switcher for one document type** — it means nothing except beside
+the canvas or the grid it re-points, and putting it next to the file tree asked the
+user to go somewhere unrelated to change what the pane they were looking at shows.
+
+Both are now a **left region strip on their own document** instead:
+
+| View | Now hosted by |
+| --- | --- |
+| `flow.library` | `flow.editor` (it already was — the Explorer section was a second home) |
+| `records.list` | `records.grid`, `records.form`, `records.board` |
+
+Their names still resolve — see below. Leaving Explorer must not cost reachability
+any more than joining it did.
 
 ## The extension point
 
@@ -70,18 +88,20 @@ overwrite the first.
 ### Every old name still works
 
 `show("files.tree")`, `show("Notebooks")`, `show("records.list")` and the rest all
-resolve, through `VIEW_ALIASES`, to the section that holds them now. Because these
-five views still exist and are merely `embedded`, `show` would reach them through
-`hostOfEmbedded` regardless — the alias entries are what make the *titles* resolve,
-and they keep resolution to one lookup instead of a scan. Pinned by the
-table-driven test in `layout/__tests__/sections.test.ts`.
+resolve, through `VIEW_ALIASES`, to whatever holds them now — a section for the
+three above, a `{ kind: 'region' }` target for the two that moved on to their own
+document. Because all five views still exist and are merely `embedded`, `show` would
+reach them through `hostOfEmbedded` regardless — the alias entries are what make the
+*titles* resolve, and they keep resolution to one lookup instead of a scan. Pinned by
+the table-driven test in `layout/__tests__/sections.test.ts`.
 
 ## Contributions
 
 - **Panel:** `explorer.home` (`tool`, left dock, `explorerHost`).
 - **Commands:** `explorer.open`, `explorer.files`. The contributing modules keep
-  their own verbs (`files.open`, `notebook.open`, `flow.openLibrary`,
-  `training.open`) — they now `revealSection` instead of opening a pane.
+  their own verbs (`files.open`, `notebook.open`, `training.open`) — they now
+  `revealSection` instead of opening a pane. `flow.openLibrary` reveals its region
+  strip instead, for the reason above.
 - **Agent tools:** unchanged. `files.*` stays declared on `files.tree`; the backend
   groups tools by **name prefix**, so which view declares them is irrelevant, and
   moving them would have silently re-grouped them.
@@ -89,7 +109,7 @@ table-driven test in `layout/__tests__/sections.test.ts`.
 ## Not done yet
 
 **Only the Files section has an agent-context payload.** The clobbering half of this
-is fixed — the other four can each register their own now — but none of them do yet,
+is fixed — the others can each register their own now — but none of them do yet,
 and only the *mounted* body can provide at all. So `show("notebooks")` still returns
 the section name, its siblings, and `hasPayload: false` (contributed centrally by
 `readPaneAgentContext`), but not a listing.

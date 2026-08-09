@@ -11,7 +11,7 @@
  * See docs/architecture/windowing.mdx.
  */
 import { openPaneInArea, resolveView } from './controller';
-import { findPaneAnywhere } from './model';
+import { areaOfInstance, findPaneAnywhere } from './model';
 import { layoutStore } from './store';
 
 /**
@@ -72,4 +72,42 @@ export function dropPaneOnArea(payload: DragPayload, areaId: string): string | n
     areaId,
   });
   return after === before ? null : payload.instanceId;
+}
+
+/**
+ * Drop onto a **position** in an area's tab strip: the same landing as
+ * `dropPaneOnArea`, followed by a slide to `index`.
+ *
+ * Two cases, deliberately one code path. A tab dragged within its own strip is a
+ * reorder and nothing else — `dropPaneOnArea` no-ops for it (the pane is already
+ * in the area), so the reorder below is the whole operation. A tab dragged in from
+ * another area, a dock, or the rail arrives at the end first and is then slid into
+ * place. Composing rather than teaching the insert verb about indices keeps every
+ * source honest: whatever `dropPaneOnArea` decides an arriving pane is, it stays
+ * that, and this only moves it along the row.
+ */
+export function dropPaneOnTab(payload: DragPayload, areaId: string, index: number): string | null {
+  // A pane already in this area is a pure reorder, and must skip the insert:
+  // `dropPaneOnArea` reports null for it (correctly — it moved nothing), which
+  // read as a failed drop and made a tab dragged within its own strip do nothing.
+  const home =
+    payload.kind === 'pane'
+      ? areaOfInstance(layoutStore.getSnapshot().frame.center, payload.instanceId)
+      : null;
+  const instanceId =
+    home?.id === areaId && payload.kind === 'pane'
+      ? payload.instanceId
+      : dropPaneOnArea(payload, areaId);
+  if (!instanceId) return null;
+  const area = areaOfInstance(layoutStore.getSnapshot().frame.center, instanceId);
+  if (!area) return instanceId;
+  const from = area.tabs.findIndex((t) => t.instanceId === instanceId);
+  // Dropping on the tab to the right of where a pane already sits means "put it
+  // there", which after its own removal is one slot left — clamped, because the
+  // caller reports the index it drew, not the index after the splice.
+  const to = Math.min(Math.max(index, 0), area.tabs.length - 1);
+  if (from >= 0 && from !== to) {
+    layoutStore.dispatch({ type: 'REORDER_TAB', areaId: area.id, from, to });
+  }
+  return instanceId;
 }

@@ -25,7 +25,7 @@ parity — an "Open Editors" section, auto-reveal, and drag-and-drop — is trac
   browsers had become five rail glyphs. Still registered, so `show("files.tree")` and
   `openPaneInArea` work unchanged.
 - **Commands:** `files.open`, `files.newFile`, `files.newFolder`, `files.rename`,
-  `files.delete`, `files.refresh`, `files.openTerminalHere`,
+  `files.delete`, `files.refresh`, `files.collapseAll`, `files.openTerminalHere`,
   `files.revealActiveBuffer`; `files.revealInOS` (desktop only — registered only
   when `shell.revealInOS` capability is present, so the palette never shows dead
   commands) is B6.
@@ -183,7 +183,8 @@ consumer that virtualizes those rows and wires the interactions:
 | **Flattened row model** | `visibleRows()` walks roots → expanded children into a flat `Row[]`, which makes keyboard nav, multi-select, and virtualization fall out cheaply |
 | **File icons**          | `icons.ts` maps extension → a colored category tag (`.file-icon`/`.ic-*` in `styles.css`); folders use an open/closed glyph |
 | **Inline rename (F2)**  | the active row becomes an `<input>`; Enter commits via `renameEntry`, Esc cancels |
-| **Context menu**        | right-click → Open / New File / New Folder / Rename / Delete / Copy Path / Open Terminal Here, contributed as a `files.node` provider (see [Context menus](../architecture/context-menus.mdx)) |
+| **Context menu**        | right-click a **row** → Open / New File / New Folder / Rename / Delete / Copy Path / Open Terminal Here, contributed as a `files.node` provider (see [Context menus](../architecture/context-menus.mdx)) |
+| **Background menu**     | right-click the **empty space below the last row** → New File / New Folder / Open Terminal Here / Refresh / Collapse All, as a `files.background` provider |
 | **Multi-select**        | Ctrl/Cmd-click toggles, Shift-click selects a range along the visible order; the set drives multi-delete |
 | **Keyboard nav**        | ↑/↓ move the active row, ←/→ collapse/expand, Enter opens, F2 renames, Delete removes, and printable keys type-ahead-jump |
 | **Virtualized tree**    | `@tanstack/react-virtual` over the flat rows, so large directories stay smooth |
@@ -203,6 +204,16 @@ which is how the **notebook** module contributes *Open as Notebook* on a `.ipynb
 without the files module knowing anything about notebooks. A right-click outside
 the current selection retargets it first: acting on a row the user cannot see
 highlighted is how *Delete* hits the wrong thing.
+
+Right-clicking the empty space below the last row reports `files.background`
+instead — a **separate kind**, not `files.node` with a null path. There is no row
+to act on, so every row-scoped verb is absent and the create verbs fall back to the
+first writable root; reusing the node kind would have meant a menu whose every
+second item was permanently grey. The background handler sits on the scroll
+container and bails on `defaultPrevented`, so a right-click that landed on a row
+never opens both menus. **Collapse All** keeps the cached listings — it is a view
+operation, and re-expanding a folder should be instant; *Refresh* is the verb for
+invalidating.
 
 ### Git decorations
 

@@ -19,6 +19,20 @@ import { RecordList } from './RecordList';
 import { refreshSchemas } from './store';
 import { TableSetup } from './TableSetup';
 
+/**
+ * The table switcher, as a left strip on every record document. Declared once
+ * and shared by all three because they are three readings of the same table:
+ * picking a different table in one has to mean the same thing in the others, and
+ * three copies of the decl is three chances for the pick key to drift.
+ */
+const TABLES_REGION = {
+  id: 'records.list',
+  label: 'Tables',
+  icon: '🗃',
+  key: 'r',
+  position: 'left',
+} as const;
+
 /** Create the built-in tables if they're missing, then reload the rail. Called
  * when a records workspace opens — idempotent, and never touches an existing
  * schema, so a user who reshaped `deals` keeps their version. */
@@ -43,6 +57,7 @@ export const recordsModule: ModuleManifest = {
       component: RecordGrid,
       role: 'document',
       icon: '▤',
+      regions: [TABLES_REGION],
     },
     {
       id: 'records.form',
@@ -52,6 +67,7 @@ export const recordsModule: ModuleManifest = {
       component: RecordForm,
       role: 'document',
       icon: '📋',
+      regions: [TABLES_REGION],
     },
     {
       id: 'records.schema',
@@ -66,6 +82,7 @@ export const recordsModule: ModuleManifest = {
       component: RecordBoard,
       role: 'document',
       icon: '🗂',
+      regions: [TABLES_REGION],
     },
     {
       id: 'records.list',
@@ -76,11 +93,14 @@ export const recordsModule: ModuleManifest = {
       defaultDock: 'left',
       defaultDockSize: 260,
       singleton: true,
-      // A section of Explorer now — see modules/explorer.
+      // Embedded, hosted by the region strip declared above on all three record
+      // documents. It was briefly an Explorer section instead, which put a table
+      // switcher next to the file tree — Explorer browses the *workspace*, and a
+      // schema list is only meaningful beside the grid it re-points. Same call as
+      // the flow library. See modules/explorer.
       embedded: true,
     },
   ],
-  explorerSources: [{ id: 'tables', label: 'Tables', icon: '🗃', view: 'records.list', key: 'r' }],
   // One workspace, not two. The old `crm` preset arranged a contacts/deals pipeline
   // that presumed a sales workflow the substrate never actually required — and it
   // was the reason a generic table store read as CRM software. The review surface

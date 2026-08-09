@@ -6,7 +6,7 @@
  */
 import './canvas/flow.css';
 
-import { revealSection } from '../../layout/controller';
+import { revealRegionView } from '../../layout/controller';
 import type { ModuleManifest } from '../../registry';
 import { FlowEditorPanel } from './panels/FlowEditorPanel';
 import { FlowLibraryPanel, openFlow } from './panels/FlowLibraryPanel';
@@ -35,13 +35,13 @@ export const flowModule: ModuleManifest = {
       icon: '🗂',
       defaultDock: 'left',
       singleton: true,
-      // A section of Explorer now — see modules/explorer. Stays registered so the
-      // region strip on `flow.editor` keeps working unchanged.
+      // Embedded, and its one home is the left region strip of `flow.editor`
+      // above. It was briefly also an Explorer section, which was a mistake: a
+      // flow is not a thing you browse alongside files and notebooks, it only
+      // means anything next to the canvas that opens it. Explorer is for the
+      // three trees you navigate a *workspace* with — see modules/explorer.
       embedded: true,
     },
-  ],
-  explorerSources: [
-    { id: 'flows', label: 'Flows', icon: '🗂', view: 'flow.library', key: 'w' },
   ],
   commands: [
     {
@@ -55,8 +55,10 @@ export const flowModule: ModuleManifest = {
     {
       id: 'flow.openLibrary',
       title: 'Flow: Open library',
+      // Opens the canvas' own left strip. `revealRegionView` opens the host pane
+      // first when none is up, so this works from a cold workspace too.
       run: () => {
-        revealSection('flows', 'explorer.home');
+        revealRegionView('flow.library');
       },
     },
   ],

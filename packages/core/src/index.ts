@@ -49,7 +49,7 @@ export { hideRailView, moveViewToDock, railEntries, RAIL_SECTIONS } from './layo
 export type { RailEntry, RailSide, RailState } from './layout/rail';
 export { getRailPrefs, railPrefsStore, resetRailPrefs, setViewHidden } from './layout/rail-prefs';
 export type { RailPrefs } from './layout/rail-prefs';
-export { dropPaneOnArea, paneDrag } from './layout/drag';
+export { dropPaneOnArea, dropPaneOnTab, paneDrag } from './layout/drag';
 export type { DragPayload } from './layout/drag';
 export { matchCommands, minibuffer, resolveCommand } from './minibuffer';
 export type { MinibufferState } from './minibuffer';
@@ -84,6 +84,7 @@ export {
   isDockable,
   joinAreaDirection,
   movePaneDirection,
+  moveTabToSplit,
   openDocument,
   openPane as openFramePane,
   openPaneInArea,
@@ -210,6 +211,7 @@ export {
 } from './modules/browser/overlay';
 export { stubModule } from './modules/stub';
 export { databaseModule } from './modules/database';
+export { karaokeModule } from './modules/karaoke';
 export { libraryModule } from './modules/library';
 export { recordsModule } from './modules/records';
 // Started at boot, not on pane mount: a proposal that arrives while you are looking

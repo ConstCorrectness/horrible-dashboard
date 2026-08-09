@@ -1,0 +1,328 @@
+/**
+ * Karaoke module styles.
+ *
+ * The stage is the odd one out and deliberately so: it's the only surface in the
+ * app meant to be read from across a room, so it opts out of the shell's normal
+ * density (small type, tight rows) for oversized text on a black field. Every
+ * other pane here stays in the house style.
+ */
+
+/* --- stage --- */
+
+.kk-stage {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #000;
+  color: #fff;
+  overflow: hidden;
+}
+
+.kk-stage__video-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+}
+
+.kk-stage__video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+/* The idle screen: what's on the TV between singers. */
+.kk-splash {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.25rem;
+  text-align: center;
+  padding: 2rem;
+  height: 100%;
+  background: radial-gradient(circle at 50% 35%, #2a1a4a 0%, #0a0a12 70%);
+}
+
+.kk-splash__title {
+  font-size: clamp(2rem, 6vw, 4.5rem);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  margin: 0;
+  background: linear-gradient(92deg, #ff6ec7, #ffd166, #6ea8fe);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.kk-splash__hint {
+  font-size: clamp(0.9rem, 1.6vw, 1.35rem);
+  color: #b9becb;
+  max-width: 40ch;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.kk-splash__next {
+  font-size: clamp(1rem, 2vw, 1.75rem);
+  color: #fff;
+}
+
+.kk-splash__next b {
+  color: #ffd166;
+}
+
+/* The "you're up" banner over the video for the first seconds of a song. */
+.kk-stage__nowbar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 1rem 1.5rem;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.85), transparent);
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  pointer-events: none;
+  transition: opacity 0.4s ease;
+}
+
+.kk-stage__nowbar--hidden {
+  opacity: 0;
+}
+
+.kk-stage__nowtitle {
+  font-size: clamp(1.1rem, 2.4vw, 2rem);
+  font-weight: 700;
+}
+
+.kk-stage__singer {
+  font-size: clamp(0.9rem, 1.6vw, 1.3rem);
+  color: #ffd166;
+}
+
+/* --- transport bar --- */
+
+.kk-transport {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-raised);
+  border-top: 1px solid var(--border);
+  color: var(--text);
+  flex-wrap: wrap;
+}
+
+.kk-transport button {
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 0.35rem 0.6rem;
+  cursor: pointer;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.kk-transport button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.kk-transport button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.kk-transport__spacer {
+  flex: 1;
+}
+
+.kk-transport__group {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.kk-transport__time {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  min-width: 6.5ch;
+}
+
+.kk-key {
+  font-variant-numeric: tabular-nums;
+  min-width: 2.5ch;
+  text-align: center;
+}
+
+.kk-key--shifted {
+  color: #ffd166;
+  font-weight: 700;
+}
+
+/* --- shared list panes --- */
+
+.kk-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  font-size: 0.85rem;
+}
+
+.kk-pane__bar {
+  display: flex;
+  gap: 0.4rem;
+  padding: 0.5rem;
+  border-bottom: 1px solid var(--border);
+  align-items: center;
+}
+
+.kk-pane__bar input[type='text'],
+.kk-pane__bar input[type='search'] {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.85rem;
+}
+
+.kk-pane__bar button {
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 0.35rem 0.6rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.kk-pane__list {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.kk-pane__empty {
+  padding: 1.5rem 1rem;
+  color: var(--text-dim);
+  text-align: center;
+  line-height: 1.6;
+}
+
+.kk-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.45rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.kk-row:hover {
+  background: var(--bg-hover);
+}
+
+.kk-row__main {
+  flex: 1;
+  min-width: 0;
+}
+
+.kk-row__title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kk-row__sub {
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kk-row__actions {
+  display: flex;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+.kk-row__actions button {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 5px;
+  padding: 0.2rem 0.45rem;
+  cursor: pointer;
+  font-size: 0.75rem;
+}
+
+.kk-row__actions button:hover {
+  border-color: var(--accent);
+}
+
+.kk-row__thumb {
+  width: 64px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: 4px;
+  flex-shrink: 0;
+  background: var(--bg-hover);
+}
+
+/* --- queue --- */
+
+.kk-row--playing {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.kk-row__index {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  width: 2ch;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.kk-singer {
+  color: #ffd166;
+}
+
+.kk-status {
+  font-size: 0.7rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.kk-status--downloading {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.kk-status--failed {
+  color: #ff8080;
+  border-color: #ff8080;
+}
+
+.kk-warning {
+  padding: 0.5rem 0.6rem;
+  background: color-mix(in srgb, #ffd166 12%, transparent);
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}

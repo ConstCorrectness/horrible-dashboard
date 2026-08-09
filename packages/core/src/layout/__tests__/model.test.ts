@@ -15,6 +15,7 @@ import {
   normalize,
   removePane,
   removePaneAnywhere,
+  reorderTab,
   resizeArea,
   setSplitSizes,
   splitArea,
@@ -207,6 +208,47 @@ describe('removePane', () => {
     root = insertPane(root, 'a1', pane('scratch.note', 2))!;
     const res = removePane(root, 'scratch.note#2', 5)!;
     expect((res.root as AreaNode).activeTab).toBe(0);
+  });
+});
+
+describe('reorderTab', () => {
+  /** a1 holding three tabs, with `active` showing. */
+  function threeTabs(active: number): LayoutNode {
+    let root: LayoutNode = createArea('a1');
+    for (const n of [1, 2, 3]) root = insertPane(root, 'a1', pane('scratch.note', n))!;
+    return { ...(root as AreaNode), activeTab: active };
+  }
+  const ids = (root: LayoutNode) => (root as AreaNode).tabs.map((t) => t.instanceId);
+
+  it('slides a tab to the requested position', () => {
+    const res = reorderTab(threeTabs(0), 'a1', 0, 2)!;
+    expect(ids(res)).toEqual(['scratch.note#2', 'scratch.note#3', 'scratch.note#1']);
+  });
+
+  it('moves leftward too', () => {
+    const res = reorderTab(threeTabs(0), 'a1', 2, 0)!;
+    expect(ids(res)).toEqual(['scratch.note#3', 'scratch.note#1', 'scratch.note#2']);
+  });
+
+  it('keeps the same pane on screen when a background tab moves past it', () => {
+    // The bug this exists to prevent: `activeTab` is an index, so dragging tab 0
+    // to the end while tab 1 is showing silently switches the visible pane.
+    const res = reorderTab(threeTabs(1), 'a1', 0, 2)!;
+    const area = res as AreaNode;
+    expect(area.tabs[area.activeTab].instanceId).toBe('scratch.note#2');
+    expect(area.activeTab).toBe(0);
+  });
+
+  it('follows the dragged tab when it is the active one', () => {
+    const res = reorderTab(threeTabs(0), 'a1', 0, 2) as AreaNode;
+    expect(res.activeTab).toBe(2);
+    expect(res.tabs[res.activeTab].instanceId).toBe('scratch.note#1');
+  });
+
+  it('refuses a no-op or an out-of-range index', () => {
+    expect(reorderTab(threeTabs(0), 'a1', 1, 1)).toBeNull();
+    expect(reorderTab(threeTabs(0), 'a1', 0, 3)).toBeNull();
+    expect(reorderTab(threeTabs(0), 'nope', 0, 1)).toBeNull();
   });
 });
 

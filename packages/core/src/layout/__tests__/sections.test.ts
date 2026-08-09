@@ -172,53 +172,65 @@ describe('retired panes stay reachable (VIEW_ALIASES)', () => {
     ['files.tree', 'explorer.home', 'files'],
     ['notebook.browser', 'explorer.home', 'notebooks'],
     ['Notebooks', 'explorer.home', 'notebooks'],
-    ['flow.library', 'explorer.home', 'flows'],
-    ['Flows', 'explorer.home', 'flows'],
-    ['records.list', 'explorer.home', 'tables'],
-    ['Tables', 'explorer.home', 'tables'],
     ['training.projects', 'explorer.home', 'projects'],
     ['Training Projects', 'explorer.home', 'projects'],
   ];
 
+  /**
+   * The two that left Explorer again for a region strip on their own document.
+   * Listed separately because they resolve to a different *shape* of target, and
+   * flattening them into the table above would have meant asserting nothing about
+   * which kind came back.
+   */
+  const RETIRED_TO_REGION: Array<[string, string]> = [
+    ['flow.library', 'flow.library'],
+    ['Flows', 'flow.library'],
+    ['records.list', 'records.list'],
+    ['Tables', 'records.list'],
+  ];
+
+  const candidates = () => ({
+    views: [
+      {
+        id: 'games.lobby',
+        title: 'Games',
+        sections: [
+          { id: 'career', label: 'Career' },
+          { id: 'replays', label: 'Replays' },
+          { id: 'social', label: 'Social' },
+        ],
+      },
+      {
+        id: 'people.home',
+        title: 'People',
+        sections: [
+          { id: 'friends', label: 'Friends' },
+          { id: 'messages', label: 'Messages' },
+          { id: 'discover', label: 'Discover' },
+          { id: 'requests', label: 'Requests' },
+          { id: 'me', label: 'Me' },
+        ],
+      },
+      {
+        id: 'explorer.home',
+        title: 'Explorer',
+        sections: [
+          { id: 'files', label: 'Files' },
+          { id: 'notebooks', label: 'Notebooks' },
+          { id: 'projects', label: 'Projects' },
+        ],
+      },
+    ],
+    workspaces: [],
+    aliases: VIEW_ALIASES,
+  });
+
   it.each(RETIRED)('%s resolves to %s / %s', (name, viewId, section) => {
-    const target = resolveShowTarget(name, {
-      views: [
-        {
-          id: 'games.lobby',
-          title: 'Games',
-          sections: [
-            { id: 'career', label: 'Career' },
-            { id: 'replays', label: 'Replays' },
-            { id: 'social', label: 'Social' },
-          ],
-        },
-        {
-          id: 'people.home',
-          title: 'People',
-          sections: [
-            { id: 'friends', label: 'Friends' },
-            { id: 'messages', label: 'Messages' },
-            { id: 'discover', label: 'Discover' },
-            { id: 'requests', label: 'Requests' },
-            { id: 'me', label: 'Me' },
-          ],
-        },
-        {
-          id: 'explorer.home',
-          title: 'Explorer',
-          sections: [
-            { id: 'files', label: 'Files' },
-            { id: 'notebooks', label: 'Notebooks' },
-            { id: 'projects', label: 'Projects' },
-            { id: 'flows', label: 'Flows' },
-            { id: 'tables', label: 'Tables' },
-          ],
-        },
-      ],
-      workspaces: [],
-      aliases: VIEW_ALIASES,
-    });
-    expect(target).toEqual({ kind: 'view', viewId, section });
+    expect(resolveShowTarget(name, candidates())).toEqual({ kind: 'view', viewId, section });
+  });
+
+  it.each(RETIRED_TO_REGION)('%s resolves to the %s region strip', (name, regionViewId) => {
+    expect(resolveShowTarget(name, candidates())).toEqual({ kind: 'region', regionViewId });
   });
 
   it('every alias points at a section the target view actually declares', () => {

@@ -7,11 +7,18 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import {
+  addContextMenuProvider,
   closePaneGuarded,
+  dropPaneOnTab,
+  findArea,
   fullscreenArea,
   joinAreaDirection,
   layoutStore,
+  moveTabToSplit,
+  openContextMenu,
   openFramePane,
+  openPaneInArea,
+  paneDrag,
   registerTransient,
   registry,
   resolveView,
@@ -19,6 +26,7 @@ import {
   splitAreaBy,
   toggleRegion,
   type AreaNode,
+  type ContextMenuItem,
   type PaneRole,
   type PaneState,
   type RegionPosition,
@@ -62,6 +70,96 @@ function paneTitle(pane: PaneState): string {
   );
 }
 
+/**
+ * The document tab menu — the same contract the workspace strip and the activity
+ * rail already use, so a module can add an item to a tab (an editor offering
+ * "Reveal in Explorer", say) without this file learning about it.
+ *
+ * The bulk-close verbs read the *current* tab list from the store rather than a
+ * list captured when the menu opened, and close by instance id rather than by
+ * index. Both matter for the same reason: each close is guarded and may prompt,
+ * so the strip can shift under a half-finished "Close Others" — closing by
+ * position would then start eating the wrong panes.
+ */
+addContextMenuProvider({
+  kind: 'area.tab',
+  items: (target) => {
+    const areaId = String(target.areaId ?? '');
+    const instanceId = String(target.instanceId ?? '');
+    const tabsNow = () => {
+      const area = findAreaTabs(areaId);
+      return area ?? [];
+    };
+    const closeMany = (pick: (ids: string[], self: number) => string[]) => () => {
+      const ids = tabsNow().map((t) => t.instanceId);
+      const self = ids.indexOf(instanceId);
+      if (self < 0) return;
+      for (const id of pick(ids, self)) void closePaneGuarded(id);
+    };
+    const count = tabsNow().length;
+    const index = tabsNow().findIndex((t) => t.instanceId === instanceId);
+
+    const items: ContextMenuItem[] = [
+      {
+        id: 'tab.close',
+        label: 'Close',
+        hint: 'mod+w',
+        run: () => void closePaneGuarded(instanceId),
+      },
+    ];
+    // Absent, not disabled, when there is nothing they could close — a permanently
+    // grey "Close Others" on a single-tab area only invites clicking it.
+    if (count > 1) {
+      items.push({
+        id: 'tab.closeOthers',
+        label: 'Close Others',
+        run: closeMany((ids) => ids.filter((id) => id !== instanceId)),
+      });
+    }
+    if (index >= 0 && index < count - 1) {
+      items.push({
+        id: 'tab.closeRight',
+        label: 'Close to the Right',
+        run: closeMany((ids, self) => ids.slice(self + 1)),
+      });
+    }
+    items.push({ id: 'tab.closeAll', label: 'Close All', run: closeMany((ids) => ids) });
+    return items;
+  },
+});
+
+/** Tab-splitting and floating: a second group, so it reads as a different verb. */
+addContextMenuProvider({
+  kind: 'area.tab',
+  order: 1,
+  items: (target) => {
+    const areaId = String(target.areaId ?? '');
+    const instanceId = String(target.instanceId ?? '');
+    return [
+      {
+        id: 'tab.splitRight',
+        label: 'Split Right',
+        run: () => void moveTabToSplit(areaId, instanceId, 'right'),
+      },
+      {
+        id: 'tab.splitDown',
+        label: 'Split Down',
+        run: () => void moveTabToSplit(areaId, instanceId, 'below'),
+      },
+      {
+        id: 'tab.float',
+        label: 'Float',
+        run: () => void registry.layoutController?.setPaneFloating(instanceId, true),
+      },
+    ];
+  },
+});
+
+/** This area's live tab list, read from the store at call time. */
+function findAreaTabs(areaId: string): PaneState[] | null {
+  return findArea(layoutStore.getSnapshot().frame.center, areaId)?.tabs ?? null;
+}
+
 function useCloseOnOutside(open: boolean, close: () => void) {
   useEffect(() => {
     if (!open) return;
@@ -82,9 +180,13 @@ function useCloseOnOutside(open: boolean, close: () => void) {
 export function AreaHeader({ area }: { area: AreaNode }) {
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
   useCloseOnOutside(switcherOpen, () => setSwitcherOpen(false));
   useCloseOnOutside(menuOpen, () => setMenuOpen(false));
+  useCloseOnOutside(addOpen, () => setAddOpen(false));
   const headerRef = useRef<HTMLDivElement>(null);
+  /** Which tab slot the in-flight drag would land in, for the insertion marker. */
+  const [dropIndex, setDropIndex] = useState<number | null>(null);
 
   const active: PaneState | undefined = area.tabs[area.activeTab];
   const activeDecl = active ? resolveView(active.viewId) : undefined;
@@ -105,6 +207,17 @@ export function AreaHeader({ area }: { area: AreaNode }) {
 
   // Guarded so a pane with unsaved changes (an editor buffer) can prompt first.
   const closeTab = (pane: PaneState) => void closePaneGuarded(pane.instanceId);
+
+  /**
+   * The `+` on the strip: open a view **as another tab of this area**, rather than
+   * letting the role router send it to its default home. That routing is right for
+   * a command-palette open and wrong here — the user pointed at a specific group.
+   */
+  const addTab = (viewId: string) => {
+    setAddOpen(false);
+    layoutStore.dispatch({ type: 'FOCUS_AREA', areaId: area.id });
+    openPaneInArea(viewId, area.id);
+  };
 
   return (
     <div ref={headerRef} className="frame-area-header">
@@ -138,12 +251,73 @@ export function AreaHeader({ area }: { area: AreaNode }) {
         )}
       </div>
 
-      {area.tabs.length > 1 ? (
+      {area.tabs.length > 0 ? (
         <div className="frame-area-tabs" role="tablist">
           {area.tabs.map((pane, index) => (
             <div
               key={pane.instanceId}
-              className={`frame-area-tab${index === area.activeTab ? ' active' : ''}`}
+              // `draggable` on the wrapper, not the label button: a drag started on
+              // the close button would otherwise never fire its click.
+              draggable
+              className={[
+                'frame-area-tab',
+                index === area.activeTab ? 'active' : '',
+                dropIndex === index ? 'frame-area-tab--drop' : '',
+              ]
+                .filter(Boolean)
+                .join(' ')}
+              onDragStart={(e) => {
+                e.dataTransfer.effectAllowed = 'move';
+                // Some browsers cancel a drag with an empty dataTransfer; the
+                // payload itself rides the store (see layout/drag.ts).
+                e.dataTransfer.setData('text/plain', paneTitle(pane));
+                paneDrag.begin({
+                  kind: 'pane',
+                  instanceId: pane.instanceId,
+                  viewId: pane.viewId,
+                  title: paneTitle(pane),
+                });
+              }}
+              onDragEnd={() => {
+                paneDrag.end();
+                setDropIndex(null);
+              }}
+              onDragOver={(e) => {
+                // Read the payload from the store, not from the render closure:
+                // `dragstart` and `dragover` can both land before React has
+                // re-rendered, and a closure captured pre-drag still says "no
+                // drag in flight" — the drop then silently does nothing.
+                if (!paneDrag.getSnapshot()) return;
+                // Stopped, or the area beneath claims the drop and the pane lands
+                // at the end of the strip instead of where the marker is drawn.
+                e.preventDefault();
+                e.stopPropagation();
+                e.dataTransfer.dropEffect = 'move';
+                setDropIndex(index);
+              }}
+              onDragLeave={() => setDropIndex((at) => (at === index ? null : at))}
+              onDrop={(e) => {
+                const payload = paneDrag.getSnapshot();
+                if (!payload) return;
+                e.preventDefault();
+                e.stopPropagation();
+                setDropIndex(null);
+                dropPaneOnTab(payload, area.id, index);
+                paneDrag.end();
+              }}
+              onContextMenu={(e) => {
+                if (
+                  openContextMenu(e, {
+                    kind: 'area.tab',
+                    areaId: area.id,
+                    instanceId: pane.instanceId,
+                    viewId: pane.viewId,
+                    title: paneTitle(pane),
+                  })
+                ) {
+                  e.preventDefault();
+                }
+              }}
             >
               <button
                 role="tab"
@@ -153,6 +327,13 @@ export function AreaHeader({ area }: { area: AreaNode }) {
                 onClick={() =>
                   layoutStore.dispatch({ type: 'SET_ACTIVE_TAB', areaId: area.id, index })
                 }
+                // Middle-click closes, as everywhere else tabs exist.
+                onAuxClick={(e) => {
+                  if (e.button === 1) {
+                    e.preventDefault();
+                    closeTab(pane);
+                  }
+                }}
               >
                 {paneTitle(pane)}
               </button>
@@ -165,9 +346,35 @@ export function AreaHeader({ area }: { area: AreaNode }) {
               </button>
             </div>
           ))}
+          <div className="frame-area-tab-add">
+            <button
+              className="frame-area-tab-add-btn"
+              title="Add a pane to this group"
+              aria-haspopup="menu"
+              aria-expanded={addOpen}
+              onClick={() => setAddOpen((v) => !v)}
+            >
+              ＋
+            </button>
+            {addOpen && (
+              <div className="frame-menu" onMouseDown={(e) => e.stopPropagation()}>
+                {switchableViews(area).map(({ group, members }) => (
+                  <div key={group} className="frame-menu-group">
+                    <div className="frame-menu-group-label">{GROUP_LABEL[group]}</div>
+                    {members.map((v) => (
+                      <button key={v.id} className="frame-menu-item" onClick={() => addTab(v.id)}>
+                        <span className="frame-menu-icon">{v.icon ?? v.title[0]}</span>
+                        {v.title}
+                      </button>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       ) : (
-        <span className="frame-area-title">{active ? paneTitle(active) : 'Empty area'}</span>
+        <span className="frame-area-title">Empty area</span>
       )}
 
       <div className="frame-area-header-actions">
