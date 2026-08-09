@@ -1,0 +1,1641 @@
+Line 780: count 1 | <div className="ch-active-room-container">
+Line 781: count 1 | <style>{`
+Line 782: count 1 | .ch-active-room-container {
+Line 783: count 1 | display: flex;
+Line 784: count 1 | flex-direction: column;
+Line 785: count 1 | height: 100%;
+Line 786: count 1 | background: #14161a;
+Line 787: count 1 | color: var(--text, #f1f5f9);
+Line 788: count 1 | position: relative;
+Line 789: count 1 | overflow: hidden;
+Line 790: count 1 | }
+Line 791: count 1 | 
+Line 792: count 1 | .ch-room-header-bar {
+Line 793: count 1 | display: flex;
+Line 794: count 1 | align-items: center;
+Line 795: count 1 | justify-content: space-between;
+Line 796: count 1 | padding: 0.75rem 1rem;
+Line 797: count 1 | background: #1d2026;
+Line 798: count 1 | border-bottom: 1px solid var(--border, #2e333d);
+Line 799: count 1 | flex-shrink: 0;
+Line 800: count 1 | z-index: 10;
+Line 801: count 1 | }
+Line 802: count 1 | 
+Line 803: count 1 | .ch-room-title-section {
+Line 804: count 1 | flex: 1;
+Line 805: count 1 | margin: 0 1rem;
+Line 806: count 1 | min-width: 0;
+Line 807: count 1 | }
+Line 808: count 1 | 
+Line 809: count 1 | .ch-room-title-text {
+Line 810: count 1 | font-size: 0.95rem;
+Line 811: count 1 | font-weight: 600;
+Line 812: count 1 | margin: 0;
+Line 813: count 1 | color: #fff;
+Line 814: count 1 | white-space: nowrap;
+Line 815: count 1 | overflow: hidden;
+Line 816: count 1 | text-overflow: ellipsis;
+Line 817: count 1 | }
+Line 818: count 1 | 
+Line 819: count 1 | .ch-room-club-text {
+Line 820: count 1 | font-size: 0.7rem;
+Line 821: count 1 | color: var(--accent, #6ea8fe);
+Line 822: count 1 | font-weight: 700;
+Line 823: count 1 | text-transform: uppercase;
+Line 824: count 1 | letter-spacing: 0.05em;
+Line 825: count 1 | margin: 0;
+Line 826: count 1 | white-space: nowrap;
+Line 827: count 1 | overflow: hidden;
+Line 828: count 1 | text-overflow: ellipsis;
+Line 829: count 1 | }
+Line 830: count 1 | 
+Line 831: count 1 | .ch-btn-leave-quietly {
+Line 832: count 1 | background: rgba(239, 68, 68, 0.12);
+Line 833: count 1 | border: 1px solid rgba(239, 68, 68, 0.3);
+Line 834: count 1 | color: #ef4444;
+Line 835: count 1 | padding: 0.4rem 0.8rem;
+Line 836: count 1 | border-radius: 20px;
+Line 837: count 1 | font-size: 0.75rem;
+Line 838: count 1 | font-weight: 600;
+Line 839: count 1 | cursor: pointer;
+Line 840: count 1 | transition: all 0.2s ease;
+Line 841: count 1 | display: flex;
+Line 842: count 1 | align-items: center;
+Line 843: count 1 | gap: 0.25rem;
+Line 844: count 1 | }
+Line 845: count 1 | 
+Line 846: count 1 | .ch-btn-leave-quietly:hover {
+Line 847: count 1 | background: rgba(239, 68, 68, 0.22);
+Line 848: count 1 | transform: translateY(-1px);
+Line 849: count 1 | }
+Line 850: count 1 | 
+Line 851: count 1 | .ch-room-scroller {
+Line 852: count 1 | flex: 1;
+Line 853: count 1 | display: flex;
+Line 854: count 1 | flex-direction: column;
+Line 855: count 1 | overflow: hidden;
+Line 856: count 1 | min-height: 0;
+Line 857: count 1 | }
+Line 858: count 1 | 
+Line 859: count 1 | .ch-participants-section {
+Line 860: count 1 | max-height: 45%;
+Line 861: count 1 | overflow-y: auto;
+Line 862: count 1 | padding: 1rem;
+Line 863: count 1 | border-bottom: 1px solid var(--border, #2e333d);
+Line 864: count 1 | background: rgba(29, 32, 38, 0.4);
+Line 865: count 1 | flex-shrink: 0;
+Line 866: count 1 | }
+Line 867: count 1 | 
+Line 868: count 1 | .ch-section-heading {
+Line 869: count 1 | font-size: 0.75rem;
+Line 870: count 1 | font-weight: 700;
+Line 871: count 1 | text-transform: uppercase;
+Line 872: count 1 | letter-spacing: 0.05em;
+Line 873: count 1 | color: var(--text-dim, #94a3b8);
+Line 874: count 1 | margin-bottom: 0.75rem;
+Line 875: count 1 | display: flex;
+Line 876: count 1 | align-items: center;
+Line 877: count 1 | justify-content: space-between;
+Line 878: count 1 | }
+Line 879: count 1 | 
+Line 880: count 1 | .ch-speakers-grid {
+Line 881: count 1 | display: grid;
+Line 882: count 1 | grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+Line 883: count 1 | gap: 1rem 0.5rem;
+Line 884: count 1 | justify-items: center;
+Line 885: count 1 | margin-bottom: 1.5rem;
+Line 886: count 1 | }
+Line 887: count 1 | 
+Line 888: count 1 | .ch-listeners-grid {
+Line 889: count 1 | display: grid;
+Line 890: count 1 | grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
+Line 891: count 1 | gap: 0.75rem 0.5rem;
+Line 892: count 1 | justify-items: center;
+Line 893: count 1 | }
+Line 894: count 1 | 
+Line 895: count 1 | .ch-user-card {
+Line 896: count 1 | display: flex;
+Line 897: count 1 | flex-direction: column;
+Line 898: count 1 | align-items: center;
+Line 899: count 1 | width: 100%;
+Line 900: count 1 | position: relative;
+Line 901: count 1 | }
+Line 902: count 1 | 
+Line 903: count 1 | .ch-avatar-container {
+Line 904: count 1 | position: relative;
+Line 905: count 1 | margin-bottom: 0.25rem;
+Line 906: count 1 | }
+Line 907: count 1 | 
+Line 908: count 1 | .ch-avatar-squircle {
+Line 909: count 1 | width: 48px;
+Line 910: count 1 | height: 48px;
+Line 911: count 1 | border-radius: 16px;
+Line 912: count 1 | object-fit: cover;
+Line 913: count 1 | border: 2px solid transparent;
+Line 914: count 1 | background: #2e333d;
+Line 915: count 1 | transition: all 0.2s ease;
+Line 916: count 1 | }
+Line 917: count 1 | 
+Line 918: count 1 | .ch-avatar-squircle.speaker {
+Line 919: count 1 | border-color: var(--accent, #6ea8fe);
+Line 920: count 1 | box-shadow: 0 0 8px rgba(110, 168, 254, 0.25);
+Line 921: count 1 | }
+Line 922: count 1 | 
+Line 923: count 1 | .ch-avatar-squircle.listener {
+Line 924: count 1 | width: 40px;
+Line 925: count 1 | height: 40px;
+Line 926: count 1 | border-radius: 14px;
+Line 927: count 1 | }
+Line 928: count 1 | 
+Line 929: count 1 | .ch-user-card:hover .ch-avatar-squircle {
+Line 930: count 1 | transform: scale(1.05);
+Line 931: count 1 | }
+Line 932: count 1 | 
+Line 933: count 1 | .ch-mod-badge {
+Line 934: count 1 | position: absolute;
+Line 935: count 1 | bottom: -2px;
+Line 936: count 1 | left: -2px;
+Line 937: count 1 | background: #10b981;
+Line 938: count 1 | color: white;
+Line 939: count 1 | font-size: 0.5rem;
+Line 940: count 1 | width: 14px;
+Line 941: count 1 | height: 14px;
+Line 942: count 1 | border-radius: 50%;
+Line 943: count 1 | display: flex;
+Line 944: count 1 | align-items: center;
+Line 945: count 1 | justify-content: center;
+Line 946: count 1 | border: 1px solid #14161a;
+Line 947: count 1 | box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+Line 948: count 1 | }
+Line 949: count 1 | 
+Line 950: count 1 | .ch-hand-badge {
+Line 951: count 1 | position: absolute;
+Line 952: count 1 | bottom: -2px;
+Line 953: count 1 | right: -2px;
+Line 954: count 1 | background: #f59e0b;
+Line 955: count 1 | font-size: 0.6rem;
+Line 956: count 1 | width: 15px;
+Line 957: count 1 | height: 15px;
+Line 958: count 1 | border-radius: 50%;
+Line 959: count 1 | display: flex;
+Line 960: count 1 | align-items: center;
+Line 961: count 1 | justify-content: center;
+Line 962: count 1 | border: 1px solid #14161a;
+Line 963: count 1 | box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+Line 964: count 1 | }
+Line 965: count 1 | 
+Line 966: count 1 | .ch-user-name {
+Line 967: count 1 | font-size: 0.7rem;
+Line 968: count 1 | text-align: center;
+Line 969: count 1 | width: 100%;
+Line 970: count 1 | overflow: hidden;
+Line 971: count 1 | text-overflow: ellipsis;
+Line 972: count 1 | white-space: nowrap;
+Line 973: count 1 | color: var(--text, #f1f5f9);
+Line 974: count 1 | }
+Line 975: count 1 | 
+Line 976: count 1 | .ch-user-name.dim {
+Line 977: count 1 | color: var(--text-dim, #94a3b8);
+Line 978: count 1 | }
+Line 979: count 1 | 
+Line 980: count 1 | .ch-chat-section {
+Line 981: count 1 | flex: 1;
+Line 982: count 1 | display: flex;
+Line 983: count 1 | flex-direction: column;
+Line 984: count 1 | overflow: hidden;
+Line 985: count 1 | background: #111317;
+Line 986: count 1 | min-height: 0;
+Line 987: count 1 | }
+Line 988: count 1 | 
+Line 989: count 1 | .ch-chat-scroll {
+Line 990: count 1 | flex: 1;
+Line 991: count 1 | overflow-y: auto;
+Line 992: count 1 | padding: 1rem;
+Line 993: count 1 | display: flex;
+Line 994: count 1 | flex-direction: column;
+Line 995: count 1 | gap: 0.75rem;
+Line 996: count 1 | }
+Line 997: count 1 | 
+Line 998: count 1 | .ch-chat-empty {
+Line 999: count 1 | display: flex;
+Line 1000: count 1 | flex-direction: column;
+Line 1001: count 1 | align-items: center;
+Line 1002: count 1 | justify-content: center;
+Line 1003: count 1 | height: 100%;
+Line 1004: count 1 | color: var(--text-dim, #94a3b8);
+Line 1005: count 1 | font-size: 0.8rem;
+Line 1006: count 1 | gap: 0.5rem;
+Line 1007: count 1 | }
+Line 1008: count 1 | 
+Line 1009: count 1 | .ch-comment-item {
+Line 1010: count 1 | display: flex;
+Line 1011: count 1 | align-items: flex-start;
+Line 1012: count 1 | gap: 0.5rem;
+Line 1013: count 1 | animation: ch-fade-in 0.25s ease-out;
+Line 1014: count 1 | }
+Line 1015: count 1 | 
+Line 1016: count 1 | @keyframes ch-fade-in {
+Line 1017: count 1 | from { opacity: 0; transform: translateY(4px); }
+Line 1018: count 1 | to { opacity: 1; transform: translateY(0); }
+Line 1019: count 1 | }
+Line 1020: count 1 | 
+Line 1021: count 1 | .ch-comment-avatar {
+Line 1022: count 1 | width: 28px;
+Line 1023: count 1 | height: 28px;
+Line 1024: count 1 | border-radius: 50%;
+Line 1025: count 1 | object-fit: cover;
+Line 1026: count 1 | background: #2e333d;
+Line 1027: count 1 | flex-shrink: 0;
+Line 1028: count 1 | margin-top: 2px;
+Line 1029: count 1 | }
+Line 1030: count 1 | 
+Line 1031: count 1 | .ch-comment-content {
+Line 1032: count 1 | flex: 1;
+Line 1033: count 1 | min-width: 0;
+Line 1034: count 1 | }
+Line 1035: count 1 | 
+Line 1036: count 1 | .ch-comment-header {
+Line 1037: count 1 | display: flex;
+Line 1038: count 1 | align-items: baseline;
+Line 1039: count 1 | gap: 0.4rem;
+Line 1040: count 1 | margin-bottom: 0.15rem;
+Line 1041: count 1 | }
+Line 1042: count 1 | 
+Line 1043: count 1 | .ch-comment-user {
+Line 1044: count 1 | font-size: 0.75rem;
+Line 1045: count 1 | font-weight: 600;
+Line 1046: count 1 | color: #fff;
+Line 1047: count 1 | }
+Line 1048: count 1 | 
+Line 1049: count 1 | .ch-comment-time {
+Line 1050: count 1 | font-size: 0.6rem;
+Line 1051: count 1 | color: var(--text-dim, #94a3b8);
+Line 1052: count 1 | }
+Line 1053: count 1 | 
+Line 1054: count 1 | .ch-comment-bubble {
+Line 1055: count 1 | background: #1d2026;
+Line 1056: count 1 | border: 1px solid var(--border, #2e333d);
+Line 1057: count 1 | padding: 0.4rem 0.6rem;
+Line 1058: count 1 | border-radius: 8px 12px 12px 8px;
+Line 1059: count 1 | font-size: 0.8rem;
+Line 1060: count 1 | line-height: 1.35;
+Line 1061: count 1 | color: #f1f5f9;
+Line 1062: count 1 | word-break: break-word;
+Line 1063: count 1 | }
+Line 1064: count 1 | 
+Line 1065: count 1 | .ch-room-bottom-panel {
+Line 1066: count 1 | padding: 0.75rem 1rem;
+Line 1067: count 1 | background: #1d2026;
+Line 1068: count 1 | border-top: 1px solid var(--border, #2e333d);
+Line 1069: count 1 | flex-shrink: 0;
+Line 1070: count 1 | display: flex;
+Line 1071: count 1 | flex-direction: column;
+Line 1072: count 1 | gap: 0.5rem;
+Line 1073: count 1 | }
+Line 1074: count 1 | 
+Line 1075: count 1 | .ch-reactions-row {
+Line 1076: count 1 | display: flex;
+Line 1077: count 1 | align-items: center;
+Line 1078: count 1 | justify-content: space-around;
+Line 1079: count 1 | background: rgba(0, 0, 0, 0.2);
+Line 1080: count 1 | border-radius: 12px;
+Line 1081: count 1 | padding: 0.25rem 0.5rem;
+Line 1082: count 1 | }
+Line 1083: count 1 | 
+Line 1084: count 1 | .ch-reaction-btn {
+Line 1085: count 1 | background: transparent;
+Line 1086: count 1 | border: none;
+Line 1087: count 1 | font-size: 1.3rem;
+Line 1088: count 1 | cursor: pointer;
+Line 1089: count 1 | padding: 0.25rem;
+Line 1090: count 1 | border-radius: 8px;
+Line 1091: count 1 | transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+Line 1092: count 1 | }
+Line 1093: count 1 | 
+Line 1094: count 1 | .ch-reaction-btn:hover {
+Line 1095: count 1 | transform: scale(1.25) translateY(-2px);
+Line 1096: count 1 | background: rgba(255, 255, 255, 0.05);
+Line 1097: count 1 | }
+Line 1098: count 1 | 
+Line 1099: count 1 | .ch-input-row {
+Line 1100: count 1 | display: flex;
+Line 1101: count 1 | align-items: center;
+Line 1102: count 1 | gap: 0.5rem;
+Line 1103: count 1 | }
+Line 1104: count 1 | 
+Line 1105: count 1 | .ch-comment-input {
+Line 1106: count 1 | flex: 1;
+Line 1107: count 1 | background: #14161a;
+Line 1108: count 1 | border: 1px solid var(--border, #2e333d);
+Line 1109: count 1 | border-radius: 20px;
+Line 1110: count 1 | color: #fff;
+Line 1111: count 1 | padding: 0.45rem 1rem;
+Line 1112: count 1 | font-size: 0.85rem;
+Line 1113: count 1 | outline: none;
+Line 1114: count 1 | transition: all 0.2s ease;
+Line 1115: count 1 | }
+Line 1116: count 1 | 
+Line 1117: count 1 | .ch-comment-input:focus {
+Line 1118: count 1 | border-color: var(--accent, #6ea8fe);
+Line 1119: count 1 | box-shadow: 0 0 0 2px rgba(110, 168, 254, 0.15);
+Line 1120: count 1 | }
+Line 1121: count 1 | 
+Line 1122: count 1 | .ch-btn-send {
+Line 1123: count 1 | background: var(--accent, #6ea8fe);
+Line 1124: count 1 | color: #14161a;
+Line 1125: count 1 | border: none;
+Line 1126: count 1 | width: 32px;
+Line 1127: count 1 | height: 32px;
+Line 1128: count 1 | border-radius: 50%;
+Line 1129: count 1 | display: flex;
+Line 1130: count 1 | align-items: center;
+Line 1131: count 1 | justify-content: center;
+Line 1132: count 1 | cursor: pointer;
+Line 1133: count 1 | transition: all 0.2s ease;
+Line 1134: count 1 | flex-shrink: 0;
+Line 1135: count 1 | }
+Line 1136: count 1 | 
+Line 1137: count 1 | .ch-btn-send:hover:not(:disabled) {
+Line 1138: count 1 | transform: scale(1.05);
+Line 1139: count 1 | box-shadow: 0 2px 8px rgba(110, 168, 254, 0.3);
+Line 1140: count 1 | }
+Line 1141: count 1 | 
+Line 1142: count 1 | .ch-btn-send:disabled {
+Line 1143: count 1 | opacity: 0.5;
+Line 1144: count 1 | cursor: not-allowed;
+Line 1145: count 1 | }
+Line 1146: count 1 | 
+Line 1147: count 1 | .ch-stage-actions-row {
+Line 1148: count 1 | display: flex;
+Line 1149: count 1 | align-items: center;
+Line 1150: count 1 | justify-content: space-between;
+Line 1151: count 1 | gap: 0.5rem;
+Line 1152: count 1 | margin-top: 0.25rem;
+Line 1153: count 1 | }
+Line 1154: count 1 | 
+Line 1155: count 1 | .ch-btn-action {
+Line 1156: count 1 | flex: 1;
+Line 1157: count 1 | display: flex;
+Line 1158: count 1 | align-items: center;
+Line 1159: count 1 | justify-content: center;
+Line 1160: count 1 | gap: 0.25rem;
+Line 1161: count 1 | background: rgba(255, 255, 255, 0.05);
+Line 1162: count 1 | border: 1px solid var(--border, #2e333d);
+Line 1163: count 1 | color: var(--text, #f1f5f9);
+Line 1164: count 1 | padding: 0.45rem 0.75rem;
+Line 1165: count 1 | border-radius: 20px;
+Line 1166: count 1 | font-size: 0.8rem;
+Line 1167: count 1 | font-weight: 600;
+Line 1168: count 1 | cursor: pointer;
+Line 1169: count 1 | transition: all 0.2s ease;
+Line 1170: count 1 | }
+Line 1171: count 1 | 
+Line 1172: count 1 | .ch-btn-action:hover:not(:disabled) {
+Line 1173: count 1 | background: rgba(255, 255, 255, 0.1);
+Line 1174: count 1 | transform: translateY(-1px);
+Line 1175: count 1 | }
+Line 1176: count 1 | 
+Line 1177: count 1 | .ch-btn-action.mic-muted {
+Line 1178: count 1 | background: #ef4444;
+Line 1179: count 1 | border-color: #ef4444;
+Line 1180: count 1 | color: #fff;
+Line 1181: count 1 | }
+Line 1182: count 1 | 
+Line 1183: count 1 | .ch-btn-action.mic-active {
+Line 1184: count 1 | background: #10b981;
+Line 1185: count 1 | border-color: #10b981;
+Line 1186: count 1 | color: #fff;
+Line 1187: count 1 | }
+Line 1188: count 1 | 
+Line 1189: count 1 | .ch-btn-action.hand-raised {
+Line 1190: count 1 | background: #f59e0b;
+Line 1191: count 1 | border-color: #f59e0b;
+Line 1192: count 1 | color: #fff;
+Line 1193: count 1 | }
+Line 1194: count 1 | 
+Line 1195: count 1 | .ch-btn-action.join-stage {
+Line 1196: count 1 | background: var(--accent, #6ea8fe);
+Line 1197: count 1 | border-color: var(--accent, #6ea8fe);
+Line 1198: count 1 | color: #14161a;
+Line 1199: count 1 | }
+Line 1200: count 1 | 
+Line 1201: count 1 | .ch-btn-action:disabled {
+Line 1202: count 1 | opacity: 0.5;
+Line 1203: count 1 | cursor: not-allowed;
+Line 1204: count 1 | }
+Line 1205: count 1 | 
+Line 1206: count 1 | .ch-floating-reactions-overlay {
+Line 1207: count 1 | position: absolute;
+Line 1208: count 1 | left: 0;
+Line 1209: count 1 | right: 0;
+Line 1210: count 1 | top: 0;
+Line 1211: count 1 | bottom: 140px;
+Line 1212: count 1 | pointer-events: none;
+Line 1213: count 1 | overflow: hidden;
+Line 1214: count 1 | z-index: 5;
+Line 1215: count 1 | }
+Line 1216: count 1 | 
+Line 1217: count 1 | .ch-floating-reaction {
+Line 1218: count 1 | position: absolute;
+Line 1219: count 1 | font-size: 2.2rem;
+Line 1220: count 1 | pointer-events: none;
+Line 1221: count 1 | animation: ch-reaction-float 2.8s cubic-bezier(0.08, 0.82, 0.17, 1) forwards;
+Line 1222: count 1 | text-shadow: 0 2px 10px rgba(0,0,0,0.5);
+Line 1223: count 1 | }
+Line 1224: count 1 | 
+Line 1225: count 1 | @keyframes ch-reaction-float {
+Line 1226: count 1 | 0% {
+Line 1227: count 1 | transform: translateY(0) scale(0.3) rotate(0deg);
+Line 1228: count 1 | opacity: 0;
+Line 1229: count 1 | }
+Line 1230: count 1 | 10% {
+Line 1231: count 1 | transform: translateY(-20px) scale(1.2) rotate(var(--rot, 0deg));
+Line 1232: count 1 | opacity: 1;
+Line 1233: count 1 | }
+Line 1234: count 1 | 90% {
+Line 1235: count 1 | opacity: 1;
+Line 1236: count 1 | }
+Line 1237: count 1 | 100% {
+Line 1238: count 1 | transform: translateY(-280px) scale(0.8) rotate(var(--rot-end, 15deg));
+Line 1239: count 1 | opacity: 0;
+Line 1240: count 1 | }
+Line 1241: count 1 | }
+Line 1242: count 1 | 
+Line 1243: count 1 | .ch-user-card {
+Line 1244: count 1 | display: flex;
+Line 1245: count 1 | flex-direction: column;
+Line 1246: count 1 | align-items: center;
+Line 1247: count 1 | width: 100%;
+Line 1248: count 1 | position: relative;
+Line 1249: count 1 | cursor: pointer;
+Line 1250: count 1 | }
+Line 1251: count 1 | 
+Line 1252: count 1 | .ch-profile-overlay {
+Line 1253: count 1 | position: absolute;
+Line 1254: count 1 | top: 0;
+Line 1255: count 1 | left: 0;
+Line 1256: count 1 | right: 0;
+Line 1257: count 1 | bottom: 0;
+Line 1258: count 1 | background: rgba(0, 0, 0, 0.65);
+Line 1259: count 1 | backdrop-filter: blur(4px);
+Line 1260: count 1 | z-index: 100;
+Line 1261: count 1 | display: flex;
+Line 1262: count 1 | align-items: center;
+Line 1263: count 1 | justify-content: center;
+Line 1264: count 1 | padding: 1.5rem;
+Line 1265: count 1 | animation: ch-fade-in 0.2s ease-out;
+Line 1266: count 1 | }
+Line 1267: count 1 | 
+Line 1268: count 1 | .ch-profile-card {
+Line 1269: count 1 | background: #1d2026;
+Line 1270: count 1 | border: 1px solid var(--border, #2e333d);
+Line 1271: count 1 | border-radius: 20px;
+Line 1272: count 1 | width: 100%;
+Line 1273: count 1 | max-width: 320px;
+Line 1274: count 1 | padding: 1.5rem;
+Line 1275: count 1 | position: relative;
+Line 1276: count 1 | box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
+Line 1277: count 1 | display: flex;
+Line 1278: count 1 | flex-direction: column;
+Line 1279: count 1 | gap: 1rem;
+Line 1280: count 1 | animation: ch-profile-scale 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+Line 1281: count 1 | }
+Line 1282: count 1 | 
+Line 1283: count 1 | @keyframes ch-profile-scale {
+Line 1284: count 1 | from { transform: scale(0.9); opacity: 0; }
+Line 1285: count 1 | to { transform: scale(1); opacity: 1; }
+Line 1286: count 1 | }
+Line 1287: count 1 | 
+Line 1288: count 1 | .ch-profile-close {
+Line 1289: count 1 | position: absolute;
+Line 1290: count 1 | top: 1rem;
+Line 1291: count 1 | right: 1rem;
+Line 1292: count 1 | background: transparent;
+Line 1293: count 1 | border: none;
+Line 1294: count 1 | color: var(--text-dim, #94a3b8);
+Line 1295: count 1 | font-size: 1rem;
+Line 1296: count 1 | cursor: pointer;
+Line 1297: count 1 | padding: 0.25rem;
+Line 1298: count 1 | transition: color 0.15s ease;
+Line 1299: count 1 | }
+Line 1300: count 1 | 
+Line 1301: count 1 | .ch-profile-close:hover {
+Line 1302: count 1 | color: #fff;
+Line 1303: count 1 | }
+Line 1304: count 1 | 
+Line 1305: count 1 | .ch-profile-header {
+Line 1306: count 1 | display: flex;
+Line 1307: count 1 | align-items: center;
+Line 1308: count 1 | gap: 1rem;
+Line 1309: count 1 | }
+Line 1310: count 1 | 
+Line 1311: count 1 | .ch-profile-avatar {
+Line 1312: count 1 | width: 64px;
+Line 1313: count 1 | height: 64px;
+Line 1314: count 1 | border-radius: 22px;
+Line 1315: count 1 | object-fit: cover;
+Line 1316: count 1 | border: 2px solid var(--border, #2e333d);
+Line 1317: count 1 | }
+Line 1318: count 1 | 
+Line 1319: count 1 | .ch-profile-avatar-placeholder {
+Line 1320: count 1 | width: 64px;
+Line 1321: count 1 | height: 64px;
+Line 1322: count 1 | border-radius: 22px;
+Line 1323: count 1 | background: linear-gradient(135deg, #2e333d, #14161a);
+Line 1324: count 1 | border: 2px solid var(--border, #2e333d);
+Line 1325: count 1 | color: var(--text-dim, #94a3b8);
+Line 1326: count 1 | display: flex;
+Line 1327: count 1 | align-items: center;
+Line 1328: count 1 | justify-content: center;
+Line 1329: count 1 | font-weight: 700;
+Line 1330: count 1 | font-size: 1.2rem;
+Line 1331: count 1 | }
+Line 1332: count 1 | 
+Line 1333: count 1 | .ch-profile-names {
+Line 1334: count 1 | display: flex;
+Line 1335: count 1 | flex-direction: column;
+Line 1336: count 1 | gap: 0.15rem;
+Line 1337: count 1 | min-width: 0;
+Line 1338: count 1 | }
+Line 1339: count 1 | 
+Line 1340: count 1 | .ch-profile-name {
+Line 1341: count 1 | font-size: 1.1rem;
+Line 1342: count 1 | font-weight: 700;
+Line 1343: count 1 | color: #fff;
+Line 1344: count 1 | margin: 0;
+Line 1345: count 1 | white-space: nowrap;
+Line 1346: count 1 | overflow: hidden;
+Line 1347: count 1 | text-overflow: ellipsis;
+Line 1348: count 1 | }
+Line 1349: count 1 | 
+Line 1350: count 1 | .ch-profile-username {
+Line 1351: count 1 | font-size: 0.8rem;
+Line 1352: count 1 | color: var(--text-dim, #94a3b8);
+Line 1353: count 1 | margin: 0;
+Line 1354: count 1 | white-space: nowrap;
+Line 1355: count 1 | overflow: hidden;
+Line 1356: count 1 | text-overflow: ellipsis;
+Line 1357: count 1 | }
+Line 1358: count 1 | 
+Line 1359: count 1 | .ch-follows-badge {
+Line 1360: count 1 | align-self: flex-start;
+Line 1361: count 1 | font-size: 0.65rem;
+Line 1362: count 1 | background: rgba(110, 168, 254, 0.12);
+Line 1363: count 1 | border: 1px solid rgba(110, 168, 254, 0.3);
+Line 1364: count 1 | color: var(--accent, #6ea8fe);
+Line 1365: count 1 | padding: 0.1rem 0.4rem;
+Line 1366: count 1 | border-radius: 10px;
+Line 1367: count 1 | font-weight: 600;
+Line 1368: count 1 | margin-top: 0.25rem;
+Line 1369: count 1 | }
+Line 1370: count 1 | 
+Line 1371: count 1 | .ch-profile-stats {
+Line 1372: count 1 | display: flex;
+Line 1373: count 1 | gap: 1.5rem;
+Line 1374: count 1 | border-bottom: 1px solid var(--border, #2e333d);
+Line 1375: count 1 | padding-bottom: 0.75rem;
+Line 1376: count 1 | }
+Line 1377: count 1 | 
+Line 1378: count 1 | .ch-profile-stat {
+Line 1379: count 1 | display: flex;
+Line 1380: count 1 | align-items: baseline;
+Line 1381: count 1 | gap: 0.25rem;
+Line 1382: count 1 | }
+Line 1383: count 1 | 
+Line 1384: count 1 | .ch-profile-stat-val {
+Line 1385: count 1 | font-weight: 700;
+Line 1386: count 1 | color: #fff;
+Line 1387: count 1 | font-size: 0.95rem;
+Line 1388: count 1 | }
+Line 1389: count 1 | 
+Line 1390: count 1 | .ch-profile-stat-lbl {
+Line 1391: count 1 | color: var(--text-dim, #94a3b8);
+Line 1392: count 1 | font-size: 0.8rem;
+Line 1393: count 1 | }
+Line 1394: count 1 | 
+Line 1395: count 1 | .ch-profile-bio {
+Line 1396: count 1 | font-size: 0.8rem;
+Line 1397: count 1 | line-height: 1.4;
+Line 1398: count 1 | color: #d1d5db;
+Line 1399: count 1 | white-space: pre-wrap;
+Line 1400: count 1 | max-height: 120px;
+Line 1401: count 1 | overflow-y: auto;
+Line 1402: count 1 | }
+Line 1403: count 1 | 
+Line 1404: count 1 | .ch-profile-socials {
+Line 1405: count 1 | display: flex;
+Line 1406: count 1 | flex-direction: column;
+Line 1407: count 1 | gap: 0.4rem;
+Line 1408: count 1 | background: rgba(0, 0, 0, 0.15);
+Line 1409: count 1 | padding: 0.5rem 0.75rem;
+Line 1410: count 1 | border-radius: 8px;
+Line 1411: count 1 | border: 1px solid rgba(255, 255, 255, 0.02);
+Line 1412: count 1 | }
+Line 1413: count 1 | 
+Line 1414: count 1 | .ch-profile-social-item {
+Line 1415: count 1 | font-size: 0.75rem;
+Line 1416: count 1 | color: var(--text-dim, #94a3b8);
+Line 1417: count 1 | }
+Line 1418: count 1 | 
+Line 1419: count 1 | .ch-profile-social-item span {
+Line 1420: count 1 | color: var(--accent, #6ea8fe);
+Line 1421: count 1 | font-weight: 600;
+Line 1422: count 1 | }
+Line 1423: count 1 | 
+Line 1424: count 1 | .ch-profile-invited {
+Line 1425: count 1 | font-size: 0.75rem;
+Line 1426: count 1 | color: var(--text-dim, #94a3b8);
+Line 1427: count 1 | border-top: 1px solid var(--border, #2e333d);
+Line 1428: count 1 | padding-top: 0.75rem;
+Line 1429: count 1 | }
+Line 1430: count 1 | 
+Line 1431: count 1 | .ch-profile-loading {
+Line 1432: count 1 | display: flex;
+Line 1433: count 1 | flex-direction: column;
+Line 1434: count 1 | align-items: center;
+Line 1435: count 1 | gap: 0.75rem;
+Line 1436: count 1 | color: #fff;
+Line 1437: count 1 | font-size: 0.9rem;
+Line 1438: count 1 | }
+Line 1439: count 1 | 
+Line 1440: count 1 | .ch-spinner {
+Line 1441: count 1 | width: 24px;
+Line 1442: count 1 | height: 24px;
+Line 1443: count 1 | border: 2px solid rgba(255, 255, 255, 0.1);
+Line 1444: count 1 | border-top-color: var(--accent, #6ea8fe);
+Line 1445: count 1 | border-radius: 50%;
+Line 1446: count 1 | animation: ch-spin 0.8s linear infinite;
+Line 1447: count 1 | }
+Line 1448: count 1 | 
+Line 1449: count 1 | @keyframes ch-spin {
+Line 1450: count 1 | to { transform: rotate(360deg); }
+Line 1451: count 1 | }
+Line 1452: count 1 | 
+Line 1453: count 1 | /* Follow/Unfollow Button */
+Line 1454: count 1 | .ch-profile-follow-btn {
+Line 1455: count 1 | background: var(--accent, #6ea8fe);
+Line 1456: count 1 | color: #14161a;
+Line 1457: count 1 | border: none;
+Line 1458: count 1 | padding: 0.35rem 1rem;
+Line 1459: count 1 | border-radius: 20px;
+Line 1460: count 1 | font-size: 0.75rem;
+Line 1461: count 1 | font-weight: 600;
+Line 1462: count 1 | cursor: pointer;
+Line 1463: count 1 | transition: all 0.2s ease;
+Line 1464: count 1 | margin-top: 0.35rem;
+Line 1465: count 1 | align-self: flex-start;
+Line 1466: count 1 | }
+Line 1467: count 1 | 
+Line 1468: count 1 | .ch-profile-follow-btn:hover:not(:disabled) {
+Line 1469: count 1 | transform: translateY(-1px);
+Line 1470: count 1 | box-shadow: 0 4px 12px rgba(110, 168, 254, 0.3);
+Line 1471: count 1 | }
+Line 1472: count 1 | 
+Line 1473: count 1 | .ch-profile-follow-btn.following {
+Line 1474: count 1 | background: rgba(255, 255, 255, 0.1);
+Line 1475: count 1 | border: 1px solid rgba(255, 255, 255, 0.2);
+Line 1476: count 1 | color: #fff;
+Line 1477: count 1 | }
+Line 1478: count 1 | 
+Line 1479: count 1 | .ch-profile-follow-btn.following:hover:not(:disabled) {
+Line 1480: count 1 | background: rgba(239, 68, 68, 0.15);
+Line 1481: count 1 | border-color: rgba(239, 68, 68, 0.3);
+Line 1482: count 1 | color: #ef4444;
+Line 1483: count 1 | box-shadow: none;
+Line 1484: count 1 | }
+Line 1485: count 1 | 
+Line 1486: count 1 | /* General Modal Layout */
+Line 1487: count 1 | .ch-modal-overlay {
+Line 1488: count 1 | position: absolute;
+Line 1489: count 1 | top: 0;
+Line 1490: count 1 | left: 0;
+Line 1491: count 1 | right: 0;
+Line 1492: count 1 | bottom: 0;
+Line 1493: count 1 | background: rgba(0, 0, 0, 0.7);
+Line 1494: count 1 | backdrop-filter: blur(6px);
+Line 1495: count 1 | z-index: 150;
+Line 1496: count 1 | display: flex;
+Line 1497: count 1 | align-items: center;
+Line 1498: count 1 | justify-content: center;
+Line 1499: count 1 | padding: 1.5rem;
+Line 1500: count 1 | animation: ch-fade-in 0.2s ease-out;
+Line 1501: count 1 | }
+Line 1502: count 1 | 
+Line 1503: count 1 | .ch-modal-card {
+Line 1504: count 1 | background: #1d2026;
+Line 1505: count 1 | border: 1px solid var(--border, #2e333d);
+Line 1506: count 1 | border-radius: 16px;
+Line 1507: count 1 | width: 100%;
+Line 1508: count 1 | max-width: 360px;
+Line 1509: count 1 | padding: 1.5rem;
+Line 1510: count 1 | position: relative;
+Line 1511: count 1 | box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5);
+Line 1512: count 1 | display: flex;
+Line 1513: count 1 | flex-direction: column;
+Line 1514: count 1 | gap: 1.25rem;
+Line 1515: count 1 | animation: ch-profile-scale 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+Line 1516: count 1 | }
+Line 1517: count 1 | 
+Line 1518: count 1 | .ch-modal-header {
+Line 1519: count 1 | display: flex;
+Line 1520: count 1 | align-items: center;
+Line 1521: count 1 | justify-content: space-between;
+Line 1522: count 1 | }
+Line 1523: count 1 | 
+Line 1524: count 1 | .ch-modal-title {
+Line 1525: count 1 | font-size: 1.05rem;
+Line 1526: count 1 | font-weight: 700;
+Line 1527: count 1 | margin: 0;
+Line 1528: count 1 | color: #fff;
+Line 1529: count 1 | }
+Line 1530: count 1 | 
+Line 1531: count 1 | .ch-modal-close {
+Line 1532: count 1 | background: transparent;
+Line 1533: count 1 | border: none;
+Line 1534: count 1 | color: var(--text-dim, #94a3b8);
+Line 1535: count 1 | font-size: 1rem;
+Line 1536: count 1 | cursor: pointer;
+Line 1537: count 1 | padding: 0.25rem;
+Line 1538: count 1 | transition: color 0.15s ease;
+Line 1539: count 1 | }
+Line 1540: count 1 | 
+Line 1541: count 1 | .ch-modal-close:hover {
+Line 1542: count 1 | color: #fff;
+Line 1543: count 1 | }
+Line 1544: count 1 | 
+Line 1545: count 1 | /* Forms inside Modals */
+Line 1546: count 1 | .ch-form-group {
+Line 1547: count 1 | display: flex;
+Line 1548: count 1 | flex-direction: column;
+Line 1549: count 1 | gap: 0.5rem;
+Line 1550: count 1 | }
+Line 1551: count 1 | 
+Line 1552: count 1 | .ch-label {
+Line 1553: count 1 | font-size: 0.75rem;
+Line 1554: count 1 | font-weight: 700;
+Line 1555: count 1 | text-transform: uppercase;
+Line 1556: count 1 | letter-spacing: 0.05em;
+Line 1557: count 1 | color: var(--text-dim, #94a3b8);
+Line 1558: count 1 | }
+Line 1559: count 1 | 
+Line 1560: count 1 | .ch-text-input {
+Line 1561: count 1 | background: #14161a;
+Line 1562: count 1 | border: 1px solid var(--border, #2e333d);
+Line 1563: count 1 | border-radius: 8px;
+Line 1564: count 1 | color: #fff;
+Line 1565: count 1 | padding: 0.55rem 0.75rem;
+Line 1566: count 1 | font-size: 0.85rem;
+Line 1567: count 1 | outline: none;
+Line 1568: count 1 | transition: border-color 0.15s ease;
+Line 1569: count 1 | }
+Line 1570: count 1 | 
+Line 1571: count 1 | .ch-text-input:focus {
+Line 1572: count 1 | border-color: var(--accent, #6ea8fe);
+Line 1573: count 1 | }
+Line 1574: count 1 | 
+Line 1575: count 1 | .ch-radio-group {
+Line 1576: count 1 | display: flex;
+Line 1577: count 1 | flex-direction: column;
+Line 1578: count 1 | gap: 0.5rem;
+Line 1579: count 1 | background: rgba(0, 0, 0, 0.15);
+Line 1580: count 1 | padding: 0.75rem;
+Line 1581: count 1 | border-radius: 8px;
+Line 1582: count 1 | border: 1px solid rgba(255, 255, 255, 0.02);
+Line 1583: count 1 | }
+Line 1584: count 1 | 
+Line 1585: count 1 | .ch-radio-label {
+Line 1586: count 1 | display: flex;
+Line 1587: count 1 | align-items: flex-start;
+Line 1588: count 1 | gap: 0.75rem;
+Line 1589: count 1 | cursor: pointer;
+Line 1590: count 1 | font-size: 0.85rem;
+Line 1591: count 1 | color: #d1d5db;
+Line 1592: count 1 | padding: 0.6rem 0.75rem;
+Line 1593: count 1 | border-radius: 8px;
+Line 1594: count 1 | border: 1px solid rgba(255, 255, 255, 0.04);
+Line 1595: count 1 | background: rgba(255, 255, 255, 0.01);
+Line 1596: count 1 | transition: all 0.2s ease;
+Line 1597: count 1 | }
+Line 1598: count 1 | 
+Line 1599: count 1 | .ch-radio-label:hover {
+Line 1600: count 1 | background: rgba(255, 255, 255, 0.04);
+Line 1601: count 1 | border-color: rgba(255, 255, 255, 0.12);
+Line 1602: count 1 | }
+Line 1603: count 1 | 
+Line 1604: count 1 | .ch-radio-label.active {
+Line 1605: count 1 | background: rgba(110, 168, 254, 0.08);
+Line 1606: count 1 | border-color: rgba(110, 168, 254, 0.4);
+Line 1607: count 1 | color: #fff;
+Line 1608: count 1 | }
+Line 1609: count 1 | 
+Line 1610: count 1 | .ch-radio-input {
+Line 1611: count 1 | margin-top: 4px;
+Line 1612: count 1 | cursor: pointer;
+Line 1613: count 1 | accent-color: var(--accent, #6ea8fe);
+Line 1614: count 1 | }
+Line 1615: count 1 | 
+Line 1616: count 1 | .ch-radio-desc {
+Line 1617: count 1 | font-size: 0.7rem;
+Line 1618: count 1 | color: var(--text-dim, #94a3b8);
+Line 1619: count 1 | margin-top: 0.1rem;
+Line 1620: count 1 | display: block;
+Line 1621: count 1 | }
+Line 1622: count 1 | 
+Line 1623: count 1 | .ch-btn-submit {
+Line 1624: count 1 | background: var(--accent, #6ea8fe);
+Line 1625: count 1 | color: #14161a;
+Line 1626: count 1 | border: none;
+Line 1627: count 1 | border-radius: 8px;
+Line 1628: count 1 | padding: 0.6rem 1rem;
+Line 1629: count 1 | font-size: 0.85rem;
+Line 1630: count 1 | font-weight: 600;
+Line 1631: count 1 | cursor: pointer;
+Line 1632: count 1 | transition: all 0.2s ease;
+Line 1633: count 1 | width: 100%;
+Line 1634: count 1 | margin-top: 0.5rem;
+Line 1635: count 1 | }
+Line 1636: count 1 | 
+Line 1637: count 1 | .ch-btn-submit:hover:not(:disabled) {
+Line 1638: count 1 | transform: translateY(-1px);
+Line 1639: count 1 | box-shadow: 0 4px 12px rgba(110, 168, 254, 0.3);
+Line 1640: count 1 | }
+Line 1641: count 1 | 
+Line 1642: count 1 | .ch-btn-submit:disabled {
+Line 1643: count 1 | opacity: 0.5;
+Line 1644: count 1 | cursor: not-allowed;
+Line 1645: count 1 | }
+Line 1646: count 1 | 
+Line 1647: count 1 | /* Tabs styling on the main list */
+Line 1648: count 1 | .ch-tabs {
+Line 1649: count 1 | display: flex;
+Line 1650: count 1 | gap: 0.5rem;
+Line 1651: count 1 | margin-bottom: 1rem;
+Line 1652: count 1 | border-bottom: 1px solid var(--border, #2e333d);
+Line 1653: count 1 | padding-bottom: 0.5rem;
+Line 1654: count 1 | }
+Line 1655: count 1 | 
+Line 1656: count 1 | .ch-tab-btn {
+Line 1657: count 1 | background: transparent;
+Line 1658: count 1 | border: none;
+Line 1659: count 1 | color: var(--text-dim, #94a3b8);
+Line 1660: count 1 | font-size: 0.85rem;
+Line 1661: count 1 | font-weight: 600;
+Line 1662: count 1 | cursor: pointer;
+Line 1663: count 1 | padding: 0.35rem 0.75rem;
+Line 1664: count 1 | border-radius: 6px;
+Line 1665: count 1 | transition: all 0.2s ease;
+Line 1666: count 1 | position: relative;
+Line 1667: count 1 | }
+Line 1668: count 1 | 
+Line 1669: count 1 | .ch-tab-btn:hover {
+Line 1670: count 1 | color: #fff;
+Line 1671: count 1 | }
+Line 1672: count 1 | 
+Line 1673: count 1 | .ch-tab-btn.active {
+Line 1674: count 1 | color: var(--accent, #6ea8fe);
+Line 1675: count 1 | background: rgba(110, 168, 254, 0.08);
+Line 1676: count 1 | }
+Line 1677: count 1 | 
+Line 1678: count 1 | /* People List in Find People */
+Line 1679: count 1 | .ch-people-list {
+Line 1680: count 1 | list-style: none;
+Line 1681: count 1 | padding: 0;
+Line 1682: count 1 | margin: 0;
+Line 1683: count 1 | display: flex;
+Line 1684: count 1 | flex-direction: column;
+Line 1685: count 1 | gap: 0.75rem;
+Line 1686: count 1 | overflow-y: auto;
+Line 1687: count 1 | flex: 1;
+Line 1688: count 1 | }
+Line 1689: count 1 | 
+Line 1690: count 1 | .ch-person-card {
+Line 1691: count 1 | display: flex;
+Line 1692: count 1 | align-items: center;
+Line 1693: count 1 | gap: 0.85rem;
+Line 1694: count 1 | padding: 0.85rem;
+Line 1695: count 1 | background: var(--bg-raised);
+Line 1696: count 1 | border: 1px solid var(--border);
+Line 1697: count 1 | border-radius: 12px;
+Line 1698: count 1 | transition: all 0.2s ease;
+Line 1699: count 1 | cursor: pointer;
+Line 1700: count 1 | width: 100%;
+Line 1701: count 1 | box-sizing: border-box;
+Line 1702: count 1 | }
+Line 1703: count 1 | 
+Line 1704: count 1 | .ch-person-card:hover {
+Line 1705: count 1 | border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+Line 1706: count 1 | background: var(--bg-hover);
+Line 1707: count 1 | }
+Line 1708: count 1 | 
+Line 1709: count 1 | .ch-person-avatar {
+Line 1710: count 1 | width: 44px;
+Line 1711: count 1 | height: 44px;
+Line 1712: count 1 | border-radius: 16px;
+Line 1713: count 1 | object-fit: cover;
+Line 1714: count 1 | border: 1px solid var(--border);
+Line 1715: count 1 | }
+Line 1716: count 1 | 
+Line 1717: count 1 | .ch-person-avatar-placeholder {
+Line 1718: count 1 | width: 44px;
+Line 1719: count 1 | height: 44px;
+Line 1720: count 1 | border-radius: 16px;
+Line 1721: count 1 | background: linear-gradient(135deg, #2e333d, #14161a);
+Line 1722: count 1 | display: flex;
+Line 1723: count 1 | align-items: center;
+Line 1724: count 1 | justify-content: center;
+Line 1725: count 1 | font-weight: 700;
+Line 1726: count 1 | font-size: 0.95rem;
+Line 1727: count 1 | color: var(--text-dim, #94a3b8);
+Line 1728: count 1 | border: 1px solid var(--border);
+Line 1729: count 1 | }
+Line 1730: count 1 | 
+Line 1731: count 1 | .ch-person-info {
+Line 1732: count 1 | flex: 1;
+Line 1733: count 1 | min-width: 0;
+Line 1734: count 1 | display: flex;
+Line 1735: count 1 | flex-direction: column;
+Line 1736: count 1 | gap: 0.15rem;
+Line 1737: count 1 | }
+Line 1738: count 1 | 
+Line 1739: count 1 | .ch-person-name {
+Line 1740: count 1 | font-size: 0.85rem;
+Line 1741: count 1 | font-weight: 600;
+Line 1742: count 1 | color: #fff;
+Line 1743: count 1 | margin: 0;
+Line 1744: count 1 | white-space: nowrap;
+Line 1745: count 1 | overflow: hidden;
+Line 1746: count 1 | text-overflow: ellipsis;
+Line 1747: count 1 | }
+Line 1748: count 1 | 
+Line 1749: count 1 | .ch-person-username {
+Line 1750: count 1 | font-size: 0.75rem;
+Line 1751: count 1 | color: var(--text-dim, #94a3b8);
+Line 1752: count 1 | margin: 0;
+Line 1753: count 1 | white-space: nowrap;
+Line 1754: count 1 | overflow: hidden;
+Line 1755: count 1 | text-overflow: ellipsis;
+Line 1756: count 1 | }
+Line 1757: count 1 | 
+Line 1758: count 1 | .ch-person-bio {
+Line 1759: count 1 | font-size: 0.7rem;
+Line 1760: count 1 | color: #d1d5db;
+Line 1761: count 1 | margin: 0.15rem 0 0 0;
+Line 1762: count 1 | overflow: hidden;
+Line 1763: count 1 | text-overflow: ellipsis;
+Line 1764: count 1 | white-space: nowrap;
+Line 1765: count 1 | }
+Line 1766: count 1 | 
+Line 1767: count 1 | .ch-btn-follow-inline {
+Line 1768: count 1 | background: var(--accent, #6ea8fe);
+Line 1769: count 1 | color: #14161a;
+Line 1770: count 1 | border: none;
+Line 1771: count 1 | border-radius: 14px;
+Line 1772: count 1 | padding: 0.3rem 0.8rem;
+Line 1773: count 1 | font-size: 0.7rem;
+Line 1774: count 1 | font-weight: 600;
+Line 1775: count 1 | cursor: pointer;
+Line 1776: count 1 | transition: all 0.15s ease;
+Line 1777: count 1 | white-space: nowrap;
+Line 1778: count 1 | }
+Line 1779: count 1 | 
+Line 1780: count 1 | .ch-btn-follow-inline:hover {
+Line 1781: count 1 | transform: scale(1.05);
+Line 1782: count 1 | }
+Line 1783: count 1 | 
+Line 1784: count 1 | .ch-btn-follow-inline.following {
+Line 1785: count 1 | background: rgba(255, 255, 255, 0.08);
+Line 1786: count 1 | border: 1px solid rgba(255, 255, 255, 0.15);
+Line 1787: count 1 | color: #fff;
+Line 1788: count 1 | }
+Line 1789: count 1 | 
+Line 1790: count 1 | .ch-btn-follow-inline.following:hover {
+Line 1791: count 1 | color: #ef4444;
+Line 1792: count 1 | background: rgba(239, 68, 68, 0.12);
+Line 1793: count 1 | border-color: rgba(239, 68, 68, 0.25);
+Line 1794: count 1 | }
+Line 1795: count 1 | 
+Line 1796: count 1 | /* Invite Friends Modal List */
+Line 1797: count 1 | .ch-invite-list {
+Line 1798: count 1 | list-style: none;
+Line 1799: count 1 | padding: 0;
+Line 1800: count 1 | margin: 0;
+Line 1801: count 1 | display: flex;
+Line 1802: count 1 | flex-direction: column;
+Line 1803: count 1 | gap: 0.5rem;
+Line 1804: count 1 | max-height: 250px;
+Line 1805: count 1 | overflow-y: auto;
+Line 1806: count 1 | }
+Line 1807: count 1 | 
+Line 1808: count 1 | .ch-invite-item {
+Line 1809: count 1 | display: flex;
+Line 1810: count 1 | align-items: center;
+Line 1811: count 1 | justify-content: space-between;
+Line 1812: count 1 | gap: 0.75rem;
+Line 1813: count 1 | padding: 0.5rem 0;
+Line 1814: count 1 | border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+Line 1815: count 1 | }
+Line 1816: count 1 | 
+Line 1817: count 1 | .ch-invite-avatar {
+Line 1818: count 1 | width: 32px;
+Line 1819: count 1 | height: 32px;
+Line 1820: count 1 | border-radius: 12px;
+Line 1821: count 1 | object-fit: cover;
+Line 1822: count 1 | }
+Line 1823: count 1 | 
+Line 1824: count 1 | .ch-invite-avatar-placeholder {
+Line 1825: count 1 | width: 32px;
+Line 1826: count 1 | height: 32px;
+Line 1827: count 1 | border-radius: 12px;
+Line 1828: count 1 | background: #2e333d;
+Line 1829: count 1 | display: flex;
+Line 1830: count 1 | align-items: center;
+Line 1831: count 1 | justify-content: center;
+Line 1832: count 1 | font-size: 0.75rem;
+Line 1833: count 1 | font-weight: 700;
+Line 1834: count 1 | color: var(--text-dim, #94a3b8);
+Line 1835: count 1 | }
+Line 1836: count 1 | 
+Line 1837: count 1 | .ch-invite-user-info {
+Line 1838: count 1 | flex: 1;
+Line 1839: count 1 | min-width: 0;
+Line 1840: count 1 | }
+Line 1841: count 1 | 
+Line 1842: count 1 | .ch-invite-name {
+Line 1843: count 1 | font-size: 0.8rem;
+Line 1844: count 1 | font-weight: 600;
+Line 1845: count 1 | color: #fff;
+Line 1846: count 1 | margin: 0;
+Line 1847: count 1 | white-space: nowrap;
+Line 1848: count 1 | overflow: hidden;
+Line 1849: count 1 | text-overflow: ellipsis;
+Line 1850: count 1 | }
+Line 1851: count 1 | 
+Line 1852: count 1 | .ch-invite-username {
+Line 1853: count 1 | font-size: 0.7rem;
+Line 1854: count 1 | color: var(--text-dim, #94a3b8);
+Line 1855: count 1 | margin: 0;
+Line 1856: count 1 | white-space: nowrap;
+Line 1857: count 1 | overflow: hidden;
+Line 1858: count 1 | text-overflow: ellipsis;
+Line 1859: count 1 | }
+Line 1860: count 1 | 
+Line 1861: count 1 | .ch-btn-invite {
+Line 1862: count 1 | background: var(--accent, #6ea8fe);
+Line 1863: count 1 | color: #14161a;
+Line 1864: count 1 | border: none;
+Line 1865: count 1 | border-radius: 14px;
+Line 1866: count 1 | padding: 0.25rem 0.75rem;
+Line 1867: count 1 | font-size: 0.7rem;
+Line 1868: count 1 | font-weight: 600;
+Line 1869: count 1 | cursor: pointer;
+Line 1870: count 1 | transition: all 0.2s ease;
+Line 1871: count 1 | white-space: nowrap;
+Line 1872: count 1 | }
+Line 1873: count 1 | 
+Line 1874: count 1 | .ch-btn-invite:hover {
+Line 1875: count 1 | transform: scale(1.05);
+Line 1876: count 1 | }
+Line 1877: count 1 | 
+Line 1878: count 1 | .ch-btn-invite.invited {
+Line 1879: count 1 | background: rgba(255, 255, 255, 0.08);
+Line 1880: count 1 | color: var(--text-dim, #94a3b8);
+Line 1881: count 1 | border: 1px solid rgba(255, 255, 255, 0.05);
+Line 1882: count 1 | cursor: default;
+Line 1883: count 1 | }
+Line 1884: count 1 | 
+Line 1885: count 1 | .ch-btn-invite.invited:hover {
+Line 1886: count 1 | transform: none;
+Line 1887: count 1 | }
+Line 1888: count 1 | `}</style>
+Line 1889: count 1 | 
+Line 1890: count 1 | {/* Floating Reactions overlay */}
+Line 1891: count 2 | <div className="ch-floating-reactions-overlay">
+Line 1892: count 2 | {activeReactions.map((r) => {
+Line 1893: count 2 | const rot = (r.x % 30) - 15;
+Line 1894: count 2 | const rotEnd = ((r.x * 2) % 60) - 30;
+Line 1895: count 2 | return (
+Line 1896: count 2 | <span
+Line 1897: count 2 | key={r.id}
+Line 1898: count 2 | className="ch-floating-reaction"
+Line 1899: count 2 | style={{
+Line 1900: count 2 | left: `${r.x}%`,
+Line 1901: count 2 | top: `${r.y}%`,
+Line 1902: count 2 | ...({
+Line 1903: count 2 | '--rot': `${rot}deg`,
+Line 1904: count 2 | '--rot-end': `${rotEnd}deg`,
+Line 1905: count 2 | } as React.CSSProperties),
+Line 1906: count 2 | }}
+Line 1907: count 2 | >
+Line 1908: count 2 | {r.emoji}
+Line 1909: count 2 | </span>
+Line 1910: count 2 | );
+Line 1911: count 2 | })}
+Line 1912: count 1 | </div>
+Line 1913: count 1 | 
+Line 1914: count 1 | {/* Speaker invite toast — floats over the content */}
+Line 1915: count 1 | {renderSpeakerInviteToast()}
+Line 1916: count 1 | 
+Line 1917: count 1 | {/* Header Bar */}
+Line 1918: count 2 | <div className="ch-room-header-bar">
+Line 1919: count 3 | <div style={{ display: 'flex', gap: '0.5rem' }}>
+Line 1920: count 3 | <button
+Line 1921: count 3 | className="ch-btn-leave-quietly"
+Line 1922: count 3 | onClick={() => void leaveRoom(activeChannel)}
+Line 1923: count 3 | disabled={voiceLoading}
+Line 1924: count 3 | >
+Line 1925: count 3 | ✌️ Leave quietly
+Line 1926: count 3 | </button>
+Line 1927: count 3 | <button
+Line 1928: count 3 | className="ch-btn-action"
+Line 1929: count 3 | style={{
+Line 1930: count 3 | padding: '0.4rem 0.8rem',
+Line 1931: count 3 | borderRadius: '20px',
+Line 1932: count 3 | fontSize: '0.75rem',
+Line 1933: count 3 | fontWeight: 600,
+Line 1934: count 3 | flex: 'none',
+Line 1935: count 3 | background: 'rgba(255, 255, 255, 0.05)',
+Line 1936: count 3 | }}
+Line 1937: count 3 | onClick={handleOpenInvite}
+Line 1938: count 3 | >
+Line 1939: count 3 | ➕ Invite Friends
+Line 1940: count 3 | </button>
+Line 1941: count 3 | {(() => {
+Line 1942: count 3 | const amIMod = activeRoomInfo?.users.find((u) => u.user_id === myUserId)?.is_moderator;
+Line 1943: count 3 | if (amIMod) {
+Line 1944: count 3 | return (
+Line 1945: count 3 | <button
+Line 1946: count 3 | className="ch-btn-action"
+Line 1947: count 3 | style={{ padding: '0.4rem 0.8rem', borderRadius: '20px', fontSize: '0.75rem', fontWeight: 600, flex: 'none', background: 'rgba(255, 255, 255, 0.05)' }}
+Line 1948: count 3 | onClick={handleOpenRoomSettings}
+Line 1949: count 3 | >
+Line 1950: count 3 | ⚙ Settings
+Line 1951: count 3 | </button>
+Line 1952: count 3 | );
+Line 1953: count 3 | }
+Line 1954: count 3 | return null;
+Line 1955: count 3 | })()}
+Line 1956: count 2 | </div>
+Line 1957: count 2 | 
+Line 1958: count 3 | <div className="ch-room-title-section">
+Line 1959: count 3 | {currentRoom?.club?.name && (
+Line 1960: count 3 | <p className="ch-room-club-text">{currentRoom.club.name}</p>
+Line 1961: count 3 | )}
+Line 1962: count 3 | <h3 className="ch-room-title-text" title={currentRoom?.topic || '(Untitled Room)'}>
+Line 1963: count 3 | {currentRoom?.topic || '(Untitled Room)'}
+Line 1964: count 3 | </h3>
+Line 1965: count 2 | </div>
+Line 1966: count 2 | 
+Line 1967: count 2 | <span
+Line 1968: count 2 | className="ch-pulse-dot"
+Line 1969: count 2 | style={{
+Line 1970: count 2 | width: '8px',
+Line 1971: count 2 | height: '8px',
+Line 1972: count 2 | backgroundColor: '#10b981',
+Line 1973: count 2 | boxShadow: '0 0 8px #10b981',
+Line 1974: count 2 | }}
+Line 1975: count 2 | />
+Line 1976: count 1 | </div>
+Line 1977: count 1 | 
+Line 1978: count 1 | {/* Main Content Area */}
+Line 1979: count 2 | <div className="ch-room-scroller" style={{ display: 'flex', flexDirection: 'column' }}>
+Line 1980: count 2 | 
+Line 1981: count 2 | {/* Horizontal Tabs */}
+Line 1982: count 3 | <div style={{ display: 'flex', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+Line 1983: count 3 | <button
+Line 1984: count 3 | onClick={() => setActiveRoomTab('participants')}
+Line 1985: count 3 | style={{ flex: 1, padding: '0.75rem', background: activeRoomTab === 'participants' ? '#1d2026' : 'transparent', color: activeRoomTab === 'participants' ? '#fff' : '#94a3b8', border: 'none', cursor: 'pointer', fontWeight: activeRoomTab === 'participants' ? 600 : 400 }}
+Line 1986: count 3 | >
+Line 1987: count 3 | 👥 Participants ({speakers.length + audience.length})
+Line 1988: count 3 | </button>
+Line 1989: count 3 | <button
+Line 1990: count 3 | onClick={() => setActiveRoomTab('chat')}
+Line 1991: count 3 | style={{ flex: 1, padding: '0.75rem', background: activeRoomTab === 'chat' ? '#1d2026' : 'transparent', color: activeRoomTab === 'chat' ? '#fff' : '#94a3b8', border: 'none', cursor: 'pointer', fontWeight: activeRoomTab === 'chat' ? 600 : 400 }}
+Line 1992: count 3 | >
+Line 1993: count 3 | 💬 Live Chat
+Line 1994: count 3 | </button>
+Line 1995: count 3 | <button
+Line 1996: count 3 | onClick={() => setActiveRoomTab('agent')}
+Line 1997: count 3 | style={{ flex: 1, padding: '0.75rem', background: activeRoomTab === 'agent' ? '#1d2026' : 'transparent', color: activeRoomTab === 'agent' ? '#fff' : '#94a3b8', border: 'none', cursor: 'pointer', fontWeight: activeRoomTab === 'agent' ? 600 : 400 }}
+Line 1998: count 3 | >
+Line 1999: count 3 | 🤖 Agent Settings
+Line 2000: count 3 | </button>
+Line 2001: count 2 | </div>
+Line 2002: count 2 | 
+Line 2003: count 3 | <div style={{ flex: 1, overflowY: 'auto', position: 'relative' }}>
+Line 2004: count 3 | {/* Participants Area */}
+Line 2005: count 3 | {activeRoomTab === 'participants' && (
+Line 2006: count 4 | <div className="ch-participants-section">
+Line 2007: count 4 | {/* Speakers */}
+Line 2008: count 4 | {speakers.length > 0 && (
+Line 2009: count 4 | <>
+Line 2010: count 5 | <div className="ch-section-heading" style={{ borderTop: 'none', background: 'transparent', padding: '1rem 1rem 0.5rem 1rem' }}>
+Line 2011: count 5 | <span style={{ fontSize: '0.75rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Speakers ({speakers.length})</span>
+Line 2012: count 4 | </div>
+Line 2013: count 4 | <div className="ch-speakers-grid">{speakers.map((u) => renderUserCard(u, true))}</div>
+Line 2014: count 4 | </>
+Line 2015: count 4 | )}
+Line 2016: count 4 | 
+Line 2017: count 4 | {/* Audience */}
+Line 2018: count 4 | {audience.length > 0 && (
+Line 2019: count 4 | <>
+Line 2020: count 5 | <div className="ch-section-heading" style={{ marginTop: '0.5rem', borderTop: 'none', background: 'transparent', padding: '1rem 1rem 0.5rem 1rem' }}>
+Line 2021: count 5 | <span style={{ fontSize: '0.75rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Audience ({audience.length})</span>
+Line 2022: count 4 | </div>
+Line 2023: count 5 | <div className="ch-listeners-grid">
+Line 2024: count 5 | {audience.map((u) => renderUserCard(u, false))}
+Line 2025: count 4 | </div>
+Line 2026: count 4 | </>
+Line 2027: count 4 | )}
+Line 2028: count 3 | </div>
+Line 2029: count 3 | )}
+Line 2030: count 3 | 
+Line 2031: count 3 | {/* Chat / Comments Feed */}
+Line 2032: count 3 | {activeRoomTab === 'chat' && (
+Line 2033: count 4 | <div className="ch-chat-section" style={{ height: '100%' }}>
+Line 2034: count 5 | <div className="ch-chat-scroll" style={{ height: '100%' }}>
+Line 2035: count 5 | {comments.length === 0 ? (
+Line 2036: count 6 | <div className="ch-chat-empty">
+Line 2037: count 6 | 💬
+Line 2038: count 6 | <span>No messages yet. Be the first to start the chat!</span>
+Line 2039: count 5 | </div>
+Line 2040: count 5 | ) : (
+Line 2041: count 5 | comments.map((c) => (
+Line 2042: count 6 | <div key={c.id} className="ch-comment-item">
+Line 2043: count 6 | {c.userPhoto ? (
+Line 2044: count 6 | <img className="ch-comment-avatar" src={c.userPhoto} alt="" />
+Line 2045: count 6 | ) : (
+Line 2046: count 7 | <div
+Line 2047: count 7 | className="ch-comment-avatar"
+Line 2048: count 7 | style={{
+Line 2049: count 7 | display: 'flex',
+Line 2050: count 7 | alignItems: 'center',
+Line 2051: count 7 | justifyContent: 'center',
+Line 2052: count 7 | background: '#2e333d',
+Line 2053: count 7 | color: 'var(--text-dim)',
+Line 2054: count 7 | fontSize: '0.65rem',
+Line 2055: count 7 | fontWeight: 600,
+Line 2056: count 7 | }}
+Line 2057: count 7 | >
+Line 2058: count 7 | {c.userName.slice(0, 2).toUpperCase()}
+Line 2059: count 6 | </div>
+Line 2060: count 6 | )}
+Line 2061: count 7 | <div className="ch-comment-content">
+Line 2062: count 8 | <div className="ch-comment-header">
+Line 2063: count 8 | <span className="ch-comment-user">{c.userName}</span>
+Line 2064: count 8 | <span className="ch-comment-time">
+Line 2065: count 8 | {new Date(c.timestamp).toLocaleTimeString([], {
+Line 2066: count 8 | hour: '2-digit',
+Line 2067: count 8 | minute: '2-digit',
+Line 2068: count 8 | })}
+Line 2069: count 8 | </span>
+Line 2070: count 7 | </div>
+Line 2071: count 7 | <div className="ch-comment-bubble">{c.text}</div>
+Line 2072: count 6 | </div>
+Line 2073: count 5 | </div>
+Line 2074: count 5 | ))
+Line 2075: count 5 | )}
+Line 2076: count 6 | <div ref={chatEndRef} />
+Line 2077: count 5 | </div>
+Line 2078: count 4 | </div>
+Line 2079: count 4 | )}
+Line 2080: count 4 | 
+Line 2081: count 4 | {/* Agent Settings Panel */}
+Line 2082: count 4 | {activeRoomTab === 'agent' && (
+Line 2083: count 5 | <div className="ch-agent-section">
+Line 2084: count 6 | <div style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+Line 2085: count 7 | <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '1rem', background: 'rgba(255,255,255,0.03)', borderRadius: '8px' }}>
+Line 2086: count 7 | <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>Enable Voice Agent</span>
+Line 2087: count 7 | <button
+Line 2088: count 7 | className={`ch-btn-action ${agentEnabled ? 'mic-active' : ''}`}
+Line 2089: count 7 | onClick={() => setAgentEnabled(!agentEnabled)}
+Line 2090: count 7 | style={{ padding: '0.5rem 1rem', fontSize: '0.8rem' }}
+Line 2091: count 7 | >
+Line 2092: count 7 | {agentEnabled ? '🤖 ON' : '🤖 OFF'}
+Line 2093: count 7 | </button>
+Line 2094: count 6 | </div>
+Line 2095: count 6 | 
+Line 2096: count 6 | {agentEnabled && (
+Line 2097: count 7 | <div style={{ padding: '1rem', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+Line 2098: count 8 | <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '1rem' }}>
+Line 2099: count 8 | <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem', color: '#f1f5f9', cursor: 'pointer' }}>
+Line 2100: count 8 | <input
+Line 2101: count 8 | type="checkbox"
+Line 2102: count 8 | checked={agentRespondsToVoice}
+Line 2103: count 8 | onChange={(e) => setAgentRespondsToVoice(e.target.checked)}
+Line 2104: count 8 | style={{ accentColor: 'var(--accent)' }}
+Line 2105: count 8 | />
+Line 2106: count 8 | Respond to Voice (Stage)
+Line 2107: count 8 | </label>
+Line 2108: count 8 | <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem', color: '#f1f5f9', cursor: 'pointer' }}>
+Line 2109: count 8 | <input
+Line 2110: count 8 | type="checkbox"
+Line 2111: count 8 | checked={agentRespondsToChat}
+Line 2112: count 8 | onChange={(e) => setAgentRespondsToChat(e.target.checked)}
+Line 2113: count 8 | style={{ accentColor: 'var(--accent)' }}
+Line 2114: count 8 | />
+Line 2115: count 8 | Respond to Live Chat
+Line 2116: count 8 | </label>
+Line 2117: count 7 | </div>
+Line 2118: count 7 | 
+Line 2119: count 8 | <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+Line 2120: count 9 | <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+Line 2121: count 9 | <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>System Prompt / Persona:</span>
+Line 2122: count 10 | <div style={{ display: 'flex', gap: '0.5rem' }}>
+Line 2123: count 10 | <select
+Line 2124: count 10 | onChange={(e) => { if (e.target.value) setAgentSystemPrompt(e.target.value); }}
+Line 2125: count 10 | style={{ padding: '0.2rem', fontSize: '0.7rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d' }}
+Line 2126: count 10 | >
+Line 2127: count 10 | <option value="">Load Preset...</option>
+Line 2128: count 10 | {agentPromptPresets.map((p, i) => (
+Line 2129: count 10 | <option key={i} value={p.prompt}>{p.name}</option>
+Line 2130: count 10 | ))}
+Line 2131: count 10 | </select>
+Line 2132: count 10 | <button
+Line 2133: count 10 | className="ch-btn-action"
+Line 2134: count 10 | style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}
+Line 2135: count 10 | onClick={() => {
+Line 2136: count 10 | const name = prompt('Name for this preset:');
+Line 2137: count 10 | if (name) {
+Line 2138: count 10 | const newPresets = [...agentPromptPresets, { name, prompt: agentSystemPrompt }];
+Line 2139: count 10 | setAgentPromptPresets(newPresets);
+Line 2140: count 10 | localStorage.setItem('agentPresets', JSON.stringify(newPresets));
+Line 2141: count 10 | }
+Line 2142: count 10 | }}
+Line 2143: count 10 | >
+Line 2144: count 10 | Save
+Line 2145: count 10 | </button>
+Line 2146: count 9 | </div>
+Line 2147: count 8 | </div>
+Line 2148: count 8 | <textarea
+Line 2149: count 8 | value={agentSystemPrompt}
+Line 2150: count 8 | onChange={(e) => setAgentSystemPrompt(e.target.value)}
+Line 2151: count 8 | placeholder="System Prompt / Persona"
+Line 2152: count 8 | style={{ width: '100%', minHeight: '80px', padding: '0.75rem', fontSize: '0.8rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d', borderRadius: '8px', resize: 'vertical' }}
+Line 2153: count 8 | />
+Line 2154: count 7 | </div>
+Line 2155: count 7 | 
+Line 2156: count 8 | <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+Line 2157: count 9 | <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', flex: 1, minWidth: '120px' }}>
+Line 2158: count 9 | <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>Pause Detection:</span>
+Line 2159: count 9 | <select
+Line 2160: count 9 | style={{ width: '100%', padding: '0.5rem', fontSize: '0.8rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d', borderRadius: '4px' }}
+Line 2161: count 9 | value={sttChunkMs}
+Line 2162: count 9 | onChange={(e) => setSttChunkMs(Number(e.target.value))}
+Line 2163: count 9 | >
+Line 2164: count 9 | <option value={2000}>Fast (2s pause)</option>
+Line 2165: count 9 | <option value={5000}>Normal (5s pause)</option>
+Line 2166: count 9 | <option value={8000}>Patient (8s pause)</option>
+Line 2167: count 9 | </select>
+Line 2168: count 8 | </div>
+Line 2169: count 8 | 
+Line 2170: count 9 | <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', flex: 1, minWidth: '100px' }}>
+Line 2171: count 9 | <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>Temperature:</span>
+Line 2172: count 9 | <input type="number" min="0" max="2" step="0.1" value={agentTemperature} onChange={(e) => setAgentTemperature(Number(e.target.value))} style={{ width: '100%', padding: '0.5rem', fontSize: '0.8rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d', borderRadius: '4px' }} />
+Line 2173: count 8 | </div>
+Line 2174: count 8 | 
+Line 2175: count 9 | <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', flex: 1, minWidth: '100px' }}>
+Line 2176: count 9 | <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>Max Tokens:</span>
+Line 2177: count 9 | <input type="number" min="20" max="500" step="10" value={agentMaxTokens} onChange={(e) => setAgentMaxTokens(Number(e.target.value))} style={{ width: '100%', padding: '0.5rem', fontSize: '0.8rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d', borderRadius: '4px' }} />
+Line 2178: count 8 | </div>
+Line 2179: count 7 | </div>
+Line 2180: count 7 | 
+Line 2181: count 8 | <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '1rem' }}>
+Line 2182: count 8 | <button
+Line 2183: count 8 | className="ch-btn-action"
+Line 2184: count 8 | style={{ padding: '0.6rem 1.2rem', fontSize: '0.85rem', background: '#e11d48', color: 'white', border: 'none', borderRadius: '20px', cursor: 'pointer' }}
+Line 2185: count 8 | onClick={stopAgentAudio}
+Line 2186: count 8 | disabled={!isAgentSpeaking}
+Line 2187: count 8 | >
+Line 2188: count 8 | ✋ Interrupt
+Line 2189: count 8 | </button>
+Line 2190: count 8 | <button
+Line 2191: count 8 | className="ch-btn-action"
+Line 2192: count 8 | style={{ padding: '0.6rem 1.2rem', fontSize: '0.85rem', background: '#2e333d', border: 'none', borderRadius: '20px', cursor: 'pointer' }}
+Line 2193: count 8 | onClick={() => triggerAgentResponse(" ")}
+Line 2194: count 8 | disabled={isAgentSpeaking}
+Line 2195: count 8 | >
+Line 2196: count 8 | 🗣️ Speak Now
+Line 2197: count 8 | </button>
+Line 2198: count 7 | </div>
+Line 2199: count 7 | {!isCurrentUserSpeaker && (
+Line 2200: count 7 | <p style={{ fontSize: '0.75rem', color: '#94a3b8', margin: '0', textAlign: 'right' }}>
+Line 2201: count 7 | ℹ️ You are in the audience. Agent will respond in text chat only.
+Line 2202: count 7 | </p>
+Line 2203: count 7 | )}
+Line 2204: count 6 | </div>
+Line 2205: count 6 | )}
+Line 2206: count 5 | </div>
+Line 2207: count 4 | </div>
+Line 2208: count 4 | )}
+Line 2209: count 3 | </div>
+Line 2210: count 2 | </div>
+Line 2211: count 2 | 
+Line 2212: count 2 | {/* Bottom Interactive Area */}
+Line 2213: count 3 | <div className="ch-room-bottom-panel">
+Line 2214: count 3 | {/* Reaction Bar */}
+Line 2215: count 4 | <div className="ch-reactions-row">
+Line 2216: count 4 | {REACTIONS.map((emoji) => (
+Line 2217: count 4 | <button
+Line 2218: count 4 | key={emoji}
+Line 2219: count 4 | className="ch-reaction-btn"
+Line 2220: count 4 | onClick={() => void sendReaction(emoji)}
+Line 2221: count 4 | title={`Send ${emoji}`}
+Line 2222: count 4 | >
+Line 2223: count 4 | {emoji}
+Line 2224: count 4 | </button>
+Line 2225: count 4 | ))}
+Line 2226: count 3 | </div>
+Line 2227: count 3 | 
+Line 2228: count 3 | {/* Chat Input */}
+Line 2229: count 3 | <form className="ch-input-row" onSubmit={handleSendComment}>
+Line 2230: count 3 | <input
+Line 2231: count 3 | className="ch-comment-input"
+Line 2232: count 3 | type="text"
+Line 2233: count 3 | placeholder="Send a chat message..."
+Line 2234: count 3 | value={commentText}
+Line 2235: count 3 | onChange={(e) => setCommentText(e.target.value)}
+Line 2236: count 3 | disabled={voiceLoading}
+Line 2237: count 3 | />
+Line 2238: count 3 | <button
+Line 2239: count 3 | className="ch-btn-send"
+Line 2240: count 3 | type="submit"
+Line 2241: count 3 | disabled={voiceLoading || !commentText.trim()}
+Line 2242: count 3 | title="Send comment"
+Line 2243: count 3 | >
+Line 2244: count 3 | <svg
+Line 2245: count 3 | width="14"
+Line 2246: count 3 | height="14"
+Line 2247: count 3 | viewBox="0 0 24 24"
+Line 2248: count 3 | fill="none"
+Line 2249: count 3 | stroke="currentColor"
+Line 2250: count 3 | strokeWidth="2.5"
+Line 2251: count 3 | strokeLinecap="round"
+Line 2252: count 3 | strokeLinejoin="round"
+Line 2253: count 3 | >
+Line 2254: count 3 | <line x1="22" y1="2" x2="11" y2="13"></line>
+Line 2255: count 3 | <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+Line 2256: count 3 | </svg>
+Line 2257: count 3 | </button>
+Line 2258: count 3 | </form>
+Line 2259: count 3 | 
+Line 2260: count 3 | {/* Action buttons (Mute/Raise hand/Accept) */}
+Line 2261: count 4 | <div className="ch-stage-actions-row">
+Line 2262: count 5 | <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+Line 2263: count 4 | </div>
+Line 2264: count 4 | {isCurrentUserSpeaker ? (
+Line 2265: count 4 | <button
+Line 2266: count 4 | className={`ch-btn-action ${isMuted ? 'mic-muted' : 'mic-active'}`}
+Line 2267: count 4 | onClick={() => void toggleMute()}
+Line 2268: count 4 | disabled={voiceLoading}
+Line 2269: count 4 | >
+Line 2270: count 4 | {isMuted ? '🎙️ Unmute Mic' : '🎙️ Mic Active (Mute)'}
+Line 2271: count 4 | </button>
+Line 2272: count 4 | ) : (
+Line 2273: count 4 | <>
+Line 2274: count 4 | <button
+Line 2275: count 4 | className={`ch-btn-action ${handRaised ? 'hand-raised' : ''}`}
+Line 2276: count 4 | onClick={() => void raiseHand(!handRaised)}
+Line 2277: count 4 | disabled={voiceLoading}
+Line 2278: count 4 | >
+Line 2279: count 4 | 🖐️ {handRaised ? 'Lower Hand' : 'Raise Hand'}
+Line 2280: count 4 | </button>
+Line 2281: count 4 | {moderators.length > 0 && (
+Line 2282: count 4 | <button
+Line 2283: count 4 | className="ch-btn-action join-stage"
+Line 2284: count 4 | onClick={() => void acceptSpeakerInvite(moderators[0].user_id!)}
+Line 2285: count 4 | disabled={voiceLoading}
+Line 2286: count 4 | >
+Line 2287: count 4 | 📢 Join Stage
+Line 2288: count 4 | </button>
+Line 2289: count 4 | )}
+Line 2290: count 4 | </>
+Line 2291: count 4 | )}
+Line 2292: count 3 | </div>
+Line 2293: count 2 | </div>
+Line 2294: count 2 | 
+Line 2295: count 2 | {voiceError && (
+Line 2296: count 3 | <div
+Line 2297: count 3 | style={{
+Line 2298: count 3 | padding: '0.5rem 1rem',
+Line 2299: count 3 | background: '#7f1d1d',
+Line 2300: count 3 | color: '#fca5a5',
+Line 2301: count 3 | fontSize: '0.8rem',
+Line 2302: count 3 | textAlign: 'center',
+Line 2303: count 3 | }}
+Line 2304: count 3 | >
+Line 2305: count 3 | Voice Error: {voiceError}
+Line 2306: count 2 | </div>
+Line 2307: count 2 | )}
+Line 2308: count 2 | 
+Line 2309: count 2 | {renderProfileOverlay()}
+Line 2310: count 2 | 
+Line 2311: count 2 | {loadingProfile && (
+Line 2312: count 3 | <div className="ch-profile-overlay">
+Line 2313: count 4 | <div className="ch-profile-loading">
+Line 2314: count 5 | <div className="ch-spinner" />
+Line 2315: count 5 | <span>Fetching profile...</span>
+Line 2316: count 4 | </div>
+Line 2317: count 3 | </div>
+Line 2318: count 3 | )}
+Line 2319: count 3 | 
+Line 2320: count 3 | {showInviteModal && (
+Line 2321: count 4 | <div className="ch-modal-overlay" onClick={() => setShowInviteModal(false)}>
+Line 2322: count 5 | <div className="ch-modal-card" onClick={(e) => e.stopPropagation()}>
+Line 2323: count 6 | <div className="ch-modal-header">
+Line 2324: count 6 | <h3 className="ch-modal-title">Invite Friends</h3>
+Line 2325: count 6 | <button className="ch-modal-close" onClick={() => setShowInviteModal(false)}>
+Line 2326: count 6 | ✕
+Line 2327: count 6 | </button>
+Line 2328: count 5 | </div>
+Line 2329: count 6 | <div className="ch-modal-body">
+Line 2330: count 6 | {loadingFollowing ? (
+Line 2331: count 7 | <div className="ch-profile-loading">
+Line 2332: count 8 | <div className="ch-spinner" />
+Line 2333: count 8 | <span>Loading friends...</span>
+Line 2334: count 7 | </div>
+Line 2335: count 7 | ) : followingUsers.length === 0 ? (
+Line 2336: count 7 | <p className="dashboard-hint" style={{ textAlign: 'center' }}>
+Line 2337: count 7 | You are not following anyone yet.
+Line 2338: count 7 | </p>
+Line 2339: count 7 | ) : (
+Line 2340: count 7 | <ul className="ch-invite-list">
+Line 2341: count 7 | {followingUsers.map((u) => {
+Line 2342: count 7 | const initials = u.name
+Line 2343: count 7 | ? u.name
+Line 2344: count 7 | .split(' ')
+Line 2345: count 7 | .map((n) => n[0])
+Line 2346: count 7 | .join('')
+Line 2347: count 7 | .slice(0, 2)
+Line 2348: count 7 | : '?';
+Line 2349: count 7 | const isInvited = invitedUserIds.has(u.user_id!);
+Line 2350: count 7 | return (
+Line 2351: count 7 | <li key={u.user_id} className="ch-invite-item">
+Line 2352: count 7 | {u.photo_url ? (
+Line 2353: count 7 | <img className="ch-invite-avatar" src={u.photo_url} alt="" />
+Line 2354: count 7 | ) : (
+Line 2355: count 7 | <div className="ch-invite-avatar-placeholder">{initials}</div>
+Line 2356: count 7 | )}
+Line 2357: count 8 | <div className="ch-invite-user-info">
+Line 2358: count 8 | <p className="ch-invite-name">{u.name}</p>
+Line 2359: count 8 | <p className="ch-invite-username">@{u.username}</p>
+Line 2360: count 7 | </div>
+Line 2361: count 7 | <button
+Line 2362: count 7 | className={`ch-btn-invite ${isInvited ? 'invited' : ''}`}
+Line 2363: count 7 | onClick={() => !isInvited && handleSendInvite(u.user_id!)}
+Line 2364: count 7 | disabled={isInvited}
+Line 2365: count 7 | >
+Line 2366: count 7 | {isInvited ? 'Invited' : 'Ping'}
+Line 2367: count 7 | </button>
+Line 2368: count 7 | </li>
+Line 2369: count 7 | );
+Line 2370: count 7 | })}
+Line 2371: count 7 | </ul>
+Line 2372: count 7 | )}
+Line 2373: count 6 | </div>
+Line 2374: count 5 | </div>
+Line 2375: count 4 | </div>
+Line 2376: count 4 | )}
+Line 2377: count 4 | 
+Line 2378: count 4 | {/* Room Settings Modal */}
+Line 2379: count 4 | {showRoomSettingsModal && (
+Line 2380: count 5 | <div className="ch-modal-overlay" onClick={() => setShowRoomSettingsModal(false)}>
+Line 2381: count 6 | <div className="ch-modal-card ch-settings-modal" onClick={(e) => e.stopPropagation()}>
+Line 2382: count 7 | <div className="ch-modal-header">
+Line 2383: count 7 | <h3 className="ch-modal-title">Room Settings</h3>
+Line 2384: count 7 | <button className="ch-modal-close" onClick={() => setShowRoomSettingsModal(false)}>✕</button>
+Line 2385: count 6 | </div>
+Line 2386: count 7 | <div className="ch-modal-body">
+Line 2387: count 7 | <form onSubmit={handleSaveRoomSettings} className="ch-start-room-form">
+Line 2388: count 8 | <div className="ch-form-group">
+Line 2389: count 8 | <label>Room Topic</label>
+Line 2390: count 8 | <input type="text" placeholder="What is this room about?" value={settingTopic} onChange={(e) => setSettingTopic(e.target.value)} className="ch-input" />
+Line 2391: count 7 | </div>
+Line 2392: count 8 | <div className="ch-form-group">
+Line 2393: count 8 | <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+Line 2394: count 8 | <input type="checkbox" checked={settingHandraiseEnabled} onChange={(e) => setSettingHandraiseEnabled(e.target.checked)} /> Enable Hand Raising
+Line 2395: count 8 | </label>
+Line 2396: count 7 | </div>
+Line 2397: count 7 | {settingHandraiseEnabled && (
+Line 2398: count 8 | <div className="ch-form-group">
+Line 2399: count 8 | <label>Who can raise hands?</label>
+Line 2400: count 8 | <select value={settingHandraisePermission} onChange={(e) => setSettingHandraisePermission(Number(e.target.value))} className="ch-input" style={{ width: '100%' }}>
+Line 2401: count 8 | <option value={1}>Everyone</option>
+Line 2402: count 8 | <option value={2}>Followed by Speakers</option>
+Line 2403: count 8 | </select>
+Line 2404: count 7 | </div>
+Line 2405: count 7 | )}
+Line 2406: count 8 | <div className="ch-form-group">
+Line 2407: count 8 | <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+Line 2408: count 8 | <input type="checkbox" checked={settingChatEnabled} onChange={(e) => setSettingChatEnabled(e.target.checked)} /> Enable Room Chat
+Line 2409: count 8 | </label>
+Line 2410: count 7 | </div>
+Line 2411: count 7 | <button type="submit" className="ch-btn-submit" disabled={savingSettings}>{savingSettings ? 'Saving...' : 'Save Settings'}</button>
+Line 2412: count 7 | </form>
+Line 2413: count 6 | </div>
+Line 2414: count 5 | </div>
+Line 2415: count 4 | </div>
+Line 2416: count 4 | )}
+Line 2417: count 3 | </div>
+Line 2418: count 3 | );
+Line 2419: count 3 | }
+Line 2420: count 3 | 

@@ -1,0 +1,112 @@
+ 780 | <div className="ch-active-room-container">
+1891 |   <div className="ch-floating-reactions-overlay">
+1912 |     </div>
+1918 |   <div className="ch-room-header-bar">
+1919 |     <div style={{ display: 'flex', gap: '0.5rem' }}>
+1956 |       </div>
+1958 |     <div className="ch-room-title-section">
+1965 |       </div>
+1976 |     </div>
+1979 |   <div className="ch-room-scroller" style={{ display: 'flex', flexDirection: 'column' }}>
+1982 |     <div style={{ display: 'flex', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+2001 |       </div>
+2003 |     <div style={{ flex: 1, overflowY: 'auto', position: 'relative' }}>
+2006 |       <div className="ch-participants-section">
+2010 |         <div className="ch-section-heading" style={{ borderTop: 'none', background: 'transparent', padding: '1rem 1rem 0.5rem 1rem' }}>
+2012 |           </div>
+2013 |         <div className="ch-speakers-grid">{speakers.map((u) => renderUserCard(u, true))}</div>
+2020 |         <div className="ch-section-heading" style={{ marginTop: '0.5rem', borderTop: 'none', background: 'transparent', padding: '1rem 1rem 0.5rem 1rem' }}>
+2022 |           </div>
+2023 |         <div className="ch-listeners-grid">
+2025 |           </div>
+2028 |         </div>
+2033 |       <div className="ch-chat-section" style={{ height: '100%' }}>
+2034 |         <div className="ch-chat-scroll" style={{ height: '100%' }}>
+2036 |           <div className="ch-chat-empty">
+2039 |             </div>
+2042 |           <div key={c.id} className="ch-comment-item">
+2046 |             <div
+2059 |               </div>
+2061 |             <div className="ch-comment-content">
+2062 |               <div className="ch-comment-header">
+2070 |                 </div>
+2071 |               <div className="ch-comment-bubble">{c.text}</div>
+2072 |               </div>
+2073 |             </div>
+2076 |           <div ref={chatEndRef} />
+2077 |             </div>
+2078 |           </div>
+2083 |         <div className="ch-agent-section">
+2084 |           <div style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+2085 |             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '1rem', background: 'rgba(255,255,255,0.03)', borderRadius: '8px' }}>
+2094 |               </div>
+2097 |             <div style={{ padding: '1rem', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+2098 |               <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '1rem' }}>
+2117 |                 </div>
+2119 |               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+2120 |                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+2122 |                   <div style={{ display: 'flex', gap: '0.5rem' }}>
+2146 |                     </div>
+2147 |                   </div>
+2154 |                 </div>
+2156 |               <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+2157 |                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', flex: 1, minWidth: '120px' }}>
+2168 |                   </div>
+2170 |                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', flex: 1, minWidth: '100px' }}>
+2173 |                   </div>
+2175 |                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', flex: 1, minWidth: '100px' }}>
+2178 |                   </div>
+2179 |                 </div>
+2181 |               <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '1rem' }}>
+2198 |                 </div>
+2204 |               </div>
+2206 |             </div>
+2207 |           </div>
+2209 |         </div>
+2210 |       </div>
+2213 |     <div className="ch-room-bottom-panel">
+2215 |       <div className="ch-reactions-row">
+2226 |         </div>
+2261 |       <div className="ch-stage-actions-row">
+2262 |         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+2263 |           </div>
+2292 |         </div>
+2293 |       </div>
+2296 |     <div
+2306 |       </div>
+2312 |     <div className="ch-profile-overlay">
+2313 |       <div className="ch-profile-loading">
+2314 |         <div className="ch-spinner" />
+2316 |           </div>
+2317 |         </div>
+2321 |       <div className="ch-modal-overlay" onClick={() => setShowInviteModal(false)}>
+2322 |         <div className="ch-modal-card" onClick={(e) => e.stopPropagation()}>
+2323 |           <div className="ch-modal-header">
+2328 |             </div>
+2329 |           <div className="ch-modal-body">
+2331 |             <div className="ch-profile-loading">
+2332 |               <div className="ch-spinner" />
+2334 |                 </div>
+2355 |               <div className="ch-invite-avatar-placeholder">{initials}</div>
+2357 |               <div className="ch-invite-user-info">
+2360 |                 </div>
+2373 |               </div>
+2374 |             </div>
+2375 |           </div>
+2380 |         <div className="ch-modal-overlay" onClick={() => setShowRoomSettingsModal(false)}>
+2381 |           <div className="ch-modal-card ch-settings-modal" onClick={(e) => e.stopPropagation()}>
+2382 |             <div className="ch-modal-header">
+2385 |               </div>
+2386 |             <div className="ch-modal-body">
+2388 |               <div className="ch-form-group">
+2391 |                 </div>
+2392 |               <div className="ch-form-group">
+2396 |                 </div>
+2398 |               <div className="ch-form-group">
+2404 |                 </div>
+2406 |               <div className="ch-form-group">
+2410 |                 </div>
+2413 |               </div>
+2414 |             </div>
+2415 |           </div>
+2417 |         </div>

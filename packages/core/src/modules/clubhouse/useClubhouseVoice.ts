@@ -565,13 +565,13 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       try {
         const chatRes = await getClubhouseChannelChat(channelName);
         if (chatRes.comments && chatRes.comments.length > 0) {
-          const mappedComments = chatRes.comments.map(msg => ({
-            id: msg.message_id || String(Math.random()),
-            userName: msg.user_profile?.name || msg.from_name || 'Anonymous',
+          const mappedComments: ChatComment[] = chatRes.comments.map((msg: any) => ({
+            id: String(msg.message_id || msg.time_created || Math.random()),
+            userName: String(msg.user_profile?.name || msg.from_name || 'Anonymous'),
             userPhoto: msg.user_profile?.photo_url || msg.from_photo_url || null,
-            text: msg.message || msg.text || msg.body || '',
+            text: String(msg.message || msg.text || msg.body || ''),
             timestamp: msg.time_created ? new Date(msg.time_created).getTime() : Date.now()
-          })).filter(c => c.text);
+          })).filter((c: ChatComment) => c.text);
           // Only take last 50 messages to prevent huge lists
           setComments(mappedComments.slice(-50));
         }
@@ -756,6 +756,19 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
   };
 
   // Play Agent Audio through the mixer
+  const stopAgentAudio = useCallback(() => {
+    if (isAgentSpeakingRef.current) {
+      console.log("Interrupting agent audio manually.");
+      if (agentAudioSourceRef.current) {
+        try { agentAudioSourceRef.current.stop(); } catch { /* ignore */ }
+      }
+      if (agentTtsAbortControllerRef.current) {
+        try { agentTtsAbortControllerRef.current.abort(); } catch { /* ignore */ }
+      }
+      isAgentSpeakingRef.current = false;
+    }
+  }, []);
+
   const playAgentAudio = useCallback(async (text: string) => {
     if (!audioCtxRef.current || !agentAudioDestRef.current || !localAudioTrackRef.current) return;
     try {
@@ -817,6 +830,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     speakerInvite,
     speakingVolumes,
     playAgentAudio,
+    stopAgentAudio,
     loading,
     error,
     joinRoom,

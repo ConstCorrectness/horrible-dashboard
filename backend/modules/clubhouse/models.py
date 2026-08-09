@@ -120,3 +120,16 @@ class SendChannelMessageRequest(BaseModel):
     channel: str
     message: str
 
+
+class HandraiseSettingsRequest(BaseModel):
+    is_enabled: bool
+    handraise_permission: int
+
+
+class UpdateTopicRequest(BaseModel):
+    topic: str
+
+
+class ChatSettingsRequest(BaseModel):
+    enable_chat: bool
+

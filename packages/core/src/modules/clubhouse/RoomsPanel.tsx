@@ -13,6 +13,9 @@ import {
   unfollowClubhouseUser,
   inviteToClubhouseChannel,
   inviteClubhouseSpeaker,
+  updateClubhouseTopic,
+  updateClubhouseHandraiseSettings,
+  updateClubhouseChatSettings,
   searchClubhouseUsers,
   getClubhouseFollowing,
   type Channel,
@@ -45,9 +48,20 @@ export function RoomsPanel() {
   const [agentTemperature, setAgentTemperature] = useState(0.7);
   const [agentMaxTokens, setAgentMaxTokens] = useState(150);
   const [agentSystemPrompt, setAgentSystemPrompt] = useState("You are an AI participant in a voice chat room. Reply concisely with a natural, conversational response.");
+    const [agentRespondsToVoice, setAgentRespondsToVoice] = useState(true);
   const [agentRespondsToChat, setAgentRespondsToChat] = useState(false);
-  const [agentRespondsToVoice, setAgentRespondsToVoice] = useState(true);
+  const [agentPromptPresets, setAgentPromptPresets] = useState<{name: string, prompt: string}[]>(() => {
+    try { return JSON.parse(localStorage.getItem('agentPresets') || '[]'); } catch { return []; }
+  });
   const [myUserId, setMyUserId] = useState<number | null>(null);
+
+  // Room settings modal states
+  const [showRoomSettingsModal, setShowRoomSettingsModal] = useState(false);
+  const [settingTopic, setSettingTopic] = useState('');
+  const [settingHandraiseEnabled, setSettingHandraiseEnabled] = useState(true);
+  const [settingHandraisePermission, setSettingHandraisePermission] = useState<number>(1);
+  const [settingChatEnabled, setSettingChatEnabled] = useState(true);
+  const [savingSettings, setSavingSettings] = useState(false);
 
   // New states for extended Clubhouse functionality
   const [showStartRoomModal, setShowStartRoomModal] = useState(false);
@@ -70,6 +84,8 @@ export function RoomsPanel() {
   const [loadingFollowing, setLoadingFollowing] = useState(false);
   const [invitedUserIds, setInvitedUserIds] = useState<Set<number>>(new Set());
 
+
+
   // Handlers for extended Clubhouse functionality
   const handleStartRoom = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -81,13 +97,23 @@ export function RoomsPanel() {
       setShowStartRoomModal(false);
       setNewRoomTopic('');
       if (res.channel) {
-        const roomInfo: Channel = {
-          channel: res.channel,
-          topic: newRoomTopic.trim() || 'My New Room',
-          num_speakers: 1,
-          num_all: 1,
-          club: null,
-          users: [],
+        const meUser: ChannelUser | null = myUserId ? {
+          user_id: myUserId,
+          name: 'Me (Creator)',
+          username: 'me',
+          photo_url: null,
+          is_speaker: true,
+          is_moderator: true
+        } : null;
+        
+        const initialUsers = meUser ? [meUser] : [];
+        const roomInfo: Channel = { 
+          channel: res.channel, 
+          topic: newRoomTopic.trim() || 'My New Room', 
+          num_speakers: 1, 
+          num_all: 1, 
+          club: null, 
+          users: initialUsers 
         };
         setActiveRoomInfo(roomInfo);
         void joinRoom(res.channel, roomInfo.users);
@@ -97,6 +123,33 @@ export function RoomsPanel() {
       toastsStore.add('error', 'Failed to start room', String(err));
     } finally {
       setCreatingRoom(false);
+    }
+  };
+
+  const handleOpenRoomSettings = () => {
+    if (!activeRoomInfo) return;
+    setSettingTopic(activeRoomInfo.topic || '');
+    setSettingHandraiseEnabled(true);
+    setSettingHandraisePermission(1);
+    setSettingChatEnabled(true);
+    setShowRoomSettingsModal(true);
+  };
+
+  const handleSaveRoomSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeChannel) return;
+    setSavingSettings(true);
+    try {
+      await updateClubhouseTopic(activeChannel, settingTopic.trim());
+      await updateClubhouseHandraiseSettings(activeChannel, settingHandraiseEnabled, settingHandraisePermission);
+      await updateClubhouseChatSettings(activeChannel, settingChatEnabled);
+      toastsStore.add('success', 'Room Settings', 'Successfully updated room settings');
+      setShowRoomSettingsModal(false);
+      if (activeRoomInfo) setActiveRoomInfo({ ...activeRoomInfo, topic: settingTopic.trim() });
+    } catch (err: any) {
+      toastsStore.add('error', 'Update Failed', err.message || 'Could not update all settings');
+    } finally {
+      setSavingSettings(false);
     }
   };
 
@@ -229,9 +282,8 @@ export function RoomsPanel() {
 
           <div className="ch-profile-actions">
             {!isCurrentUser && activeChannel && (() => {
-              const currentRoom = channels.find((ch) => ch.channel === activeChannel) || activeRoomInfo;
-              const amIMod = currentRoom?.users.find((u) => u.user_id === myUserId)?.is_moderator;
-              const isTheySpeaker = liveUsers.get(selectedUser.user_id)?.isSpeaker ?? currentRoom?.users.find((u) => u.user_id === selectedUser.user_id)?.is_speaker;
+              const amIMod = activeRoomInfo?.users.find((u) => u.user_id === myUserId)?.is_moderator;
+              const isTheySpeaker = liveUsers.find((u: any) => u.userId === selectedUser.user_id)?.isSpeaker ?? activeRoomInfo?.users.find((u) => u.user_id === selectedUser.user_id)?.is_speaker;
               
               if (amIMod && !isTheySpeaker) {
                 return (
@@ -305,12 +357,13 @@ export function RoomsPanel() {
     liveUsers,
     speakerInvite,
     speakingVolumes,
+    playAgentAudio,
+    stopAgentAudio,
     loading: voiceLoading,
     error: voiceError,
     joinRoom,
     leaveRoom,
     toggleMute,
-    playAgentAudio,
     raiseHand,
     acceptSpeakerInvite,
     dismissSpeakerInvite,
@@ -334,14 +387,17 @@ export function RoomsPanel() {
     },
     onSpeakerInvite: (invite) => {
       toastsStore.add('info', 'Speaker Invite', `${invite.moderatorName} wants you to speak!`);
-      if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+      if (Notification.permission === 'granted') {
         new Notification('Speaker Invite', { body: `${invite.moderatorName} wants you to speak!` });
       }
+      if (agentEnabled) {
+        acceptSpeakerInvite(invite.moderatorId);
+        toastsStore.add('info', 'Agent', `Auto-accepted speaker invite from ${invite.moderatorName}`);
+      }
     },
-    onHandRaise: (userId, userName) => {
+    onHandRaise: (_userId, userName) => {
       // Check if current user is a moderator
-      const currentRoom = channels.find((ch) => ch.channel === activeChannel) || activeRoomInfo;
-      const amIMod = currentRoom?.users.find((u) => u.user_id === myUserId)?.is_moderator;
+      const amIMod = activeRoomInfo?.users.find((u) => u.user_id === myUserId)?.is_moderator;
       if (amIMod) {
         toastsStore.add('info', 'Hand Raised', `${userName} wants to come up on stage.`);
         if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
@@ -410,6 +466,68 @@ export function RoomsPanel() {
     if (!text || isAgentSpeaking) return;
     try {
       setIsAgentSpeaking(true);
+
+      const amISpeaker = activeRoomInfo?.users.find((u) => u.user_id === myUserId)?.is_speaker;
+      const liveMe = liveUsers.find(u => u.userId === myUserId);
+      const isActuallySpeaker = liveMe?.isSpeaker || amISpeaker || false;
+
+      // Handle custom /agent commands (Authorized users / mods only for settings)
+      if (text.startsWith('/agent')) {
+        const parts = text.trim().split(' ');
+        const cmd = parts[1];
+        const amIMod = activeRoomInfo?.users.find((u) => u.user_id === myUserId)?.is_moderator;
+
+        if (cmd === 'topic' && activeChannel) {
+          if (amIMod) {
+            const newTopic = parts.slice(2).join(' ');
+            await updateClubhouseTopic(activeChannel, newTopic);
+            await sendComment(`🤖 Room topic updated to: ${newTopic}`);
+            if (activeRoomInfo) setActiveRoomInfo({ ...activeRoomInfo, topic: newTopic });
+          } else {
+            await sendComment(`🤖 Only moderators can change the topic.`);
+          }
+          setIsAgentSpeaking(false);
+          return;
+        } else if (cmd === 'chat' && activeChannel) {
+          if (amIMod) {
+            const enable = parts[2] === 'on';
+            await updateClubhouseChatSettings(activeChannel, enable);
+            await sendComment(`🤖 Room chat is now ${enable ? 'enabled' : 'disabled'}.`);
+          } else {
+            await sendComment(`🤖 Only moderators can change chat settings.`);
+          }
+          setIsAgentSpeaking(false);
+          return;
+        } else if (cmd === 'handraise' && activeChannel) {
+          if (amIMod) {
+            const enable = parts[2] === 'on';
+            await updateClubhouseHandraiseSettings(activeChannel, enable, 1);
+            await sendComment(`🤖 Hand raising is now ${enable ? 'enabled' : 'disabled'}.`);
+          } else {
+            await sendComment(`🤖 Only moderators can change handraise settings.`);
+          }
+          setIsAgentSpeaking(false);
+          return;
+        } else if (cmd === 'questionnaire') {
+          if (amIMod) {
+            setAgentSystemPrompt("You are a questionnaire bot. Ask the audience 5 questions one by one about their experience and gather feedback. Keep it engaging. Acknowledge their answers before asking the next question.");
+            await sendComment(`🤖 Agent is now in questionnaire mode! Let's get started.`);
+            text = "Initiate the questionnaire by asking the first question.";
+          } else {
+            await sendComment(`🤖 Only moderators can start a questionnaire.`);
+            setIsAgentSpeaking(false);
+            return;
+          }
+        } else if (cmd === 'search') {
+           const query = parts.slice(2).join(' ');
+           await sendComment(`🤖 Searching the web for: ${query}...`);
+           try {
+              // Real web search could be hooked here; for now we prompt the model to provide factual info
+              text = `Please perform a simulated web search or provide factual knowledge about: ${query}. Synthesize it into a brief answer.`;
+           } catch(e) {}
+        }
+      }
+
       agentAbortControllerRef.current = new AbortController();
       
       const promptText = text.trim() 
@@ -431,12 +549,15 @@ export function RoomsPanel() {
       const data = await req.json();
       
       if (data.completion) {
-        const text = data.completion.trim();
-        await sendComment(`🤖 ${text}`);
-        await playAgentAudio(text);
+        const responseText = data.completion.trim();
+        await sendComment(`🤖 ${responseText}`);
+        if (isActuallySpeaker) {
+          await playAgentAudio(responseText);
+        }
       }
       setIsAgentSpeaking(false);
     } catch (e) {
+      if (e instanceof Error && e.name === 'AbortError') return;
       console.error('Agent response failed:', e);
       setIsAgentSpeaking(false);
     }
@@ -505,7 +626,7 @@ export function RoomsPanel() {
   if (joined && activeChannel) {
     const currentRoom = channels.find((ch) => ch.channel === activeChannel) || activeRoomInfo;
     const isCurrentUserSpeaker =
-      currentRoom?.users.find((u) => u.user_id === myUserId)?.is_speaker ?? false;
+      activeRoomInfo?.users.find((u) => u.user_id === myUserId)?.is_speaker ?? false;
     const moderators = currentRoom?.users.filter((u) => u.is_moderator && u.user_id) ?? [];
     const speakers = currentRoom?.users.filter((u) => u.is_speaker) ?? [];
     const audience = currentRoom?.users.filter((u) => !u.is_speaker) ?? [];
@@ -1872,6 +1993,21 @@ export function RoomsPanel() {
             >
               ➕ Invite Friends
             </button>
+            {(() => {
+              const amIMod = activeRoomInfo?.users.find((u) => u.user_id === myUserId)?.is_moderator;
+              if (amIMod) {
+                return (
+                  <button
+                    className="ch-btn-action"
+                    style={{ padding: '0.4rem 0.8rem', borderRadius: '20px', fontSize: '0.75rem', fontWeight: 600, flex: 'none', background: 'rgba(255, 255, 255, 0.05)' }}
+                    onClick={handleOpenRoomSettings}
+                  >
+                    ⚙ Settings
+                  </button>
+                );
+              }
+              return null;
+            })()}
           </div>
 
           <div className="ch-room-title-section">
@@ -2036,7 +2172,34 @@ export function RoomsPanel() {
                     </div>
 
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                      <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>System Prompt / Persona:</span>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>System Prompt / Persona:</span>
+                        <div style={{ display: 'flex', gap: '0.5rem' }}>
+                          <select 
+                            onChange={(e) => { if (e.target.value) setAgentSystemPrompt(e.target.value); }}
+                            style={{ padding: '0.2rem', fontSize: '0.7rem', background: '#1d2026', color: '#f1f5f9', border: '1px solid #2e333d' }}
+                          >
+                            <option value="">Load Preset...</option>
+                            {agentPromptPresets.map((p, i) => (
+                              <option key={i} value={p.prompt}>{p.name}</option>
+                            ))}
+                          </select>
+                          <button 
+                            className="ch-btn-action"
+                            style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}
+                            onClick={() => {
+                              const name = prompt('Name for this preset:');
+                              if (name) {
+                                const newPresets = [...agentPromptPresets, { name, prompt: agentSystemPrompt }];
+                                setAgentPromptPresets(newPresets);
+                                localStorage.setItem('agentPresets', JSON.stringify(newPresets));
+                              }
+                            }}
+                          >
+                            Save
+                          </button>
+                        </div>
+                      </div>
                       <textarea 
                         value={agentSystemPrompt} 
                         onChange={(e) => setAgentSystemPrompt(e.target.value)} 
@@ -2070,20 +2233,27 @@ export function RoomsPanel() {
                       </div>
                     </div>
                     
-                    <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '1rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.5rem', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '1rem' }}>
+                      <button
+                        className="ch-btn-action"
+                        style={{ padding: '0.6rem 1.2rem', fontSize: '0.85rem', background: '#e11d48', color: 'white', border: 'none', borderRadius: '20px', cursor: 'pointer' }}
+                        onClick={stopAgentAudio}
+                        disabled={!isAgentSpeaking}
+                      >
+                        ✋ Interrupt
+                      </button>
                       <button
                         className="ch-btn-action"
                         style={{ padding: '0.6rem 1.2rem', fontSize: '0.85rem', background: '#2e333d', border: 'none', borderRadius: '20px', cursor: 'pointer' }}
                         onClick={() => triggerAgentResponse(" ")}
-                        disabled={isAgentSpeaking || !isCurrentUserSpeaker}
-                        title={!isCurrentUserSpeaker ? "Must be a speaker to use agent voice" : "Force speak"}
+                        disabled={isAgentSpeaking}
                       >
                         🗣️ Speak Now
                       </button>
                     </div>
                     {!isCurrentUserSpeaker && (
-                      <p style={{ fontSize: '0.75rem', color: '#ef4444', margin: '0', textAlign: 'right' }}>
-                        ⚠️ You must be on stage to use the Agent's voice.
+                      <p style={{ fontSize: '0.75rem', color: '#94a3b8', margin: '0', textAlign: 'right' }}>
+                        ℹ️ You are in the audience. Agent will respond in text chat only.
                       </p>
                     )}
                   </div>
@@ -2255,6 +2425,46 @@ export function RoomsPanel() {
                     })}
                   </ul>
                 )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Room Settings Modal */}
+        {showRoomSettingsModal && (
+          <div className="ch-modal-overlay" onClick={() => setShowRoomSettingsModal(false)}>
+            <div className="ch-modal-card ch-settings-modal" onClick={(e) => e.stopPropagation()}>
+              <div className="ch-modal-header">
+                <h3 className="ch-modal-title">Room Settings</h3>
+                <button className="ch-modal-close" onClick={() => setShowRoomSettingsModal(false)}>✕</button>
+              </div>
+              <div className="ch-modal-body">
+                <form onSubmit={handleSaveRoomSettings} className="ch-start-room-form">
+                  <div className="ch-form-group">
+                    <label>Room Topic</label>
+                    <input type="text" placeholder="What is this room about?" value={settingTopic} onChange={(e) => setSettingTopic(e.target.value)} className="ch-input" />
+                  </div>
+                  <div className="ch-form-group">
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <input type="checkbox" checked={settingHandraiseEnabled} onChange={(e) => setSettingHandraiseEnabled(e.target.checked)} /> Enable Hand Raising
+                    </label>
+                  </div>
+                  {settingHandraiseEnabled && (
+                    <div className="ch-form-group">
+                      <label>Who can raise hands?</label>
+                      <select value={settingHandraisePermission} onChange={(e) => setSettingHandraisePermission(Number(e.target.value))} className="ch-input" style={{ width: '100%' }}>
+                        <option value={1}>Everyone</option>
+                        <option value={2}>Followed by Speakers</option>
+                      </select>
+                    </div>
+                  )}
+                  <div className="ch-form-group">
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <input type="checkbox" checked={settingChatEnabled} onChange={(e) => setSettingChatEnabled(e.target.checked)} /> Enable Room Chat
+                    </label>
+                  </div>
+                  <button type="submit" className="ch-btn-submit" disabled={savingSettings}>{savingSettings ? 'Saving...' : 'Save Settings'}</button>
+                </form>
               </div>
             </div>
           </div>

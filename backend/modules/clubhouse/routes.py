@@ -35,6 +35,9 @@ from backend.modules.clubhouse.models import (
     StartAuthResult,
     TokenConnectRequest,
     SendChannelMessageRequest,
+    HandraiseSettingsRequest,
+    UpdateTopicRequest,
+    ChatSettingsRequest,
 )
 from backend.modules.telemetry.instrument import instrumented_client
 
@@ -716,6 +719,50 @@ async def send_channel_message(body: SendChannelMessageRequest) -> dict[str, Any
     return await _ch_authed_post(
         "/send_channel_message",
         {"channel": body.channel, "message": body.message},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+@router.post("/channels/{channel}/handraise_settings")
+async def change_handraise_settings(channel: str, body: HandraiseSettingsRequest) -> dict[str, Any]:
+    """Change the hand-raise policy for the channel."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/change_handraise_settings",
+        {
+            "channel": channel,
+            "is_enabled": body.is_enabled,
+            "handraise_permission": body.handraise_permission,
+        },
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+@router.post("/channels/{channel}/topic")
+async def update_channel_topic(channel: str, body: UpdateTopicRequest) -> dict[str, Any]:
+    """Change the room's title."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/set_channel_title",
+        {"channel": channel, "title": body.topic},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+@router.post("/channels/{channel}/chat_settings")
+async def update_chat_settings(channel: str, body: ChatSettingsRequest) -> dict[str, Any]:
+    """Enable or disable chat in the room."""
+    auth = _require_auth()
+    endpoint = "/enable_channel_messages" if body.enable_chat else "/disable_channel_messages"
+    return await _ch_authed_post(
+        endpoint,
+        {"channel": channel},
         auth["auth_token"],
         auth["user_id"],
         auth.get("device_id"),

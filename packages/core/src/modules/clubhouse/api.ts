@@ -118,6 +118,18 @@ export function inviteClubhouseSpeaker(channel: string, userId: number): Promise
   return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/invite_speaker`, { user_id: userId });
 }
 
+export function updateClubhouseTopic(channel: string, topic: string): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/topic`, { topic });
+}
+
+export function updateClubhouseHandraiseSettings(channel: string, isEnabled: boolean, permission: number): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/handraise_settings`, { is_enabled: isEnabled, handraise_permission: permission });
+}
+
+export function updateClubhouseChatSettings(channel: string, enableChat: boolean): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/chat_settings`, { enable_chat: enableChat });
+}
+
 export function getClubhouseChannelDetails(channel: string): Promise<Channel> {
   return apiGet<Channel>(`/clubhouse/channels/${channel}`);
 }
