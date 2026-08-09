@@ -179,15 +179,17 @@ export function MatchSetupCard({ game }: { game: GameCatalogEntry }) {
 
   // Seat state lives in settings (per game) and is mirrored here so the card is
   // responsive; `setDriver` and friends are the writes that make it stick.
-  const [me, setMe] = useState<Driver>(() => resolveDriver(gameId, game.default_policy));
+  const [me, setMe] = useState<Driver>(() =>
+    resolveDriver(gameId, game.default_policy, game.allowed_policies),
+  );
   const [opponent, setOpponent] = useState<Opponent>(() => resolveOpponent(gameId));
 
   // Switching games in the library re-reads that game's saved seats rather than
   // carrying the previous game's over.
   useEffect(() => {
-    setMe(resolveDriver(gameId, game.default_policy));
+    setMe(resolveDriver(gameId, game.default_policy, game.allowed_policies));
     setOpponent(resolveOpponent(gameId));
-  }, [gameId, game.default_policy]);
+  }, [gameId, game.default_policy, game.allowed_policies]);
 
   const pickDriver = useCallback(
     (next: Driver) => {
@@ -204,11 +206,11 @@ export function MatchSetupCard({ game }: { game: GameCatalogEntry }) {
         kind === 'bot'
           ? { kind, tier: resolveBotTier(gameId) }
           : kind === 'mirror'
-            ? { kind, driver: resolveMirrorDriver(gameId) }
+            ? { kind, driver: resolveMirrorDriver(gameId, game.allowed_policies) }
             : { kind },
       );
     },
-    [gameId],
+    [gameId, game.allowed_policies],
   );
 
   // A game may forbid a driver outright (a realtime game has no sensible manual

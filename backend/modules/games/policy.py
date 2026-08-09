@@ -22,7 +22,13 @@ import logging
 import random
 from typing import Any, Awaitable, Callable, Protocol
 
-from backend.modules.games.loadout import HarnessRuntime, Loadout, get_loadout
+from backend.modules.games.loadout import (
+    CodedHarness,
+    HarnessRuntime,
+    LlmHarness,
+    get_coded_harness,
+    get_llm_harness,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -62,8 +68,8 @@ class RandomPolicy:
 # A chat function: (messages, tools) -> a ChatResult-like object with
 # `.tool_calls` (each .name/.arguments/.id), `.assistant_message` (dict), `.content`.
 ChatFn = Callable[[list[dict[str, Any]], list[dict[str, Any]]], Awaitable[Any]]
-# Resolve the loadout for a game (injectable for tests).
-LoadoutFn = Callable[[str], Loadout]
+# Resolve the LLM harness for a game (injectable for tests).
+LlmHarnessFn = Callable[[str], LlmHarness]
 # Receives one reasoning step (see the `kind` values emitted in `_drive`). Live UI
 # and replay uploads hang off this; a None sink means "think silently" as before.
 TraceFn = Callable[[dict[str, Any]], Any]
@@ -80,7 +86,7 @@ def _clip(value: Any) -> str:
 class AgentPolicy:
     """Drives the local model through the player's harness to pick a move.
 
-    `chat_fn`/`load_loadout` are injectable so the loop can be tested without a live
+    `chat_fn`/`load_harness` are injectable so the loop can be tested without a live
     provider or on-disk loadouts.
     """
 
@@ -89,12 +95,12 @@ class AgentPolicy:
         fallback: Policy | None = None,
         *,
         chat_fn: ChatFn | None = None,
-        load_loadout: LoadoutFn | None = None,
+        load_harness: LlmHarnessFn | None = None,
         trace: TraceFn | None = None,
     ) -> None:
         self._fallback = fallback or RandomPolicy()
         self._chat_fn = chat_fn
-        self._load_loadout = load_loadout or get_loadout
+        self._load_harness = load_harness or get_llm_harness
         self._trace = trace
 
     def _emit(self, kind: str, **fields: Any) -> None:
@@ -146,7 +152,7 @@ class AgentPolicy:
         game_id: str | None,
     ) -> str | None:
         key = game_id or str(observation.get("game") or "default")
-        loadout = self._load_loadout(key)
+        loadout = self._load_harness(key)
         runtime = HarnessRuntime(loadout)
         agent_code = (getattr(loadout, "agent_code", "") or "").strip()
 
@@ -221,7 +227,7 @@ class AgentPolicy:
         self,
         chat: ChatFn | None,
         runtime: HarnessRuntime,
-        loadout: Loadout,
+        loadout: LlmHarness,
         agent_code: str,
         observation: dict[str, Any],
         legal_actions: list[dict[str, Any]],
@@ -381,12 +387,12 @@ def _prose_id(content: str, ids: list[str]) -> str | None:
 
 
 class BotPolicy:
-    """Runs the harness's **script** seat: a Python policy, in the RL sense.
+    """Runs the **coded harness**: a Python policy, in the RL sense, with no model.
 
-    The bot is the tool named `bot` (or the loadout's first tool if there is none).
-    Three code shapes are accepted — `class Agent`, `def act(obs, info)`, and the
-    legacy `def run(args, obs)` — resolved by `bot_sdk.compile_bot`; see that module
-    for what each one is handed.
+    The bot is that harness's `bot_code` — the whole harness, not a tool inside a
+    bigger one. Three code shapes are accepted — `class Agent`, `def act(obs, info)`,
+    and the legacy `def run(args, obs)` — resolved by `bot_sdk.compile_bot`; see that
+    module for what each one is handed.
 
     The compiled bot is **cached for the life of this policy object**, which the
     client rebuilds at each match boundary. That is what lets a `class Agent` hold
@@ -400,11 +406,11 @@ class BotPolicy:
     def __init__(
         self,
         trace: TraceFn | None = None,
-        load_loadout: LoadoutFn | None = None,
+        load_harness: Callable[[str], CodedHarness] | None = None,
         fallback: Policy | None = None,
     ) -> None:
         self._trace = trace
-        self._load_loadout = load_loadout or get_loadout
+        self._load_harness = load_harness or get_coded_harness
         self._fallback = fallback or RandomPolicy()
         self._bot: Any = None
         self._bot_key: str | None = None
@@ -443,34 +449,31 @@ class BotPolicy:
         return fallback
 
     def _resolve_bot(self, key: str) -> Any:
-        """Compile (once per match) the loadout's bot tool.
+        """Compile (once per match) the coded harness's `bot_code`.
 
-        `bot_tool_of` always returns something — `<game>.bot`, `bot`, or the default
-        random-legal-move baseline. It used to fall back to the loadout's *first*
-        tool, which is normally a helper returning analysis rather than a move: that
-        answered illegally every turn and degraded to random anyway, silently, in
-        ranked matches too.
+        `get_coded_harness` always returns code — the player's, the game's shipped
+        starter, or the random-legal baseline. This used to hunt the LLM harness's
+        *tool list* for `<game>.bot` → `bot` → the loadout's first tool, and that
+        last step is what made a helper returning analysis play as though it were a
+        move: illegal every turn, degrading to random, silently, ranked included.
+        A coded policy is its own object now, so there is nothing to hunt.
         """
         from backend.modules.games.bot_sdk import compile_bot
-        from backend.modules.games.loadout import bot_tool_of
 
         if self._bot is not None and self._bot_key == key:
             return self._bot
 
-        loadout = self._load_loadout(key)
-        bot_tool = bot_tool_of(loadout, key)
+        harness = self._load_harness(key)
         try:
-            bot = compile_bot(bot_tool.code, f"<loadout:{bot_tool.name}>")
+            bot = compile_bot(harness.bot_code, f"<bot:{key}>")
         except Exception as exc:
-            raise ValueError(
-                f"Bot script {bot_tool.name!r} failed to load: {exc}"
-            ) from exc
+            raise ValueError(f"Bot script for {key!r} failed to load: {exc}") from exc
 
         self._bot, self._bot_key, self._started = bot, key, False
         self._emit(
             "assistant",
             content=(
-                f"Running bot script {bot_tool.name!r} "
+                f"Running your {key} bot "
                 f"({'legacy run()' if bot.legacy else bot.shape} shape)"
             ),
             tool_calls=[],

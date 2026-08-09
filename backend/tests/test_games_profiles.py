@@ -290,7 +290,9 @@ def test_comment_body_is_capped(client: TestClient) -> None:
 
 
 def test_cards_return_face_and_level_for_many_at_once(client: TestClient) -> None:
-    client.post("/profile", headers=auth("acc1"), json={"avatar": "🦊", "status_text": "afk"})
+    client.post(
+        "/profile", headers=auth("acc1"), json={"avatar": "🦊", "status_text": "afk"}
+    )
     body = client.post("/profiles/cards", json={"handles": ["rob", "ann"]}).json()
     cards = body["cards"]
     assert set(cards) == {"rob", "ann"}
@@ -309,7 +311,9 @@ def test_a_card_for_someone_who_never_opened_the_plaza(client: TestClient) -> No
 
 
 def test_unknown_handles_are_absent_not_errors(client: TestClient) -> None:
-    cards = client.post("/profiles/cards", json={"handles": ["rob", "nobody"]}).json()["cards"]
+    cards = client.post("/profiles/cards", json={"handles": ["rob", "nobody"]}).json()[
+        "cards"
+    ]
     assert set(cards) == {"rob"}
 
 

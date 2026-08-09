@@ -1,7 +1,13 @@
 import { useEffect, useState } from 'react';
 
 import { gameAccent, gameIcon } from '../game-identity';
-import { fetchGamesCatalog, getLoadout, type GameCatalogEntry, type Loadout } from '../games-api';
+import {
+  fetchGamesCatalog,
+  getLoadout,
+  type CodedHarness,
+  type GameCatalogEntry,
+  type LlmHarness,
+} from '../games-api';
 import { openGamesSection } from '../hub-section';
 import { openHarnessFor, useActiveGame } from '../selected-game';
 import { DryRunSection } from './DryRunSection';
@@ -32,7 +38,13 @@ export function TrainingSection() {
   const activeGame = useActiveGame();
   const [games, setGames] = useState<GameCatalogEntry[]>([]);
   const [gameId, setGameId] = useState(activeGame ?? 'tictactoe');
-  const [loadout, setLoadout] = useState<Loadout | null>(null);
+  // This section spans BOTH harnesses, because its two halves are different
+  // questions: "run my policy a few hundred times" is the coded one (an LLM
+  // harness has no policy to run headless), and "watch one turn think" is the LLM
+  // one (a coded bot has no thinking to watch). So both are loaded, and each block
+  // renders only when the game's seats can actually run that harness.
+  const [coded, setCoded] = useState<CodedHarness | null>(null);
+  const [llm, setLlm] = useState<LlmHarness | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -47,17 +59,25 @@ export function TrainingSection() {
 
   useEffect(() => {
     let cancelled = false;
-    setLoadout(null);
+    setCoded(null);
+    setLlm(null);
     setError(null);
-    getLoadout(gameId)
-      .then((lo) => !cancelled && setLoadout(lo))
+    getLoadout(gameId, 'coded')
+      .then((h) => !cancelled && setCoded(h as CodedHarness))
       .catch((e: Error) => !cancelled && setError(String(e.message || e)));
+    getLoadout(gameId, 'llm')
+      .then((h) => !cancelled && setLlm(h as LlmHarness))
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
   }, [gameId]);
 
   const entry = games.find((g) => g.id === gameId);
+  // Whether this game's seats may run the LLM harness at all — the same rule the
+  // backend applies to /games/dry-run, keyed on allowed_policies rather than the
+  // category so a turn-based coded game on the escape hatch still gets one.
+  const canReason = (entry?.allowed_policies ?? ['agent']).includes('agent');
   const accent = gameAccent(gameId);
 
   return (
@@ -99,21 +119,31 @@ export function TrainingSection() {
 
       <section className="games-train-block">
         <h3>2 · Run it a few hundred times</h3>
-        <TrainingRunner gameId={gameId} loadout={loadout} />
+        <TrainingRunner gameId={gameId} loadout={coded} />
       </section>
 
       <section className="games-train-block">
         <h3>3 · Watch one turn think</h3>
-        {error ? (
+        {!canReason ? (
+          // Mirrors the backend's own refusal on /games/dry-run: this game has no
+          // model in its loop, so there is no turn to watch think.
+          <div className="games-train-noenv">
+            <strong>No model in this game’s loop.</strong>
+            <p>
+              {entry?.name ?? gameId} is a coded-agent game — its seat runs your policy, not a
+              prompt. Step 2 above is where you watch it play.
+            </p>
+          </div>
+        ) : error ? (
           <div className="games-train-error">
             Couldn’t load the saved harness for {gameId}: {error}
           </div>
-        ) : !loadout ? (
+        ) : !llm ? (
           <div className="games-train-loading">Loading harness…</div>
         ) : (
           <DryRunSection
             gameId={gameId}
-            loadout={{ context: loadout.context, tools: loadout.tools, model: loadout.model }}
+            loadout={{ context: llm.context, tools: llm.tools, model: llm.model }}
             engineGames={games.map((g) => ({ id: g.id, name: g.name }))}
           />
         )}

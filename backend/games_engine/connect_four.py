@@ -138,6 +138,9 @@ SPEC = register_game(
         min_players=2,
         max_players=2,
         factory=ConnectFour,
+        # Turn-based coded-agent game on the escape hatch — see tictactoe.
+        decision_class="policy",
+        declared_policies=("agent", "bot", "random", "manual"),
         default_policy="agent",
     )
 )

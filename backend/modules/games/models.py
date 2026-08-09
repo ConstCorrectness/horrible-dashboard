@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class GameInfo(BaseModel):
@@ -30,17 +30,50 @@ class ToolDefModel(BaseModel):
     required: list[str] = []
 
 
-class LoadoutModel(BaseModel):
-    """A player's agent for a game: an optional `my_agent(obs, config)` entrypoint over
-    the harness (strategy context + custom tools + the model that drives it; None model =
-    borrow the agent module's configured model). Empty `agent_code` = the default agent
-    (context + tools drive the model)."""
+class LlmHarnessModel(BaseModel):
+    """A player's **LLM agent** for a game: an optional `my_agent(obs, config)`
+    entrypoint over the harness (strategy context + custom tools + the model that
+    drives it; None model = borrow the agent module's configured model). Empty
+    `agent_code` = the default agent (context + tools drive the model)."""
 
+    # `extra="forbid"` is what makes the split real on the wire: without it Pydantic
+    # silently drops unknown fields, so a body sending `bot_code` to the LLM arm
+    # would be accepted and the policy quietly lost. A cross-kind field is a
+    # confused client, and it should hear about it.
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["llm"] = "llm"
     game_id: str
     context: str = ""
     tools: list[ToolDefModel] = []
     model: dict[str, Any] | None = None
     agent_code: str = ""
+
+
+class CodedHarnessModel(BaseModel):
+    """A player's **coded agent** for a game: one Python policy, no model. It carries
+    no context/tools/model fields at all — a request that sends them is rejected by
+    the discriminator rather than quietly having them dropped."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["coded"] = "coded"
+    game_id: str
+    bot_code: str = ""
+
+
+# The wire type for "a player's harness". It is a **discriminated union**, so the
+# body a client sends must declare which harness it is and may only carry that
+# harness's fields. Note this must be the declared `response_model` on every route
+# that returns a harness: a `response_model` filters unknown fields silently, so
+# declaring one arm alone would make the other arm's fields vanish on the way out
+# with no error anywhere.
+HarnessModel = Annotated[
+    LlmHarnessModel | CodedHarnessModel, Field(discriminator="kind")
+]
+
+# The old name, kept because the LLM harness is what every pre-split caller meant.
+LoadoutModel = LlmHarnessModel
 
 
 class LoadoutVersionInfo(BaseModel):
@@ -55,7 +88,7 @@ class LoadoutVersionInfo(BaseModel):
 
 class SaveVersionRequest(BaseModel):
     label: str = ""
-    loadout: LoadoutModel
+    loadout: HarnessModel
 
 
 class ActivateVersionRequest(BaseModel):

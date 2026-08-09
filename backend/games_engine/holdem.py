@@ -336,6 +336,11 @@ SPEC = register_game(
         min_players=2,
         max_players=2,
         factory=Holdem,
+        # Turn-based coded-agent game on the escape hatch — see tictactoe. Betting
+        # under imperfect information reads well as a reasoning demo, but the seat
+        # is still an obs → action mapping and a scripted bot plays it perfectly well.
+        decision_class="policy",
+        declared_policies=("agent", "bot", "random", "manual"),
         default_policy="agent",
     )
 )

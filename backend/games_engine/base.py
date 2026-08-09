@@ -37,6 +37,36 @@ class Action:
         return {"id": self.id, "label": self.label, "params": dict(self.params)}
 
 
+# ---- categories ------------------------------------------------------------
+#
+# A game's `decision_class` is its category, and the category decides what may
+# occupy a seat. The two baselines are **disjoint on purpose**: an LLM driving a
+# real-time seat and a codeless bot answering a language task are not preferences
+# a player should be able to express — they are configurations that cannot work.
+CLASS_BASELINE_POLICIES: dict[str, tuple[str, ...]] = {
+    "policy": ("bot", "random", "manual"),
+    "reasoner": ("agent", "manual"),
+}
+
+# The one escape hatch. A **turn-based** coded-agent game may additionally offer
+# the LLM harness — watching a model play tic-tac-toe is a genuinely good demo and
+# the seat has no cadence to miss. A `realtime` one may not, at any pacing: a
+# multi-second tool loop on a 1.2s tick is the misconfiguration this whole axis
+# exists to make impossible. A reasoner game has no hatch — `bot` cannot produce
+# the payload (a patch, an answer set) its actions carry, and a random id over
+# open actions is meaningless.
+CLASS_EXTRA_POLICIES: dict[tuple[str, str], tuple[str, ...]] = {
+    ("policy", "turn"): ("agent",),
+}
+
+
+def permitted_policies(decision_class: str, pacing: str) -> tuple[str, ...]:
+    """Every move policy a game of this category+pacing is *allowed to declare*.
+    `allowed_policies` is the subset a given game actually offers."""
+    baseline = CLASS_BASELINE_POLICIES.get(decision_class, ())
+    return baseline + CLASS_EXTRA_POLICIES.get((decision_class, pacing), ())
+
+
 @dataclass(frozen=True)
 class GameSpec:
     """Static metadata about a game type (not a live game)."""
@@ -52,20 +82,25 @@ class GameSpec:
     move_timeout_s: float | None = None
 
     # --- How a player's seat decides, and how the UI should present it. ---
-    # `decision_class` is the load-bearing axis (see docs/modules/games.mdx):
+    # `decision_class` is the game's **category** and the load-bearing axis (see
+    # docs/modules/games.mdx):
     #   "policy"   — the agent IS a mapping obs → action (MDP/Markov sense); a pure
     #                `bot(obs)` function is the natural interface and an LLM is
     #                optional-to-harmful (can't hold a real-time cadence).
     #   "reasoner" — the task *is* language; the system prompt + tools + model are
     #                the gameplay levers.
-    # This gates which move policies are *valid* at runtime, so it lives here (the
-    # backend is the source of truth), not just as frontend chrome.
+    # The category decides what may occupy a seat (`permitted_policies` below), so
+    # it lives here — the backend is the source of truth, not frontend chrome.
     decision_class: Literal["policy", "reasoner"] = "policy"
-    # The move policy this game defaults to, and the set a player may choose from.
-    # Vocabulary matches the UI enum (random | agent | manual | bot); `manual` means
-    # "no automatic policy" (the human/agent-tool drives), handled by callers.
+    # The move policy this game defaults to. Vocabulary matches the UI enum
+    # (random | agent | manual | bot); `manual` means "no automatic policy" (the
+    # human/agent-tool drives), handled by callers. Must be in `allowed_policies`.
     default_policy: str = "random"
-    allowed_policies: tuple[str, ...] = ("random", "agent", "manual", "bot")
+    # The set a player may choose from, or None for the category's baseline. Declare
+    # it only to use the escape hatch (see `permitted_policies`); `register_game`
+    # rejects anything the category doesn't permit, so a misconfiguration is an
+    # import-time error rather than a match that cannot work.
+    declared_policies: tuple[str, ...] | None = None
     # Shape of the per-seat observation and the match pacing — display badges the
     # Build UI and game cards use (e.g. render a `frames` obs as an image, warn that
     # a `realtime` game can't afford a 6-round tool loop).
@@ -78,6 +113,15 @@ class GameSpec:
     sample_obs: Callable[[int], tuple[dict[str, Any], list[dict[str, Any]]]] | None = (
         None
     )
+
+    @property
+    def allowed_policies(self) -> tuple[str, ...]:
+        """The move policies a seat in this game may actually use — the declared
+        set, or the category baseline. This is what every consumer reads; the
+        declaration is validated once, at registration."""
+        if self.declared_policies is not None:
+            return self.declared_policies
+        return CLASS_BASELINE_POLICIES[self.decision_class]
 
     def new(self, **kwargs: Any) -> "GameState":
         return self.factory(**kwargs)
@@ -165,7 +209,29 @@ _GAMES: dict[str, GameSpec] = {}
 
 
 def register_game(spec: GameSpec) -> GameSpec:
-    """Register a game type. Games self-register on import (see package init)."""
+    """Register a game type. Games self-register on import (see package init).
+
+    Registration is where a game's **category** is checked, so an impossible seat
+    (an LLM on a real-time tick, a codeless bot on a language task) fails at import
+    with a name and a reason, instead of being discovered mid-match.
+    """
+    if spec.decision_class not in CLASS_BASELINE_POLICIES:
+        raise ValueError(f"{spec.id}: unknown decision_class {spec.decision_class!r}")
+    allowed = spec.allowed_policies
+    if not allowed:
+        raise ValueError(f"{spec.id}: allowed_policies is empty — no seat could play")
+    permitted = permitted_policies(spec.decision_class, spec.pacing)
+    refused = [p for p in allowed if p not in permitted]
+    if refused:
+        raise ValueError(
+            f"{spec.id}: a {spec.pacing} {spec.decision_class} game may not offer "
+            f"{refused} — permitted: {list(permitted)}"
+        )
+    if spec.default_policy not in allowed:
+        raise ValueError(
+            f"{spec.id}: default_policy {spec.default_policy!r} is not in "
+            f"allowed_policies {list(allowed)}"
+        )
     _GAMES[spec.id] = spec
     return spec
 

@@ -90,6 +90,11 @@ class KaraokeSession:
             artist=song.get("artist") or "",
             singer=singer,
             duration=song.get("duration"),
+            # A song queued straight from the library is playable now; one queued
+            # mid-download is not, and `song_downloaded` flips this when its file
+            # lands. Derived from the row rather than assumed, because both paths
+            # reach this method.
+            ready=song.get("status") == "ready",
         )
         async with self._lock:
             if next_up:
@@ -229,6 +234,46 @@ class KaraokeSession:
             await self.next_song()
         else:
             await self.stop()
+
+    async def song_downloaded(self, song_id: str, *, ok: bool) -> None:
+        """A download finished; unblock (or drop) every entry waiting on it.
+
+        This is the other half of queueing-while-downloading. A `<video>` that
+        fails to load never retries on its own, so an entry that reached the stage
+        before its file did would stay black forever without this call — the
+        broadcast is what tells the stage the source is worth loading now.
+        """
+        async with self._lock:
+            waiting = [
+                e
+                for e in ([self._now_playing] if self._now_playing else [])
+                + self._queue
+                if e.song_id == song_id and not e.ready
+            ]
+            if not waiting:
+                return
+            if ok:
+                for entry in waiting:
+                    entry.ready = True
+                stranded = False
+            else:
+                # The file is never coming. Drop the dead entries rather than
+                # leaving the room staring at a song that cannot play, and
+                # remember whether the *current* one died — we have to advance
+                # past it, and that can't happen while holding the lock.
+                dead = {e.entry_id for e in waiting}
+                self._queue = [e for e in self._queue if e.entry_id not in dead]
+                stranded = (
+                    self._now_playing is not None and self._now_playing.entry_id in dead
+                )
+                if stranded:
+                    self._now_playing = None
+
+        if stranded:
+            # `next_song` takes the lock itself, hence the two-phase shape above.
+            await self.next_song()
+        else:
+            await self.broadcast()
 
 
 session = KaraokeSession()

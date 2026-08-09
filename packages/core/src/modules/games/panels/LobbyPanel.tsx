@@ -3,7 +3,13 @@ import { useEffect, useState, type CSSProperties } from 'react';
 import { signOut } from '../../../account';
 import { useAccount } from '../../../useAccount';
 import { registry } from '../../../registry';
-import { gameAccent, gameIcon, gameTagline } from '../game-identity';
+import {
+  decisionClassOf,
+  gameAccent,
+  gameIcon,
+  gameTagline,
+  GAME_CATEGORIES,
+} from '../game-identity';
 import { useGames, gamesDisconnect, ensureConnected } from '../game-ws';
 import { fetchGamesCatalog, type GameCatalogEntry } from '../games-api';
 import { setActiveGame } from '../selected-game';
@@ -175,46 +181,62 @@ export function LobbyPanel() {
           <span className="games-lib-sidebar-title-text"> GAMES LIBRARY</span>
         </div>
         <div className="games-lib-scroll">
-          <div className="games-lib-section-label">Shipped Defaults</div>
-          <ul className="games-lib-cards">
-            {games.map((g) => {
-              const isSelected = selectedGame === g.id;
-              const accent = gameAccent(g.id);
-              return (
-                <li key={g.id}>
-                  <button
-                    type="button"
-                    className={`games-lib-card${isSelected ? ' selected' : ''}`}
-                    style={{ '--tile-accent': accent } as CSSProperties}
-                    title={g.name}
-                    onClick={() => {
-                      const next = isSelected ? null : g.id;
-                      setSelectedGame(next);
-                      // Keep the harness pane in sync so switching games here
-                      // switches the "Build your agent" template too.
-                      if (next) setActiveGame(next);
-                    }}
-                  >
-                    {/* Large faded glyph reads as the card's "background image". */}
-                    <span className="games-lib-card-glyph" aria-hidden>
-                      {gameIcon(g.id)}
-                    </span>
-                    {/* Dark bottom scrim so white text stays readable over the tint. */}
-                    <span className="games-lib-card-scrim" aria-hidden />
-                    <span className="games-lib-card-body">
-                      <span className="games-lib-card-name">{g.name}</span>
-                      <span className="games-lib-card-desc">{gameTagline(g.id)}</span>
-                    </span>
-                    {isSelected && (
-                      <span className="games-lib-card-check" aria-hidden>
-                        ✓
-                      </span>
-                    )}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+          {/* The library is split by CATEGORY rather than listed flat, because the
+              two halves are different activities: picking a shelf is picking whether
+              you're writing a policy or engineering a prompt. A flat list of twelve
+              with a badge on each made that a detail you had to notice. */}
+          {GAME_CATEGORIES.map(({ cls, icon, label, blurb }) => {
+            const inCategory = games.filter(
+              (g) => (g.decision_class ?? decisionClassOf(g.id)) === cls,
+            );
+            if (!inCategory.length) return null;
+            return (
+              <div key={cls}>
+                <div className="games-lib-section-label" title={blurb}>
+                  {icon} {label}
+                </div>
+                <ul className="games-lib-cards">
+                  {inCategory.map((g) => {
+                    const isSelected = selectedGame === g.id;
+                    const accent = gameAccent(g.id);
+                    return (
+                      <li key={g.id}>
+                        <button
+                          type="button"
+                          className={`games-lib-card${isSelected ? ' selected' : ''}`}
+                          style={{ '--tile-accent': accent } as CSSProperties}
+                          title={g.name}
+                          onClick={() => {
+                            const next = isSelected ? null : g.id;
+                            setSelectedGame(next);
+                            // Keep the harness pane in sync so switching games here
+                            // switches the "Build your agent" template too.
+                            if (next) setActiveGame(next);
+                          }}
+                        >
+                          {/* Large faded glyph reads as the card's "background image". */}
+                          <span className="games-lib-card-glyph" aria-hidden>
+                            {gameIcon(g.id)}
+                          </span>
+                          {/* Dark bottom scrim so white text stays readable over the tint. */}
+                          <span className="games-lib-card-scrim" aria-hidden />
+                          <span className="games-lib-card-body">
+                            <span className="games-lib-card-name">{g.name}</span>
+                            <span className="games-lib-card-desc">{gameTagline(g.id)}</span>
+                          </span>
+                          {isSelected && (
+                            <span className="games-lib-card-check" aria-hidden>
+                              ✓
+                            </span>
+                          )}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            );
+          })}
 
           <div
             style={{

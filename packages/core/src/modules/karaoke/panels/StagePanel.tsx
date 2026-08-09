@@ -17,6 +17,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
 
 import { useAgentContext } from '../../../agent-context';
 import { useSetting } from '../../../settings';
+import { toastsStore } from '../../../toasts';
 import {
   applyPlayerState,
   connectKaraoke,
@@ -76,11 +77,20 @@ export function KaraokeStagePanel() {
     if (settingVolume !== state.volume) void setVolume(settingVolume).then(applyPlayerState);
   }, [settingVolume, state.volume]);
 
-  const src = entry ? mediaUrl(entry.song_id, state.semitones) : '';
+  // An entry can reach the stage before its file does — `POST /download` queues
+  // while the download is still running, on purpose. Mounting a `<video>` at that
+  // point is not merely early, it's unrecoverable: the element 404s, sets
+  // `error.code = 4`, and a media element that failed to load never retries. So
+  // the stage renders a waiting screen until the server says the file landed.
+  const pending = Boolean(entry) && entry?.ready === false;
+  const src = entry && !pending ? mediaUrl(entry.song_id, state.semitones) : '';
 
   // A new song, or a key change, is a *source* change. The transposed stream is a
   // live transcode with no seek (see backend transpose.py), so switching key has
-  // to restart the element — hence keying the load on both.
+  // to restart the element — hence keying the load on both. `pending` is in the
+  // deps because the element is unmounted while waiting: when the download lands
+  // a *fresh* element mounts, and an effect keyed on `src` alone would not re-run
+  // for it.
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !src) return;
@@ -88,7 +98,7 @@ export function KaraokeStagePanel() {
     setBannerVisible(true);
     const timer = window.setTimeout(() => setBannerVisible(false), BANNER_MS);
     return () => window.clearTimeout(timer);
-  }, [src]);
+  }, [src, pending]);
 
   // Reconcile play/pause toward the server's intent.
   useEffect(() => {
@@ -104,7 +114,7 @@ export function KaraokeStagePanel() {
     } else {
       video.pause();
     }
-  }, [state.playing, src]);
+  }, [state.playing, src, pending]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -148,6 +158,19 @@ export function KaraokeStagePanel() {
     void reportEnded().then(applyPlayerState);
   }, []);
 
+  // A media element that fails to load goes quiet: no throw, no rejected promise,
+  // just a black rectangle and `playing: true` on every remote. Surface it, and
+  // pause so the transport stops lying about what the room is watching.
+  const onMediaError = useCallback(() => {
+    const code = videoRef.current?.error?.code;
+    toastsStore.add(
+      'error',
+      'Playback failed',
+      `${entry?.title ?? 'This song'} could not be played${code ? ` (media error ${code})` : ''}.`,
+    );
+    void pause().then(applyPlayerState);
+  }, [entry?.title]);
+
   const transpose = useCallback(
     (delta: number) => {
       const next = Math.max(-6, Math.min(6, state.semitones + delta));
@@ -161,13 +184,25 @@ export function KaraokeStagePanel() {
   return (
     <div className="kk-stage">
       <div className="kk-stage__video-wrap">
-        {entry ? (
+        {entry && pending ? (
+          <div className="kk-splash">
+            <h1 className="kk-splash__title">DOWNLOADING</h1>
+            <p className="kk-splash__next">
+              <b>{entry.title}</b>
+              {entry.singer ? ` — ${entry.singer}` : ''}
+            </p>
+            <p className="kk-splash__hint">
+              It&rsquo;ll start on its own the moment the file lands.
+            </p>
+          </div>
+        ) : entry ? (
           <>
             <video
               ref={videoRef}
               className="kk-stage__video"
               src={src}
               onEnded={onEnded}
+              onError={onMediaError}
               playsInline
             />
             <div className={`kk-stage__nowbar${bannerVisible ? '' : ' kk-stage__nowbar--hidden'}`}>

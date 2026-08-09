@@ -66,6 +66,11 @@ def _settings() -> tuple[str, str, str]:
     return url, token, policy
 
 
+# Per-game policy overrides that this process has already refused, so a seat that
+# rebuilds at every match boundary logs the reason once rather than every game.
+_refused_overrides: set[str] = set()
+
+
 def _resolve_policy_name(game_id: str | None) -> str:
     """The move-policy name for `game_id`, resolved in order:
     (1) the player's explicit per-game override (`games.policy.<game_id>`),
@@ -73,17 +78,43 @@ def _resolve_policy_name(game_id: str | None) -> str:
     (3) the legacy global `games.policy` setting (for uncatalogued games / town).
 
     Policy is a property of the game now, so a VizDoom seat defaults to `bot` and a
-    RAG Race seat to `agent` without the player flipping a single global switch."""
+    RAG Race seat to `agent` without the player flipping a single global switch.
+
+    **This is the gate that makes a game's category binding.** An override outside
+    the game's `allowed_policies` is refused here and the declared default used
+    instead — so setting `games.policy.vizdoom_toy = agent` can no longer put a
+    multi-second LLM loop on a 1.2s tick. It lives here rather than on a settings
+    route because `/api/settings` is generic and knows nothing about games: a
+    route-side check would leave the agent tools and the REPL as back doors, the
+    same argument as `_guard_writes` in the database driver.
+    """
     if game_id:
-        override = get_value(f"games.policy.{game_id}", None)
-        if override:
-            return str(override)
+        spec = None
         try:
             from backend.games_engine.base import get_game
 
-            return str(get_game(game_id).default_policy)
+            spec = get_game(game_id)
         except Exception:
-            logger.debug("no catalog default_policy for %s", game_id, exc_info=True)
+            logger.debug("no catalog entry for %s", game_id, exc_info=True)
+        override = get_value(f"games.policy.{game_id}", None)
+        if override:
+            name = str(override)
+            if spec is None or name in spec.allowed_policies:
+                return name
+            if game_id not in _refused_overrides:
+                _refused_overrides.add(game_id)
+                logger.warning(
+                    "ignoring games.policy.%s=%r: a %s %s game allows only %s; "
+                    "using its default (%s)",
+                    game_id,
+                    name,
+                    spec.pacing,
+                    spec.decision_class,
+                    list(spec.allowed_policies),
+                    spec.default_policy,
+                )
+        if spec is not None:
+            return str(spec.default_policy)
     return str(get_value("games.policy", "random") or "random")
 
 
@@ -132,11 +163,10 @@ class _PlayerConn:
         self._trace_buffer: list[dict[str, Any]] = []
         # Plaza-arcade held keys for the fighter (set from the browser each frame).
         self._arcade_keys: list[str] = []
-        # Compiled `fighter.bot` loadout tool for ranked fighter mode (lazy).
-        self._fighter_bot: Any = None
-        # Compiled `<game_id>.bot` loadout tools for the ViZDoom modes, one per game
-        # id (vizdoom_toy / vizdoom_duel), compiled lazily on first tick.
-        self._vizdoom_bots: dict[str, Any] = {}
+        # Compiled coded harnesses for the real-time modes (fighter / vizdoom_toy /
+        # vizdoom_duel), one per game id, compiled lazily on first tick and held for
+        # the life of this connection.
+        self._tick_bots: dict[str, Any] = {}
         # The AgentTown resident's mind (created on first use; whispers land here).
         self._town_policy: TownPolicy | None = None
 
@@ -383,7 +413,9 @@ class _PlayerConn:
             from backend.modules.games import model_config
 
             version = loadout_mod.active_version_id(game_id)
-            config = model_config.parse_model(loadout_mod.get_loadout(game_id).model)
+            config = model_config.parse_model(
+                loadout_mod.get_llm_harness(game_id).model
+            )
             return version, model_config.model_label(config)
         except Exception:
             logger.debug("loadout attribution failed", exc_info=True)
@@ -459,7 +491,7 @@ class _PlayerConn:
             # Arcade seat (human at the keyboard) — map held keys, default idle.
             action_id = self._arcade_action(legal_ids)
         else:
-            action_id = self._fighter_bot_action(observation, legal_ids)
+            action_id = self._tick_bot_action("fighter", observation, legal, legal_ids)
         if self.last_turn is not msg:
             return
         await self._send(
@@ -472,51 +504,43 @@ class _PlayerConn:
         if self.last_turn is msg:
             self.last_turn = None
 
-    def _fighter_bot_action(
-        self, observation: dict[str, Any], legal_ids: set[str]
+    def _tick_bot_action(
+        self,
+        game_id: str,
+        observation: dict[str, Any],
+        legal: list[dict[str, Any]],
+        legal_ids: set[str],
     ) -> str:
-        """Ranked fighter: run the compiled `fighter.bot` loadout tool (a pure
-        function, no model) to pick this tick's action. Any failure → idle."""
-        try:
-            if self._fighter_bot is None:
-                from backend.modules.games.loadout import HarnessRuntime, get_loadout
+        """Run the game's **coded harness** to pick this tick's action. Any failure
+        → idle (a real-time seat can't stall waiting for a fix).
 
-                runtime = HarnessRuntime(get_loadout("fighter"))
-                self._fighter_bot = runtime if runtime.has("fighter.bot") else False
-            if not self._fighter_bot:
-                return "idle"
-            # HarnessRuntime.call is async only to await async tools; the fighter
-            # bot is sync, so call the compiled fn directly for speed.
-            fn = self._fighter_bot._compiled.get("fighter.bot")
-            result = fn({}, observation) if fn else None
+        Shared by the ranked fighter, ranked ViZDoom and the networked ViZDoom Duel.
+        These used to compile the bot as an LLM-harness *tool* and find it by name,
+        which meant a bot written in the modern `act(obs, info)` shape — the shape
+        every other surface teaches — silently failed to compile at all and the seat
+        idled forever. Going through `compile_bot`, as `BotPolicy` does, is what
+        makes all three shapes work here too.
+        """
+        try:
+            bot = self._tick_bots.get(game_id)
+            if bot is None:
+                from backend.modules.games.bot_sdk import compile_bot
+                from backend.modules.games.loadout import get_coded_harness
+
+                bot = compile_bot(
+                    get_coded_harness(game_id).bot_code, f"<bot:{game_id}>"
+                )
+                self._tick_bots[game_id] = bot
+            from backend.modules.games.bot_sdk import build_info
+
+            obs_for_bot = dict(observation)
+            obs_for_bot.setdefault("legal_actions", legal)
+            info = build_info(obs_for_bot, legal, game_id, self._my_seat)
+            result = bot.act(obs_for_bot, info)
             action = result if isinstance(result, str) else (result or {}).get("action")
             return str(action) if str(action) in legal_ids else "idle"
         except Exception:
-            logger.debug("fighter.bot failed; idling", exc_info=True)
-            return "idle"
-
-    def _vizdoom_bot_action(
-        self, game_id: str, observation: dict[str, Any], legal_ids: set[str]
-    ) -> str:
-        """Run the compiled `<game_id>.bot` loadout tool (a pure function, no model)
-        to pick this tick's action. Shared by ranked ViZDoom (score race) and the
-        networked ViZDoom Duel — the bot tool is named for whichever game is live."""
-        tool = f"{game_id}.bot"
-        try:
-            if game_id not in self._vizdoom_bots:
-                from backend.modules.games.loadout import HarnessRuntime, get_loadout
-
-                runtime = HarnessRuntime(get_loadout(game_id))
-                self._vizdoom_bots[game_id] = runtime if runtime.has(tool) else False
-            bot = self._vizdoom_bots[game_id]
-            if not bot:
-                return "idle"
-            fn = bot._compiled.get(tool)
-            result = fn({}, observation) if fn else None
-            action = result if isinstance(result, str) else (result or {}).get("action")
-            return str(action) if str(action) in legal_ids else "idle"
-        except Exception:
-            logger.debug("%s failed; idling", tool, exc_info=True)
+            logger.debug("%s bot failed; idling", game_id, exc_info=True)
             return "idle"
 
     async def _play_vizdoom(
@@ -527,7 +551,7 @@ class _PlayerConn:
     ) -> None:
         game_id = str(msg.get("game_id") or "vizdoom_toy")
         legal_ids = {str(a.get("id")) for a in legal}
-        action_id = self._vizdoom_bot_action(game_id, observation, legal_ids)
+        action_id = self._tick_bot_action(game_id, observation, legal, legal_ids)
         if self.last_turn is not msg:
             return
         await self._send(
@@ -548,13 +572,13 @@ class _PlayerConn:
         the agent errored) so a table never hangs. Traces flow to the same sink."""
         from backend.modules.agent.routes import _load_config
         from backend.modules.games import model_client, model_config
-        from backend.modules.games.loadout import get_loadout
+        from backend.modules.games.loadout import get_llm_harness
         from backend.modules.games.task_agent import TaskAgent
 
         game_id = str(msg.get("game_id") or "")
         import httpx
 
-        loadout_model = model_config.parse_model(get_loadout(game_id).model)
+        loadout_model = model_config.parse_model(get_llm_harness(game_id).model)
         try:
             if loadout_model is not None:
                 headers = model_client.headers_for(loadout_model)

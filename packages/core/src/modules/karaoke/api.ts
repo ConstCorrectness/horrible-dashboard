@@ -53,6 +53,14 @@ export interface QueueEntry {
   artist: string;
   singer: string;
   duration: number | null;
+  /**
+   * Whether the media file exists yet. An entry is queued *while its download is
+   * still running*, so it can reach the stage before its file does. A `<video>`
+   * that fails to load never retries, so the stage must wait on this rather than
+   * pointing at a URL that 404s — otherwise a song that arrived a moment later
+   * stays black forever.
+   */
+  ready: boolean;
   played_at: string | null;
 }
 

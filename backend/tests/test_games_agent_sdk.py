@@ -19,7 +19,7 @@ from backend.modules.games.agent_sdk import (
     compile_agent,
     starter_agent_source,
 )
-from backend.modules.games.loadout import Loadout
+from backend.modules.games.loadout import LlmHarness
 from backend.modules.games.policy import AgentPolicy, RandomPolicy
 
 LEGAL = [
@@ -90,12 +90,12 @@ def test_starter_sources_compile_for_every_game() -> None:
 # ---- the policy path -------------------------------------------------------
 
 
-def _run(loadout: Loadout, chat_fn=None):
+def _run(loadout: LlmHarness, chat_fn=None):
     steps: list[dict] = []
     policy = AgentPolicy(
         fallback=RandomPolicy(),
         chat_fn=chat_fn,
-        load_loadout=lambda _g: loadout,
+        load_harness=lambda _g: loadout,
         trace=steps.append,
     )
     chosen = asyncio.run(policy.choose({"board": []}, LEGAL, loadout.game_id))
@@ -104,7 +104,7 @@ def _run(loadout: Loadout, chat_fn=None):
 
 def test_default_agent_runs_the_declarative_loop() -> None:
     # Empty agent_code ⇒ unchanged behavior: the model drives context+tools and commits.
-    loadout = Loadout(game_id="t", context="think")
+    loadout = LlmHarness(game_id="t", context="think")
     chosen, steps = _run(loadout, _commit_chat("8"))
     assert chosen == "8"
     assert steps[-1] == {"kind": "chose", "action_id": "8"}
@@ -115,7 +115,7 @@ def test_custom_agent_overrides_without_touching_the_model() -> None:
     async def boom(messages, tools):  # would raise if the declarative loop ran
         raise AssertionError("the model should not be used by a pure-code agent")
 
-    loadout = Loadout(
+    loadout = LlmHarness(
         game_id="t",
         agent_code="def my_agent(obs, config):\n    return obs['legal_actions'][1]['id']\n",
     )
@@ -127,7 +127,7 @@ def test_custom_agent_overrides_without_touching_the_model() -> None:
 
 def test_agent_can_delegate_to_config_decide() -> None:
     # `return await config.decide(obs)` re-enters the declarative loop.
-    loadout = Loadout(
+    loadout = LlmHarness(
         game_id="t",
         context="ctx",
         agent_code="async def my_agent(obs, config):\n    return await config.decide(obs)\n",
@@ -140,7 +140,7 @@ def test_agent_can_delegate_to_config_decide() -> None:
 
 def test_broken_agent_falls_back_to_a_legal_move() -> None:
     # A syntax error in agent_code degrades to the random fallback (never hangs a table).
-    loadout = Loadout(
+    loadout = LlmHarness(
         game_id="t", agent_code="def my_agent(obs, config)\n    return 1\n"
     )
     chosen, steps = _run(loadout, _commit_chat("8"))
@@ -160,7 +160,7 @@ def test_pure_code_agent_runs_without_any_model(monkeypatch) -> None:
     import backend.modules.agent.routes as agent_routes
 
     monkeypatch.setattr(agent_routes, "_load_config", lambda: None)
-    loadout = Loadout(game_id="t", agent_code=REFLEX_AGENT_SOURCE)
-    policy = AgentPolicy(fallback=RandomPolicy(), load_loadout=lambda _g: loadout)
+    loadout = LlmHarness(game_id="t", agent_code=REFLEX_AGENT_SOURCE)
+    policy = AgentPolicy(fallback=RandomPolicy(), load_harness=lambda _g: loadout)
     chosen = asyncio.run(policy.choose({"board": []}, LEGAL, "t"))
     assert chosen in IDS

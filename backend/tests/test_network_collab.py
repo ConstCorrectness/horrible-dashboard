@@ -122,7 +122,8 @@ def test_an_op_reaches_nobody_until_the_pane_is_shared(monkeypatch):
     async def go():
         await mgr.handle(conn, {"event": "join", "data": {"paneKey": "k"}})
         await mgr.handle(
-            conn, {"event": "op", "data": {"paneKey": "k", "baseRev": 0, "text": "private"}}
+            conn,
+            {"event": "op", "data": {"paneKey": "k", "baseRev": 0, "text": "private"}},
         )
 
     asyncio.run(go())
@@ -140,12 +141,15 @@ def test_a_third_peer_receives_nothing(monkeypatch):
         # peerA is in because they sent us an op; peerB because we shared with them.
         await mgr.apply_peer_op(
             PeerEnvelope(
-                type="collab_op", src="peerA", data={"paneKey": "k", "rev": 1, "text": "hi"}
+                type="collab_op",
+                src="peerA",
+                data={"paneKey": "k", "rev": 1, "text": "hi"},
             )
         )
         mgr.rooms["k"].peers.add("peerB")
         await mgr.handle(
-            conn, {"event": "op", "data": {"paneKey": "k", "baseRev": 1, "text": "ours"}}
+            conn,
+            {"event": "op", "data": {"paneKey": "k", "baseRev": 1, "text": "ours"}},
         )
 
     asyncio.run(go())
@@ -161,7 +165,9 @@ def test_a_peers_op_puts_them_in_the_room(monkeypatch):
     async def go():
         await mgr.apply_peer_op(
             PeerEnvelope(
-                type="collab_op", src="peerA", data={"paneKey": "k", "rev": 2, "text": "x"}
+                type="collab_op",
+                src="peerA",
+                data={"paneKey": "k", "rev": 2, "text": "x"},
             )
         )
 
@@ -185,7 +191,8 @@ def test_sharing_pushes_the_current_state_to_their_machines(monkeypatch):
     async def go():
         await mgr.handle(conn, {"event": "join", "data": {"paneKey": "k"}})
         await mgr.handle(
-            conn, {"event": "op", "data": {"paneKey": "k", "baseRev": 0, "text": "notes"}}
+            conn,
+            {"event": "op", "data": {"paneKey": "k", "baseRev": 0, "text": "notes"}},
         )
         await mgr.handle(
             conn, {"event": "share", "data": {"paneKey": "k", "personId": "p_ann"}}
@@ -235,7 +242,8 @@ def test_unshare_removes_every_machine_of_theirs(monkeypatch):
         )
         hub.sent.clear()
         await mgr.handle(
-            conn, {"event": "op", "data": {"paneKey": "k", "baseRev": 0, "text": "after"}}
+            conn,
+            {"event": "op", "data": {"paneKey": "k", "baseRev": 0, "text": "after"}},
         )
 
     asyncio.run(go())
@@ -255,7 +263,9 @@ def test_an_untrusted_peers_op_is_ignored():
         info = Info()
 
     env = PeerEnvelope(
-        type="collab_op", src="rando", data={"paneKey": "k", "rev": 9, "text": "mine now"}
+        type="collab_op",
+        src="rando",
+        data={"paneKey": "k", "rev": 9, "text": "mine now"},
     )
     asyncio.run(handle_peer_collab_op(None, Session(), env))
     from backend.modules.network.collab import collab_manager

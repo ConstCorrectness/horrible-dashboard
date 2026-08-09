@@ -9,13 +9,13 @@ from backend.games_engine import list_games
 from backend.modules.games.loadout import (
     STARTER_VERSION,
     HarnessRuntime,
-    Loadout,
+    LlmHarness,
     active_version_id,
-    get_loadout,
+    get_llm_harness,
     list_versions,
     save_version,
 )
-from backend.modules.games.templates import default_loadout_for, loadout_templates
+from backend.modules.games.templates import loadout_templates
 
 # A minimal but realistic observation per game, carrying the fields each starter
 # tool reads (keeps the test fast + hermetic — no engine instantiation, which for
@@ -81,19 +81,48 @@ def test_every_registered_game_has_a_starter_template() -> None:
     assert missing == [], f"games without a starter harness: {missing}"
 
 
-def test_default_loadout_for_every_game() -> None:
-    for g in list_games():
-        body = default_loadout_for(g.id)
-        assert body is not None, g.id
-        assert body["game_id"] == g.id
+def test_every_starter_is_for_exactly_one_harness() -> None:
+    """A template is either a coded policy or an LLM harness — never both, and the
+    kind it claims is the kind `default_harness_for` will hand back."""
+    from backend.modules.games.loadout import CODED, LLM
+    from backend.modules.games.templates import default_harness_for, template_kind
+
+    for t in loadout_templates():
+        kind = template_kind(t)
+        assert kind in (CODED, LLM), t["id"]
+        body = default_harness_for(t["game_id"], kind)
+        assert body is not None, t["id"]
+        if kind == CODED:
+            # A coded starter arrives as bot_code, not as a tool list.
+            assert body["bot_code"].strip(), t["id"]
+            assert "tools" not in body, t["id"]
+        else:
+            assert body["game_id"] == t["game_id"], t["id"]
+        # The other side genuinely has nothing of this template's.
+        assert (
+            default_harness_for(t["game_id"], LLM if kind == CODED else CODED) != body
+        )
 
 
-def test_get_loadout_seeds_the_starter_for_a_fresh_game() -> None:
-    # No saved loadout (isolated temp data dir) → the shipped starter is active,
-    # so a brand-new player's agent already has a working harness.
+def test_seeding_a_fresh_game_gives_the_right_harness() -> None:
+    """No saved harness (isolated temp data dir) → the shipped starter is active, so
+    a brand-new player already has a working one of whichever kind their seat runs."""
+    from backend.modules.games.loadout import (
+        DEFAULT_BOT_CODE,
+        get_coded_harness,
+    )
+    from backend.modules.games.templates import default_harness_for
+
     for g in list_games():
-        lo = get_loadout(g.id)
-        assert lo.context or lo.tools, f"{g.id} seeded empty"
+        if default_harness_for(g.id, "llm") is not None:
+            lo = get_llm_harness(g.id)
+            assert lo.context or lo.tools, f"{g.id} seeded an empty LLM harness"
+        if default_harness_for(g.id, "coded") is not None:
+            coded = get_coded_harness(g.id)
+            assert coded.bot_code.strip(), f"{g.id} seeded an empty bot"
+            assert coded.bot_code != DEFAULT_BOT_CODE, f"{g.id} ignored its starter"
+        # Either way a coded seat always has something to run.
+        assert get_coded_harness(g.id).bot_code.strip(), g.id
 
 
 def test_seeded_default_attributes_to_starter_version() -> None:
@@ -109,21 +138,36 @@ def test_seeded_default_attributes_to_starter_version() -> None:
 
 
 def test_first_real_save_replaces_the_starter() -> None:
-    save_version("tictactoe", Loadout(game_id="tictactoe", context="mine"), "v1")
+    save_version("tictactoe", LlmHarness(game_id="tictactoe", context="mine"), "v1")
     assert active_version_id("tictactoe") == "v1"
     assert [v["id"] for v in list_versions("tictactoe")] == ["v1"]
 
 
-def test_every_template_tool_compiles_and_runs() -> None:
+def test_every_template_compiles_and_runs() -> None:
+    """Each starter is exercised through the runtime that will actually run it: a
+    coded one through `compile_bot` (the policy path), an LLM one tool-by-tool
+    through `HarnessRuntime`. Running a coded starter through the tool runtime would
+    pass while proving nothing about the seat that plays it."""
+    from backend.modules.games.bot_sdk import build_info, compile_bot
+    from backend.modules.games.loadout import CODED
+    from backend.modules.games.templates import default_harness_for, template_kind
+
     for t in loadout_templates():
-        obs = _OBS[t["game_id"]]
-        runtime = HarnessRuntime(Loadout.from_wire(t["game_id"], t["loadout"]))
+        game_id = t["game_id"]
+        obs = _OBS[game_id]
+        if template_kind(t) == CODED:
+            body = default_harness_for(game_id, CODED) or {}
+            bot = compile_bot(body["bot_code"], f"<starter:{t['id']}>")
+            legal = list(obs.get("legal_actions") or [])
+            action = bot.act(obs, build_info(obs, legal, game_id, 0))
+            assert action in [a["id"] for a in legal], (t["id"], action)
+            continue
+        runtime = HarnessRuntime(LlmHarness.from_wire(game_id, t["loadout"]))
         for tool in t["loadout"]["tools"]:
             res = asyncio.run(
                 runtime.call(tool["name"], _ARGS.get(tool["name"], {}), obs)
             )
-            # A tool returns a dict (helpers) or a string (per-tick .bot actions);
-            # only a dict carrying "error" means it raised.
+            # A helper returns a dict; only a dict carrying "error" means it raised.
             assert not (isinstance(res, dict) and "error" in res), (
                 t["id"],
                 tool["name"],

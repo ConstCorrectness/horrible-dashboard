@@ -1,4 +1,4 @@
-"""Loadout versioning: v1 files upgrade in place, branching/activating/deleting
+"""LlmHarness versioning: v1 files upgrade in place, branching/activating/deleting
 versions, and match-log attribution stats."""
 
 from __future__ import annotations
@@ -21,20 +21,97 @@ def _write_v1(path: Path, game_id: str) -> None:
 def test_v1_file_reads_as_active_version(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("HORRIBLE_DATA_DIR", str(tmp_path))
     _write_v1(tmp_path / "games_loadouts.json", "tictactoe")
-    loadout = L.get_loadout("tictactoe")
+    loadout = L.get_llm_harness("tictactoe")
     assert loadout.context == "old context"
     assert L.active_version_id("tictactoe") == "v1"
     assert [v["id"] for v in L.list_versions("tictactoe")] == ["v1"]
 
 
+def _write_v2(path: Path, game_id: str, tools: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                game_id: {
+                    "active": "v2",
+                    "versions": {
+                        "v1": {"label": "first", "created_at": 1.0, "context": "old"},
+                        "v2": {
+                            "label": "second",
+                            "created_at": 2.0,
+                            "context": "my strategy",
+                            "tools": tools,
+                            "model": {"provider": "ollama"},
+                            "agent_code": "def my_agent(o, c): ...",
+                        },
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_v2_splits_into_two_harnesses_without_losing_anything(
+    tmp_path, monkeypatch
+) -> None:
+    """The migration with real user data at stake. In v2 the coded policy lived
+    *inside* the tool list under `<game>.bot`; it has to come out as `bot_code`
+    while every genuine helper tool stays on the LLM side. Losing either half means
+    silently discarding work someone did."""
+    monkeypatch.setenv("HORRIBLE_DATA_DIR", str(tmp_path))
+    tools = [
+        {
+            "name": "board_scanner",
+            "description": "helper",
+            "code": "def run(a, o): ...",
+        },
+        {"name": "fighter.bot", "description": "the policy", "code": "MY BOT CODE"},
+    ]
+    _write_v2(tmp_path / "games_loadouts.json", "fighter", tools)
+
+    coded = L.get_coded_harness("fighter")
+    assert coded.bot_code == "MY BOT CODE"
+
+    llm = L.get_llm_harness("fighter")
+    assert llm.context == "my strategy"
+    assert llm.model == {"provider": "ollama"}
+    assert llm.agent_code == "def my_agent(o, c): ..."
+    # The helper survives; the bot tool does not linger as a tool as well.
+    assert [t.name for t in llm.tools] == ["board_scanner"]
+
+    # Both sides keep the same history and the same active pointer, so a player's
+    # versions still line up across the split.
+    assert L.active_version_id("fighter", L.CODED) == "v2"
+    assert L.active_version_id("fighter", L.LLM) == "v2"
+    assert [v["id"] for v in L.list_versions("fighter", L.LLM)] == ["v2", "v1"]
+
+
+def test_the_two_harnesses_version_independently(tmp_path, monkeypatch) -> None:
+    """Separate histories are the point of the split: iterating a bot and iterating
+    a prompt are different activities, and a hatch game has both."""
+    monkeypatch.setenv("HORRIBLE_DATA_DIR", str(tmp_path))
+    L.save_harness(L.CodedHarness(game_id="tictactoe", bot_code="bot one"))
+    L.save_harness(L.LlmHarness(game_id="tictactoe", context="prompt one"))
+    L.save_version("tictactoe", L.CodedHarness(game_id="tictactoe", bot_code="bot two"))
+
+    assert L.get_coded_harness("tictactoe").bot_code == "bot two"
+    # Branching the bot left the prompt exactly where it was.
+    assert L.get_llm_harness("tictactoe").context == "prompt one"
+    assert len(L.list_versions("tictactoe", L.CODED)) == 2
+    assert len(L.list_versions("tictactoe", L.LLM)) == 1
+
+
 def test_save_version_branches_and_activates(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("HORRIBLE_DATA_DIR", str(tmp_path))
-    L.save_loadout(L.Loadout(game_id="tictactoe", context="first"))
+    L.save_harness(L.LlmHarness(game_id="tictactoe", context="first"))
     vid = L.save_version(
-        "tictactoe", L.Loadout(game_id="tictactoe", context="second"), "corner opener"
+        "tictactoe",
+        L.LlmHarness(game_id="tictactoe", context="second"),
+        "corner opener",
     )
     assert vid == "v2"
-    assert L.get_loadout("tictactoe").context == "second"
+    assert L.get_llm_harness("tictactoe").context == "second"
     versions = L.list_versions("tictactoe")
     assert {v["id"] for v in versions} == {"v1", "v2"}
     assert next(v for v in versions if v["id"] == "v2")["label"] == "corner opener"
@@ -42,14 +119,14 @@ def test_save_version_branches_and_activates(tmp_path, monkeypatch) -> None:
 
     # Flip back to v1 — the active version is what plays.
     assert L.activate_version("tictactoe", "v1")
-    assert L.get_loadout("tictactoe").context == "first"
+    assert L.get_llm_harness("tictactoe").context == "first"
 
 
 def test_delete_version_guards(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("HORRIBLE_DATA_DIR", str(tmp_path))
-    L.save_loadout(L.Loadout(game_id="t", context="only"))
+    L.save_harness(L.LlmHarness(game_id="t", context="only"))
     assert not L.delete_version("t", "v1")  # never the last one
-    L.save_version("t", L.Loadout(game_id="t", context="two"), "")
+    L.save_version("t", L.LlmHarness(game_id="t", context="two"), "")
     assert L.delete_version("t", "v2")  # deleting the active one…
     assert L.active_version_id("t") == "v1"  # …falls back to the newest remaining
 
@@ -57,8 +134,8 @@ def test_delete_version_guards(tmp_path, monkeypatch) -> None:
 def test_save_loadout_keeps_model_and_updates_active(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("HORRIBLE_DATA_DIR", str(tmp_path))
     model = {"provider": "ollama", "model": "llama3"}
-    L.save_loadout(L.Loadout(game_id="t", context="x", model=model))
-    assert L.get_loadout("t").model == model
+    L.save_harness(L.LlmHarness(game_id="t", context="x", model=model))
+    assert L.get_llm_harness("t").model == model
 
 
 def test_match_log_attribution(tmp_path, monkeypatch) -> None:

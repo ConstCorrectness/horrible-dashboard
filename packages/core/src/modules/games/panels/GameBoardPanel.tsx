@@ -261,7 +261,9 @@ function IdleBoard() {
                       '--tile-accent': accent,
                     } as React.CSSProperties
                   }
-                  onClick={() => void startWithSavedSetup(g.id, g.default_policy)}
+                  onClick={() =>
+                    void startWithSavedSetup(g.id, g.default_policy, g.allowed_policies)
+                  }
                 >
                   <span style={{ fontSize: '1.6rem' }}>{gameIcon(g.id)}</span>
                   <span style={{ fontSize: '0.78rem', fontWeight: 700, textAlign: 'center' }}>

@@ -95,7 +95,17 @@ export interface LoadoutTool {
   required: string[];
 }
 
-export interface Loadout {
+/**
+ * Which harness a game's seat runs. `coded` is a Python policy and nothing else;
+ * `llm` is context + tools + model + agent_code. They are separate objects with
+ * separate version histories, so this is a discriminated union rather than one
+ * shape with optional halves — and the backend's wire union **rejects** a body
+ * carrying the other kind's fields rather than dropping them.
+ */
+export type HarnessKind = 'coded' | 'llm';
+
+export interface LlmHarness {
+  kind: 'llm';
   game_id: string;
   context: string;
   tools: LoadoutTool[];
@@ -103,22 +113,42 @@ export interface Loadout {
   agent_code: string;
 }
 
+export interface CodedHarness {
+  kind: 'coded';
+  game_id: string;
+  bot_code: string;
+}
+
+export type Harness = LlmHarness | CodedHarness;
+
+/** The harness kind a game's seat runs, given its effective move policy. Mirrors
+ * `harness_kind_for_policy` on the backend — only the `bot` policy is coded. */
+export function harnessKindForPolicy(policy: string | undefined): HarnessKind {
+  return policy === 'bot' ? 'coded' : 'llm';
+}
+
+/** The old name: pre-split, "loadout" always meant the LLM harness. */
+export type Loadout = LlmHarness;
+
 export interface LoadoutValidation {
   ok: boolean;
   tools: { name: string; ok: boolean; error: string | null }[];
   agent_error: string | null;
 }
 
-export function getLoadout(gameId: string): Promise<Loadout> {
-  return apiGet(`/games/loadout/${encodeURIComponent(gameId)}`);
+/** A game's harness. `kind` picks which one; omitted, the backend answers with
+ * whichever this node's seat would actually run. */
+export function getLoadout(gameId: string, kind?: HarnessKind): Promise<Harness> {
+  const q = kind ? `?kind=${kind}` : '';
+  return apiGet(`/games/loadout/${encodeURIComponent(gameId)}${q}`);
 }
 
-export function saveLoadout(gameId: string, loadout: Loadout): Promise<Loadout> {
-  return apiPut(`/games/loadout/${encodeURIComponent(gameId)}`, loadout);
+export function saveLoadout(gameId: string, harness: Harness): Promise<Harness> {
+  return apiPut(`/games/loadout/${encodeURIComponent(gameId)}`, harness);
 }
 
-export function validateLoadout(loadout: Loadout): Promise<LoadoutValidation> {
-  return apiPost('/games/loadout/validate', loadout);
+export function validateLoadout(harness: Harness): Promise<LoadoutValidation> {
+  return apiPost('/games/loadout/validate', harness);
 }
 
 /** The starter `my_agent` source to seed the editor for a fresh agent on a game. */
@@ -163,14 +193,21 @@ export function testTool(
 export interface LoadoutTemplate {
   id: string;
   game_id: string;
+  kind: HarnessKind;
   title: string;
   blurb: string;
   loadout: Loadout;
 }
 
-/** The shipped templates, optionally narrowed to one game. */
-export async function fetchLoadoutTemplates(gameId?: string): Promise<LoadoutTemplate[]> {
-  const q = gameId ? `?game_id=${encodeURIComponent(gameId)}` : '';
+/** The shipped templates, optionally narrowed to one game and one harness kind. */
+export async function fetchLoadoutTemplates(
+  gameId?: string,
+  kind?: HarnessKind,
+): Promise<LoadoutTemplate[]> {
+  const params = new URLSearchParams();
+  if (gameId) params.set('game_id', gameId);
+  if (kind) params.set('kind', kind);
+  const q = params.toString() ? `?${params}` : '';
   const res = await apiGet<{ templates?: LoadoutTemplate[] }>(`/games/loadout-templates${q}`);
   return res.templates ?? [];
 }

@@ -287,10 +287,17 @@ def test_declared_repo_is_read_from_the_gguf_provenance():
 
 def test_declared_repo_rejects_anything_that_is_not_owner_slash_name():
     assert arch.declared_repo(_gguf({})) is None
-    assert arch.declared_repo(_gguf({"general.base_model.0.repo_url": "not a url"})) is None
+    assert (
+        arch.declared_repo(_gguf({"general.base_model.0.repo_url": "not a url"}))
+        is None
+    )
     assert (
         arch.declared_repo(
-            _gguf({"general.base_model.0.repo_url": "https://huggingface.co/a/b/tree/main"})
+            _gguf(
+                {
+                    "general.base_model.0.repo_url": "https://huggingface.co/a/b/tree/main"
+                }
+            )
         )
         is None
     )
@@ -336,7 +343,9 @@ def test_fill_gaps_recomputes_attention_kind_once_kv_heads_arrive():
     """kvHeads is what makes GQA detectable; filling it without recomputing would
     leave the diagram saying 'unknown' while holding the data to say 'gqa'."""
     primary = arch.from_ollama_show(
-        "m", "e", _gguf({"llama.attention.head_count": 16, "llama.embedding_length": 3840})
+        "m",
+        "e",
+        _gguf({"llama.attention.head_count": 16, "llama.embedding_length": 3840}),
     )
     assert primary.attention.kind == "unknown"
 
@@ -365,7 +374,9 @@ def test_fill_gaps_never_overrides_a_stated_value():
         ),
     )
     secondary = arch.from_hf_config(
-        "m", "r", {"num_attention_heads": 16, "head_dim": 256, "max_position_embeddings": 8192}
+        "m",
+        "r",
+        {"num_attention_heads": 16, "head_dim": 256, "max_position_embeddings": 8192},
     )
     arch.fill_gaps(primary, secondary)
 

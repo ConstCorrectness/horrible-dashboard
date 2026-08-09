@@ -223,6 +223,181 @@ def test_song_ended_respects_autoplay(data_dir, session):
     assert [e.title for e in session.snapshot().queue] == ["C"]
 
 
+def test_entry_queued_while_downloading_is_not_ready(data_dir, session):
+    """The stage must be able to tell 'no file yet' from 'ready'. A `<video>`
+    pointed at a not-yet-downloaded song 404s and never retries."""
+    song = _song(title="Still coming", status="queued")
+    asyncio.run(session.add(song, singer="Ana"))
+    assert session.snapshot().now_playing.ready is False
+
+
+def test_finished_download_unblocks_the_waiting_entry(data_dir, session):
+    """The regression this whole flag exists for: a song queued mid-download used
+    to reach the stage, fail to load, and stay black forever once the file landed,
+    because nothing re-triggered the load."""
+    song = _song(title="Still coming", status="queued")
+    asyncio.run(session.add(song, singer="Ana"))
+    assert session.snapshot().now_playing.ready is False
+
+    store.update_song(song["id"], status="ready", filename="x.mp4")
+    asyncio.run(session.song_downloaded(song["id"], ok=True))
+
+    playing = session.snapshot().now_playing
+    assert playing.ready is True
+    assert playing.title == "Still coming"
+
+
+def test_finished_download_unblocks_entries_still_in_the_queue(data_dir, session):
+    """Not just the playing one: the same song can be queued for several singers,
+    and every waiting entry has to be released."""
+    session._autoplay = False
+    song = _song(title="Shared", status="queued")
+    asyncio.run(session.add(song, singer="Ana"))
+    asyncio.run(session.add(song, singer="Ben"))
+    assert [e.ready for e in session.snapshot().queue] == [False, False]
+
+    asyncio.run(session.song_downloaded(song["id"], ok=True))
+    assert [e.ready for e in session.snapshot().queue] == [True, True]
+
+
+def test_failed_download_advances_past_the_stranded_entry(data_dir, session):
+    """A download that never arrives must not wedge the stage on a song that
+    cannot play — the room would just stare at it."""
+    dead = _song(title="Never arrives", status="queued")
+    good = _song(title="Fine", status="ready")
+    asyncio.run(session.add(dead, singer="Ana"))
+    asyncio.run(session.add(good, singer="Ben"))
+    assert session.snapshot().now_playing.title == "Never arrives"
+
+    asyncio.run(session.song_downloaded(dead["id"], ok=False))
+    state = session.snapshot()
+    assert state.now_playing.title == "Fine"
+    assert all(e.title != "Never arrives" for e in state.queue)
+
+
+def test_failed_download_drops_queued_entries_without_disturbing_playback(
+    data_dir, session
+):
+    playing = _song(title="Playing", status="ready")
+    dead = _song(title="Never arrives", status="queued")
+    asyncio.run(session.add(playing))
+    asyncio.run(session.add(dead, singer="Ana"))
+
+    asyncio.run(session.song_downloaded(dead["id"], ok=False))
+    state = session.snapshot()
+    assert state.now_playing.title == "Playing"
+    assert state.queue == []
+
+
+def test_song_downloaded_is_a_no_op_for_unqueued_songs(data_dir, session):
+    """Downloads happen without anything waiting on them all the time (the plain
+    'get it for later' path); that must not touch the session."""
+    asyncio.run(session.add(_song(title="Playing", status="ready")))
+    before = session.snapshot().revision
+    asyncio.run(session.song_downloaded(_song(status="queued")["id"], ok=True))
+    assert session.snapshot().revision == before
+
+
+def test_library_queued_song_is_ready_immediately(data_dir, session):
+    asyncio.run(session.add(_song(title="On disk", status="ready")))
+    assert session.snapshot().now_playing.ready is True
+
+
+def test_completed_download_wires_through_to_the_playing_entry(
+    data_dir, monkeypatch, session
+):
+    """End-to-end wiring of the reported bug, with the network stubbed out.
+
+    Queue-while-downloading → the entry reaches the stage unplayable → the real
+    `download_song` finishes → the entry flips to ready. The unit tests above cover
+    `song_downloaded`; this one covers the thing that was actually missing, which
+    was nobody *calling* it.
+    """
+    monkeypatch.setattr(
+        "backend.modules.karaoke.session.session", session, raising=False
+    )
+    song = _song(title="Arrives late", status="queued")
+
+    def fake_fetch(song_id, url):
+        (store.songs_dir() / f"{song_id}.mp4").write_bytes(b"video bytes")
+        return {"ext": "mp4", "title": "Arrives late", "duration": 100}
+
+    monkeypatch.setattr(downloader, "_download_blocking", fake_fetch)
+
+    asyncio.run(session.add(song, singer="Ana"))
+    assert session.snapshot().now_playing.ready is False
+
+    asyncio.run(downloader.download_song(song["id"], "https://youtu.be/aaaaaaaaaaa"))
+
+    playing = session.snapshot().now_playing
+    assert playing.ready is True
+    assert playing.title == "Arrives late"
+    assert store.get_song(song["id"])["status"] == "ready"
+
+
+def test_download_replaces_the_url_placeholder_title(data_dir, monkeypatch, session):
+    """A caller that supplies no title gets the URL as a placeholder (the column is
+    NOT NULL and the row must show something while it downloads). yt-dlp's real
+    title has to win over it, or the library shows a URL forever."""
+    monkeypatch.setattr(
+        "backend.modules.karaoke.session.session", session, raising=False
+    )
+    url = "https://www.youtube.com/watch?v=aaaaaaaaaaa"
+    song = store.create_song(title=url, url=url, status="queued")
+
+    def fake_fetch(song_id, _url):
+        (store.songs_dir() / f"{song_id}.mp4").write_bytes(b"v")
+        return {"ext": "mp4", "title": "Toto - Africa (Karaoke)", "duration": 100}
+
+    monkeypatch.setattr(downloader, "_download_blocking", fake_fetch)
+    asyncio.run(downloader.download_song(song["id"], url))
+
+    row = store.get_song(song["id"])
+    assert row["title"] == "Africa (Karaoke)"
+    assert row["artist"] == "Toto"
+
+
+def test_download_keeps_a_caller_supplied_title(data_dir, monkeypatch, session):
+    """The other side of it: an explicit title from the UI or the agent must not
+    be overwritten by yt-dlp's."""
+    monkeypatch.setattr(
+        "backend.modules.karaoke.session.session", session, raising=False
+    )
+    song = store.create_song(
+        title="My chosen title", url="https://youtu.be/aaaaaaaaaaa", status="queued"
+    )
+
+    def fake_fetch(song_id, _url):
+        (store.songs_dir() / f"{song_id}.mp4").write_bytes(b"v")
+        return {"ext": "mp4", "title": "Something Else Entirely", "duration": 10}
+
+    monkeypatch.setattr(downloader, "_download_blocking", fake_fetch)
+    asyncio.run(downloader.download_song(song["id"], "https://youtu.be/aaaaaaaaaaa"))
+
+    assert store.get_song(song["id"])["title"] == "My chosen title"
+
+
+def test_failed_download_wires_through_and_clears_the_stage(
+    data_dir, monkeypatch, session
+):
+    monkeypatch.setattr(
+        "backend.modules.karaoke.session.session", session, raising=False
+    )
+    song = _song(title="Never arrives", status="queued")
+
+    def boom(song_id, url):
+        raise RuntimeError("video unavailable")
+
+    monkeypatch.setattr(downloader, "_download_blocking", boom)
+
+    asyncio.run(session.add(song, singer="Ana"))
+    asyncio.run(downloader.download_song(song["id"], "https://youtu.be/aaaaaaaaaaa"))
+
+    # The stage must not be left holding a song whose file will never exist.
+    assert session.snapshot().now_playing is None
+    assert store.get_song(song["id"])["status"] == "failed"
+
+
 def test_revision_increases_on_every_mutation(data_dir, session):
     """Clients drop broadcasts older than what they hold; that only works if the
     revision moves on every change."""

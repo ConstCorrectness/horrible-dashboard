@@ -34,122 +34,54 @@ def test_make_policy_selects_type() -> None:
 
 
 def test_bot_policy_executes_script() -> None:
-    from backend.modules.games.loadout import Loadout, ToolDef
+    """The coded harness is one policy body, so every case here is about that body:
+    what it returns and how failure degrades. There is no tool list to pick from —
+    see `test_a_helper_tool_can_no_longer_be_run_as_the_policy` in test_games_env."""
+    from backend.modules.games.loadout import CodedHarness
     from backend.modules.games.policy import BotPolicy
 
-    # Test running a tool named "bot"
-    loadout_with_bot = Loadout(
-        game_id="t",
-        tools=[
-            ToolDef(
-                name="bot",
-                description="",
-                code="def run(args, obs):\n    return '4'\n",
-            )
-        ],
-    )
+    NL = chr(10)
+
+    def policy_for(code: str, steps: list[dict]):
+        return BotPolicy(
+            trace=steps.append,
+            load_harness=lambda g: CodedHarness(game_id=g, bot_code=code),
+        )
+
     steps: list[dict] = []
-    policy = BotPolicy(trace=steps.append, load_loadout=lambda _g: loadout_with_bot)
-
-    chosen = asyncio.run(policy.choose({"board": []}, LEGAL, "t"))
+    chosen = asyncio.run(
+        policy_for("def run(args, obs):" + NL + "    return '4'" + NL, steps).choose(
+            {"board": []}, LEGAL, "t"
+        )
+    )
     assert chosen == "4"
-    kinds = [s["kind"] for s in steps]
-    assert kinds == ["assistant", "tool_result", "chose"]
+    assert [s["kind"] for s in steps] == ["assistant", "tool_result", "chose"]
 
-    # A tool that is NOT the bot is never run as one. This used to assert the
-    # opposite — that the loadout's *first* tool played — which is the bug the
-    # default bot tool replaces: a helper returning analysis rather than a move
-    # answered illegally every turn and degraded to random, silently, in ranked
-    # matches too. Now the default random-legal bot plays instead.
-    loadout_helper_only = Loadout(
-        game_id="t",
-        tools=[
-            ToolDef(
-                name="my_strategy",
-                description="",
-                code="def run(args, obs):\n    return {'action': '8'}\n",
-            )
-        ],
-    )
-    steps = []
-    policy = BotPolicy(trace=steps.append, load_loadout=lambda _g: loadout_helper_only)
-    chosen = asyncio.run(policy.choose({"board": []}, LEGAL, "t"))
-    assert chosen in IDS
-    # The default bot answered directly — nothing had to fall back to random.
-    assert not any(s["kind"].startswith("fallback") for s in steps)
+    # Every failure mode degrades to a random legal move so a table never hangs, and
+    # says why in the trace: a raise, a syntax error, and an illegal answer.
+    for code in (
+        "def run(args, obs):" + NL + "    raise ValueError('boom')" + NL,
+        "def run(args, obs)" + NL + "    return '4'" + NL,  # syntax error
+        "def run(args, obs):" + NL + "    return '99'" + NL,  # illegal action
+    ):
+        steps = []
+        chosen = asyncio.run(policy_for(code, steps).choose({"board": []}, LEGAL, "t"))
+        assert chosen in IDS
+        kinds = [s["kind"] for s in steps]
+        assert "fallback" in kinds
+        assert "fallback_reason" in kinds
 
-    # Test bot policy robust fallback to RandomPolicy on runtime error
-    loadout_error = Loadout(
-        game_id="t",
-        tools=[
-            ToolDef(
-                name="bot",
-                description="",
-                code="def run(args, obs):\n    raise ValueError('runtime fail')\n",
-            )
-        ],
-    )
+    # legal_actions are injected into the obs a legacy bot sees.
     steps = []
-    policy = BotPolicy(trace=steps.append, load_loadout=lambda _g: loadout_error)
-    chosen = asyncio.run(policy.choose({"board": []}, LEGAL, "t"))
-    assert chosen in IDS
-    kinds = [s["kind"] for s in steps]
-    assert "fallback_reason" in kinds
-    assert "fallback" in kinds
-
-    # Test bot policy robust fallback to RandomPolicy on compilation error
-    loadout_compile_error = Loadout(
-        game_id="t",
-        tools=[
-            ToolDef(
-                name="bot",
-                description="",
-                code="def run(args, obs)\n    return '4'\n",  # syntax error
-            )
-        ],
+    code = (
+        "def run(args, obs):"
+        + NL
+        + "    assert 'legal_actions' in obs"
+        + NL
+        + "    return obs['legal_actions'][1]['id']"
+        + NL
     )
-    steps = []
-    policy = BotPolicy(
-        trace=steps.append, load_loadout=lambda _g: loadout_compile_error
-    )
-    chosen = asyncio.run(policy.choose({"board": []}, LEGAL, "t"))
-    assert chosen in IDS
-    kinds = [s["kind"] for s in steps]
-    assert "fallback_reason" in kinds
-    assert "fallback" in kinds
-
-    # Test bot policy robust fallback on returning illegal action
-    loadout_illegal = Loadout(
-        game_id="t",
-        tools=[
-            ToolDef(
-                name="bot",
-                description="",
-                code="def run(args, obs):\n    return '99'\n",  # illegal action
-            )
-        ],
-    )
-    steps = []
-    policy = BotPolicy(trace=steps.append, load_loadout=lambda _g: loadout_illegal)
-    chosen = asyncio.run(policy.choose({"board": []}, LEGAL, "t"))
-    assert chosen in IDS
-    kinds = [s["kind"] for s in steps]
-    assert "fallback" in kinds
-
-    # Test that legal_actions are injected into obs passed to the bot
-    loadout_legal_check = Loadout(
-        game_id="t",
-        tools=[
-            ToolDef(
-                name="bot",
-                description="",
-                code="def run(args, obs):\n    assert 'legal_actions' in obs\n    return obs['legal_actions'][1]['id']\n",
-            )
-        ],
-    )
-    steps = []
-    policy = BotPolicy(trace=steps.append, load_loadout=lambda _g: loadout_legal_check)
-    chosen = asyncio.run(policy.choose({"board": []}, LEGAL, "t"))
+    chosen = asyncio.run(policy_for(code, steps).choose({"board": []}, LEGAL, "t"))
     assert chosen == "4"
 
 
@@ -170,9 +102,9 @@ class _Result:
 def test_agent_policy_emits_a_trace_of_its_reasoning() -> None:
     """The trace sink sees every assistant step, tool result, and the commit — the
     feed behind the live thoughts pane and the replay upload."""
-    from backend.modules.games.loadout import Loadout, ToolDef
+    from backend.modules.games.loadout import LlmHarness, ToolDef
 
-    loadout = Loadout(
+    loadout = LlmHarness(
         game_id="t",
         context="think",
         tools=[
@@ -197,7 +129,7 @@ def test_agent_policy_emits_a_trace_of_its_reasoning() -> None:
 
     steps: list[dict] = []
     policy = AgentPolicy(
-        chat_fn=chat, load_loadout=lambda _g: loadout, trace=steps.append
+        chat_fn=chat, load_harness=lambda _g: loadout, trace=steps.append
     )
     chosen = asyncio.run(policy.choose({"board": []}, LEGAL, "t"))
     assert chosen == "8"
@@ -290,14 +222,97 @@ def test_resolve_policy_name_prefers_the_games_declared_default(monkeypatch) -> 
 def test_resolve_policy_name_per_game_override_beats_default(monkeypatch) -> None:
     from backend.modules.games import client as client_mod
 
-    store = {"games.policy.vizdoom_duel": "agent"}
+    store = {"games.policy.tictactoe": "bot"}
     monkeypatch.setattr(
         client_mod, "get_value", lambda key, default=None: store.get(key, default)
     )
-    # The explicit per-game override wins over the game's `bot` default.
-    assert client_mod._resolve_policy_name("vizdoom_duel") == "agent"
+    # An override the game allows wins over its own `agent` default.
+    assert client_mod._resolve_policy_name("tictactoe") == "bot"
     # A different game with no override still resolves to its own default.
     assert client_mod._resolve_policy_name("rag_race") == "agent"
+
+
+def test_resolve_policy_name_refuses_a_cross_category_override(monkeypatch) -> None:
+    """The category is binding: an override outside the game's `allowed_policies`
+    is ignored and its declared default used instead. Without this gate, setting
+    `games.policy.vizdoom_duel = agent` really does put a multi-second LLM loop on
+    a 1.2s tick — the exact configuration the axis exists to make impossible."""
+    from backend.modules.games import client as client_mod
+
+    store = {
+        "games.policy.vizdoom_duel": "agent",  # LLM on a real-time seat
+        "games.policy.rag_race": "bot",  # codeless bot on a language task
+    }
+    monkeypatch.setattr(
+        client_mod, "get_value", lambda key, default=None: store.get(key, default)
+    )
+    client_mod._refused_overrides.clear()
+    assert client_mod._resolve_policy_name("vizdoom_duel") == "bot"
+    assert client_mod._resolve_policy_name("rag_race") == "agent"
+
+    # The hatch is real: a turn-based coded game that declares `agent` keeps it.
+    store["games.policy.tictactoe"] = "agent"
+    assert client_mod._resolve_policy_name("tictactoe") == "agent"
+
+
+def test_register_game_rejects_impossible_seats() -> None:
+    """A category violation fails at import with a name and a reason, rather than
+    being discovered mid-match."""
+    import pytest
+
+    from backend.games_engine.base import GameSpec, register_game
+
+    def _factory(**_kw):  # never called — registration raises first
+        raise AssertionError("factory should not run")
+
+    def spec(**over):
+        base = dict(
+            id="_test_bad",
+            name="Bad",
+            min_players=2,
+            max_players=2,
+            factory=_factory,
+        )
+        return GameSpec(**{**base, **over})
+
+    # An LLM on a real-time seat: refused, with no hatch at any pacing.
+    with pytest.raises(ValueError, match="may not offer"):
+        register_game(
+            spec(
+                pacing="realtime",
+                declared_policies=("agent", "bot"),
+                default_policy="bot",
+            )
+        )
+    # A codeless bot on a language task: refused.
+    with pytest.raises(ValueError, match="may not offer"):
+        register_game(
+            spec(
+                decision_class="reasoner",
+                declared_policies=("agent", "bot"),
+                default_policy="agent",
+            )
+        )
+    # A default nothing is allowed to select.
+    with pytest.raises(ValueError, match="default_policy"):
+        register_game(spec(default_policy="agent"))
+    # A seat no one could occupy.
+    with pytest.raises(ValueError, match="empty"):
+        register_game(spec(declared_policies=(), default_policy="bot"))
+
+
+def test_every_game_stays_inside_its_category() -> None:
+    """The catalog invariant, checked over the real registry: nothing offers a
+    policy its category+pacing doesn't permit, and every default is selectable."""
+    from backend.games_engine.base import list_games, permitted_policies
+
+    for spec in list_games():
+        permitted = permitted_policies(spec.decision_class, spec.pacing)
+        assert set(spec.allowed_policies) <= set(permitted), spec.id
+        assert spec.default_policy in spec.allowed_policies, spec.id
+        # Real-time games can never run the model loop, hatch or not.
+        if spec.pacing == "realtime":
+            assert "agent" not in spec.allowed_policies, spec.id
 
 
 def test_resolve_policy_name_falls_back_to_global_for_uncatalogued(monkeypatch) -> None:
@@ -339,6 +354,10 @@ def test_catalog_carries_decision_metadata() -> None:
     assert vd.default_policy == "bot"
     assert vd.obs_kind == "frames"
     assert vd.pacing == "realtime"
+    assert vd.allowed_policies == ["bot", "random", "manual"]
     rr = by_id["rag_race"]
     assert rr.decision_class == "reasoner"
     assert rr.default_policy == "agent"
+    assert rr.allowed_policies == ["agent", "manual"]
+    # The escape hatch reaches the frontend, so the seat picker can offer it.
+    assert "agent" in by_id["tictactoe"].allowed_policies

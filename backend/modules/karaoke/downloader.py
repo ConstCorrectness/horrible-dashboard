@@ -204,7 +204,10 @@ async def download_song(song_id: str, url: str) -> None:
     Never raises: this runs detached, so a failure has to land in the row (where
     the UI shows it) rather than in an unretrieved task exception.
     """
-    from backend.modules.karaoke.session import publish_song
+    # Imported here, not at module scope: `session` imports `store`, and a
+    # top-level import would close the cycle downloader → session → store →
+    # downloader.
+    from backend.modules.karaoke.session import publish_song, session
 
     async with _download_semaphore:
         song = store.update_song(song_id, status="downloading", error=None)
@@ -217,6 +220,10 @@ async def download_song(song_id: str, url: str) -> None:
             failed = store.update_song(song_id, status="failed", error=str(exc)[:500])
             if failed:
                 await publish_song(failed)
+            # An entry may already be waiting on this file (it was queued while
+            # the download ran). Tell the session so it drops it rather than
+            # leaving the stage pointed at a song that will never arrive.
+            await session.song_downloaded(song_id, ok=False)
             return
 
         # yt-dlp reports the real extension only after the fact (the format it
@@ -231,6 +238,7 @@ async def download_song(song_id: str, url: str) -> None:
                 )
                 if failed:
                     await publish_song(failed)
+                await session.song_downloaded(song_id, ok=False)
                 return
             path = matches[0]
 
@@ -246,13 +254,26 @@ async def download_song(song_id: str, url: str) -> None:
         }
         # Only fill in metadata the caller didn't supply — an explicit
         # title/artist from the agent or the UI outranks yt-dlp's guess.
+        #
+        # `title` is never empty here: the route seeds it with the URL, because
+        # the column is NOT NULL and a row has to show *something* in the library
+        # while it downloads. So the placeholder has to be recognised explicitly —
+        # testing only for emptiness left a row permanently titled with its own
+        # URL whenever the caller passed no title (any direct API/agent call that
+        # skipped it).
+        placeholder = not current.get("title") or current.get("title") == current.get(
+            "url"
+        )
         if not current.get("artist") and artist:
             updates["artist"] = artist
-        if not current.get("title") and title:
+        if placeholder and title:
             updates["title"] = title
         song = store.update_song(song_id, **updates)
         if song:
             await publish_song(song)
+        # The file exists now. This is what unblocks an entry that reached the
+        # stage before its media did — the stage is waiting on the broadcast.
+        await session.song_downloaded(song_id, ok=True)
 
 
 def start_download(song_id: str, url: str) -> None:

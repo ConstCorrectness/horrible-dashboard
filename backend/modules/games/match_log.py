@@ -1,7 +1,7 @@
 """Node-side match history with **loadout attribution** — which harness version
 (and model) played each game, and how it went.
 
-This is the data behind the harness-progression loop: the Loadout panel shows a
+This is the data behind the harness-progression loop: the LlmHarness panel shows a
 per-version W/L strip so you can tell whether your latest branch actually plays
 better. Appended by `client.py` on every `game_over`; the following
 `rating_update` (rating games only) attaches the delta to the newest entry.

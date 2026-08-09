@@ -593,7 +593,9 @@ def test_the_node_reports_which_server_the_flows_describe(monkeypatch) -> None:
     import httpx
 
     monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
-    monkeypatch.setattr(server_auth, "resolve_server_url", lambda: "ws://localhost:9090")
+    monkeypatch.setattr(
+        server_auth, "resolve_server_url", lambda: "ws://localhost:9090"
+    )
 
     out = asyncio.run(server_auth.auth_providers())
     assert out["server"] == "ws://localhost:9090"
@@ -614,7 +616,9 @@ def test_an_unreachable_game_server_still_names_itself(monkeypatch) -> None:
         raise httpx.ConnectError("nope")
 
     monkeypatch.setattr(httpx.AsyncClient, "get", boom)
-    monkeypatch.setattr(server_auth, "resolve_server_url", lambda: "wss://example.invalid")
+    monkeypatch.setattr(
+        server_auth, "resolve_server_url", lambda: "wss://example.invalid"
+    )
 
     out = asyncio.run(server_auth.auth_providers())
     assert out == {"server": "wss://example.invalid", "flows": {}}

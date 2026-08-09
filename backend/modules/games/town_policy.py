@@ -213,9 +213,9 @@ class TownPolicy:
     # ---- agent mode -------------------------------------------------------------
 
     async def _agent(self, tick: dict[str, Any]) -> dict[str, Any] | None:
-        from backend.modules.games.loadout import get_loadout
+        from backend.modules.games.loadout import get_llm_harness
 
-        persona = (get_loadout("town").context or "").strip()
+        persona = (get_llm_harness("town").context or "").strip()
         you = tick.get("you") or {}
         whisper, self._whisper = self._whisper, None  # a nudge is spent on use
         inventory = you.get("inventory") or {}

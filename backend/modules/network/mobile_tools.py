@@ -35,7 +35,8 @@ def _pick_mobile(device: str | None) -> tuple[Any | None, dict[str, Any] | None]
         match = [
             p
             for p in peers
-            if p.node_id.lower() == wanted or str(getattr(p, "name", "")).lower() == wanted
+            if p.node_id.lower() == wanted
+            or str(getattr(p, "name", "")).lower() == wanted
         ]
         if not match:
             return None, {

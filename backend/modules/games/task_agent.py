@@ -19,7 +19,7 @@ import logging
 from typing import Any, Awaitable, Callable
 
 from backend.games_engine import verify
-from backend.modules.games.loadout import HarnessRuntime, get_loadout
+from backend.modules.games.loadout import HarnessRuntime, get_llm_harness
 from backend.modules.games.policy import ChatFn, TraceFn, _clip
 
 logger = logging.getLogger(__name__)
@@ -114,7 +114,7 @@ class TaskAgent:
         self._visible_tests = {
             str(k): str(v) for k, v in (observation.get("visible_tests") or {}).items()
         }
-        runtime = HarnessRuntime(get_loadout(self._game_id))
+        runtime = HarnessRuntime(get_llm_harness(self._game_id))
         tools = _builtin_tools() + runtime.provider_tools()
 
         prior = observation.get("attempts") or []

@@ -65,6 +65,25 @@ describe('karaoke module manifest', () => {
   });
 });
 
+describe('pending entries', () => {
+  // The stage derives `pending` from this exact expression; the rule it encodes
+  // is that an entry queued mid-download must NOT get a <video>, because a media
+  // element that 404s sets error.code 4 and never retries.
+  const pendingOf = (entry: { ready: boolean } | null) => Boolean(entry) && entry?.ready === false;
+
+  it('treats a not-yet-downloaded entry as pending', () => {
+    expect(pendingOf({ ready: false })).toBe(true);
+  });
+
+  it('treats a downloaded entry as playable', () => {
+    expect(pendingOf({ ready: true })).toBe(false);
+  });
+
+  it('is not pending when nothing is playing', () => {
+    expect(pendingOf(null)).toBe(false);
+  });
+});
+
 describe('media url', () => {
   it('omits the semitones parameter at the original key', () => {
     // The plain path is the seekable one — it must not be shadowed by a `?0`

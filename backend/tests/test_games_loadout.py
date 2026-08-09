@@ -8,10 +8,10 @@ import random
 
 from backend.modules.games.loadout import (
     HarnessRuntime,
-    Loadout,
+    LlmHarness,
     ToolDef,
-    get_loadout,
-    save_loadout,
+    get_llm_harness,
+    save_harness,
 )
 from backend.modules.games.policy import AgentPolicy, RandomPolicy
 
@@ -25,7 +25,7 @@ def _tool(name: str, code: str) -> ToolDef:
 
 def test_runtime_compiles_and_runs_a_tool() -> None:
     rt = HarnessRuntime(
-        Loadout(
+        LlmHarness(
             "g",
             tools=[
                 _tool(
@@ -40,7 +40,7 @@ def test_runtime_compiles_and_runs_a_tool() -> None:
 
 
 def test_runtime_bad_code_is_absent_and_error_captured() -> None:
-    rt = HarnessRuntime(Loadout("g", tools=[_tool("bad", "def nope():\n    pass")]))
+    rt = HarnessRuntime(LlmHarness("g", tools=[_tool("bad", "def nope():\n    pass")]))
     assert not rt.has("bad")
     assert rt.compile_error("bad")
     # A broken tool is never advertised to the model.
@@ -49,7 +49,7 @@ def test_runtime_bad_code_is_absent_and_error_captured() -> None:
 
 def test_runtime_tool_exception_becomes_error_result() -> None:
     rt = HarnessRuntime(
-        Loadout(
+        LlmHarness(
             "g", tools=[_tool("boom", "def run(args, obs):\n    raise ValueError('x')")]
         )
     )
@@ -61,19 +61,19 @@ def test_runtime_tool_exception_becomes_error_result() -> None:
 
 
 def test_loadout_store_roundtrip_and_default_fallback() -> None:
-    save_loadout(
-        Loadout(
+    save_harness(
+        LlmHarness(
             "tictactoe",
             context="ctx",
             tools=[_tool("a", "def run(args, obs):\n    return 1")],
         )
     )
-    got = get_loadout("tictactoe")
+    got = get_llm_harness("tictactoe")
     assert got.context == "ctx"
     assert got.tools[0].name == "a"
     # A `default` loadout applies to any game without its own.
-    save_loadout(Loadout("default", context="dflt"))
-    assert get_loadout("some-other-game").context == "dflt"
+    save_harness(LlmHarness("default", context="dflt"))
+    assert get_llm_harness("some-other-game").context == "dflt"
 
 
 # ---- agent loop (fake provider) --------------------------------------------
@@ -97,7 +97,7 @@ LEGAL = [{"id": "4", "label": "center"}, {"id": "0", "label": "corner"}]
 
 
 def test_agent_runs_a_custom_tool_then_commits_a_move() -> None:
-    loadout = Loadout(
+    loadout = LlmHarness(
         "tictactoe",
         context="play well",
         tools=[_tool("best_cell", "def run(args, obs):\n    return {'cell': 4}")],
@@ -114,7 +114,7 @@ def test_agent_runs_a_custom_tool_then_commits_a_move() -> None:
         seen.append(list(messages))
         return scripted.pop(0)
 
-    policy = AgentPolicy(chat_fn=chat, load_loadout=lambda _gid: loadout)
+    policy = AgentPolicy(chat_fn=chat, load_harness=lambda _gid: loadout)
     chosen = asyncio.run(
         policy.choose({"game": "tictactoe", "board": [None] * 9}, LEGAL, "tictactoe")
     )
@@ -133,7 +133,7 @@ def test_agent_illegal_choice_falls_back_to_random() -> None:
 
     policy = AgentPolicy(
         chat_fn=chat,
-        load_loadout=lambda _gid: Loadout("g"),
+        load_harness=lambda _gid: LlmHarness("g"),
         fallback=RandomPolicy(random.Random(0)),
     )
     chosen = asyncio.run(policy.choose({}, LEGAL, "g"))

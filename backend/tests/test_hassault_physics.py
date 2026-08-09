@@ -622,7 +622,9 @@ def test_conformance_shot_trace(index: int):
     direction = aim_vector(case["yaw"], case["pitch"])
     origin = (case["origin"][0], case["origin"][1], case["origin"][2])
     distance = raycast_world(world, origin, direction, case["max_distance"])
-    assert distance == pytest.approx(case["expect"], abs=data["tolerance"]), case["name"]
+    assert distance == pytest.approx(case["expect"], abs=data["tolerance"]), case[
+        "name"
+    ]
 
 
 @pytest.mark.parametrize("index", range(len(_load_vectors()["bodies"])))

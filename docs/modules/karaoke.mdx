@@ -118,6 +118,16 @@ Queueing a song that is still downloading is **deliberate**: the entry holds its
 place in the running order and the file arrives long before that singer's turn.
 Waiting would push a guest's song behind ones queued after it.
 
+That has a consequence which is easy to get wrong, and did go wrong once: an entry
+can reach the **stage** before its file exists. A `<video>` pointed at a media URL
+that 404s sets `error.code = 4` and **never retries** — so the first song of the
+night would sit black forever, even once its download finished a second later.
+Hence `QueueEntry.ready`: the stage renders a waiting screen instead of mounting a
+media element, and `session.song_downloaded` flips the flag and rebroadcasts when
+the file lands, which is what starts playback. A download that *fails* drops its
+waiting entries and advances the stage, rather than stranding the room on a song
+that will never play.
+
 The **filename is the row id**, not the title. PiKaraoke encodes metadata into the
 filename (`Artist - Title---videoid.mp4`) because its library *is* the directory
 listing; here the database is the index, so a filename only has to be unique and

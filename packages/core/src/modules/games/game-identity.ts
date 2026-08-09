@@ -95,10 +95,42 @@ export function decisionClassOf(id: string): 'policy' | 'reasoner' {
 }
 
 /** A short badge for a decision class — the glyph + label shown on game cards and
- * in the builder header so the policy-vs-reasoner split is legible at a glance. */
+ * in the builder header so the category split is legible at a glance. */
 export function decisionClassBadge(cls: 'policy' | 'reasoner'): { icon: string; label: string } {
   return cls === 'reasoner' ? { icon: '🧠', label: 'Reasoner' } : { icon: '⚙', label: 'Policy' };
 }
+
+/**
+ * The two **categories** the library is split into, in the order they're shown.
+ *
+ * The wire values stay `policy`/`reasoner` (the backend `GameSpec` is the source of
+ * truth and renaming them would migrate nothing useful); these are what a player
+ * reads. "Coded" and "LLM" name *what you build* rather than what the seat is
+ * formally called, because the choice a player is making when they pick a shelf is
+ * "am I writing a policy or engineering a prompt".
+ *
+ * Coded comes first: it needs no model configured, so it's the half of the library
+ * that works on a fresh install.
+ */
+export const GAME_CATEGORIES: {
+  cls: 'policy' | 'reasoner';
+  icon: string;
+  label: string;
+  blurb: string;
+}[] = [
+  {
+    cls: 'policy',
+    icon: '⚙',
+    label: 'Coded agents',
+    blurb: 'You write the policy: obs → action, no model in the loop.',
+  },
+  {
+    cls: 'reasoner',
+    icon: '🧠',
+    label: 'LLM agents',
+    blurb: 'You engineer the harness: system prompt, tools, model.',
+  },
+];
 
 /** The icon for a game id, falling back to the die for anything uncatalogued. */
 export function gameIcon(id: string): string {

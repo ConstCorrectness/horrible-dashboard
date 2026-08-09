@@ -51,12 +51,26 @@ function isKind(value: unknown): value is OpponentKind {
  * catalog, which is why `catalogDefault` is passed in rather than fetched) → the
  * legacy global `games.policy` → agent. Reading the global last is what keeps a
  * pre-seat-model install from suddenly changing behaviour.
+ *
+ * `allowed` (the catalog's `allowed_policies`) filters every candidate, mirroring
+ * the backend's own gate in `_resolve_policy_name`. Both sides have to apply it:
+ * a setting saved before its game's category tightened is still on disk, and
+ * without this the card would show a seat the server has quietly overruled.
  */
-export function resolveDriver(gameId: string, catalogDefault?: string): Driver {
+export function resolveDriver(
+  gameId: string,
+  catalogDefault?: string,
+  allowed?: readonly string[],
+): Driver {
+  const ok = (d: Driver | null): Driver | null =>
+    d && (!allowed || allowed.some((p) => driverFromPolicy(p) === d)) ? d : null;
   return (
-    driverFromPolicy(getSetting<string>(driverKey(gameId))) ??
+    ok(driverFromPolicy(getSetting<string>(driverKey(gameId)))) ??
+    ok(driverFromPolicy(catalogDefault)) ??
+    ok(driverFromPolicy(getSetting<string>('games.policy'))) ??
+    // The game's own default is allowed by construction (the backend refuses to
+    // register a spec whose default it forbids), so it is the safe last word.
     driverFromPolicy(catalogDefault) ??
-    driverFromPolicy(getSetting<string>('games.policy')) ??
     DEFAULT_DRIVER
   );
 }
@@ -65,8 +79,14 @@ export function setDriver(gameId: string, driver: Driver): void {
   void setSetting(driverKey(gameId), policyName(driver));
 }
 
-export function resolveMirrorDriver(gameId: string): Driver {
-  return driverFromPolicy(getSetting<string>(mirrorDriverKey(gameId))) ?? DEFAULT_DRIVER;
+export function resolveMirrorDriver(gameId: string, allowed?: readonly string[]): Driver {
+  const saved = driverFromPolicy(getSetting<string>(mirrorDriverKey(gameId)));
+  // The sparring seat plays the same game, so it lives under the same category
+  // rule as yours — a self-play table can't run a seat the game forbids.
+  if (saved && (!allowed || allowed.some((p) => driverFromPolicy(p) === saved))) return saved;
+  return allowed && !allowed.some((p) => driverFromPolicy(p) === DEFAULT_DRIVER)
+    ? (driverFromPolicy(allowed[0]) ?? DEFAULT_DRIVER)
+    : DEFAULT_DRIVER;
 }
 
 export function setMirrorDriver(gameId: string, driver: Driver): void {

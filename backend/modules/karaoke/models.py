@@ -88,6 +88,13 @@ class QueueEntry(BaseModel):
     artist: str = ""
     singer: str = ""
     duration: float | None = None
+    # Whether the media file exists yet. An entry is queued *while its download is
+    # still running* (that's the point — it holds its place in the running order),
+    # so an entry can legitimately reach the stage with no file behind it. The
+    # stage waits on this instead of pointing a `<video>` at a URL that 404s: a
+    # media element that fails to load does NOT retry, so without this flag a song
+    # that arrived a second later would stay black forever.
+    ready: bool = True
     # Set once the entry has been played, so the history view can tell a finished
     # entry from one still waiting. Entries are removed on play, so this only ever
     # appears on the `history` list.

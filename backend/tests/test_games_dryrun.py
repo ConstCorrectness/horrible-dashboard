@@ -10,7 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.modules.games.dryrun import run_dry, sample_observation
-from backend.modules.games.loadout import Loadout, ToolDef, tool_name_error
+from backend.modules.games.loadout import LlmHarness, ToolDef, tool_name_error
 
 
 class _Call:
@@ -36,8 +36,8 @@ def _scripted(turns: list[_Result]):
     return chat
 
 
-def _loadout(**kwargs) -> Loadout:
-    return Loadout(game_id="tictactoe", **kwargs)
+def _loadout(**kwargs) -> LlmHarness:
+    return LlmHarness(game_id="tictactoe", **kwargs)
 
 
 # ---- sample_observation ------------------------------------------------------
@@ -162,7 +162,7 @@ def test_run_once_propagates_exceptions_and_commits() -> None:
     async def boom(messages, tools):
         raise RuntimeError("down")
 
-    policy = AgentPolicy(chat_fn=boom, load_loadout=lambda _g: _loadout())
+    policy = AgentPolicy(chat_fn=boom, load_harness=lambda _g: _loadout())
     with pytest.raises(RuntimeError):
         asyncio.run(policy.run_once({}, legal))
 
@@ -170,7 +170,7 @@ def test_run_once_propagates_exceptions_and_commits() -> None:
         chat_fn=_scripted(
             [_Result("", [_Call("game.chooseAction", {"action_id": "4"})])]
         ),
-        load_loadout=lambda _g: _loadout(),
+        load_harness=lambda _g: _loadout(),
     )
     assert asyncio.run(ok.run_once({}, legal)) == "4"
 
@@ -200,7 +200,9 @@ def test_every_template_tool_compiles_and_is_well_named() -> None:
     ids = {t["id"] for t in templates}
     assert {"ttt-tactician", "holdem-calculator"} <= ids  # the multi-tool starters
     for descriptor in templates:
-        loadout = Loadout.from_wire(descriptor["game_id"], dict(descriptor["loadout"]))
+        loadout = LlmHarness.from_wire(
+            descriptor["game_id"], dict(descriptor["loadout"])
+        )
         assert HarnessRuntime(loadout).compile_errors() == {}, descriptor["id"]
         taken: set[str] = set()
         for tool in loadout.tools:
@@ -215,14 +217,14 @@ def test_multi_tool_templates_run_against_a_sample_position() -> None:
 
     by_id = {t["id"]: t for t in loadout_templates()}
 
-    ttt = Loadout.from_wire("tictactoe", dict(by_id["ttt-tactician"]["loadout"]))
+    ttt = LlmHarness.from_wire("tictactoe", dict(by_id["ttt-tactician"]["loadout"]))
     obs, _ = sample_observation("tictactoe")
     runtime = HarnessRuntime(ttt)
     scan = asyncio.run(runtime.call("board_scanner", {}, obs))
     forks = asyncio.run(runtime.call("fork_finder", {}, obs))
     assert "win_at" in scan and "my_forks" in forks
 
-    holdem = Loadout.from_wire("holdem", dict(by_id["holdem-calculator"]["loadout"]))
+    holdem = LlmHarness.from_wire("holdem", dict(by_id["holdem-calculator"]["loadout"]))
     obs, _ = sample_observation("holdem", seed=3)
     runtime = HarnessRuntime(holdem)
     strength = asyncio.run(runtime.call("hand_strength", {}, obs))
@@ -248,6 +250,7 @@ def _tool(name: str, code: str = "def run(args, obs):\n    return 1\n") -> dict:
 
 def test_validate_route_diagnoses_each_tool(client: TestClient) -> None:
     body = {
+        "kind": "llm",
         "game_id": "tictactoe",
         "context": "",
         "tools": [
@@ -273,7 +276,12 @@ def test_validate_route_diagnoses_each_tool(client: TestClient) -> None:
 
 
 def test_validate_route_clean_loadout_is_ok(client: TestClient) -> None:
-    body = {"game_id": "tictactoe", "context": "", "tools": [_tool("scan")]}
+    body = {
+        "kind": "llm",
+        "game_id": "tictactoe",
+        "context": "",
+        "tools": [_tool("scan")],
+    }
     res = client.post("/api/games/loadout/validate", json=body)
     assert res.status_code == 200
     assert res.json()["ok"] is True
@@ -297,3 +305,69 @@ def test_dry_run_route_without_a_model_reports_it(client: TestClient) -> None:
     assert payload["ok"] is False
     assert "no model" in payload["error"]
     assert len(payload["legal_actions"]) == 9
+
+
+_IDLE_BOT = "def act(obs, info):\n    return 'idle'\n"
+
+
+def test_validate_route_refuses_a_cross_kind_body(client: TestClient) -> None:
+    """The wire union is where the split is enforced. A body claiming one harness
+    while carrying the other's fields is rejected outright — the alternative is
+    Pydantic silently dropping them, which is how a player loses a policy they
+    believe they saved. A body with no `kind` at all is equally refused: there is no
+    "default harness" worth guessing at."""
+    coded_with_llm_fields = {
+        "kind": "coded",
+        "game_id": "vizdoom_toy",
+        "bot_code": _IDLE_BOT,
+        "context": "you are a doom marine",
+    }
+    res = client.post("/api/games/loadout/validate", json=coded_with_llm_fields)
+    assert res.status_code == 422
+
+    llm_with_bot_code = {"kind": "llm", "game_id": "rag_race", "bot_code": "x"}
+    assert (
+        client.post("/api/games/loadout/validate", json=llm_with_bot_code).status_code
+        == 422
+    )
+
+    no_kind = {"game_id": "tictactoe"}
+    assert client.post("/api/games/loadout/validate", json=no_kind).status_code == 422
+
+
+def test_validate_route_checks_a_coded_harness_as_one_policy(
+    client: TestClient,
+) -> None:
+    """A coded harness has no tool list, so its diagnostics are about the single
+    policy body rather than per-tool."""
+    ok = client.post(
+        "/api/games/loadout/validate",
+        json={"kind": "coded", "game_id": "vizdoom_toy", "bot_code": _IDLE_BOT},
+    ).json()
+    assert ok["ok"] is True and ok["tools"] == []
+
+    broken = client.post(
+        "/api/games/loadout/validate",
+        json={"kind": "coded", "game_id": "vizdoom_toy", "bot_code": "def act(:\n"},
+    ).json()
+    assert broken["ok"] is False and broken["agent_error"]
+
+
+def test_coded_harness_round_trips_over_http(client: TestClient) -> None:
+    """The response-model trap, checked at the HTTP boundary: a `response_model`
+    filters silently, so if the union weren't declared on the route the coded arm's
+    `bot_code` would come back missing with no error anywhere."""
+    put = client.put(
+        "/api/games/loadout/vizdoom_toy",
+        json={"kind": "coded", "game_id": "vizdoom_toy", "bot_code": _IDLE_BOT},
+    )
+    assert put.status_code == 200, put.text
+    assert put.json()["bot_code"] == _IDLE_BOT
+
+    got = client.get("/api/games/loadout/vizdoom_toy").json()
+    assert got["kind"] == "coded"
+    assert got["bot_code"] == _IDLE_BOT
+    # A real-time coded game has no LLM harness on its seat, but asking for one
+    # explicitly still works — it is a separate, empty object, not a view of this.
+    llm = client.get("/api/games/loadout/vizdoom_toy?kind=llm").json()
+    assert llm["kind"] == "llm" and "bot_code" not in llm

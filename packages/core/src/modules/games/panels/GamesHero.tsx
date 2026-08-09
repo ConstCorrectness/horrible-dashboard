@@ -57,7 +57,7 @@ export function GamesHero({
     // hero for one game while the harness and board sit on another.
     setSelectedGame(current.id);
     setActiveGame(current.id);
-    void startWithSavedSetup(current.id, current.default_policy);
+    void startWithSavedSetup(current.id, current.default_policy, current.allowed_policies);
   }, [current, setSelectedGame]);
 
   if (!current) {

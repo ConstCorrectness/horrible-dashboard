@@ -15,28 +15,34 @@ from backend.modules.games import server_auth
 from backend.modules.games.agent_sdk import agent_compile_error
 from backend.modules.games.client import games_client, resolve_server_url
 from backend.modules.games.loadout import (
+    HARNESS_KINDS,
+    CodedHarness,
+    Harness,
     HarnessRuntime,
-    Loadout,
+    LlmHarness,
     ToolDef,
-    get_loadout,
-    save_loadout,
+    get_harness,
+    harness_kind,
+    save_harness,
     tool_name_error,
 )
 from backend.modules.games.models import (
     ActivateVersionRequest,
+    CodedHarnessModel,
     DevicePollRequest,
     DryRunRequest,
     DryRunResponse,
     EnvInfoResponse,
     GameInfo,
     GamesStatus,
+    HarnessModel,
+    LlmHarnessModel,
     LocalLoginRequest,
     LocalSignupRequest,
     SampleObservationResponse,
     SaveVersionRequest,
     SetCallsignRequest,
     SetKeyRequest,
-    LoadoutModel,
     TestToolRequest,
     TestToolResponse,
     ToolDefModel,
@@ -98,10 +104,12 @@ def status() -> GamesStatus:
     )
 
 
-def _to_model(loadout: Loadout) -> LoadoutModel:
-    return LoadoutModel(
-        game_id=loadout.game_id,
-        context=loadout.context,
+def _to_model(harness: Harness) -> HarnessModel:
+    if isinstance(harness, CodedHarness):
+        return CodedHarnessModel(game_id=harness.game_id, bot_code=harness.bot_code)
+    return LlmHarnessModel(
+        game_id=harness.game_id,
+        context=harness.context,
         tools=[
             ToolDefModel(
                 name=t.name,
@@ -110,15 +118,17 @@ def _to_model(loadout: Loadout) -> LoadoutModel:
                 parameters=t.parameters,
                 required=t.required,
             )
-            for t in loadout.tools
+            for t in harness.tools
         ],
-        model=loadout.model,
-        agent_code=loadout.agent_code,
+        model=harness.model,
+        agent_code=harness.agent_code,
     )
 
 
-def _from_model(game_id: str, body: LoadoutModel) -> Loadout:
-    return Loadout(
+def _from_model(game_id: str, body: HarnessModel) -> Harness:
+    if isinstance(body, CodedHarnessModel):
+        return CodedHarness(game_id=game_id, bot_code=body.bot_code)
+    return LlmHarness(
         game_id=game_id,
         context=body.context,
         tools=[
@@ -136,23 +146,43 @@ def _from_model(game_id: str, body: LoadoutModel) -> Loadout:
     )
 
 
+def _resolve_kind(game_id: str, kind: str | None) -> str:
+    """The harness kind a request is about: what it asked for, else whichever one
+    this node's seat would actually run for that game."""
+    if kind in HARNESS_KINDS:
+        return str(kind)
+    return harness_kind(game_id)
+
+
 # Registered BEFORE the /loadout/{game_id} routes: FastAPI matches in order, and
 # the literal "validate" segment must not be swallowed as a game id.
 @router.post("/loadout/validate", response_model=ValidateLoadoutResponse)
-def validate_loadout_route(body: LoadoutModel) -> ValidateLoadoutResponse:
-    """Per-tool diagnostics (name rule + compilation) for the harness editor —
-    a broken tool is silently absent in a live match, so surface it here."""
-    loadout = _from_model(body.game_id or "_validate", body)
-    runtime = HarnessRuntime(loadout)
+def validate_loadout_route(body: HarnessModel) -> ValidateLoadoutResponse:
+    """Compile diagnostics for the harness editor — broken code is silently absent
+    in a live match, so surface it here. What gets checked depends on which harness
+    this is: a coded one is a single policy body, an LLM one is per-tool plus the
+    optional `my_agent` entrypoint."""
+    harness = _from_model(body.game_id or "_validate", body)
+    if isinstance(harness, CodedHarness):
+        from backend.modules.games.bot_sdk import compile_bot
+
+        error: str | None = None
+        try:
+            compile_bot(harness.bot_code, "<bot>")
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+        return ValidateLoadoutResponse(ok=error is None, tools=[], agent_error=error)
+
+    runtime = HarnessRuntime(harness)
     taken: set[str] = set()
     diags: list[ToolDiagnostic] = []
-    for tool in loadout.tools:
+    for tool in harness.tools:
         err = tool_name_error(tool.name, taken) or runtime.compile_error(tool.name)
         taken.add(tool.name)
         diags.append(ToolDiagnostic(name=tool.name, ok=err is None, error=err))
     # A broken `my_agent` entrypoint is silently absent in a match (falls back to random),
     # so surface it here too. Empty agent_code = the default agent → no error.
-    agent_error = agent_compile_error(loadout.agent_code)
+    agent_error = agent_compile_error(harness.agent_code)
     return ValidateLoadoutResponse(
         ok=all(d.ok for d in diags) and agent_error is None,
         tools=diags,
@@ -160,35 +190,39 @@ def validate_loadout_route(body: LoadoutModel) -> ValidateLoadoutResponse:
     )
 
 
-@router.get("/loadout/{game_id}", response_model=LoadoutModel)
-def get_loadout_route(game_id: str) -> LoadoutModel:
-    """The harness for a game (falls back to the `default` loadout)."""
-    return _to_model(get_loadout(game_id))
+@router.get("/loadout/{game_id}", response_model=HarnessModel)
+def get_loadout_route(game_id: str, kind: str | None = None) -> HarnessModel:
+    """A game's harness (falls back to the `default` one, then to the shipped
+    starter). `kind` selects which harness; omitted, it's the one this node's seat
+    would run — so a ViZDoom seat gets its bot and a RAG Race seat its prompt."""
+    return _to_model(get_harness(game_id, _resolve_kind(game_id, kind)))
 
 
-@router.put("/loadout/{game_id}", response_model=LoadoutModel)
-def put_loadout_route(game_id: str, body: LoadoutModel) -> LoadoutModel:
-    """Overwrite the ACTIVE version of a game's harness in place."""
-    return _to_model(save_loadout(_from_model(game_id, body)))
+@router.put("/loadout/{game_id}", response_model=HarnessModel)
+def put_loadout_route(game_id: str, body: HarnessModel) -> HarnessModel:
+    """Overwrite the ACTIVE version of a game's harness in place. The body's `kind`
+    decides which harness is written; neither can hold the other's fields."""
+    return _to_model(save_harness(_from_model(game_id, body)))
 
 
 # ---- harness versions (the progression loop) --------------------------------
 
 
 @router.get("/loadout/{game_id}/versions")
-def list_versions_route(game_id: str) -> dict[str, Any]:
+def list_versions_route(game_id: str, kind: str | None = None) -> dict[str, Any]:
     from backend.modules.games import loadout as loadout_mod
     from backend.modules.games import match_log
 
     return {
-        "versions": loadout_mod.list_versions(game_id),
+        "versions": loadout_mod.list_versions(game_id, _resolve_kind(game_id, kind)),
         "stats": match_log.version_stats(game_id),
     }
 
 
 @router.post("/loadout/{game_id}/versions")
 def save_version_route(game_id: str, body: SaveVersionRequest) -> dict[str, Any]:
-    """Branch: save as a NEW version (becomes active)."""
+    """Branch: save as a NEW version (becomes active). The kind comes from the
+    harness in the body, not a parameter — a version belongs to one harness."""
     from backend.modules.games import loadout as loadout_mod
 
     vid = loadout_mod.save_version(
@@ -199,29 +233,59 @@ def save_version_route(game_id: str, body: SaveVersionRequest) -> dict[str, Any]
 
 @router.put("/loadout/{game_id}/active")
 def activate_version_route(
-    game_id: str, body: ActivateVersionRequest
+    game_id: str, body: ActivateVersionRequest, kind: str | None = None
 ) -> dict[str, Any]:
     from backend.modules.games import loadout as loadout_mod
 
-    ok = loadout_mod.activate_version(game_id, body.version_id)
+    ok = loadout_mod.activate_version(
+        game_id, body.version_id, _resolve_kind(game_id, kind)
+    )
     return {"ok": ok}
 
 
 @router.delete("/loadout/{game_id}/versions/{version_id}")
-def delete_version_route(game_id: str, version_id: str) -> dict[str, Any]:
+def delete_version_route(
+    game_id: str, version_id: str, kind: str | None = None
+) -> dict[str, Any]:
     from backend.modules.games import loadout as loadout_mod
 
-    return {"ok": loadout_mod.delete_version(game_id, version_id)}
+    return {
+        "ok": loadout_mod.delete_version(
+            game_id, version_id, _resolve_kind(game_id, kind)
+        )
+    }
 
 
 @router.get("/loadout-templates")
-def loadout_templates_route(game_id: str | None = None) -> dict[str, Any]:
-    """Starter harnesses for the onboarding wizard's guided first-loadout step."""
-    from backend.modules.games.templates import loadout_templates
+def loadout_templates_route(
+    game_id: str | None = None, kind: str | None = None
+) -> dict[str, Any]:
+    """Starter harnesses for the builder and the onboarding wizard's guided first
+    step. Each carries its `kind`, and the list is filtered to one harness when
+    asked — an LLM template offered inside a coded builder is just a tool list the
+    editor has nowhere to put."""
+    from backend.modules.games.templates import (
+        default_harness_for,
+        loadout_templates,
+        template_kind,
+    )
 
-    templates = loadout_templates()
+    templates = []
+    for t in loadout_templates():
+        k = template_kind(t)
+        # A coded template is served in the coded harness's own shape (`bot_code`),
+        # matching what `default_harness_for` seeds — otherwise the builder would
+        # have to re-derive a policy out of a tool list the editor can't show.
+        body = (
+            default_harness_for(t["game_id"], k)
+            if k == CodedHarness.kind
+            else t["loadout"]
+        )
+        templates.append({**t, "kind": k, "loadout": body})
     if game_id:
         templates = [t for t in templates if t["game_id"] == game_id]
+    if kind in HARNESS_KINDS:
+        templates = [t for t in templates if t["kind"] == kind]
     return {"templates": templates}
 
 
@@ -273,7 +337,7 @@ async def test_tool_route(body: TestToolRequest) -> TestToolResponse:
     """Compile and run one tool body against a sample observation — the editor's
     'test' button, so a player can iterate on a tool before a live match."""
     runtime = HarnessRuntime(
-        Loadout(
+        LlmHarness(
             game_id="_test",
             tools=[ToolDef(name="test", description="", code=body.code)],
         )
@@ -294,7 +358,25 @@ async def dry_run_route(body: DryRunRequest) -> DryRunResponse:
     a sample engine position — the editor's full-loop tester. One-shot: the loop
     is bounded (MAX_HARNESS_ROUNDS), so the finished trace comes back in the
     response."""
+    from backend.games_engine.base import get_game
     from backend.modules.games import dryrun
+
+    # The dry run *is* the LLM harness (context + tools + model), so it only means
+    # something for a game whose seats may run it. Keyed on `allowed_policies`
+    # rather than the category, so a turn-based coded game on the escape hatch
+    # (tic-tac-toe) still gets one. A coded game's equivalent is `/test-tool`.
+    try:
+        spec = get_game(body.game_id)
+    except KeyError:
+        return DryRunResponse(ok=False, error=f"unknown game {body.game_id!r}")
+    if "agent" not in spec.allowed_policies:
+        return DryRunResponse(
+            ok=False,
+            error=(
+                f"{spec.name} is a coded-agent game — it has no model in the loop. "
+                "Run your bot against a sample observation instead."
+            ),
+        )
 
     try:
         return await dryrun.run_dry(

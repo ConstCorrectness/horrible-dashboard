@@ -110,6 +110,12 @@ export function KaraokeQueuePanel() {
                 {entry.singer ? <span className="kk-singer"> · 🎤 {entry.singer}</span> : null}
               </div>
             </div>
+            {/* Queued while still downloading — its place is held, the file is
+                still coming. Worth showing: it explains the wait if it reaches
+                the stage first. */}
+            {!entry.ready ? (
+              <span className="kk-status kk-status--downloading">downloading</span>
+            ) : null}
             <div className="kk-row__actions">
               <button
                 type="button"

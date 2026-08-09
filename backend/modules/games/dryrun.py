@@ -15,7 +15,7 @@ import time
 from typing import Any
 
 from backend.games_engine.base import CHANCE, WORK, get_game
-from backend.modules.games.loadout import HarnessRuntime, Loadout, tool_name_error
+from backend.modules.games.loadout import HarnessRuntime, LlmHarness, tool_name_error
 from backend.modules.games.models import DryRunResponse, DryRunStep
 from backend.modules.games.policy import AgentPolicy, ChatFn
 
@@ -52,7 +52,7 @@ def sample_observation(
     return state.observation(seat), [a.to_wire() for a in state.legal_actions(seat)]
 
 
-def _tool_problems(loadout: Loadout) -> dict[str, str]:
+def _tool_problems(loadout: LlmHarness) -> dict[str, str]:
     """Name violations + compile errors, tool name → message."""
     problems: dict[str, str] = {}
     taken: set[str] = set()
@@ -66,7 +66,7 @@ def _tool_problems(loadout: Loadout) -> dict[str, str]:
 
 
 async def run_dry(
-    loadout: Loadout,
+    loadout: LlmHarness,
     game_id: str,
     seed: int = 0,
     chat_fn: ChatFn | None = None,
@@ -99,7 +99,7 @@ async def run_dry(
     def sink(step: dict[str, Any]) -> None:
         steps.append(DryRunStep(t_ms=(time.monotonic() - t0) * 1000.0, **step))
 
-    policy = AgentPolicy(chat_fn=chat_fn, load_loadout=lambda _g: loadout, trace=sink)
+    policy = AgentPolicy(chat_fn=chat_fn, load_harness=lambda _g: loadout, trace=sink)
     chosen: str | None = None
     error: str | None = None
     try:

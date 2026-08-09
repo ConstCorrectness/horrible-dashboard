@@ -116,6 +116,11 @@ SPEC = register_game(
         min_players=2,
         max_players=2,
         factory=TicTacToe,
+        # A coded-agent game taking the turn-based escape hatch: the board is the
+        # classic "watch a model reason" demo, and it defaults to that because the
+        # first thing a new player wants is to see a mind at work, not write one.
+        decision_class="policy",
+        declared_policies=("agent", "bot", "random", "manual"),
         default_policy="agent",
     )
 )

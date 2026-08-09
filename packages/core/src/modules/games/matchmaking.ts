@@ -138,10 +138,14 @@ export async function startMatch(setup: MatchSetup): Promise<void> {
  * regardless of what the player had configured. Reading the stored setup means one
  * choice, made once on the card, is what every one of these buttons honours.
  */
-export async function startWithSavedSetup(gameId: string, catalogDefault?: string): Promise<void> {
+export async function startWithSavedSetup(
+  gameId: string,
+  catalogDefault?: string,
+  allowed?: readonly string[],
+): Promise<void> {
   await startMatch({
     gameId,
-    me: resolveDriver(gameId, catalogDefault),
+    me: resolveDriver(gameId, catalogDefault, allowed),
     opponent: resolveOpponent(gameId),
   });
 }

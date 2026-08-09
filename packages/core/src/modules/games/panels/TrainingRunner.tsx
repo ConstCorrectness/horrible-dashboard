@@ -4,7 +4,7 @@ import {
   fetchEnvInfo,
   runTraining,
   type EnvInfo,
-  type Loadout,
+  type CodedHarness,
   type TrainRunResult,
 } from '../games-api';
 
@@ -41,23 +41,21 @@ const OPPONENTS: { value: string; label: string }[] = [
 ];
 
 /**
- * The harness tool that *is* the script seat: `<gameId>.bot`, else `bot`.
+ * The code Training runs: the coded harness's policy, whole.
  *
- * Mirrors `loadout.bot_tool_of` on the backend — if these two disagree, Training
- * measures a different tool than the ladder runs. There is no "first tool"
- * fallback: the backend guarantees a `bot` tool exists on every loadout it hands
- * out (a random-legal-move baseline when you haven't written one), so an absent
- * bot means the loadout hasn't loaded yet, not that there is nothing to run.
+ * This used to mirror a name-resolution rule (`<gameId>.bot`, else `bot`, out of
+ * the LLM harness's tool list) that had to agree with the backend's or Training
+ * would measure something the ladder never runs. The coded harness has one body
+ * and no names, so there is nothing left to keep in sync. A null harness means it
+ * hasn't loaded yet — never "there is nothing to run": the backend guarantees code
+ * comes back, a random-legal-move baseline when you haven't written one.
  */
 export function botToolOf(
-  loadout: Loadout | null,
+  harness: CodedHarness | null,
   gameId: string,
 ): { name: string; code: string } | null {
-  if (!loadout) return null;
-  const tool =
-    loadout.tools.find((t) => t.name === `${gameId}.bot`) ??
-    loadout.tools.find((t) => t.name === 'bot');
-  return tool ? { name: tool.name, code: tool.code } : null;
+  if (!harness?.bot_code) return null;
+  return { name: `${gameId} bot`, code: harness.bot_code };
 }
 
 function Sparkline({ points }: { points: number[] }) {
@@ -85,7 +83,13 @@ function Sparkline({ points }: { points: number[] }) {
   );
 }
 
-export function TrainingRunner({ gameId, loadout }: { gameId: string; loadout: Loadout | null }) {
+export function TrainingRunner({
+  gameId,
+  loadout,
+}: {
+  gameId: string;
+  loadout: CodedHarness | null;
+}) {
   const [env, setEnv] = useState<EnvInfo | null>(null);
   const [opponent, setOpponent] = useState('bot:bronze');
   const [episodes, setEpisodes] = useState(200);

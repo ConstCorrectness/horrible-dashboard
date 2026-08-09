@@ -660,11 +660,45 @@ def loadout_templates() -> list[dict[str, Any]]:
     ]
 
 
-def default_loadout_for(game_id: str) -> dict[str, Any] | None:
-    """The shipped starter loadout (wire dict) for `game_id` — the **first** template
-    listed for it. Used to seed the default active loadout so a fresh player's agent
-    already has a working harness. None if the game has no template."""
+def _bot_tool(body: dict[str, Any], game_id: str) -> dict[str, Any] | None:
+    """The `<game>.bot` / `bot` tool in a template body, if it has one. A template
+    written around one is a **coded** starter: it has no context and the tool is the
+    whole policy."""
+    for tool in body.get("tools") or []:
+        name = str(tool.get("name") or "")
+        if name == "bot" or name == f"{game_id}.bot":
+            return tool
+    return None
+
+
+def template_kind(template: dict[str, Any]) -> str:
+    """Which harness a template is for. Derived rather than declared: a template
+    whose tool list contains the bot tool *is* a coded policy, and one that doesn't
+    is context + helpers for the model. Deriving it keeps the two from disagreeing
+    when a template is edited."""
+    from backend.modules.games.loadout import CODED, LLM
+
+    body = template.get("loadout") or {}
+    return CODED if _bot_tool(body, str(template.get("game_id") or "")) else LLM
+
+
+def default_harness_for(game_id: str, kind: str) -> dict[str, Any] | None:
+    """The shipped starter harness (wire dict) of `kind` for `game_id` — the
+    **first** matching template. Used to seed the default so a fresh player already
+    has a working harness. None if the game ships no template of that kind.
+
+    A coded starter is returned in the coded harness's own shape (`bot_code`), not
+    as a tool list: the tool wrapper was only ever the old storage's way of holding
+    a policy.
+    """
+    from backend.modules.games.loadout import CODED
+
     for template in loadout_templates():
-        if template["game_id"] == game_id:
-            return template["loadout"]
+        if template["game_id"] != game_id or template_kind(template) != kind:
+            continue
+        body = dict(template["loadout"])
+        if kind == CODED:
+            tool = _bot_tool(body, game_id) or {}
+            return {"bot_code": str(tool.get("code") or "")}
+        return body
     return None

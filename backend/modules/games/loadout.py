@@ -1,19 +1,33 @@
 """The **agent harness** a player engineers for a game — the heart of the skill game.
 
-A loadout is a player's *context* (strategy/system prompt) plus a set of **custom
-tools they author as real Python** that their agent can call while deciding a move.
-The better your tools (and context), the better your agent plays — so the human's
-skill is in tool/harness engineering, not in moving pieces.
+There are **two harnesses, and they are different objects**, because there are two
+kinds of game (see `games_engine/base.py`):
 
-Trust model: a loadout runs **only on its author's own node**, and the tools only
-ever see the observation the server sent *this* seat — they physically cannot touch
-an opponent's hidden state. So, like the backend plugin SDK, tool code is trusted
-and unsandboxed in v1 (it's your own code on your own machine, no different from
-editing the app). Each tool body defines `run(args, obs)`:
+- **`LlmHarness`** (kind `llm`) — the player's *context* (strategy/system prompt),
+  a set of **custom tools they author as real Python** for the model to call, the
+  `model` itself, and an optional `my_agent(obs, config)` entrypoint. This is the
+  harness for a **reasoner** game, where the skill is context engineering.
+- **`CodedHarness`** (kind `coded`) — one piece of Python, `bot_code`, mapping
+  observation → action with no model anywhere in the loop. This is the harness for
+  a **coded-agent** game, where the skill is writing the policy.
+
+They are stored separately (see the v3 note below) and neither can hold the other's
+fields. A game that takes the turn-based escape hatch (tic-tac-toe) may have one of
+each; **which one plays is decided by the seat's move policy**, not by the game
+alone, which is why `harness_kind` resolves through `_resolve_policy_name`.
+
+Trust model: a harness runs **only on its author's own node**, and its code only
+ever sees the observation the server sent *this* seat — it physically cannot touch
+an opponent's hidden state. So, like the backend plugin SDK, the code is trusted and
+unsandboxed in v1 (it's your own code on your own machine, no different from editing
+the app). An LLM harness's tool body defines `run(args, obs)`:
 
     def run(args, obs):
         # args: the model's arguments; obs: this seat's observation
         return {"winning_cell": ...}
+
+A coded harness's `bot_code` defines `act(obs, info)` (or `class Agent`, or the
+legacy `run(args, obs)`) — see `bot_sdk.compile_bot`.
 
 See docs/modules/games.mdx (agent harness).
 """
@@ -29,7 +43,34 @@ from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
 
-# Applies to any game when no game-specific loadout exists.
+# The two harnesses. `coded` is `bot_code` alone; `llm` is context + tools + model
+# + agent_code. Nothing holds both.
+CODED = "coded"
+LLM = "llm"
+HARNESS_KINDS = (CODED, LLM)
+
+
+def harness_kind_for_policy(policy: str) -> str:
+    """Which harness a seat running `policy` would use. Only the `bot` policy is
+    coded; `agent` is the LLM one. `random`/`manual` run neither, and resolve to
+    the game's other side so the Build panel still shows something editable."""
+    return CODED if policy == "bot" else LLM
+
+
+def harness_kind(game_id: str) -> str:
+    """The harness this node's seat would use for `game_id` **right now**.
+
+    Resolved through the seat's effective move policy, not the game's category,
+    because a turn-based coded game on the escape hatch (tic-tac-toe) can run
+    either — and which one it runs is exactly what the player's driver choice
+    decides. Uncatalogued ids (AgentTown's `town` persona) fall to `llm`.
+    """
+    from backend.modules.games.client import _resolve_policy_name
+
+    return harness_kind_for_policy(_resolve_policy_name(game_id))
+
+
+# Applies to any game when no game-specific harness exists.
 DEFAULT_KEY = "default"
 
 # Synthetic version id for a game running its **shipped starter harness** (the
@@ -39,11 +80,13 @@ DEFAULT_KEY = "default"
 STARTER_VERSION = "starter"
 
 
-def _has_starter(game_id: str) -> bool:
-    """Whether `game_id` ships a starter template (so its seeded default plays)."""
-    from backend.modules.games.templates import default_loadout_for
+def _has_starter(game_id: str, kind: str) -> bool:
+    """Whether `game_id` ships a starter template of `kind` (so its seeded default
+    plays). A coded game always effectively has one — the random-legal baseline —
+    but that is the *absence* of authored work, so it doesn't count as a starter."""
+    from backend.modules.games.templates import default_harness_for
 
-    return default_loadout_for(game_id) is not None
+    return default_harness_for(game_id, kind) is not None
 
 
 # The commit tool's namespace; player tools must not shadow it.
@@ -114,7 +157,13 @@ class ToolDef:
 
 
 @dataclass
-class Loadout:
+class LlmHarness:
+    """The harness for an **LLM agent** seat: the model's context, the tools it may
+    call, the model itself, and an optional `my_agent` entrypoint. Carries no
+    `bot_code` — a coded policy is the other harness, not a field of this one."""
+
+    kind = LLM
+
     game_id: str
     context: str = ""
     tools: list[ToolDef] = field(default_factory=list)
@@ -135,7 +184,7 @@ class Loadout:
         }
 
     @classmethod
-    def from_wire(cls, game_id: str, d: dict[str, Any]) -> "Loadout":
+    def from_wire(cls, game_id: str, d: dict[str, Any]) -> "LlmHarness":
         model = d.get("model")
         return cls(
             game_id=game_id,
@@ -144,6 +193,66 @@ class Loadout:
             model=dict(model) if isinstance(model, dict) else None,
             agent_code=str(d.get("agent_code") or ""),
         )
+
+
+# The coded seat's baseline: a uniformly random legal move.
+#
+# Every coded harness has one, always — with no authored bot, this is what plays.
+# It used to be injected as a *tool* named `bot` into the LLM harness's tool list,
+# which is precisely the conflation this split removes: a policy is not a tool the
+# model may call, and storing it as one meant `BotPolicy` had to hunt the tool list
+# by name (`<game>.bot` → `bot` → …) and could pick up a helper that returns
+# analysis rather than a move.
+#
+# Written in the modern `act(obs, info)` shape so a new player's first sight of the
+# contract is the contract, and reading `info["legal_actions"]` rather than the
+# action mask so it works for every game.
+DEFAULT_BOT_CODE = '''\
+import random
+
+
+def act(obs, info):
+    """Pick a uniformly random legal move.
+
+    This is the baseline every policy is measured against — beating it is the
+    first thing a real bot has to do. Replace the body with your own logic:
+
+        info["legal_actions"]  every move you may make right now
+        info["action_mask"]    same thing as a 0/1 vector (games with an RL env)
+        info["obs"]            the encoded, seat-relative observation
+        obs                    the raw observation dict
+
+    Return an action id, or an integer index into the action space. For a bot that
+    remembers things between turns, use `class Agent` with an `act(self, obs, info)`
+    method instead — it also gets `reset()` and `observe(reward, terminated, info)`.
+    """
+    return random.choice(info["legal_actions"])["id"]
+'''
+
+
+@dataclass
+class CodedHarness:
+    """The harness for a **coded agent** seat: one Python policy, no model.
+
+    `bot_code` is never empty on the way out of this module — an unauthored harness
+    reads back as `DEFAULT_BOT_CODE`, so "what will play" and "what the editor shows"
+    are the same visible, editable thing.
+    """
+
+    kind = CODED
+
+    game_id: str
+    bot_code: str = ""
+
+    def to_wire(self) -> dict[str, Any]:
+        return {"game_id": self.game_id, "bot_code": self.bot_code}
+
+    @classmethod
+    def from_wire(cls, game_id: str, d: dict[str, Any]) -> "CodedHarness":
+        return cls(game_id=game_id, bot_code=str(d.get("bot_code") or ""))
+
+
+Harness = LlmHarness | CodedHarness
 
 
 # ---- persistence -----------------------------------------------------------
@@ -172,11 +281,33 @@ def _write_all(data: dict[str, Any]) -> None:
 
 # ---- versioning --------------------------------------------------------------
 #
-# On-disk shape v2, per game: {"active": vid, "versions": {vid: {label, created_at,
-# context, tools, model}}}. The v1 shape (a bare loadout dict) upgrades in memory
-# on read and is rewritten as v2 on the first save — so a fresh checkout and a
-# years-old loadouts file both just work. Versions are the harness-progression
-# loop: play → study the replay → branch the loadout → requeue.
+# On-disk shape **v3**, per game: one side per harness kind, each with its own
+# active pointer and version history:
+#
+#   {"<game>": {"coded": {"active": vid, "versions": {vid: {label, created_at,
+#                                                           bot_code}}},
+#               "llm":   {"active": vid, "versions": {vid: {label, created_at,
+#                                                           context, tools, model,
+#                                                           agent_code}}}}}
+#
+# Separate histories are the point: iterating a bot and iterating a prompt are
+# different activities with different units of progress, and a hatch game may have
+# both. Older shapes upgrade in memory on read and are rewritten on the first save,
+# so a fresh checkout and a years-old file both just work:
+#
+#   v2  {"active": vid, "versions": {vid: {context, tools, model, ...}}}
+#   v1  a bare loadout body
+#
+# Versions are the harness-progression loop: play → study the replay → branch →
+# requeue.
+
+# In v2 the coded policy lived *inside* the tool list, under `<game>.bot` or `bot`.
+# The migration lifts it out; that name-hunt exists nowhere else now.
+_LEGACY_BOT_NAMES = ("bot",)
+
+
+def _is_legacy_bot_tool(name: str, game_id: str) -> bool:
+    return name in _LEGACY_BOT_NAMES or name == f"{game_id}.bot"
 
 
 def _as_v2(entry: Any) -> dict[str, Any]:
@@ -188,159 +319,201 @@ def _as_v2(entry: Any) -> dict[str, Any]:
     return {"active": "v1", "versions": {"v1": body}}
 
 
+def _as_v3(entry: Any, game_id: str) -> dict[str, Any]:
+    """Upgrade any stored shape to v3. Splitting a v2 version yields one version on
+    each side with the **same id**, so a player's history stays aligned across the
+    split and nothing they authored is dropped: the bot tool becomes `bot_code`, and
+    everything else stays on the LLM side."""
+    if isinstance(entry, dict) and (CODED in entry or LLM in entry):
+        return entry
+    if not entry:
+        # Nothing stored. Distinct from "a legacy body that happens to be sparse":
+        # treating an empty dict as a v1 body invents a phantom `v1` on both sides,
+        # which then shifts the player's first real save to `v2`.
+        return {
+            CODED: {"active": "", "versions": {}},
+            LLM: {"active": "", "versions": {}},
+        }
+    v2 = _as_v2(entry)
+    active = v2.get("active") or ""
+    coded: dict[str, Any] = {}
+    llm: dict[str, Any] = {}
+    for vid, body in (v2.get("versions") or {}).items():
+        meta = {
+            "label": body.get("label") or vid,
+            "created_at": float(body.get("created_at") or 0.0),
+        }
+        tools = [dict(t) for t in (body.get("tools") or [])]
+        bot = next(
+            (
+                t
+                for t in tools
+                if _is_legacy_bot_tool(str(t.get("name") or ""), game_id)
+            ),
+            None,
+        )
+        coded[vid] = {**meta, "bot_code": str((bot or {}).get("code") or "")}
+        llm[vid] = {
+            **meta,
+            "context": body.get("context") or "",
+            "tools": [
+                t
+                for t in tools
+                if not _is_legacy_bot_tool(str(t.get("name") or ""), game_id)
+            ],
+            "model": body.get("model"),
+            "agent_code": body.get("agent_code") or "",
+        }
+    return {
+        CODED: {"active": active, "versions": coded},
+        LLM: {"active": active, "versions": llm},
+    }
+
+
 def _entry_for(data: dict[str, Any], game_id: str) -> dict[str, Any] | None:
     if game_id in data:
-        return _as_v2(data[game_id])
+        return _as_v3(data[game_id], game_id)
     if DEFAULT_KEY in data:
-        return _as_v2(data[DEFAULT_KEY])
+        return _as_v3(data[DEFAULT_KEY], game_id)
     return None
 
 
-def _active_body(entry: dict[str, Any]) -> dict[str, Any]:
-    versions = entry.get("versions") or {}
-    active = entry.get("active")
+def _side(entry: dict[str, Any] | None, kind: str) -> dict[str, Any]:
+    """One harness kind's `{active, versions}` block, or an empty one."""
+    if entry is None:
+        return {"active": "", "versions": {}}
+    side = entry.get(kind)
+    return side if isinstance(side, dict) else {"active": "", "versions": {}}
+
+
+def _active_body(side: dict[str, Any]) -> dict[str, Any]:
+    versions = side.get("versions") or {}
+    active = side.get("active")
     if active in versions:
         return versions[active]
     return next(iter(versions.values()), {})
 
 
-# ---- the default bot tool ----------------------------------------------------
-
-# The script seat's baseline: a uniformly random legal move.
-#
-# Every harness has one, always. Before this, a loadout with no `bot` tool made
-# `BotPolicy` fall back to running the loadout's **first** tool — which is normally
-# a *helper* (`board_scanner` returns `{"win_at": ..., "block_at": ...}`), not a
-# move. That answered illegally every single turn and silently degraded to a random
-# move anyway, in ranked matches included. Guaranteeing the tool exists removes the
-# guess: the fallback and the baseline are now the same visible, editable thing.
-#
-# Written in the modern `act(obs, info)` shape so a new player's first sight of the
-# contract is the contract, and reading `info["legal_actions"]` rather than the
-# action mask so it works for every game — including reasoner games, which have no
-# action space at all.
-DEFAULT_BOT_TOOL_NAME = "bot"
-
-DEFAULT_BOT_CODE = '''\
-import random
-
-
-def act(obs, info):
-    """Pick a uniformly random legal move.
-
-    This is the baseline every policy is measured against — beating it is the
-    first thing a real bot has to do. Replace the body with your own logic:
-
-        info["legal_actions"]  every move you may make right now
-        info["action_mask"]    same thing as a 0/1 vector (games with an RL env)
-        info["obs"]            the encoded, seat-relative observation
-        obs                    the raw observation dict
-
-    Return an action id, or an integer index into the action space. For a bot that
-    remembers things between turns, use `class Agent` with an `act(self, obs, info)`
-    method instead — it also gets `reset()` and `observe(reward, terminated, info)`.
-    """
-    return random.choice(info["legal_actions"])["id"]
-'''
-
-
-def default_bot_tool() -> ToolDef:
-    return ToolDef(
-        name=DEFAULT_BOT_TOOL_NAME,
-        description="Your script seat: picks a move from the legal set.",
-        code=DEFAULT_BOT_CODE,
+def _is_authored(body: dict[str, Any], kind: str) -> bool:
+    """Whether a stored version holds anything the player actually wrote. The
+    migration writes a version on *both* sides of every v2 entry, so a coded game's
+    llm side (and vice versa) is normally empty — and an empty side must fall
+    through to the shipped starter rather than shadowing it with nothing."""
+    if not body:
+        return False
+    if kind == CODED:
+        return bool(str(body.get("bot_code") or "").strip())
+    return bool(
+        str(body.get("context") or "").strip()
+        or body.get("tools")
+        or body.get("model")
+        or str(body.get("agent_code") or "").strip()
     )
 
 
-def bot_tool_of(loadout: Loadout, game_id: str | None = None) -> ToolDef:
-    """The tool the **script seat** runs.
-
-    Resolution is `<game_id>.bot` → `bot` → the default random bot. The per-game
-    name is not decoration: shipped harnesses use it (`fighter.bot`) and the Build
-    panel has always resolved it, while the policy only ever looked for `bot` — so
-    a fighter harness ran whichever tool happened to be first. The two now agree.
-
-    Never returns None and never falls through to "some other tool": a helper that
-    returns analysis is not a move, and running one as though it were is exactly the
-    failure this replaces.
-    """
-    by_name = {t.name: t for t in loadout.tools}
-    if game_id and f"{game_id}.bot" in by_name:
-        return by_name[f"{game_id}.bot"]
-    if DEFAULT_BOT_TOOL_NAME in by_name:
-        return by_name[DEFAULT_BOT_TOOL_NAME]
-    return default_bot_tool()
+# ---- reading a harness --------------------------------------------------------
 
 
-def _with_default_bot(loadout: Loadout) -> Loadout:
-    """Guarantee a bot tool on every loadout that leaves this module.
+def _starter_body(game_id: str, kind: str) -> dict[str, Any] | None:
+    # Lazy import avoids a module-load cycle (templates is imported by routes).
+    from backend.modules.games.templates import default_harness_for
 
-    Injected on **read** rather than written into storage, so existing saved
-    harnesses gain it with no migration and a player who deletes it gets it back
-    rather than silently losing their script seat.
-    """
-    names = {t.name for t in loadout.tools}
-    if DEFAULT_BOT_TOOL_NAME in names or f"{loadout.game_id}.bot" in names:
-        return loadout
-    loadout.tools.append(default_bot_tool())
-    return loadout
+    return default_harness_for(game_id, kind)
 
 
-def get_loadout(game_id: str) -> Loadout:
-    """The **active version** of the loadout for `game_id`, falling back to the
-    user's `default` loadout and, failing that, to the game's **shipped starter
-    harness** so a fresh player's agent already has a working default.
-
-    Whatever the source, the result carries a bot tool (see `_with_default_bot`)."""
-    entry = _entry_for(_read_all(), game_id)
-    if entry is None:
-        # Lazy import avoids a module-load cycle (templates is imported by routes).
-        from backend.modules.games.templates import default_loadout_for
-
-        body = default_loadout_for(game_id)
-        if body is not None:
-            return _with_default_bot(Loadout.from_wire(game_id, body))
-        return _with_default_bot(Loadout(game_id=game_id))
-    return _with_default_bot(Loadout.from_wire(game_id, _active_body(entry)))
+def get_llm_harness(game_id: str) -> LlmHarness:
+    """The **active version** of the LLM harness for `game_id`, falling back to the
+    user's `default` harness and, failing that, to the game's **shipped starter** so
+    a fresh player's agent already has a working one."""
+    body = _active_body(_side(_entry_for(_read_all(), game_id), LLM))
+    if not _is_authored(body, LLM):
+        body = _starter_body(game_id, LLM) or {}
+    return LlmHarness.from_wire(game_id, body)
 
 
-def active_version_id(game_id: str) -> str | None:
-    """Which version would play right now (for match attribution). With no saved
-    loadout, returns the synthetic `STARTER_VERSION` when the game ships a starter
-    (its seeded default plays), else None."""
-    entry = _entry_for(_read_all(), game_id)
-    if entry is None:
-        return STARTER_VERSION if _has_starter(game_id) else None
-    active = entry.get("active")
-    return active if active in (entry.get("versions") or {}) else None
+def get_coded_harness(game_id: str) -> CodedHarness:
+    """The **active version** of the coded harness for `game_id`, falling back to the
+    shipped starter bot and finally to `DEFAULT_BOT_CODE`.
+
+    Never returns empty code: the seat has to decide *something* every tick, and the
+    random-legal baseline is what "I haven't written one yet" means."""
+    body = _active_body(_side(_entry_for(_read_all(), game_id), CODED))
+    if not _is_authored(body, CODED):
+        body = _starter_body(game_id, CODED) or {}
+    harness = CodedHarness.from_wire(game_id, body)
+    if not harness.bot_code.strip():
+        harness.bot_code = DEFAULT_BOT_CODE
+    return harness
 
 
-def save_loadout(loadout: Loadout) -> Loadout:
-    """Overwrite the active version in place (the classic PUT path)."""
+def get_harness(game_id: str, kind: str | None = None) -> Harness:
+    """The harness of `kind` for a game — defaulting to whichever one this node's
+    seat would actually run (see `harness_kind`)."""
+    kind = kind or harness_kind(game_id)
+    return get_coded_harness(game_id) if kind == CODED else get_llm_harness(game_id)
+
+
+def active_version_id(game_id: str, kind: str | None = None) -> str | None:
+    """Which version would play right now (for match attribution). With nothing
+    saved, returns the synthetic `STARTER_VERSION` when the game ships a starter of
+    that kind (its seeded default plays), else None."""
+    kind = kind or harness_kind(game_id)
+    side = _side(_entry_for(_read_all(), game_id), kind)
+    active = side.get("active")
+    versions = side.get("versions") or {}
+    if active in versions and _is_authored(versions[active], kind):
+        return str(active)
+    return STARTER_VERSION if _has_starter(game_id, kind) else None
+
+
+# ---- writing a harness --------------------------------------------------------
+
+
+def _mutate(game_id: str, kind: str, fn: Callable[[dict[str, Any]], Any]) -> Any:
+    """Run `fn` over one kind's `{active, versions}` block and persist the result.
+    Every write goes through here, so the v1/v2 → v3 upgrade happens exactly once
+    per game and only the touched side is rewritten."""
+    data = _read_all()
+    entry = _as_v3(data.get(game_id, {}), game_id)
+    side = entry.setdefault(kind, {"active": "", "versions": {}})
+    side.setdefault("versions", {})
+    result = fn(side)
+    data[game_id] = entry
+    _write_all(data)
+    return result
+
+
+def save_harness(harness: Harness) -> Harness:
+    """Overwrite the active version of this harness's kind in place (the PUT path)."""
     import time
 
-    data = _read_all()
-    entry = _as_v2(data.get(loadout.game_id)) if loadout.game_id in data else None
-    if entry is None:
-        entry = {"active": "v1", "versions": {}}
-        entry["versions"]["v1"] = {"label": "v1", "created_at": time.time()}
-    body = entry["versions"].setdefault(
-        entry["active"], {"label": entry["active"], "created_at": time.time()}
-    )
-    body.update(loadout.to_wire())
-    body.pop("game_id", None)
-    data[loadout.game_id] = entry
-    _write_all(data)
-    return loadout
+    def apply(side: dict[str, Any]) -> None:
+        versions = side["versions"]
+        if not side.get("active") or side["active"] not in versions:
+            side["active"] = side.get("active") or "v1"
+        body = versions.setdefault(
+            side["active"], {"label": side["active"], "created_at": time.time()}
+        )
+        body.update(harness.to_wire())
+        body.pop("game_id", None)
+
+    _mutate(harness.game_id, harness.kind, apply)
+    return harness
 
 
-def list_versions(game_id: str) -> list[dict[str, Any]]:
-    """Version summaries for a game, newest first. With no saved loadout, a game that
-    ships a starter lists one synthetic, active `starter` version (kept in sync with
-    `active_version_id`)."""
-    entry = _entry_for(_read_all(), game_id)
-    if entry is None:
-        if _has_starter(game_id):
+def list_versions(game_id: str, kind: str | None = None) -> list[dict[str, Any]]:
+    """Version summaries for one harness kind, newest first. With nothing authored,
+    a game that ships a starter of that kind lists one synthetic, active `starter`
+    version (kept in sync with `active_version_id`)."""
+    kind = kind or harness_kind(game_id)
+    side = _side(_entry_for(_read_all(), game_id), kind)
+    versions = {
+        vid: body
+        for vid, body in (side.get("versions") or {}).items()
+        if _is_authored(body, kind)
+    }
+    if not versions:
+        if _has_starter(game_id, kind):
             return [
                 {
                     "id": STARTER_VERSION,
@@ -351,14 +524,13 @@ def list_versions(game_id: str) -> list[dict[str, Any]]:
                 }
             ]
         return []
-    versions = entry.get("versions") or {}
     return sorted(
         (
             {
                 "id": vid,
                 "label": str(body.get("label") or vid),
                 "created_at": float(body.get("created_at") or 0.0),
-                "active": vid == entry.get("active"),
+                "active": vid == side.get("active"),
                 "model": body.get("model"),
             }
             for vid, body in versions.items()
@@ -368,62 +540,60 @@ def list_versions(game_id: str) -> list[dict[str, Any]]:
     )
 
 
-def save_version(game_id: str, loadout: Loadout, label: str = "") -> str:
-    """Branch: save `loadout` as a NEW version of `game_id` and make it active."""
+def save_version(game_id: str, harness: Harness, label: str = "") -> str:
+    """Branch: save `harness` as a NEW version of its kind and make it active."""
     import time
 
-    data = _read_all()
-    entry = (
-        _as_v2(data.get(game_id)) if game_id in data else {"active": "", "versions": {}}
-    )
-    versions = entry["versions"]
-    n = 1
-    while f"v{n}" in versions:
-        n += 1
-    vid = f"v{n}"
-    body = loadout.to_wire()
-    body.pop("game_id", None)
-    body["label"] = label or vid
-    body["created_at"] = time.time()
-    versions[vid] = body
-    entry["active"] = vid
-    data[game_id] = entry
-    _write_all(data)
-    return vid
+    def apply(side: dict[str, Any]) -> str:
+        versions = side["versions"]
+        n = 1
+        while f"v{n}" in versions:
+            n += 1
+        vid = f"v{n}"
+        body = harness.to_wire()
+        body.pop("game_id", None)
+        body["label"] = label or vid
+        body["created_at"] = time.time()
+        versions[vid] = body
+        side["active"] = vid
+        return vid
+
+    return str(_mutate(game_id, harness.kind, apply))
 
 
-def activate_version(game_id: str, version_id: str) -> bool:
-    data = _read_all()
-    if game_id not in data:
+def activate_version(game_id: str, version_id: str, kind: str | None = None) -> bool:
+    kind = kind or harness_kind(game_id)
+    if game_id not in _read_all():
         return False
-    entry = _as_v2(data[game_id])
-    if version_id not in (entry.get("versions") or {}):
-        return False
-    entry["active"] = version_id
-    data[game_id] = entry
-    _write_all(data)
-    return True
+
+    def apply(side: dict[str, Any]) -> bool:
+        if version_id not in (side.get("versions") or {}):
+            return False
+        side["active"] = version_id
+        return True
+
+    return bool(_mutate(game_id, kind, apply))
 
 
-def delete_version(game_id: str, version_id: str) -> bool:
+def delete_version(game_id: str, version_id: str, kind: str | None = None) -> bool:
     """Delete a version (never the last one; deleting the active one activates the
     newest remaining)."""
-    data = _read_all()
-    if game_id not in data:
+    kind = kind or harness_kind(game_id)
+    if game_id not in _read_all():
         return False
-    entry = _as_v2(data[game_id])
-    versions = entry.get("versions") or {}
-    if version_id not in versions or len(versions) <= 1:
-        return False
-    del versions[version_id]
-    if entry.get("active") == version_id:
-        newest = max(
-            versions, key=lambda vid: float(versions[vid].get("created_at") or 0.0)
-        )
-        entry["active"] = newest
-    data[game_id] = entry
-    _write_all(data)
-    return True
+
+    def apply(side: dict[str, Any]) -> bool:
+        versions = side.get("versions") or {}
+        if version_id not in versions or len(versions) <= 1:
+            return False
+        del versions[version_id]
+        if side.get("active") == version_id:
+            side["active"] = max(
+                versions, key=lambda vid: float(versions[vid].get("created_at") or 0.0)
+            )
+        return True
+
+    return bool(_mutate(game_id, kind, apply))
 
 
 # ---- runtime ---------------------------------------------------------------
@@ -434,7 +604,7 @@ class HarnessRuntime:
     buggy tool degrades the agent's play (its own problem) rather than crashing the
     turn."""
 
-    def __init__(self, loadout: Loadout) -> None:
+    def __init__(self, loadout: LlmHarness) -> None:
         self.loadout = loadout
         self._compiled: dict[str, Callable[..., Any]] = {}
         self._errors: dict[str, str] = {}

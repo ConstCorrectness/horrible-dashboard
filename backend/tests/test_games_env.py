@@ -28,22 +28,16 @@ from backend.modules.games.bot_sdk import (
 )
 from backend.modules.games.loadout import (
     DEFAULT_BOT_CODE,
-    Loadout,
-    ToolDef,
-    bot_tool_of,
-    get_loadout,
+    CodedHarness,
+    get_coded_harness,
 )
 from backend.modules.games.policy import BotPolicy
 
 ENV_GAMES = ["tictactoe", "connect_four"]
 
 
-def _loadout_with(code: str):
-    return lambda key: Loadout(
-        game_id=key,
-        context="",
-        tools=[ToolDef(name="bot", description="test bot", code=code)],
-    )
+def _coded_with(code: str):
+    return lambda key: CodedHarness(game_id=key, bot_code=code)
 
 
 # ---- adapters ---------------------------------------------------------------
@@ -197,7 +191,7 @@ def test_every_shape_plays_through_bot_policy(code: str, expected: str) -> None:
     `run(args, obs)`; breaking them to tidy an interface would be a poor trade."""
     obs = {"game": "tictactoe", "board": [None] * 9, "turn": 0}
     legal = [{"id": str(i), "label": f"c{i}"} for i in range(9)]
-    policy = BotPolicy(load_loadout=_loadout_with(code))
+    policy = BotPolicy(load_harness=_coded_with(code))
     chosen = asyncio.run(policy.choose(obs, legal, "tictactoe", 0))
     assert chosen == expected
 
@@ -206,7 +200,7 @@ def test_class_agent_keeps_state_across_turns_of_one_match() -> None:
     """What makes a stateful policy — and an in-pane learner — possible at all."""
     obs = {"game": "tictactoe", "board": [None] * 9, "turn": 0}
     legal = [{"id": str(i)} for i in range(9)]
-    policy = BotPolicy(load_loadout=_loadout_with(AGENT_BOT))
+    policy = BotPolicy(load_harness=_coded_with(AGENT_BOT))
     asyncio.run(policy.choose(obs, legal, "tictactoe", 0))
     asyncio.run(policy.choose(obs, legal, "tictactoe", 0))
     assert policy._bot._instance.turns == 2
@@ -217,7 +211,7 @@ def test_illegal_bot_answer_falls_back_and_says_why() -> None:
     traces: list[dict] = []
     policy = BotPolicy(
         trace=traces.append,
-        load_loadout=_loadout_with("def act(obs, info):\n    return 'nope'\n"),
+        load_harness=_coded_with("def act(obs, info):\n    return 'nope'\n"),
     )
     legal = [{"id": str(i)} for i in range(9)]
     chosen = asyncio.run(
@@ -316,27 +310,27 @@ def test_env_rejects_games_without_an_adapter() -> None:
         HorribleEnv("bug_hunt")
 
 
-# ---- the default bot tool ----------------------------------------------------
+# ---- the coded harness's baseline --------------------------------------------
 
 
-def test_every_loadout_gets_a_bot_tool() -> None:
-    """The script seat always has something to run. Whatever the source — a saved
-    harness, a shipped starter, or nothing at all — a `bot` tool comes back."""
-    for game_id in ("tictactoe", "connect_four", "bug_hunt", "not_a_real_game"):
-        loadout = get_loadout(game_id)
-        assert bot_tool_of(loadout, game_id) is not None
-        names = {t.name for t in loadout.tools}
-        assert "bot" in names or f"{game_id}.bot" in names
+def test_every_game_has_runnable_bot_code() -> None:
+    """A coded seat always has something to run. Whatever the source — a saved
+    harness, a shipped starter, or nothing at all — code comes back, and it
+    compiles. An uncatalogued id is included: the seat still has to act."""
+    for game_id in ("tictactoe", "connect_four", "fighter", "not_a_real_game"):
+        harness = get_coded_harness(game_id)
+        assert harness.bot_code.strip(), game_id
+        compile_bot(harness.bot_code, f"<bot:{game_id}>")
 
 
 def test_the_default_bot_plays_a_legal_move() -> None:
-    """It is the baseline every policy is measured against, so it had better work."""
+    """It is the baseline every policy is measured against, so it had better work.
+    An empty `bot_code` is what "I haven't written one yet" means, and it resolves
+    to the random-legal baseline rather than to nothing."""
     obs = {"game": "tictactoe", "board": [None] * 9, "turn": 0}
     legal = [{"id": str(i), "label": f"c{i}"} for i in range(9)]
-    policy = BotPolicy(
-        load_loadout=lambda key: Loadout(game_id=key, context="", tools=[])
-    )
-    chosen = asyncio.run(policy.choose(obs, legal, "tictactoe", 0))
+    policy = BotPolicy(load_harness=lambda key: get_coded_harness(key))
+    chosen = asyncio.run(policy.choose(obs, legal, "not_a_real_game", 0))
     assert chosen in {a["id"] for a in legal}
 
 
@@ -347,41 +341,18 @@ def test_default_bot_beats_nothing_but_never_acts_illegally() -> None:
     assert result.ok and result.illegal == 0 and result.episodes == 40
 
 
-def test_per_game_bot_name_wins_over_the_generic_one() -> None:
-    """Shipped harnesses use `<game>.bot` (e.g. `fighter.bot`) and the Build panel
-    has always resolved it. The policy only looked for `bot`, so a fighter harness
-    ran whichever tool happened to be first — the bug the default tool replaces."""
-    loadout = Loadout(
-        game_id="fighter",
-        context="",
-        tools=[
-            ToolDef(name="helper", description="not a move", code="def act(o,i): pass"),
-            ToolDef(
-                name="fighter.bot", description="the real one", code=DEFAULT_BOT_CODE
-            ),
-        ],
-    )
-    assert bot_tool_of(loadout, "fighter").name == "fighter.bot"
+def test_a_helper_tool_can_no_longer_be_run_as_the_policy() -> None:
+    """The regression the split closes structurally. The coded harness has no tool
+    list, so there is nothing for the policy to pick the wrong member of: it used to
+    hunt `<game>.bot` → `bot` → *the loadout's first tool*, and that last step ran a
+    helper returning analysis as though it were a move — illegal every turn,
+    degrading to random, silently, ranked matches included."""
+    from backend.modules.games.loadout import CodedHarness
 
+    assert not hasattr(CodedHarness(game_id="t"), "tools")
 
-def test_a_helper_tool_is_never_run_as_the_bot() -> None:
-    """The regression this whole change exists for: with no bot tool, the policy
-    used to run the loadout's *first* tool — normally a helper that returns analysis
-    rather than a move, answering illegally every turn in ranked matches included."""
-    helper = ToolDef(
-        name="board_scanner",
-        description="analysis, not a move",
-        code="def run(args, obs):\n    return {'win_at': 4, 'block_at': None}\n",
-    )
-    loadout = Loadout(game_id="tictactoe", context="", tools=[helper])
-    assert bot_tool_of(loadout, "tictactoe").name == "bot"
-
-    traces: list[dict] = []
-    policy = BotPolicy(trace=traces.append, load_loadout=lambda _key: loadout)
-    legal = [{"id": str(i)} for i in range(9)]
-    chosen = asyncio.run(
-        policy.choose({"game": "tictactoe", "board": [None] * 9}, legal, "tictactoe", 0)
-    )
-    assert chosen in {a["id"] for a in legal}
-    # The default bot answered directly; nothing had to fall back to random.
-    assert not any(t["kind"].startswith("fallback") for t in traces)
+    # The shipped fighter starter is a policy, and it is what the coded seat gets —
+    # no name resolution involved.
+    fighter = get_coded_harness("fighter")
+    assert "def run(args, obs)" in fighter.bot_code
+    assert fighter.bot_code != DEFAULT_BOT_CODE

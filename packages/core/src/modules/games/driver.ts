@@ -12,24 +12,33 @@ export type Driver = 'manual' | 'agent' | 'script' | 'random';
 
 export const DRIVERS: Driver[] = ['manual', 'agent', 'script', 'random'];
 
+/**
+ * The seat labels name **which harness plays**, not a possessive.
+ *
+ * They used to read "My Agent" and "My Script", which collided with the word the
+ * rest of the module uses for the MDP sense — the agent *is* the policy, and a
+ * coded bot is no less "my agent" than a prompt is. Naming the two harnesses here
+ * is the whole point of the seat picker: it is the control that chooses between
+ * them.
+ */
 export const DRIVER_LABEL: Record<Driver, string> = {
   manual: 'You',
-  agent: 'My Agent',
-  script: 'My Script',
+  agent: 'LLM Agent',
+  script: 'Coded Agent',
   random: 'Random',
 };
 
 export const DRIVER_ICON: Record<Driver, string> = {
   manual: '🎮',
   agent: '🧠',
-  script: '🤖',
+  script: '⚙',
   random: '🎲',
 };
 
 export const DRIVER_HINT: Record<Driver, string> = {
   manual: 'You play the board yourself. Unrated.',
-  agent: 'Your harness drives: context, tools and the model pick each move.',
-  script: 'Your harness’s Python bot picks each move — no model, no latency.',
+  agent: 'Your LLM harness drives: context, tools and the model pick each move.',
+  script: 'Your coded policy picks each move — no model, no latency.',
   random: 'A uniformly random legal move. The baseline everything is measured against.',
 };
 

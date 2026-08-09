@@ -248,7 +248,9 @@ def test_304_is_not_treated_as_a_redirect():
         if request.headers.get("if-none-match"):
             return httpx.Response(304)
         return httpx.Response(
-            200, headers={"content-type": "text/html", "etag": "W/abc"}, text="<p>hi</p>"
+            200,
+            headers={"content-type": "text/html", "etag": "W/abc"},
+            text="<p>hi</p>",
         )
 
     transport = httpx.MockTransport(handler)

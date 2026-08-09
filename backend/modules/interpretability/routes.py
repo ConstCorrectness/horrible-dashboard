@@ -141,7 +141,9 @@ async def model_architecture() -> ModelArchitecture:
             if repo:
                 cfg = await arch.fetch_hf_config(repo)
                 if cfg is not None:
-                    filled = arch.fill_gaps(primary, arch.from_hf_config(model, repo, cfg))
+                    filled = arch.fill_gaps(
+                        primary, arch.from_hf_config(model, repo, cfg)
+                    )
                     if filled:
                         primary.notes.append(
                             f"Gaps in the GGUF metadata filled from {repo}: "

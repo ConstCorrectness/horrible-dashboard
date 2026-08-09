@@ -4,7 +4,15 @@ import { gradedStat, power, readBuild, stats } from '../agentBuild';
 import type { Loadout } from '../games-api';
 
 function lo(partial: Partial<Loadout>): Loadout {
-  return { game_id: 't', context: '', tools: [], model: null, agent_code: '', ...partial };
+  return {
+    kind: 'llm',
+    game_id: 't',
+    context: '',
+    tools: [],
+    model: null,
+    agent_code: '',
+    ...partial,
+  };
 }
 
 describe('agent build derivation (code-first readout)', () => {

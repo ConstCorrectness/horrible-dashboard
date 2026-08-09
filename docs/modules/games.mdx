@@ -365,10 +365,22 @@ series pips, rating toasts, and optional bleeps (`games.sound`).
 ## The match setup card
 
 The Play section's centrepiece (`MatchSetupCard`) is **two seats and a button**. The
-left seat is *how you play* (your `Driver` — 🎮 You / 🧠 My Agent / 🤖 My Script /
+left seat is *how you play* (your `Driver` — 🎮 You / 🧠 LLM Agent / ⚙ Coded Agent /
 🎲 Random), the right seat is *who you play* (`Opponent` — 🏁 Ranked / 🤖 Practice
 Bot / 👤 Open Table / 🪞 Mirror), and the button's label is **generated from both**
 by `describeSetup`.
+
+The two agent seats name **which harness plays** ([the two
+harnesses](#the-two-harnesses)) — this is the control that chooses between them.
+They used to read "My Agent" and "My Script", which collided with the word the rest
+of the module uses for the MDP sense: the agent *is* the policy, and a coded bot is
+no less "my agent" than a prompt is. Only the labels changed; the stored values are
+still `agent` / `bot`, so no saved seat moved.
+
+A driver the game forbids is shown **disabled with the reason**, from the catalog's
+`allowed_policies` — and `resolveDriver` filters a saved-but-now-illegal seat the
+same way, because the setting is still on disk and the card would otherwise show a
+seat the backend has quietly overruled.
 
 That shape is load-bearing. The screen it replaced had a MOVE POLICY toggle group
 *rendered twice from the same state*, a PLAY MODE toggle, a QUEUE DIFFICULTY control
@@ -381,8 +393,8 @@ random meant dice vs dice. One button, three different games.
 
 Two rules keep it honest:
 
-- The Fight label is `describeSetup(setup)`, never a fixed string — "My Agent vs You"
-  and "My Agent vs My Agent (self-play)" are visibly different setups now.
+- The Fight label is `describeSetup(setup)`, never a fixed string — "LLM Agent vs You"
+  and "LLM Agent vs LLM Agent (self-play)" are visibly different setups now.
 - The mirror opponent carries **its own driver as a field**, which is precisely what
   was missing. There is no global that a button's meaning depends on.
 
@@ -512,7 +524,7 @@ the trajectory logic is unit-testable without a backend (`__tests__/episode.test
 are terminal in these games, so `applyReturns` mirrors each seat's return onto its
 own final step.
 
-## Decision class — policy vs. reasoner games
+## Game category — coded agents vs. LLM agents
 
 The load-bearing distinction: **the agent _is_ the policy** — a mapping
 `observation → action` in the MDP/Markov sense — and an **LLM reasoner is one
@@ -520,26 +532,72 @@ possible component of it**, mandatory for some games and absent from others. Eve
 game declares a `decision_class` on its `GameSpec` (`games_engine/base.py`, the
 backend is the source of truth):
 
-- **`policy`** games (ViZDoom, Tic-Tac-Toe, Connect Four, Arena, Fighter) — a pure
-  `bot(obs) → action` function is the natural interface; an LLM is optional and, for
-  a real-time game, a liability (it can't hold the tick cadence).
-- **`reasoner`** games (RAG Race, Code Golf, Bug Hunt, Test Duel, Tabular FE) — the
-  observation _is_ a language task; the system prompt + tools + model _are_ the
-  gameplay levers.
+- **`policy`** — a **coded agent** game (ViZDoom, Tic-Tac-Toe, Connect Four, Arena,
+  Fighter). A pure `bot(obs) → action` function is the natural interface; an LLM is
+  optional and, for a real-time game, a liability (it can't hold the tick cadence).
+- **`reasoner`** — an **LLM agent** game (RAG Race, Code Golf, Bug Hunt, Test Duel,
+  Tabular FE). The observation _is_ a language task; the system prompt + tools +
+  model _are_ the gameplay levers.
+
+### The category decides what may occupy a seat
+
+The two categories are **mutually exclusive by construction**, not by convention.
+Each has a baseline set of move policies (`CLASS_BASELINE_POLICIES`), and they are
+disjoint on purpose — an LLM driving a real-time seat and a codeless bot answering a
+language task aren't preferences a player should be able to express, they're
+configurations that cannot work:
+
+| Category            | Baseline policies       |
+| ------------------- | ----------------------- |
+| `policy` (coded)    | `bot`, `random`, `manual` |
+| `reasoner` (LLM)    | `agent`, `manual`         |
+
+There is exactly **one escape hatch** (`CLASS_EXTRA_POLICIES`): a **turn-based**
+coded-agent game may additionally offer `agent`, by declaring `declared_policies`.
+Tic-Tac-Toe, Connect Four and Hold'em take it and in fact _default_ to it — watching
+a model reason over a board is the best first thing a new player can see, and a
+turn-based seat has no cadence to miss. A `realtime` game may not take the hatch at
+all, and a reasoner game has no hatch: `bot` cannot produce the payload (a patch, an
+answer set) its actions carry, and a random id over open actions is meaningless.
+
+This is enforced in two places, both of which have to hold:
+
+- **`register_game`** validates the declaration at **import time** — a spec offering
+  a policy its category+pacing forbids, or defaulting to one it doesn't offer, raises
+  with the game's name and the reason. An impossible seat can't reach a match.
+- **`_resolve_policy_name`** (`modules/games/client.py`) validates the player's
+  saved override at **resolution time**, falling back to the game's declared default
+  and logging once. It lives there rather than on a settings route because
+  `/api/settings` is generic and knows nothing about games — a route-side check would
+  leave the agent tools and the `dash` REPL as back doors, the same argument as
+  `_guard_writes` in the [database](database.mdx) driver.
 
 `GameSpec` also carries `default_policy`, `obs_kind` (`json` | `frames`), and
-`pacing` (`turn` | `realtime`), all surfaced to the frontend through `GameInfo` /
-`/games/status` and shown as badges. The [Build view](#agent-harness--the-skill-game)
-branches on the decision class, and the tutorial track differs by it.
+`pacing` (`turn` | `realtime`); the resolved `allowed_policies` and all of the above
+reach the frontend through `GameInfo` / `/games/status`. The seat picker on the
+[match setup card](#the-match-setup-card) offers only the allowed drivers,
+`resolveDriver` (`seat.ts`) filters a saved-but-now-illegal seat the same way the
+backend does — both sides must, since the setting is still on disk — and the
+[Build view](#agent-harness--the-skill-game) branches on the category, as does the
+tutorial track.
+
+One consequence worth knowing: **`POST /games/dry-run` is the LLM harness**, so it
+refuses a game whose seats can't run one and points at `/games/test-tool` (run your
+bot against a sample observation) instead. It keys off `allowed_policies`, not the
+category, so a turn-based coded game on the hatch still gets a dry run.
 
 ## Move policy
 
 A node's **move policy** is now a property of the **game**, not a single global
 switch. Resolution (`_resolve_policy_name` in `client.py`): the player's explicit
 per-game override (`games.policy.<game_id>`) → the game's declared `default_policy`
-→ the legacy global `games.policy` (kept only as a fallback for uncatalogued games).
-So a ViZDoom seat defaults to `bot` and a RAG Race seat to `agent` with no switch
-flipping. The four policy names:
+→ the legacy global `games.policy` (kept only as a fallback for uncatalogued games —
+in practice AgentTown, which has no match boundary and isn't in the catalog, so it
+is the one place the global setting still decides anything). So a ViZDoom seat
+defaults to `bot` and a RAG Race seat to `agent` with no switch flipping. **An
+override outside the game's `allowed_policies` is refused** and its default used
+instead — see [the category rules](#the-category-decides-what-may-occupy-a-seat).
+The four policy names:
 
 - **`random`** — a built-in random legal move. No model needed, so the pipeline is
   watchable even with no local LLM running.
@@ -681,26 +739,26 @@ notebook", because a tabular learner there would only teach the wrong lesson.
 | `def act(obs, info)` | yes | none | a stateless policy function |
 | `def run(args, obs)` | **no** | none | **legacy, fully supported**; `args` was always `{}` |
 
-### There is always a bot tool
+### The coded harness always has code
 
-Every loadout the node hands out carries one, injected on **read** by
-`_with_default_bot` — no migration, and deleting it gets it back rather than
-silently costing you your script seat. The default is a uniformly random legal
-move: the baseline every policy is measured against, and the first thing a real bot
-has to beat.
+`get_coded_harness` never returns nothing: your policy, else the game's shipped
+starter, else `DEFAULT_BOT_CODE` — a uniformly random legal move, the baseline every
+policy is measured against and the first thing a real bot has to beat. "What will
+play" and "what the editor shows" are the same visible, editable thing.
 
-This replaces a fallback that quietly did real damage. `BotPolicy` used to look for
-a tool named exactly `bot` and, failing that, run the loadout's **first** tool —
-normally a *helper* (`board_scanner` returns `{"win_at": ..., "block_at": ...}`),
-not a move. That answered illegally every single turn and degraded to a random move
-anyway, silently, in ranked matches included. The Train runner made it visible for
-the first time: 200 episodes, 200 illegal actions, 0% wins.
+This is what closes a fallback that quietly did real damage. When the policy lived
+*inside* the LLM harness's tool list, `BotPolicy` had to find it by name — `bot`,
+and failing that the loadout's **first** tool, normally a *helper*
+(`board_scanner` returns `{"win_at": ..., "block_at": ...}`), not a move. That
+answered illegally every single turn and degraded to a random move anyway, silently,
+in ranked matches included; the Train runner made it visible for the first time at
+200 episodes, 200 illegal actions, 0% wins. A stopgap made the name resolution
+`<game_id>.bot` → `bot` → a default tool, and kept three copies of that rule in sync
+(the policy, the Build panel, the Train runner).
 
-Resolution is now `<game_id>.bot` → `bot` → the default, shared by
-`loadout.bot_tool_of` and the Train section's `botToolOf`. The per-game name is not
-decoration: shipped harnesses use it (`fighter.bot`) and the Build panel always
-resolved it, while the policy never did — so a fighter harness ran whichever tool
-happened to be first. The two agree now, and a helper tool is never run as a bot.
+The [harness split](#the-two-harnesses) removes the mechanism rather than the
+symptom: a coded harness has **no tool list**, so there is no wrong member to pick
+and no name rule to keep in sync anywhere.
 
 The legacy shape is not deprecated-in-name-only: every shipped template used it and
 people have saved harnesses written against it, so breaking those to tidy an
@@ -725,6 +783,66 @@ yourself and engineering an agent that writes it are two ways to play the same g
 and the ladder measures both.
 
 ## Agent harness — the skill game
+
+### Two categories, two builders
+
+The split is the shape of the UI, not a badge on a flat list:
+
+- **The library** (`LobbyPanel`) is two labelled shelves — **⚙ Coded agents** and
+  **🧠 LLM agents** — from `GAME_CATEGORIES` in `game-identity.ts`. Coded is first
+  because it needs no model configured, so it is the half of the library that works
+  on a fresh install.
+- **The builder** is two components, `CodedBuilder` and `HarnessBuilder`, behind a
+  shell (`AgentBuilderPanel`) that owns what both need: the game picker, the category
+  header, the pipeline strip, the observation inspector, save/lock-in. When this was
+  one component with `if (policy === 'bot')` through it, every shared line had to be
+  read twice and the answer drifted — a "Helper tools" fold survived for a harness
+  with no tools, and the loading gate tested the LLM readout, so every coded game
+  rendered a permanent "loading…".
+- **Templates** are filtered to the harness being edited, and a coded starter
+  **replaces** the body (asking first) rather than merging: a policy is one body,
+  not a set to append to.
+
+The header shows the **game's category** while the sentence under it names the
+**harness your seat runs**. Those differ only on a hatch game, and saying both is how
+"Tic-Tac-Toe is a coded-agent game, but this seat is running the LLM harness" becomes
+legible rather than contradictory.
+
+### The two harnesses
+
+A game's [category](#game-category--coded-agents-vs-llm-agents) decides what a seat
+is, so it also decides what you *build*. There are two harness objects and neither
+can hold the other's fields (`loadout.py`):
+
+| | `CodedHarness` (`coded`) | `LlmHarness` (`llm`) |
+| --- | --- | --- |
+| What it is | `bot_code` — one Python policy | `context` + `tools` + `model` + `agent_code` |
+| Runs under | the `bot` move policy | the `agent` move policy |
+| Model in the loop | none | yes |
+| Editor | the bot editor | context / tools / model / `my_agent` |
+| Tested by | `/games/test-tool`, the Train runner | `/games/dry-run` |
+
+Which one you're editing follows the **seat**, not the game: `harness_kind` resolves
+through `_resolve_policy_name`, so a turn-based coded game on the escape hatch can
+have one of each and your driver choice says which plays. `GET /games/loadout/{id}`
+takes an optional `?kind=`, defaulting to the one this node's seat would run.
+
+**On the wire it's a discriminated union** (`HarnessModel`) with
+`extra="forbid"`: a body must declare its `kind` and may carry only that harness's
+fields. Both halves of that matter — the union has to be the declared
+`response_model` or the coded arm's `bot_code` is filtered out silently on the way
+back, and without `extra="forbid"` a cross-kind field is dropped just as quietly,
+which is how a player loses a policy they believe they saved.
+
+**Storage is v3** — one side per kind, each with its own active pointer and version
+history, because iterating a bot and iterating a prompt are different activities with
+different units of progress. Older files upgrade in memory on read and are rewritten
+on the first save (v2 = one `{active, versions}` block; v1 = a bare body). The v2
+split lifts the `<game>.bot` tool out of the tool list into `bot_code` and leaves
+every genuine helper on the LLM side, keeping the same version ids on both sides so a
+player's history stays aligned.
+
+### The LLM harness
 
 The real game isn't moving pieces — it's **engineering the agent that plays**. A
 player's *harness* (their **loadout**) is a strategy `context` plus a set of **custom
@@ -839,11 +957,22 @@ and offered in the first-run card). Board/fast games get a worked helper or per-
 `.bot` (e.g. `board_scanner`, `fighter.bot`, `vizdoom_duel.bot`); the open-action
 code-submission games (`arena`, `bug_hunt`, `code_golf`, `test_duel`, `tabular_fe`) get a
 strategy `context` plus a helper that reads the observation (failing-test triage, a
-byte counter, a signature parser, a column lister, …). A game's **first** listed
-template is its **shipped default**: `get_loadout(game_id)` falls back to it
-(`templates.default_loadout_for`) when the player has saved nothing, so a brand-new
-player's agent already plays with a working harness before they open the editor —
-saving any loadout (or a global `default`) overrides it. A match played on the seeded
+byte counter, a signature parser, a column lister, …).
+
+A template belongs to **one harness kind**, and it is *derived* rather than declared
+(`template_kind`): a template whose tools contain the bot tool **is** a coded policy,
+one that doesn't is context + helpers. Deriving it keeps the two from disagreeing
+when a template is edited. `GET /games/loadout-templates` reports each template's
+`kind` and filters on `?kind=`, so a coded builder is never offered a tool list it
+has nowhere to put.
+
+A game's **first** listed template of a kind is its **shipped default**:
+`get_coded_harness` / `get_llm_harness` fall back to it (`default_harness_for`) when
+the player has saved nothing, so a brand-new player's agent already plays with a
+working harness before they open the editor — saving one (or a global `default`)
+overrides it. A coded starter arrives in the coded harness's own shape (`bot_code`),
+not as a tool list; the tool wrapper was only ever the old storage's way of holding a
+policy. A match played on the seeded
 default is attributed to a synthetic **`starter`** version (`active_version_id` /
 `list_versions`), so the ladder and replays show *which* harness played rather than a
 blank; the first real **Save as new version** branches to `v1` and the starter drops
