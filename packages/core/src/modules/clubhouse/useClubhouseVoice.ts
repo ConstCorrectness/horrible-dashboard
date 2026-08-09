@@ -27,6 +27,8 @@ export interface UseClubhouseVoiceProps {
   onSpeakingVolumesChange?: (volumes: Record<number, number>) => void;
   onTranscribe?: (text: string) => void;
   onBargeIn?: () => void;
+  onSpeakerInvite?: (invite: SpeakerInvite) => void;
+  onHandRaise?: (userId: number, userName: string) => void;
   sttChunkIntervalMs?: number;
 }
 
@@ -122,6 +124,8 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
   const humanGainRef = useRef<GainNode | null>(null);
   const onTranscribeRef = useRef(props?.onTranscribe);
   const onBargeInRef = useRef(props?.onBargeIn);
+  const onSpeakerInviteRef = useRef(props?.onSpeakerInvite);
+  const onHandRaiseRef = useRef(props?.onHandRaise);
   
   // VAD & Agent Audio control
   const vadIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -134,8 +138,10 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
   useEffect(() => {
     onTranscribeRef.current = props?.onTranscribe;
     onBargeInRef.current = props?.onBargeIn;
+    onSpeakerInviteRef.current = props?.onSpeakerInvite;
+    onHandRaiseRef.current = props?.onHandRaise;
     chunkIntervalRef.current = props?.sttChunkIntervalMs || 5000;
-  }, [props?.onTranscribe, props?.onBargeIn, props?.sttChunkIntervalMs]);
+  }, [props?.onTranscribe, props?.onBargeIn, props?.onSpeakerInvite, props?.onHandRaise, props?.sttChunkIntervalMs]);
 
   const rtcClientRef = useRef<IAgoraRTCClient | null>(null);
   const localAudioTrackRef = useRef<ILocalAudioTrack | null>(null);
@@ -461,6 +467,9 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
             } else if (action === 'raise_hands' || action === 'hand_raised') {
               if (senderId != null) {
                 updateLiveUser(senderId, { handRaised: true });
+                if (onHandRaiseRef.current && senderId !== myUserId) {
+                  onHandRaiseRef.current(senderId, sender.name || msg.from_name || 'Someone');
+                }
               }
             } else if (action === 'lower_hands' || action === 'unraise_hands') {
               if (senderId != null) {
@@ -477,11 +486,15 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
             } else if (action === 'invite_speaker') {
               const targetId = msg.user_id;
               if (targetId != null && Number(targetId) === Number(myUserId)) {
-                setSpeakerInvite({
+                const invite: SpeakerInvite = {
                   moderatorId: msg.moderator_id ?? (senderId ?? 0),
                   moderatorName: msg.moderator_name || sender.name || 'A moderator',
                   moderatorPhoto: msg.moderator_photo_url || sender.photo_url || null,
-                });
+                };
+                setSpeakerInvite(invite);
+                if (onSpeakerInviteRef.current) {
+                  onSpeakerInviteRef.current(invite);
+                }
               }
             }
 

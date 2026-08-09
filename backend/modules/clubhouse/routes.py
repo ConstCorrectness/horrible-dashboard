@@ -628,6 +628,19 @@ async def accept_speaker(
     )
 
 
+@router.post("/channels/{channel}/invite_speaker")
+async def invite_speaker(channel: str, body: InviteUserRequest) -> dict[str, Any]:
+    """Invite an audience member to speak (Clubhouse POST /invite_speaker)."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/invite_speaker",
+        {"channel": channel, "user_id": body.user_id},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
 @router.post("/channels", response_model=JoinChannelResult)
 async def create_channel(body: CreateChannelRequest) -> dict[str, Any]:
     """Start a new room (Clubhouse POST /create_channel) and retrieve tokens."""

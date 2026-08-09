@@ -114,6 +114,10 @@ export function acceptClubhouseSpeaker(channel: string, userId: number): Promise
   return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/accept_speaker`, { user_id: userId });
 }
 
+export function inviteClubhouseSpeaker(channel: string, userId: number): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/invite_speaker`, { user_id: userId });
+}
+
 export function getClubhouseChannelDetails(channel: string): Promise<Channel> {
   return apiGet<Channel>(`/clubhouse/channels/${channel}`);
 }

@@ -12,6 +12,7 @@ import {
   followClubhouseUser,
   unfollowClubhouseUser,
   inviteToClubhouseChannel,
+  inviteClubhouseSpeaker,
   searchClubhouseUsers,
   getClubhouseFollowing,
   type Channel,
@@ -226,6 +227,34 @@ export function RoomsPanel() {
             </div>
           </div>
 
+          <div className="ch-profile-actions">
+            {!isCurrentUser && activeChannel && (() => {
+              const currentRoom = channels.find((ch) => ch.channel === activeChannel) || activeRoomInfo;
+              const amIMod = currentRoom?.users.find((u) => u.user_id === myUserId)?.is_moderator;
+              const isTheySpeaker = liveUsers.get(selectedUser.user_id)?.isSpeaker ?? currentRoom?.users.find((u) => u.user_id === selectedUser.user_id)?.is_speaker;
+              
+              if (amIMod && !isTheySpeaker) {
+                return (
+                  <button
+                    className="ch-btn-action"
+                    onClick={async () => {
+                      try {
+                        await inviteClubhouseSpeaker(activeChannel, selectedUser.user_id);
+                        toastsStore.add('success', 'Invite Sent', `Invited ${selectedUser.name} to speak.`);
+                        setSelectedUser(null);
+                      } catch (err: any) {
+                        toastsStore.add('error', 'Failed', err.message || 'Could not invite speaker');
+                      }
+                    }}
+                  >
+                    🎤 Invite to Stage
+                  </button>
+                );
+              }
+              return null;
+            })()}
+          </div>
+
           <div className="ch-profile-stats">
             <div className="ch-profile-stat">
               <span className="ch-profile-stat-val">{selectedUser.num_followers ?? 0}</span>
@@ -302,6 +331,23 @@ export function RoomsPanel() {
       if (text.trim().length > 0) {
         setAgentTranscript(text.trim());
       }
+    },
+    onSpeakerInvite: (invite) => {
+      toastsStore.add('info', 'Speaker Invite', `${invite.moderatorName} wants you to speak!`);
+      if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+        new Notification('Speaker Invite', { body: `${invite.moderatorName} wants you to speak!` });
+      }
+    },
+    onHandRaise: (userId, userName) => {
+      // Check if current user is a moderator
+      const currentRoom = channels.find((ch) => ch.channel === activeChannel) || activeRoomInfo;
+      const amIMod = currentRoom?.users.find((u) => u.user_id === myUserId)?.is_moderator;
+      if (amIMod) {
+        toastsStore.add('info', 'Hand Raised', `${userName} wants to come up on stage.`);
+        if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+          new Notification('Hand Raised', { body: `${userName} wants to come up on stage.` });
+        }
+      }
     }
   });
 
@@ -326,6 +372,9 @@ export function RoomsPanel() {
 
   useEffect(() => {
     void load();
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {});
+    }
   }, []);
 
   // Poll active channel details when joined to keep participant lists updated in real-time
