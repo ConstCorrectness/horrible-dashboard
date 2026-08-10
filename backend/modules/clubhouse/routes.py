@@ -212,9 +212,9 @@ async def _ch_authed_post(
         except (ValueError, AttributeError):
             pass
         status_code = res.status_code if 400 <= res.status_code < 500 else 502
+        print(f"Clubhouse API Error for {path}: {status_code} {message}")
         raise HTTPException(status_code=status_code, detail=f"Clubhouse: {message}")
     return res.json()
-
 
 async def _ch_authed_get(
     path: str,
@@ -445,14 +445,14 @@ async def get_channel_chat(channel: str) -> dict[str, Any]:
     """Attempt to get recent chat for a channel."""
     auth = _require_auth()
     try:
-        res = await _ch_authed_post(
-            "/get_channel",
-            {"channel": channel},
+        res = await _ch_authed_get(
+            "/get_channel_messages",
             auth["auth_token"],
             auth["user_id"],
             auth.get("device_id"),
+            {"channel": channel},
         )
-        return {"comments": res.get("recent_messages", [])}
+        return {"comments": res.get("messages", [])}
     except Exception as e:
         print("Failed to fetch chat:", e)
         return {"comments": []}
@@ -588,10 +588,10 @@ async def active_ping(channel: str) -> dict[str, Any]:
 
 @router.post("/channels/{channel}/mute")
 async def mute_channel(channel: str, body: MuteRequest) -> dict[str, Any]:
-    """Notify Clubhouse of speaker mute/unmute state (Clubhouse POST /update_is_muted)."""
+    """Notify Clubhouse of speaker mute/unmute state (Clubhouse POST /mute_speaker)."""
     auth = _require_auth()
     return await _ch_authed_post(
-        "/update_is_muted",
+        "/mute_speaker",
         {"channel": channel, "is_muted": body.is_muted},
         auth["auth_token"],
         auth["user_id"],
@@ -730,10 +730,10 @@ async def change_handraise_settings(channel: str, body: HandraiseSettingsRequest
     """Change the hand-raise policy for the channel."""
     auth = _require_auth()
     return await _ch_authed_post(
-        "/change_handraise_settings",
+        "/update_is_ask_to_join_allowed",
         {
             "channel": channel,
-            "is_enabled": body.is_enabled,
+            "is_ask_to_join_allowed": body.is_enabled,
             "handraise_permission": body.handraise_permission,
         },
         auth["auth_token"],

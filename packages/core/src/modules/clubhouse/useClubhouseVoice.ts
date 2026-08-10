@@ -502,7 +502,6 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
             if (action === 'chat_message' || action === 'chat' || action === 'post_to_chat' || action === 'new_channel_message' || (!action && (msg.text || msg.body || msg.message))) {
               const text = msg.text || msg.body || msg.message;
               if (text && typeof text === 'string') {
-                if (senderId != null && myUserId != null && Number(senderId) === Number(myUserId)) return;
                 setComments(prev => [
                   ...prev,
                   {
@@ -704,21 +703,29 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
 
   // 7. Post a comment chat message to the room
   const sendComment = async (text: string) => {
-    if (!pubnubRef.current || !activeChannel) return;
-    const profile = myProfileRef.current;
-    const commentId = 'my-msg-' + Math.random().toString(36).slice(2, 9);
-    const timestamp = Date.now();
+    if (!pubnubRef.current || !activeChannel || !text) return;
 
-    setComments(prev => [...prev, {
-      id: commentId,
-      userName: profile?.name || 'Anonymous',
-      userPhoto: profile?.photoUrl || null,
-      text,
-      timestamp
-    }]);
+    // Clubhouse chat messages have a 280-character limit
+    const MAX_LEN = 270;
+    const chunks: string[] = [];
+    let current = text;
+    while (current.length > 0) {
+      if (current.length <= MAX_LEN) {
+        chunks.push(current);
+        break;
+      }
+      let splitIdx = current.lastIndexOf(' ', MAX_LEN);
+      if (splitIdx === -1) splitIdx = MAX_LEN;
+      chunks.push(current.substring(0, splitIdx));
+      current = current.substring(splitIdx).trim();
+    }
 
     try {
-      await sendChannelMessage(activeChannel, text);
+      for (const chunk of chunks) {
+        await sendChannelMessage(activeChannel, chunk);
+        // Add a tiny delay between chunks so they appear in order
+        await new Promise(r => setTimeout(r, 300));
+      }
     } catch (err2) {
       console.error('Failed to publish comment:', err2);
       throw err2;

@@ -441,6 +441,7 @@ export function RoomsPanel() {
       try {
         const details = await getClubhouseChannelDetails(activeChannel);
         setChannels((prev) => prev.map((ch) => (ch.channel === activeChannel ? details : ch)));
+        setActiveRoomInfo(details); // update active room info for the UI
       } catch (err) {
         console.error('Failed to poll active channel details:', err);
       }
