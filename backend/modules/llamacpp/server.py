@@ -2,12 +2,18 @@
 
 Three things here are the difference between "it works" and "it silently doesn't":
 
-**`--jinja` is not optional.** Without it `llama-server` ignores the model's chat
-template and serves a generic one that cannot emit tool calls — the request still
-returns 200 with a perfectly fluent answer, and every tool in the agent's schema is
-simply never called. That failure looks exactly like "this small model is bad at
-tool use", which is the most expensive wrong conclusion available here. It rides on
-every spawn, and the flag is asserted by a test.
+**`--jinja` is passed explicitly, never left to the default.** It selects the
+model's own chat template, which is what carries the model's tool-call syntax.
+Upstream now defaults it *on* (verified on b10362, where a server started without
+it reports the same template), but the default has flipped before, `--no-jinja`
+exists, and it also reads `LLAMA_ARG_JINJA` from the environment — so whether the
+agent can call tools would otherwise depend on which build got downloaded and what
+is in the user's env. Without the model's template, `llama-server` accepts only
+"commonly used" templates and falls back to a generic one for the rest, and that
+failure is silent: 200, a perfectly fluent answer, and every tool in the schema
+simply never called — indistinguishable from "this small model is bad at tool use",
+the most expensive wrong conclusion available here. Hence the explicit flag and the
+test that pins it.
 
 **Readiness is a health gate, not a sleep.** Loading a 20 GB GGUF takes tens of
 seconds; a request that arrives first gets a connection refused, which the agent
@@ -173,8 +179,9 @@ class LlamaServerManager:
             str(context_size),
             "-ngl",
             str(gpu_layers),
-            # See the module docstring: without this the model's own chat template
-            # never runs and tool calls are silently impossible.
+            # Explicit, not inherited: the default has flipped upstream before and
+            # `LLAMA_ARG_JINJA` in the environment can turn it off. See the module
+            # docstring — the failure mode is a fluent 200 with no tool call.
             "--jinja",
         ]
         if threads:

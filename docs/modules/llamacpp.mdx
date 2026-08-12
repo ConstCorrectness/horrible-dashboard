@@ -118,14 +118,20 @@ fails at load time with an error that reads like a corrupt *model*.
 
 ## The server
 
-### `--jinja` is not optional
+### `--jinja` is passed explicitly, never inherited
 
-Without it, `llama-server` ignores the model's own chat template and serves a
-generic one **that cannot emit tool calls**. The request still returns 200 with a
-perfectly fluent answer, and every tool in the agent's schema is simply never
-called — which looks exactly like "this small model is bad at tool use", the most
-expensive wrong conclusion available here. It rides on every spawn and is asserted
-by a test.
+It selects the model's **own** chat template, which is what carries its tool-call
+syntax. Upstream currently defaults it on — verified on b10362, where a server
+started without it reports the same template — but the default has flipped before,
+`--no-jinja` exists, and it also reads `LLAMA_ARG_JINJA` from the environment. So
+whether the agent can call tools would otherwise depend on which build happened to
+be downloaded and what is in the user's env.
+
+Without the model's template, `llama-server` accepts only "commonly used" templates
+and falls back to a generic one for the rest — and that failure is **silent**: 200,
+a perfectly fluent answer, and every tool in the schema simply never called, which
+is indistinguishable from "this small model is bad at tool use". Hence the explicit
+flag, and the test that pins it.
 
 ### Ready is not the same as running
 
@@ -238,8 +244,8 @@ what "the node serves its own weights" means.
 `backend/tests/test_llamacpp.py`. The tests worth keeping are the ones pinning
 failures that are otherwise **silent**:
 
-- `--jinja` present on every spawn (its absence = tool calls stop happening, with a
-  200 and a fluent answer).
+- `--jinja` present on every spawn, so the model's own chat template is never left
+  to a build default or an env var.
 - An accelerator build is never selected for a `cpu` request, and `cudart-*` is
   never mistaken for a server.
 - A digest mismatch leaves **no install behind**.

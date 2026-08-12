@@ -225,10 +225,11 @@ class _FakeProc:
 
 
 def test_spawn_always_passes_jinja(data_dir: Path) -> None:
-    """Without `--jinja`, llama-server ignores the model's chat template and serves
-    a generic one that cannot emit tool calls — the request still returns 200 with
-    a fluent answer and every tool is silently never called. It is the single most
-    expensive silent failure in this module."""
+    """`--jinja` selects the model's own chat template, which carries its tool-call
+    syntax. Upstream currently defaults it on, but the default has flipped before,
+    `--no-jinja` exists, and `LLAMA_ARG_JINJA` in the environment can disable it —
+    so it is passed explicitly rather than inherited. Losing it is silent: 200, a
+    fluent answer, and every tool never called."""
     captured: list[list[str]] = []
     manager = LlamaServerManager(
         launcher=lambda cmd: captured.append(cmd) or _FakeProc(cmd)
