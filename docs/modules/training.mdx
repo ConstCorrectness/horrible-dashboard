@@ -104,6 +104,108 @@ strips these from visible output and fans them out as `training` channel events 
 same line-protocol trick the visualizer uses for Pygame frames, so it works identically
 under a kernel, a script runner, or manim.
 
+## The recipe surface
+
+A fine-tune is a couple of dozen numbers, and until this landed the only place to
+put them was a notebook cell written from memory. `recipes.py` makes them a
+**schema**: a curated catalog of fields, each with a type, a default and a
+one-line description, rendered as a form by `training.recipe` (non-singleton,
+params `{projectId}`) and **materialized into `main.ipynb`**.
+
+**There is no new execution path.** `materialize()` returns notebook cells. They
+run on the same kernel in the same venv, their `ht.log()` output is
+indistinguishable from hand-written code's, and the same notebook is what the
+Kaggle and Colab push already send. The recipe itself lives in `recipe.json` so
+the *form* round-trips; the cells are yours the moment they land and are never
+read back. A regenerate **replaces** the previous block (found by a
+`horrible_recipe` cell-metadata flag, with the header line as a fallback) rather
+than appending — two `SFTConfig` definitions in one notebook is a bug where the
+second silently wins, discovered after a wasted run.
+
+### Validated against what is actually installed
+
+The expensive failure this exists to prevent: `trl` renamed
+`SFTConfig.max_seq_length` to `max_length`, so a recipe emitting the wrong one
+dies with a `TypeError` several minutes in, after the dataset has downloaded. So
+fields carry `aliases`, and `introspect()` asks the **project venv** — one
+subprocess, cached on the venv's mtime — which names its installed classes
+actually accept, via `dataclasses.fields()` on the real `SFTConfig`/`LoraConfig`.
+
+Four states, and the last two are not the same thing:
+
+| Status | Meaning | Emitted? |
+| --- | --- | --- |
+| `ok` | the installed class accepts this name | yes |
+| `renamed` | it accepts an alias instead | yes, under the alias, with a comment |
+| `unsupported` | we asked, and it accepts neither | **no** — dropped, and named as dropped in the header |
+| `unvalidated` | we never got to ask (no venv, no trl) | yes, with a banner saying it wasn't checked |
+
+Two fields make the rule concrete. `max_length`/`max_seq_length` **are** aliases —
+same meaning, different spellings across versions. `warmup_ratio` and
+`warmup_steps` are deliberately **not**, even though transformers 5 dropped the
+first and kept the second: they carry different units, so aliasing them would
+send `0.03` — three percent of training — into a field meaning "three hundredths
+of a step", which is no warmup at all and raises nothing anywhere. Whichever one
+the installed version accepts is the one that renders.
+
+**The form admits it is not the whole API.** `TrainingArguments` has 112 fields
+on transformers 5.15; this catalog has 24. `Introspection.extra` counts the
+difference and the header says "24 of 118 knobs — edit the generated cell for the
+rest", because a form that looks complete is a form you trust to be complete.
+
+Parameter docs come from the node's own **versioned doc index** (the `trl` and
+`peft` crawler seeds): `GET /training/recipe/docs` returns a link per config class
+carrying the indexed version and the `installedMismatch` annotation, so the link
+is to docs for a version you can compare against rather than to whatever is
+current. An empty index yields no links rather than a guessed URL.
+
+### `report_to` is first-class, and local metrics stay authoritative
+
+The tracker picker (`none` / `tensorboard` / `wandb` / `mlflow` / `trackio`) sets
+`SFTConfig.report_to`. It is genuinely **additive**: every generated recipe
+installs `ht.callback()` — a `TrainerCallback` in the helper package that mirrors
+each logged scalar into the metrics pane — so the chart works offline, works with
+`report_to=["none"]`, and keeps working when a tracker's key expires mid-run.
+"None" means no third party, never no metrics.
+
+Credentials live in the **`trackers` connector** (Fernet-encrypted, W&B key and
+MLflow tracking URI, both secret because a tracking URI routinely embeds one),
+never in settings — `GET /api/settings` hands the whole bag to the browser. This
+is the one connector whose `id` names no agent-tool group, because "log this run
+to W&B" is a property of a recipe you wrote, not something the agent should do on
+your behalf.
+
+They reach training code through the **environment at spawn**: `SessionConfig.env`
+(new, on `notebook_core`) is merged over the backend's own by the kernel manager,
+and the script runner does the same. That is what keeps the key out of the
+notebook, out of `project.json`, and out of every HTTP response. `env_for()` is
+scoped to the trackers the recipe selected, so connecting the tile does not by
+itself start shipping every run somewhere.
+
+### Closing the loop: checkpoint → GGUF
+
+`convert.py` turns a finished checkpoint into a GGUF in the **llama.cpp module's
+managed model directory** — the one its catalog scans, its disk budget counts and
+its delete route may touch — so a model you trained is one this node serves. See
+[llamacpp](./llamacpp.mdx).
+
+- **The converter is not in the release binaries.** `convert_hf_to_gguf.py` lives
+  in the llama.cpp repo, so it is fetched on demand **at the tag of the installed
+  build** (a converter from a different release can write a file the server reads
+  slightly wrong), cached under the data dir with its sha256 recorded as
+  `verified: false` — GitHub publishes no digest for a raw file.
+- **A LoRA checkpoint is not a model.** Told apart by `adapter_config.json` and
+  sent to `convert_lora_to_gguf.py` with the base model read from that file; the
+  result is labelled an adapter, since `llama-server` loads it with `--lora`
+  beside a base model rather than serving it alone.
+- **It runs in the project venv**, which is where torch lives. Missing converter
+  deps (`gguf`, `sentencepiece`, `protobuf`) are installed through `envs.install`
+  — `uv pip install --python <venv>`, because a uv-created venv has **no pip in
+  it at all** and `python -m pip` fails on every project this module makes.
+- Output types are the ones the converter itself writes (`f16`/`bf16`/`f32`/
+  `q8_0`). `q4_k_m` is a separate `llama-quantize` step and is deliberately not
+  offered, because offering it and silently producing f16 would be worse.
+
 ## The notebook pane & kernel sessions
 
 `training.notebook` is a **native cell UI** (CodeMirror cells, non-singleton, opened
@@ -281,6 +383,9 @@ a target argument. Both are larger than the rename and neither is done.
 | `GET/PUT /projects/{id}/notebook?path=` | whole-document notebook read/replace (path-traversal-guarded) |
 | `POST/GET/DELETE /projects/{id}/runs`, `GET/DELETE /runs/{id}` | script runs (start/list/stop) |
 | `POST /projects/{id}/manim` (202), `GET /projects/{id}/media/{path}` | manim render + traversal-guarded media serving |
+| `GET/PUT /projects/{id}/recipe`, `POST /projects/{id}/recipe/apply` | the recipe form's schema + validation, and writing its cells into `main.ipynb` |
+| `GET /recipe/docs` | doc links per config class from the versioned index |
+| `GET /projects/{id}/checkpoints`, `POST /projects/{id}/convert` | checkpoints to convert, and the conversion itself (NDJSON progress) |
 | `GET /push/targets`, `POST/GET /projects/{id}/push/{target}[/status]` | Kaggle/Colab push + status |
 | `POST /google/auth/start`, `POST /google/auth/complete`, `GET/DELETE /google/...` | Colab Drive OAuth (server-held token) |
 | `GET /fabric/ads`, `POST /fabric/advertise` | peer training ads (list / set advertise mode) |
@@ -296,6 +401,7 @@ events, plus `metrics` / `model_graph` / `model_stats` / `frame` / `run_output` 
 | Contribution | Value |
 | --- | --- |
 | Panel `training.projects` | singleton hub, `embedded`: the **Projects** section of [Explorer](explorer.mdx) and the left region strip of `training.notebook`. Provider search → create project, project list with live venv/data status, open-notebook buttons |
+| Panel `training.recipe` | non-singleton fine-tuning recipe form, params `{projectId}`, opened from a project row (`openTrainingRecipe`); typed schema + validation chips, tracker picker, checkpoint→GGUF card |
 | Panel `training.notebook` | non-singleton notebook pane (center), params `{projectId, notebook}`, opened via `openTrainingNotebook()` so it focuses/reuses rather than splitting (see [windowing](../architecture/windowing.mdx)); CodeMirror cells, run/interrupt/restart toolbar, nbformat output renderers (stream+ANSI, results, images, HTML, tracebacks) |
 | Widget `training.metrics` | live metric charts (uPlot, one per metric of the selected run; ring-buffer backfill via `watch_run`, ≤20 wire events/s per run with every point kept server-side) |
 | Widget `training.modelgraph` | model architecture graph (dagre SVG; fx/module-tree, grad-norm heatmap) |
@@ -304,8 +410,9 @@ events, plus `metrics` / `model_graph` / `model_stats` / `frame` / `run_output` 
 | Widget `training.peers` | peer training ads: advertise offer/seek, match-highlighted peer list, open-chat handoff |
 | Regions on `training.notebook` | metrics/architecture/rollout/manim/peers on the right strip, projects on the left |
 | Layout preset `training` (🧠) | projects · notebook · metrics workspace |
-| Commands | `training.open`, `training.openMetrics`, `training.openModelGraph`, `training.openRollout`, `training.openManim`, `training.openPeers` |
-| Project row actions | open notebook, ⇪ push to Kaggle, ⇪ push to Colab, delete |
+| Commands | `training.open`, `training.openRecipe`, `training.openMetrics`, `training.openModelGraph`, `training.openRollout`, `training.openManim`, `training.openPeers` |
+| Project row actions | open notebook, 🧪 recipe, ⇪ push to Kaggle, ⇪ push to Colab, delete |
+| Connector `trackers` | W&B API key + MLflow tracking URI, Fernet-encrypted. The one connector contributing **no agent tools**, so its id names no tool group |
 | Settings | `training.projectsRoot`, `training.defaultPython`, `training.kaggle.username`, `training.kaggle.key`, `training.hf.token`, `training.google.clientId`, `training.google.clientSecret`, `training.metrics.bufferPoints`, `training.manim.quality`, `training.fabric.advertise`, `training.fabric.note` |
 
 Credentials note: settings persist in the plaintext `.data/settings.json` store — same

@@ -18,6 +18,7 @@ from backend.modules.settings.models import (
     SETTING_KEY_PATTERN,
     SettingsValues,
     SettingValue,
+    is_secret_key,
 )
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -62,9 +63,24 @@ def set_value(key: str, value: Any) -> None:
     _write(data)
 
 
+def _served(data: dict) -> SettingsValues:
+    """The bag as it leaves the process: secret-shaped values blanked.
+
+    Blanked rather than omitted, because a key vanishing from the response is
+    indistinguishable from never having been set — and a settings page that
+    cannot tell those apart will happily overwrite a saved token with an empty
+    string the first time someone saves an unrelated field.
+    """
+    values = {k: ("" if is_secret_key(k) else v) for k, v in data.items()}
+    secret_keys = [
+        k for k, v in data.items() if is_secret_key(k) and v not in ("", None)
+    ]
+    return SettingsValues(values=values, secretKeys=secret_keys)
+
+
 @router.get("", response_model=SettingsValues)
 def get_settings() -> SettingsValues:
-    return SettingsValues(values=_read())
+    return _served(_read())
 
 
 @router.put("/{key}", response_model=SettingValue)
@@ -82,4 +98,4 @@ def delete_setting(key: SettingKey) -> SettingsValues:
     if key in data:
         del data[key]
         _write(data)
-    return SettingsValues(values=data)
+    return _served(data)

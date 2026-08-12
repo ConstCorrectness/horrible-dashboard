@@ -1,4 +1,4 @@
-import { apiGet, apiPost, streamNdjson } from '../../api';
+import { apiDelete, apiGet, apiPost, streamNdjson } from '../../api';
 
 /** One unpacked `llama-server` build under the data dir. */
 export interface Install {
@@ -135,6 +135,132 @@ export function stopServer(): Promise<LlamaStatus> {
   return apiPost<LlamaStatus>('/llamacpp/stop', {});
 }
 
+/**
+ * One captured node.
+ *
+ * `fidelity` is the honesty knob and must survive to the screen: `full` is the
+ * tensor, `fp16` is a downcast of it, and `summary` is statistics *instead of*
+ * the tensor — a summary record has no values and must never be drawn as if it
+ * had.
+ */
+export interface TraceRecord {
+  index: number;
+  name: string;
+  op: string;
+  dtype: string;
+  ne: number[];
+  nb: number[];
+  /** The decoder block, or null for nodes outside one (embeddings, the head). */
+  layer: number | null;
+  passIndex: number;
+  fidelity: 'full' | 'fp16' | 'summary';
+  offset: number;
+  length: number;
+  summary: Record<string, number>;
+}
+
+export interface TraceSummary {
+  traceId: string;
+  createdAt: number;
+  modelName: string;
+  modelPath: string;
+  modelSha: string;
+  /** What `modelSha` actually hashed — never a whole-file digest. */
+  modelShaScope: string;
+  llamaBuild: string;
+  flashAttn: boolean;
+  fidelity: string;
+  attention: boolean;
+  prompt: string;
+  promptTokens: number;
+  maxTokens: number;
+  recordCount: number;
+  blobBytes: number;
+  diskBytes: number;
+  chatTemplate: boolean;
+  note: string;
+}
+
+export interface TraceListResponse {
+  traces: TraceSummary[];
+  usedBytes: number;
+  budgetBytes: number;
+  root: string;
+  /** False when `llama-cpp-python` is missing; `reason` carries the install line. */
+  available: boolean;
+  reason: string;
+}
+
+export interface TraceToken {
+  index: number;
+  id: number;
+  text: string;
+  generated: boolean;
+}
+
+export interface TraceDetail {
+  trace: TraceSummary;
+  records: TraceRecord[];
+  tokens: TraceToken[];
+}
+
+export interface RecordValues {
+  record: TraceRecord;
+  values: number[];
+  truncated: boolean;
+  summary: Record<string, number>;
+}
+
+export interface TraceEstimate {
+  bytes: number;
+  seconds: number;
+  note: string;
+  layers: number;
+  embeddingLength: number;
+  heads: number;
+  promptTokens: number;
+  budgetBytes: number;
+  error: string;
+}
+
+export interface TraceOptions {
+  modelPath: string;
+  prompt: string;
+  maxTokens?: number;
+  layers?: number[];
+  attention?: boolean;
+  fidelity?: string;
+  tokenCap?: number;
+}
+
+export function listTraces(): Promise<TraceListResponse> {
+  return apiGet<TraceListResponse>('/llamacpp/traces');
+}
+
+export function getTrace(traceId: string): Promise<TraceDetail> {
+  return apiGet<TraceDetail>(`/llamacpp/traces/${encodeURIComponent(traceId)}`);
+}
+
+export function getRecordValues(traceId: string, index: number): Promise<RecordValues> {
+  return apiGet<RecordValues>(`/llamacpp/traces/${encodeURIComponent(traceId)}/record/${index}`);
+}
+
+export function estimateTrace(options: TraceOptions): Promise<TraceEstimate> {
+  return apiPost<TraceEstimate>('/llamacpp/traces/estimate', options);
+}
+
+export function runTrace(
+  options: TraceOptions,
+  onProgress: (p: Progress) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return streamNdjson('/llamacpp/traces', options, (obj) => onProgress(obj as Progress), signal);
+}
+
+export function deleteTrace(traceId: string): Promise<{ deleted: boolean }> {
+  return apiDelete(`/llamacpp/traces/${encodeURIComponent(traceId)}`);
+}
+
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes)) return '—';
   // Zero is a real answer here — an empty managed directory reads "0 B of 80 GB
@@ -142,7 +268,10 @@ export function formatBytes(bytes: number): string {
   if (bytes <= 0) return '0 B';
   const gb = bytes / 1024 ** 3;
   if (gb >= 1) return `${gb.toFixed(1)} GB`;
-  return `${(bytes / 1024 ** 2).toFixed(0)} MB`;
+  // Traces are orders of magnitude smaller than weights, and a 16 KB one
+  // rendered as "0 MB" reads as an empty trace rather than a small one.
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(0)} MB`;
+  return `${(bytes / 1024).toFixed(0)} KB`;
 }
 
 /** Parameter counts read from the tensor inventory, so "7.6B" not "7B". */

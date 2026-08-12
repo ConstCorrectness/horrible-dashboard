@@ -70,6 +70,7 @@ from backend.modules.search.broadcast import push_crawl_events
 from backend.modules.search.crawl import queue_handlers as _crawl_queue_handlers  # noqa: F401 — registers the crawl task handler on import (see its docstring)
 from backend.modules.library import push_library_events
 from backend.modules.library import queue_handlers as _library_queue_handlers  # noqa: F401 — registers the ingest task handlers on import (see its docstring)
+from backend.modules.hardware import router as hardware_router
 from backend.modules.interpretability import router as interpretability_router
 from backend.modules.karaoke import register_agent_tools as register_karaoke_tools
 from backend.modules.karaoke import router as karaoke_router
@@ -222,6 +223,7 @@ app.include_router(research_router, prefix="/api")
 app.include_router(search_router, prefix="/api")
 app.include_router(arxiv_router, prefix="/api")
 app.include_router(interpretability_router, prefix="/api")
+app.include_router(hardware_router, prefix="/api")
 app.include_router(llamacpp_router, prefix="/api")
 app.include_router(connectors_router, prefix="/api")
 app.include_router(google_connector_router, prefix="/api")

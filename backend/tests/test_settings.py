@@ -13,7 +13,7 @@ def client(tmp_path, monkeypatch) -> TestClient:
 def test_settings_default_empty(client: TestClient) -> None:
     res = client.get("/api/settings")
     assert res.status_code == 200
-    assert res.json() == {"values": {}}
+    assert res.json() == {"values": {}, "secretKeys": []}
 
 
 def test_put_then_get_roundtrip(client: TestClient) -> None:
@@ -32,14 +32,49 @@ def test_delete_resets_key(client: TestClient) -> None:
     client.put("/api/settings/observability.recentCount", json={"value": 9})
     res = client.delete("/api/settings/observability.recentCount")
     assert res.status_code == 200
-    assert res.json() == {"values": {}}
-    assert client.get("/api/settings").json() == {"values": {}}
+    assert res.json() == {"values": {}, "secretKeys": []}
+    assert client.get("/api/settings").json() == {"values": {}, "secretKeys": []}
 
 
 def test_delete_missing_key_is_noop(client: TestClient) -> None:
     res = client.delete("/api/settings/never.set")
     assert res.status_code == 200
-    assert res.json() == {"values": {}}
+    assert res.json() == {"values": {}, "secretKeys": []}
+
+
+def test_secret_shaped_values_are_never_served(client: TestClient) -> None:
+    """`GET /api/settings` hands the whole bag to whatever asked — including
+    third-party plugins, which load unsandboxed. A token in that response is a
+    credential given away."""
+    from backend.modules.settings.routes import get_value
+
+    client.put("/api/settings/training.hf.token", json={"value": "hf_realtoken"})
+    client.put("/api/settings/training.google.clientSecret", json={"value": "shhh"})
+    client.put("/api/settings/training.google.clientId", json={"value": "public-id"})
+
+    body = client.get("/api/settings").json()
+    assert body["values"]["training.hf.token"] == ""
+    assert body["values"]["training.google.clientSecret"] == ""
+    # A client *id* is public and must keep working as an ordinary setting.
+    assert body["values"]["training.google.clientId"] == "public-id"
+    # "Set" is knowable; the value is not.
+    assert sorted(body["secretKeys"]) == [
+        "training.google.clientSecret",
+        "training.hf.token",
+    ]
+    assert "hf_realtoken" not in res_text(client)
+
+    # The backend still reads the real value — redaction is on the way out only.
+    assert get_value("training.hf.token", "") == "hf_realtoken"
+
+
+def res_text(client: TestClient) -> str:
+    return client.get("/api/settings").text
+
+
+def test_unset_secret_is_not_listed(client: TestClient) -> None:
+    client.put("/api/settings/training.hf.token", json={"value": ""})
+    assert client.get("/api/settings").json()["secretKeys"] == []
 
 
 def test_put_rejects_bad_key(client: TestClient) -> None:

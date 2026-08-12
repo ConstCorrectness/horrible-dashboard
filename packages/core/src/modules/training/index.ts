@@ -6,6 +6,7 @@ import { MetricsPane } from './panels/MetricsPane';
 import { ModelGraphPane } from './panels/ModelGraphPane';
 import { NotebookPane } from './panels/NotebookPane';
 import { ProjectsPane } from './panels/ProjectsPane';
+import { RecipePane } from './panels/RecipePane';
 import { RolloutPane } from './panels/RolloutPane';
 import { TrainingPeersPane } from './panels/TrainingPeersPane';
 
@@ -140,6 +141,17 @@ export const trainingModule: ModuleManifest = {
       // Full cell CRUD + execute for the agent (group `notebook`).
       agentTools: notebookAgentTools,
     },
+    {
+      // Non-singleton and params-bound like the notebook: a recipe belongs to one
+      // project, and two projects open at once must not share a form. A center
+      // pane rather than a region strip because it is a real form — the narrow
+      // companion strips beside the notebook would make every row wrap.
+      id: 'training.recipe',
+      title: 'Recipe',
+      component: RecipePane,
+      role: 'document',
+      icon: '🧪',
+    },
   ],
   explorerSources: [
     { id: 'projects', label: 'Projects', icon: '🗂', view: 'training.projects', key: 'j' },
@@ -195,6 +207,14 @@ export const trainingModule: ModuleManifest = {
       run: () => {
         revealSection('projects', 'explorer.home');
       },
+    },
+    {
+      id: 'training.openRecipe',
+      title: 'Training: Open the fine-tuning recipe',
+      // Needs a project, and the pane says so rather than guessing one: opening
+      // the palette entry from nowhere is how you'd end up editing a recipe that
+      // belongs to a project you weren't looking at.
+      run: () => registry.openPanel('training.recipe'),
     },
     {
       id: 'training.openMetrics',

@@ -1,11 +1,22 @@
 import { type SettingDecl } from '../../registry';
 import { registry } from '../../registry';
-import { isSettingOverridden, resetSetting, setSetting, useSetting } from '../../settings';
+import {
+  isSecretSet,
+  isSecretSetting,
+  isSettingOverridden,
+  resetSetting,
+  setSetting,
+  useSetting,
+} from '../../settings';
 
 /** One setting row: label + description, a control by type, and a reset link. */
 function SettingRow({ decl }: { decl: SettingDecl }) {
   const value = useSetting(decl.key) ?? decl.default;
   const overridden = isSettingOverridden(decl.key);
+  // A secret's value is never served back, so the control is write-only: it shows
+  // whether something is stored, never what. Reading `value` here would show the
+  // blank the server sent and read as "not set".
+  const secret = isSecretSetting(decl.key);
 
   const commit = (v: string | number | boolean) => {
     void setSetting(decl.key, v);
@@ -45,7 +56,19 @@ function SettingRow({ decl }: { decl: SettingDecl }) {
       );
       break;
     default:
-      control = (
+      control = secret ? (
+        <input
+          type="password"
+          // Uncontrolled on purpose: there is no server-side value to control it
+          // with, and a controlled empty input would wipe the field on every
+          // unrelated re-render.
+          defaultValue=""
+          placeholder={isSecretSet(decl.key) ? 'saved — type to replace' : 'not set'}
+          onBlur={(e) => {
+            if (e.target.value !== '') commit(e.target.value);
+          }}
+        />
+      ) : (
         <input type="text" value={String(value)} onChange={(e) => commit(e.target.value)} />
       );
   }

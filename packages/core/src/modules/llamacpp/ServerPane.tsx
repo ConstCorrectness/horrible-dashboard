@@ -18,6 +18,7 @@ import {
   type Progress,
   type RepoFile,
 } from './api';
+import { TracesSection } from './TracesSection';
 
 /**
  * The llama.cpp pane: the binary, the weights, and the running server.
@@ -422,7 +423,9 @@ export function LlamaCppPane() {
 
   return (
     <div className="llama-pane">
-      {section === 'models' ? (
+      {section === 'traces' ? (
+        <TracesSection models={models?.models ?? []} />
+      ) : section === 'models' ? (
         <ModelsSection data={models} refresh={refresh} />
       ) : (
         <ServerSection status={status} models={models?.models ?? []} refresh={refresh} />

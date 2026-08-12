@@ -397,3 +397,12 @@ def register_agent_tools() -> None:
     First-party consumer of the same registry backend plugins write to."""
     for tool in _TOOLS:
         registry.agent_tools[tool.name] = tool
+
+    # The `trackers` connector rides along here because it belongs to this module
+    # even though it contributes no tools of its own: W&B/MLflow credentials are a
+    # property of a recipe, not a capability the agent should reach for. It is the
+    # one connector whose id names no tool group — see `trackers.py`.
+    from backend.modules.training.trackers import build as build_trackers
+
+    connector = build_trackers()
+    registry.connectors[connector.id] = connector

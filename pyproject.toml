@@ -88,6 +88,16 @@ vectordb = ["chromadb>=0.5", "qdrant-client>=1.9", "weaviate-client>=4.6"]
 geoip = [
     "geoip2>=5.3.0",
 ]
+# Activation tracing (`backend/modules/llamacpp/tracer.py`). This is the *trace* path
+# and it is a different artifact from the chat path: chat runs a downloaded upstream
+# `llama-server` binary, tracing runs whatever libllama this wheel bundles — which is
+# precisely why a trace may only be overlaid on a chat turn when both the build and the
+# model match. Pinned with `==` and not `>=` on purpose: `ggml_abi.py` mirrors the first
+# fields of `struct ggml_tensor`, which is internal C with no stability promise, so the
+# version that was checked is the version that is allowed. Opt-in
+# (`uv sync --extra llamacpp`), lazy-imported, and CPU-only; PyPI ships an sdist rather
+# than wheels, so installing it builds llama.cpp and needs cmake plus a C++ compiler.
+llamacpp = ["llama-cpp-python==0.3.34"]
 
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]

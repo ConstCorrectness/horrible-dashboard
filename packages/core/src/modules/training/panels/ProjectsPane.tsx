@@ -13,7 +13,7 @@ import {
   type ProviderInfo,
 } from '../api';
 import { onTrainingEvent } from '../client';
-import { openTrainingNotebook } from '../open';
+import { openTrainingNotebook, openTrainingRecipe } from '../open';
 
 const dim = { color: 'var(--text-dim)' } as const;
 
@@ -160,6 +160,12 @@ export function ProjectsPane() {
                 </span>
                 <button onClick={() => openTrainingNotebook(p.id, 'main.ipynb')}>
                   Open notebook
+                </button>
+                <button
+                  title="Fine-tuning recipe: a typed form that writes cells into this project's notebook"
+                  onClick={() => openTrainingRecipe(p.id)}
+                >
+                  🧪 Recipe
                 </button>
                 <button
                   title="Push notebook to Kaggle kernels"

@@ -4,6 +4,7 @@
 
 mod backend;
 mod shortcuts;
+mod updater;
 mod webview;
 mod window;
 
@@ -23,12 +24,28 @@ fn main() {
     let supervisor = Arc::new(backend::BackendSupervisor::new());
     backend::start(Arc::clone(&supervisor));
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+    let mut builder = tauri::Builder::default()
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build());
+
+    // The updater plugin refuses to initialise without a public key, and a
+    // checkout that has not had one generated yet would therefore fail to start
+    // at all — which would make `pnpm dev:desktop` depend on a release-signing
+    // step nobody needs in order to develop. So it is registered only once the
+    // key is filled in; `updater_check` says so plainly in the meantime rather
+    // than reporting "no update available", which would be a lie.
+    if updater::is_configured() {
+        // The plugin owns the signature check; the endpoint is chosen per call in
+        // updater.rs, because the release channel is a runtime setting.
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
+
+    builder
         .manage(supervisor)
         .manage(webview::BrowserWebviews::default())
         .invoke_handler(tauri::generate_handler![
             backend::backend_status,
+            updater::updater_check,
+            updater::updater_install,
             shortcuts::shortcuts_register,
             shortcuts::shortcuts_unregister_all,
             window::window_is_fullscreen,
@@ -104,6 +121,7 @@ mod acl_coverage {
         include_str!("../permissions/shortcuts.toml"),
         include_str!("../permissions/window.toml"),
         include_str!("../permissions/webview.toml"),
+        include_str!("../permissions/updater.toml"),
     ];
 
     #[test]

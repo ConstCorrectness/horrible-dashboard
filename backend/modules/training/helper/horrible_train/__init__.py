@@ -254,3 +254,46 @@ def _emit_stats(model: Any) -> None:
             _emit({"type": "model_stats", "stats": stats, "ts": time.time()})
     except Exception:
         pass  # stats must never break a training loop
+
+
+def callback(name=None, log_every=1):
+    """A Hugging Face `TrainerCallback` that mirrors every logged metric here.
+
+    This is what makes "local metrics are authoritative" true rather than a
+    slogan: it is installed on every generated recipe regardless of
+    `report_to`, so the chart pane works offline, works with `report_to=["none"]`,
+    and keeps working when a tracker's API key expires mid-run.
+
+    `transformers` is imported **inside** this function. The helper package has
+    zero dependencies by design — importing a trainer at module scope would make
+    `import horrible_train` fail in a plain script or a gym rollout, which is
+    most of what this package is used for.
+    """
+    from transformers import TrainerCallback  # noqa: PLC0415 — see the docstring
+
+    class HorribleCallback(TrainerCallback):
+        def __init__(self):
+            self.started = False
+
+        def on_train_begin(self, args, state, control, **kwargs):
+            if not self.started:
+                run(name or "train")
+                self.started = True
+
+        def on_log(self, args, state, control, logs=None, **kwargs):
+            if not logs:
+                return
+            step = int(getattr(state, "global_step", 0) or 0)
+            if log_every > 1 and step % log_every:
+                return
+            # Only scalars: `logs` also carries strings and the odd nested dict,
+            # and a chart of a string is a crash rather than an empty series.
+            values = {}
+            for key, value in logs.items():
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    continue
+                values[key] = float(value)
+            if values:
+                log(step=step, **values)
+
+    return HorribleCallback()

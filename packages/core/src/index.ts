@@ -263,6 +263,8 @@ export {
   startClubhouseAuth,
   type ClubhouseStatus,
 } from './modules/clubhouse';
+export { hardwareModule } from './modules/hardware';
+export { updatesModule } from './modules/updates';
 export { interpretabilityModule } from './modules/interpretability';
 export { labModule } from './modules/lab';
 export { llamacppModule } from './modules/llamacpp';

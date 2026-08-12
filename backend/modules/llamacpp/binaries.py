@@ -26,6 +26,7 @@ import logging
 import os
 import platform
 import shutil
+import tarfile
 import zipfile
 from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass
@@ -43,6 +44,10 @@ REPO_URL = "https://github.com/ggml-org/llama.cpp"
 #: it is the only variant guaranteed to run on the machine that downloads it, and
 #: a GPU build that fails to load its runtime looks exactly like a broken install.
 VARIANTS = ("cpu", "cuda", "vulkan", "hip", "sycl")
+
+#: Archive extensions upstream publishes. Windows gets `.zip`, everything else
+#: `.tar.gz` — matching only the first is what made this module Windows-only.
+ARCHIVE_SUFFIXES = (".zip", ".tar.gz")
 
 #: Tokens that mark an accelerator build. Used both to *find* a variant and to
 #: *exclude* one: a plain `cpu` request must not match the CUDA archive, whose
@@ -115,18 +120,24 @@ def select_asset(
     omitted it entirely, so a name that matches the OS and the accelerator but says
     nothing about the arch is still a candidate — whereas a CUDA archive is never
     an acceptable substitute for the `cpu` build that was asked for.
+
+    **The extension is per-OS and matching only `.zip` matched only Windows.**
+    Upstream ships `.zip` for Windows and `.tar.gz` everywhere else, so a filter
+    of `endswith(".zip")` silently reduced this whole module to a Windows feature:
+    every Linux and macOS install failed with "this release publishes no build for
+    ubuntu/x64", which reads like an upstream problem rather than our own.
     """
     wrong_arch = "arm64" if arch == "x64" else "x64"
     candidates: list[str] = []
     for name in names:
         lower = name.lower()
-        # `llama-<tag>-bin-<os>-<variant>-<arch>.zip`. The prefix is not decoration:
-        # releases also carry `cudart-llama-bin-win-cu12.4-x64.zip`, the CUDA runtime
+        # `llama-<tag>-bin-<os>-<variant>-<arch>.<ext>`. The prefix is not decoration:
+        # releases also carry `cudart-llama-bin-win-cuda-12.4-x64.zip`, the CUDA runtime
         # redistributable, which matches every other token here and contains no
         # server at all.
         if not lower.startswith("llama-"):
             continue
-        if not lower.endswith(".zip") or "-bin-" not in lower:
+        if not lower.endswith(ARCHIVE_SUFFIXES) or "-bin-" not in lower:
             continue
         if os_token not in lower:
             continue
@@ -249,21 +260,41 @@ def _tag_key(tag: str) -> tuple[int, str]:
     return (int(digits) if digits else 0, tag)
 
 
-def _safe_extract(archive: zipfile.ZipFile, dest: Path) -> None:
-    """Extract, refusing any member that would land outside `dest`.
+def _check_members(names: Iterable[str], dest: Path) -> None:
+    """Refuse any member that would land outside `dest`.
 
-    `ZipFile.extractall` sanitizes absolute paths but a crafted archive is still
-    the classic way to write somewhere you didn't intend, and this one arrives over
-    the network.
+    `extractall` sanitizes absolute paths but a crafted archive is still the
+    classic way to write somewhere you didn't intend, and this one arrives over
+    the network. Tar is the worse of the two — it carries symlinks and hardlinks,
+    which is why `tarfile`'s own `data` filter is used on top of this.
     """
     dest_resolved = dest.resolve()
-    for member in archive.infolist():
-        target = (dest / member.filename).resolve()
+    for name in names:
+        target = (dest / name).resolve()
         if not str(target).startswith(str(dest_resolved)):
             raise RuntimeError(
-                f"refusing archive member outside the install dir: {member.filename}"
+                f"refusing archive member outside the install dir: {name}"
             )
-    archive.extractall(dest)
+
+
+def _extract(archive_path: Path, dest: Path) -> None:
+    """Unpack a release archive, choosing the format by extension.
+
+    Not by OS: the extension is what the bytes actually are, and a release that
+    changed shape would otherwise be unpacked with the wrong reader on the basis
+    of a platform assumption.
+    """
+    if archive_path.name.lower().endswith(".zip"):
+        with zipfile.ZipFile(archive_path) as archive:
+            _check_members((m.filename for m in archive.infolist()), dest)
+            archive.extractall(dest)
+        return
+    with tarfile.open(archive_path, "r:*") as archive:
+        _check_members((m.name for m in archive.getmembers()), dest)
+        # `filter="data"` blocks the tar-specific attacks a path check does not:
+        # absolute/parent symlink targets, device nodes, setuid bits. Python 3.12
+        # warns without it and 3.14 makes it the default.
+        archive.extractall(dest, filter="data")
 
 
 async def install_server(
@@ -355,9 +386,8 @@ async def install_server(
 
         yield {"status": "extracting", "asset": name}
         try:
-            with zipfile.ZipFile(archive_path) as archive:
-                _safe_extract(archive, dest)
-        except (OSError, RuntimeError, zipfile.BadZipFile) as exc:
+            _extract(archive_path, dest)
+        except (OSError, RuntimeError, zipfile.BadZipFile, tarfile.TarError) as exc:
             shutil.rmtree(dest, ignore_errors=True)
             yield {"error": f"could not unpack {name}: {exc}"}
             return
@@ -369,8 +399,9 @@ async def install_server(
             yield {"error": f"{name} contains no {server_filename()}"}
             return
         if not platform.system().lower().startswith("win"):
-            # The zip loses the executable bit; without this the spawn fails with a
-            # bare PermissionError that reads like a sandbox problem.
+            # A zip loses the executable bit entirely; a tar carries it, but only
+            # if upstream set it. Without this the spawn fails with a bare
+            # PermissionError that reads like a sandbox problem.
             binary.chmod(binary.stat().st_mode | 0o111)
 
         import json

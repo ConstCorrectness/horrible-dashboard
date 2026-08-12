@@ -31,6 +31,7 @@ from typing import Any
 
 from backend.modules.training import notebooks, projects
 from backend.modules.training.envs import python_path, venv_ready
+from backend.modules.training.models import ProjectModel
 from backend.modules.training.sentinel import EVENT_NAMES, LineSplitter
 from backend.notebook_core import KernelSession, KernelSessionManager, SessionConfig
 from backend.notebook_core.detach import run_detached
@@ -153,6 +154,11 @@ class TrainingKernelManager(KernelSessionManager):
             rel_path=nb_rel,
             channel="training",
             display_name=f"training:{project.id}",
+            # Tracker credentials are injected at spawn, for the trackers this
+            # project's recipe actually selected. They never touch the notebook,
+            # `project.json`, or an HTTP response — and connecting the tile does
+            # not by itself start shipping runs anywhere.
+            env=_tracker_env(project),
         )
         session = TrainingKernelSession(config, self._loop(), project)
         session.start()
@@ -171,6 +177,21 @@ class TrainingKernelManager(KernelSessionManager):
     def session_for(self, project_id: str, nb_rel: str) -> TrainingKernelSession | None:  # type: ignore[override]
         session = self.sessions.get(f"{project_id}:{nb_rel}")
         return session  # type: ignore[return-value]
+
+
+def _tracker_env(project: ProjectModel) -> dict[str, str]:
+    """Credentials for the trackers this project's recipe selected, if any.
+
+    Read at spawn rather than stored on the session: connecting the tile after a
+    kernel started should take effect on the next restart, not never.
+    """
+    from backend.modules.training import recipes, trackers
+
+    try:
+        return trackers.env_for(recipes.load_recipe(project).trackers)
+    except Exception as exc:  # noqa: BLE001 — a missing credential must not block a kernel
+        logger.info("training: no tracker env for %s (%s)", project.id, exc)
+        return {}
 
 
 training_kernels = TrainingKernelManager()

@@ -28,6 +28,7 @@ export const llamacppModule: ModuleManifest = {
       sections: [
         { id: 'server', label: 'Server', icon: '⚙️', key: 's', default: true },
         { id: 'models', label: 'Models', icon: '🧠', key: 'm' },
+        { id: 'traces', label: 'Traces', icon: '🔬', key: 't' },
       ],
     },
   ],
@@ -46,6 +47,14 @@ export const llamacppModule: ModuleManifest = {
         'Folders scanned for .gguf files in addition to the managed one, separated by newlines or semicolons. Models found here are servable but never deleted by this app.',
       type: 'string',
       default: '',
+    },
+    {
+      key: 'llamacpp.traceBudgetGb',
+      title: 'Activation trace budget (GB)',
+      description:
+        'Ceiling for stored traces. One traced forward pass with attention on is around a gigabyte, so this is small on purpose; the oldest traces are pruned when a new one takes the directory over it.',
+      type: 'number',
+      default: 2,
     },
     {
       key: 'llamacpp.diskBudgetGb',

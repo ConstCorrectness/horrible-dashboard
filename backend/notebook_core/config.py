@@ -4,8 +4,10 @@ instead of any module's domain model. `training` fills it from a `ProjectModel`
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 
 
 @dataclass(frozen=True)
@@ -24,3 +26,9 @@ class SessionConfig:
     channel: str = "notebook"  # /ws channel the session fans events to
     display_name: str = "notebook"  # kernelspec display name
     default_mode: str = "classic"  # execution mode when the .ipynb has no flag
+    # Extra environment for the kernel process, merged over the backend's own at
+    # spawn. This is how a credential reaches training code without ever being
+    # written into the notebook, the project file, or an HTTP response — see
+    # `training/trackers.py`. Immutable and empty by default: a kernel inherits
+    # exactly what the backend has unless a caller says otherwise.
+    env: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))

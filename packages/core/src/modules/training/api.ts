@@ -2,7 +2,7 @@
  * Typed client for the training backend (`/api/training/*`). Shared by the
  * training panes and (later) the module's agent tools.
  */
-import { apiDelete, apiGet, apiPost, apiPut } from '../../api';
+import { apiDelete, apiGet, apiPost, apiPut, streamNdjson } from '../../api';
 
 export type EnvironmentKind = 'competition' | 'dataset' | 'env';
 
@@ -157,4 +157,122 @@ export function advertise(
   note?: string,
 ): Promise<{ status: string }> {
   return apiPost('/training/fabric/advertise', { status, note });
+}
+
+// --- the recipe surface -------------------------------------------------------
+
+/** One knob in the recipe form, as the backend catalog declares it. */
+export interface RecipeField {
+  name: string;
+  target: 'sft' | 'lora';
+  label: string;
+  type: 'int' | 'float' | 'bool' | 'text' | 'select';
+  default: unknown;
+  help: string;
+  group: string;
+  options: string[];
+  aliases: string[];
+}
+
+/**
+ * How a field will be emitted against the library that is actually installed.
+ *
+ * The four states are not decoration: `unsupported` means the field is left out
+ * of the generated code entirely, while `unvalidated` means nobody could ask and
+ * it is emitted hopefully. Rendering them the same way would hide which of those
+ * happened.
+ */
+export interface ResolvedField {
+  name: string;
+  emit: string | null;
+  status: 'ok' | 'renamed' | 'unsupported' | 'unvalidated';
+  note: string;
+}
+
+export interface Introspection {
+  available: boolean;
+  versions: Record<string, string>;
+  accepted: Record<string, string[]>;
+  /** Fields the installed class accepts that this form does not render. */
+  extra: Record<string, number>;
+  error: string;
+}
+
+export interface Recipe {
+  task: string;
+  baseModel: string;
+  dataset: string;
+  datasetSplit: string;
+  textField: string;
+  useLora: boolean;
+  outputDir: string;
+  trackers: string[];
+  values: Record<string, unknown>;
+}
+
+export interface RecipePayload {
+  recipe: Recipe;
+  fields: RecipeField[];
+  introspection: Introspection;
+  resolved: ResolvedField[];
+  warnings: string[];
+  trackers: string[];
+  tasks: string[];
+  outputTypes: string[];
+}
+
+export interface Checkpoint {
+  path: string;
+  relPath: string;
+  /** `lora` is an adapter: converted with a different script, served with --lora. */
+  kind: 'model' | 'lora';
+  sizeBytes: number;
+  modified: number;
+}
+
+export interface DocLink {
+  label: string;
+  url: string;
+  title: string;
+  version: string | null;
+  installedMismatch: string | null;
+}
+
+export function getRecipe(projectId: string, refresh = false): Promise<RecipePayload> {
+  return apiGet(`/training/projects/${projectId}/recipe${refresh ? '?refresh=true' : ''}`);
+}
+
+export function saveRecipe(projectId: string, recipe: Recipe): Promise<RecipePayload> {
+  return apiPut(`/training/projects/${projectId}/recipe`, recipe);
+}
+
+export function applyRecipe(
+  projectId: string,
+  recipe: Recipe,
+): Promise<{ cells: number; notebook: string }> {
+  return apiPost(`/training/projects/${projectId}/recipe/apply`, recipe);
+}
+
+export function recipeDocs(): Promise<{ links: DocLink[] }> {
+  return apiGet('/training/recipe/docs');
+}
+
+export function listCheckpoints(
+  projectId: string,
+): Promise<{ checkpoints: Checkpoint[]; note: string }> {
+  return apiGet(`/training/projects/${projectId}/checkpoints`);
+}
+
+export function convertCheckpoint(
+  projectId: string,
+  body: { checkpoint: string; outType: string; baseModel?: string },
+  onProgress: (event: Record<string, unknown>) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return streamNdjson(
+    `/training/projects/${projectId}/convert`,
+    body,
+    (obj) => onProgress(obj as Record<string, unknown>),
+    signal,
+  );
 }

@@ -1,0 +1,139 @@
+name: Release
+
+# Build the desktop app on all three OSes, sign the update artifacts, and publish
+# them to a GitHub Release together with the signed manifest the app's updater
+# reads. The docs workflow is the precedent for publishing from CI.
+#
+# One-time setup before the first run (see docs/architecture/releases.mdx):
+#   1. `pnpm tauri signer generate -w ~/.tauri/horrible.key`
+#   2. Put the PUBLIC half in apps/desktop/src-tauri/tauri.conf.json → plugins.updater.pubkey
+#      (replacing REPLACE_WITH_TAURI_SIGNING_PUBLIC_KEY — until then the shell does
+#      not even register the updater plugin).
+#   3. Put the PRIVATE half in the repo secret TAURI_SIGNING_PRIVATE_KEY, and its
+#      password in TAURI_SIGNING_PRIVATE_KEY_PASSWORD.
+# The private key never enters the repository. Losing it means no existing install
+# can ever be updated again — a new key is a new identity, and every client refuses
+# a manifest it cannot verify. Back it up somewhere that is not this machine.
+#
+# Channel: the tag decides. `v1.2.3` publishes `latest.json` (stable);
+# `v1.2.3-beta.1` publishes `beta.json`. Both live on the same release, because
+# `updater.rs` picks a channel by filename, not by host.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (must already exist)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      # Never cancel the other two: a macOS build failing must not throw away a
+      # finished Windows one, since a partial release is still a release people
+      # can update to on the platforms it did produce.
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            args: '--target aarch64-apple-darwin'
+          - platform: macos-latest
+            args: '--target x86_64-apple-darwin'
+          - platform: ubuntu-22.04
+            args: ''
+          - platform: windows-latest
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      # Tauri's Linux build needs the system webkit/gtk headers; the other two
+      # platforms use OS-provided webviews and need nothing.
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ github.event.inputs.tag || github.ref_name }}
+          releaseName: 'horrible-dashboard ${{ github.event.inputs.tag || github.ref_name }}'
+          # Not a draft: a draft release's assets need an authenticated request to
+          # download, so a manifest pointing at them would verify-then-404 on every
+          # client. The safety this gives up is recovered by `publish-manifest`,
+          # which is what actually makes a build reachable by the updater and runs
+          # only after all four platforms have uploaded.
+          releaseDraft: false
+          prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-beta') }}
+          # Ship the NSIS installer in the manifest rather than the MSI: the MSI
+          # cannot update an app while it is running, which is the only situation
+          # an updater ever runs in.
+          updaterJsonPreferNsis: true
+          args: ${{ matrix.args }}
+
+  # `tauri-action` writes `latest.json` onto the release it just built, whose tag
+  # moves with every version. The app reads from a *fixed* tag instead (see
+  # MANIFEST_BASE in updater.rs), so the finished manifest is copied there under
+  # the channel's filename once every platform has uploaded its share — a manifest
+  # published before the last platform finishes would offer an update that 404s
+  # on the platform still building.
+  publish-manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Copy the manifest to the fixed updater release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          case "$TAG" in
+            *-beta*) CHANNEL_FILE=beta.json ;;
+            *)       CHANNEL_FILE=latest.json ;;
+          esac
+          gh release download "$TAG" --pattern latest.json --dir . --clobber
+          mv latest.json "$CHANNEL_FILE"
+          # Idempotent: the fixed release exists after the first run.
+          gh release view updater >/dev/null 2>&1 || gh release create updater \
+            --title "Update manifests" \
+            --notes "Signed update manifests read by the desktop app. Not a build — see .github/workflows/release.yml." \
+            --latest=false
+          gh release upload updater "$CHANNEL_FILE" --clobber

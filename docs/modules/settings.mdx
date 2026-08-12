@@ -68,9 +68,9 @@ Setting a value is optimistic (local update + `PUT`), so widgets bound via
 
 ## Never put a secret in a setting
 
-`GET /api/settings` returns the **entire** bag to the browser, unfiltered — that is
-what makes the frontend-owned-schema design work, and it means **every setting value
-is readable by any code running in the page**.
+`GET /api/settings` returns the bag to the browser, and **every value in it is
+readable by any code running in the page** — including third-party plugins, all of
+which load unsandboxed at boot.
 
 So: an OAuth **client id** is fine (it's public by design), but a **client secret**,
 an API key, or a token must never be a setting. Those belong in the environment or
@@ -83,6 +83,35 @@ rule — and has been removed: the game server now reads `GAMES_GITHUB_CLIENT_SE
 That case is also why the rule bites harder than it looks: a bundled game server shares
 `$HORRIBLE_DATA_DIR/settings.json` with its node, so the secret was reachable from the
 browser even though nothing in the UI displayed it.
+
+### The backstop: secret-shaped keys are never served
+
+Some user-supplied credentials predate connectors and still live here —
+`training.kaggle.key`, `training.hf.token`, `training.google.clientSecret`. Rather
+than leave them in the response until each is migrated, the route **blanks any
+value whose key is secret-shaped** (`SECRET_KEY_SUFFIXES` in
+`backend/modules/settings/models.py`: `.key`, `.token`, `.secret`, `.password`,
+`.apikey`, …) and returns a separate `secretKeys` list naming the ones that *are*
+set.
+
+Three deliberate choices:
+
+- **Matched on the key shape, not on a declaration.** Declarations live on the
+  frontend, so a backend that trusted them would be asking the untrusted side
+  which of its own values are sensitive.
+- **Blanked, not omitted.** A key vanishing from the response is indistinguishable
+  from never having been set, and a settings page that cannot tell those apart
+  will overwrite a saved token with an empty string the first time someone saves
+  an unrelated field.
+- **Redaction is on the way out only.** `get_value` reads the file, so every
+  backend consumer still sees the real value.
+
+Such a setting is consequently **write-only from the UI**: it renders as a
+password field showing `saved — type to replace` or `not set`, never the value.
+A client **id** is public and keeps working as an ordinary setting.
+
+This is a backstop, not a substitute for the rule. A client secret in a setting is
+still a bug; the correct home is a [connector](connectors.mdx#credential-custody).
 
 ## What is deliberately *not* a setting
 
@@ -134,7 +163,8 @@ page; **storage** is the plugin's own runtime bookkeeping. See
 
 ## Backend surface
 
-`backend/modules/settings/` — `GET /api/settings` (all overridden values),
+`backend/modules/settings/` — `GET /api/settings` (overridden values, secret-shaped
+ones blanked, plus `secretKeys`),
 `PUT /api/settings/{key}` (set one, body `{value}`), `DELETE /api/settings/{key}`
 (clear an override → revert to the frontend default). Persists to
 `$HORRIBLE_DATA_DIR/settings.json`.

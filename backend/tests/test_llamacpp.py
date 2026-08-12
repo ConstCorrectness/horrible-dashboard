@@ -32,16 +32,25 @@ def data_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 # ── asset selection ──────────────────────────────────────────────────────────
 
-# A real release listing, trimmed. `cudart-*` is the CUDA runtime redistributable
-# that ships beside the builds and contains no server at all.
+# The asset listing of release b10373, verbatim except for the tag. It used to be
+# a hand-written approximation that spelled every name `.zip`, and that single
+# inaccuracy hid the fact that `select_asset` matched nothing at all off Windows:
+# upstream ships `.zip` for Windows and `.tar.gz` everywhere else. A fixture that
+# is *nearly* the real thing tests the fixture.
 _ASSETS = [
-    "cudart-llama-bin-win-cu12.4-x64.zip",
-    "llama-b4567-bin-macos-arm64.zip",
-    "llama-b4567-bin-macos-x64.zip",
-    "llama-b4567-bin-ubuntu-vulkan-x64.zip",
-    "llama-b4567-bin-ubuntu-x64.zip",
+    "cudart-llama-bin-win-cuda-12.4-x64.zip",
+    "cudart-llama-bin-win-cuda-13.3-x64.zip",
+    "llama-b4567-bin-android-arm64.tar.gz",
+    "llama-b4567-bin-macos-arm64.tar.gz",
+    "llama-b4567-bin-macos-x64.tar.gz",
+    "llama-b4567-bin-ubuntu-arm64.tar.gz",
+    "llama-b4567-bin-ubuntu-rocm-7.14-x64.tar.gz",
+    "llama-b4567-bin-ubuntu-sycl-fp16-x64.tar.gz",
+    "llama-b4567-bin-ubuntu-vulkan-x64.tar.gz",
+    "llama-b4567-bin-ubuntu-x64.tar.gz",
     "llama-b4567-bin-win-cpu-x64.zip",
     "llama-b4567-bin-win-cuda-12.4-x64.zip",
+    "llama-b4567-bin-win-rocm-7.14-x64.zip",
     "llama-b4567-bin-win-vulkan-x64.zip",
     "llama-b4567-src.zip",
 ]
@@ -54,12 +63,36 @@ def test_select_asset_picks_the_plain_cpu_build() -> None:
     )
     assert (
         binaries.select_asset(_ASSETS, "ubuntu", "x64", "cpu")
-        == "llama-b4567-bin-ubuntu-x64.zip"
+        == "llama-b4567-bin-ubuntu-x64.tar.gz"
     )
     assert (
         binaries.select_asset(_ASSETS, "macos", "arm64", "cpu")
-        == "llama-b4567-bin-macos-arm64.zip"
+        == "llama-b4567-bin-macos-arm64.tar.gz"
     )
+
+
+def test_select_asset_handles_the_tar_gz_platforms() -> None:
+    """Matching only `.zip` reduced this module to a Windows feature, and said so
+    in the voice of an upstream problem: "this release publishes no build for
+    ubuntu/x64"."""
+    assert (
+        binaries.select_asset(_ASSETS, "ubuntu", "x64", "vulkan")
+        == "llama-b4567-bin-ubuntu-vulkan-x64.tar.gz"
+    )
+    assert (
+        binaries.select_asset(_ASSETS, "ubuntu", "x64", "hip")
+        == "llama-b4567-bin-ubuntu-rocm-7.14-x64.tar.gz"
+    )
+
+
+def test_upstream_publishes_no_linux_cuda_build() -> None:
+    """Pins the fact `_variant_for` exists for: CUDA is Windows-only upstream.
+
+    If this ever starts failing because a `ubuntu-cuda-*` asset appeared, the
+    special case in the hardware probe can go — this is the assertion that says
+    so out loud rather than leaving it as folklore.
+    """
+    assert binaries.select_asset(_ASSETS, "ubuntu", "x64", "cuda") is None
 
 
 def test_select_asset_never_substitutes_an_accelerator_build() -> None:
@@ -83,7 +116,7 @@ def test_select_asset_ignores_the_cuda_runtime_package() -> None:
 def test_select_asset_rejects_the_wrong_arch() -> None:
     assert (
         binaries.select_asset(_ASSETS, "macos", "arm64", "cpu")
-        != "llama-b4567-bin-macos-x64.zip"
+        != "llama-b4567-bin-macos-x64.tar.gz"
     )
 
 
@@ -105,6 +138,34 @@ def _release(tmp_path: Path, digest: str | None) -> tuple[dict[str, Any], bytes]
     if digest:
         asset["digest"] = f"sha256:{digest}"
     return {"tag_name": "b1", "assets": [asset]}, payload
+
+
+def _tar_release(tmp_path: Path) -> tuple[dict[str, Any], bytes]:
+    """The same, as the `.tar.gz` every non-Windows platform actually gets."""
+    import io
+    import tarfile
+
+    archive = tmp_path / "src.tar.gz"
+    with tarfile.open(archive, "w:gz") as tf:
+        for name, body in (
+            ("build/bin/llama-server", b"#!/bin/sh\n"),
+            ("build/bin/llama-server.exe", b"MZ"),
+        ):
+            info = tarfile.TarInfo(name)
+            info.size = len(body)
+            info.mode = 0o755
+            tf.addfile(info, io.BytesIO(body))
+    payload = archive.read_bytes()
+    return {
+        "tag_name": "b1",
+        "assets": [
+            {
+                "name": "llama-b1-bin-ubuntu-x64.tar.gz",
+                "browser_download_url": "https://example.invalid/llama.tar.gz",
+                "size": len(payload),
+            }
+        ],
+    }, payload
 
 
 class _FakeStream:
@@ -173,6 +234,24 @@ async def test_install_unpacks_and_records_a_verified_digest(data_dir: Path) -> 
     assert install.binary.is_file()
     marker = json.loads((install.path / "install.json").read_text())
     assert marker["sha256"] == digest
+
+
+@pytest.mark.anyio
+async def test_install_unpacks_a_tar_gz(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Linux/macOS half of the install path, which never worked: the matcher
+    demanded `.zip` and the extractor was `zipfile`, so every non-Windows install
+    failed as though upstream published nothing for the platform."""
+    monkeypatch.setattr(binaries, "platform_tokens", lambda: ("ubuntu", "x64"))
+    release, payload = _tar_release(data_dir)
+
+    events = await _run_install(_FakeClient(release, payload))
+    assert events[-1]["status"] == "done", events[-1]
+
+    install = binaries.newest_install()
+    assert install is not None
+    assert install.binary.is_file()
 
 
 @pytest.mark.anyio

@@ -25,6 +25,20 @@
     }
   },
   "bundle": {
-    "active": false
+    "active": true,
+    "targets": ["nsis", "app", "dmg", "appimage", "deb"],
+    "createUpdaterArtifacts": true,
+    "icon": ["icons/icon.png"]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "REPLACE_WITH_TAURI_SIGNING_PUBLIC_KEY",
+      "endpoints": [
+        "https://github.com/horriblecpp/horrible-dashboard/releases/download/updater/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

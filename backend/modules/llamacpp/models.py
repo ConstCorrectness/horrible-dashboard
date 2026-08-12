@@ -14,9 +14,13 @@ from pydantic import BaseModel, Field
 class InstallRequest(BaseModel):
     #: A release tag (`b4567`) or "latest".
     tag: str = "latest"
-    #: One of `binaries.VARIANTS`. `cpu` on purpose: it is the only build
-    #: guaranteed to run on the machine that downloaded it.
-    variant: str = "cpu"
+    #: One of `binaries.VARIANTS`, or `auto` to take the hardware probe's answer.
+    #: `auto` is the default because the previous one — a flat `cpu` — was right
+    #: on the machine with no GPU and silently wrong on every machine with one.
+    #: The probe still falls back to `cpu` whenever it could not determine what
+    #: the machine has: a CUDA build that cannot load its runtime looks exactly
+    #: like a broken install.
+    variant: str = "auto"
 
 
 class RemoveInstallRequest(BaseModel):
@@ -38,7 +42,9 @@ class SpawnRequest(BaseModel):
     contextSize: int = 4096
     #: Layers offloaded to the GPU. 0 = pure CPU, which is what the `cpu` build
     #: can do; raising it on a cpu-only build is silently ignored by llama-server.
-    gpuLayers: int = 0
+    #: `None` means "ask the hardware probe" — an explicit 0 still means 0, which
+    #: is why this is nullable rather than defaulting to a sentinel integer.
+    gpuLayers: int | None = None
     threads: int | None = None
     extraArgs: list[str] = Field(default_factory=list)
     #: Wait for `/health` before returning, so the caller knows the difference
@@ -102,7 +108,9 @@ class TraceRequest(BaseModel):
     #: thing in a trace and grows with the square of the token count.
     attention: bool = False
     fidelity: str = "fp16"
-    tokenCap: int = 256
+    #: `None` = take the hardware probe's cap, which is set from RAM (the tracer
+    #: runs on the CPU wheel, so RAM and not VRAM is the binding constraint).
+    tokenCap: int | None = None
     gpuLayers: int = 0
 
 

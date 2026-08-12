@@ -47,6 +47,8 @@ import {
   hassaultModule,
   recordsModule,
   browserModule,
+  hardwareModule,
+  updatesModule,
   interpretabilityModule,
   labModule,
   llamacppModule,
@@ -110,6 +112,10 @@ async function boot(): Promise<void> {
   registry.register(skillsModule);
   registry.register(browserModule);
   registry.register(clubhouseModule);
+  // Before the modules whose defaults it decides (llama.cpp's build and offload,
+  // the tracer's cap, what the training surface recommends).
+  registry.register(hardwareModule);
+  registry.register(updatesModule);
   registry.register(interpretabilityModule);
   // After interpretability so the Lab workspace tab sits beside it, and because the
   // Lab frame composes its panes more heavily than any other module's.

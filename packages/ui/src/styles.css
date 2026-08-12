@@ -647,6 +647,96 @@ body {
   margin: 0.4rem 0 0;
 }
 
+/* Hardware settings section (hardware/MachineSection.tsx): the probe's reading and
+ * the defaults derived from it. `.machine-unknown` is the load-bearing one — it is
+ * how "we could not ask" is kept visually distinct from "there is none". */
+.machine-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.3rem 0.9rem;
+  margin: 0.6rem 0 0;
+  font-size: 0.85rem;
+}
+.machine-facts dt {
+  opacity: 0.7;
+}
+.machine-facts dd {
+  margin: 0;
+}
+.machine-accelerators {
+  margin: 0;
+  padding-left: 1rem;
+}
+.machine-kind {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.78rem;
+  opacity: 0.8;
+}
+.machine-source {
+  color: var(--text-dim);
+  font-size: 0.78rem;
+}
+.machine-unknown,
+.machine-overridden {
+  color: #e2c08d;
+}
+.machine-overridden {
+  margin: 0.2rem 0 0;
+  font-size: 0.78rem;
+}
+.machine-error {
+  color: #e88;
+  font-size: 0.85rem;
+}
+.machine-notes {
+  margin: 0.5rem 0 0;
+  padding-left: 1rem;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+.machine-defaults {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.7rem;
+  font-size: 0.85rem;
+}
+.machine-defaults th,
+.machine-defaults td {
+  text-align: left;
+  padding: 0.25rem 0.6rem;
+  border-bottom: 1px solid var(--border, rgba(127, 127, 127, 0.2));
+  vertical-align: top;
+}
+.machine-defaults th {
+  opacity: 0.7;
+  font-weight: 600;
+}
+.machine-defaults td:last-child {
+  color: var(--text-dim);
+}
+
+/* Updates settings section (updates/UpdatesSection.tsx). `.updates-unknown` is the
+ * counterpart of `.machine-unknown`: "could not check" must not look like "up to date". */
+.updates-result {
+  margin-top: 0.6rem;
+  font-size: 0.85rem;
+}
+.updates-available {
+  color: #7fd18a;
+}
+.updates-unknown {
+  color: #e2c08d;
+}
+.updates-notes {
+  max-height: 12rem;
+  overflow: auto;
+  padding: 0.4rem 0.6rem;
+  background: var(--bg-alt, rgba(127, 127, 127, 0.1));
+  border-radius: 4px;
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+}
+
 /* LSP hover tooltip and completion documentation pane (editor/lsp.ts → CodeMirror
  * hoverTooltip / completion `info`). Both hold markdown rendered by `renderMarkdown`. */
 .cm-lsp-hover,
@@ -5716,6 +5806,106 @@ kbd {
   display: flex;
   align-items: center;
   gap: 0.4rem;
+}
+
+/* --- traces (the scrubber) --- */
+
+.llama-prompt {
+  width: 100%;
+  resize: vertical;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+}
+
+.llama-records {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  max-height: 18rem;
+  overflow: auto;
+}
+
+.llama-record {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0.15rem 0.3rem;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.llama-record:hover {
+  background: rgb(255 255 255 / 6%);
+}
+
+.llama-record-on {
+  border-color: var(--accent, #6ea8fe);
+}
+
+.llama-record-name {
+  flex: 1 1 auto;
+  font-family: var(--font-mono, monospace);
+  overflow-wrap: anywhere;
+}
+
+/* Fidelity is the honesty knob and has to be visible at a glance: a `summary`
+   record carries statistics *instead of* the tensor, so it must never look like
+   a slightly-lower-resolution version of one. */
+.llama-fidelity-summary {
+  border-color: rgb(230 180 90 / 60%);
+  color: rgb(230 190 120);
+}
+
+.llama-fidelity-full {
+  border-color: rgb(110 200 140 / 60%);
+  color: rgb(130 210 160);
+}
+
+.llama-heat {
+  display: flex;
+  align-items: stretch;
+  gap: 1px;
+  height: 2.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px;
+  overflow: hidden;
+}
+
+.llama-heat-cell {
+  flex: 1 1 0;
+  min-width: 1px;
+  border-radius: 1px;
+}
+
+.llama-tokens {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+}
+
+.llama-token {
+  padding: 0 2px;
+  border-radius: 2px;
+  background: rgb(255 255 255 / 7%);
+  white-space: pre;
+}
+
+/* A generated token was produced by the pass being traced; a prompt token was
+   handed to it. Reading the strip without that distinction makes the model look
+   like it predicted its own input. */
+.llama-token-gen {
+  background: rgb(110 168 254 / 25%);
 }
 
 .llama-model-name {

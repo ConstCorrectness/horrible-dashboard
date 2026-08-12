@@ -9,6 +9,7 @@ events (`env_progress`, `fetch_progress`, `project_changed`).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import threading
 import time
@@ -16,10 +17,10 @@ from collections.abc import Callable
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from backend.modules.settings.routes import get_value
-from backend.modules.training import envs, notebooks, projects
+from backend.modules.training import convert, envs, notebooks, projects, recipes
 from backend.modules.training.models import (
     AcceptedResponse,
     CreateProjectRequest,
@@ -472,3 +473,98 @@ def _start_fetch(project: ProjectModel) -> None:
             emit("fetch failed — see backend log")
 
     _spawn(f"fetch-{project.id}", work)
+
+
+# --- the recipe surface -------------------------------------------------------
+#
+# A fine-tuning config as a schema rather than a blank cell. The form's answers
+# live in `recipe.json`; applying one writes notebook cells, which is the same
+# execution path everything else here uses.
+
+
+def _recipe_payload(project: ProjectModel, *, refresh: bool = False) -> dict:
+    recipe = recipes.load_recipe(project)
+    intro = recipes.introspect(project, refresh=refresh)
+    return {
+        "recipe": recipe.to_dict(),
+        "fields": [f.to_dict() for f in recipes.FIELDS],
+        "introspection": intro.to_dict(),
+        "resolved": [r.to_dict() for r in recipes.resolve_all(intro)],
+        "warnings": recipes.warnings_for(recipe.values, recipe.trackers),
+        "trackers": list(recipes.TRACKERS),
+        "tasks": list(recipes.TASKS),
+        "outputTypes": list(convert.OUTPUT_TYPES),
+    }
+
+
+@router.get("/projects/{project_id}/recipe")
+async def recipe_get(project_id: str, refresh: bool = False) -> dict:
+    project = _project_or_404(project_id)
+    # Introspection spawns the project's python, so it is offloaded like every
+    # other blocking call here rather than run on the event loop.
+    return await asyncio.to_thread(_recipe_payload, project, refresh=refresh)
+
+
+@router.put("/projects/{project_id}/recipe")
+async def recipe_put(project_id: str, body: dict) -> dict:
+    project = _project_or_404(project_id)
+    recipe = recipes.Recipe.from_dict(body)
+    await asyncio.to_thread(recipes.save_recipe, project, recipe)
+    return await asyncio.to_thread(_recipe_payload, project)
+
+
+@router.post("/projects/{project_id}/recipe/apply")
+async def recipe_apply(project_id: str, body: dict) -> dict:
+    """Write the recipe's cells into `main.ipynb`, replacing a previous block."""
+    project = _project_or_404(project_id)
+    recipe = recipes.Recipe.from_dict(body) if body else recipes.load_recipe(project)
+
+    def work() -> int:
+        recipes.save_recipe(project, recipe)
+        intro = recipes.introspect(project)
+        return recipes.apply_to_notebook(project, recipe, intro)
+
+    try:
+        written = await asyncio.to_thread(work)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"cells": written, "notebook": "main.ipynb"}
+
+
+@router.get("/recipe/docs")
+async def recipe_docs() -> dict:
+    """Doc links for the config classes, from this node's own crawled index."""
+    return {"links": await recipes.doc_links()}
+
+
+# --- checkpoint → GGUF --------------------------------------------------------
+
+
+@router.get("/projects/{project_id}/checkpoints")
+async def checkpoints(project_id: str) -> dict:
+    project = _project_or_404(project_id)
+    found = await asyncio.to_thread(convert.list_checkpoints, project)
+    return {"checkpoints": found, "note": convert.python_version_note()}
+
+
+@router.post("/projects/{project_id}/convert")
+async def convert_checkpoint(project_id: str, body: dict) -> StreamingResponse:
+    """Convert a checkpoint to GGUF, streaming progress as NDJSON.
+
+    NDJSON on the request rather than the `training` channel, matching the
+    llama.cpp module's downloads: a conversion belongs to the request that asked
+    for it, and navigating away should stop it rather than leave a broadcast
+    running for nobody.
+    """
+    project = _project_or_404(project_id)
+
+    async def gen():
+        async for event in convert.run_conversion(
+            project,
+            str(body.get("checkpoint") or ""),
+            out_type=str(body.get("outType") or "f16"),
+            base_model=str(body.get("baseModel") or ""),
+        ):
+            yield json.dumps(event) + "\n"
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")

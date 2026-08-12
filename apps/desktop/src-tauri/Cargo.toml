@@ -25,3 +25,9 @@ serde_json = "1"
 # `open_external`: hand a URL to the user's default browser (OAuth consent pages,
 # external links) — the webview itself can't spawn browser windows.
 open = "5"
+# Remote updates against a signed manifest. The plugin owns the signature check
+# (the public key is in tauri.conf.json); src/updater.rs owns which endpoint is
+# asked, because the release channel is a runtime setting rather than a build
+# constant. Desktop-only — there is nothing to update on a mobile target.
+[target.'cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))'.dependencies]
+tauri-plugin-updater = "2"

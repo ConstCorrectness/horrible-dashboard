@@ -22,6 +22,8 @@
     "allow-navigate-browser-webview",
     "allow-close-browser-webview",
     "allow-open-external",
+    "allow-updater-check",
+    "allow-updater-install",
     "allow-shortcuts-register",
     "allow-shortcuts-unregister-all",
     "global-shortcut:default",

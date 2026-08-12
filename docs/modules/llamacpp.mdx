@@ -63,6 +63,12 @@ carry meaning — OS, arch, accelerator — with two rules that are the whole te
   contains every token a CPU one does, plus one. Downloading it onto a machine with
   no NVIDIA driver produces a binary that fails to load its runtime, which reads
   like a corrupt download.
+- **The extension is per-OS.** Upstream ships `.zip` for Windows and `.tar.gz`
+  everywhere else. Matching only `.zip` — as this did until it was caught — reduced
+  the whole module to a Windows feature, and reported it in upstream's voice:
+  _"release b10373 publishes no cpu build for ubuntu/x64"_. Both formats now match
+  and `_extract` picks the reader by extension rather than by OS, because the
+  extension is what the bytes actually are.
 - **The name must start with `llama-`.** Releases also carry
   `cudart-llama-bin-win-cu12.4-x64.zip`, the CUDA *runtime redistributable*, which
   matches every other token, is shorter than the real CUDA build, and contains no
@@ -70,6 +76,29 @@ carry meaning — OS, arch, accelerator — with two rules that are the whole te
 
 When nothing matches, the error names the assets it *did* see, rather than failing
 blind on a release whose naming moved again.
+
+### Which variant, though — the hardware probe decides
+
+`variant` used to default to a flat `cpu`, which is correct on a machine with no
+GPU and silently wrong on every machine with one. It now defaults to `"auto"` and
+is resolved by the [hardware probe](hardware.mdx), which still falls back to `cpu`
+whenever it could not determine what the machine has — the asymmetry above still
+holds, and "we could not ask" must never install a CUDA build.
+
+**The card alone does not decide the variant; the OS does too.** Upstream
+publishes CUDA for **Windows only** — there is no `ubuntu-cuda-*` asset in any
+release, because Linux NVIDIA users are expected to build it or run the Vulkan
+build. So an NVIDIA card on Linux resolves to `vulkan`, with a reason string that
+says why. Getting this wrong is not a slow build, it is *no install at all*, and
+it only became reachable when the default moved from `cpu` to `auto`.
+`test_upstream_publishes_no_linux_cuda_build` pins the upstream fact, so if a
+Linux CUDA asset ever appears the special case can be deleted on a failing test
+rather than on a hunch.
+
+The same probe supplies `gpuLayers` and `threads` at spawn and `tokenCap` for a
+trace. Those request fields are **nullable**, and the resolution is an `is None`
+check rather than a falsiness one: an explicit `0` is a request for pure CPU and
+has to survive.
 
 ### Verification says what it actually knows
 
@@ -105,6 +134,14 @@ that KV is an enum id whose meaning has shifted between llama.cpp releases, and 
 mixed-quant build (most K-quant files keep some tensors at F32) is the norm. Header
 facts are memoized on `(path, size, mtime)` — scanning a directory of 20 GB files on
 every status poll would otherwise re-read all of them.
+
+### Models you trained land here too
+
+The [training](./training.mdx) module converts a finished checkpoint into a GGUF in
+the **managed** directory, so it shows up in this catalog like any download and is
+served the same way. That is the loop closing: train it here, serve it here, look
+inside it here. A LoRA result is labelled an adapter, because `llama-server` takes
+it with `--lora` beside a base model rather than serving it alone.
 
 ### The disk budget is pre-flight
 
@@ -195,13 +232,16 @@ model than the one its settings show.
 | Panel | `llamacpp.server` | "llama.cpp" 🦙; singleton, role `widget` |
 | Section | `llamacpp.server` → `server` | Default, key <kbd>s</kbd> — build + process + log |
 | Section | `llamacpp.server` → `models` | Key <kbd>m</kbd> — catalog + downloads |
+| Section | `llamacpp.server` → `traces` | Key <kbd>t</kbd> — the activation scrubber |
 | Command | `llamacpp.open` | llama.cpp: Server and models |
 | Setting | `llamacpp.modelDirs` | Extra GGUF directories to scan |
 | Setting | `llamacpp.diskBudgetGb` | Ceiling for the managed directory |
+| Setting | `llamacpp.traceBudgetGb` | Ceiling for stored traces (default 2 GB) |
 
-One pane, two sections — the build and the weights are one workflow in a strict
-order (no build, no server; no weights, nothing to serve), so splitting them would
-give two panes of which one is usually an instruction to open the other. The pane is
+One pane, three sections — the build, the weights and the traces are one workflow in
+a strict order (no build, no server; no weights, nothing to serve; nothing served,
+nothing to look inside), so splitting them would
+give panes of which most are usually an instruction to open another. The pane is
 also tabbed into the [Lab](./lab.mdx) frame beside the Hub and the model explorer:
 find weights → serve them → look at what you served is one working position.
 
@@ -221,6 +261,13 @@ beside the model override they have to agree with.
 | `POST` | `/api/llamacpp/models/delete` | Delete a managed model (403 otherwise) |
 | `POST` | `/api/llamacpp/start` | Spawn on a chosen GGUF, optionally waiting for ready |
 | `POST` | `/api/llamacpp/stop` | Terminate |
+| `GET` | `/api/llamacpp/traces` | Stored traces, disk usage, and whether tracing is available at all |
+| `POST` | `/api/llamacpp/traces/estimate` | Pre-flight cost, from the GGUF header |
+| `POST` | `/api/llamacpp/traces` | Run one traced forward pass (NDJSON progress) |
+| `GET` | `/api/llamacpp/traces/{id}` | Manifest, record list, tokens |
+| `GET` | `/api/llamacpp/traces/{id}/record/{i}` | One record's values, decoded server-side |
+| `GET` | `/api/llamacpp/traces/{id}/tensors` | The raw blob, honouring `Range` |
+| `DELETE` | `/api/llamacpp/traces/{id}` | Delete a trace |
 
 Progress rides **NDJSON on the request**, not a `/ws` channel — the shape
 `/agent/pull` already uses, and it keeps a multi-gigabyte transfer scoped to the
@@ -256,11 +303,124 @@ failures that are otherwise **silent**:
 - A per-agent provider override reaches resolution, an unknown one degrades to the
   configured provider, and an unoverridden agent is untouched.
 
+## The tracer
+
+Everything above serves tokens. This part serves **activations**: a traced forward
+pass, captured node by node out of ggml and written to disk.
+
+It is a **separate artifact from the chat path and stays that way**. Chat runs a
+downloaded `llama-server` binary; tracing runs whatever libllama the
+`llama-cpp-python` wheel bundled, installed by `uv sync --extra llamacpp` and pinned
+with `==` rather than `>=`. The chat provider must not depend on the risky code, and
+the two llama.cpps genuinely disagree — which is why a trace may only be overlaid on
+a chat turn when **both** `llamaBuild` and `modelSha` match (`traces.matches_run`).
+A pane that overlaid them anyway would be showing a forward pass that did not
+produce the answer above it.
+
+### Why snapshots, not a stream
+
+Attention scores alone are fp32 `[n_kv, n_tokens, n_head]` — roughly 33 MB *per
+layer per pass* at 512 tokens and 32 heads, about a gigabyte across 32 layers. A
+live tensor feed is therefore a websocket carrying a gigabyte a second to a pane
+that can render none of it. A run writes a snapshot and the pane scrubs it
+afterwards, which also makes a trace something you can keep, compare and delete.
+
+```
+$HORRIBLE_DATA_DIR/llamacpp/traces/<trace_id>/
+  manifest.json   # provenance + every record (name, layer, pass, op, dtype,
+                  # ne[4], nb[4], offset, length, fidelity)
+  tokens.json     # the tokens the pass actually ran on
+  tensors.bin     # one append-only blob, records in capture order
+```
+
+One blob rather than a file per layer — hassault's cube-grid precedent literally.
+Per-layer files give thousands of handles and *still* cannot address a single node
+inside a layer; blob plus `Range` gives both, and the range handling (including the
+suffix form, where `bytes=-3` is the **last** three bytes) is copied from karaoke
+along with its tests.
+
+### The ggml ABI is the top risk, and it is contained three ways
+
+`struct ggml_tensor` is internal C with no stability promise, and
+`llama-cpp-python` declares the `cb_eval` callback type and **zero ggml accessors** —
+so the callback hands over a `void *` that nothing in the wheel can read.
+`ggml_abi.py` closes that gap as narrowly as possible:
+
+1. **Mirror as little as possible.** Only the first four fields (`type`, `buffer`,
+   `ne[4]`, `nb[4]`). Name, op and data are read through functions ggml *exports* —
+   the same instinct as serving `plane_order` instead of hardcoding it.
+2. **A self-check gates every trace.** On the first tensor, `nbytes` is recomputed
+   from `(type, ne, nb)` using ggml's own formula and compared against
+   `ggml_nbytes()`, and a dimension count derived from `ne` against `ggml_n_dims()`.
+   A field inserted upstream shifts the layout and the two disagree immediately.
+   On mismatch the run **aborts and writes nothing** — a trace that parses but is
+   garbage is worse than no trace.
+3. **The tracer is a subprocess.** `python -m backend.modules.llamacpp.tracer
+   <spec.json>`, spawned with `subprocess.Popen` on a worker thread (never
+   `asyncio.create_subprocess_exec` — under `uvicorn --reload` on Windows the loop
+   cannot spawn subprocesses at all). A segfault inside a ggml callback is then an
+   exit code the runner reports, not a dead FastAPI backend mid-turn. A non-zero
+   exit with no error line is reported as exactly that.
+
+### Four things that fail silently if forgotten
+
+- **Flash attention must be disabled explicitly.** With it on,
+  `ggml_flash_attn_ext` is one fused node and the score matrix never materialises —
+  attention capture would produce *nothing*, reading as a bug in the name filter
+  rather than a missing flag. Recent llama.cpp auto-enables it, so the default is
+  not safe; `_disable_flash_attn` sets `flash_attn_type` (or the older `flash_attn`
+  bool, whichever this build has).
+- **The `CFUNCTYPE` instance is held in a module global.** Built inline, it is
+  garbage-collected the moment the call that created it returns and the next graph
+  node jumps into freed memory.
+- **Quantized tensors are recorded as metadata only.** Dequantizing in Python would
+  be a second implementation of ggml's block formats — wrong in one corner and
+  plausible everywhere else. There is no dequantizer here, and `traces.decode`
+  refuses a quantized dtype rather than guessing.
+- **No chat template is applied.** The prompt is traced as raw text; rendering a
+  template ourselves would put a *different* token sequence through the model than
+  the one shown beside it. The manifest carries `chatTemplate: false` and says so.
+
+### Everything declares what it is
+
+The module's three-state honesty applies unchanged:
+
+- Every record carries a **`fidelity`** — `full` (the tensor), `fp16` (a downcast of
+  it), or `summary` (statistics **instead of** the tensor). A summary record has no
+  bytes by construction: `TraceWriter.append` refuses a payload for one, the record
+  route returns empty `values`, and the pane draws the statistics as statistics.
+- **`modelSha` says what it hashed.** Digesting 20 GB to open a pane would be
+  absurd, so it is the GGUF's first megabyte plus its size, and every manifest
+  carries `modelShaScope: "gguf-header-1mib+size"`. It is enough to catch "a
+  different model" and does not pretend to be a whole-file checksum.
+- **The estimate is labelled an estimate.** `POST /traces/estimate` costs the run
+  from the GGUF header (`block_count`, `embedding_length`, `attention.head_count`)
+  *before* it starts, because the difference between a 200 MB trace and a 12 GB one
+  is one checkbox and a progress bar that has already started is too late. The
+  manifest's `blobBytes` is what actually happened.
+
+Cost control is three layers: a hard `MAX_TRACE_TOKENS` cap (512) regardless of what
+the caller asks for, attention off by default and per-layer opt-in, and a global
+byte budget (`llamacpp.traceBudgetGb`, default 2 GB) pruned oldest-first after every
+run.
+
+### Testing
+
+`backend/tests/test_llamacpp_trace.py`, and it needs **no native library** — `bind()`
+is duck-typed against a stub ggml, so the ABI check is exercised as arithmetic over
+ctypes structures built in Python memory. The tests pin: the self-check passing on a
+consistent tensor and **failing** on a mutated one (both the `nbytes` and the
+`n_dims` disagreement), the quantized block branch (misreading `nb[0]` as a stride
+overstates a q5_0 row by 32×), manifest/blob round-trip including a zero-length
+summary record, `Range` requests including the suffix and open-ended forms,
+server-side decoding of both dtypes, a summary record returning **no** values,
+oldest-first pruning, the overlay guard refusing when either the build or the model
+differs, and a trace id that tries to walk out of the trace directory with `..`.
+
 ## Not done here
 
-The **tracer** — `ggml_abi`, the subprocess tracer, and snapshot traces on disk — is
-the next phase and a separate artifact with a different distribution story
-(`llama-cpp-python`, pinned `==`, via an extra). Keeping it off this path is
-deliberate: the chat provider must not depend on the risky code, and the pane must
-refuse to overlay a trace on a chat turn unless `llama_build` and `model_sha` both
-match. See [interpretability](./interpretability.mdx).
+`topk` fidelity is declared as an idea and not implemented — only `full`, `fp16` and
+`summary` are written, and the enum lists exactly those. Traces are not yet overlaid
+on a chat turn in the interpretability pane: `traces.matches_run` is the guard that
+work will need, but the pane wiring is not built. The tracer also samples greedily
+and traces a raw prompt, so it reproduces a *forward pass*, not a chat turn.

@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import os
 import queue
 import threading
 from typing import Any
@@ -183,7 +184,12 @@ class KernelSession:
         self.km = _make_kernel_manager(
             self.config.python_executable, self.config.display_name
         )
-        self.km.start_kernel(cwd=self.config.cwd)
+        # `env` replaces rather than extends the child's environment, so the
+        # backend's own is merged in explicitly — passing only the extras would
+        # start a kernel with no PATH.
+        self.km.start_kernel(
+            cwd=self.config.cwd, env={**os.environ, **dict(self.config.env)}
+        )
         self.kc = self.km.client()
         self.kc.start_channels()
         try:

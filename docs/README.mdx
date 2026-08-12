@@ -56,6 +56,10 @@ flowchart TB
 - [Layout shell](architecture/layout-shell.mdx) — the shared frontend layout
   (workspace, panels, command palette) and how the browser and desktop (Tauri)
   versions differ.
+- [Releases and remote updates](architecture/releases.mdx) — bundling, the signed
+  update manifest, stable/beta channels, and why an update never touches
+  `$HORRIBLE_DATA_DIR`. Read before generating the signing key: losing it means no
+  existing install can ever be updated again.
 - [Windowing](architecture/windowing.mdx) — the dockable workspace: how views
   (panels and widgets) open as tabbed/split/floating panes, views vs pane
   instances, and layout persistence.
@@ -134,6 +138,10 @@ layout shell and how it behaves in the browser vs the desktop app:
   catalog spanning our managed directory and the files Ollama and LM Studio already
   have, and a supervised process the agent talks to over the OpenAI dialect. Adds
   per-agent provider selection, so one agent can run here while the rest stay on Ollama.
+- [Hardware](modules/hardware.mdx) — **Implemented.** One capability probe deciding
+  the llama.cpp build, GPU offload, thread count and trace cap, with three states
+  rather than two: found it, looked and found nothing, and *could not ask*. No pane —
+  a settings section and three overrides.
 - [Marketplace](modules/marketplace.mdx)
 - [Settings](modules/settings.mdx)
 - [Keyboard](modules/keymap.mdx) — the Keyboard Shortcuts pane and the `keymap.*`

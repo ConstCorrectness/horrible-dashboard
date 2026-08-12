@@ -1,0 +1,13 @@
+[[permission]]
+identifier = "allow-updater-check"
+description = "Enables the updater_check custom command (asks the release channel's signed manifest whether a newer build exists)"
+
+[permission.commands]
+allow = ["updater_check"]
+
+[[permission]]
+identifier = "allow-updater-install"
+description = "Enables the updater_install custom command (downloads, verifies the signature, installs, and restarts)"
+
+[permission.commands]
+allow = ["updater_install"]

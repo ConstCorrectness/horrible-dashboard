@@ -17,3 +17,12 @@ export function openTrainingNotebook(projectId: string, notebook: string): void 
     () => true,
   );
 }
+
+/**
+ * Open a project's fine-tuning recipe. Same shape as the notebook opener and for
+ * the same reason: a recipe is bound to one project, so reopening the same one
+ * focuses its pane instead of splitting a second form onto the screen.
+ */
+export function openTrainingRecipe(projectId: string): void {
+  openDocument('training.recipe', `training.recipe:${projectId}`, { projectId }, () => true);
+}

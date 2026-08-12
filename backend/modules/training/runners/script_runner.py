@@ -13,6 +13,7 @@ REST endpoints; runs are project-scoped and survive pane/tab closes.
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import threading
 import uuid
@@ -60,6 +61,10 @@ class ScriptRunner:
         run.proc = subprocess.Popen(
             [str(python_path(project)), "-u", str(target)],
             cwd=str(root),
+            # Same contract as the kernel: tracker credentials arrive through the
+            # environment at spawn, for the trackers this project's recipe asked
+            # for, and are never written anywhere the browser can read.
+            env={**os.environ, **_tracker_env(project)},
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -147,3 +152,14 @@ class ScriptRunner:
 
 
 script_runner = ScriptRunner()
+
+
+def _tracker_env(project: ProjectModel) -> dict[str, str]:
+    """Tracker credentials for this project's recipe. See `training/trackers.py`."""
+    from backend.modules.training import recipes, trackers
+
+    try:
+        return trackers.env_for(recipes.load_recipe(project).trackers)
+    except Exception as exc:  # noqa: BLE001 — a missing credential must not block a run
+        logger.info("training: no tracker env for %s (%s)", project.id, exc)
+        return {}

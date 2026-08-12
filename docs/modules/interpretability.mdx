@@ -32,24 +32,36 @@ previously invisible:
   *ask* for; the model has what it has. Asking for more gets you the model's real
   limit silently. The header shows both.
 
-## Not a Jacobian lens
+## Prompt, weights, activations — three surfaces, three modules
 
-This module inspects the **prompt**, not the network. Activations, attention, KV
-cache contents, and gradients are all unavailable through the HTTP API of every
-provider it can talk to, which returns tokens and counts — nothing else.
+This module inspects the **prompt**. That is a real boundary and not a temporary
+one: activations, attention, KV cache contents and gradients are unavailable
+through the HTTP API of every provider it can talk to, which returns tokens and
+counts and nothing else. Everything on this page is measured from the request the
+backend is about to send.
 
-The model explorer narrows that gap on one side: reading the GGUF directly gives the
-real **weights inventory** — every tensor's name, shape and quantization — so the
-structure shown is measured rather than described. It stops at the file. Nothing here
-runs a forward pass, so there are still no activations and no attention maps.
+The model explorer covers the **weights**: reading the GGUF directly gives the
+real tensor inventory — every name, shape and quantization — so the structure
+shown is measured rather than described. It stops at the file; nothing here runs
+a forward pass.
 
-Getting those is a planned, separate piece of work: a llama.cpp-backed *inspect*
-provider that coexists with Ollama and captures ggml's per-node `cb_eval` tensors
-into a **snapshot trace on disk**, scrubbed offline rather than streamed. That path
-deliberately avoids autograd — the backend has no torch and should not grow one; heavy
-dependencies live in per-project uv envs (`backend/modules/training/envs.py`) or
-optional extras. Until it lands, take this module as inspecting the **prompt** and the
-**weights**, never the computation between them.
+The computation between them is now covered too, and it lives **next door in
+[llamacpp](./llamacpp.mdx)** rather than here, because it needs a different
+engine and a different install. A traced run captures ggml's per-node `cb_eval`
+tensors into a **snapshot on disk**, scrubbed offline rather than streamed (one
+pass with attention on is about a gigabyte), and is read in the `traces` section
+of the llama.cpp pane. That path still avoids autograd entirely — the backend has
+no torch and should not grow one; heavy dependencies live in per-project uv envs
+(`backend/modules/training/envs.py`) or optional extras, and tracing is
+`uv sync --extra llamacpp`, lazy-imported and CPU-only.
+
+The seam between this page and that one matters: a trace and a chat turn are
+**different runs until proven otherwise**. Chat goes through a downloaded
+`llama-server` binary, tracing through the wheel's own libllama, so the two may
+only be shown together when both the build and the model hash agree
+(`traces.matches_run`). Overlaying them regardless would put a forward pass under
+an answer it did not produce — which is exactly the kind of confident wrongness
+this module exists to refuse.
 
 ## Architecture
 
