@@ -279,6 +279,18 @@ function TurnHeader({ turn }: { turn: TurnSnapshot }) {
           {fmtTokens(used)} / {window ? fmtTokens(window) : '?'} tok
           {pct != null && ` (${pct.toFixed(0)}%)`}
         </span>
+        {/* Carried up from what used to be the separate budget widget: the two
+            things worth knowing without scrolling are how full the window is and
+            whether tools were silently dropped before the prompt was sent. The
+            full explanation still sits with the tool list below. */}
+        {round?.toolsTruncated && (
+          <span
+            className="interp-warn-chip"
+            title={`${round.toolsSelected - round.toolBudget} tools were dropped before this prompt was sent.`}
+          >
+            tools dropped
+          </span>
+        )}
       </div>
       {turn.requestedNumCtx != null &&
         turn.modelContextLength != null &&
@@ -396,38 +408,6 @@ export function InterpretabilityPanel() {
           <ToolList round={round} />
         </div>
       )}
-    </div>
-  );
-}
-
-/** Compact dashboard widget: the last turn's window usage at a glance. */
-export function InterpretabilityWidget() {
-  const turns = useTurns();
-  const modelInfo = useModelInfo();
-  const turn = turns[0];
-  if (!turn) return <div className="interp-empty interp-dim">No turns captured yet.</div>;
-
-  const round = turn.rounds[turn.rounds.length - 1];
-  const used = round?.totalTokens ?? 0;
-  const window = effectiveWindow(turn, modelInfo?.contextLength ?? null);
-  const pct = window ? Math.min(100, (used / window) * 100) : null;
-
-  return (
-    <div className="interp-widget">
-      <div className="interp-widget-top">
-        <span className="interp-model">{turn.model || 'model'}</span>
-        {turn.tokenizerSource === 'family' && <span className="interp-approx-chip">approx</span>}
-        {!turn.exact && turn.tokenizerSource !== 'family' && (
-          <span className="interp-warn-chip">est</span>
-        )}
-      </div>
-      <div className="interp-budget-bar">
-        <div className="interp-budget-fill" style={{ width: `${pct ?? 0}%` }} />
-      </div>
-      <div className="interp-dim">
-        {fmtTokens(used)} / {window ? fmtTokens(window) : '?'} tok
-        {round?.toolsTruncated && <span className="interp-warn-chip">tools dropped</span>}
-      </div>
     </div>
   );
 }

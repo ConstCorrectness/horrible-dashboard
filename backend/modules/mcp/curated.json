@@ -1,0 +1,92 @@
+[
+  {
+    "name": "io.modelcontextprotocol/fetch",
+    "title": "Fetch",
+    "description": "Fetch a URL and convert it to markdown for the model to read.",
+    "note": "The reference server for web fetching. This node already has browser.read and search.read, so reach for it mainly when comparing MCP behaviour against ours.",
+    "repository": "https://github.com/modelcontextprotocol/servers",
+    "packages": [
+      {
+        "registryType": "pypi",
+        "identifier": "mcp-server-fetch",
+        "runtimeHint": "uvx",
+        "transport": { "type": "stdio" }
+      }
+    ]
+  },
+  {
+    "name": "io.modelcontextprotocol/filesystem",
+    "title": "Filesystem",
+    "description": "Read, write and search files under directories you explicitly allow.",
+    "note": "Append the directories to allow as arguments — with none, the server starts and can reach nothing. Every tool here is gated: this is third-party code writing to your disk.",
+    "repository": "https://github.com/modelcontextprotocol/servers",
+    "packages": [
+      {
+        "registryType": "npm",
+        "identifier": "@modelcontextprotocol/server-filesystem",
+        "runtimeHint": "npx",
+        "transport": { "type": "stdio" }
+      }
+    ]
+  },
+  {
+    "name": "io.modelcontextprotocol/git",
+    "title": "Git",
+    "description": "Read and search a git repository: status, diffs, log, and commits.",
+    "note": "Pass --repository <path>. Useful against a repo this node's own file tools aren't pointed at.",
+    "repository": "https://github.com/modelcontextprotocol/servers",
+    "packages": [
+      {
+        "registryType": "pypi",
+        "identifier": "mcp-server-git",
+        "runtimeHint": "uvx",
+        "transport": { "type": "stdio" }
+      }
+    ]
+  },
+  {
+    "name": "io.modelcontextprotocol/memory",
+    "title": "Memory",
+    "description": "A knowledge graph the model can write to and read back across turns.",
+    "note": "Stores what the agent chooses to remember in a local JSON graph. Distinct from the library, which stores what you ingest.",
+    "repository": "https://github.com/modelcontextprotocol/servers",
+    "packages": [
+      {
+        "registryType": "npm",
+        "identifier": "@modelcontextprotocol/server-memory",
+        "runtimeHint": "npx",
+        "transport": { "type": "stdio" }
+      }
+    ]
+  },
+  {
+    "name": "io.modelcontextprotocol/sequential-thinking",
+    "title": "Sequential thinking",
+    "description": "A scratchpad tool that lets the model plan in explicit revisable steps.",
+    "note": "One tool, no side effects, no credentials — the cheapest thing to try if you want to see what an MCP group costs a turn in the interpretability pane.",
+    "repository": "https://github.com/modelcontextprotocol/servers",
+    "packages": [
+      {
+        "registryType": "npm",
+        "identifier": "@modelcontextprotocol/server-sequential-thinking",
+        "runtimeHint": "npx",
+        "transport": { "type": "stdio" }
+      }
+    ]
+  },
+  {
+    "name": "io.modelcontextprotocol/everything",
+    "title": "Everything (reference)",
+    "description": "The protocol's test server: every tool, prompt and resource shape MCP defines.",
+    "note": "Not useful to an agent — useful to you. It is the one server that exercises prompts, resources, annotations and error shapes at once, so it is what to point the transcript view at when something else looks wrong.",
+    "repository": "https://github.com/modelcontextprotocol/servers",
+    "packages": [
+      {
+        "registryType": "npm",
+        "identifier": "@modelcontextprotocol/server-everything",
+        "runtimeHint": "npx",
+        "transport": { "type": "stdio" }
+      }
+    ]
+  }
+]

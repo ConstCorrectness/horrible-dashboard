@@ -27,6 +27,19 @@ export const mcpModule: ModuleManifest = {
       icon: '🔌',
       defaultDock: 'left',
       singleton: true,
+      // Two sections, one component: finding a server and running one are the same
+      // objects at two moments, and the discover half hands its result straight to
+      // the servers half. Splitting them into two panes would mean two copies of the
+      // config shape and a hand-off across a pane boundary.
+      sections: [
+        { id: 'servers', label: 'Servers', icon: '🔌', key: 's', default: true },
+        { id: 'discover', label: 'Discover', icon: '🔎', key: 'd' },
+        // Authoring is a third section rather than a pane of its own for the same
+        // reason: a scaffolded project *is* a server, and the moment it's provisioned
+        // it appears in Servers with the same inspector as any other. Splitting them
+        // would mean two views of one object with a hand-off between them.
+        { id: 'author', label: 'Author', icon: '✍️', key: 'a' },
+      ],
     },
   ],
   settings: [
@@ -57,6 +70,25 @@ export const mcpModule: ModuleManifest = {
       title: 'MCP: Add server',
       // The form lives in the pane; the command is the discoverable entry point to it.
       run: () => registry.openPanel('mcp.servers'),
+    },
+    {
+      id: 'mcp.discover',
+      title: 'MCP: Discover servers',
+      // Opens the pane, then switches it. `section.show:mcp.servers:discover` is
+      // synthesized by the registry and only reveals a section of an *open* pane, so
+      // the discoverable entry point has to do both.
+      run: () => {
+        registry.openPanel('mcp.servers');
+        registry.runCommand('section.show:mcp.servers:discover');
+      },
+    },
+    {
+      id: 'mcp.author',
+      title: 'MCP: Author a server',
+      run: () => {
+        registry.openPanel('mcp.servers');
+        registry.runCommand('section.show:mcp.servers:author');
+      },
     },
     {
       id: 'mcp.status',

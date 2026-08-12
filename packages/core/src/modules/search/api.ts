@@ -52,6 +52,8 @@ export interface CrawlSeed {
   last_status?: string | null;
   last_error?: string | null;
   pages: number;
+  /** The release the seed's pages describe. Null for a seed with no `package`. */
+  version?: string | null;
 }
 
 export interface IndexStatus {
@@ -78,6 +80,9 @@ export interface CrawlProgress {
   errors: number;
   chunks: number;
   notes: string[];
+  /** Which ingest path ran: the publisher's corpus, its link index, or a crawl. */
+  source?: 'corpus' | 'index' | 'crawl';
+  version?: string | null;
 }
 
 async function json<T>(path: string, init?: RequestInit): Promise<T> {

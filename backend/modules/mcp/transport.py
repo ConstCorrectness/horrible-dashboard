@@ -31,6 +31,7 @@ import shutil
 import subprocess
 import sys
 import threading
+from collections import deque
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -89,10 +90,12 @@ class StdioProcess:
         proc: subprocess.Popen[bytes],
         loop: asyncio.AbstractEventLoop,
         writer: MemoryObjectSendStream[SessionMessage | Exception],
+        stderr_sink: deque[str] | None = None,
     ) -> None:
         self.proc = proc
         self.loop = loop
         self._writer = writer
+        self._stderr_sink = stderr_sink
         self._closed = threading.Event()
         self.reader_thread: threading.Thread | None = None
         # Serializes stdin writes so two concurrent tool calls can't interleave
@@ -104,6 +107,36 @@ class StdioProcess:
             target=self._read_loop, name=f"mcp-{name}", daemon=True
         )
         self.reader_thread.start()
+        if self.proc.stderr is not None:
+            threading.Thread(
+                target=self._read_stderr, name=f"mcp-err-{name}", daemon=True
+            ).start()
+
+    def _read_stderr(self) -> None:
+        """Keep the tail of the server's stderr, on its own thread.
+
+        Nothing here reaches the protocol stream. It exists because a server that dies
+        on startup says *why* on stderr and nowhere else — the client only sees its
+        streams close, which surfaces as `ExceptionGroup: unhandled errors in a
+        TaskGroup`, a message that names neither the server nor the problem. For an
+        authored server the discarded text was the traceback of the syntax error you
+        had just saved.
+
+        A separate thread, not a pipe merged into stdout: stdout *is* the protocol
+        channel, and interleaving log lines into it corrupts the framing.
+        """
+        stderr = self.proc.stderr
+        if stderr is None:
+            return
+        try:
+            for raw in stderr:
+                if self._closed.is_set():
+                    break
+                line = raw.decode("utf-8", errors="replace").rstrip()
+                if line and self._stderr_sink is not None:
+                    self._stderr_sink.append(line)
+        except (OSError, ValueError):  # noqa: S110 - the pipe closing is normal
+            pass
 
     def _read_loop(self) -> None:
         """Pump the server's stdout into the read stream. Runs on a daemon thread.
@@ -182,6 +215,7 @@ async def popen_stdio_client(
     args: list[str],
     env: dict[str, str] | None = None,
     cwd: str | None = None,
+    stderr_sink: deque[str] | None = None,
 ) -> AsyncIterator[
     tuple[
         MemoryObjectReceiveStream[SessionMessage | Exception],
@@ -217,16 +251,18 @@ async def popen_stdio_client(
         [executable, *args],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
-        # Server logs go to stderr by convention; we don't interleave them into the
-        # protocol stream, and inheriting would spam the backend console.
-        stderr=subprocess.DEVNULL,
+        # Server logs go to stderr by convention. Never interleaved into the protocol
+        # stream (stdout is the wire), and never inherited (it would spam the backend
+        # console) — but captured when the caller offers a sink, because a server that
+        # dies on startup explains itself here and nowhere else.
+        stderr=subprocess.PIPE if stderr_sink is not None else subprocess.DEVNULL,
         cwd=cwd,
         env=child_env,
         bufsize=0,
         creationflags=_creation_flags(),
     )
 
-    handle = StdioProcess(proc, asyncio.get_running_loop(), read_writer)
+    handle = StdioProcess(proc, asyncio.get_running_loop(), read_writer, stderr_sink)
     handle.start_reader(command)
 
     async def pump_writes() -> None:

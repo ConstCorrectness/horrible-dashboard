@@ -83,6 +83,19 @@ class SeedModel(BaseModel):
     last_status: str | None = None
     last_error: str | None = None
     pages: int = 0
+    # The release the seed's pages describe, resolved from its package registry at
+    # the start of the last crawl. None for a seed that declares no package.
+    version: str | None = None
+
+
+class PackageRefModel(BaseModel):
+    """The package a doc seed documents, so its version can be resolved."""
+
+    registry: Literal["pypi", "npm", "github"]
+    # A distribution name for pypi/npm, `owner/repo` for github.
+    name: str
+    # The importable distribution name when it differs from the registry name.
+    dist: str = ""
 
 
 class SeedsResponse(BaseModel):
@@ -100,6 +113,13 @@ class SeedUpsertRequest(BaseModel):
     max_pages: int = Field(default=200, ge=1, le=2000)
     recrawl_days: int = Field(default=14, ge=0, le=365)
     tags: list[str] = Field(default_factory=list)
+    package: PackageRefModel | None = None
+    # Probing costs two conditional GETs and can replace the entire crawl, so it is
+    # on by default; a seed whose origin serves something misleading at those paths
+    # opts out.
+    prefer_llms_txt: bool = True
+    llms_txt_url: str = ""
+    llms_full_url: str = ""
 
 
 class CrawlRequest(BaseModel):

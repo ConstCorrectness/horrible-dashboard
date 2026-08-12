@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import deque
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -31,6 +32,7 @@ from mcp import ClientSession
 from mcp import types as mcp_types
 
 from backend.modules.mcp import config as cfg
+from backend.modules.mcp import transcript
 from backend.modules.mcp.transport import describe_target, popen_stdio_client
 
 logger = logging.getLogger(__name__)
@@ -79,6 +81,12 @@ class ServerRuntime:
     error: str | None = None
     server_name: str = ""
     server_version: str = ""
+    # The negotiated protocol version and the capability object exactly as declared.
+    # Kept raw rather than flattened to booleans because the conformance suite's whole
+    # job is comparing what was *declared* against what is served — a normalized copy
+    # would lose the distinction between "absent" and "declared empty".
+    protocol_version: str = ""
+    capabilities: dict[str, Any] = field(default_factory=dict)
     tools: list[ToolInfo] = field(default_factory=list)
     prompts: list[PromptInfo] = field(default_factory=list)
     resources: list[ResourceInfo] = field(default_factory=list)
@@ -111,7 +119,14 @@ class ServerRuntime:
             "error": self.error,
             "serverName": self.server_name,
             "serverVersion": self.server_version,
+            "protocolVersion": self.protocol_version,
+            # Where this server came from. `manual` is the default because a config
+            # written before this field existed was typed by hand.
+            "origin": str(self.config.get("origin") or "manual"),
+            "project": str(self.config.get("project") or ""),
             "hasToken": cfg.has_auth_token(self.id),
+            "secretEnv": [str(n) for n in self.config.get("secretEnv") or []],
+            "missingSecretEnv": cfg.missing_env_secrets(self.id),
             "target": target,
             "tools": [
                 {
@@ -119,6 +134,10 @@ class ServerRuntime:
                     "description": t.description,
                     "readOnly": t.read_only,
                     "destructive": t.destructive,
+                    # Carried to the browser so the invoke form is generated from the
+                    # server's own schema rather than a free-text JSON box — which is
+                    # the difference between trying a tool and guessing at one.
+                    "inputSchema": t.input_schema,
                 }
                 for t in self.tools
             ],
@@ -135,8 +154,17 @@ class ServerRuntime:
 class McpSession:
     """One supervised connection to an MCP server."""
 
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(
+        self, config: dict[str, Any], *, wire: transcript.Transcript | None = None
+    ) -> None:
         self.runtime = ServerRuntime(config=config)
+        # A probe passes its own throwaway ring so a candidate server's handshake
+        # never lands in a configured server's transcript.
+        self.transcript = wire or transcript.for_server(str(config.get("id", "")))
+        # The tail of a stdio server's stderr. Small on purpose: it exists to answer
+        # "why didn't it start", which the last few lines always do, and a server that
+        # logs chattily for hours must not accumulate.
+        self._stderr: deque[str] = deque(maxlen=40)
         self._session: ClientSession | None = None
         self._task: asyncio.Task[None] | None = None
         self._stop = asyncio.Event()
@@ -184,8 +212,14 @@ class McpSession:
                 popen_stdio_client(
                     str(conf.get("command", "")),
                     [str(a) for a in conf.get("args", []) or []],
-                    {str(k): str(v) for k, v in (conf.get("env") or {}).items()},
+                    {
+                        **{str(k): str(v) for k, v in (conf.get("env") or {}).items()},
+                        # Secret variables are resolved here and nowhere else — they
+                        # are never in the config file and never in a route's response.
+                        **cfg.env_secrets(self.id),
+                    },
                     conf.get("cwd") or None,
+                    self._stderr,
                 )
             )
         else:
@@ -209,11 +243,15 @@ class McpSession:
                 read, write, _ = await stack.enter_async_context(
                     streamablehttp_client(url, headers=headers)
                 )
+        # Teed before `ClientSession` ever sees them, so the handshake itself is
+        # recorded — which is the half of the conversation a failing server fails in.
+        read, write = transcript.tee(read, write, self.transcript)
         session = await stack.enter_async_context(ClientSession(read, write))
         return session
 
     async def _run(self) -> None:
         """Own the session for its whole lifetime: connect, discover, park, tear down."""
+        self._stderr.clear()
         try:
             async with AsyncExitStack() as stack:
                 session = await self._open(stack)
@@ -236,7 +274,13 @@ class McpSession:
             raise
         except Exception as exc:  # noqa: BLE001 - any failure becomes visible status
             self.runtime.state = "error"
-            self.runtime.error = f"{type(exc).__name__}: {exc}"
+            # The exception the client sees when a server dies on startup is
+            # `ExceptionGroup: unhandled errors in a TaskGroup` — true, and useless.
+            # What the *user* needs is the server's own last words, which went to its
+            # stderr; appending them turns "it broke" into "SyntaxError, line 84".
+            self.runtime.error = _with_stderr(
+                f"{type(exc).__name__}: {exc}", self._stderr
+            )
             logger.warning("mcp: %s failed: %s", self.id, self.runtime.error)
         finally:
             self._session = None
@@ -253,6 +297,11 @@ class McpSession:
         calls; that is normal and must not fail the connection.
         """
         caps = info.capabilities
+        self.runtime.protocol_version = str(info.protocolVersion or "")
+        # `exclude_none` so an undeclared capability is absent rather than an explicit
+        # null — the conformance check reads truthiness, and `{"prompts": None}` would
+        # otherwise be indistinguishable from a declared-but-empty capability.
+        self.runtime.capabilities = caps.model_dump(exclude_none=True)
         self.runtime.tools = []
         self.runtime.prompts = []
         self.runtime.resources = []
@@ -334,6 +383,19 @@ class McpSession:
             else:
                 parts.append({"uri": str(content.uri), "blob": "<binary omitted>"})
         return {"contents": parts}
+
+
+def _with_stderr(message: str, lines: deque[str]) -> str:
+    """A failure message with the server's own last words appended, if it said any.
+
+    Bounded twice — the ring caps how much is kept, and this caps how much is shown —
+    because the destination is a status line in a pane, not a log viewer. The *last*
+    lines are kept rather than the first: a traceback names its exception at the end.
+    """
+    if not lines:
+        return message
+    tail = [line for line in list(lines)[-6:] if line.strip()]
+    return f"{message}\n{chr(10).join(tail)}" if tail else message
 
 
 def _flatten_result(result: mcp_types.CallToolResult) -> dict[str, Any]:

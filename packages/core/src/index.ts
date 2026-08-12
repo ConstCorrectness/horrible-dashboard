@@ -201,6 +201,7 @@ export { dashboardModule } from './modules/dashboard';
 export { layoutsModule } from './modules/layouts';
 export { scratchModule } from './modules/scratch';
 export { mcpModule } from './modules/mcp';
+export { skillsModule } from './modules/skills';
 export { browserModule } from './modules/browser';
 // Native overlays (the browser's child webview) composite ABOVE the HTML layer, so
 // any full-window UI must claim suppression while it is up or it renders underneath.
@@ -263,6 +264,7 @@ export {
   type ClubhouseStatus,
 } from './modules/clubhouse';
 export { interpretabilityModule } from './modules/interpretability';
+export { labModule } from './modules/lab';
 export { observabilityModule } from './modules/observability';
 export { marketplaceModule } from './modules/marketplace';
 export { settingsModule } from './modules/settings';

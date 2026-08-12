@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 
+import { usePaneSection } from '../../../layout/use-sections';
 import {
   connectServer,
   deleteServer,
@@ -10,6 +11,9 @@ import {
   type McpServerInput,
   type McpTransport,
 } from '../api';
+import { AuthorSection } from './AuthorSection';
+import { DiscoverSection } from './DiscoverSection';
+import { ServerInspector } from './ServerInspector';
 
 /**
  * The MCP servers pane: what's configured, what's connected, and — when something is
@@ -28,6 +32,37 @@ function stateColor(state: McpServer['state']): string {
   if (state === 'error') return 'var(--danger, #f85149)';
   if (state === 'starting') return 'var(--warn, #d29922)';
   return 'var(--text-dim)';
+}
+
+/**
+ * Whose code this row runs.
+ *
+ * It reads as decoration and isn't: `registry` means a third party's package is
+ * executing on this machine with the user's environment, which is a materially
+ * different thing from a server they wrote in the Author section. The label is the
+ * only place that distinction is ever visible after the moment of adding.
+ */
+function OriginChip({ origin }: { origin: McpServer['origin'] }) {
+  if (origin === 'manual') return null;
+  const registry = origin === 'registry';
+  return (
+    <span
+      style={{
+        fontSize: '0.62rem',
+        padding: '0 0.3rem',
+        borderRadius: 3,
+        border: '1px solid var(--border)',
+        color: registry ? 'var(--warn, #d29922)' : 'var(--text-dim)',
+      }}
+      title={
+        registry
+          ? 'Third-party code installed from the MCP registry.'
+          : 'A project you scaffolded in the Author section.'
+      }
+    >
+      {registry ? 'third-party' : 'yours'}
+    </span>
+  );
 }
 
 function ServerCard({ server, onChanged }: { server: McpServer; onChanged: () => void }) {
@@ -59,6 +94,7 @@ function ServerCard({ server, onChanged }: { server: McpServer; onChanged: () =>
         <span style={{ color: stateColor(server.state) }}>●</span>
         <strong>{server.name || server.id}</strong>
         <code style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>{server.group}</code>
+        <OriginChip origin={server.origin} />
         <span style={{ marginLeft: 'auto', display: 'flex', gap: '0.35rem' }}>
           <button disabled={busy} onClick={() => act(() => connectServer(server.id))}>
             {server.state === 'ready' ? 'Reconnect' : 'Connect'}
@@ -96,35 +132,36 @@ function ServerCard({ server, onChanged }: { server: McpServer; onChanged: () =>
         </div>
       )}
 
-      {server.state === 'ready' && (
-        <div style={{ marginTop: '0.4rem', fontSize: '0.75rem' }}>
-          <button
-            onClick={() => setOpen((v) => !v)}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: 'var(--text-dim)',
-              cursor: 'pointer',
-              padding: 0,
-            }}
-          >
-            {open ? '▾' : '▸'} {server.tools.length} tools · {server.prompts.length} prompts ·{' '}
-            {server.resources.length} resources
-          </button>
-          {open && (
-            <ul style={{ margin: '0.35rem 0 0', paddingLeft: '1rem' }}>
-              {server.tools.map((t) => (
-                <li key={t.name} style={{ marginBottom: '0.15rem' }}>
-                  <code>{`${server.group}.${t.name}`}</code>{' '}
-                  <span style={{ color: 'var(--text-dim)' }}>
-                    {t.readOnly ? '(read-only)' : '(gated)'} {t.description}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
+      {/* A server that starts but has no credential fails inside the *server*, whose
+          error text is rarely legible. Saying it here turns that into a fixable
+          state rather than a mystery. */}
+      {server.missingSecretEnv.length > 0 && (
+        <div style={{ fontSize: '0.72rem', color: 'var(--warn, #d29922)', marginTop: '0.3rem' }}>
+          Needs a value for {server.missingSecretEnv.join(', ')}.
         </div>
       )}
+
+      {/* The wire is available whenever anything has been recorded — including for a
+          server that never reached `ready`, which is exactly when it is worth
+          reading. */}
+      <div style={{ marginTop: '0.4rem', fontSize: '0.75rem' }}>
+        <button
+          onClick={() => setOpen((v) => !v)}
+          style={{
+            background: 'none',
+            border: 'none',
+            color: 'var(--text-dim)',
+            cursor: 'pointer',
+            padding: 0,
+          }}
+        >
+          {open ? '▾' : '▸'}{' '}
+          {server.state === 'ready'
+            ? `${server.tools.length} tools · ${server.prompts.length} prompts · ${server.resources.length} resources`
+            : 'Inspect'}
+        </button>
+        {open && <ServerInspector server={server} />}
+      </div>
     </div>
   );
 }
@@ -228,6 +265,7 @@ function AddServerForm({ onAdded }: { onAdded: () => void }) {
 }
 
 export function McpServersPane() {
+  const { section } = usePaneSection();
   const [servers, setServers] = useState<McpServer[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -247,6 +285,26 @@ export function McpServersPane() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  if (section === 'discover') {
+    return (
+      <div style={{ padding: '0.75rem', height: '100%', overflow: 'auto' }}>
+        <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginBottom: '0.5rem' }}>
+          The official MCP registry, with a shipped shortlist in front of it. Inspect before you
+          add: what a server <em>is</em> comes from the running server, not from its listing.
+        </div>
+        <DiscoverSection onAdded={refresh} />
+      </div>
+    );
+  }
+
+  if (section === 'author') {
+    return (
+      <div style={{ padding: '0.75rem', height: '100%', overflow: 'auto' }}>
+        <AuthorSection onChanged={refresh} />
+      </div>
+    );
+  }
 
   return (
     <div style={{ padding: '0.75rem', height: '100%', overflow: 'auto' }}>

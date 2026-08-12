@@ -25,7 +25,11 @@ describe('browser module', () => {
     expect(keys).toContain('browser.readerModeDefault');
     expect(keys).toContain('browser.engine');
     const engine = (browserModule.settings ?? []).find((s) => s.key === 'browser.engine');
-    expect(engine?.enumValues).toEqual(['auto', 'full', 'iframe']);
+    // Order is the `auto` preference order, not an alphabetical list: full beats
+    // native even on the desktop, because the agent's tools drive the backend session
+    // and the native overlay is the one surface the agent cannot read.
+    expect(engine?.enumValues).toEqual(['auto', 'full', 'native', 'iframe']);
+    expect(engine?.default).toBe('auto');
   });
 
   it('exposes read/open + the full-engine scrape/act agent tools', () => {

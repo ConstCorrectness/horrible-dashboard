@@ -50,7 +50,23 @@ _ALLOWED_KEYS = {
     "url",
     "headers",
     "enabled",
+    # The *names* of environment variables whose values live in the encrypted store.
+    # Names are not secret — an entry from the MCP registry publishes them — and
+    # keeping them here is what lets the UI show which credentials a server still
+    # needs without ever holding one.
+    "secretEnv",
+    # Where this server came from: `manual` (a command the user typed), `registry`
+    # (third-party code installed from the MCP registry) or `authored` (a project
+    # scaffolded here). Persisted rather than derived because the distinction that
+    # matters — whose code is this — is only knowable at the moment it is added.
+    "origin",
+    # For an authored server, the `author.py` project that owns its files.
+    "project",
 }
+
+# The provenance values a config may carry. Anything else falls back to `manual`, the
+# conservative reading: an unrecognized origin is not evidence the code is ours.
+ORIGINS = ("manual", "registry", "authored")
 
 
 def _store_path() -> Path:
@@ -118,6 +134,8 @@ def _clean(config: dict[str, Any]) -> dict[str, Any]:
     out = {k: v for k, v in config.items() if k in _ALLOWED_KEYS}
     out.setdefault("name", out.get("id", ""))
     out.setdefault("enabled", True)
+    if out.get("origin") not in ORIGINS:
+        out["origin"] = "manual"
     if out.get("transport") == "stdio":
         out.setdefault("args", [])
         out.setdefault("env", {})
@@ -151,15 +169,57 @@ def delete_server(server_id: str) -> bool:
     if len(remaining) == len(rows):
         return False
     _write(remaining)
-    # Drop the credential too — leaving it behind means a later server that reuses
+    # Drop the credentials too — leaving them behind means a later server that reuses
     # the id silently inherits someone else's token.
+    gone = next((c for c in rows if c.get("id") == server_id), {})
     try:
         from backend.modules.database.secrets_store import delete_secret
 
         delete_secret(secret_key(server_id))
+        for name in gone.get("secretEnv") or []:
+            delete_secret(env_secret_key(server_id, str(name)))
     except Exception:  # noqa: BLE001 - a missing/locked store must not block deletion
         pass
     return True
+
+
+def env_secret_key(server_id: str, name: str) -> str:
+    """Where one secret environment variable's value lives."""
+    return f"mcp:{server_id}:env:{name}"
+
+
+def set_env_secret(server_id: str, name: str, value: str) -> None:
+    from backend.modules.database.secrets_store import upsert_secret
+
+    upsert_secret(env_secret_key(server_id, name), value)
+
+
+def env_secrets(server_id: str) -> dict[str, str]:
+    """Resolved secret environment for a server, read at connect time only.
+
+    A discovered server routinely wants an API key in its environment, and `env` lives
+    in plaintext `mcp-servers.json` — so a key put there would sit on disk in the clear,
+    which is exactly what this module's docstring forbids. The names stay in the config
+    and the values come from here, the same split the bearer token already uses.
+    """
+    from backend.modules.database.secrets_store import get_secret_or_none
+
+    conf = get_server(server_id) or {}
+    out: dict[str, str] = {}
+    for name in conf.get("secretEnv") or []:
+        try:
+            if value := get_secret_or_none(env_secret_key(server_id, str(name))):
+                out[str(name)] = value
+        except Exception:  # noqa: BLE001 — a locked store means one missing variable
+            continue
+    return out
+
+
+def missing_env_secrets(server_id: str) -> list[str]:
+    """Declared secret variables with no stored value — the "still needs a key" list."""
+    conf = get_server(server_id) or {}
+    have = env_secrets(server_id)
+    return [str(n) for n in conf.get("secretEnv") or [] if str(n) not in have]
 
 
 def auth_token(server_id: str) -> str | None:

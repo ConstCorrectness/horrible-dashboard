@@ -19,6 +19,12 @@ accepted gap — please don't "fix" it by wiring in Chromium.
   not chunks within a page.
 - Embedding is the other half, and `crawl_pages`'s content hash is what avoids it: an
   unchanged page costs a conditional GET and nothing else.
+
+**Three ingest paths, tried in order** (see `llmstxt.py` for why): the publisher's
+`llms-full.txt` corpus, the `llms.txt` link index used as the frontier, and this
+BFS. Only the third one is a crawl in the ordinary sense; the first two are the
+publisher telling us what its documentation is, which is strictly better information
+than anything link-following can recover.
 """
 
 from __future__ import annotations
@@ -36,12 +42,18 @@ from urllib.parse import urljoin, urlsplit
 
 from backend.modules.search.canonical import canonical_url, host_of
 from backend.modules.search.crawl import index as webindex
-from backend.modules.search.crawl import store
+from backend.modules.search.crawl import llmstxt, store, versions
 from backend.modules.search.crawl.robots import USER_AGENT, HostLimiter, RobotsCache
 
 logger = logging.getLogger(__name__)
 
 _MAX_PAGE_BYTES = 3_000_000
+# A corpus is legitimately much larger than a page — but not unboundedly so.
+# `docs.claude.com/llms-full.txt` is 25 MB, which at the default chunk size is ~25,000
+# chunks for one seed: more than the whole index holds today, and hours of embedding.
+# Refusing it isn't a loss, because that site also publishes an `llms.txt` index and
+# the fallback honours `max_pages`.
+_MAX_CORPUS_BYTES = 8_000_000
 _FETCH_TIMEOUT_S = 20.0
 # Below this, "extracted text" is a nav bar or a cookie banner, not a document.
 _MIN_TEXT_CHARS = 200
@@ -60,6 +72,9 @@ class CrawlStats:
     errors: int = 0
     chunks: int = 0
     notes: list[str] = field(default_factory=list)
+    # Which of the three ingest paths ran: "corpus", "index" or "crawl".
+    source: str = "crawl"
+    version: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -72,6 +87,8 @@ class CrawlStats:
             "errors": self.errors,
             "chunks": self.chunks,
             "notes": self.notes,
+            "source": self.source,
+            "version": self.version,
         }
 
 
@@ -117,11 +134,19 @@ def extract_links(html: str, base_url: str) -> list[str]:
     return out
 
 
-def in_scope(url: str, spec: dict[str, Any]) -> bool:
+def in_scope(url: str, spec: dict[str, Any], *, apply_deny: bool = True) -> bool:
     """Whether a URL belongs to this seed. Pure — this is the rule worth testing.
 
     Host match allows subdomains of an allowed domain (`docs.example.com` under
     `example.com`) but not suffix collisions (`notexample.com`).
+
+    `apply_deny=False` is used for links taken from the publisher's own `llms.txt`.
+    Deny patterns exist to keep *link-following* out of junk — `/genindex`,
+    `/_sources`, archived version trees — and a curated index contains none of that by
+    construction. It matters concretely: Hugging Face's index links pinned
+    `/docs/transformers/v5.14.0/…` URLs, which `deny_patterns: ["/v[0-9]"]` would
+    reject, discarding the entire index. Domain and allow patterns still apply, so an
+    index that links off-site or outside its own docs tree can't drag the crawl along.
     """
     host = host_of(url)
     if not host:
@@ -134,6 +159,8 @@ def in_scope(url: str, spec: dict[str, Any]) -> bool:
     allow_patterns = spec.get("allow_patterns") or []
     if allow_patterns and not any(re.search(p, path) for p in allow_patterns):
         return False
+    if not apply_deny:
+        return True
     return not any(re.search(p, url) for p in spec.get("deny_patterns") or [])
 
 
@@ -174,14 +201,49 @@ async def crawl_seed(
     robots = RobotsCache()
     limiter = HostLimiter(_crawl_delay_setting())
 
+    # Resolved and recorded before a single page is written, because every page this
+    # run indexes is stamped with it. See `store.set_seed_version`.
+    version = await _resolve_version(spec)
+    stats.version = version
+    store.set_seed_version(seed_id, version)
+
     max_depth = int(spec.get("max_depth") or 2)
     max_pages = int(spec.get("max_pages") or 200)
     tags = list(spec.get("tags") or [])
+
+    published = await _llms_txt(
+        seed_id, spec, robots, limiter, force=force, version=version
+    )
+    if published is not None and (published.docs or published.unchanged):
+        return await _ingest_corpus(
+            seed_id,
+            published,
+            stats=stats,
+            tags=tags,
+            version=version,
+            force=force,
+            max_pages=max_pages,
+            on_progress=on_progress,
+            is_cancelled=is_cancelled,
+        )
 
     frontier: deque[tuple[str, int]] = deque(
         (str(u), 0) for u in spec.get("start_urls") or []
     )
     seen: set[str] = {canonical_url(u) for u, _d in frontier}
+
+    # The publisher's own table of contents, when it has one. Every entry enters at
+    # depth 0: these are documentation by declaration, not links that happened to be
+    # within `max_depth` of a start page.
+    curated: dict[str, dict[str, Any]] = {}
+    if published is not None and published.index is not None:
+        stats.source = "index"
+        curated = llmstxt.entry_metadata(published.index.entries)
+        for entry in published.index.entries:
+            key = canonical_url(entry.url)
+            if key not in seen and in_scope(entry.url, spec, apply_deny=False):
+                seen.add(key)
+                frontier.append((entry.url, 0))
 
     # Re-check everything already indexed, not just what this pass can rediscover.
     # On a re-crawl the start page answers 304, which means no HTML and therefore no
@@ -213,8 +275,14 @@ async def crawl_seed(
         limiter.note_crawl_delay(urlsplit(url).netloc, await robots.crawl_delay(url))
 
         known = store.get_page(canonical, seed_id)
+        # A version change has to defeat both skip levels. Level 2 compares hashes
+        # below, but level 1 never gets a body at all — so the conditional headers
+        # are withheld rather than sent, or a page whose text is unchanged would keep
+        # chunk metadata naming the previous release and vanish from a
+        # version-filtered search.
+        restale = _version_changed(known, version)
         conditional: dict[str, str] = {}
-        if known and not force:
+        if known and not force and not restale:
             if known.get("etag"):
                 conditional["If-None-Match"] = str(known["etag"])
             if known.get("last_modified"):
@@ -264,14 +332,22 @@ async def crawl_seed(
 
         from backend.modules.library.extract import extract_article
 
-        article = extract_article(html, final_url)
-        text = (article.text or "").strip()
+        if llmstxt.looks_like_markdown(html):
+            # A `.md` twin, which trafilatura would return nothing from.
+            extracted_title, text = llmstxt.markdown_article(html)
+        else:
+            article = extract_article(html, final_url)
+            extracted_title, text = article.title, (article.text or "").strip()
+        # The publisher's own title for the page beats the HTML's, which on a docs
+        # site is frequently the product name repeated on all two hundred pages.
+        curated_meta = curated.get(url) or curated.get(final_url) or {}
+        title = str(curated_meta.get("title") or "") or extracted_title
         if len(text) < _MIN_TEXT_CHARS:
             stats.skipped += 1
             store.record_page(
                 canonical,
                 seed_id,
-                title=article.title,
+                title=title,
                 content_hash="",
                 status="error",
                 error="no extractable content",
@@ -282,7 +358,7 @@ async def crawl_seed(
         digest = content_hash(text)
 
         # Level 2: body came back but says the same thing. Skip the expensive half.
-        if known and not force and known.get("content_hash") == digest:
+        if known and not force and not restale and known.get("content_hash") == digest:
             stats.unchanged += 1
             store.touch_page(canonical, seed_id)
             progress()
@@ -291,33 +367,28 @@ async def crawl_seed(
         # Level 3: genuinely new or changed — replace, don't duplicate.
         webindex.forget_page(canonical)
         chunks = _chunk(text)
-        for i, chunk in enumerate(chunks):
-            pending.append(
-                (
-                    webindex.doc_id(canonical, i),
-                    chunk,
-                    {
-                        "url": final_url,
-                        "title": article.title or canonical,
-                        "seed_id": seed_id,
-                        "tags": tags,
-                        "chunk_index": i,
-                        "crawled_at": time.strftime(
-                            "%Y-%m-%dT%H:%M:%SZ", time.gmtime()
-                        ),
-                    },
-                )
+        pending.extend(
+            _chunk_rows(
+                canonical,
+                chunks,
+                url=final_url,
+                title=title or canonical,
+                seed_id=seed_id,
+                tags=tags,
+                version=version,
             )
+        )
         store.record_page(
             canonical,
             seed_id,
-            title=article.title,
+            title=title,
             etag=outcome.get("etag"),
             last_modified=outcome.get("last_modified"),
             content_hash=digest,
             chunk_count=len(chunks),
             status="ok",
             indexed=True,
+            version=version,
         )
         stats.indexed += 1
         stats.chunks += len(chunks)
@@ -339,6 +410,314 @@ async def crawl_seed(
     return stats
 
 
+@dataclass
+class _Published:
+    """What the publisher told us about its own docs, if anything."""
+
+    corpus_url: str = ""
+    docs: list[llmstxt.LlmsDoc] = field(default_factory=list)
+    index: llmstxt.LlmsIndex | None = None
+    digest: str = ""
+    etag: str | None = None
+    last_modified: str | None = None
+    # The corpus answered 304 — the entire seed is unchanged in one request.
+    unchanged: bool = False
+
+
+async def _resolve_version(spec: dict[str, Any]) -> str | None:
+    ref = versions.parse_package(spec.get("package"))
+    return await versions.resolve_latest(ref) if ref else None
+
+
+def _version_changed(known: dict[str, Any] | None, version: str | None) -> bool:
+    """Whether a stored page describes a different release than this run does.
+
+    Compared by **series**, not by exact version: docs are written per `major.minor`,
+    so comparing patch versions would re-embed the whole index on every point release
+    for no change in the text. A page stored before versioning has no version at all,
+    which is a difference — it gets reindexed once, and only for seeds that declare a
+    package.
+    """
+    if not known or not version:
+        return False
+    return versions.version_series(known.get("version")) != versions.version_series(
+        version
+    )
+
+
+def _chunk_rows(
+    canonical: str,
+    chunks: list[str],
+    *,
+    url: str,
+    title: str,
+    seed_id: str,
+    tags: list[str],
+    version: str | None,
+) -> list[tuple[str, str, dict[str, Any]]]:
+    """Chunk texts paired with the metadata a search hit is rebuilt from."""
+    crawled_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    meta: dict[str, Any] = {
+        "url": url,
+        "title": title,
+        "seed_id": seed_id,
+        "tags": tags,
+        "crawled_at": crawled_at,
+    }
+    # Absent rather than empty when unknown: retrieval treats "no version recorded" as
+    # no signal, and an empty string would compare unequal to every real version.
+    if version:
+        meta["version"] = version
+    return [
+        (webindex.doc_id(canonical, i), chunk, {**meta, "chunk_index": i})
+        for i, chunk in enumerate(chunks)
+    ]
+
+
+async def _llms_txt(
+    seed_id: str,
+    spec: dict[str, Any],
+    robots: RobotsCache,
+    limiter: HostLimiter,
+    *,
+    force: bool,
+    version: str | None,
+) -> _Published | None:
+    """Probe for the publisher's llms.txt files. None means "crawl the HTML"."""
+    if spec.get("prefer_llms_txt") is False:
+        return None
+    starts = [str(u) for u in spec.get("start_urls") or [] if str(u).strip()]
+    if not starts:
+        return None
+
+    guessed_full, guessed_index = llmstxt.llms_txt_urls(starts[0])
+    full_urls = (
+        [str(spec["llms_full_url"])] if spec.get("llms_full_url") else guessed_full
+    )
+    index_urls = (
+        [str(spec["llms_txt_url"])] if spec.get("llms_txt_url") else guessed_index
+    )
+
+    for full_url in full_urls:
+        corpus = await _probe(
+            full_url,
+            robots,
+            limiter,
+            conditional=_corpus_conditional(
+                full_url, seed_id, force=force, version=version
+            ),
+            max_bytes=_MAX_CORPUS_BYTES,
+        )
+        if corpus is None:
+            continue
+        if corpus.get("not_modified"):
+            return _Published(corpus_url=canonical_url(full_url), unchanged=True)
+        text = str(corpus.get("text") or "")
+        docs, total = llmstxt.parse_llms_full(text, full_url)
+        if llmstxt.usable_as_corpus(docs, total):
+            return _Published(
+                corpus_url=canonical_url(full_url),
+                docs=docs,
+                digest=content_hash(text),
+                etag=corpus.get("etag"),
+                last_modified=corpus.get("last_modified"),
+            )
+        logger.info(
+            "%s: %s has %d/%d attributable documents — falling back",
+            seed_id,
+            full_url,
+            len(docs),
+            total,
+        )
+
+    for index_url in index_urls:
+        # Never conditional: the index is read for its links every run, and a 304
+        # would hand back a frontier of nothing.
+        listing = await _probe(index_url, robots, limiter, conditional={})
+        if listing is None:
+            continue
+        parsed = llmstxt.parse_llms_txt(str(listing.get("text") or ""), index_url)
+        if parsed.entries:
+            return _Published(index=parsed)
+    return None
+
+
+def _corpus_conditional(
+    url: str, seed_id: str, *, force: bool, version: str | None
+) -> dict[str, str]:
+    known = store.get_page(canonical_url(url), seed_id)
+    if not known or force or _version_changed(known, version):
+        return {}
+    headers: dict[str, str] = {}
+    if known.get("etag"):
+        headers["If-None-Match"] = str(known["etag"])
+    if known.get("last_modified"):
+        headers["If-Modified-Since"] = str(known["last_modified"])
+    return headers
+
+
+async def _probe(
+    url: str,
+    robots: RobotsCache,
+    limiter: HostLimiter,
+    *,
+    conditional: dict[str, str],
+    max_bytes: int = _MAX_PAGE_BYTES,
+) -> dict[str, Any] | None:
+    """One llms.txt fetch. None means "there isn't one here", for any reason.
+
+    A missing file is the common case and is not an error — most sites don't publish
+    these yet, and a seed that doesn't have one must crawl exactly as it always did.
+    """
+    if not await robots.allowed(url):
+        return None
+    host = urlsplit(url).netloc
+    await limiter.acquire(host)
+    try:
+        outcome = await _fetch(url, conditional, max_bytes=max_bytes)
+    finally:
+        limiter.release(host)
+
+    if outcome.get("not_modified"):
+        return {"not_modified": True}
+    if outcome.get("gone") or outcome.get("error"):
+        return None
+    text = str(outcome.get("html") or "")
+    # A docs site answers a missing path with its SPA shell and a 200 far more often
+    # than with a 404, so the body has to be checked, not just the status.
+    if not llmstxt.looks_like_markdown(text):
+        return None
+    return {
+        "text": text,
+        "etag": outcome.get("etag"),
+        "last_modified": outcome.get("last_modified"),
+    }
+
+
+async def _ingest_corpus(
+    seed_id: str,
+    published: _Published,
+    *,
+    stats: CrawlStats,
+    tags: list[str],
+    version: str | None,
+    force: bool,
+    max_pages: int,
+    on_progress: ProgressFn | None,
+    is_cancelled: Callable[[], bool] | None,
+) -> CrawlStats:
+    """Index an `llms-full.txt` corpus: one fetch, many documents.
+
+    Per-document hashes are kept exactly as in the HTML path, so a corpus whose one
+    changed page is a typo fix still costs one embedding rather than two hundred.
+    """
+    stats.source = "corpus"
+    stats.fetched += 1
+
+    def progress() -> None:
+        if on_progress:
+            on_progress(stats.as_dict())
+
+    if published.unchanged:
+        stats.not_modified += 1
+        store.touch_page(published.corpus_url, seed_id, status="corpus")
+        progress()
+        return stats
+
+    # The corpus row is bookkeeping, not a page: its `corpus` status keeps it out of
+    # `known_urls` (so it can never enter a frontier) and out of the page count.
+    store.record_page(
+        published.corpus_url,
+        seed_id,
+        title="llms-full.txt",
+        etag=published.etag,
+        last_modified=published.last_modified,
+        content_hash=published.digest,
+        status="corpus",
+        indexed=True,
+        version=version,
+    )
+
+    pending: list[tuple[str, str, dict[str, Any]]] = []
+    live: set[str] = set()
+    cancelled = False
+
+    for doc in published.docs[:max_pages]:
+        if is_cancelled and is_cancelled():
+            stats.notes.append("cancelled")
+            cancelled = True
+            break
+
+        canonical = canonical_url(doc.url)
+        live.add(canonical)
+        digest = content_hash(doc.text)
+        known = store.get_page(canonical, seed_id)
+        if (
+            known
+            and not force
+            and not _version_changed(known, version)
+            and known.get("content_hash") == digest
+        ):
+            stats.unchanged += 1
+            store.touch_page(canonical, seed_id)
+            continue
+
+        webindex.forget_page(canonical)
+        chunks = _chunk(doc.text)
+        pending.extend(
+            _chunk_rows(
+                canonical,
+                chunks,
+                url=doc.url,
+                title=doc.title or canonical,
+                seed_id=seed_id,
+                tags=tags,
+                version=version,
+            )
+        )
+        store.record_page(
+            canonical,
+            seed_id,
+            title=doc.title,
+            content_hash=digest,
+            chunk_count=len(chunks),
+            status="ok",
+            indexed=True,
+            version=version,
+        )
+        stats.indexed += 1
+        stats.chunks += len(chunks)
+
+        if len(pending) >= webindex.EMBED_CHUNK:
+            if note := await _flush(pending):
+                stats.notes.append(note)
+                stats.errors += 1
+                cancelled = True
+                break
+        progress()
+
+    if pending:
+        if note := await _flush(pending):
+            stats.notes.append(note)
+            stats.errors += 1
+            cancelled = True
+
+    # A corpus is the complete list of what the publisher documents, so a page that
+    # left it is gone rather than merely undiscovered this run — the same
+    # replace-don't-duplicate rule the Drive sync follows. Skipped after a partial
+    # run, where "not in `live`" means "we stopped early", not "it was removed".
+    if not cancelled:
+        for url in store.known_urls(seed_id):
+            key = canonical_url(url)
+            if key not in live:
+                webindex.forget_page(key)
+                store.drop_page(key, seed_id)
+                stats.skipped += 1
+
+    progress()
+    return stats
+
+
 def _crawl_delay_setting() -> float:
     from backend.modules.settings.routes import get_value
 
@@ -355,7 +734,9 @@ def _chunk(text: str) -> list[str]:
     return chunk_text(text, size=int(get_value("library.chunkSize", 1000) or 1000))
 
 
-async def _fetch(url: str, conditional: dict[str, str]) -> dict[str, Any]:
+async def _fetch(
+    url: str, conditional: dict[str, str], *, max_bytes: int = _MAX_PAGE_BYTES
+) -> dict[str, Any]:
     """One guarded, conditional GET. Returns an outcome dict, never raises."""
     import httpx
 
@@ -366,7 +747,7 @@ async def _fetch(url: str, conditional: dict[str, str]) -> dict[str, Any]:
             _fetch_guarded(
                 url,
                 accept=("html", "xml", "text"),
-                max_bytes=_MAX_PAGE_BYTES,
+                max_bytes=max_bytes,
                 user_agent=USER_AGENT,
                 headers=conditional or None,
             ),

@@ -57,8 +57,14 @@ async def run_delegate(
     model = orchestrator._orchestrator_model(config.model, spec.id)
     active_groups = set(spec.preload_groups)
     guides_msg = orchestrator._guides_message(active_groups)
+    # A delegate gets the same skill catalog the main agent does. Withholding it would
+    # mean "review this like I taught you" works when the user asks directly and
+    # silently doesn't when the orchestrator hands the same task to `coder` — and the
+    # scope check in `use_skill` already stops a skill widening a specialist's reach.
+    skills_msg = orchestrator._skills_message()
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": spec.system_prompt},
+        *([skills_msg] if skills_msg else []),
         *([guides_msg] if guides_msg else []),
         {"role": "user", "content": prompt},
     ]

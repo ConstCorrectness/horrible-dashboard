@@ -46,10 +46,29 @@ MAX_BLOCK_CHARS = 4000
 # orchestrator can't tag them without the tag reaching the provider.
 _BUFFER_MARKER = "<<<BUFFER"
 
+# Same trick for the skill catalog, which is also `role: system` and also assembled
+# before the history. It gets its own kind rather than being folded into `guides`
+# because the two have opposite cost profiles: a guide is paid only when its group is
+# active, while every line of the catalog rides *every* turn. Merging them would hide
+# the one block whose growth the user most needs to see.
+#
+# Imported from the module that writes it rather than copied: a literal here would
+# drift the day the header is reworded, and the symptom — the catalog silently
+# relabelled "Tool guides" — is one nobody would think to look for.
 _turns: deque[TurnSnapshot] = deque(maxlen=MAX_TURNS)
 # Per-turn capture state: where the assembled prompt ended and the loop's own
 # appends began. Pinned at round 0 so classification stays stable as the list grows.
 _prompt_end: dict[str, int] = {}
+
+
+def _skills_marker() -> str:
+    """The skill catalog's header, from the module that emits it."""
+    from backend.modules.skills.agent import CATALOG_MARKER
+
+    return CATALOG_MARKER
+
+
+_SKILLS_MARKER = _skills_marker()
 
 
 def _clip(text: str) -> tuple[str, bool, int]:
@@ -78,7 +97,7 @@ def _classify_prompt(messages: list[dict[str, Any]]) -> list[str]:
     """Label the assembled prompt (round 0) by kind.
 
     Order is the contract from `run_agent_turn`:
-        system → guides? → history… → editor? → user
+        system → skills? → guides? → history… → workspace? → editor? → user
     Roles alone can't separate system/guides/editor, so this leans on position for
     the first (always the spec's system prompt) and a content marker for the editor
     buffer. If the assembly order in orchestrator.py changes, this must change with
@@ -91,10 +110,13 @@ def _classify_prompt(messages: list[dict[str, Any]]) -> list[str]:
     for i, msg in enumerate(messages):
         role = str(msg.get("role") or "")
         if role == "system":
+            content = _as_text(msg.get("content"))
             if i == 0:
                 kinds.append("system")
-            elif _BUFFER_MARKER in _as_text(msg.get("content")):
+            elif _BUFFER_MARKER in content:
                 kinds.append("editor")
+            elif content.startswith(_SKILLS_MARKER):
+                kinds.append("skills")
             else:
                 kinds.append("guides")
         elif role == "user":
@@ -113,6 +135,7 @@ def _classify_prompt(messages: list[dict[str, Any]]) -> list[str]:
 _LABELS = {
     "system": "System prompt",
     "guides": "Tool guides",
+    "skills": "Skill catalog",
     "history": "Conversation history",
     "editor": "Focused editor buffer",
     "user": "User prompt",

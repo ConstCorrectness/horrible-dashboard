@@ -2,181 +2,606 @@
   {
     "id": "pytorch-docs",
     "label": "PyTorch docs",
-    "start_urls": ["https://docs.pytorch.org/docs/stable/"],
-    "allow_domains": ["docs.pytorch.org"],
-    "allow_patterns": ["^/docs/stable/"],
-    "deny_patterns": ["/_modules/", "/_sources/", "/genindex", "/search.html"],
+    "start_urls": [
+      "https://docs.pytorch.org/docs/stable/"
+    ],
+    "allow_domains": [
+      "docs.pytorch.org"
+    ],
+    "allow_patterns": [
+      "^/docs/stable/"
+    ],
+    "deny_patterns": [
+      "/_modules/",
+      "/_sources/",
+      "/genindex",
+      "/search.html"
+    ],
     "max_depth": 2,
     "max_pages": 200,
     "recrawl_days": 21,
-    "tags": ["ml", "docs", "pytorch"]
+    "package": {
+      "registry": "pypi",
+      "name": "torch"
+    },
+    "tags": [
+      "ml",
+      "docs",
+      "pytorch"
+    ]
   },
   {
     "id": "huggingface-transformers",
     "label": "Hugging Face Transformers docs",
-    "start_urls": ["https://huggingface.co/docs/transformers/index"],
-    "allow_domains": ["huggingface.co"],
-    "allow_patterns": ["^/docs/transformers/"],
-    "deny_patterns": ["/v[0-9]", "\\?"],
+    "start_urls": [
+      "https://huggingface.co/docs/transformers/index"
+    ],
+    "allow_domains": [
+      "huggingface.co"
+    ],
+    "allow_patterns": [
+      "^/docs/transformers/"
+    ],
+    "deny_patterns": [
+      "/v[0-9]",
+      "\\?"
+    ],
     "max_depth": 2,
     "max_pages": 200,
     "recrawl_days": 21,
-    "tags": ["ml", "docs", "huggingface"]
+    "package": {
+      "registry": "pypi",
+      "name": "transformers"
+    },
+    "tags": [
+      "ml",
+      "docs",
+      "huggingface"
+    ]
+  },
+  {
+    "id": "huggingface-datasets",
+    "label": "Hugging Face Datasets docs",
+    "start_urls": [
+      "https://huggingface.co/docs/datasets/index"
+    ],
+    "allow_domains": [
+      "huggingface.co"
+    ],
+    "allow_patterns": [
+      "^/docs/datasets/"
+    ],
+    "deny_patterns": [
+      "/v[0-9]",
+      "\\?"
+    ],
+    "max_depth": 2,
+    "max_pages": 120,
+    "recrawl_days": 21,
+    "package": {
+      "registry": "pypi",
+      "name": "datasets"
+    },
+    "tags": [
+      "ml",
+      "docs",
+      "huggingface",
+      "data"
+    ]
+  },
+  {
+    "id": "huggingface-trl",
+    "label": "TRL docs",
+    "start_urls": [
+      "https://huggingface.co/docs/trl/index"
+    ],
+    "allow_domains": [
+      "huggingface.co"
+    ],
+    "allow_patterns": [
+      "^/docs/trl/"
+    ],
+    "deny_patterns": [
+      "/v[0-9]",
+      "\\?"
+    ],
+    "max_depth": 2,
+    "max_pages": 120,
+    "recrawl_days": 14,
+    "package": {
+      "registry": "pypi",
+      "name": "trl"
+    },
+    "tags": [
+      "ml",
+      "docs",
+      "huggingface",
+      "training"
+    ]
+  },
+  {
+    "id": "huggingface-peft",
+    "label": "PEFT docs",
+    "start_urls": [
+      "https://huggingface.co/docs/peft/index"
+    ],
+    "allow_domains": [
+      "huggingface.co"
+    ],
+    "allow_patterns": [
+      "^/docs/peft/"
+    ],
+    "deny_patterns": [
+      "/v[0-9]",
+      "\\?"
+    ],
+    "max_depth": 2,
+    "max_pages": 120,
+    "recrawl_days": 14,
+    "package": {
+      "registry": "pypi",
+      "name": "peft"
+    },
+    "tags": [
+      "ml",
+      "docs",
+      "huggingface",
+      "training"
+    ]
+  },
+  {
+    "id": "huggingface-accelerate",
+    "label": "Accelerate docs",
+    "start_urls": [
+      "https://huggingface.co/docs/accelerate/index"
+    ],
+    "allow_domains": [
+      "huggingface.co"
+    ],
+    "allow_patterns": [
+      "^/docs/accelerate/"
+    ],
+    "deny_patterns": [
+      "/v[0-9]",
+      "\\?"
+    ],
+    "max_depth": 2,
+    "max_pages": 100,
+    "recrawl_days": 21,
+    "package": {
+      "registry": "pypi",
+      "name": "accelerate"
+    },
+    "tags": [
+      "ml",
+      "docs",
+      "huggingface",
+      "training"
+    ]
+  },
+  {
+    "id": "huggingface-hub",
+    "label": "Hugging Face Hub client docs",
+    "start_urls": [
+      "https://huggingface.co/docs/huggingface_hub/index"
+    ],
+    "allow_domains": [
+      "huggingface.co"
+    ],
+    "allow_patterns": [
+      "^/docs/huggingface_hub/"
+    ],
+    "deny_patterns": [
+      "/v[0-9]",
+      "\\?"
+    ],
+    "max_depth": 2,
+    "max_pages": 100,
+    "recrawl_days": 21,
+    "package": {
+      "registry": "pypi",
+      "name": "huggingface-hub",
+      "dist": "huggingface-hub"
+    },
+    "tags": [
+      "ml",
+      "docs",
+      "huggingface"
+    ]
+  },
+  {
+    "id": "google-adk",
+    "label": "Google Agent Development Kit docs",
+    "start_urls": [
+      "https://google.github.io/adk-docs/"
+    ],
+    "allow_domains": [
+      "adk.dev",
+      "google.github.io"
+    ],
+    "allow_patterns": [],
+    "deny_patterns": [],
+    "max_depth": 2,
+    "max_pages": 150,
+    "recrawl_days": 14,
+    "package": {
+      "registry": "pypi",
+      "name": "google-adk"
+    },
+    "tags": [
+      "docs",
+      "llm",
+      "agents"
+    ]
+  },
+  {
+    "id": "openai-docs",
+    "label": "OpenAI API docs",
+    "start_urls": [
+      "https://platform.openai.com/docs/"
+    ],
+    "allow_domains": [
+      "developers.openai.com",
+      "platform.openai.com"
+    ],
+    "allow_patterns": [],
+    "deny_patterns": [],
+    "max_depth": 1,
+    "max_pages": 150,
+    "recrawl_days": 14,
+    "package": {
+      "registry": "pypi",
+      "name": "openai"
+    },
+    "tags": [
+      "docs",
+      "llm",
+      "api"
+    ]
   },
   {
     "id": "scikit-learn",
     "label": "scikit-learn docs",
-    "start_urls": ["https://scikit-learn.org/stable/user_guide.html"],
-    "allow_domains": ["scikit-learn.org"],
-    "allow_patterns": ["^/stable/"],
-    "deny_patterns": ["/_downloads/", "/_images/", "/genindex", "_sources"],
+    "start_urls": [
+      "https://scikit-learn.org/stable/user_guide.html"
+    ],
+    "allow_domains": [
+      "scikit-learn.org"
+    ],
+    "allow_patterns": [
+      "^/stable/"
+    ],
+    "deny_patterns": [
+      "/_downloads/",
+      "/_images/",
+      "/genindex",
+      "_sources"
+    ],
     "max_depth": 2,
     "max_pages": 150,
     "recrawl_days": 30,
-    "tags": ["ml", "docs", "sklearn"]
+    "package": {
+      "registry": "pypi",
+      "name": "scikit-learn"
+    },
+    "tags": [
+      "ml",
+      "docs",
+      "sklearn"
+    ]
   },
   {
     "id": "numpy-docs",
     "label": "NumPy docs",
-    "start_urls": ["https://numpy.org/doc/stable/"],
-    "allow_domains": ["numpy.org"],
-    "allow_patterns": ["^/doc/stable/"],
-    "deny_patterns": ["/_sources/", "/genindex"],
+    "start_urls": [
+      "https://numpy.org/doc/stable/"
+    ],
+    "allow_domains": [
+      "numpy.org"
+    ],
+    "allow_patterns": [
+      "^/doc/stable/"
+    ],
+    "deny_patterns": [
+      "/_sources/",
+      "/genindex"
+    ],
     "max_depth": 2,
     "max_pages": 120,
     "recrawl_days": 30,
-    "tags": ["ml", "docs", "numpy"]
+    "package": {
+      "registry": "pypi",
+      "name": "numpy"
+    },
+    "tags": [
+      "ml",
+      "docs",
+      "numpy"
+    ]
   },
   {
     "id": "python-docs",
     "label": "Python standard library",
-    "start_urls": ["https://docs.python.org/3/library/index.html"],
-    "allow_domains": ["docs.python.org"],
-    "allow_patterns": ["^/3/library/", "^/3/reference/"],
-    "deny_patterns": ["/_sources/", "/genindex"],
+    "start_urls": [
+      "https://docs.python.org/3/library/index.html"
+    ],
+    "allow_domains": [
+      "docs.python.org"
+    ],
+    "allow_patterns": [
+      "^/3/library/",
+      "^/3/reference/"
+    ],
+    "deny_patterns": [
+      "/_sources/",
+      "/genindex"
+    ],
     "max_depth": 2,
     "max_pages": 200,
     "recrawl_days": 60,
-    "tags": ["docs", "python"]
+    "tags": [
+      "docs",
+      "python"
+    ]
   },
   {
     "id": "fastapi",
     "label": "FastAPI docs",
-    "start_urls": ["https://fastapi.tiangolo.com/"],
-    "allow_domains": ["fastapi.tiangolo.com"],
-    "allow_patterns": ["^/"],
-    "deny_patterns": ["^/[a-z]{2}/", "/release-notes"],
+    "start_urls": [
+      "https://fastapi.tiangolo.com/"
+    ],
+    "allow_domains": [
+      "fastapi.tiangolo.com"
+    ],
+    "allow_patterns": [
+      "^/"
+    ],
+    "deny_patterns": [
+      "^/[a-z]{2}/",
+      "/release-notes"
+    ],
     "max_depth": 2,
     "max_pages": 120,
     "recrawl_days": 30,
-    "tags": ["docs", "python", "web"]
+    "package": {
+      "registry": "pypi",
+      "name": "fastapi"
+    },
+    "tags": [
+      "docs",
+      "python",
+      "web"
+    ]
   },
   {
     "id": "lancedb-docs",
     "label": "LanceDB docs",
-    "start_urls": ["https://lancedb.github.io/lancedb/"],
-    "allow_domains": ["lancedb.github.io"],
-    "allow_patterns": ["^/lancedb/"],
-    "deny_patterns": ["/js/", "/rust/"],
+    "start_urls": [
+      "https://lancedb.github.io/lancedb/"
+    ],
+    "allow_domains": [
+      "lancedb.github.io"
+    ],
+    "allow_patterns": [
+      "^/lancedb/"
+    ],
+    "deny_patterns": [
+      "/js/",
+      "/rust/"
+    ],
     "max_depth": 2,
     "max_pages": 100,
     "recrawl_days": 21,
-    "tags": ["docs", "vectordb"]
+    "package": {
+      "registry": "pypi",
+      "name": "lancedb"
+    },
+    "tags": [
+      "docs",
+      "vectordb"
+    ]
   },
   {
     "id": "anthropic-docs",
     "label": "Claude API docs",
-    "start_urls": ["https://docs.claude.com/en/docs/overview"],
-    "allow_domains": ["docs.claude.com"],
-    "allow_patterns": ["^/en/docs/", "^/en/api/"],
-    "deny_patterns": ["/release-notes"],
+    "start_urls": [
+      "https://docs.claude.com/en/docs/overview"
+    ],
+    "allow_domains": [
+      "docs.claude.com",
+      "platform.claude.com"
+    ],
+    "allow_patterns": [],
+    "deny_patterns": [
+      "/release-notes"
+    ],
     "max_depth": 2,
     "max_pages": 150,
     "recrawl_days": 14,
-    "tags": ["docs", "llm", "api"]
+    "package": {
+      "registry": "pypi",
+      "name": "anthropic"
+    },
+    "tags": [
+      "docs",
+      "llm",
+      "api"
+    ]
   },
   {
     "id": "ollama-docs",
     "label": "Ollama docs",
-    "start_urls": ["https://docs.ollama.com/"],
-    "allow_domains": ["docs.ollama.com"],
-    "allow_patterns": ["^/"],
+    "start_urls": [
+      "https://docs.ollama.com/"
+    ],
+    "allow_domains": [
+      "docs.ollama.com"
+    ],
+    "allow_patterns": [
+      "^/"
+    ],
     "deny_patterns": [],
     "max_depth": 2,
     "max_pages": 80,
     "recrawl_days": 14,
-    "tags": ["docs", "llm", "local"]
+    "package": {
+      "registry": "github",
+      "name": "ollama/ollama",
+      "dist": "ollama"
+    },
+    "tags": [
+      "docs",
+      "llm",
+      "local"
+    ]
   },
   {
     "id": "distill-pub",
     "label": "Distill",
-    "start_urls": ["https://distill.pub/"],
-    "allow_domains": ["distill.pub"],
-    "allow_patterns": ["^/20"],
+    "start_urls": [
+      "https://distill.pub/"
+    ],
+    "allow_domains": [
+      "distill.pub"
+    ],
+    "allow_patterns": [
+      "^/20"
+    ],
     "deny_patterns": [],
     "max_depth": 2,
     "max_pages": 80,
     "recrawl_days": 90,
-    "tags": ["ml", "blog", "research"]
+    "tags": [
+      "ml",
+      "blog",
+      "research"
+    ]
   },
   {
     "id": "lilian-weng",
     "label": "Lil'Log (Lilian Weng)",
-    "start_urls": ["https://lilianweng.github.io/"],
-    "allow_domains": ["lilianweng.github.io"],
-    "allow_patterns": ["^/posts/"],
+    "start_urls": [
+      "https://lilianweng.github.io/"
+    ],
+    "allow_domains": [
+      "lilianweng.github.io"
+    ],
+    "allow_patterns": [
+      "^/posts/"
+    ],
     "deny_patterns": [],
     "max_depth": 2,
     "max_pages": 80,
     "recrawl_days": 30,
-    "tags": ["ml", "blog", "research"]
+    "tags": [
+      "ml",
+      "blog",
+      "research"
+    ]
   },
   {
     "id": "karpathy-blog",
     "label": "Andrej Karpathy's blog",
-    "start_urls": ["https://karpathy.github.io/"],
-    "allow_domains": ["karpathy.github.io"],
-    "allow_patterns": ["^/"],
+    "start_urls": [
+      "https://karpathy.github.io/"
+    ],
+    "allow_domains": [
+      "karpathy.github.io"
+    ],
+    "allow_patterns": [
+      "^/"
+    ],
     "deny_patterns": [],
     "max_depth": 2,
     "max_pages": 60,
     "recrawl_days": 60,
-    "tags": ["ml", "blog"]
+    "tags": [
+      "ml",
+      "blog"
+    ]
   },
   {
     "id": "jax-docs",
     "label": "JAX docs",
-    "start_urls": ["https://docs.jax.dev/en/latest/"],
-    "allow_domains": ["docs.jax.dev"],
-    "allow_patterns": ["^/en/latest/"],
-    "deny_patterns": ["/_sources/", "/genindex", "/_modules/"],
+    "start_urls": [
+      "https://docs.jax.dev/en/latest/"
+    ],
+    "allow_domains": [
+      "docs.jax.dev"
+    ],
+    "allow_patterns": [
+      "^/en/latest/"
+    ],
+    "deny_patterns": [
+      "/_sources/",
+      "/genindex",
+      "/_modules/"
+    ],
     "max_depth": 2,
     "max_pages": 120,
     "recrawl_days": 30,
-    "tags": ["ml", "docs", "jax"]
+    "package": {
+      "registry": "pypi",
+      "name": "jax"
+    },
+    "tags": [
+      "ml",
+      "docs",
+      "jax"
+    ]
   },
   {
     "id": "pandas-docs",
     "label": "pandas docs",
-    "start_urls": ["https://pandas.pydata.org/docs/user_guide/index.html"],
-    "allow_domains": ["pandas.pydata.org"],
-    "allow_patterns": ["^/docs/user_guide/", "^/docs/reference/"],
-    "deny_patterns": ["/_sources/", "/genindex"],
+    "start_urls": [
+      "https://pandas.pydata.org/docs/user_guide/index.html"
+    ],
+    "allow_domains": [
+      "pandas.pydata.org"
+    ],
+    "allow_patterns": [
+      "^/docs/user_guide/",
+      "^/docs/reference/"
+    ],
+    "deny_patterns": [
+      "/_sources/",
+      "/genindex"
+    ],
     "max_depth": 2,
     "max_pages": 150,
     "recrawl_days": 30,
-    "tags": ["docs", "data"]
+    "package": {
+      "registry": "pypi",
+      "name": "pandas"
+    },
+    "tags": [
+      "docs",
+      "data"
+    ]
   },
   {
     "id": "mdn-web-api",
     "label": "MDN Web APIs",
-    "start_urls": ["https://developer.mozilla.org/en-US/docs/Web/API"],
-    "allow_domains": ["developer.mozilla.org"],
-    "allow_patterns": ["^/en-US/docs/Web/API/"],
-    "deny_patterns": ["\\$history", "\\$edit", "/contributors"],
+    "start_urls": [
+      "https://developer.mozilla.org/en-US/docs/Web/API"
+    ],
+    "allow_domains": [
+      "developer.mozilla.org"
+    ],
+    "allow_patterns": [
+      "^/en-US/docs/Web/API/"
+    ],
+    "deny_patterns": [
+      "\\$history",
+      "\\$edit",
+      "/contributors"
+    ],
     "max_depth": 2,
     "max_pages": 200,
     "recrawl_days": 45,
-    "tags": ["docs", "web"]
+    "tags": [
+      "docs",
+      "web"
+    ]
   }
 ]

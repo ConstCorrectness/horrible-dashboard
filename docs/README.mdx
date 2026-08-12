@@ -121,8 +121,14 @@ layout shell and how it behaves in the browser vs the desktop app:
 - [Observability](modules/observability.mdx)
 - [Interpretability](modules/interpretability.mdx) — **Implemented.** The exact context
   each agent round was handed: prompt composition in real tokens, per-tool schema cost,
-  and the tool-budget truncation that was previously silent. Ships its own
-  "Interpretability" workspace (inspector centre, agent chat docked right).
+  and the tool-budget truncation that was previously silent. Plus the model explorer —
+  a selectable structure tree backed by the model's own GGUF tensor directory, so the
+  shape shown is measured rather than described. Ships its own "Interpretability"
+  workspace (inspector centre, agent chat docked right).
+- [Lab](modules/lab.mdx) — **Implemented.** The umbrella workspace for building and
+  studying models: the notebook and editor beside the model explorer, the context
+  inspector, and a Hugging Face browser. Composes the other modules' panes at the
+  frame rather than merging their manifests.
 - [Marketplace](modules/marketplace.mdx)
 - [Settings](modules/settings.mdx)
 - [Keyboard](modules/keymap.mdx) — the Keyboard Shortcuts pane and the `keymap.*`
@@ -156,6 +162,11 @@ layout shell and how it behaves in the browser vs the desktop app:
   [Model Context Protocol](https://modelcontextprotocol.io) servers over stdio/http/sse;
   each becomes an `mcp-<id>` agent tool group, so its tools inherit progressive
   disclosure and the permission gate, and its prompts become the group's guide.
+- [Skills](modules/skills.mdx) — **Implemented.** Reusable instructions in Anthropic's
+  SKILL.md format, read from `$HORRIBLE_DATA_DIR/skills/` and the repo's
+  `.claude/skills/`. Each skill's description rides every turn (and is counted as its
+  own block in the interpretability pane); the body arrives only when the agent calls
+  `use_skill`, which also loads the tool groups the skill declared.
 - [Symdex](modules/symdex.mdx) — the shared symbol/docs embedding index: package
   APIs, database schemas, and project docs, feeding both the `symbols.*` agent
   tools and the editor's completion doc snippets.
@@ -176,7 +187,10 @@ layout shell and how it behaves in the browser vs the desktop app:
   provider interface, an AI layer of our own on top (query fan-out, canonical
   dedupe, rank fusion, fetch + rerank), and a **focused crawler** that indexes a
   curated set of ML sites and API docs into the node's own vector collection —
-  queried as just another engine, so local hits fuse with live web hits.
+  queried as just another engine, so local hits fuse with live web hits. The crawl is
+  **llms.txt-first** (a publisher's own corpus or link index beats following links)
+  and **versioned**: a seed declares its package, the release is resolved from PyPI /
+  npm / GitHub, and docs for a version you don't have installed rank below ones you do.
 - [Documentation popup](modules/docs-popup.mdx) — hover and <kbd>Shift</kbd>+<kbd>Tab</kbd>
   documentation in the editor and in notebook cells, resolved through a configurable
   chain: the **live kernel** (Jupyter `inspect_request`), the language server, the

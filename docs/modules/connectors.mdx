@@ -368,6 +368,46 @@ any token can read them. `repoInfo` reports `gated`, and a read returns a "gated
 a licence" error — not something the agent can fix, and the guide says to stop rather
 than retry.
 
+### A browser for the human, over the same helpers
+
+`huggingface_routes.py` puts those four capabilities on HTTP for the
+[Lab](./lab.mdx)'s Hugging Face pane. It lives beside the connector rather than in a
+module of its own, for the same reason as `github_routes.py` and `google_routes.py`:
+the token is held by `huggingface.py` and reached through `huggingface_tools._request`,
+and a separate module would have to import another module's private helpers.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/api/connectors/huggingface/search` | `q`, `type`, `task`, `sort` — Hub search |
+| GET | `/api/connectors/huggingface/mine` | the connected account's own repos |
+| GET | `/api/connectors/huggingface/repo` | metadata + file list for one repo |
+| GET | `/api/connectors/huggingface/file` | one text file (README, config.json, card) |
+
+The routes call `_search` / `_list_repos` / `_repo_info` / `_read_file` directly, so
+"find me a dataset" and "show me a dataset" are one implementation seen from two ends.
+Everything the agent is protected from, the pane inherits for free: the 100 KB cap, the
+binary refusal, the `type` split.
+
+Three things differ because the caller is a browser, not an agent loop:
+
+- **Errors become status codes.** `huggingface_tools` returns errors as values because
+  an agent reads the message and decides what to do next; a fetch cannot. `_check` maps
+  "isn't connected" to **409** and everything else to **502** — the pane offers a
+  connect prompt for the first and a retry for the second, so collapsing them would
+  produce the wrong prompt, not just the wrong number.
+- **`repo` is a query parameter, not a path segment.** A Hub id is `owner/name`; as a
+  path it needs escaping at every call site, and one caller forgetting is a 404 that
+  looks like a missing repo.
+- **Short-TTL caching** (60s searches, 300s repos/files, 200 entries), because browsing
+  is repetitive in a way an agent turn is not. Failures are never cached — `_check`
+  raises before the store — or a "not connected" banner would outlive the connection.
+
+:::note `gated` is three-state
+`true` / `"auto"` / `"manual"` all mean a licence must be accepted; `false` means open;
+**`null` means the Hub didn't say**. The pane renders a chip only for the first group.
+Coercing a missing value to `false` would tell the user a repo is open on no evidence.
+:::
+
 ## Agent tools + guides
 
 Connector tools are **backend** `AgentTool`s (`backend/sdk`), not frontend-declared

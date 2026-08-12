@@ -4826,61 +4826,324 @@ kbd {
   color: #ba82ff;
 }
 
-/* ── Interpretability: model architecture diagram ─────────────────────────────
-   A 2D view of the loaded model. Colours reuse the context-block hues so the two
-   panes read as one system: attention/FFN/MoE each get a stable identity. */
+/* ── Interpretability: model explorer ─────────────────────────────────────────
+   The loaded model as a selectable stack (left) beside the detail for whatever is
+   selected (right). Colours reuse the context-block hues so the two interpretability
+   panes read as one system: attention/FFN/MoE each keep a stable identity. */
 
-.md-root {
+.mx-root {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
   padding: 0.5rem;
   font-size: 12px;
   height: 100%;
-  overflow: auto;
+  min-height: 0;
+  overflow: hidden;
 }
 
-.md-head {
+.mx-head {
   display: flex;
   align-items: center;
   gap: 0.4rem;
   flex-wrap: wrap;
+  flex: 0 0 auto;
 }
 
-.md-svg {
+/* Where the metadata came from. The strong variant means "read off the weights
+   you are running"; the quiet one means "read off a repo", which is a weaker
+   claim and is styled as one. */
+.mx-src {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  padding: 0 0.3rem;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+
+.mx-src-strong {
+  border-color: rgb(46 213 115 / 45%);
+  color: #2ed573;
+}
+
+/* Two columns while there's room; the stack drops above the detail when the pane
+   is docked narrow, since neither half is useful clipped. */
+.mx-body {
+  display: grid;
+  grid-template-columns: minmax(190px, 260px) minmax(0, 1fr);
+  gap: 0.6rem;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+@media (width <= 720px) {
+  .mx-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+}
+
+.mx-stack {
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  min-height: 0;
+  padding-right: 0.2rem;
+}
+
+.mx-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  overflow: auto;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  padding-left: 0.6rem;
+}
+
+@media (width <= 720px) {
+  .mx-detail {
+    border-left: none;
+    border-top: 1px solid var(--border);
+    padding: 0.5rem 0 0;
+  }
+}
+
+/* One stage of the stack. A button, not a div: this is the pane's whole
+   interaction and it has to be reachable from the keyboard. */
+.mx-stage {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
   width: 100%;
-  max-width: 340px;
+  text-align: left;
+  padding: 0.3rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+}
+
+.mx-stage:hover {
+  border-color: var(--border-strong, var(--border));
+}
+
+.mx-stage-on {
+  outline: 1px solid var(--accent, #6ea8fe);
+  outline-offset: -1px;
+}
+
+.mx-stage-in {
+  margin-left: 0.5rem;
+}
+
+.mx-stage-label {
+  font-weight: 600;
+}
+
+.mx-stage-sub,
+.mx-stage-right {
+  font-size: 10px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}
+
+.mx-stage-right {
+  margin-left: auto;
+}
+
+.mx-tone-io {
+  background: rgb(120 130 150 / 16%);
+}
+.mx-tone-norm {
+  background: rgb(255 255 255 / 5%);
+}
+.mx-tone-attn {
+  background: rgb(110 168 254 / 16%);
+}
+.mx-tone-ffn {
+  background: rgb(46 213 115 / 14%);
+}
+.mx-tone-moe {
+  background: rgb(186 130 255 / 16%);
+}
+
+/* The vertical connector between stages — the residual path, drawn rather than
+   labelled so the stack reads top-down at a glance. */
+.mx-flow {
+  width: 1px;
+  height: 10px;
+  margin: 0 auto;
+  background: var(--text-dim);
+  opacity: 0.5;
+}
+
+.mx-blockframe {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  border: 1px dashed var(--border-strong, var(--border));
+  border-radius: 5px;
+  padding: 0.35rem;
+  background: rgb(255 255 255 / 2%);
+}
+
+.mx-blockhead {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.mx-blocktoggle,
+.mx-clear,
+.mx-more {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.mx-blocktoggle:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.mx-clear {
+  margin-left: auto;
+  color: var(--accent, #6ea8fe);
+}
+
+/* Layer picker. A 64-layer model has to stay one glanceable grid, so these are
+   deliberately tiny and wrap rather than scrolling horizontally. */
+.mx-layers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 0.15rem 0;
+}
+
+.mx-layer {
+  min-width: 20px;
+  padding: 1px 3px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.mx-layer-on {
+  background: var(--accent, #6ea8fe);
+  border-color: var(--accent, #6ea8fe);
+  color: #000;
+}
+
+.mx-residual {
+  text-align: center;
+  font-size: 10px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}
+
+.mx-detail-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  text-transform: capitalize;
+}
+
+.mx-detail-sum {
+  display: flex;
+  gap: 0.9rem;
+  flex-wrap: wrap;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  padding: 0.3rem 0;
+  border-top: 1px solid var(--border);
+}
+
+.mx-quants {
+  display: flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+
+.mx-dtype {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 0 0.25rem;
+  border-radius: 3px;
+  background: rgb(255 255 255 / 7%);
+  color: var(--text-dim);
+}
+
+/* The inventory. Wide content scrolls inside its own box — the pane must never
+   scroll sideways as a whole. */
+.mx-tensors {
+  overflow-x: auto;
+  min-width: 0;
+}
+
+.mx-tensors table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.mx-tensors th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+  padding: 0.2rem 0.4rem 0.2rem 0;
+  position: sticky;
+  top: 0;
+  background: var(--bg, #111);
+}
+
+.mx-tensors td {
+  padding: 0.12rem 0.4rem 0.12rem 0;
+  white-space: nowrap;
+}
+
+.mx-tensors code {
+  font-size: 10.5px;
+}
+
+.mx-num {
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+}
+
+.mx-more {
+  color: var(--accent, #6ea8fe);
+  padding: 0.25rem 0;
+}
+
+.mx-heads {
+  width: 100%;
+  max-width: 260px;
   height: auto;
-  align-self: center;
 }
 
-/* Boxes ----------------------------------------------------------------- */
-.md-box {
-  stroke: var(--border-strong, var(--border));
-  stroke-width: 1;
+.mx-noinv {
+  font-size: 11px;
+  line-height: 1.4;
 }
 
-.md-blockframe {
-  fill: rgb(255 255 255 / 3%);
-  stroke: var(--border-strong, var(--border));
-  stroke-width: 1;
-  stroke-dasharray: 3 2;
-}
-
-.md-io {
-  fill: rgb(120 130 150 / 22%);
-}
-.md-norm {
-  fill: rgb(255 255 255 / 6%);
-}
-.md-attn {
-  fill: rgb(110 168 254 / 20%);
-}
-.md-ffn {
-  fill: rgb(46 213 115 / 18%);
-}
-.md-moe {
-  fill: rgb(186 130 255 / 20%);
+.mx-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
 }
 
 /* Head grouping: query ticks over the KV head they share. */
@@ -4891,66 +5154,24 @@ kbd {
   fill: #ffc857;
 }
 
-/* Expert bank: routed experts stand out from the dormant ones. */
-.md-expert {
-  fill: rgb(186 130 255 / 25%);
-}
-.md-expert-active {
-  fill: #ba82ff;
-}
-
-/* Text ------------------------------------------------------------------ */
-.md-label,
-.md-sub,
-.md-micro,
-.md-residual,
-.md-blocktitle {
+.md-micro {
   text-anchor: middle;
   font-family: var(--font-mono);
-  fill: var(--text);
-}
-
-.md-label {
-  font-size: 9px;
-  font-weight: 600;
-}
-.md-sub {
-  font-size: 7.5px;
-  fill: var(--text-dim);
-}
-.md-micro {
   font-size: 6.5px;
-  fill: var(--text-dim);
-}
-.md-residual {
-  font-size: 7.5px;
-  fill: var(--text-dim);
-}
-
-.md-blocktitle {
-  text-anchor: start;
-  font-size: 8px;
-  font-weight: 600;
-  fill: var(--text-dim);
-}
-
-.md-flow line {
-  stroke: var(--text-dim);
-  stroke-width: 1;
-}
-
-.md-flow polygon {
   fill: var(--text-dim);
 }
 
 /* Facts ----------------------------------------------------------------- */
 .md-facts {
   display: grid;
-  grid-template-columns: auto auto;
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 0.1rem 0.6rem;
   margin: 0;
   font-size: 11px;
-  justify-content: center;
+}
+
+.md-facts > div {
+  display: contents;
 }
 
 .md-facts dt {
@@ -4967,14 +5188,193 @@ kbd {
 .md-note {
   background: rgb(110 168 254 / 12%);
   color: var(--text-dim);
+  font-size: 10.5px;
+  line-height: 1.4;
+  padding: 0.25rem 0.4rem;
+  border-radius: 3px;
 }
 
-/* Explains an inferred value in the diagram — quieter than a note, since it
-   qualifies one number rather than the whole model. */
-.md-caveat {
+/* ── Lab: the Hugging Face browser ────────────────────────────────────────────
+   Results on the left, the selected repo on the right. Reuses the interpretability
+   chips (`interp-warn`, `interp-dim`) rather than defining a second vocabulary for
+   the same states — the two panes sit in the same workspace. */
+
+.lab-hub {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  height: 100%;
+  min-height: 0;
+  padding: 0.5rem;
+  font-size: 12px;
+  overflow: hidden;
+}
+
+.lab-search {
+  display: flex;
+  gap: 0.3rem;
+  flex: 0 0 auto;
+}
+
+.lab-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.lab-body {
+  display: grid;
+  grid-template-columns: minmax(180px, 300px) minmax(0, 1fr);
+  gap: 0.6rem;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+@media (width <= 720px) {
+  .lab-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(80px, 40%) minmax(0, 1fr);
+  }
+}
+
+.lab-results {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: auto;
+  min-height: 0;
+}
+
+.lab-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  overflow: auto;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  padding-left: 0.6rem;
+}
+
+@media (width <= 720px) {
+  .lab-detail {
+    border-left: none;
+    border-top: 1px solid var(--border);
+    padding: 0.5rem 0 0;
+  }
+}
+
+.lab-hint {
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.lab-hit {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  align-items: flex-start;
+  text-align: left;
+  width: 100%;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.lab-hit:hover {
+  background: rgb(255 255 255 / 5%);
+}
+
+.lab-hit-on {
+  border-color: var(--accent, #6ea8fe);
+  background: rgb(110 168 254 / 12%);
+}
+
+/* A Hub id is `owner/name` and routinely long. It wraps rather than truncating:
+   the owner is often the only thing distinguishing two otherwise identical hits. */
+.lab-hit-id {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.lab-hit-meta {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
   font-size: 10px;
-  line-height: 1.4;
-  text-align: center;
+  color: var(--text-dim);
+}
+
+.lab-tag {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 0 0.25rem;
+  border-radius: 3px;
+  background: rgb(255 255 255 / 7%);
+  color: var(--text-dim);
+}
+
+.lab-detail-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.lab-actions {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 11px;
+}
+
+.lab-files {
+  display: flex;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+}
+
+.lab-file {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 1px 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.lab-file:hover {
+  border-color: var(--border-strong, var(--border));
+  color: var(--text);
+}
+
+/* The card and the config answer "what is this and will it fit", so they lead the
+   list rather than being hunted for among weight shards. */
+.lab-file-key {
+  border-color: rgb(110 168 254 / 45%);
+  color: #6ea8fe;
+}
+
+.lab-filebody {
+  margin: 0;
+  padding: 0.4rem;
+  font-size: 11px;
+  line-height: 1.45;
+  background: rgb(0 0 0 / 22%);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 60%;
+  overflow: auto;
 }
 
 /* -------------------------------------------- browser network inspector ---- */

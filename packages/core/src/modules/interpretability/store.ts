@@ -61,7 +61,6 @@ export interface TurnSnapshot {
   maxTokens: number | null;
 }
 
-
 /** The loaded model's structure. Every dimension is optional: a field the metadata
  *  couldn't confirm stays null and is simply not drawn. */
 export interface AttentionSpec {
@@ -123,6 +122,37 @@ export interface ModelInfo {
   error: string | null;
 }
 
+/** One tensor from the model's GGUF directory. Mirrors backend TensorEntry. */
+export interface TensorEntry {
+  name: string;
+  shape: number[];
+  dtype: string;
+  elements: number;
+  /** null when the ggml type has no known block size — never a guess. */
+  byteSize: number | null;
+  /** Transformer block index, or null for tensors outside the stack. */
+  layer: number | null;
+  /** attention | ffn | moe | norm | embedding | output | position | other */
+  component: string;
+}
+
+export interface ModelTensors {
+  /** "gguf" when we opened the real weights file; "none" otherwise. */
+  source: string;
+  path: string;
+  fileSize: number | null;
+  ggufVersion: number | null;
+  tensorCount: number;
+  layerCount: number | null;
+  totalParameters: number;
+  totalBytes: number;
+  /** False when a tensor used an unrecognized quant, so totalBytes is a floor. */
+  bytesComplete: boolean;
+  quantTypes: Record<string, number>;
+  tensors: TensorEntry[];
+  error: string | null;
+}
+
 /**
  * Captured turns, newest first, fed by the `interpretability` `/ws` channel and
  * back-filled from the API on open.
@@ -137,6 +167,13 @@ class InterpretabilityStore {
   private started = false;
   private modelInfo: ModelInfo | null = null;
   private architecture: ModelArchitecture | null = null;
+  // The tensor inventory is fetched separately from `refresh()`: it can run to a
+  // couple of thousand entries and only changes when the loaded model does,
+  // whereas `refresh()` fires on every turn — and on every live round that beats
+  // its own back-fill. Keyed by model so switching models re-reads exactly once.
+  private tensors: ModelTensors | null = null;
+  private tensorsFor: string | null = null;
+  private tensorsInFlight: Promise<void> | null = null;
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
@@ -151,6 +188,36 @@ class InterpretabilityStore {
   getModelInfo = (): ModelInfo | null => this.modelInfo;
 
   getArchitecture = (): ModelArchitecture | null => this.architecture;
+
+  getTensors = (): ModelTensors | null => this.tensors;
+
+  /**
+   * Load the tensor inventory for the currently loaded model, once.
+   *
+   * Called by the explorer rather than by `refresh()` — see the note on
+   * `tensorsFor`. Concurrent callers share one request: the pane can be open
+   * twice, and two mounts must not both pull a 2000-entry payload.
+   */
+  ensureTensors = (): Promise<void> => {
+    const model = this.modelInfo?.model ?? '';
+    if (this.tensorsFor === model && this.tensors !== null) return Promise.resolve();
+    if (this.tensorsInFlight) return this.tensorsInFlight;
+    const request = apiGet<ModelTensors>('/interpretability/tensors')
+      .then((res) => {
+        this.tensors = res;
+        this.tensorsFor = model;
+        this.emit();
+      })
+      .catch(() => {
+        // Backend down or restarting. Leave the previous inventory in place and
+        // let the next mount retry rather than blanking a pane that was working.
+      })
+      .finally(() => {
+        this.tensorsInFlight = null;
+      });
+    this.tensorsInFlight = request;
+    return request;
+  };
 
   private emit(): void {
     for (const listener of this.listeners) listener();

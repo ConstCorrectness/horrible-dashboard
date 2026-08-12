@@ -1,0 +1,201 @@
+---
+sidebar_position: 22
+sidebar_label: Skills
+---
+
+# Module: Skills
+
+Reusable instructions the agent can pull in when a task calls for them, written in
+Anthropic's **SKILL.md** format — the same files [Claude Code](https://claude.com/claude-code)
+reads, so a skill written here works there and back again.
+
+**Status:** implemented — storage and discovery, agent consumption through the existing
+progressive-disclosure path, a creator with a live preview of exactly what the model
+receives, per-turn cost accounting, and export/import against `.claude/skills/`.
+Backend `backend/modules/skills/`; frontend `packages/core/src/modules/skills/`.
+
+## Contributions to the layout shell
+
+- **Panels** — `skills.library` ("Skills", 🎓, `role: 'tool'`, `defaultDock: 'left'`,
+  singleton).
+- **Commands** — `skills.open`, `skills.new`, `skills.status` (prints the list *and*
+  the per-turn cost inline, no model turn).
+- **Agent tools** — `use_skill`, in the core set, but **only when a skill is enabled**.
+- **Keybindings / settings** — none. Enablement is machine-local state, not a setting;
+  see [Enablement](#enablement-is-not-a-setting).
+
+## The format is not ours
+
+A skill is a directory containing `SKILL.md`: YAML frontmatter (`name`, `description`,
+optional `allowed-tools`) followed by a markdown body.
+
+```markdown
+---
+name: tidy-a-file
+description: Tidy a source file the way this project likes it. Use before committing.
+allowed-tools:
+  - files.read
+  - editor.proposeEdit
+---
+
+# Tidy a file
+
+1. Read the file.
+2. …
+```
+
+Adopting the format rather than inventing one is the whole point: it is what makes a
+skill portable in both directions without a converter, and a converter is exactly the
+thing that would rot.
+
+Two sources are discovered:
+
+| Scope | Location | Writable here |
+| --- | --- | --- |
+| `user` | `$HORRIBLE_DATA_DIR/skills/<name>/SKILL.md` | yes |
+| `project` | `<repo>/.claude/skills/<name>/SKILL.md` | **no** — copy it first |
+
+Project skills are the repository's own git-tracked files. The pane reads them and
+offers "copy to mine"; a pane that silently rewrote one would be a surprise in
+someone's next `git diff`.
+
+## Two tiers, and the whole economics
+
+This is the design, and everything else follows from it:
+
+1. **The description rides every turn.** All enabled skills are listed — one line each,
+   `name: description` — in a system message assembled next to the tool guides. That is
+   how the model learns the skill exists.
+2. **The body is delivered only when asked for.** The model calls `use_skill(name)` and
+   gets the instructions back as a tool result.
+
+The same progressive disclosure the tool groups use, for the same reason: a good skill's
+body is thousands of tokens, and paying for all of them every round would make skills a
+net loss. What the split buys is that a skill costs a *sentence* until the moment it's
+worth its full price.
+
+### The catalog is not free, and the pane says so
+
+Ten skills with 40-word descriptions is a permanent ~500-token tax competing with the
+same budget the 38-tool ceiling constrains — a fine trade if the skills fire, pure loss
+if they don't. So:
+
+- `GET /api/skills/cost` counts the assembled catalog and each skill's share of it, and
+  the pane leads with **"N tokens on _every_ turn"** before the list.
+- The catalog is its own **block kind** in the [interpretability](interpretability.mdx)
+  pane (`skills`, "Skill catalog"), deliberately not folded into `guides`: a guide is
+  paid only when its group is active, while every line of this rides every round.
+  Merging them would hide the one block whose growth most needs watching.
+- Disabling is the lever. A disabled skill costs exactly nothing.
+
+### Zero skills costs exactly zero
+
+No catalog message, and `use_skill` is **not in the core tool set** — the tool appears
+only when at least one skill is enabled. An unconditional core tool would be ~60 tokens
+on every turn of every install, which is precisely the regression that took the core
+tool list from 34 down to 11.
+
+The check runs on every model round, so the discovered-skill list sits behind a 2-second
+TTL cache; the routes invalidate it *after* a write, never before — dropping it first
+leaves a window in which a concurrent turn refills it from the pre-write state.
+
+## `allowed-tools` activates tool groups
+
+A skill saying "use `editor.proposeEdit`" is useless if that tool isn't loaded, and
+asking the model to notice the gap and call `load_tools` itself is a round-trip it
+routinely skips. So `use_skill` resolves the declared entries to their groups and
+activates them in the same step, returning `loadedGroups` (and those groups' guides,
+for the same reason `load_tools` returns one).
+
+An entry may be a tool name (`files.read`) or a group name (`files`) — both are written
+in the wild, and a group name never contains a dot, so they're unambiguous. Resolving
+here keeps the file portable: Claude Code's `allowed-tools` lists *tools*.
+
+A skill **cannot widen a specialized agent's scope**. `use_skill` running under a spec
+with `tool_groups` drops anything outside it and reports `refusedGroups` — otherwise a
+skill would be a way around the roster's boundaries.
+
+## Failure is visible, never silent
+
+A skill that quietly fails to load is the worst outcome in this module: the agent simply
+doesn't know something, and nothing anywhere says why. So every malformed file is
+**listed with its error** rather than skipped:
+
+| Problem | Reported as |
+| --- | --- |
+| No frontmatter, or an unclosed fence | "the file must start with `---`" / "never closed" |
+| Invalid YAML, or frontmatter that isn't a mapping | the YAML error / "must be a mapping" |
+| No `description` | "the model has nothing to decide by" |
+| `name:` disagrees with the directory | "the directory wins; fix the file" |
+| Empty body | "there is nothing for the model to read" |
+
+**The directory is the identity**, not the frontmatter's `name`. Everything that
+addresses a skill — save, delete, export, `use_skill` — needs one answer, and the
+directory is the one that exists even when the file won't parse. Taking the name from
+the frontmatter instead makes a mismatched file retrievable under *neither* identity, so
+the pane cannot show you the error it just recorded.
+
+A BOM before the fence is stripped, because an editor writing UTF-8 with a BOM would
+otherwise make every skill it touches "have no frontmatter".
+
+### Shadowing
+
+A user skill and a project skill can share a name. `use_skill` takes a name, so the
+collision has to resolve one way: **the user copy wins**, and the project one is flagged
+`shadowed` in the list. Hiding it would leave "I edited the skill and nothing changed"
+with no explanation.
+
+## Enablement is not a setting
+
+`GET /api/settings` hands the whole bag to the browser, and this is machine-local state
+about local files — so it lives in `$HORRIBLE_DATA_DIR/skills-state.json`. Nor is it
+frontmatter: toggling a project skill would rewrite a git-tracked file to record a local
+preference.
+
+## Portability
+
+`POST /api/skills/{name}/export` copies a user skill into `.claude/skills/`, where Claude
+Code reads it unchanged. **A copy, not a symlink** — Windows needs elevation (or
+developer mode) for one, so a symlink implementation works on the author's machine and
+fails on half the users', with an opaque `OSError` at export time. The cost is that the
+two diverge after an edit.
+
+The other direction is already automatic: anything in `.claude/skills/` is discovered as
+a `project` skill, and "copy to mine" brings the whole directory — resources included,
+since the format lets a body reference files beside it.
+
+## Backend surface
+
+Mounted at `/api/skills`:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `` | Every discovered skill, both scopes, including broken ones |
+| `POST` | `` | Create or update a **user** skill (409 on a project skill) |
+| `DELETE` | `/{name}` | Delete a user skill (409 on a project skill) |
+| `POST` | `/{name}/enabled` | Switch its catalog line on or off |
+| `GET` | `/cost` | Per-turn catalog cost, and each skill's share |
+| `GET` | `/{name}/preview` | The literal catalog text + the literal `use_skill` result |
+| `POST` | `/{name}/copy` | Copy a project skill into the user's own |
+| `POST` | `/{name}/export` | Copy a user skill into `.claude/skills/` |
+
+## The creator shows the string, not the intent
+
+A skill is a prompt, and the usual way prompts go wrong is that the author is looking at
+their intent while the model is looking at a string. So the editor's preview shows the
+two things the model literally receives — the catalog line and the `use_skill` result —
+as raw text rather than rendered markdown. Stray frontmatter and leading whitespace are
+exactly what a prettified preview would hide.
+
+## Roadmap
+
+- **A test run against a spawned agent.** The pieces exist (`agent.delegate` runs a full
+  sub-turn on the same connection), but a "try this skill" button needs a live socket,
+  so it belongs to the chat surface rather than a REST route.
+- **Resources beyond the body.** The format allows files beside `SKILL.md`; they are
+  copied and exported, but nothing yet offers them to the model — a skill that says
+  "see `reference.md`" is describing a file the agent can only reach through the `files`
+  tools.
+- **Skill-scoped permissions.** `allowed-tools` currently *grants* (it loads groups); it
+  does not *restrict* a turn to those tools. Making it a ceiling as well as a floor is a
+  permission-model change, not a skills change.

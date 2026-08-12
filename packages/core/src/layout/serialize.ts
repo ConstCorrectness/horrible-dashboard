@@ -37,13 +37,16 @@ const REGION_POSITIONS: readonly RegionPosition[] = ['left', 'right', 'bottom'];
  *
  * `games.board` / `games.loadout` became sections of the merged `games.lobby`
  * pane, and `games.thoughts` became a stream of `games.log` (see
- * modules/games/hub-section.ts). Duplicates that result from two old views
- * collapsing onto one are dropped by `readPane`.
+ * modules/games/hub-section.ts). `interpretability.budget` was a compact widget
+ * duplicating the header of `interpretability.context`; the budget bar now lives
+ * in that panel. Duplicates that result from two old views collapsing onto one
+ * are dropped by `readPane`.
  */
 const RENAMED_VIEWS: Readonly<Record<string, string>> = {
   'games.board': 'games.lobby',
   'games.loadout': 'games.lobby',
   'games.thoughts': 'games.log',
+  'interpretability.budget': 'interpretability.context',
 };
 
 export function serialize(frame: FrameState): SerializedLayout {

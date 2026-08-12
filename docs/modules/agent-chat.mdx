@@ -572,7 +572,15 @@ Tools belong to **groups** by name prefix (`files`, `editor`, `terminal`,
 * the **core** — the layout verbs (see below), the peer tools (`list_peers`,
   `agent.ask_peer`), and two **meta-tools**: `list_tool_groups()` (discover groups
   + counts) and `load_tools(groups[])` (enable a group); plus
+* `use_skill(name)`, but **only when a [skill](skills.mdx) is enabled** — a third
+  meta-tool that is absent (costing nothing) on an install with no skills; plus
 * the tools of every **active** group.
+
+Skills are the same idea one tier up, and they reuse this machinery rather than
+paralleling it: a one-line description per skill rides every turn (that is the
+trigger), the instructions arrive only when `use_skill` asks, and a skill's
+`allowed-tools` are resolved to groups and activated in that same call — so the
+instructions never name tools the model cannot see. See [Skills](skills.mdx).
 
 The **layout verbs split by cost**, because they were the largest always-on block
 and most agents never rearrange anything. The five *read* verbs

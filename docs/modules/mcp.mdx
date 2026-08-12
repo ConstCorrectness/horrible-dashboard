@@ -15,17 +15,120 @@ orthogonal to the [peer fabric](../architecture/distributed.mdx), which is the
 for why both exist.
 
 **Status:** client implemented (stdio + http/sse transports, tools, prompts, resources,
-servers pane) **and** the exported server implemented (read-only trajectory + telemetry
-introspection, off by default — see [The server we export](#the-server-we-export)).
-Backend `backend/modules/mcp/`; frontend `packages/core/src/modules/mcp/`.
+servers pane, **registry discovery, pre-install inspection, per-server context
+accounting and a JSON-RPC transcript**); **authoring implemented** (scaffold a server
+into its own environment, edit it here, restart on save, invoke a tool from a generated
+form, and run a [conformance suite](#the-conformance-suite)); and the exported server
+implemented (read-only trajectory + telemetry introspection, off by default — see
+[The server we export](#the-server-we-export)). Backend `backend/modules/mcp/`;
+frontend `packages/core/src/modules/mcp/`.
 
 ## Contributions to the layout shell
 
 - **Panels** — `mcp.servers` ("MCP Servers", 🔌, `role: 'tool'`, `defaultDock: 'left'`,
   singleton). Configuration you consult while working, not a document you work in.
-- **Commands** — `mcp.openServers`, `mcp.addServer`, `mcp.status`.
+  Three **sections**: `servers` (<kbd>s</kbd>, default), `discover` (<kbd>d</kbd>) and
+  `author` (<kbd>a</kbd>).
+- **Commands** — `mcp.openServers`, `mcp.addServer`, `mcp.discover`, `mcp.author`,
+  `mcp.status`.
+  `section.show:mcp.servers:discover` is synthesized by the registry; `mcp.discover`
+  exists because that command only reveals a section of an *already open* pane.
 - **Chat** — `/mcp` lists servers inline, `/mcp open` runs `mcp.openServers`.
 - **Keybindings / settings** — none.
+
+One pane with three sections rather than three panes: finding a server, writing one and
+running one are the same object at three moments. Discover hands its result straight to
+Servers, and a scaffolded project *becomes* an ordinary row in Servers the moment it is
+provisioned. Splitting them would mean three copies of the config shape and a hand-off
+across every pane boundary.
+
+## Discovering a server
+
+The [official registry](https://registry.modelcontextprotocol.io) is queried live and
+merged with a **curated overlay** we ship (`curated.json`) — the same shape the
+[search](search.mdx) module uses for engines, and for the same reason. The registry is
+comprehensive and unopinionated, thousands of entries, many published once by one
+person; the overlay is six entries with a sentence each about *why you would want
+this*. Neither alone is a good browse.
+
+Two details are load-bearing:
+
+- **The registry's rows are versions, not servers.** `GET /v0/servers` returns one row
+  per published version, so an unfiltered browse is routinely three copies of one
+  server. `version=latest` is passed on every call.
+- **A registry outage is not an empty result.** `registryOnline: false` means the list
+  is the shipped overlay alone, and the pane says so — otherwise "the registry is down"
+  reads as "nothing matched".
+
+### An entry is a description, not a command line
+
+An entry carries `packages` (an npm/pypi/oci identifier with argument and environment
+declarations) and `remotes` (a URL). `catalog.install_options` turns both into configs
+this node could actually launch, which is where the sharp edges live:
+
+| Trap | What happens without the fix |
+| --- | --- |
+| `runtimeHint` is frequently absent | Nothing to spawn. Inferred from `registryType`: npm → `npx`, pypi → `uvx`, oci → `docker` |
+| `npx` prompts before installing | Its stdin **is** the protocol pipe, so the prompt is never answered and the connect dies 90s later. `-y` is added when the entry didn't declare it |
+| An argument declared with no value | A `--root` the *user* must supply is not a value we have. Emitting the flag alone yields an argv that fails unreadably, so valueless declarations are skipped |
+| An unmappable registry type | Returned with an empty command and a reason, rather than a command line that fails confusingly |
+
+Remotes are listed first: a hosted server needs nothing installed and executes none of
+the publisher's code on this machine.
+
+### Inspect before you add
+
+**`POST /api/mcp/probe`** connects a *candidate* once — in a scratch session that is
+never saved, never registers an agent tool, and gets its own transcript ring — then
+reports the server's real tools, its `readOnlyHint` annotations, its prompts and
+resources, and its own `instructions`. Then it tears the session down in a `finally`,
+because a probe that leaves an `npx` process running is a leak with no UI to find it.
+
+The point is the gap it closes: an entry's description is written by its publisher,
+while this is the running server describing itself. Adding a server used to mean
+committing to it and finding out afterwards.
+
+It does **run the server**. For a stdio package that means fetching and executing
+third-party code locally — the same act as adding it, minus the persistence — so the
+pane says so next to the button rather than in a tooltip.
+
+## What a server costs you
+
+`GET /servers/{id}/cost` counts the **provider-shaped** payload (`orchestrator._tool`),
+not the description text: what reaches the model is serialized JSON schema, and a
+server with eight tools and forty-property inputs is expensive in a way a tool *count*
+never shows. Guide tokens are counted alongside, because the two load together.
+
+Counts come from the model's real tokenizer via the
+[interpretability](interpretability.mdx) module's `Counter`, and fall back to a chars/4
+estimate flagged `exact: false` — which the pane renders as "estimated". An estimate
+displayed as a precise number is the failure that module exists to prevent.
+
+The same response answers "who can actually use this": the roster agents whose
+`tool_groups` name the group, plus those with no scope limit at all. `tool_groups=None`
+means unrestricted and `[]` means nothing — collapsing the two would report a
+specialist as having access to everything, so the distinction is carried out as
+`explicit`.
+
+## The wire
+
+`GET /servers/{id}/transcript` is the recent JSON-RPC conversation. "The tool returned
+nothing" is three different bugs — the request never went out, the server answered an
+error, or the answer came back in a shape the bridge flattened away — and only the wire
+distinguishes them.
+
+Recorded by **teeing the streams, not the transport**. `ClientSession` is handed a
+`(read, write)` pair of anyio memory streams and neither knows nor cares what produced
+them, so wrapping that pair records stdio, streamable-http and SSE with one mechanism.
+Instrumenting `transport.popen_stdio_client` would have been simpler and covered stdio
+only — and then "the transcript is empty" would mean "wrong transport" rather than
+"nothing was sent", which is exactly the ambiguity the view exists to remove.
+
+The ring is small (200 messages, 4 KB each) and in-process: this is a debugging view,
+not an audit log, and tool arguments frequently carry the user's own text. It
+**survives a reconnect** — the handshake of the attempt that failed is usually what you
+came to read — but not a delete, or a later server reusing the id would inherit
+someone else's conversation.
 
 ## One server is one tool group
 
@@ -126,6 +229,17 @@ An MCP token must never be a setting — `GET /api/settings` hands the whole set
 to the browser. The config store enforces this with a key allow-list, so a `token` field
 submitted alongside a config is dropped rather than persisted.
 
+**Environment secrets take the same split.** A discovered server routinely wants an API
+key in its environment, and `env` is persisted in that plaintext file — so a value put
+there would sit on disk in the clear. An entry's `isSecret` variables are carried in the
+config by **name only** (`secretEnv`), the values go to `mcp:<id>:env:<NAME>` in the
+encrypted store, and they are resolved exactly once, in `_open`, at the moment of
+spawning. A name is not a secret: the registry publishes it.
+
+A declared secret with nothing stored is reported as `missingSecretEnv` and shown in the
+pane. Without it, the failure surfaces as the server's own start error, which is rarely
+legible.
+
 Note that a stdio server is an **arbitrary local process** the user configures. That is
 the same trust model as [backend plugins](../architecture/backend-plugin-sdk.mdx):
 trusted and unsandboxed in v1, localhost-oriented.
@@ -142,10 +256,179 @@ Mounted at `/api/mcp`:
 | `POST` | `/servers/{id}/connect` | (Re)connect — the retry after a failure |
 | `POST` | `/servers/{id}/disconnect` | Drop the session, keep the config |
 | `POST` | `/servers/{id}/resource` | Read one resource by URI |
+| `GET` | `/servers/{id}/cost` | Context cost + which agents have the group in scope (409 when not connected) |
+| `GET`/`DELETE` | `/servers/{id}/transcript` | The JSON-RPC wire, and clearing it |
+| `GET` | `/discover` | Registry search with the curated overlay in front |
+| `POST` | `/probe` | Connect a candidate once, report what it is, discard it |
+| `POST` | `/servers/{id}/call` | Invoke one tool by hand (409 when not connected) |
+| `POST` | `/servers/{id}/conformance` | Run the conformance suite against a live session |
+| `GET` | `/projects` | Authored projects + whether `uv`/`npm` exist on this machine |
+| `POST` | `/projects` | Scaffold one; registers its server **disabled** |
+| `GET` | `/projects/{id}` | One project: files, provisioning state, log |
+| `POST` | `/projects/{id}/provision` | Build its environment, then enable its server |
+| `POST` | `/projects/{id}/register` | Put an unregistered project back in the server list |
+| `POST` | `/projects/{id}/restart` | Restart it without touching a file |
+| `GET`/`POST` | `/projects/{id}/file` | Read / save a source file (a save restarts) |
+| `DELETE` | `/projects/{id}` | Unregister; `?deleteFiles=true` also removes the tree |
 
 Enabled servers connect during the app lifespan and are torn down on shutdown — stdio
 servers are child processes, and leaving them behind on reload would strand orphaned
 `node`/`python` processes.
+
+## Authoring a server
+
+The second half of this module: write an MCP server *here*, and run it here. The loop is
+scaffold → provision → edit → save → invoke → check, and none of it leaves the app —
+which matters because the alternative loop (editor, terminal, restart the client, hope)
+is where most of the friction in writing an MCP server actually lives.
+
+### An authored server is not a second kind of server
+
+The whole design rests on this. Scaffolding writes a project directory and then
+registers an ordinary **stdio entry in `mcp-servers.json`** pointing at it. The session
+supervisor, the transcript tee, the bridge, the cost view and the conformance suite all
+work on it unchanged; the Author section owns only what is genuinely different — the
+files, the toolchain, and the restart. The alternative (a parallel "dev server" concept
+with its own lifecycle) would have meant a second implementation of everything, and the
+thing you tested would not have been the thing you later ran.
+
+Two fields are added to a server's config: `origin` and `project`.
+
+### Provenance is a label, not a gate
+
+The plan called for gating spawned servers the way the games module gates code
+execution. On inspection that would have been **theatre**: `POST /api/mcp/servers` has
+always accepted an arbitrary `command` + `args` for a stdio server and spawned it, so
+authoring adds no capability that isn't already reachable — it adds *files we wrote*. A
+gate on the authoring routes alone would advertise a boundary that doesn't exist.
+
+What is genuinely useful, and what shipped, is **labelling**. `origin` distinguishes:
+
+| `origin` | Means | Shown as |
+| --- | --- | --- |
+| `manual` | A command the user typed themselves | (nothing) |
+| `registry` | Third-party code installed from the MCP registry | `third-party` |
+| `authored` | A project scaffolded in this pane | `yours` |
+
+It is recorded at the one moment it is knowable — when the server is added — because
+nothing about a running `npx` process reveals it afterwards. An unrecognized `origin` is
+coerced to `manual` on save rather than trusted: a value we don't recognize is not
+evidence the code is ours.
+
+### Templates and provisioning
+
+Two templates, each provisioned into **its own environment** so a server never depends on
+what the backend happens to have installed:
+
+| Template | Scaffolds | Provisioned with | Runs as |
+| --- | --- | --- | --- |
+| `python` | `server.py` (FastMCP), `pyproject.toml` | `uv venv .venv` + `uv pip install --python <project venv> mcp` | the project's own interpreter |
+| `node` | `server.mjs`, `package.json` | `npm install` | `node server.mjs` |
+
+The Node template uses the official **TypeScript SDK from plain ESM JavaScript** — no
+build step, deliberately. The edit loop here is "save, restart", and a `tsc` pass between
+them means a stale binary running against fresh source, which is a class of confusion the
+pane cannot explain to you.
+
+Provisioning spawns blocking `subprocess.Popen` on a worker thread, never
+`asyncio.create_subprocess_exec` — under `uvicorn --reload` on Windows the loop is a
+`SelectorEventLoop` where asyncio subprocess spawn fails outright. Same pattern, and same
+reason, as `backend/modules/training/envs.py` and the LSP manager.
+
+A project is registered **disabled** at scaffold time and enabled only once provisioning
+succeeds. Enabled from the start, it would try to spawn an interpreter that does not
+exist yet and report a spawn error instead of "not provisioned". Missing toolchains are
+named in the pane *before* a project is created, not after it fails to build.
+
+### Hot restart is an honest restart
+
+MCP gives a client no way to ask a server to re-read its own source, and a
+`tools/list_changed` notification a server never sends will not arrive because we edited a
+file. So saving a source file **restarts the process** — after which the bridge re-syncs
+from live state and the agent's catalog follows the edit. The response says which:
+`restarted`, plus `restartError` when the server failed to come back, which is the common
+case immediately after introducing a syntax error. Reporting only "Saved" there would hide
+the one thing worth knowing.
+
+A README edit does not restart anything (`touches_runtime`) — otherwise every keystroke in
+the notes costs a process spawn — while a `server.py` edit always does, since a pane
+listing tools that no longer exist is the worse lie.
+
+### The file guard
+
+Editing is confined to the project directory, and the check is on the **resolved** path,
+not the string: `..`, an absolute path (`Path(root) / "/etc/passwd"` discards the root
+entirely) and a symlink out of the tree all produce something that looks relative.
+`.venv`/`node_modules` are excluded from listing and editing — they would bury the three
+files the user actually wrote — and only text suffixes are editable, since a binary
+round-tripped through a JSON string field is corrupt by the time it lands.
+
+**Remove keeps the source.** A list-row button is not consent to delete a source tree, and
+there is no undo. The directory therefore outlives the server config, so the project stays
+listed as `registered: false` with an "Add to servers" button rather than being hidden —
+hiding it would mean scaffolding the same id again fails on "a directory already exists"
+while the pane shows nothing that could explain why.
+
+## Invoking a tool by hand
+
+The **Run** view in a server's inspector generates a form from the tool's own
+`inputSchema` and calls it through `McpSession.call_tool` — the same entry point the
+bridge uses, so what you see is what the model would get, flattening included (which is
+frequently the thing that's actually wrong).
+
+A form, not a JSON text box: a text box makes you guess argument names and then reports
+your typo as the server's error. And it is generated from exactly the schema the model is
+handed, so a schema that is confusing here is confusing there. Fields the flat form can't
+express (nested objects, arrays of objects) fall back to a per-field JSON textarea rather
+than being dropped. An untouched optional field is **omitted**, not sent as an empty
+string — most servers distinguish absent from empty.
+
+It is deliberately **not** gated on `readOnlyHint`. That gate exists to stop a *model*
+taking an action the user didn't ask for; here the user is pressing the button, and
+refusing to run their own write tool would make the view useless for its purpose. The pane
+says plainly when a tool isn't annotated read-only.
+
+`elapsedMs` is reported because latency is a property of a tool the pane can measure and
+the agent cannot: a nine-second tool will make every turn that touches it feel broken, and
+that is invisible in a result body.
+
+## The conformance suite
+
+Run from the inspector's **Check** view against any connected server, third-party ones
+included. Eight checks:
+
+| Check | Catches |
+| --- | --- |
+| `handshake` | `initialize` without a `serverInfo` name/version or a negotiated protocol version |
+| `capabilities` | Serving tools/prompts/resources without declaring the capability |
+| `schemas` | A non-object `inputSchema`, a `required` naming a property that doesn't exist, a name the bridge has to rewrite, a missing description |
+| `annotations` | `readOnlyHint` **and** `destructiveHint` on one tool; unannotated (therefore gated) tools |
+| `unknown-tool` | A call to a tool that cannot exist returning success — or hanging until the client timeout |
+| `missing-arguments` | A tool that declares required arguments and succeeds without them |
+| `guide` | No `instructions` and no prompts, or a guide truncated at `MAX_GUIDE_CHARS` |
+| `resources` | A resource URI with no scheme |
+
+### What it cannot tell you
+
+Everything above checks the server's **own declarations** for coherence and its protocol
+edges for sane behaviour. None of it can check whether a declaration is *true*: a tool
+annotated `readOnlyHint` may delete your files, and nothing short of reading the server's
+source would reveal that. That is precisely why `bridge.py` treats an unannotated tool as
+gated, and why the report says what it checked. A suite that implied "green means safe"
+would be worse than no suite, so the pane spells the limit out under every run.
+
+Note the direction of the `annotations` verdict: an unannotated tool is a **warning**,
+never a failure. It is already in the safe state — gated. Failing it would train the user
+to annotate everything read-only to clear the report, which is the exact opposite of what
+the check is for.
+
+### It never calls a declared tool with valid arguments
+
+Two checks do call the server: one with a tool name that cannot exist, one with arguments
+a tool declares required and which are absent. Neither can succeed by design, and the
+second is aimed **only** at a tool the server itself annotated read-only — skipping
+entirely when there is no such tool rather than guessing. A conformance run whose side
+effect was emptying a bucket would be an unusable feature.
 
 ## Browser vs desktop
 
@@ -217,6 +500,12 @@ manager and is a no-op when the export is disabled.
 
 ## Roadmap
 
+- **Watching the filesystem.** A save made *in this pane* restarts the server; a save
+  made in an external editor does not, because nothing is watching the project
+  directory. The restart is a route, not a watcher.
+- **Publishing an authored server.** Scaffolding produces a project that runs here; it
+  has no path to the registry, a git remote, or a package. That is a real gap for anyone
+  who writes something worth sharing.
 - **Resources → library.** Ingest MCP resources into a [library](library.mdx) as
   sources, making a server's documents searchable by RAG rather than only readable on
   demand.

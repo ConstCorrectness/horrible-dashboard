@@ -570,7 +570,46 @@ META_TOOLS: list[dict[str, Any]] = [
     ),
 ]
 
-META_TOOL_NAMES = {t["function"]["name"] for t in META_TOOLS}
+# Present only when the user actually has an enabled skill — see `_skill_tools`.
+# Unconditionally in core it would be ~60 tokens on every turn of every install, which
+# is the exact regression that took the core tool list from 34 down to 11.
+SKILL_TOOLS: list[dict[str, Any]] = [
+    _tool(
+        "use_skill",
+        "Read a skill: the user's own reusable instructions for a kind of task. Pass "
+        "the name from the 'Available skills' list. The description you were shown is "
+        "a summary — call this to get the actual instructions BEFORE starting the "
+        "work, not after.",
+        {
+            "name": {
+                "type": "string",
+                "description": "The skill's name, e.g. 'new-module'.",
+            }
+        },
+        ["name"],
+    ),
+]
+
+META_TOOL_NAMES = {t["function"]["name"] for t in META_TOOLS} | {
+    t["function"]["name"] for t in SKILL_TOOLS
+}
+
+
+def _skill_tools() -> list[dict[str, Any]]:
+    """`use_skill`, but only when there is a skill to use.
+
+    A user with no skills pays nothing for the feature: no catalog message and no tool
+    schema. The check is cached (see `skills.agent.has_active`) because it runs on
+    every round and would otherwise stat two directories per turn.
+    """
+    try:
+        from backend.modules.skills import agent as skills_agent
+
+        return list(SKILL_TOOLS) if skills_agent.has_active() else []
+    except Exception:  # noqa: BLE001 - skills must never break a turn
+        logger.debug("skills unavailable for this turn", exc_info=True)
+        return []
+
 
 # Cap kept only as a safety backstop now that groups load on demand.
 #
@@ -905,6 +944,7 @@ def _core_tools(spec: AgentSpec | None = None) -> list[dict[str, Any]]:
     if spec is None or spec.can_delegate:
         tools += list(DELEGATE_TOOLS)
     tools += list(META_TOOLS)
+    tools += _skill_tools()
     core_plugin = _plugins.provider_tools(grouped=False)
     if spec is not None and spec.tool_groups is not None:
         allowed = set(spec.tool_groups)
@@ -1004,6 +1044,23 @@ def _guides_message(groups: set[str]) -> dict[str, Any] | None:
     outright). Without this the guide would almost never reach the model."""
     text = _guides_text(groups)
     return {"role": "system", "content": text} if text else None
+
+
+def _skills_message() -> dict[str, Any] | None:
+    """The skill catalog as a system message, or None when there are no skills.
+
+    Sits next to `_guides_message` because it is the same idea one tier up: a cheap
+    line that lets the model discover something expensive, delivered in full only when
+    it asks. Wrapped in a swallow because a broken skills directory must never take
+    down a turn — the worst it may do is cost the user their skills for that round.
+    """
+    try:
+        from backend.modules.skills import agent as skills_agent
+
+        return skills_agent.catalog_message()
+    except Exception:  # noqa: BLE001
+        logger.debug("skill catalog unavailable for this turn", exc_info=True)
+        return None
 
 
 def _group_catalog(
@@ -1507,6 +1564,28 @@ async def _dispatch_call(
             result["guide"] = guide
         return result
 
+    if name == "use_skill":
+        from backend.modules.skills import agent as skills_agent
+
+        # `allowed-tools` is resolved to groups and activated in this same step, so a
+        # skill that says "use editor.proposeEdit" arrives with that tool already in
+        # hand. Asking the model to notice the gap and call load_tools itself is a
+        # round-trip it routinely skips, and then the skill's instructions name tools
+        # it cannot see.
+        before = set(active_groups)
+        result = skills_agent.use(str(call.arguments.get("name") or ""), active_groups)
+        if allowed is not None:
+            # A scoped agent cannot widen its own scope through a skill.
+            refused = sorted((active_groups - before) - allowed)
+            if refused:
+                active_groups.difference_update(refused)
+                result["refusedGroups"] = refused
+        # The guide for a group the skill just activated has to ride along, for the
+        # same reason `load_tools` returns one: nothing else will deliver it this turn.
+        if guide := _guides_text(set(result.get("loadedGroups") or [])):
+            result["guide"] = guide
+        return result
+
     # Forgiveness: the model called a known tool from a group it hadn't loaded — pull
     # the group in (so it stays visible next round) and run the call. A scoped
     # agent gets no forgiveness outside its allowed groups: the call is refused.
@@ -1790,8 +1869,13 @@ async def run_agent_turn(
     # Guides for groups the turn starts with — the model never calls load_tools for
     # those, so this is the only chance to hand it the usage notes.
     guides_msg = _guides_message(active_groups) if active_groups else None
+    # The skill catalog: one line per enabled skill, the trigger the model decides by.
+    # Not sent on a remote turn — a peer's agent runs tool-less on someone else's node,
+    # so offering it `use_skill` would advertise a tool it cannot call.
+    skills_msg = None if remote else _skills_message()
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": spec.system_prompt},
+        *([skills_msg] if skills_msg else []),
         *([guides_msg] if guides_msg else []),
         *_history_messages(history),
         # The workspace index and then the focused buffer go right before the user

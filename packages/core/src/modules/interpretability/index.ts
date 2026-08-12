@@ -1,6 +1,6 @@
 import { registry, type ModuleManifest } from '../../registry';
-import { ModelDiagram } from './ModelDiagram';
-import { InterpretabilityPanel, InterpretabilityWidget } from './view';
+import { ModelExplorer } from './ModelExplorer';
+import { InterpretabilityPanel } from './view';
 
 /**
  * See what the model is actually being handed.
@@ -29,26 +29,11 @@ export const interpretabilityModule: ModuleManifest = {
       // Sits beside the context view: what the model *is*, next to what it was
       // given. Also `widget` so it can hold a center area of its own.
       id: 'interpretability.architecture',
-      title: 'Model diagram',
-      component: ModelDiagram,
+      title: 'Model explorer',
+      component: ModelExplorer,
       role: 'widget',
       icon: '🧬',
       singleton: true,
-    },
-  ],
-  widgets: [
-    {
-      // The compact counterpart — dockable alongside whatever you're actually
-      // working on, with the full inspector one region-strip click away.
-      id: 'interpretability.budget',
-      title: 'Context budget',
-      component: InterpretabilityWidget,
-      role: 'tool',
-      icon: '▤',
-      defaultDock: 'bottom',
-      regions: [
-        { id: 'interpretability.context', label: 'Context', icon: '🔍', position: 'bottom' },
-      ],
     },
   ],
   /**
@@ -88,8 +73,10 @@ export const interpretabilityModule: ModuleManifest = {
       run: () => registry.openPanel('interpretability.context'),
     },
     {
+      // Command id kept as-is: a keybinding or plugin naming it predates the
+      // rename, and a command id is an API even when its title isn't.
       id: 'interpretability.openDiagram',
-      title: 'Interpretability: Show model diagram',
+      title: 'Interpretability: Explore model structure',
       run: () => registry.openPanel('interpretability.architecture'),
     },
   ],
@@ -107,6 +94,18 @@ export const interpretabilityModule: ModuleManifest = {
         'name rather than a repo (LM Studio builds often are), or when the repo is gated and ' +
         'you have no Hugging Face connection. Without a resolvable repo, token counts fall ' +
         'back to chars/4 estimates and the diagram has no source.',
+      type: 'string',
+      default: '',
+    },
+    {
+      key: 'interpretability.ggufPath',
+      title: 'Model weights file (.gguf)',
+      description:
+        'Absolute path to the GGUF the server has loaded, for the tensor inventory in the ' +
+        'model explorer. Leave empty to find it automatically: Ollama models are located in ' +
+        'its blob store and LM Studio models through its own index. Set this for llama.cpp, ' +
+        'vLLM or any other server whose model store we cannot walk — and to override the ' +
+        'automatic result if it ever picks the wrong file.',
       type: 'string',
       default: '',
     },

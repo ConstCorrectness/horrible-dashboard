@@ -18,7 +18,7 @@ class ContextBlock(BaseModel):
     orchestrator knows which is which at assembly time; this preserves that.
     """
 
-    kind: str  # system | guides | history | editor | user | assistant | tool_result
+    kind: str  # system | skills | guides | history | editor | user | ...
     role: str
     label: str
     content: str
@@ -177,6 +177,58 @@ class ModelArchitecture(BaseModel):
     # Human-readable caveats worth showing beside the diagram (quantization,
     # multimodal towers, alternating attention patterns).
     notes: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class TensorEntry(BaseModel):
+    """One tensor from the GGUF directory — the model as it exists on disk.
+
+    Distinct from everything else in this file: the specs above are *descriptions*
+    of a model normalized out of scalar metadata, whereas this is the inventory.
+    `byteSize` is what a shape alone cannot tell you, because a quantized tensor's
+    footprint depends on its block format.
+    """
+
+    name: str
+    shape: list[int] = Field(default_factory=list)
+    dtype: str
+    elements: int
+    # None when the ggml type id is one we have no block size for. A guessed size
+    # would misattribute where the model's weight actually sits, which is the one
+    # question the inventory exists to answer.
+    byteSize: int | None = None
+    # Transformer block index, or None for the tensors outside the stack
+    # (embeddings, final norm, output head).
+    layer: int | None = None
+    component: str = "other"
+
+
+class ModelTensorsResponse(BaseModel):
+    """The loaded model's real tensor inventory, read from its GGUF header.
+
+    `source` is `gguf` only when we opened the actual file the server loaded. There
+    is no fallback source: unlike the architecture, an inventory cannot be
+    approximated from a repo's config, so the pane shows nothing rather than
+    something plausible.
+    """
+
+    source: str = "none"  # gguf | none
+    path: str = ""
+    fileSize: int | None = None
+    ggufVersion: int | None = None
+    tensorCount: int = 0
+    # Highest `blk.N` index + 1. Reported separately from ModelArchitecture.layers
+    # so the two disagreeing is visible rather than reconciled.
+    layerCount: int | None = None
+    totalParameters: int = 0
+    totalBytes: int = 0
+    # False when at least one tensor had an unrecognized quantization type, so
+    # `totalBytes` is a floor rather than the total.
+    bytesComplete: bool = True
+    # Quantization type name → how many tensors use it. A mixed quant (most K-quant
+    # builds keep some tensors at F32/F16) is the norm, not an anomaly.
+    quantTypes: dict[str, int] = Field(default_factory=dict)
+    tensors: list[TensorEntry] = Field(default_factory=list)
     error: str | None = None
 
 

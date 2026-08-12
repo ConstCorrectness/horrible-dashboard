@@ -127,9 +127,109 @@ blogs, an API reference. General web indexing loses to a search API below roughl
 queries/month; a curated corpus wins on the axis APIs are worst at: instant, free per
 query, and complete for the handful of sites that matter to you.
 
-Seeds ship in `backend/modules/search/crawl/seeds.json` (PyTorch, Transformers,
-scikit-learn, NumPy, JAX, pandas, FastAPI, LanceDB, Claude API, Ollama, MDN, Distill,
-Karpathy, Lil'Log). Add your own via `POST /api/search/seeds`.
+Seeds ship in `backend/modules/search/crawl/seeds.json` — 22 of them: the Hugging Face
+stack (Transformers, Datasets, TRL, PEFT, Accelerate, Hub), PyTorch, JAX, scikit-learn,
+NumPy, pandas, Python, FastAPI, LanceDB, the Claude API, OpenAI, Google ADK, Ollama,
+MDN, Distill, Karpathy and Lil'Log. Add your own via `POST /api/search/seeds`.
+
+## Three ingest paths, in order of preference
+
+Most modern doc sites publish their own machine-readable index, and taking it is
+strictly better than following links: it is the pages the publisher *considers*
+documentation, with no crawl-depth guesswork and no `/genindex` to deny-pattern away.
+`crawl/llmstxt.py` probes for both files and the crawler falls through:
+
+```mermaid
+flowchart TD
+    P["probe llms-full.txt / llms.txt<br/>(path-scoped, then origin)"] --> C{"corpus, and its<br/>documents name their pages?"}
+    C -->|yes| Corpus["**corpus** — one fetch, many documents"]
+    C -->|no| I{"llms.txt index?"}
+    I -->|yes| Index["**index** — its links are the frontier"]
+    I -->|no| Crawl["**crawl** — BFS over links, as before"]
+```
+
+Which one ran is reported as `source` on the crawl stats, so a seed that silently fell
+back to BFS is visible rather than inferred.
+
+### Path-scoped before origin-rooted
+
+The convention puts these files at the origin. The web disagrees often enough that both
+are probed, scoped path first: `huggingface.co/docs/transformers/llms.txt` is 726
+curated links while `huggingface.co/llms.txt` is a 404, and `docs.claude.com` is the
+exact reverse. Taking the origin file first would index the wrong product on every
+multi-product host.
+
+### A corpus must name its pages
+
+`llms-full.txt` is the whole corpus in one file — one conditional GET replaces two
+hundred, and an unchanged corpus is a single **304 for the entire seed**. But it is only
+usable as *content* when its sections carry source URLs (a `Source:` line, a bare URL
+under the heading, or a linked heading; `docs.ollama.com` does this for 53 of its 65
+sections).
+
+Without them every chunk would share one URL — and since chunks are grouped back into
+pages by URL and `canonical_url` drops fragments, the whole corpus would collapse into a
+single search hit that opens a multi-megabyte text file instead of the page that
+answered the question. Below half attributable, the corpus is discarded and the index
+path runs instead. Google's ADK corpus is 229 sections with **zero** source URLs, so
+this fallback is what makes that site indexable at all.
+
+A corpus over 8 MB is also refused: `docs.claude.com/llms-full.txt` is 25 MB, roughly
+25,000 chunks for one seed, and its `llms.txt` index honours `max_pages` instead.
+
+### Curated links skip the deny patterns
+
+Deny patterns exist to keep *link-following* out of junk. A publisher's own index
+contains none by construction, and applying them anyway breaks a real case: Hugging
+Face's index links pinned `/docs/transformers/v5.14.0/…` URLs, which the seed's
+`/v[0-9]` pattern would reject — discarding all 726 entries. Domain and allow patterns
+still apply, so an index cannot drag the crawl off-site.
+
+Those links are also `.md` twins, which trafilatura extracts *nothing* from — it parses
+HTML. A body that doesn't look like HTML is therefore indexed as the markdown it is,
+headings and all.
+
+## Versioned docs
+
+A docs URL is not a version claim: `huggingface.co/docs/transformers/index` serves
+whatever is current. So a seed declares its **package** instead, and the crawl asks the
+registry what the latest stable release is before writing a single page:
+
+```json
+{ "id": "huggingface-trl", "package": { "registry": "pypi", "name": "trl" } }
+```
+
+`pypi`, `npm` and `github` are supported (a GitHub *draft* release is rejected — it
+names a tag nobody can install). The resolved version is stored on `crawl_seeds`, on
+each `crawl_pages` row, and in every `webindex` chunk's metadata. Seventeen of the 22
+built-in seeds declare one; the rest (Python, MDN, the blogs) genuinely have no package.
+
+### A version change defeats both skip levels
+
+The cheap paths compare content, and a page whose text didn't change would otherwise
+keep chunk metadata naming the previous release — and then vanish from a
+version-filtered search. So when the resolved version differs from what a page holds,
+the conditional headers are **withheld** (a 304 returns no body to reindex) and the
+hash comparison is skipped.
+
+Compared by `major.minor`, not exact version: docs are written per series, and
+comparing patch versions would re-embed two hundred pages for every point release. A
+seed with no package resolves no version and never restales, so its crawls are
+byte-for-byte what they were before.
+
+### What's installed here beats what's latest
+
+A doc answer that disagrees with the user's installed package is worse than no answer —
+it reads as authoritative and is wrong in a way that costs a debugging session. So
+`versions.installed_versions` reads `*.dist-info` metadata from the backend env and from
+every [training](./training.mdx) project venv (on disk, not by spawning an interpreter),
+and crawl hits describing a series you don't have are **demoted**.
+
+Demoted, not excluded, and only slightly: docs for an adjacent release are usually still
+right. And nothing installed is *no signal*, not a mismatch — penalizing docs for a
+package you haven't installed yet would bury exactly the docs you read before installing
+it. Fusion downstream is rank-based, so reordering within this provider's list is the
+whole of the lever; the score never leaves the provider.
 
 ### Re-crawls are nearly free
 
@@ -216,7 +316,7 @@ work.
 | `GET /api/search/providers` | Which engines exist, which can run, and why the rest can't |
 | `POST /api/search/read` | Extract one URL |
 | `POST /api/search/index/query` | Local index only |
-| `GET/POST /api/search/seeds`, `DELETE /api/search/seeds/{id}` | Crawl seeds |
+| `GET/POST /api/search/seeds`, `DELETE /api/search/seeds/{id}` | Crawl seeds (a seed carries `package`, `prefer_llms_txt`, `llms_txt_url`, `llms_full_url`; the response carries the resolved `version`) |
 | `POST /api/search/crawl` | Enqueue one seed, or every seed that's due |
 | `GET /api/search/crawl/status` | Seeds + index status |
 | `POST /api/search/cache/clear` | Empty both caches |

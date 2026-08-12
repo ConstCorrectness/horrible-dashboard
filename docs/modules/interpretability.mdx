@@ -35,13 +35,21 @@ previously invisible:
 ## Not a Jacobian lens
 
 This module inspects the **prompt**, not the network. Activations, attention, KV
-cache contents, and gradients are all unavailable through Ollama's HTTP API, which
-returns tokens and counts — nothing else. Any true mechanistic-interpretability
-work (logit lens, tuned lens, Jacobian-based sensitivity) needs autograd against
-real weights, which means a torch-backed process outside the backend env — see
-the `training` module's spawned envs (`backend/modules/training/envs.py`) for the
-shape that would take. The backend deliberately has no torch and should not grow
-one.
+cache contents, and gradients are all unavailable through the HTTP API of every
+provider it can talk to, which returns tokens and counts — nothing else.
+
+The model explorer narrows that gap on one side: reading the GGUF directly gives the
+real **weights inventory** — every tensor's name, shape and quantization — so the
+structure shown is measured rather than described. It stops at the file. Nothing here
+runs a forward pass, so there are still no activations and no attention maps.
+
+Getting those is a planned, separate piece of work: a llama.cpp-backed *inspect*
+provider that coexists with Ollama and captures ggml's per-node `cb_eval` tensors
+into a **snapshot trace on disk**, scrubbed offline rather than streamed. That path
+deliberately avoids autograd — the backend has no torch and should not grow one; heavy
+dependencies live in per-project uv envs (`backend/modules/training/envs.py`) or
+optional extras. Until it lands, take this module as inspecting the **prompt** and the
+**weights**, never the computation between them.
 
 ## Architecture
 
@@ -114,51 +122,87 @@ own machine, and this node genuinely cannot see it (nor should it; see
 honest: a delegation that leaves the node shows up as a leaf that says so, rather
 than a silent gap the reader has to guess about.
 
-## Model diagram
+## Model explorer
 
-Beside the context view sits a 2D diagram of the loaded model: what it *is*, next to
-what it was *given*. It's data-driven — every dimension comes from real metadata, and
-anything the source doesn't state is simply not drawn.
+Beside the context view sits the loaded model: what it *is*, next to what it was
+*given*. It is a thing you click through rather than a picture — selecting a stage
+of the stack shows the tensors that actually implement it.
 
 ```mermaid
 flowchart TD
     E["Token embedding — vocab × d_model"] --> B
-    subgraph B["Transformer block ×N"]
+    subgraph B["Decoder block ×N — expandable to a specific layer"]
         direction TB
         N1["RMSNorm"] --> A["Attention — heads / KV heads"]
         A --> R1["⊕ residual"]
-        R1 --> N2["RMSNorm"]
-        N2 --> F["Gated FFN  ·or·  MoE router → top-k experts"]
+        R1 --> F["Gated FFN  ·or·  MoE router → top-k experts"]
         F --> R2["⊕ residual"]
     end
     B --> H["Final norm → LM head"]
 ```
 
-The block is drawn **once with a ×N multiplier** rather than repeated. Forty-two
-identical rectangles say nothing the number doesn't; the space is better spent on
-what differs *inside* a block.
+The block is drawn **once with a ×N multiplier** rather than repeated — forty-eight
+identical rectangles say nothing the number doesn't — but the multiplier expands
+into a layer picker, so "block 17 specifically" is one click away.
 
-Two details are drawn rather than merely stated, because the number alone doesn't
-land:
+### Two sources, and why they stay separate
 
-- **Head grouping** — query heads are drawn sitting on the KV head they share. "28
-  heads / 4 KV" is a 7× smaller KV cache than full MHA, and the picture makes that
-  immediate.
-- **Expert routing** — for an MoE, the expert bank is drawn with the routed top-k
-  highlighted, alongside the active fraction (Mixtral: 2 of 8, so 25%).
-
-### Where the numbers come from
-
-| Source | Provider | Confidence |
+| Source | Available for | What it gives |
 | --- | --- | --- |
-| GGUF `model_info` via `/api/show` | Ollama | **Highest** — written from the weights the server actually loaded |
-| `config.json` from a HF repo | any (the only option for LM Studio / vLLM) | Describes the architecture, but strictly describes the *repo* |
+| The model's own **GGUF header** | Ollama, LM Studio, or any server with `interpretability.ggufPath` set | The **inventory**: every tensor's name, shape, ggml quant type and byte size |
+| GGUF `model_info` via `/api/show` | Ollama | The **description**, written from the weights the server loaded |
+| `config.json` from a HF repo | any (the only option for LM Studio / vLLM) | The description, but strictly of the *repo* |
 
-The pane labels which one it used (`from weights` / `from repo`) rather than
-presenting them interchangeably. OpenAI-dialect servers expose no architecture
-endpoint at all, so for those a resolvable repo is required — set
-`interpretability.modelRepo` when the model id is a local build name rather than a
-repo, which LM Studio's often are.
+The pane labels which it used (`weights` / `repo`, plus a `gguf` chip when the
+inventory is present) rather than presenting them interchangeably.
+
+The split is load-bearing. A description can be approximated from a repo when the
+weights are unreachable; an **inventory cannot** — a `config.json` lists no tensors —
+so `/tensors` returns an error the pane renders as "no GGUF found" rather than a
+plausible-looking list. A model can have the description without the inventory, and
+the pane stays useful minus the tensor tables.
+
+### What the inventory catches that a schematic can't
+
+Every scalar source reports **one** head count for the whole model. That is often
+false. Gemma 4 alternates its attention shape by layer — `blk.0.attn_q` is 3840×4096
+where `blk.17.attn_q` is 3840×8192 — so a "× 48" with a single head count beside it
+actively misleads. The explorer compares tensor shapes across blocks and, when they
+differ, marks the block frame `varies` and names the roles that change. Only the
+inventory can see this.
+
+It also reports the **mixed quantization** a K-quant build actually uses (a Gemma 4
+12B QAT build is 338 F32 tensors, 328 Q4_0, and exactly one Q6_K — the embedding),
+and where the bytes sit: select Attention and the pane says what share of the file
+it is.
+
+### Locating the weights
+
+`gguf.resolve_model_path` tries, in order:
+
+1. **`interpretability.ggufPath`**, which wins outright. Auto-discovery reads two
+   undocumented on-disk layouts their owners are free to change, so there has to be
+   a way to say "it is this file" that no upstream release can break.
+2. **Ollama's blob store** — its manifest names the layer whose `mediaType` is
+   `…image.model`; that digest is the blob. `OLLAMA_MODELS` relocates the root.
+3. **LM Studio's index** (`~/.lmstudio/.internal/model-index-cache.json`), where
+   `indexedModelIdentifier` is exactly the id its API serves. Its REST API reports a
+   model's arch and quantization but *not* its path, so the index is the only route.
+   Taking `entryPoint` matters: a multimodal repo ships an `mmproj-*.gguf` beside the
+   weights, and the first file in the directory is a real GGUF that parses cleanly
+   and describes the wrong thing.
+
+Step 3 is not gated on the provider being LM Studio — llama.cpp and other
+OpenAI-dialect servers are often pointed at a model LM Studio also has indexed, and
+a hit there is a hit on the same file.
+
+:::note A byte size is not derivable from a shape
+A quantized tensor's footprint depends on its block format, so `gguf.py` carries a
+`(elements per block, bytes per block)` table. An unrecognized ggml type reports
+**no** size rather than a guessed one, and the response's `bytesComplete` goes false
+so the total reads as a floor. The table's correctness argument is that on a real
+mixed-quant file, `sum(tensor bytes)` equals `file_size - data_offset` to the byte.
+:::
 
 GGUF keys are namespaced per architecture (`gemma2.block_count`,
 `llama.attention.head_count_kv`), so they're matched **by suffix**. A new family
@@ -173,20 +217,28 @@ single-projection FFN. The same reasoning governs every optional field.
 
 ## Block classification
 
-The provider payload is an undifferentiated list of role/content dicts, and three
+The provider payload is an undifferentiated list of role/content dicts, and four
 distinct parts of the prompt all arrive as `role: system`. The recorder recovers
-the distinction from assembly order plus the `<<<BUFFER` marker:
+the distinction from assembly order plus two content markers (`<<<BUFFER` and the
+skill catalog's header, imported from the module that writes it so a reworded header
+can't silently relabel the block):
 
 | Kind | Source | Role |
 | --- | --- | --- |
 | `system` | `spec.system_prompt` | system |
 | `guides` | `_guides_message` — usage notes for preloaded groups | system |
+| `skills` | `_skills_message` — the [skill](skills.mdx) catalog | system |
 | `history` | prior conversation replayed into the turn | user / assistant |
 | `editor` | `_active_editor_message` — the focused buffer | system |
 | `user` | this turn's prompt | user |
 | `assistant` | the model's output this turn (incl. tool calls) | assistant |
 | `tool_result` | a tool's return value | tool |
 | `nudge` | the force-tool retry system message | system |
+
+`skills` is deliberately not folded into `guides`: their cost profiles are
+opposites. A guide is paid only on turns where its group is active, while every line
+of the skill catalog rides *every* round — so merging them would hide the one block
+whose growth the user most needs to see.
 
 The prompt/loop boundary is pinned at round 0 so classification stays stable as
 the loop appends to the list.
@@ -222,12 +274,21 @@ to prevent.
 | --- | --- | --- |
 | Layout | `interpretability` | "Interpretability" workspace in the top tab strip |
 | Panel | `interpretability.context` | Singleton; role `widget` (holds a center area) |
-| Panel | `interpretability.architecture` | Model diagram; sits beside the context view |
-| Widget | `interpretability.budget` | Role `tool`; docks bottom, region strip to the full pane |
+| Panel | `interpretability.architecture` | Model explorer; sits beside the context view |
 | Command | `interpretability.open` | Inspect context window |
-| Command | `interpretability.openDiagram` | Show model diagram |
+| Command | `interpretability.openDiagram` | Explore model structure |
 | Keybinding | `mod+shift+x` | → `interpretability.open` |
-| Setting | `interpretability.modelRepo` | HF repo for exact tokens **and** the diagram |
+| Setting | `interpretability.modelRepo` | HF repo for exact tokens **and** the description |
+| Setting | `interpretability.ggufPath` | Explicit weights file for the tensor inventory |
+
+:::note Layouts saved before the budget widget was merged
+`interpretability.budget` was a compact `role: 'tool'` widget duplicating the
+context panel's header. It is gone; the budget bar (and its "tools dropped" chip)
+lives in `interpretability.context`, which was always one region-strip click away.
+`RENAMED_VIEWS` in `layout/serialize.ts` maps the retired id onto the panel, so a
+workspace saved before the merge opens without a hole. `interpretability.openDiagram`
+keeps its id through the rename — a command id is an API even when its title isn't.
+:::
 
 ### The Interpretability workspace
 
@@ -253,9 +314,8 @@ live in **separate visible areas** (center + dock) deliberately: panes in inacti
 tabs unmount, which would drop the pane's live `/ws` subscription mid-turn.
 
 Note the role split this forces. A center area accepts `document` or `widget` panes —
-`tool` panes are dock-only — so the full inspector is `role: 'widget'` even though it
-reads like a tool, and the compact budget readout is the `role: 'tool'` one. Same
-inversion as the observability module.
+`tool` panes are dock-only — so both panes are `role: 'widget'` even though they read
+like tools. Same inversion as the observability module.
 
 ## Backend surface
 
@@ -265,7 +325,8 @@ inversion as the observability module.
 | GET | `/api/interpretability/turns/{turn_id}` | One turn; 404 if evicted |
 | DELETE | `/api/interpretability/turns` | Clear the ring |
 | GET | `/api/interpretability/model` | Model metadata + true context length |
-| GET | `/api/interpretability/architecture` | Normalized model structure for the diagram |
+| GET | `/api/interpretability/architecture` | Normalized model structure (the description) |
+| GET | `/api/interpretability/tensors` | The GGUF tensor inventory; no fallback source |
 
 `/api/interpretability/model` reads Ollama's `/api/show`. The OpenAI dialect (LM
 Studio, vLLM) has no equivalent, so it returns an `error` the pane renders as

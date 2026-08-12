@@ -34,7 +34,10 @@ logger = logging.getLogger(__name__)
 
 _SEEDS_FILE = Path(__file__).parent / "seeds.json"
 
-PAGE_STATUSES = ("ok", "error", "gone")
+# `corpus` marks the llms-full.txt bookkeeping row rather than a page: it carries the
+# etag that makes a whole-seed 304 possible, and is deliberately excluded from
+# `known_urls` and the page count so it can never be crawled or counted as content.
+PAGE_STATUSES = ("ok", "error", "gone", "corpus")
 
 
 @contextmanager
@@ -90,7 +93,20 @@ def init_crawl_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_crawl_pages_seed ON crawl_pages(seed_id)"
         )
+        # Both statements above are CREATE TABLE IF NOT EXISTS, so an existing install
+        # never sees a column added after its tables were made. Every later column
+        # goes here instead.
+        _ensure_column(conn, "crawl_seeds", "version", "TEXT")
+        _ensure_column(conn, "crawl_pages", "version", "TEXT")
     _load_builtin_seeds()
+
+
+def _ensure_column(
+    conn: sqlite3.Connection, table: str, column: str, decl: str
+) -> None:
+    existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
 def _load_builtin_seeds() -> None:
@@ -133,6 +149,7 @@ def _seed_row(r: Any) -> dict[str, Any]:
         "last_status": r["last_status"],
         "last_error": r["last_error"],
         "pages": r["pages"],
+        "version": r["version"],
     }
 
 
@@ -193,6 +210,20 @@ def delete_seed(seed_id: str) -> str:
     return "deleted"
 
 
+def set_seed_version(seed_id: str, version: str | None) -> None:
+    """Record the release the seed's pages now describe.
+
+    Written at the *start* of a crawl rather than the end: the pages being written
+    during the run are stamped with it, so a run that dies halfway must not leave the
+    seed claiming the old version for pages that already hold the new one.
+    """
+    with get_db_conn() as conn:
+        conn.execute(
+            "UPDATE crawl_seeds SET version = ? WHERE id = ?",
+            (version or None, seed_id),
+        )
+
+
 def finish_seed(seed_id: str, *, status: str, error: str | None, pages: int) -> None:
     with get_db_conn() as conn:
         conn.execute(
@@ -246,17 +277,23 @@ def record_page(
     status: str = "ok",
     error: str | None = None,
     indexed: bool = False,
+    version: str | None = None,
 ) -> None:
     """Upsert what we now know about a page. `indexed` bumps `indexed_at` only when
     chunks were actually written, so "last seen" and "last embedded" stay distinct —
-    that difference is what makes the skip paths auditable."""
+    that difference is what makes the skip paths auditable.
+
+    `version` is only overwritten when the page was actually indexed: it describes the
+    release the *chunks in the vector store* were written for, and an error row would
+    otherwise claim a version whose text was never indexed.
+    """
     with get_db_conn() as conn:
         conn.execute(
             """
             INSERT INTO crawl_pages
                 (url, seed_id, title, etag, last_modified, content_hash,
-                 chunk_count, status, error, fetched_at, indexed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP,
+                 chunk_count, status, error, version, fetched_at, indexed_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP,
                     CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE NULL END)
             ON CONFLICT(url, seed_id) DO UPDATE SET
                 title = excluded.title,
@@ -267,6 +304,8 @@ def record_page(
                 chunk_count = excluded.chunk_count,
                 status = excluded.status,
                 error = excluded.error,
+                version = CASE WHEN ? THEN excluded.version
+                               ELSE crawl_pages.version END,
                 fetched_at = CURRENT_TIMESTAMP,
                 indexed_at = CASE WHEN ? THEN CURRENT_TIMESTAMP
                                   ELSE crawl_pages.indexed_at END
@@ -281,19 +320,26 @@ def record_page(
                 chunk_count,
                 status,
                 error,
+                version or None,
+                1 if indexed else 0,
                 1 if indexed else 0,
                 1 if indexed else 0,
             ),
         )
 
 
-def touch_page(url: str, seed_id: str) -> None:
-    """Mark a page as seen-and-unchanged without disturbing its content hash."""
+def touch_page(url: str, seed_id: str, *, status: str = "ok") -> None:
+    """Mark a page as seen-and-unchanged without disturbing its content hash.
+
+    `status` is explicit because the corpus row must stay `corpus`: promoting it to
+    `ok` on a 304 would put the llms-full.txt file itself into the next run's
+    frontier and count it as an indexed page.
+    """
     with get_db_conn() as conn:
         conn.execute(
-            "UPDATE crawl_pages SET fetched_at = CURRENT_TIMESTAMP, status = 'ok', "
+            "UPDATE crawl_pages SET fetched_at = CURRENT_TIMESTAMP, status = ?, "
             "error = NULL WHERE url = ? AND seed_id = ?",
-            (url, seed_id),
+            (status if status in PAGE_STATUSES else "ok", url, seed_id),
         )
 
 

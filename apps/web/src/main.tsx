@@ -48,6 +48,7 @@ import {
   recordsModule,
   browserModule,
   interpretabilityModule,
+  labModule,
   observabilityModule,
   registry,
   replModule,
@@ -55,6 +56,7 @@ import {
   scratchModule,
   searchModule,
   mcpModule,
+  skillsModule,
   setWindowControl,
   settingsModule,
   stubModule,
@@ -104,9 +106,13 @@ async function boot(): Promise<void> {
   registry.register(agentModule);
   registry.register(scratchModule);
   registry.register(mcpModule);
+  registry.register(skillsModule);
   registry.register(browserModule);
   registry.register(clubhouseModule);
   registry.register(interpretabilityModule);
+  // After interpretability so the Lab workspace tab sits beside it, and because the
+  // Lab frame composes its panes more heavily than any other module's.
+  registry.register(labModule);
   registry.register(observabilityModule);
   registry.register(marketplaceModule);
   registry.register(settingsModule);

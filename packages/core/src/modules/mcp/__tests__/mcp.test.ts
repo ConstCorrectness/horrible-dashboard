@@ -27,11 +27,16 @@ function server(overrides: Partial<McpServer>): McpServer {
     error: null,
     serverName: '',
     serverVersion: '',
+    protocolVersion: '',
+    origin: 'manual',
+    project: '',
     hasToken: false,
     target: { available: true },
     tools: [],
     prompts: [],
     resources: [],
+    secretEnv: [],
+    missingSecretEnv: [],
     ...overrides,
   };
 }
@@ -50,8 +55,8 @@ describe('summarize', () => {
         state: 'ready',
         group: 'mcp-fs',
         tools: [
-          { name: 'read', description: '', readOnly: true, destructive: false },
-          { name: 'write', description: '', readOnly: false, destructive: false },
+          { name: 'read', description: '', readOnly: true, destructive: false, inputSchema: {} },
+          { name: 'write', description: '', readOnly: false, destructive: false, inputSchema: {} },
         ],
       }),
     ]);
@@ -64,7 +69,9 @@ describe('summarize', () => {
     const text = summarize([
       server({
         state: 'ready',
-        tools: [{ name: 'only', description: '', readOnly: false, destructive: false }],
+        tools: [
+          { name: 'only', description: '', readOnly: false, destructive: false, inputSchema: {} },
+        ],
       }),
     ]);
     expect(text).toContain('1 tool ');

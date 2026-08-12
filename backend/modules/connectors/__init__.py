@@ -13,7 +13,16 @@ See docs/modules/connectors.mdx.
 
 from backend.modules.connectors.providers.github_routes import router as github_router
 from backend.modules.connectors.providers.google_routes import router as google_router
+from backend.modules.connectors.providers.huggingface_routes import (
+    router as huggingface_router,
+)
 from backend.modules.connectors.routes import router
 from backend.modules.connectors.setup import register_connectors
 
-__all__ = ["github_router", "google_router", "register_connectors", "router"]
+__all__ = [
+    "github_router",
+    "google_router",
+    "huggingface_router",
+    "register_connectors",
+    "router",
+]

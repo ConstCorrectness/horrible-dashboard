@@ -192,6 +192,74 @@ _GUIDES: dict[str, str] = {}
 _DESCRIPTIONS: dict[str, str] = {}
 
 
+def agents_with_group(group: str) -> list[dict[str, Any]]:
+    """Which roster agents can load this server's tools, and how.
+
+    `tool_groups=None` means unrestricted — every group is loadable, which only `main`
+    is — while an empty list means *no* groups at all. Collapsing the two would report
+    a specialist as having access to everything, so the distinction is carried out to
+    the pane as `explicit`: named in the agent's scope, versus reachable because the
+    agent has no scope limit.
+    """
+    from backend.modules.agent.roster import list_agents
+
+    out: list[dict[str, Any]] = []
+    for spec in list_agents():
+        groups = getattr(spec, "tool_groups", None)
+        if groups is None:
+            out.append({"id": spec.id, "name": spec.name, "explicit": False})
+        elif group in groups:
+            out.append({"id": spec.id, "name": spec.name, "explicit": True})
+    return out
+
+
+async def context_cost(runtime: ServerRuntime) -> dict[str, Any]:
+    """What this server costs the model, in real tokens, once its group is loaded.
+
+    Counted on the **provider-shaped** payload (`orchestrator._tool`), not on the
+    description text: what reaches the model is serialized JSON schema, and a tool with
+    a one-line description and a forty-property input schema is expensive in a way no
+    description-length heuristic would show.
+
+    Falls back to a chars/4 estimate when no tokenizer resolves, and says so — the same
+    rule the interpretability pane follows, and for the same reason: an estimate
+    rendered as a precise number is the failure mode this kind of view exists to
+    prevent.
+    """
+    from backend.modules.agent import routes as agent_routes
+    from backend.modules.agent.orchestrator import _tool
+    from backend.modules.interpretability.tokenizer import Counter
+
+    config = agent_routes._load_config()
+    counter = await Counter.create(getattr(config, "model", "") or "")
+
+    per_tool: list[dict[str, Any]] = []
+    total = 0
+    for agent_tool in _agent_tools_for(runtime):
+        payload = _tool(
+            agent_tool.name,
+            agent_tool.description,
+            agent_tool.parameters,
+            agent_tool.required,
+        )
+        tokens = counter.count_json(payload)
+        total += tokens
+        per_tool.append({"name": agent_tool.name, "tokens": tokens})
+
+    guide = guide_for(runtime) or ""
+    guide_tokens = counter.count(guide)
+    return {
+        "tools": per_tool,
+        "toolTokens": total,
+        "guideTokens": guide_tokens,
+        # The number that answers "what does turning this on cost me": schemas plus
+        # the guide, which load together.
+        "totalTokens": total + guide_tokens,
+        "exact": counter.exact,
+        "tokenizer": counter.repo or "",
+    }
+
+
 def group_description(group: str) -> str | None:
     return _DESCRIPTIONS.get(group)
 

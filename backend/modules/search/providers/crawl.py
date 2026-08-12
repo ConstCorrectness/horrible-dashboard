@@ -14,16 +14,23 @@ should never treat "not in the index" as "not on the web".
 from __future__ import annotations
 
 import logging
+import re
+from dataclasses import replace
 from typing import Any
 
 from backend.modules.search.base import SearchProviderError, SearchResult
 from backend.modules.search.crawl import index as webindex
+from backend.modules.search.crawl.versions import installed_versions, version_series
 
 logger = logging.getLogger(__name__)
 
 # Chunks fetched per page-level result. A long docs page contributes many chunks and
 # we only keep its best, so the raw limit has to overshoot.
 _CHUNK_OVERSAMPLE = 4
+
+# How much a hit loses for describing a release the machine doesn't have. Small on
+# purpose — see `demote_mismatches`.
+_MISMATCH_DEMOTION = 0.85
 
 
 class CrawlProvider:
@@ -83,7 +90,7 @@ async def search_index(
     except Exception as exc:  # noqa: BLE001 — a broken index is one dead provider
         raise SearchProviderError(f"crawl: {exc}") from exc
 
-    return _group_by_page(rows, limit=limit, site=site)
+    return annotate_versions(_group_by_page(rows, limit=limit, site=site))
 
 
 def _group_by_page(
@@ -117,8 +124,92 @@ def _group_by_page(
             score=score,
             published=meta.get("crawled_at") or None,
             provider="crawl",
-            raw={"seed_id": meta.get("seed_id"), "tags": meta.get("tags") or []},
+            raw={
+                "seed_id": meta.get("seed_id"),
+                "tags": meta.get("tags") or [],
+                # Absent when the seed declares no package — "unversioned" and
+                # "version unknown" are the same thing here, and neither is "".
+                "version": meta.get("version") or None,
+            },
         )
 
     ordered = sorted(best.values(), key=lambda r: r.score or 0.0, reverse=True)
     return ordered[:limit]
+
+
+def demote_mismatches(
+    results: list[SearchResult], installed: dict[str, str]
+) -> list[SearchResult]:
+    """Re-rank so docs for a release you don't have sit below ones you do.
+
+    `installed` maps seed id → the version found on this machine. Pure, so the ranking
+    rule is testable without touching a venv.
+
+    Demotion rather than exclusion, and a small one: docs for an adjacent release are
+    usually still right, and the failure this guards against is a *confident* wrong
+    answer, not the presence of an older page. Fusion downstream is rank-based, so
+    changing the order within this provider's list is the whole of the lever —
+    the number itself never leaves here.
+    """
+    scored: list[tuple[float, int, SearchResult]] = []
+    for position, result in enumerate(results):
+        found = installed.get(str(result.raw.get("seed_id") or ""))
+        mismatched = bool(
+            found
+            and result.raw.get("version")
+            and version_series(str(result.raw["version"])) != version_series(found)
+        )
+        raw = {**result.raw, "installed": found or None, "version_mismatch": mismatched}
+        base = result.score or 0.0
+        scored.append(
+            (
+                base * _MISMATCH_DEMOTION if mismatched else base,
+                position,
+                replace(result, raw=raw),
+            )
+        )
+
+    # `position` breaks ties by the original order, so an unversioned corpus of equal
+    # scores can't be shuffled arbitrarily between calls.
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [result for _score, _pos, result in scored]
+
+
+def annotate_versions(results: list[SearchResult]) -> list[SearchResult]:
+    """Attach installed-version context to crawl hits and re-rank on it.
+
+    Reads seed rows and on-disk distribution metadata, so it is kept separate from
+    the pure grouping and ranking above. Never raises: version awareness improves a
+    result list, and losing it must not cost the list.
+    """
+    if not results:
+        return results
+    try:
+        return demote_mismatches(results, _installed_for(results))
+    except Exception:  # noqa: BLE001
+        logger.exception("couldn't resolve installed versions for crawl hits")
+        return results
+
+
+def _installed_for(results: list[SearchResult]) -> dict[str, str]:
+    """seed id → the version of that seed's package installed on this machine."""
+    from backend.modules.search.crawl import store
+    from backend.modules.search.crawl.versions import parse_package
+
+    out: dict[str, str] = {}
+    for seed_id in {str(r.raw.get("seed_id") or "") for r in results} - {""}:
+        seed = store.get_seed(seed_id)
+        ref = parse_package((seed or {}).get("config", {}).get("package"))
+        if ref is None:
+            continue
+        found = installed_versions(ref.dist_name)
+        if found:
+            # A package installed in several project venvs at different versions has
+            # no single right answer, so the newest wins: it is the one a fresh
+            # project would get, and picking the oldest would demote current docs.
+            out[seed_id] = max(found.values(), key=_sort_key)
+    return out
+
+
+def _sort_key(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in re.findall(r"\d+", version)[:4]) or (0,)

@@ -156,6 +156,14 @@ export function SearchPanel() {
               <tr key={seed.id} style={{ opacity: seed.enabled ? 1 : 0.5 }}>
                 <td style={{ padding: '0.15rem 0' }} title={seed.last_error ?? ''}>
                   {seed.label}
+                  {/* The release these pages describe, resolved from the package
+                      registry at the last crawl. Absent for a seed with no package —
+                      "unversioned" and "stale" must not look the same. */}
+                  {seed.version ? (
+                    <span className="dashboard-hint" style={{ marginLeft: '0.4rem' }}>
+                      v{seed.version}
+                    </span>
+                  ) : null}
                 </td>
                 <td style={{ color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>
                   {live

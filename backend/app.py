@@ -52,6 +52,9 @@ from backend.modules.games import register_agent_tools as register_games_tools
 from backend.modules.games import router as games_router
 from backend.modules.connectors import github_router as github_connector_router
 from backend.modules.connectors import google_router as google_connector_router
+from backend.modules.connectors import (
+    huggingface_router as huggingface_connector_router,
+)
 from backend.modules.connectors import register_connectors
 from backend.modules.connectors import router as connectors_router
 from backend.modules.artifacts import router as artifacts_router
@@ -80,6 +83,7 @@ from backend.modules.records import router as records_router
 from backend.modules.lsp import LspManager
 from backend.modules.lsp import router as lsp_router
 from backend.modules.mcp import router as mcp_router
+from backend.modules.skills import router as skills_router
 from backend.modules.mcp import server as mcp_export
 from backend.modules.mcp.client import manager as mcp_manager
 from backend.modules.network import (
@@ -215,6 +219,7 @@ app.include_router(interpretability_router, prefix="/api")
 app.include_router(connectors_router, prefix="/api")
 app.include_router(google_connector_router, prefix="/api")
 app.include_router(github_connector_router, prefix="/api")
+app.include_router(huggingface_connector_router, prefix="/api")
 app.include_router(browser_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(files_router, prefix="/api")
@@ -234,6 +239,7 @@ app.include_router(hassault_router, prefix="/api")
 app.include_router(training_router, prefix="/api")
 app.include_router(lsp_router, prefix="/api")
 app.include_router(mcp_router, prefix="/api")
+app.include_router(skills_router, prefix="/api")
 # The MCP server this node *exports* (read-only trajectories + telemetry). Mounts only
 # when HORRIBLE_ENABLE_MCP_SERVER=1 — it serves the user's prompts and the node's I/O
 # metadata, so it stays behind an explicit opt-in. See backend/modules/mcp/server.py.
