@@ -22,6 +22,8 @@ export function OrchestratorSettings() {
   // main predates the roster and keeps its original settings namespace.
   const prefix = agentId === 'main' ? 'agent.orchestrator' : `agent.${agentId}`;
 
+  const PROVIDER_KEY = `${prefix}.provider`;
+  const ENDPOINT_KEY = `${prefix}.endpoint`;
   const MODEL_KEY = `${prefix}.model`;
   const TEMP_KEY = `${prefix}.temperature`;
   const CTX_KEY = `${prefix}.contextSize`;
@@ -29,6 +31,8 @@ export function OrchestratorSettings() {
   const TOP_P_KEY = `${prefix}.topP`;
   const MODE_KEY = `agent.${agentId}.permissionMode`;
 
+  const provider = useSetting<string>(PROVIDER_KEY) ?? '';
+  const endpoint = useSetting<string>(ENDPOINT_KEY) ?? '';
   const model = useSetting<string>(MODEL_KEY) ?? '';
   const temperature = useSetting<number>(TEMP_KEY);
   const tempOverridden = isSettingOverridden(TEMP_KEY);
@@ -46,12 +50,16 @@ export function OrchestratorSettings() {
 
   const [models, setModels] = useState<string[]>([]);
   const [configuredModel, setConfiguredModel] = useState<string | null>(null);
+  const [configuredProvider, setConfiguredProvider] = useState<string | null>(null);
+  const [providers, setProviders] = useState<{ kind: string; label: string }[]>([]);
 
   useEffect(() => {
     void getAgentStatus()
       .then((s) => {
         setModels(s.available_models ?? []);
         setConfiguredModel(s.model);
+        setConfiguredProvider(s.provider);
+        setProviders((s.providers ?? []).map((p) => ({ kind: p.kind, label: p.label })));
       })
       .catch(() => {
         // Provider/backend down — the current override still stays selectable below.
@@ -97,6 +105,63 @@ export function OrchestratorSettings() {
           </div>
         </div>
       )}
+
+      <div className="setting-row">
+        <div className="setting-label">
+          <label>Provider override</label>
+          <p className="setting-desc">
+            Which local-model server this agent's turns run against. Blank uses the provider you
+            configured during onboarding
+            {configuredProvider ? ` (${configuredProvider})` : ''}. Pointing one agent at the node's
+            own llama.cpp server while the rest stay on Ollama is the reason this is per-agent — but
+            note the <b>model override above must name a model that provider actually serves</b>,
+            since a model name means nothing on a server that doesn't have it.
+          </p>
+        </div>
+        <div className="setting-control">
+          <select
+            value={provider}
+            onChange={(e) => {
+              if (e.target.value === '') void resetSetting(PROVIDER_KEY);
+              else void setSetting(PROVIDER_KEY, e.target.value);
+            }}
+          >
+            <option value="">
+              {isMain
+                ? `Configured provider${configuredProvider ? ` (${configuredProvider})` : ''}`
+                : 'Orchestrator provider'}
+            </option>
+            {providers.map((p) => (
+              <option key={p.kind} value={p.kind}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="setting-row">
+        <div className="setting-label">
+          <label>Endpoint override</label>
+          <p className="setting-desc">
+            Base URL for this agent's provider. Blank is almost always right — it uses the
+            provider's default, and a llama.cpp server this app spawned advertises its real port
+            even when it had to move off the default one.
+          </p>
+        </div>
+        <div className="setting-control">
+          <input
+            type="text"
+            value={endpoint}
+            placeholder="Provider default"
+            onChange={(e) => {
+              if (e.target.value.trim() !== '')
+                void setSetting(ENDPOINT_KEY, e.target.value.trim());
+              else void resetSetting(ENDPOINT_KEY);
+            }}
+          />
+        </div>
+      </div>
 
       <div className="setting-row">
         <div className="setting-label">

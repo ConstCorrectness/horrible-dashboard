@@ -1835,8 +1835,7 @@ async def run_agent_turn(
             )
         )
         return
-    info = P.provider_for(config.provider)
-    endpoint = config.endpoint or info.default_endpoint
+    info, endpoint = roster.resolve_provider(config, agent_id)
     model = _orchestrator_model(config.model, agent_id)
     # A remote turn gets no tools (it can't reach a browser to execute them, and must
     # not act on this machine) → active_groups=None → the loop runs tool-less.

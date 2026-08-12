@@ -124,3 +124,45 @@ export function apiPatch<T>(path: string, body: unknown): Promise<T> {
 export function apiDelete<T>(path: string): Promise<T> {
   return request<T>(path, { method: 'DELETE' });
 }
+
+/**
+ * POST and consume a newline-delimited JSON stream, one object per callback.
+ *
+ * The backend's shape for anything with a progress bar — model pulls, llama.cpp
+ * installs and GGUF downloads — because the transfer belongs to the request that
+ * asked for it: navigating away cancels it, rather than leaving a `/ws` broadcast
+ * running for nobody. Deliberately outside `request()`: that helper reads the whole
+ * body before returning, which for a stream means the progress arrives all at once
+ * at the end.
+ *
+ * `signal` aborts the read; the last partial line is dropped, since a truncated
+ * line is not a JSON object.
+ */
+export async function streamNdjson(
+  path: string,
+  body: unknown,
+  onLine: (obj: Record<string, unknown>) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await fetch(apiUrl(`${BASE}${path}`), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    ...(signal ? { signal } : {}),
+  });
+  if (!res.ok || !res.body)
+    throw new ApiError(`API POST ${path} failed: ${res.status}`, res.status);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+    for (const line of lines) {
+      if (line.trim()) onLine(JSON.parse(line) as Record<string, unknown>);
+    }
+  }
+}

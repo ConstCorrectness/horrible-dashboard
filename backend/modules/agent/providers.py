@@ -5,7 +5,8 @@ Two API dialects cover every provider we support:
 - **ollama** — Ollama's native API (``/api/tags``, ``/api/chat``,
   ``/api/generate``, ``/api/pull``).
 - **openai** — the OpenAI-compatible API (``/v1/models``,
-  ``/v1/chat/completions``) served by **LM Studio** and **vLLM**.
+  ``/v1/chat/completions``) served by **LM Studio**, **vLLM** and the node's own
+  **llama.cpp** server (see backend/modules/llamacpp).
 
 `PROVIDERS` maps a provider *kind* to its metadata; the dialect functions below
 normalize the two wire formats so the orchestrator and routes stay
@@ -57,6 +58,23 @@ PROVIDERS: dict[str, ProviderInfo] = {
         install_url="https://lmstudio.ai",
         can_pull=False,
         can_spawn=False,
+    ),
+    "llamacpp": ProviderInfo(
+        kind="llamacpp",
+        label="llama.cpp",
+        # `llama-server` speaks the OpenAI API, so this is not a new dialect — it
+        # inherits streamed reasoning, tool-call assembly and the
+        # `tool_choice="required"` retry unchanged. A bespoke dialect would have
+        # meant six new branches in this file and would have silently lost that
+        # retry, which is gated on `info.dialect == "openai"`.
+        dialect="openai",
+        default_endpoint="http://127.0.0.1:8080",
+        install_url="https://github.com/ggml-org/llama.cpp",
+        # Not `can_pull`: weights are fetched from Hugging Face by the llamacpp
+        # module's own catalog, not by asking the inference server to pull them
+        # the way Ollama does.
+        can_pull=False,
+        can_spawn=True,
     ),
     "vllm": ProviderInfo(
         kind="vllm",

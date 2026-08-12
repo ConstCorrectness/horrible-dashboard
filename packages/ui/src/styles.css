@@ -5518,3 +5518,242 @@ kbd {
   color: var(--text-dim);
   opacity: 0.7;
 }
+
+/* ── llama.cpp pane ───────────────────────────────────────────────────────── */
+
+.llama-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: auto;
+  padding: 0.6rem;
+  gap: 0.6rem;
+  font-size: 12px;
+}
+
+.llama-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-height: 0;
+}
+
+.llama-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 0.6rem;
+}
+
+.llama-card h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.llama-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.llama-row label {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--text-dim);
+}
+
+.llama-row input[type='number'] {
+  width: 6rem;
+}
+
+.llama-row input[type='text'],
+.llama-row > input:not([type]) {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
+.llama-meta {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.llama-note {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+.llama-error {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--danger, #f08a8a);
+  overflow-wrap: anywhere;
+}
+
+.llama-tag {
+  display: inline-block;
+  padding: 0 0.3rem;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-dim);
+}
+
+.llama-tag.llama-ok {
+  border-color: rgb(110 200 140 / 60%);
+  color: rgb(130 210 160);
+}
+
+/* A model this app manages can be deleted from here; one that belongs to Ollama
+   or LM Studio cannot, and the tag is the only thing saying so. */
+.llama-origin-managed {
+  border-color: var(--accent, #6ea8fe);
+  color: var(--accent, #6ea8fe);
+}
+
+.llama-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 0.35rem;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+
+.llama-dot-on {
+  background: rgb(130 210 160);
+}
+
+.llama-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.llama-progress-track {
+  height: 4px;
+  border-radius: 2px;
+  background: rgb(255 255 255 / 10%);
+  overflow: hidden;
+}
+
+.llama-progress-fill {
+  height: 100%;
+  background: var(--accent, #6ea8fe);
+  transition: width 0.2s linear;
+}
+
+/* No total yet (a resolve step, or a server that sent no content-length): a full
+   bar would claim a completeness we don't have, so it pulses instead. */
+.llama-progress-idle {
+  width: 30%;
+  animation: llama-indeterminate 1.2s ease-in-out infinite;
+}
+
+@keyframes llama-indeterminate {
+  0% {
+    margin-left: 0;
+  }
+
+  50% {
+    margin-left: 70%;
+  }
+
+  100% {
+    margin-left: 0;
+  }
+}
+
+.llama-progress-label {
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.llama-files,
+.llama-models {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-height: 22rem;
+  overflow: auto;
+}
+
+.llama-files li {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.llama-files code {
+  flex: 1 1 auto;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+
+.llama-models li {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.llama-model-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.llama-model-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.llama-model-path {
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.llama-suggested {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.llama-suggest {
+  font-size: 11px;
+}
+
+.llama-danger {
+  align-self: flex-start;
+}
+
+.llama-logs pre {
+  margin: 0;
+  max-height: 14rem;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-dim);
+}

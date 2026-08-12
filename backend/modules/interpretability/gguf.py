@@ -477,6 +477,20 @@ def resolve_model_path(model: str, dialect: str, override: str = "") -> str | No
     if override.strip():
         path = Path(override.strip()).expanduser()
         return str(path) if path.is_file() else None
+    # Our own llama-server: we chose the file, so there is nothing to discover.
+    # This is the only provider where the path is *known* rather than inferred from
+    # somebody else's undocumented on-disk layout.
+    #
+    # Matched on the alias, not merely on "a server is running": llama-server can be
+    # up while the agent talks to Ollama, and answering with the wrong model's
+    # tensors is exactly the silent, plausible-looking wrongness this module exists
+    # to prevent.
+    from backend.modules.llamacpp.server import llama_manager
+
+    if model and llama_manager.alias == model:
+        served = llama_manager.model_path
+        if served and Path(served).is_file():
+            return served
     if dialect == "ollama":
         return resolve_ollama_model(model)
     # Not gated on the dialect being `lmstudio`: llama.cpp and other OpenAI-dialect

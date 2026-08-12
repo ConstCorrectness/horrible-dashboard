@@ -16,7 +16,6 @@ from collections import defaultdict
 from types import SimpleNamespace
 from typing import Any
 
-from backend.modules.agent import providers as P
 from backend.modules.agent.orchestrator import (
     _call_frontend_tool,
     _gate,
@@ -277,8 +276,12 @@ async def _run_agent_node(
     + gate on the same connection."""
     if config is None:
         raise RuntimeError("agent not configured")
-    info = P.provider_for(config.provider)
-    endpoint = config.endpoint or info.default_endpoint
+    # A flow's Agent node runs the orchestrator persona, so it resolves the same
+    # per-agent provider `main` does — otherwise pointing the orchestrator at the
+    # local llama.cpp server would silently leave every flow on the global one.
+    from backend.modules.agent.roster import resolve_provider
+
+    info, endpoint = resolve_provider(config, str(node.config.get("agentId") or "main"))
     model = str(node.config.get("model") or config.model)
     system = str(node.config.get("system") or AGENT_SYSTEM_DEFAULT)
     messages: list[dict[str, Any]] = [

@@ -55,7 +55,15 @@ export const labModule: ModuleManifest = {
             // What you look things up in, tabbed rather than tiled: at this width
             // three stacked panes would each be too short to read.
             {
-              tabs: ['lab.hub', 'interpretability.architecture', 'interpretability.context'],
+              tabs: [
+                'lab.hub',
+                'interpretability.architecture',
+                'interpretability.context',
+                // The Lab is where you study a model; `llamacpp.server` is where
+                // the node runs one. Tabbed here so "find weights → serve them →
+                // look at what you served" is one position, not three panes.
+                'llamacpp.server',
+              ],
               active: 0,
             },
           ],

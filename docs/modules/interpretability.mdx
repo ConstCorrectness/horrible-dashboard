@@ -149,7 +149,7 @@ into a layer picker, so "block 17 specifically" is one click away.
 
 | Source | Available for | What it gives |
 | --- | --- | --- |
-| The model's own **GGUF header** | Ollama, LM Studio, or any server with `interpretability.ggufPath` set | The **inventory**: every tensor's name, shape, ggml quant type and byte size |
+| The model's own **GGUF header** | the node's own llama.cpp server, Ollama, LM Studio, or any server with `interpretability.ggufPath` set | The **inventory**: every tensor's name, shape, ggml quant type and byte size |
 | GGUF `model_info` via `/api/show` | Ollama | The **description**, written from the weights the server loaded |
 | `config.json` from a HF repo | any (the only option for LM Studio / vLLM) | The description, but strictly of the *repo* |
 
@@ -183,18 +183,24 @@ it is.
 1. **`interpretability.ggufPath`**, which wins outright. Auto-discovery reads two
    undocumented on-disk layouts their owners are free to change, so there has to be
    a way to say "it is this file" that no upstream release can break.
-2. **Ollama's blob store** — its manifest names the layer whose `mediaType` is
+2. **The node's own [llama.cpp](./llamacpp.mdx) server**, when one is running and
+   its `--alias` matches the configured model. This is the only source that is
+   *known* rather than inferred: we chose the file. It is matched on the alias and
+   not merely on "a server is running", because `llama-server` can be up while the
+   agent talks to Ollama, and answering with the wrong model's tensors is exactly
+   the plausible-looking wrongness this module exists to prevent.
+3. **Ollama's blob store** — its manifest names the layer whose `mediaType` is
    `…image.model`; that digest is the blob. `OLLAMA_MODELS` relocates the root.
-3. **LM Studio's index** (`~/.lmstudio/.internal/model-index-cache.json`), where
+4. **LM Studio's index** (`~/.lmstudio/.internal/model-index-cache.json`), where
    `indexedModelIdentifier` is exactly the id its API serves. Its REST API reports a
    model's arch and quantization but *not* its path, so the index is the only route.
    Taking `entryPoint` matters: a multimodal repo ships an `mmproj-*.gguf` beside the
    weights, and the first file in the directory is a real GGUF that parses cleanly
    and describes the wrong thing.
 
-Step 3 is not gated on the provider being LM Studio — llama.cpp and other
-OpenAI-dialect servers are often pointed at a model LM Studio also has indexed, and
-a hit there is a hit on the same file.
+Step 4 is not gated on the provider being LM Studio — a third-party llama.cpp build
+and other OpenAI-dialect servers are often pointed at a model LM Studio also has
+indexed, and a hit there is a hit on the same file.
 
 :::note A byte size is not derivable from a shape
 A quantized tensor's footprint depends on its block format, so `gguf.py` carries a

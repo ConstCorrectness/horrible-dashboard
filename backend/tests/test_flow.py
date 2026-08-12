@@ -5,6 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app import app
+from backend.modules.agent import roster
 from backend.modules.flow import executor
 from backend.modules.flow.models import Flow, FlowEdge, FlowNode
 
@@ -140,7 +141,13 @@ def test_run_flow_streams_node_and_edge_events(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(executor, "run_agent_loop", fake_loop)
     monkeypatch.setattr(executor, "_load_config", lambda: _FakeConfig())
     monkeypatch.setattr(executor, "_tools_for", lambda conn, prompt="": [])
-    monkeypatch.setattr(executor.P, "provider_for", lambda provider: _FakeInfo())
+    # An Agent node resolves its provider the same way `main` does (per-agent
+    # settings, then the saved config), so the patch point is the roster helper.
+    monkeypatch.setattr(
+        roster,
+        "resolve_provider",
+        lambda config, agent_id="main": (_FakeInfo(), "http://x"),
+    )
 
     conn = _FakeConn()
     asyncio.run(executor.run_flow(conn, "demo", "run1", None))

@@ -204,6 +204,49 @@ def agent_setting(agent_id: str, key: str, default: Any = None) -> Any:
     return get_value(f"agent.orchestrator.{key}", default)
 
 
+def resolve_provider(config: Any, agent_id: str = "main") -> tuple[Any, str]:
+    """The provider and endpoint one agent's turns run against: `(ProviderInfo, str)`.
+
+    `model`, `temperature` and `contextSize` have been per-agent since the roster
+    landed; `provider` and `endpoint` were not, so "run the coder on the local
+    llama.cpp server and leave the orchestrator on Ollama" was unexpressible — the
+    provider was global and the only per-agent knob was a model *name*, which is
+    meaningless on a server that does not have that model.
+
+    Resolution order per key: `agent.<id>.provider` → `agent.orchestrator.provider`
+    (via `agent_setting`) → the saved global config. An override that names an
+    unknown provider is ignored rather than fatal — a stale settings value must not
+    take the agent down.
+
+    **This must be called at every `run_agent_loop` call site.** A site left on
+    `provider_for(config.provider)` doesn't fail; it quietly runs that path on the
+    global provider, which is how a delegate ends up on a different model than the
+    one its settings show.
+    """
+    from backend.modules.agent import providers as P
+    from backend.modules.agent.routes import _endpoint_for
+
+    kind = agent_setting(agent_id, "provider", "")
+    kind = kind.strip() if isinstance(kind, str) else ""
+    overridden = (
+        bool(kind) and kind in P.PROVIDERS and kind != getattr(config, "provider", None)
+    )
+    info = P.provider_for(
+        kind if kind in P.PROVIDERS else getattr(config, "provider", None)
+    )
+
+    endpoint = agent_setting(agent_id, "endpoint", "")
+    endpoint = endpoint.strip() if isinstance(endpoint, str) else ""
+    if endpoint:
+        return info, endpoint
+    if overridden:
+        # A different provider than the configured one: its own default (or its
+        # live spawned endpoint), never the saved endpoint, which belongs to the
+        # provider the user configured globally.
+        return info, _endpoint_for(info, None)
+    return info, _endpoint_for(info, config)
+
+
 def resolve_mode(spec: AgentSpec) -> Mode | None:
     """The permission-mode override a spec's turns run under: the
     `agent.<id>.permissionMode` setting, else the spec's default. None (or an

@@ -41,6 +41,15 @@ def _endpoint_for(info: P.ProviderInfo, config: AgentConfig | None) -> str:
     """The endpoint to probe for a provider: the saved one if it's the configured
     provider, else the provider default. ``HORRIBLE_OLLAMA_URL`` still overrides
     the Ollama default for back-compat, and a spawned vLLM advertises its port."""
+    # Checked BEFORE the saved endpoint, unlike every other provider: a spawned
+    # llama-server picks an ephemeral port when the default one is taken, so a
+    # saved `:8080` would point at nothing while the real server sits elsewhere.
+    # We are the ones who started it — the live manager is the authority.
+    if info.kind == "llamacpp":
+        from backend.modules.llamacpp.server import llama_manager
+
+        if llama_manager.running():
+            return llama_manager.endpoint
     if config and config.provider == info.kind and config.endpoint:
         return config.endpoint
     if info.kind == "ollama":

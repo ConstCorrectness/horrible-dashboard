@@ -21,7 +21,6 @@ from typing import Any
 
 import httpx
 
-from backend.modules.agent import providers as P
 from backend.modules.agent import roster
 from backend.modules.agent.routes import _load_config
 from backend.modules.ws import WsConnection
@@ -52,8 +51,9 @@ async def run_delegate(
     config = _load_config()
     if config is None:
         return {"error": "agent not configured"}
-    info = P.provider_for(config.provider)
-    endpoint = config.endpoint or info.default_endpoint
+    # The delegate's own provider, not the caller's: a specialist pinned to the
+    # node's llama.cpp server must still land there when `main` hands it work.
+    info, endpoint = roster.resolve_provider(config, spec.id)
     model = orchestrator._orchestrator_model(config.model, spec.id)
     active_groups = set(spec.preload_groups)
     guides_msg = orchestrator._guides_message(active_groups)

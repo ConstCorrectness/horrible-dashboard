@@ -129,6 +129,11 @@ layout shell and how it behaves in the browser vs the desktop app:
   studying models: the notebook and editor beside the model explorer, the context
   inspector, and a Hugging Face browser. Composes the other modules' panes at the
   frame rather than merging their manifests.
+- [llama.cpp](modules/llamacpp.mdx) — **Implemented.** The node serving its own
+  weights: an upstream `llama-server` build fetched and hash-checked on demand, a GGUF
+  catalog spanning our managed directory and the files Ollama and LM Studio already
+  have, and a supervised process the agent talks to over the OpenAI dialect. Adds
+  per-agent provider selection, so one agent can run here while the rest stay on Ollama.
 - [Marketplace](modules/marketplace.mdx)
 - [Settings](modules/settings.mdx)
 - [Keyboard](modules/keymap.mdx) — the Keyboard Shortcuts pane and the `keymap.*`

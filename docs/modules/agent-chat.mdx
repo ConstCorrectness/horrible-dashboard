@@ -312,10 +312,20 @@ Mechanics (`run_agent_turn(agent_id=…)`):
   per-workspace override (kept in `localStorage`, keyed by workspace id) so it
   survives switching away and back; the declared agent is the default, not a lock.
   See [windowing](../architecture/windowing.mdx).
-- **Per-agent settings** `agent.<id>.model/temperature/contextSize/maxTokens/topP/permissionMode`
+- **Per-agent settings**
+  `agent.<id>.provider/endpoint/model/temperature/contextSize/maxTokens/topP/permissionMode`
   fall back to the `agent.orchestrator.*` keys, then defaults (`roster.agent_setting`).
   The permission-mode override threads through the gate; the user's explicit
   allow/ask/deny rules still apply unchanged.
+- **Per-agent provider** (`roster.resolve_provider`). `provider`/`endpoint` used to be
+  global while `model` was per-agent, which made "run the coder on the node's
+  [llama.cpp](./llamacpp.mdx) server and leave the orchestrator on Ollama"
+  unexpressible: a model *name* means nothing on a server that does not have that
+  model. An override naming an unknown provider is ignored rather than fatal, so a
+  stale settings value cannot take the agent down. It must be resolved at **all three**
+  `run_agent_loop` call sites — the orchestrator, `delegate.py`, and the flow
+  executor's Agent node — because a site left on `provider_for(config.provider)` does
+  not fail, it quietly runs on the global provider.
 - **Per-agent sessions**: `ChatSession.agent_id` (default `main`) + an
   `active_by_agent` map and a `GET /api/chat/sessions?agent=<id>` filter — all
   additive, so pre-roster `chat-sessions.json` files load unchanged.
@@ -530,14 +540,23 @@ The model is always a **local** server reached over HTTP — there is no cloud /
 hosted-API path anywhere in the agent. `backend/modules/agent/providers.py` is the
 source of truth; it collapses every provider onto one of two **dialects**:
 
-| Provider  | Dialect  | Default endpoint         | Pull | Spawn |
-| --------- | -------- | ------------------------ | ---- | ----- |
-| Ollama    | `ollama` | `http://localhost:11434` | yes  | no    |
-| LM Studio | `openai` | `http://localhost:1234`  | no   | no    |
-| vLLM      | `openai` | `http://localhost:8001`  | no   | yes   |
+| Provider   | Dialect  | Default endpoint         | Pull | Spawn |
+| ---------- | -------- | ------------------------ | ---- | ----- |
+| Ollama     | `ollama` | `http://localhost:11434` | yes  | no    |
+| LM Studio  | `openai` | `http://localhost:1234`  | no   | no    |
+| llama.cpp  | `openai` | `http://127.0.0.1:8080`  | no   | yes   |
+| vLLM       | `openai` | `http://localhost:8001`  | no   | yes   |
+
+`llamacpp` is the node's **own** server — the backend downloads the `llama-server`
+binary, picks the GGUF and supervises the process, which is why it is the one
+provider whose model *path* is known rather than inferred. See
+[llamacpp](./llamacpp.mdx). It is an `openai`-dialect entry rather than a new
+dialect on purpose: a bespoke one would have meant six new branches here and would
+have silently lost the `tool_choice="required"` retry, which is gated on
+`info.dialect == "openai"`.
 
 The dialect — **not** an online/offline switch — decides the wire format and the
-request paths. "OpenAI-compatible" refers to LM Studio's and vLLM's wire format;
+request paths. "OpenAI-compatible" refers to LM Studio's, llama.cpp's and vLLM's wire format;
 it does not mean any request leaves the machine. Everything runs offline against a
 localhost server.
 
@@ -550,7 +569,10 @@ localhost server.
 | Pull a model             | `POST /api/pull`                  | — (unsupported)                              | `/agent/pull`                            |
 
 Ollama's default URL can be overridden with `HORRIBLE_OLLAMA_URL`; a backend-spawned
-vLLM advertises its own port. All of these outbound calls go through
+vLLM advertises its own port, and so does a spawned `llama-server` — for that one
+alone the **live manager is checked before the saved endpoint**, because it takes an
+ephemeral port when the default is occupied and a saved `:8080` would point at
+nothing. All of these outbound calls go through
 `instrumented_client()`, so they surface in the observability I/O stream with full
 request↔response bodies — the streamed tool-calling round, answer, and pull
 responses all via `tee_stream`. See

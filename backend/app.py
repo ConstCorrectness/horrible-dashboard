@@ -74,6 +74,8 @@ from backend.modules.interpretability import router as interpretability_router
 from backend.modules.karaoke import register_agent_tools as register_karaoke_tools
 from backend.modules.karaoke import router as karaoke_router
 from backend.modules.library import router as library_router
+from backend.modules.llamacpp import router as llamacpp_router
+from backend.modules.llamacpp.server import llama_manager
 from backend.modules.records import (
     init_records_db,
     push_records_events,
@@ -179,6 +181,10 @@ async def lifespan(app: FastAPI):
         # would strand orphaned ipykernels.
         await training_kernels.shutdown_all()
         await notebook_manager.shutdown_all()
+        # Same reasoning: llama-server is a child process holding gigabytes of
+        # mapped weights and a bound port. An orphan survives a reload and then
+        # makes the next spawn fail on a port that looks free.
+        llama_manager.stop()
         await stop_network()
 
 
@@ -216,6 +222,7 @@ app.include_router(research_router, prefix="/api")
 app.include_router(search_router, prefix="/api")
 app.include_router(arxiv_router, prefix="/api")
 app.include_router(interpretability_router, prefix="/api")
+app.include_router(llamacpp_router, prefix="/api")
 app.include_router(connectors_router, prefix="/api")
 app.include_router(google_connector_router, prefix="/api")
 app.include_router(github_connector_router, prefix="/api")

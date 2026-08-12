@@ -265,6 +265,7 @@ export {
 } from './modules/clubhouse';
 export { interpretabilityModule } from './modules/interpretability';
 export { labModule } from './modules/lab';
+export { llamacppModule } from './modules/llamacpp';
 export { observabilityModule } from './modules/observability';
 export { marketplaceModule } from './modules/marketplace';
 export { settingsModule } from './modules/settings';
