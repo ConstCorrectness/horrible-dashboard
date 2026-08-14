@@ -60,6 +60,10 @@ flowchart TB
   update manifest, stable/beta channels, and why an update never touches
   `$HORRIBLE_DATA_DIR`. Read before generating the signing key: losing it means no
   existing install can ever be updated again.
+- [Theming](architecture/theming.mdx) — every colour, radius and elevation as a CSS
+  token, and the `data-theme` switch that selects a block of them. Read before
+  adding a colour to a component: a hardcoded literal is invisible to the switcher
+  and survives into a theme it was never designed for.
 - [Windowing](architecture/windowing.mdx) — the dockable workspace: how views
   (panels and widgets) open as tabbed/split/floating panes, views vs pane
   instances, and layout persistence.

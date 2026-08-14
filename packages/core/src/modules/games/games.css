@@ -21,9 +21,12 @@
 
 .games-theme {
   /* Editorial display for ceremony (hero headline, fighter names); body text stays
-     in the UI sans. See packages/ui/src/fonts/fonts.css. */
-  --games-display: 'Instrument Serif', Georgia, 'Times New Roman', serif;
-  --games-body: 'DM Sans', 'Segoe UI', system-ui, sans-serif;
+     in the UI sans. Both come from the active theme (packages/ui/src/themes.css)
+     rather than being restated here — these used to be two hardcoded stacks, which
+     is the font equivalent of the palette this class deliberately stopped
+     redeclaring, and would have pinned games to one theme's typography. */
+  --games-display: var(--font-display);
+  --games-body: var(--font-sans);
 
   font-family: var(--games-body);
   background: var(--bg);
@@ -3023,31 +3026,17 @@
 
 .games-vs-card {
   position: relative;
-  border: 1px solid
-    color-mix(
-      in srgb,
-      var(--vs-accent, var(--accent, #6ea8fe)) 40%,
-      transparent
-    );
+  border: 1px solid color-mix(in srgb, var(--vs-accent, var(--accent, #6ea8fe)) 40%, transparent);
   border-radius: 14px;
   background:
     radial-gradient(
       120% 100% at 50% 0%,
-      color-mix(
-          in srgb,
-          var(--vs-accent, var(--accent, #6ea8fe)) 14%,
-          transparent
-        )
-        0%,
+      color-mix(in srgb, var(--vs-accent, var(--accent, #6ea8fe)) 14%, transparent) 0%,
       transparent 70%
     ),
     var(--bg-raised, #1d2026);
   box-shadow: 0 8px 32px
-    color-mix(
-      in srgb,
-      var(--vs-accent, var(--accent, #6ea8fe)) 18%,
-      transparent
-    );
+    color-mix(in srgb, var(--vs-accent, var(--accent, #6ea8fe)) 18%, transparent);
   overflow: hidden;
   margin-bottom: 1rem;
 }
@@ -3123,19 +3112,10 @@
   place-items: center;
   font-size: 2.2rem;
   border-radius: 14px;
-  border: 2px solid
-    color-mix(
-      in srgb,
-      var(--vs-accent, var(--accent, #6ea8fe)) 45%,
-      transparent
-    );
+  border: 2px solid color-mix(in srgb, var(--vs-accent, var(--accent, #6ea8fe)) 45%, transparent);
   background: rgba(255, 255, 255, 0.03);
   box-shadow: inset 0 0 24px
-    color-mix(
-      in srgb,
-      var(--vs-accent, var(--accent, #6ea8fe)) 18%,
-      transparent
-    );
+    color-mix(in srgb, var(--vs-accent, var(--accent, #6ea8fe)) 18%, transparent);
 }
 
 .games-vs-portrait.theirs {
@@ -3187,11 +3167,7 @@
   letter-spacing: 0.1em;
   color: var(--vs-accent, var(--accent, #6ea8fe));
   text-shadow: 0 0 18px
-    color-mix(
-      in srgb,
-      var(--vs-accent, var(--accent, #6ea8fe)) 70%,
-      transparent
-    );
+    color-mix(in srgb, var(--vs-accent, var(--accent, #6ea8fe)) 70%, transparent);
 }
 
 /* ---- seat chips ---- */
@@ -3224,21 +3200,13 @@
 
 .games-seat-chip:hover {
   color: var(--text);
-  border-color: color-mix(
-    in srgb,
-    var(--seat-accent, var(--accent, #6ea8fe)) 60%,
-    transparent
-  );
+  border-color: color-mix(in srgb, var(--seat-accent, var(--accent, #6ea8fe)) 60%, transparent);
 }
 
 .games-seat-chip.selected {
   color: var(--text);
   border-color: var(--seat-accent, var(--accent, #6ea8fe));
-  background: color-mix(
-    in srgb,
-    var(--seat-accent, var(--accent, #6ea8fe)) 16%,
-    transparent
-  );
+  background: color-mix(in srgb, var(--seat-accent, var(--accent, #6ea8fe)) 16%, transparent);
   font-weight: 800;
 }
 
@@ -3314,11 +3282,7 @@
 
 .games-vs-fight:hover {
   box-shadow: 0 6px 24px
-    color-mix(
-      in srgb,
-      var(--vs-accent, var(--accent, #6ea8fe)) 55%,
-      transparent
-    );
+    color-mix(in srgb, var(--vs-accent, var(--accent, #6ea8fe)) 55%, transparent);
   transform: translateY(-1px);
 }
 
@@ -3329,7 +3293,7 @@
 /* The sweep: a highlight that crosses the button on hover. Decorative only — the
    button is fully usable with it suppressed. */
 .games-vs-fight::after {
-  content: "";
+  content: '';
   position: absolute;
   inset: 0;
   background: linear-gradient(
@@ -3378,17 +3342,8 @@
   margin: 0.7rem 0.9rem 0.9rem;
   padding: 0.5rem 0.7rem;
   border-radius: 10px;
-  border: 1px solid
-    color-mix(
-      in srgb,
-      var(--vs-accent, var(--accent, #6ea8fe)) 45%,
-      transparent
-    );
-  background: color-mix(
-    in srgb,
-    var(--vs-accent, var(--accent, #6ea8fe)) 8%,
-    transparent
-  );
+  border: 1px solid color-mix(in srgb, var(--vs-accent, var(--accent, #6ea8fe)) 45%, transparent);
+  background: color-mix(in srgb, var(--vs-accent, var(--accent, #6ea8fe)) 8%, transparent);
 }
 
 .games-vs-searching-text {
@@ -3468,11 +3423,7 @@
 }
 
 .games-devkit-card:hover {
-  border-color: color-mix(
-    in srgb,
-    var(--tile-accent, var(--accent, #6ea8fe)) 60%,
-    transparent
-  );
+  border-color: color-mix(in srgb, var(--tile-accent, var(--accent, #6ea8fe)) 60%, transparent);
   background: rgba(255, 255, 255, 0.03);
 }
 

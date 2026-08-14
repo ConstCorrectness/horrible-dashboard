@@ -3,13 +3,14 @@
     "name": "io.modelcontextprotocol/fetch",
     "title": "Fetch",
     "description": "Fetch a URL and convert it to markdown for the model to read.",
-    "note": "The reference server for web fetching. This node already has browser.read and search.read, so reach for it mainly when comparing MCP behaviour against ours.",
+    "note": "The reference server for web fetching. This node already has browser.read and search.read, so reach for it mainly when comparing MCP behaviour against ours. Pinned to the 1.x Python SDK: mcp 2.0 renamed McpError and this server still imports the old name, so an unpinned uvx resolve fails at import.",
     "repository": "https://github.com/modelcontextprotocol/servers",
     "packages": [
       {
         "registryType": "pypi",
         "identifier": "mcp-server-fetch",
         "runtimeHint": "uvx",
+        "runtimeArguments": [{ "type": "named", "name": "--with", "value": "mcp<2" }],
         "transport": { "type": "stdio" }
       }
     ]

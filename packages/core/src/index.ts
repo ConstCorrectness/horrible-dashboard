@@ -143,6 +143,18 @@ export {
   type SettingValue,
 } from './settings';
 export {
+  applyTheme,
+  currentThemeId,
+  DEFAULT_THEME,
+  initTheme,
+  isKnownTheme,
+  readThemeTokens,
+  THEME_SETTING_KEY,
+  THEMES,
+  useThemeId,
+  type ThemeDecl,
+} from './theme';
+export {
   registry,
   type AgentCommandDecl,
   type AgentContextSnapshot,

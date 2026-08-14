@@ -59,6 +59,12 @@ Two details are load-bearing:
 - **A registry outage is not an empty result.** `registryOnline: false` means the list
   is the shipped overlay alone, and the pane says so — otherwise "the registry is down"
   reads as "nothing matched".
+- **An overlay entry may pin its runtime dependencies.** `uvx`/`npx` resolve a
+  server's deps fresh at launch, so a server that lags its own SDK dies at import
+  with a traceback the user has no way to read as "not your fault". The `fetch`
+  entry therefore carries `runtimeArguments` of `--with mcp<2`: the Python SDK's
+  2.0 renamed `McpError` → `MCPError` and `mcp-server-fetch` still imports the old
+  name.
 
 ### An entry is a description, not a command line
 

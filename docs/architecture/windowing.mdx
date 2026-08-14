@@ -148,6 +148,21 @@ host's region strip or section rather than failing to open it standalone. An
 embedded view that **nothing hosts** is a declaration error, and fails loudly
 (`ok: false`) rather than quietly opening a pane the flag said shouldn't exist.
 
+### A view that stops being dockable
+
+`role` and `embedded` decide where *new* opens go; neither touches a layout that is
+already saved. So a view that was a docked `tool` and became a centre-only
+`document` — as `settings.home` did when the settings page grew two columns — stays
+pinned in its old dock in every workspace the user has, forever, and looks like the
+change simply didn't work.
+
+`undockableViews()` (`layout/persistence.ts`) closes that at load time: it reports
+every view for which `isDockable` is now false, and `deserialize` drops those from
+**docks only**. The rule is capability-based rather than a per-view migration list,
+so it covers `embedded` and a `role` change identically, and needs no entry when
+the next view changes its mind. Centre panes and region placements are untouched —
+those are placements the user made deliberately.
+
 **`sections?: SectionDecl[]`** are in-pane tabs — the sibling of a region strip. A
 region is a *companion* beside the main content; a section *replaces* it. Each
 section declares an `id`, a `label` (what `show("friends")` matches), an optional

@@ -39,6 +39,7 @@ import {
   initNotifications,
   initRecordsWatch,
   initSocial,
+  initTheme,
   notificationsModule,
   marketplaceModule,
   networkModule,
@@ -163,6 +164,10 @@ async function boot(): Promise<void> {
   // After plugins register their declarations, seed the persisted overrides so
   // widgets read correct values on first render. Backend down ⇒ defaults only.
   await loadSettings();
+  // Straight after the overrides land and before the first render: the theme is a
+  // `data-theme` attribute on <html>, so applying it here means the first paint is
+  // already themed rather than flashing the default and correcting itself.
+  initTheme();
   // Same reason as settings: seed the user's overrides before the first render so
   // the palette and the Shortcuts pane show the bindings that will actually fire.
   await loadKeymapOverrides();

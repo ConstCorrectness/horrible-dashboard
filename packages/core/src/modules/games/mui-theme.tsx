@@ -2,6 +2,8 @@ import { type ReactNode, useMemo } from 'react';
 import { createTheme, ThemeProvider } from '@mui/material/styles';
 import ScopedCssBaseline from '@mui/material/ScopedCssBaseline';
 
+import { readThemeTokens, useThemeId } from '../../theme';
+
 /**
  * MUI theming for the games module. The rest of the app is styled with plain CSS
  * driven by `:root` custom properties (see packages/ui/src/styles.css); this maps
@@ -15,61 +17,71 @@ import ScopedCssBaseline from '@mui/material/ScopedCssBaseline';
  */
 
 /**
- * The app palette, as literals.
+ * The tokens this theme needs, read off the live document rather than duplicated
+ * as literals.
  *
- * MUI's theme is a JS object built once at module scope — it cannot read the CSS
- * custom properties the rest of the app styles with, so these values are duplicated
- * from packages/ui/src/styles.css `:root`. **Change one, change the other.**
+ * MUI's theme is a plain JS object and cannot read a CSS custom property, so this
+ * used to be a hardcoded copy of `:root` that went stale whenever the palette
+ * moved. With themes selectable at runtime a copy is not merely stale-prone but
+ * wrong by construction, so the values are resolved from `<html>` and the theme is
+ * rebuilt whenever the active theme changes.
  *
- * This duplication is the thing a global theme system has to solve: the moment
- * `:root` can change at runtime these literals go stale, so the theme switcher needs
- * to drive this object too (read the computed vars off the document element and
- * rebuild the theme on change) rather than leaving it pinned at module scope.
+ * `radius` is parsed rather than passed through because MUI's `shape.borderRadius`
+ * is a number of pixels, not a CSS length — handing it `"16px"` yields
+ * `border-radius: 16pxpx`.
  */
-const TOKENS = {
-  bg: '#14161a',
-  bgRaised: '#1d2026',
-  bgHover: '#262a32',
-  border: '#2e333d',
-  text: '#d7dae0',
-  textDim: '#8a909c',
-  accent: '#6ea8fe',
-};
+const TOKEN_NAMES = [
+  'bg',
+  'bg-raised',
+  'bg-hover',
+  'border',
+  'text',
+  'text-dim',
+  'accent',
+  'radius-lg',
+] as const;
 
-const gamesTheme = createTheme({
-  palette: {
-    mode: 'dark',
-    primary: { main: TOKENS.accent },
-    background: { default: TOKENS.bg, paper: TOKENS.bgRaised },
-    text: { primary: TOKENS.text, secondary: TOKENS.textDim },
-    divider: TOKENS.border,
-    action: { hover: TOKENS.bgHover },
-  },
-  // Small radii — the look leans on hairlines, not soft corners.
-  shape: { borderRadius: 8 },
-  typography: {
-    // Inherit the app's font stack rather than MUI's Roboto default.
-    fontFamily: 'inherit',
-    fontSize: 13,
-  },
-  components: {
-    MuiCard: {
-      defaultProps: { variant: 'outlined' },
-      styleOverrides: {
-        root: { backgroundImage: 'none', borderColor: TOKENS.border },
+function buildGamesTheme() {
+  const t = readThemeTokens(TOKEN_NAMES);
+  return createTheme({
+    palette: {
+      mode: 'dark',
+      primary: { main: t.accent },
+      background: { default: t.bg, paper: t['bg-raised'] },
+      text: { primary: t.text, secondary: t['text-dim'] },
+      divider: t.border,
+      action: { hover: t['bg-hover'] },
+    },
+    // Follows the theme: midnight leans on hairlines and wants small corners,
+    // studio holds cards apart with radius and elevation instead.
+    shape: { borderRadius: Number.parseFloat(t['radius-lg']) || 8 },
+    typography: {
+      // Inherit the app's font stack rather than MUI's Roboto default.
+      fontFamily: 'inherit',
+      fontSize: 13,
+    },
+    components: {
+      MuiCard: {
+        defaultProps: { variant: 'outlined' },
+        styleOverrides: {
+          root: { backgroundImage: 'none', borderColor: t.border },
+        },
       },
+      MuiButton: {
+        defaultProps: { size: 'small' },
+        styleOverrides: { root: { textTransform: 'none', fontWeight: 700 } },
+      },
+      MuiChip: { defaultProps: { size: 'small' } },
     },
-    MuiButton: {
-      defaultProps: { size: 'small' },
-      styleOverrides: { root: { textTransform: 'none', fontWeight: 700 } },
-    },
-    MuiChip: { defaultProps: { size: 'small' } },
-  },
-});
+  });
+}
 
 export function GamesMui({ children }: { children: ReactNode }) {
-  // createTheme is cheap but memoize to keep referential identity stable.
-  const theme = useMemo(() => gamesTheme, []);
+  // Keyed on the theme id: `initTheme` writes `data-theme` before any component's
+  // settings subscriber runs, so by the time this recomputes the document already
+  // carries the incoming theme's values.
+  const themeId = useThemeId();
+  const theme = useMemo(() => buildGamesTheme(), [themeId]);
   return (
     <ThemeProvider theme={theme}>
       <ScopedCssBaseline sx={{ bgcolor: 'transparent' }}>{children}</ScopedCssBaseline>

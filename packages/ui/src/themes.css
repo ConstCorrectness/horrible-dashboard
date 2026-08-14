@@ -1,0 +1,180 @@
+/* The theme system.
+ *
+ * Every colour, radius, elevation and font family in the app resolves to a token
+ * declared here. A theme is one block of primitives on `<html>`; the shell sets
+ * `data-theme` from the `settings.theme` setting (see packages/core/src/theme.ts),
+ * so switching a theme is one attribute write and no re-render.
+ *
+ * THREE RULES.
+ *
+ * 1. A component never hardcodes a colour. If you need one that isn't here, add a
+ *    token to *every* theme rather than a literal to one component — a literal is
+ *    invisible to the switcher and silently survives into a theme it was never
+ *    designed for. This is the same rule fonts.css states for font faces.
+ *
+ * 2. `:root` (unqualified) carries the default theme, so a document with no
+ *    `data-theme` — or one naming a theme that no longer exists — still renders in
+ *    full rather than losing its palette. `:root[data-theme='…']` scores higher
+ *    (0,2,0 vs 0,1,0) so a named theme always wins regardless of source order.
+ *
+ * 3. Derived aliases live in ONE block at the bottom and reference primitives
+ *    through `var()`. Because both the primitive block and the alias block match
+ *    the same element (`<html>`), an alias resolves against whichever theme is
+ *    active — so a new theme declares primitives only and inherits every alias.
+ *
+ * Adding a theme: add a `:root[data-theme='<id>']` block declaring the full
+ * primitive set (copy one below — a missing primitive falls back to the default
+ * theme's, which reads as a bug rather than as inheritance), then register it in
+ * `THEMES` in packages/core/src/theme.ts so it appears in Settings.
+ */
+
+/* ---------------------------------------------------------------- midnight --
+ *
+ * The original look, and the default. Hairline-led: near-black ground, low
+ * contrast between surfaces, small radii, almost no elevation. Structure comes
+ * from 1px borders rather than from shadow or fill.
+ */
+:root,
+:root[data-theme='midnight'] {
+  color-scheme: dark;
+
+  /* Surfaces, ground upward. */
+  --bg: #14161a;
+  --bg-raised: #1d2026;
+  --bg-elevated: #22262e;
+  --bg-hover: #262a32;
+  /* Recessed wells (code blocks, copyable URLs) — translucent so it darkens
+     whatever surface it lands on rather than assuming it lands on --bg. */
+  --bg-inset: rgb(0 0 0 / 25%);
+
+  --border: #2e333d;
+  --border-strong: #3b414c;
+
+  /* Text, loud to quiet. `--text-strong` is for headings and the one or two
+     values a pane exists to show; most text is `--text`. */
+  --text-strong: #f0f2f5;
+  --text: #d7dae0;
+  --text-dim: #8a909c;
+  --text-faint: #5c6169;
+
+  --accent: #6ea8fe;
+  /* Text/iconography drawn ON a filled accent. Never `--text`: the accent is a
+     light blue and light-on-light is how a primary button loses its label. */
+  --accent-contrast: #0b0d10;
+
+  /* Status. These four are the app's whole semantic vocabulary — there is no
+     separate "info", which is what `--accent` is for. */
+  --success: #3fb950;
+  --warn: #e2c08d;
+  --danger: #e06c75;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+
+  --shadow-card: 0 4px 6px rgb(0 0 0 / 15%);
+  --shadow-overlay: 0 8px 24px rgb(0 0 0 / 40%);
+
+  --font-sans: 'Segoe UI', system-ui, sans-serif;
+  /* The app has exactly one editorial face and midnight already uses it (the games
+     lobby's hero and ceremony type). Declared identically in both themes rather
+     than collapsed to `--font-sans` here: a theme is free to agree with another,
+     and pointing midnight's display face at its UI face would silently strip the
+     serif from every surface that reads this token. */
+  --font-display: 'Instrument Serif', Georgia, 'Times New Roman', serif;
+}
+
+/* ------------------------------------------------------------------ studio --
+ *
+ * Built from the Settings Kit design. Same ground and same accent as midnight —
+ * this is a sibling, not an inversion — but the surfaces sit closer together and
+ * the borders are softer, so a card is separated from the page by *elevation and
+ * radius* instead of by a bright hairline. Editorial serif for display type.
+ *
+ * The 1a1d23 / 23262d pairing is the whole idea: a raised surface only 6 steps off
+ * the ground, held apart by a shadow. Brightening either one collapses it back
+ * into midnight.
+ */
+:root[data-theme='studio'] {
+  color-scheme: dark;
+
+  --bg: #14161a;
+  --bg-raised: #1a1d23;
+  --bg-elevated: #1f232a;
+  --bg-hover: #262a32;
+  --bg-inset: rgb(0 0 0 / 28%);
+
+  --border: #23262d;
+  --border-strong: #2e333d;
+
+  --text-strong: #eceef1;
+  --text: #d7dae0;
+  --text-dim: #8a909c;
+  --text-faint: #5c6169;
+
+  --accent: #6ea8fe;
+  --accent-contrast: #0b0d10;
+
+  --success: #7fd18a;
+  --warn: #e2c08d;
+  --danger: #e4676b;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+
+  --shadow-card: 0 8px 24px rgb(0 0 0 / 28%);
+  --shadow-overlay: 0 16px 48px rgb(0 0 0 / 45%);
+
+  /* Both faces are declared in fonts.css and fall back gracefully until the woff2
+     files land — DM Sans to Segoe UI, Instrument Serif to Georgia, which is
+     metrically close enough that the swap isn't jarring. */
+  --font-sans: 'DM Sans', 'Segoe UI', system-ui, sans-serif;
+  --font-display: 'Instrument Serif', Georgia, 'Times New Roman', serif;
+}
+
+/* ------------------------------------------------------------- derived + aliases
+ *
+ * Theme-independent by construction: everything here is a `var()` on a primitive
+ * above, so it follows the active theme without being restated per theme.
+ *
+ * The `--fg` / `--surface` / `--hover` names are older spellings that predate the
+ * canonical set and are still read from ~40 files, always as a fallback pair like
+ * `var(--fg-muted, var(--fg))`. Neither half was ever defined, so every one of
+ * those declarations was invalid at computed-value time and quietly inherited
+ * instead — the styling worked by accident. Defining them here makes those call
+ * sites resolve to the intended token AND brings them under the switcher; they
+ * are kept as aliases rather than renamed across 40 files in a theming change.
+ */
+:root {
+  /* The one mono stack. Every "mono" surface (editors, diffs, logs, terminal)
+     reads this token — don't hardcode a stack in a component. It is deliberately
+     NOT per-theme: a theme changes how the app looks, not which glyphs line up. */
+  --font-mono:
+    ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', 'JetBrains Mono', menlo, consolas, monospace;
+
+  /* A translucent wash of the accent — selected rows, active tabs, the user's own
+     chat bubble. `color-mix` rather than a hardcoded rgba so it tracks `--accent`
+     if a future theme moves off blue. */
+  --accent-dim: color-mix(in srgb, var(--accent) 18%, transparent);
+
+  /* Legacy surface spellings. */
+  --surface: var(--bg-raised);
+  --surface-2: var(--bg-elevated);
+  --panel-2: var(--bg-elevated);
+  --bg-elev: var(--bg-elevated);
+  --bg-alt: var(--bg-elevated);
+  --hover: var(--bg-hover);
+
+  /* Legacy text spellings. */
+  --fg: var(--text);
+  --fg-muted: var(--text-dim);
+  --muted: var(--text-dim);
+
+  /* Legacy status spellings. */
+  --ok: var(--success);
+  --warning: var(--warn);
+  --error: var(--danger);
+}

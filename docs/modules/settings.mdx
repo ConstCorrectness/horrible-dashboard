@@ -122,6 +122,20 @@ reason: the keymap is its own document at `$HORRIBLE_DATA_DIR/keymap.json` behin
 — see [keymap](keymap.mdx#storage). `keymap.escapeHoldMs` *is* a setting, because
 it is a single number.
 
+## The one setting this module declares itself
+
+`settings.theme` — the app's appearance. Appearance is global rather than any one
+feature's concern, and the `shell` module would be the natural home, but it
+registers from inside `AppShell`'s mount effect — long after `initTheme()` reads
+the theme at boot, so its declared default would not exist yet at the one moment
+the theme is first resolved. This module is registered synchronously in
+`main.tsx` before `loadSettings()`, so its default is always readable. Its
+`enumValues` are derived from
+`THEMES` in `packages/core/src/theme.ts`, so a theme cannot be shipped and then be
+unreachable from this page; the palette also gets one `Theme: <name>` command per
+entry from the same array. See
+[../architecture/theming.mdx](../architecture/theming.mdx).
+
 ## Custom sections
 
 Some configuration is too rich for the declarative `SettingDecl` controls
@@ -135,10 +149,41 @@ lists are arrays, outside the scalar `useSetting` store). See
 [../architecture/agent-tools.md](../architecture/agent-tools.mdx). This seam is
 built-in only — not part of the public plugin contract yet.
 
+## The page
+
+Modelled on VS Code's Settings editor: a **search box** over a **category list**
+and a scrolling body. Search matches a setting's title, description, key and
+owning group — the key included, because that is what docs, plugin manifests and
+`dash` call it by, and it is shown beside the title on hover for the same reason.
+A setting you have overridden gets an accent bar in the gutter (VS Code's
+"modified" marker) as well as its Reset link: at ~120 settings the link alone is
+easy to miss when scanning.
+
+Each group renders as one card with hairline-separated rows, rather than every row
+carrying its own frame — at ~30 groups that reads as a wall of boxes.
+
+Booleans render as a **switch**, not a checkbox, because a setting here takes
+effect the moment it is clicked and there is nothing to submit. It is a
+`<button role="switch" aria-checked>`; `aria-checked` both carries the state to
+assistive tech and drives the styling, so the two cannot drift apart. See
+[../architecture/theming.mdx](../architecture/theming.mdx) for the control
+vocabulary, which is themed and shared app-wide.
+
+Below ~40rem of **pane** width the page drops to one column: the category list
+hides and rows stack. That is a container query, not a media query — a `document`
+pane is routinely half of a split, so the window's width says nothing about this
+page's. Search still reaches every setting, so nothing becomes unreachable when
+the list goes.
+
 ## Contributions to the layout shell
 
-- **Panels:** `settings.home` (singleton, `center`) — the settings page,
-  grouped by the module/plugin that declared each setting.
+- **Panels:** `settings.home` (singleton, **`document`**) — the settings page,
+  grouped by the module/plugin that declared each setting. A centre tab, the way
+  VS Code opens its Settings editor. It was a `tool` pane with
+  `defaultDock: 'right'`, which gave a two-column page ~20rem and wrapped every
+  row; note that changing `role` only affects *new* opens, so the already-saved
+  layouts are migrated by `undockableViews()` in `layout/persistence.ts` — see
+  [../architecture/windowing.mdx](../architecture/windowing.mdx).
 - **Commands:** `settings.open`.
 - **Keybindings:** `mod+,` → `settings.open` (VS Code parity).
 

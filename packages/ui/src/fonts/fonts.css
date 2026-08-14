@@ -9,8 +9,26 @@
  * replaced when the real face lands — the display stack falls back to Georgia, which
  * is metrically close enough to Instrument Serif that the swap isn't jarring.
  *
- * Both families are SIL OFL 1.1. Adding a face: drop the woff2 here, add the
- * @font-face, and reference it from a token in styles.css — never from a component.
+ * Both families are SIL OFL 1.1 — the licences ship beside them as `OFL-*.txt`,
+ * which is what the licence asks of anyone redistributing the binaries, and we do
+ * redistribute: they are bundled into every web build and every desktop installer.
+ * Adding a face: drop the woff2 here, add the @font-face, and reference it from a
+ * token in themes.css — never from a component.
+ *
+ * PROVENANCE. These are the **upstream** fonts from github.com/google/fonts
+ * (`ofl/dmsans`, `ofl/instrumentserif`), converted TTF → woff2 locally with
+ * fonttools:
+ *
+ *   uvx --from "fonttools[woff]" python -c "from fontTools.ttLib import TTFont; \
+ *     f=TTFont('DMSans[opsz,wght].ttf'); f.flavor='woff2'; f.save('DMSans-Variable.woff2')"
+ *
+ * Deliberately NOT the files the Google Fonts CSS API serves. Those are split into
+ * `latin` and `latin-ext` subsets paired with `unicode-range`, so taking one file
+ * per face — which is what the rules below assume — silently drops every accented
+ * character outside Latin-1. That failure is invisible until a peer's name or a
+ * karaoke title contains one and a single glyph renders in the fallback face. The
+ * upstream files carry the full 333–403 codepoints for 144 KB total, which is not
+ * a size worth being clever about.
  */
 
 @font-face {

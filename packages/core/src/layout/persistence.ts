@@ -18,7 +18,7 @@ import { workspaceStore } from '../workspace-store';
 import { createEmptyFrame, listPanes } from './model';
 import { closeWorkspaceSessions } from './pane-lifetime';
 import { seedFromPreset, type FramePreset } from './presets';
-import { regionsFor, resolveView } from './controller';
+import { isDockable, regionsFor, resolveView } from './controller';
 import { deserialize, serialize } from './serialize';
 import { layoutStore } from './store';
 import type { FrameState } from './types';
@@ -33,10 +33,19 @@ function knownViews(): ReadonlySet<string> {
   return new Set([...registry.panels.map((p) => p.id), ...registry.widgets.map((w) => w.id)]);
 }
 
-/** Views that may no longer sit in a dock — see `deserialize`. */
-function embeddedViews(): ReadonlySet<string> {
+/**
+ * Views that may no longer sit in a dock — see `deserialize`.
+ *
+ * Asked of `isDockable` rather than of the `embedded` flag alone, because
+ * `embedded` is only one of the ways a view stops being dockable: a view that
+ * changes `role` from `tool` to `document` (as `settings.home` did when the
+ * settings page became a centre tab) is equally undockable afterwards, and its
+ * saved dock entry is equally a state today's code cannot produce. Filtering on
+ * the *capability* covers both without a per-view migration list.
+ */
+function undockableViews(): ReadonlySet<string> {
   return new Set(
-    [...registry.panels, ...registry.widgets].filter((v) => v.embedded).map((v) => v.id),
+    [...registry.panels, ...registry.widgets].filter((v) => !isDockable(v.id)).map((v) => v.id),
   );
 }
 
@@ -95,7 +104,7 @@ function seed(preset: FramePreset): FrameState {
 /** A workspace's frame: its stored blob if it is one of ours, else its preset
  * seed (covers pre-frame legacy blobs — discarded by design), else empty. */
 function frameOf(ws: WorkspaceModel): FrameState {
-  const restored = deserialize(ws.layout, knownViews(), embeddedViews());
+  const restored = deserialize(ws.layout, knownViews(), undockableViews());
   if (restored) return restored;
   const preset = presetFor(ws.id);
   return preset ? seed(preset) : createEmptyFrame();

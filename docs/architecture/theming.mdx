@@ -1,0 +1,159 @@
+# Theming
+
+Every colour, radius, elevation and font family in the app resolves to a CSS custom
+property. A **theme** is one block of those properties, selected by a `data-theme`
+attribute on `<html>`. Switching themes is a single attribute write: the browser
+restyles the whole tree itself, and no React component re-renders.
+
+| Where | What |
+| --- | --- |
+| `packages/ui/src/themes.css` | The themes. One block of primitives each, plus a shared alias block. |
+| `packages/ui/src/controls.css` | The control primitives — checkbox, radio, switch, input, select — built on those tokens. |
+| `packages/core/src/theme.ts` | The switch: the theme list, `applyTheme`, `initTheme`, and the hooks for JS-side consumers. |
+| `packages/core/src/modules/settings/index.ts` | Declares the `settings.theme` setting and one palette command per theme. |
+| `apps/web/src/main.tsx` | Calls `initTheme()` at boot. |
+
+## The themes
+
+**`midnight`** is the original look and the default: near-black ground, hairline
+borders, small radii, essentially no elevation. Structure comes from 1px borders.
+
+**`studio`** is built from the Settings Kit design. Same ground and the same accent
+— it is a sibling, not an inversion — but the surfaces sit much closer together
+(`#1a1d23` on `#14161a`) and the borders are softer (`#23262d`), so a card is held
+apart from the page by **radius and shadow** rather than by a bright hairline. It
+also carries editorial serif display type.
+
+That pairing is the whole idea of `studio`, and it is fragile in one direction:
+brightening either the raised surface or the border collapses it back into
+`midnight`.
+
+## Selecting one
+
+Settings → Theme, or the command palette (`Theme: Midnight`, `Theme: Studio`). The
+choice is the `settings.theme` setting, so it persists server-side like any other
+override and follows the user to any browser pointed at the node.
+
+`initTheme()` runs at boot **after `loadSettings()` and before the first render**,
+so the first paint is already themed rather than flashing the default and
+correcting itself.
+
+## Adding a theme
+
+1. Add a `:root[data-theme='<id>']` block to `themes.css` declaring the **full**
+   primitive set. Copy an existing block — a missing primitive silently falls back
+   to the default theme's value, which reads as a bug rather than as inheritance.
+2. Register it in `THEMES` in `theme.ts`. The settings enum and the palette
+   commands are both derived from that array, so there is nothing else to update.
+
+Do not add a primitive to one theme only. A token that exists in one theme and not
+another is a component that renders correctly under exactly one setting.
+
+## The rules that are load-bearing
+
+**A component never hardcodes a colour.** If a component needs a colour that isn't
+a token, add the token to *every* theme rather than a literal to that component: a
+literal is invisible to the switcher and survives unchanged into a theme it was
+never designed for. This is the same rule `fonts.css` states for font faces.
+
+**`:root` unqualified carries the default theme.** A document with no `data-theme`
+— or one naming a theme that no longer exists — still renders in full instead of
+losing its palette. `:root[data-theme='…']` scores 0,2,0 against `:root`'s 0,1,0,
+so a named theme always wins regardless of source order.
+
+**`applyTheme` refuses an unknown id** and writes the default instead. A theme can
+be removed, or a setting can be restored from a machine that had a plugin theme
+installed; writing that id through would leave the app on `:root`'s values while
+the settings page claimed otherwise.
+
+**Aliases are declared once and resolve per theme.** `--surface`, `--fg`, `--ok`
+and friends are older spellings still read from ~40 files. They are defined in one
+block at the bottom of `themes.css` as `var()` references to primitives — because
+that block and the theme blocks both match `<html>`, an alias resolves against
+whichever theme is active, so a new theme declares primitives only.
+
+Those aliases were, until this system existed, **referenced but never defined**
+anywhere — always as a fallback pair like `var(--fg-muted, var(--fg))`. With
+neither half defined the declaration is invalid at computed-value time and the
+property quietly inherits, so those call sites were styled by accident. Defining
+the aliases fixes them and brings them under the switcher in one move; they are
+kept as aliases rather than renamed across 40 files, which is a separate change.
+
+## Controls
+
+A theme is not only a palette — it is also the shape of the things you click, so
+the control primitives live in the theme layer (`controls.css`) rather than in any
+one pane. Checkboxes and radios are repainted from the browser's default blue into
+the theme's own accent, corners follow `--radius-sm`, focus is one accent ring
+everywhere, and `.switch` / `.select-wrap` are there for the two controls that have
+no acceptable native form.
+
+Two rules in that file are load-bearing:
+
+**The fill is the state, not the glyph.** A checked checkbox is a solid accent box
+whose tick is a bonus. Pseudo-element support on `appearance: none` inputs is
+near-universal but not guaranteed by spec, and a control whose *only* state signal
+was the tick would silently become unreadable if it ever failed to draw. This way
+the worst case is a checkbox without a tick, which is still unambiguous.
+
+**No data-URI SVG for the tick or the select chevron.** An SVG data URI cannot read
+a custom property, so any icon drawn that way carries a hardcoded colour into every
+theme. Both are drawn with CSS instead — borders on a rotated box, and a text glyph
+in a pseudo-element.
+
+Everything is element-level, i.e. a *baseline*. Panes that already style their own
+inputs by class (`.lib-input`, `.dbc-field input`, …) still win on specificity and
+are unaffected; they inherit the improvement only where they had no opinion.
+
+`.select-wrap` is opt-in: a bare `<select>` keeps its native arrow, so nothing
+loses its affordance by default.
+
+## JavaScript consumers
+
+A theme is CSS, so almost nothing needs to know it changed. The exception is code
+that reads token *values* into JavaScript — an MUI palette, a canvas, anything
+drawing to a 2D context. None of those can see a CSS variable.
+
+Such a consumer subscribes with `useThemeId()` and re-reads through
+`readThemeTokens()`, which resolves the properties off `<html>` via
+`getComputedStyle`. Resolved, not declared: an alias like `--surface` is defined as
+`var(--bg-raised)`, and only the collapsed value is usable by a canvas.
+
+`packages/core/src/modules/games/mui-theme.tsx` is the reference consumer. Two
+things there are easy to get wrong:
+
+- **Ordering.** `initTheme()` registers its settings subscriber at boot, and
+  listeners fire in insertion order, so the `data-theme` attribute is always
+  updated before a component that subscribed on mount re-renders. A consumer that
+  applied the theme itself, later in the list, would read the *outgoing* theme's
+  values on the render following a switch.
+- **`shape.borderRadius` is a number of pixels, not a CSS length.** Passing
+  `"16px"` straight through yields `border-radius: 16pxpx`; parse it.
+
+## Typography
+
+`studio` asks for DM Sans and Instrument Serif, and both ship: three self-hosted
+woff2 files (144 KB total) in `packages/ui/src/fonts/`, bundled by Vite into every
+web build and desktop installer. Never the Google Fonts CDN — the app is
+offline-first, so a network dependency for text means unstyled UI on a plane.
+
+They are the **upstream** fonts from `github.com/google/fonts`, converted TTF →
+woff2 locally, rather than the files the Google Fonts CSS API serves. The API
+splits each family into `latin` and `latin-ext` subsets paired with
+`unicode-range`; taking one file per face from that — which is what `fonts.css`
+assumes — silently drops every accented character outside Latin-1, and the failure
+is invisible until a peer's name or a karaoke title contains one and a single glyph
+renders in the fallback face. See the provenance note in `fonts.css` for the
+conversion command.
+
+Both families are SIL OFL 1.1 and the licences ship beside them as `OFL-*.txt`,
+which is what the licence asks of anyone redistributing the binaries.
+
+`--font-display` is the app's one editorial face and is declared identically in both
+themes. That is deliberate rather than an oversight: pointing midnight's display
+face at `--font-sans` would silently strip the serif from every surface that reads
+the token — today, the games lobby's hero and ceremony type, which consumes it
+through `--games-display`.
+
+`--font-mono` is deliberately **not** per-theme. A theme changes how the app looks,
+not which glyphs line up.
