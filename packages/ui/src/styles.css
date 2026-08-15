@@ -4343,6 +4343,25 @@ kbd {
   border-color: var(--accent, #6ea8fe);
 }
 
+/* The one action a toast may offer. Styled as the affirmative thing in the
+   card rather than a quiet secondary control like .toast-copy-btn: it is what
+   the toast appeared to get clicked. */
+.toast-action {
+  margin-top: 0.5rem;
+  font-size: 0.72rem;
+  padding: 0.28rem 0.6rem;
+  border: 1px solid var(--accent, #6ea8fe);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent, #6ea8fe);
+  cursor: pointer;
+}
+
+.toast-action:hover {
+  background: var(--accent, #6ea8fe);
+  color: var(--bg, #101014);
+}
+
 .toast-close {
   background: transparent;
   border: none;

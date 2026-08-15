@@ -12,13 +12,19 @@ import { useState } from 'react';
 
 import { useSetting } from '../../settings';
 import { checkForUpdate, installUpdate, updatesSupported, type UpdateInfo } from './api';
+import { lastCheckedAt } from './auto';
 
 export function UpdatesSection() {
   const channel = useSetting<string>('app.releaseChannel') ?? 'stable';
+  const auto = useSetting<string>('app.autoUpdate') ?? 'notify';
   const [info, setInfo] = useState<UpdateInfo | null>(null);
   const [busy, setBusy] = useState('');
 
   const supported = updatesSupported();
+  // Read once per render rather than subscribed: the background checker writes
+  // it at most every six hours, and a settings page nobody is looking at does
+  // not need to know the moment it changes.
+  const last = lastCheckedAt();
 
   const check = async (): Promise<void> => {
     setBusy('checking');
@@ -59,6 +65,16 @@ export function UpdatesSection() {
           </button>
         ) : null}
       </div>
+
+      {supported ? (
+        <p className="setting-desc updates-last-check">
+          {auto === 'never'
+            ? 'Automatic checks are off — this button is the only path.'
+            : last > 0
+              ? `Last automatic check: ${new Date(last).toLocaleString()}.`
+              : 'No automatic check has completed yet.'}
+        </p>
+      ) : null}
 
       {supported && info ? (
         <div className="updates-result">

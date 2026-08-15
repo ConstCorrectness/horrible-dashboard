@@ -5,7 +5,8 @@ name: Release
 # reads. The docs workflow is the precedent for publishing from CI.
 #
 # One-time setup before the first run (see docs/architecture/releases.mdx):
-#   1. `pnpm tauri signer generate -w ~/.tauri/horrible.key`
+#   1. `pnpm --filter @horrible/desktop exec tauri signer generate -w $HOME/.tauri/horrible.key`
+#      (the CLI is a devDependency of @horrible/desktop, not of the root package)
 #   2. Put the PUBLIC half in apps/desktop/src-tauri/tauri.conf.json → plugins.updater.pubkey
 #      (replacing REPLACE_WITH_TAURI_SIGNING_PUBLIC_KEY — until then the shell does
 #      not even register the updater plugin).

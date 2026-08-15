@@ -7,8 +7,10 @@ import {
   getSetting,
   hasCapability,
   installKeymap,
+  installUpdate,
   layoutStore,
   onExternalOpenFailed,
+  startAutoUpdateChecks,
   registry,
   setSetting,
   setShellView,
@@ -81,6 +83,43 @@ export function AppShell({
           0,
           { copyUrl: url },
         );
+      }),
+    [],
+  );
+
+  // Background update checks. A no-op in the browser layout, which has nothing
+  // to install. The toast is persistent (duration 0) and carries the install
+  // action: an update notice that expires after four seconds is one the user
+  // will only ever catch by accident, and dismissing it is how they say no.
+  //
+  // `policy`/`channel` are read through getSetting on every tick rather than
+  // captured, so changing either in settings takes effect without a restart —
+  // which is why this effect has no dependency on them and mounts once.
+  useEffect(
+    () =>
+      startAutoUpdateChecks({
+        policy: () => (getSetting<string>('app.autoUpdate') === 'never' ? 'never' : 'notify'),
+        channel: () => getSetting<string>('app.releaseChannel') ?? 'stable',
+        onUpdate: (info) => {
+          toastsStore.add(
+            'info',
+            `Version ${info.version ?? ''} is available`,
+            `You are running ${info.currentVersion} on the ${info.channel} channel. Installing replaces the app and restarts it; your data is untouched.`,
+            0,
+            {
+              action: {
+                label: 'Install and restart',
+                run: () => {
+                  // Nothing follows on success — the process is replaced. A
+                  // failure is worth a word, since the user asked for this one.
+                  void installUpdate(info.channel).catch((exc: unknown) => {
+                    toastsStore.add('error', "Couldn't install the update", String(exc), 0);
+                  });
+                },
+              },
+            },
+          );
+        },
       }),
     [],
   );

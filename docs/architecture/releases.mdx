@@ -1,14 +1,17 @@
 # Releases and remote updates
 
-**Status: implemented, pending a signing key.** The desktop app can check a
-signed manifest, download an update, verify it, install it and restart. Until
-somebody generates the signing keypair and fills in the public half, the shell
-does not register the updater plugin at all and the settings section says so.
+**Status: implemented and keyed.** The desktop app checks a signed manifest —
+automatically in the background and on demand — downloads an update, verifies
+it, installs it and restarts. The signing keypair exists: the public half is in
+`tauri.conf.json` (key ID `DCD4A446DD335DBD`), so the shell registers the
+updater plugin. What remains before an update can actually reach anyone is the
+**private** half in the repo secrets and a first `v*` tag.
 
 - **Shell:** `apps/desktop/src-tauri/src/updater.rs`, plugin registered in `main.rs`
 - **Config:** `apps/desktop/src-tauri/tauri.conf.json` → `bundle`, `plugins.updater`
 - **CI:** `.github/workflows/release.yml`
-- **Frontend:** `packages/core/src/modules/updates/`
+- **Frontend:** `packages/core/src/modules/updates/` (`auto.ts` is the background
+  checker; `AppShell` starts it)
 
 ## Why custom commands instead of the plugin's JS API
 
@@ -37,8 +40,13 @@ bypass, not even behind a flag.
 ### One-time setup
 
 ```bash
-pnpm tauri signer generate -w ~/.tauri/horrible.key
+pnpm --filter @horrible/desktop exec tauri signer generate -w $HOME/.tauri/horrible.key
 ```
+
+The CLI is a devDependency of `@horrible/desktop`, not of the root package, so a
+bare `pnpm tauri …` from the repo root fails with `Command "tauri" not found`.
+`$HOME` rather than `~` because PowerShell passes a bare `~` through to a native
+command literally, producing a directory called `~` in the repo.
 
 1. Public half → `apps/desktop/src-tauri/tauri.conf.json`, replacing
    `REPLACE_WITH_TAURI_SIGNING_PUBLIC_KEY`.
@@ -85,6 +93,45 @@ verify-then-404 on every client.
 The tag decides the channel: `v1.2.3` → `latest.json`, `v1.2.3-beta.1` →
 `beta.json`. Switching a client from beta back to stable does not downgrade it —
 it simply finds nothing until stable catches up.
+
+## Automatic checks
+
+Nobody opens a settings page to ask whether their app is old, so the app asks on
+its own: once about 30 seconds after launch, then on a timer, targeting **one
+check every six hours**. `packages/core/src/modules/updates/auto.ts` is that
+layer and nothing more — it calls the same `checkForUpdate` the button does, and
+installing still goes through the same signature-verified `updater_install`.
+It is started once by `AppShell` and is a no-op in the browser layout.
+
+Three decisions in it are load-bearing:
+
+- **The interval is measured from the last completed check, not from process
+  start.** A desktop app is left running for weeks and also restarted twenty
+  times an afternoon; keying off process start means the first kind never checks
+  twice and the second checks on every launch. `lastCheckedAt` is persisted in
+  `localStorage`, and the stamp is written **on completion** — stamping at the
+  start would silence retries for six hours after a check that never returned.
+  A stamp in the *future* (a clock that was wrong, or moved) is treated as due
+  rather than trusted, since trusting it parks the app for the size of the skew.
+- **A failed background check is never surfaced.** "Could not ask" is a real
+  state and the settings section reports it, because a user who clicked deserves
+  the truth — but an offline laptop producing a toast every six hours teaches
+  people to dismiss update notices unread, which is the one habit this mechanism
+  cannot afford. The same reasoning caps the nagging at once per version:
+  `notifiedVersion` is remembered, so dismissing is how a user says no and a
+  newer version is what makes it a fresh event.
+- **There is no silent-install policy.** `app.autoUpdate` is `notify` or
+  `never`. An `auto` value would have to mean download-and-restart, because that
+  is what the installer does — the process is replaced. Restarting an app
+  somebody is working in, to deliver something that was not urgent enough to
+  interrupt them for, is worse than being one version behind. The restart is
+  always a click the user made.
+
+The notice is a **persistent toast** (`duration: 0`) carrying a single action.
+An update notice that expires after four seconds is one a user only catches by
+accident. `Toast.action` was added for this and is deliberately one action, not
+a list: a toast that grows a row of buttons has become a dialog that does not
+block, and the thing that asks is `dialogs`.
 
 ## What an update must not touch
 

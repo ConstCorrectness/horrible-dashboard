@@ -11,6 +11,16 @@ export interface Toast {
    * been proven not to work, so offering another one would be the same dead end.
    */
   copyUrl?: string;
+  /**
+   * A single thing the toast is offering to do — "Install and restart" on an
+   * available update, and nothing else so far.
+   *
+   * Deliberately one action, not a list: a toast that grows a row of buttons has
+   * become a dialog that does not block, and the thing that asks is
+   * [[dialogs]]. The click *is* the confirmation, so an action must be the
+   * obvious consequence of the title it sits under.
+   */
+  action?: { label: string; run: () => void };
 }
 
 const listeners = new Set<(toasts: Toast[]) => void>();
@@ -35,7 +45,7 @@ export const toastsStore = {
     title: string,
     message: string,
     duration = 4000,
-    extra: Pick<Toast, 'copyUrl'> = {},
+    extra: Pick<Toast, 'copyUrl' | 'action'> = {},
   ): void {
     const id = Math.random().toString(36).substring(2, 9);
     toasts = [...toasts, { id, type, title, message, duration, ...extra }];

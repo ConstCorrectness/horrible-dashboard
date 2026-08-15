@@ -22,8 +22,18 @@ export const updatesModule: ModuleManifest = {
       enumValues: ['stable', 'beta'],
       default: 'stable',
     },
+    {
+      key: 'app.autoUpdate',
+      title: 'Check for updates automatically',
+      description:
+        'Check the channel shortly after launch and every few hours, and say so when something newer exists. "never" leaves the Check now button as the only path. There is no install-silently option on purpose: the installer replaces the running process, so a silent update would mean restarting an app you are working in to deliver something that was not urgent enough to interrupt you for.',
+      type: 'enum',
+      enumValues: ['notify', 'never'],
+      default: 'notify',
+    },
   ],
   settingsSections: [{ id: 'updates.status', title: 'Updates', component: UpdatesSection }],
 };
 
 export * from './api';
+export * from './auto';

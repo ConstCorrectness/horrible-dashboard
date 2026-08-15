@@ -47,6 +47,21 @@ function ToastCard({ t }: { t: Toast }) {
         <div className="toast-title">{t.title}</div>
         <div className="toast-message">{t.message}</div>
         {t.copyUrl && <CopyUrl url={t.copyUrl} />}
+        {t.action && (
+          <button
+            type="button"
+            className="toast-action"
+            onClick={() => {
+              // Dismissed first: an action that replaces the process (installing
+              // an update) never returns, and a toast left on screen behind a
+              // restart reappears as a stale offer to install what just landed.
+              toastsStore.remove(t.id);
+              t.action?.run();
+            }}
+          >
+            {t.action.label}
+          </button>
+        )}
       </div>
       <button className="toast-close" onClick={() => toastsStore.remove(t.id)}>
         ×
