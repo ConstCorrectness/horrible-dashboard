@@ -3,11 +3,11 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to build (must already exist)'
+        description: "Tag to build (must already exist)"
         required: true
 
 permissions:
@@ -43,13 +43,13 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
-            args: '--target aarch64-apple-darwin'
+            args: "--target aarch64-apple-darwin"
           - platform: macos-latest
-            args: '--target x86_64-apple-darwin'
+            args: "--target x86_64-apple-darwin"
           - platform: ubuntu-22.04
-            args: ''
+            args: ""
           - platform: windows-latest
-            args: ''
+            args: ""
 
     runs-on: ${{ matrix.platform }}
     steps:
@@ -93,7 +93,7 @@ jobs:
         with:
           projectPath: apps/desktop
           tagName: ${{ github.event.inputs.tag || github.ref_name }}
-          releaseName: 'horrible-dashboard ${{ github.event.inputs.tag || github.ref_name }}'
+          releaseName: "horrible-dashboard ${{ github.event.inputs.tag || github.ref_name }}"
           releaseDraft: false
           prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-beta') }}
           updaterJsonPreferNsis: true
@@ -103,6 +103,8 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - name: Copy the manifest to the fixed updater release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -114,11 +116,24 @@ jobs:
             *-beta*) CHANNEL_FILE=beta.json ;;
             *)       CHANNEL_FILE=latest.json ;;
           esac
-          gh release download "$TAG" --pattern latest.json --dir . --clobber
-          mv latest.json "$CHANNEL_FILE"
-          gh release view updater >/dev/null 2>&1 || gh release create updater \
-            --title "Update manifests" \
-            --notes "Signed update manifests read by the desktop app. Not a build — see .github/workflows/release.yml." \
-            --latest=false
-          gh release upload updater "$CHANNEL_FILE" --clobber
 
+          # Download all json assets from the release to see what tauri-action produced
+          gh release download "$TAG" --pattern "*.json" --dir ./manifests --clobber
+
+          if [ -f "./manifests/latest.json" ]; then
+            cp "./manifests/latest.json" "$CHANNEL_FILE"
+          else
+            # If named something else, grab the first json manifest found
+            cp ./manifests/*.json "$CHANNEL_FILE"
+          fi
+
+          # Ensure the updater release exists (create lightweight tag if missing)
+          if ! gh release view updater >/dev/null 2>&1; then
+            gh release create updater \
+              --title "Update manifests" \
+              --notes "Signed update manifests read by the desktop app. Not a build — see .github/workflows/release.yml." \
+              --target "$GITHUB_SHA" \
+              --latest=false
+          fi
+
+          gh release upload updater "$CHANNEL_FILE" --clobber
