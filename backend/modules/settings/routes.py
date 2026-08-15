@@ -7,13 +7,13 @@ layout store.
 """
 
 import json
-import os
 from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter
 from fastapi import Path as PathParam
 
+from backend import paths
 from backend.modules.settings.models import (
     SETTING_KEY_PATTERN,
     SettingsValues,
@@ -27,7 +27,7 @@ SettingKey = Annotated[str, PathParam(pattern=SETTING_KEY_PATTERN)]
 
 
 def _settings_path() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")) / "settings.json"
+    return paths.data_dir() / "settings.json"
 
 
 def _read() -> dict:

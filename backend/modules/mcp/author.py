@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import shutil
 import subprocess
@@ -40,6 +39,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from backend.modules.mcp import config as cfg
+from backend import paths
 
 logger = logging.getLogger(__name__)
 
@@ -263,7 +263,7 @@ def projects_dir() -> Path:
     path that does not exist. `uv` reports that as "no virtual environment found" —
     naming the venv it had just created moments earlier.
     """
-    root = Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")).resolve()
+    root = paths.data_dir().resolve()
     return root / "mcp-projects"
 
 

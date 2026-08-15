@@ -14,8 +14,8 @@ import keyword
 import os
 import sqlite3
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Generator, Iterable, Mapping
+from backend import paths
 
 # Symbols seeded from the language itself (builtins + keywords) live under this
 # synthetic source so a buffer re-index never clears them.
@@ -28,7 +28,7 @@ _initialized = False
 
 @contextmanager
 def _conn() -> Generator[sqlite3.Connection, None, None]:
-    data_dir = Path(os.environ.get("HORRIBLE_DATA_DIR", ".data"))
+    data_dir = paths.data_dir()
     data_dir.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(data_dir / "app.db"))
     conn.row_factory = sqlite3.Row

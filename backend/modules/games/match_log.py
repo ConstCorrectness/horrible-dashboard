@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 from pathlib import Path
 from typing import Any
+from backend import paths
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ MAX_ENTRIES = 500
 
 
 def _log_path() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")) / "games_match_log.json"
+    return paths.data_dir() / "games_match_log.json"
 
 
 def _read() -> list[dict[str, Any]]:

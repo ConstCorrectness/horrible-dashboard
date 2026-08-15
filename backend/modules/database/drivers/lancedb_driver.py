@@ -21,9 +21,7 @@ Notes on this store's shape:
 from __future__ import annotations
 
 import json
-import os
 import time
-from pathlib import Path
 from typing import Any
 
 from backend.modules.database.drivers.base import (
@@ -33,6 +31,7 @@ from backend.modules.database.drivers.base import (
     QueryResult,
     TableSchema,
 )
+from backend import paths
 from backend.modules.database.drivers.vector_base import (
     affected_result,
     flatten_record,
@@ -72,7 +71,7 @@ def _import_lancedb():  # type: ignore[no-untyped-def]
 
 def default_path() -> str:
     """The node's own vector store directory."""
-    return str(Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")) / "lancedb")
+    return str(paths.data_dir() / "lancedb")
 
 
 def _connect(config: dict[str, Any]):  # type: ignore[no-untyped-def]

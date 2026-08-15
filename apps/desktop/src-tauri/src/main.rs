@@ -59,6 +59,7 @@ fn main() {
             window::window_open_workspace,
             window::browser_open_url,
             window::open_external,
+            window::open_path,
             webview::create_browser_webview,
             webview::update_browser_webview_bounds,
             webview::set_browser_webview_visible,

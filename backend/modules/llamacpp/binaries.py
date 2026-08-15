@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 import platform
 import shutil
 import tarfile
@@ -34,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from backend import paths
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +82,7 @@ class Install:
 
 
 def bin_root() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")) / "llamacpp" / "bin"
+    return paths.data_dir() / "llamacpp" / "bin"
 
 
 def platform_tokens() -> tuple[str, str]:

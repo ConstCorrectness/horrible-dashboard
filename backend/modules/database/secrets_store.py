@@ -21,6 +21,7 @@ from typing import Generator
 
 from cryptography.fernet import Fernet, InvalidToken
 from dotenv import load_dotenv
+from backend import paths
 
 # Picks up a SECRETS_MASTER_KEY that older installs wrote into .env, so their
 # existing secrets keep decrypting after the key moved to its own file.
@@ -41,21 +42,24 @@ def get_db_path() -> Path:
 
 
 def _data_dir() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data"))
+    return paths.data_dir()
 
 
 def get_key_path() -> Path:
     """Where the generated master key is persisted: `SECRETS_KEY_PATH`, else
-    `~/.horrible/secrets.key`.
+    `paths.config_dir()/secrets.key` — which is `~/.horrible/secrets.key`.
 
-    Deliberately NOT in `$HORRIBLE_DATA_DIR` — storing the key beside the database it
+    Deliberately NOT in `paths.data_dir()` — storing the key beside the database it
     decrypts would defeat the one threat this design actually covers (the data dir
-    being copied somewhere it shouldn't). The env override exists so tests (and
-    multi-node dev setups) can isolate the key the way they isolate the data dir.
+    being copied somewhere it shouldn't). That requirement is why `config_dir()` is
+    the one root that doesn't follow the per-OS convention: every conventional
+    config location for this app is a *child* of its data dir. The env override
+    exists so tests (and multi-node dev setups) can isolate the key the way they
+    isolate the data dir.
     """
     if override := os.environ.get("SECRETS_KEY_PATH"):
         return Path(override)
-    return Path.home() / ".horrible" / "secrets.key"
+    return paths.config_dir() / "secrets.key"
 
 
 def _restrict_permissions(path: Path) -> None:

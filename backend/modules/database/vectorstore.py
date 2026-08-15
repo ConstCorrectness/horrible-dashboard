@@ -1,14 +1,14 @@
-import os
 import json
 import time
 from pathlib import Path
 from typing import Any
 
 import lancedb
+from backend import paths
 
 
 def get_db_path() -> Path:
-    data_dir = Path(os.environ.get("HORRIBLE_DATA_DIR", ".data"))
+    data_dir = paths.data_dir()
     return data_dir / "lancedb"
 
 

@@ -22,10 +22,11 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
 
 from backend.modules.network.models import NodeId
 from backend.modules.settings.routes import get_value
+from backend import paths
 
 
 def _data_dir() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data"))
+    return paths.data_dir()
 
 
 def _identity_path() -> Path:

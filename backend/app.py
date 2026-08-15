@@ -20,8 +20,13 @@ if "HORRIBLE_ENABLE_SERVER_BROWSER" not in os.environ:
     except ImportError:
         pass
 
-_LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
-_LOG_DIR.mkdir(exist_ok=True)
+from backend import paths
+
+# `<repo>/logs` in a checkout, the per-OS log directory in a packaged install —
+# resolved from this file's location rather than the cwd, so it does not move when
+# the launcher does. See `backend/paths.py`.
+_LOG_DIR = paths.log_dir()
+_LOG_DIR.mkdir(parents=True, exist_ok=True)
 _LOG_PATH = _LOG_DIR / "backend.log"
 
 logging.basicConfig(
@@ -210,6 +215,14 @@ app.middleware("http")(telemetry_middleware)
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "app": "horrible-dashboard", "version": APP_VERSION}
+
+
+@app.get("/api/paths")
+def resolved_paths() -> dict[str, object]:
+    """Every root this node resolved and *why*, so "where did my models go" is
+    answerable from inside the app rather than from `backend/paths.py`. `repo` is
+    empty in a packaged install. Rendered by the Storage settings section."""
+    return paths.describe_roots()
 
 
 app.include_router(agent_router, prefix="/api")

@@ -8,11 +8,11 @@ rules; the backend stores what it is given. See docs/architecture/keybindings.md
 """
 
 import json
-import os
 from pathlib import Path
 
 from fastapi import APIRouter
 
+from backend import paths
 from backend.modules.keymap.models import (
     KEYMAP_SCHEMA,
     KEYMAP_VERSION,
@@ -24,7 +24,7 @@ router = APIRouter(prefix="/keymap", tags=["keymap"])
 
 
 def _keymap_path() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")) / "keymap.json"
+    return paths.data_dir() / "keymap.json"
 
 
 def _empty() -> Keymap:

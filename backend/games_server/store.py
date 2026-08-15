@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 import sqlite3
 import time
@@ -23,6 +22,7 @@ from pathlib import Path
 from typing import Any, Generator
 
 from backend.games_server import crypto as _crypto
+from backend import paths
 
 BASE_RATING = 1200.0
 ELO_K = 32.0
@@ -109,7 +109,7 @@ def delta_preview(rating: float, opponent_rating: float) -> dict[str, int]:
 
 
 def get_db_path() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")) / "game_server.db"
+    return paths.data_dir() / "game_server.db"
 
 
 @contextmanager
@@ -1648,7 +1648,7 @@ MEDIA_PER_ACCOUNT = 12
 
 
 def media_dir() -> Path:
-    path = Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")) / "media"
+    path = paths.data_dir() / "media"
     path.mkdir(parents=True, exist_ok=True)
     return path
 

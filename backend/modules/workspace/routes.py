@@ -6,7 +6,6 @@ frontend authors the default "Dashboard" layout (engine-shaped) and saves it
 here. See docs/architecture/windowing.md.
 """
 
-import os
 import uuid
 from pathlib import Path
 from typing import Annotated
@@ -14,6 +13,7 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException
 from fastapi import Path as PathParam
 
+from backend import paths
 from backend.modules.workspace.models import (
     WORKSPACE_ID_PATTERN,
     ActiveRequest,
@@ -29,7 +29,7 @@ WorkspaceId = Annotated[str, PathParam(pattern=WORKSPACE_ID_PATTERN)]
 
 
 def _state_path() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")) / "workspaces.json"
+    return paths.data_dir() / "workspaces.json"
 
 
 def _read() -> WorkspacesState:

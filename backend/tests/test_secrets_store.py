@@ -98,6 +98,9 @@ def test_default_key_path_is_not_beside_the_database(monkeypatch):
     default would write to the developer's home directory.
     """
     monkeypatch.delenv("SECRETS_KEY_PATH", raising=False)
+    # Both overrides, because the key now follows `paths.config_dir()` and the
+    # conftest isolates that too. Cleared here to assert the *real* default.
+    monkeypatch.delenv("HORRIBLE_CONFIG_DIR", raising=False)
     key_path = get_key_path()
     data_dir = Path(os.environ["HORRIBLE_DATA_DIR"]).resolve()
     assert data_dir not in key_path.resolve().parents

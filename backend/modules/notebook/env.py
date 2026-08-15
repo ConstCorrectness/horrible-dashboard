@@ -13,7 +13,6 @@ uses under `--reload` (the LSP manager's Windows-safe pattern).
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import sys
@@ -22,6 +21,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from backend.modules.settings.routes import get_value
+from backend import paths
 
 ProgressLine = Callable[[str], None]
 
@@ -30,7 +30,7 @@ _bootstrap_lock = threading.Lock()
 
 
 def _data_dir() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data"))
+    return paths.data_dir()
 
 
 def managed_venv_dir() -> Path:

@@ -6,7 +6,6 @@ transcript. The chat widget auto-saves each completed turn here so conversations
 survive reloads and pane unmounts. See docs/modules/agent-chat.md.
 """
 
-import os
 import time
 import uuid
 from pathlib import Path
@@ -15,6 +14,7 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException
 from fastapi import Path as PathParam
 
+from backend import paths
 from backend.modules.chat.models import (
     CHAT_ID_PATTERN,
     ActiveRequest,
@@ -32,7 +32,7 @@ SessionId = Annotated[str, PathParam(pattern=CHAT_ID_PATTERN)]
 
 
 def _state_path() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")) / "chat-sessions.json"
+    return paths.data_dir() / "chat-sessions.json"
 
 
 def _read() -> ChatSessionsState:

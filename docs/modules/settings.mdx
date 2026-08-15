@@ -149,6 +149,16 @@ lists are arrays, outside the scalar `useSetting` store). See
 [../architecture/agent-tools.md](../architecture/agent-tools.mdx). This seam is
 built-in only — not part of the public plugin contract yet.
 
+The other consumers are readings rather than controls, which is the same reason
+they cannot be `SettingDecl`s: **Hardware** (what the probe found and every default
+it decided, each with its reason — see
+[hardware.mdx](hardware.mdx)), **Updates**, and **Storage** (where this node keeps
+its files, and by which rule — see
+[../architecture/data-directories.mdx](../architecture/data-directories.mdx)).
+Storage's own overrides are environment variables, not settings, because they must
+resolve before anything is read and `settings.json` lives in the directory they
+locate.
+
 ## The page
 
 Modelled on VS Code's Settings editor: a **search box** over a **category list**

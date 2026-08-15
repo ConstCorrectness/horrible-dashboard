@@ -24,9 +24,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any
+from backend import paths
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ def doc_id(canonical: str, chunk_index: int) -> str:
 
 
 def _meta_path() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")) / "webindex.meta.json"
+    return paths.data_dir() / "webindex.meta.json"
 
 
 def read_meta() -> dict[str, Any]:

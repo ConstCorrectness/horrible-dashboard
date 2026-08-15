@@ -28,7 +28,6 @@ nothing anywhere says why. So a file that won't parse is listed with its error.
 from __future__ import annotations
 
 import logging
-import os
 import re
 import shutil
 from dataclasses import dataclass, field
@@ -36,6 +35,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
+from backend import paths
 
 logger = logging.getLogger(__name__)
 
@@ -197,7 +197,7 @@ def _skill_from_file(path: Path, scope: Scope) -> Skill:
 
 def user_dir() -> Path:
     """Where skills written here live. Absolute — see `mcp/author.py` for why."""
-    root = Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")).resolve()
+    root = paths.data_dir().resolve()
     return root / "skills"
 
 

@@ -9,7 +9,6 @@ path). See docs/modules/editor.md.
 
 from __future__ import annotations
 
-import os
 import time
 import uuid
 from pathlib import Path
@@ -18,6 +17,7 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException
 from fastapi import Path as PathParam
 
+from backend import paths
 from backend.modules.notes.models import (
     NOTE_ID_PATTERN,
     CreateNote,
@@ -35,7 +35,7 @@ SNIPPET_LEN = 120
 
 
 def _state_path() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")) / "notes.json"
+    return paths.data_dir() / "notes.json"
 
 
 def _read() -> NotesState:

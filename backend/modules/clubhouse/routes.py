@@ -36,13 +36,14 @@ from backend.modules.clubhouse.models import (
     TokenConnectRequest,
 )
 from backend.modules.telemetry.instrument import instrumented_client
+from backend import paths
 
 router = APIRouter(prefix="/clubhouse", tags=["clubhouse"])
 logger = logging.getLogger(__name__)
 
 
 def _data_dir() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data"))
+    return paths.data_dir()
 
 
 def _auth_path() -> Path:

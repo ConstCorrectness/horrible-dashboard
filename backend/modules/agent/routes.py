@@ -22,12 +22,13 @@ from backend.modules.agent.models import (
 )
 from backend.modules.agent.vllm import vllm_manager
 from backend.modules.telemetry.instrument import instrumented_client, tee_stream
+from backend import paths
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
 
 def _config_path() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")) / "agent-config.json"
+    return paths.data_dir() / "agent-config.json"
 
 
 def _load_config() -> AgentConfig | None:

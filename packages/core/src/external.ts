@@ -62,6 +62,28 @@ export async function openExternal(url: string): Promise<boolean> {
 }
 
 /**
+ * Show a local **directory** in the OS file manager. Desktop shell only.
+ *
+ * Returns false in the browser layout rather than throwing, because a web page
+ * genuinely cannot do this and the caller's job is to offer something else (the
+ * Storage settings section falls back to copying the path). The shell refuses
+ * anything that is not a directory, so a rejection here can also mean the folder
+ * has not been created yet — which is why the caller checks `exists` first and
+ * treats the boolean as "the user is now looking at it", exactly as
+ * {@link openExternal} does.
+ */
+export async function openPath(path: string): Promise<boolean> {
+  const invoke = tauriInvoke();
+  if (!invoke) return false;
+  try {
+    await invoke('open_path', { path });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Subscribers notified when a URL could not be opened for the user at all.
  *
  * This exists because the *last* fallback needs one too. Every other layer here

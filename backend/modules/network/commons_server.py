@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -47,6 +46,7 @@ from backend.modules.database.vectorstore import (
     upsert_document,
 )
 from backend.modules.database.embeddings import get_embedding
+from backend import paths
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ PROFILE_COLLECTION = "commons-profiles"
 
 
 def _data_dir() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data"))
+    return paths.data_dir()
 
 
 def _profiles_path() -> Path:

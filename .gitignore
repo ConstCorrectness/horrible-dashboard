@@ -146,6 +146,9 @@ apps/desktop/src-tauri/gen/
 .data/
 .data-*/
 
+# Regenerable bytes (`paths.cache_dir()` — `<repo>/.cache` in a checkout).
+.cache/
+
 # Claude Code local overrides
 .claude/settings.local.json
 .claude/.docs_check_state

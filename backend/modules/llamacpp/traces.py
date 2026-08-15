@@ -36,7 +36,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import re
 import shutil
 import struct
@@ -44,6 +43,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, BinaryIO
+from backend import paths
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ FIDELITIES = ("full", "fp16", "summary")
 
 
 def traces_root() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")) / "llamacpp" / "traces"
+    return paths.data_dir() / "llamacpp" / "traces"
 
 
 def _setting(key: str, default: Any) -> Any:

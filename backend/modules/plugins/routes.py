@@ -21,6 +21,7 @@ from fastapi import Path as PathParam
 from fastapi.responses import FileResponse
 from pydantic import ValidationError
 
+from backend import paths
 from backend.modules.plugins.models import (
     MANIFEST_FILENAME,
     PLUGIN_ID_PATTERN,
@@ -49,7 +50,7 @@ def _catalog_dir() -> Path:
 
 
 def _plugins_root() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")) / "plugins"
+    return paths.data_dir() / "plugins"
 
 
 def _package_dir(plugin_id: str) -> Path:

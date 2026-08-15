@@ -36,10 +36,10 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
+from backend import paths
 
 logger = logging.getLogger(__name__)
 
@@ -259,7 +259,7 @@ Harness = LlmHarness | CodedHarness
 
 
 def _store_path() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")) / "games_loadouts.json"
+    return paths.data_dir() / "games_loadouts.json"
 
 
 def _read_all() -> dict[str, Any]:

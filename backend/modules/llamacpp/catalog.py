@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass
@@ -35,6 +34,7 @@ from typing import Any
 import httpx
 
 from backend.modules.interpretability import gguf
+from backend import paths
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +76,7 @@ class ModelFile:
 
 
 def models_root() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")) / "llamacpp" / "models"
+    return paths.data_dir() / "llamacpp" / "models"
 
 
 def _setting(key: str, default: Any) -> Any:

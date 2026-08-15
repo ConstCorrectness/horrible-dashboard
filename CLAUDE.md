@@ -107,6 +107,14 @@ buffers, terminal + file explorer.
 - TypeScript strict mode; no `any` without a comment explaining why.
 - Pydantic models for every API boundary; the backend is the source of truth for
   shared types.
+- **Never write `os.environ.get("HORRIBLE_DATA_DIR", ".data")`.** `backend/paths.py`
+  is the one authority on where files live (`data_dir`, `config_dir`, `cache_dir`,
+  `log_dir`). That inline default was relative to the **cwd**, which is set by
+  whichever launcher started the backend, so the same code resolved to different
+  directories under `pnpm dev`, the Tauri supervisor and a packaged build — a user's
+  llama.cpp install simply vanishing. `paths` resolves from the source tree instead:
+  env override → `<repo>/.data` in a checkout → the per-OS location. See
+  docs/architecture/data-directories.mdx.
 - New features go through the module registry — a module declares its commands,
   panels, and keybindings in one place; nothing reaches into another module's
   internals. See `.claude/skills/new-module/SKILL.md` before adding a feature.

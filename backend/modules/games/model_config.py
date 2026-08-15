@@ -13,11 +13,11 @@ any wire**; routes expose key *names* only (see routes.py).
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel
+from backend import paths
 
 Provider = Literal["anthropic", "openai", "ollama"]
 
@@ -70,7 +70,7 @@ def is_local(config: ModelConfig) -> bool:
 
 
 def _keys_path() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")) / "games_keys.json"
+    return paths.data_dir() / "games_keys.json"
 
 
 def _read_keys() -> dict[str, str]:

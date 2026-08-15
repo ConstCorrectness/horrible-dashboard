@@ -1,18 +1,17 @@
 import asyncio
 import json
 import logging
-import os
 import sqlite3
 import uuid
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any, Awaitable
+from backend import paths
 
 logger = logging.getLogger(__name__)
 
 
 def _get_db_conn() -> sqlite3.Connection:
-    data_dir = Path(os.environ.get("HORRIBLE_DATA_DIR", ".data"))
+    data_dir = paths.data_dir()
     data_dir.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(data_dir / "app.db"))
     conn.row_factory = sqlite3.Row

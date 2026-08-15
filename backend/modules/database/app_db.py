@@ -15,12 +15,12 @@ Keep the two names apart.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
+from backend import paths
 
 
 def get_data_dir() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data"))
+    return paths.data_dir()
 
 
 def get_app_db_path() -> Path:

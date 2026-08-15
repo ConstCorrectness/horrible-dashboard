@@ -23,12 +23,12 @@ every user's machine.
 from __future__ import annotations
 
 import json
-import os
 import uuid
 from pathlib import Path
 from typing import Any
 
 from backend.modules.database.app_db import get_app_db_path
+from backend import paths
 
 
 # Connection config keys whose values must never be returned to the client. `uri` is
@@ -45,7 +45,7 @@ BUILTIN_IDS = frozenset({BUILTIN_APP_ID, BUILTIN_VECTORS_ID, BUILTIN_ATLAS_ID})
 
 
 def _store_path() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")) / "connections.json"
+    return paths.data_dir() / "connections.json"
 
 
 def _read() -> list[dict[str, Any]]:

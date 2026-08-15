@@ -35,6 +35,7 @@ import subprocess
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Any
+from backend import paths
 
 logger = logging.getLogger(__name__)
 
@@ -500,12 +501,8 @@ _GEO_TRIED = False
 
 
 def geoip_db_path() -> Any:
-    import os
-    from pathlib import Path
 
-    return (
-        Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")) / "geoip" / "dbip-city.mmdb"
-    )
+    return paths.data_dir() / "geoip" / "dbip-city.mmdb"
 
 
 def _reader() -> Any:

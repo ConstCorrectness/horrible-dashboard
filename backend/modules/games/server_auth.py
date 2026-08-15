@@ -22,17 +22,17 @@ match channel consults; a client-supplied name is never identity.
 from __future__ import annotations
 
 import json
-import os
 import time
 from pathlib import Path
 from typing import Any
 
 from backend.modules.games.client import resolve_server_url
 from backend.modules.settings.routes import get_value
+from backend import paths
 
 
 def _token_path() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")) / "games_token.json"
+    return paths.data_dir() / "games_token.json"
 
 
 def _read() -> dict[str, Any] | None:

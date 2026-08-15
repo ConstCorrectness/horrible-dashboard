@@ -44,6 +44,7 @@ import httpx
 from backend.modules.training import envs
 from backend.modules.training.envs import python_path, venv_dir, venv_ready
 from backend.modules.training.models import ProjectModel
+from backend import paths
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ CONVERTERS = {
 
 
 def scripts_dir() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")) / "llamacpp" / "convert"
+    return paths.data_dir() / "llamacpp" / "convert"
 
 
 def checkpoint_kind(path: Path) -> str:
@@ -343,6 +344,7 @@ async def _run(cmd: list[str], *, cwd: str) -> tuple[int, list[str]]:
     `asyncio.create_subprocess_exec` — under `uvicorn --reload` on Windows the
     loop is a `SelectorEventLoop` and cannot spawn subprocesses at all.
     """
+
     def work() -> tuple[int, list[str]]:
         proc = subprocess.Popen(
             cmd,

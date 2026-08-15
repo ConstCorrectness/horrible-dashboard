@@ -23,10 +23,10 @@ map/texture names that index into it come from files we did not write.
 
 from __future__ import annotations
 
-import os
 from functools import lru_cache
 from pathlib import Path
 
+from backend import paths
 from backend.modules.hassault import mapsource
 from backend.modules.hassault.cgz import CgzMap, read_cgz
 from backend.modules.settings.routes import get_value
@@ -78,9 +78,10 @@ def install_root() -> Path | None:
     if configured:
         path = Path(configured).expanduser()
         return path if _looks_like_install(path) else None
-    # Keyed on the environment so a test pointing elsewhere isn't served a
-    # cached answer from the developer's real machine.
-    detected = _autodetect(os.environ.get("HORRIBLE_DATA_DIR", ""))
+    # Keyed on the resolved data dir so a test pointing elsewhere isn't served a
+    # cached answer from the developer's real machine. The value is a cache key
+    # here, not a location — the install being looked for is AssaultCube's, not ours.
+    detected = _autodetect(str(paths.data_dir()))
     return Path(detected) if detected else None
 
 

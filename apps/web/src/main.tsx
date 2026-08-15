@@ -49,6 +49,7 @@ import {
   recordsModule,
   browserModule,
   hardwareModule,
+  storageModule,
   updatesModule,
   interpretabilityModule,
   labModule,
@@ -116,6 +117,9 @@ async function boot(): Promise<void> {
   // Before the modules whose defaults it decides (llama.cpp's build and offload,
   // the tracer's cap, what the training surface recommends).
   registry.register(hardwareModule);
+  // Beside hardware: both are readings of the machine rather than panes, and the
+  // two questions ("what is this box" / "where do my files go") are asked together.
+  registry.register(storageModule);
   registry.register(updatesModule);
   registry.register(interpretabilityModule);
   // After interpretability so the Lab workspace tab sits beside it, and because the

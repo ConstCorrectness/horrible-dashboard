@@ -54,13 +54,14 @@ from typing import Any
 import jwt
 
 from backend.games_server import store
+from backend import paths
 
 JWT_ALG = "HS256"
 JWT_TTL_S = 30 * 24 * 3600  # 30 days
 
 
 def _data_dir() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data"))
+    return paths.data_dir()
 
 
 def _jwt_secret() -> str:

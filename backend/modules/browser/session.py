@@ -51,6 +51,7 @@ from backend.modules.browser.cdp import connection_info
 from backend.modules.browser.fetch import UnsafeUrlError, _check_host_public
 from backend.modules.telemetry.instrument import record_browser_request
 from backend.modules.ws import WsConnection
+from backend import paths
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +120,7 @@ def server_browser_enabled() -> bool:
 
 def _profile_dir(profile: str) -> Path:
     safe = "".join(c for c in profile if c.isalnum() or c in ("-", "_")) or "default"
-    root = Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")) / "browser" / safe
+    root = paths.data_dir() / "browser" / safe
     root.mkdir(parents=True, exist_ok=True)
     return root
 

@@ -187,6 +187,26 @@ pub fn open_external(url: String) -> Result<(), String> {
     open::that_detached(&url).map_err(|e| e.to_string())
 }
 
+/// Show a **directory** in the OS file manager — Explorer, Finder, the desktop's
+/// file browser. Used by the Storage settings section for the roots reported by
+/// `GET /api/paths`.
+///
+/// **It must be a directory, and that is the security boundary, not a nicety.**
+/// `open::that_detached` asks the OS to open a path the way a double-click would,
+/// which for an executable, a `.desktop` file or a script means *running* it. A
+/// directory has no such interpretation on any of the three platforms. The check
+/// is on the canonicalized path so `…/data/../../something.exe` cannot smuggle a
+/// file past a textual test, and `canonicalize` also resolves the symlink whose
+/// target — not whose name — is what the OS will actually act on.
+#[tauri::command]
+pub fn open_path(path: String) -> Result<(), String> {
+    let resolved = std::fs::canonicalize(&path).map_err(|e| format!("{path}: {e}"))?;
+    if !resolved.is_dir() {
+        return Err(format!("refusing to open a non-directory path: {path}"));
+    }
+    open::that_detached(&resolved).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn browser_open_url(app: AppHandle, url: String) -> Result<(), String> {
     let parsed = tauri::Url::parse(&url).map_err(|e| e.to_string())?;

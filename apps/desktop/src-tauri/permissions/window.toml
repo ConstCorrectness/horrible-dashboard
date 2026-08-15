@@ -71,3 +71,12 @@ identifier = "allow-open-external"
 description = "Enables the open_external custom command"
 [permission.commands]
 allow = ["open_external"]
+
+# Shows a directory in the OS file manager (the Storage settings section). The
+# command itself refuses anything that is not a directory after canonicalizing,
+# so this permission cannot become a way to launch an executable.
+[[permission]]
+identifier = "allow-open-path"
+description = "Enables the open_path custom command"
+[permission.commands]
+allow = ["open_path"]

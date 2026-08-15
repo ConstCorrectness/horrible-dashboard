@@ -11,11 +11,11 @@ exchanges the pasted code.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
 from backend.modules.training.push.base import PushError
+from backend import paths
 
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 # Google's manual-copy flow (no local listener needed).
@@ -23,10 +23,7 @@ REDIRECT_URI = "urn:ietf:wg:oauth:2.0:oob"
 
 
 def _token_path() -> Path:
-    return (
-        Path(os.environ.get("HORRIBLE_DATA_DIR", ".data"))
-        / "training_google_token.json"
-    )
+    return paths.data_dir() / "training_google_token.json"
 
 
 def _client_config() -> dict[str, Any]:

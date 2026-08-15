@@ -43,6 +43,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from backend.modules.network import identity as node_identity
 from backend.modules.social.friendcode import format_friend_code
+from backend import paths
 
 # A person id is the same shape as a node id, and for the same reason: it is the
 # fingerprint of a public key, so it cannot be claimed by anyone else.
@@ -50,7 +51,7 @@ PersonId = str
 
 
 def _data_dir() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data"))
+    return paths.data_dir()
 
 
 def _key_path() -> Path:

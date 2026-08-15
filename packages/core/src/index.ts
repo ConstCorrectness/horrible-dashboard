@@ -13,6 +13,7 @@ export {
   notifyExternalOpenFailed,
   onExternalOpenFailed,
   openExternal,
+  openPath,
 } from './external';
 export {
   Avatar3D,
@@ -276,6 +277,13 @@ export {
   type ClubhouseStatus,
 } from './modules/clubhouse';
 export { hardwareModule } from './modules/hardware';
+export {
+  getPaths,
+  storageModule,
+  type RootSource,
+  type StoragePaths,
+  type StorageRoot,
+} from './modules/storage';
 export {
   installUpdate,
   startAutoUpdateChecks,

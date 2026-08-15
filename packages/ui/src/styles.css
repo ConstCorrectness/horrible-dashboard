@@ -750,6 +750,80 @@ body {
   white-space: pre-wrap;
 }
 
+/* Storage settings section (storage/StorageSection.tsx): the resolved roots. The
+ * source chip carries the load-bearing distinction — an environment override is
+ * something the user set, a system default is a property of the install, and a
+ * path alone cannot tell you which you are looking at. */
+.storage-roots {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0.7rem 0 0;
+}
+.storage-root {
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.2));
+  border-radius: 6px;
+}
+.storage-root-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.storage-root-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.storage-source {
+  font-size: 0.72rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: var(--bg-alt, rgba(127, 127, 127, 0.12));
+  color: var(--text-dim);
+}
+.storage-source--environment {
+  color: #e2c08d;
+}
+.storage-missing {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  font-style: italic;
+}
+.storage-path {
+  display: block;
+  margin: 0.35rem 0;
+  padding: 0.3rem 0.45rem;
+  background: var(--bg-alt, rgba(127, 127, 127, 0.1));
+  border-radius: 4px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.78rem;
+  /* A path is long, and a horizontal scrollbar inside a settings card is worse
+     than a wrap: the whole point is that the user can read the whole thing. */
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.storage-actions {
+  display: flex;
+  gap: 0.4rem;
+}
+.storage-note,
+.storage-why {
+  margin: 0.35rem 0 0;
+  font-size: 0.78rem;
+}
+.storage-why {
+  color: var(--text-dim);
+}
+.storage-warn {
+  margin: 0.35rem 0 0;
+  font-size: 0.78rem;
+  color: #e2c08d;
+}
+.storage-origin {
+  margin-top: 0.7rem;
+  font-size: 0.78rem;
+}
+
 /* LSP hover tooltip and completion documentation pane (editor/lsp.ts → CodeMirror
  * hoverTooltip / completion `info`). Both hold markdown rendered by `renderMarkdown`. */
 .cm-lsp-hover,

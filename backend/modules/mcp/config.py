@@ -21,10 +21,10 @@ tool names, where most providers only accept `[A-Za-z0-9_-]`.
 from __future__ import annotations
 
 import json
-import os
 import re
 from pathlib import Path
 from typing import Any, Literal
+from backend import paths
 
 # The prefix every MCP-contributed tool group carries. Keeping it in one place means
 # the bridge, the routes, and the tests can't drift on it.
@@ -70,7 +70,7 @@ ORIGINS = ("manual", "registry", "authored")
 
 
 def _store_path() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")) / "mcp-servers.json"
+    return paths.data_dir() / "mcp-servers.json"
 
 
 def secret_key(server_id: str) -> str:

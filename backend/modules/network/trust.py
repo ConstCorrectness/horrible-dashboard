@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.modules.settings.routes import get_value
+from backend import paths
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ TRUST_OPEN_LAN = "open-lan"
 
 
 def _data_dir() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data"))
+    return paths.data_dir()
 
 
 def _peers_path() -> Path:

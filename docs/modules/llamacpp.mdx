@@ -362,6 +362,18 @@ so the callback hands over a `void *` that nothing in the wheel can read.
    exit code the runner reports, not a dead FastAPI backend mid-turn. A non-zero
    exit with no error line is reported as exactly that.
 
+Those exported functions live in **`ggml-base`, and only there**. A modern wheel
+splits the build into several shared libraries, and `llama.dll` re-exports none of
+the ggml API — nor does `ggml.dll` (the backend registry) or `ggml-cpu.dll`. Nor is
+the CDLL reliably reachable from `llama_cpp._ggml` under a fixed attribute name (it
+has been both `lib` and `libggml`). So `_ggml_candidates()` yields every plausible
+holder — each CDLL bound on `_ggml`, then `*ggml-base*` from the wheel's `lib/`
+directory, then the old single-library `llama_cpp.llama_cpp._lib` — and each is
+**probed for `ggml_nbytes` before being accepted**. Picking a library by name
+instead surfaces later and further away, as `AbiMismatch: ggml exports none of
+ggml_type_name` out of `bind()`, which reads like an upstream ABI break rather than
+the wrong file being open.
+
 ### Four things that fail silently if forgotten
 
 - **Flash attention must be disabled explicitly.** With it on,

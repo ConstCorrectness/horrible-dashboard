@@ -6,7 +6,6 @@ node types/config at run time. File-backed JSON under $HORRIBLE_DATA_DIR.
 See docs/modules/flow-canvas.md.
 """
 
-import os
 import uuid
 from pathlib import Path
 from typing import Annotated
@@ -14,6 +13,7 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException
 from fastapi import Path as PathParam
 
+from backend import paths
 from backend.modules.flow.models import (
     FLOW_ID_PATTERN,
     ActiveRequest,
@@ -29,7 +29,7 @@ FlowId = Annotated[str, PathParam(pattern=FLOW_ID_PATTERN)]
 
 
 def _state_path() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")) / "flows.json"
+    return paths.data_dir() / "flows.json"
 
 
 def _read() -> FlowsState:

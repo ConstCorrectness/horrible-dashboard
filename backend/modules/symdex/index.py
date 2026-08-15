@@ -18,7 +18,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import time
 from pathlib import Path
 from typing import Any
@@ -38,6 +37,7 @@ from backend.modules.symdex.extract_packages import extract_packages
 from backend.modules.symdex.extract_schema import extract_schemas
 from backend.modules.symdex.extract_stdlib import STDLIB_EMBED, extract_stdlib
 from backend.modules.symdex.models import KIND_PREFIXES
+from backend import paths
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ EMBED_CHUNK = 256
 
 
 def _meta_path() -> Path:
-    return Path(os.environ.get("HORRIBLE_DATA_DIR", ".data")) / "symdex.meta.json"
+    return paths.data_dir() / "symdex.meta.json"
 
 
 def _read_meta() -> dict[str, Any]:

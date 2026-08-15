@@ -30,6 +30,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
+from backend import paths
 from backend.modules.llamacpp import traces
 
 logger = logging.getLogger(__name__)
@@ -81,10 +82,11 @@ async def run_trace(spec: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
 
     cmd = [sys.executable, "-m", "backend.modules.llamacpp.tracer", str(spec_path)]
     env = dict(os.environ)
-    # The subprocess resolves `$HORRIBLE_DATA_DIR` itself to find the trace
-    # directory; pinning it explicitly means a differently-launched child can
-    # never write its trace somewhere the backend does not look.
-    env.setdefault("HORRIBLE_DATA_DIR", os.environ.get("HORRIBLE_DATA_DIR", ".data"))
+    # The subprocess resolves the data dir itself to find the trace directory;
+    # pinning it explicitly (already resolved, always absolute) means a
+    # differently-launched child can never write its trace somewhere the backend
+    # does not look.
+    env["HORRIBLE_DATA_DIR"] = str(paths.data_dir().resolve())
 
     loop = asyncio.get_running_loop()
     proc = await loop.run_in_executor(None, lambda: _launch(cmd, env))

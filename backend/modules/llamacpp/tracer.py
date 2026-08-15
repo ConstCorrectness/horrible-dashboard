@@ -75,28 +75,63 @@ def emit(event: dict[str, Any]) -> None:
     sys.stdout.flush()
 
 
-def _load_libs() -> tuple[Any, Any]:
-    """The `llama_cpp` module and the shared library holding the ggml symbols.
+#: The symbol every candidate library is probed for. A library that lacks it is
+#: not the one holding ggml's API, however plausible its name.
+_GGML_PROBE = "ggml_nbytes"
 
-    Newer wheels split ggml into its own module; older ones export everything
-    from the llama library. Both are tried rather than assumed, because the
-    failure otherwise is an `AttributeError` deep in a callback.
+
+def _exports_ggml(lib: Any) -> bool:
+    # ctypes raises AttributeError for a missing symbol, so getattr's default
+    # answers the question without a try/except.
+    return lib is not None and getattr(lib, _GGML_PROBE, None) is not None
+
+
+def _ggml_candidates() -> Any:
+    """Every plausible holder of the ggml symbols, cheapest first.
+
+    Modern wheels split the build into several shared libraries and the ggml API
+    lives in **ggml-base** alone: `llama.dll` re-exports none of it, and neither
+    does `ggml.dll` (the backend registry) or `ggml-cpu.dll`. Older wheels put
+    everything in the llama library. Each candidate is yielded and probed rather
+    than assumed, because guessing wrong surfaces as `AbiMismatch` from `bind()`
+    ("ggml exports none of ggml_type_name") rather than as a missing file.
     """
     import llama_cpp
     import llama_cpp.llama_cpp as low
 
-    lib = None
     try:
         from llama_cpp import _ggml  # type: ignore[attr-defined]
-
-        lib = getattr(_ggml, "lib", None)
     except Exception:  # noqa: BLE001 — older wheels have no _ggml at all
-        lib = None
-    if lib is None or not hasattr(lib, "ggml_nbytes"):
-        lib = getattr(low, "_lib", None)
-    if lib is None:
-        raise RuntimeError("could not locate the ggml shared library in llama_cpp")
-    return llama_cpp, lib
+        _ggml = None
+    if _ggml is not None:
+        # The attribute has been named both `lib` and `libggml`; scanning every
+        # loaded CDLL on the module costs nothing and outlives the next rename.
+        for value in vars(_ggml).values():
+            if isinstance(value, ctypes.CDLL):
+                yield value
+
+    lib_dir = Path(llama_cpp.__file__).parent / "lib"
+    for path in sorted(lib_dir.glob("*ggml-base*")):
+        if path.suffix in (".dll", ".so", ".dylib") or ".so." in path.name:
+            try:
+                yield ctypes.CDLL(str(path))
+            except OSError:
+                continue
+
+    yield getattr(low, "_lib", None)
+
+
+def _load_libs() -> tuple[Any, Any]:
+    """The `llama_cpp` module and the shared library holding the ggml symbols."""
+    import llama_cpp
+
+    for candidate in _ggml_candidates():
+        if _exports_ggml(candidate):
+            return llama_cpp, candidate
+    raise RuntimeError(
+        "could not locate the ggml shared library in llama_cpp: no library in "
+        f"{Path(llama_cpp.__file__).parent / 'lib'} exports {_GGML_PROBE}"
+    )
 
 
 def _sym(module: Any, *names: str) -> Any:
