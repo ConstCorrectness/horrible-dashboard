@@ -162,6 +162,32 @@ def select_asset(
     return candidates[0]
 
 
+async def variant_availability(
+    client: httpx.AsyncClient, tag: str = "latest"
+) -> dict[str, Any]:
+    """Which of `VARIANTS` this release actually publishes for this OS/arch.
+
+    Reuses `select_asset` — the same match `install_server` makes right before
+    downloading — so the picker can grey out a variant *before* the user clicks
+    install instead of after, without a second notion of "available" that could
+    disagree with the one that actually gates the download.
+    """
+    release = await fetch_release(client, tag)
+    resolved_tag = str(release.get("tag_name") or tag)
+    names = [str(a.get("name") or "") for a in release.get("assets") or []]
+    os_token, arch = platform_tokens()
+    variants = {
+        variant: select_asset(names, os_token, arch, variant) is not None
+        for variant in VARIANTS
+    }
+    return {
+        "tag": resolved_tag,
+        "os": os_token,
+        "arch": arch,
+        "variants": variants,
+    }
+
+
 async def fetch_release(
     client: httpx.AsyncClient, tag: str = "latest"
 ) -> dict[str, Any]:

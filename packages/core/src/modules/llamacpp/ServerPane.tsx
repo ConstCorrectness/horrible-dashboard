@@ -6,6 +6,7 @@ import {
   downloadModel,
   formatBytes,
   formatParams,
+  getInstallVariants,
   getLlamaModels,
   getLlamaStatus,
   getRepoFiles,
@@ -17,6 +18,7 @@ import {
   type ModelsResponse,
   type Progress,
   type RepoFile,
+  type VariantAvailability,
 } from './api';
 import { TracesSection } from './TracesSection';
 
@@ -74,6 +76,23 @@ function ServerSection({
   const [contextSize, setContextSize] = useState(4096);
   const [gpuLayers, setGpuLayers] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [availability, setAvailability] = useState<VariantAvailability | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getInstallVariants().then(
+      (info) => {
+        if (!cancelled) setAvailability(info);
+      },
+      () => {
+        // A failed lookup leaves every option enabled — an unknown answer must
+        // not be shown as "unavailable", which would misrepresent the release.
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const modelPath = selected || models[0]?.path || '';
 
@@ -150,16 +169,29 @@ function ServerSection({
         )}
         <div className="llama-row">
           <select value={variant} onChange={(e) => setVariant(e.target.value)} disabled={busy}>
-            <option value="cpu">CPU (works everywhere)</option>
-            <option value="cuda">CUDA (NVIDIA)</option>
-            <option value="vulkan">Vulkan</option>
-            <option value="hip">HIP / ROCm (AMD)</option>
-            <option value="sycl">SYCL (Intel)</option>
+            {(
+              [
+                ['cpu', 'CPU (works everywhere)'],
+                ['cuda', 'CUDA (NVIDIA)'],
+                ['vulkan', 'Vulkan'],
+                ['hip', 'HIP / ROCm (AMD)'],
+                ['sycl', 'SYCL (Intel)'],
+              ] as const
+            ).map(([value, label]) => {
+              const available = availability?.variants[value];
+              return (
+                <option key={value} value={value} disabled={available === false}>
+                  {label}
+                  {available === false ? ` — no ${availability?.tag} build for this platform` : ''}
+                </option>
+              );
+            })}
           </select>
           <button onClick={() => void install()} disabled={busy}>
             {install0 ? 'Install latest' : 'Install'}
           </button>
         </div>
+        {availability?.error && <p className="llama-note">{availability.error}</p>}
         {progress && <ProgressBar progress={progress} />}
       </div>
 

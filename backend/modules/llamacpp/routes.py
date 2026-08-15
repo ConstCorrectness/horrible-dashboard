@@ -16,6 +16,7 @@ from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 
@@ -37,6 +38,7 @@ from backend.modules.llamacpp.models import (
     TraceDetail,
     TraceListResponse,
     TraceRequest,
+    VariantAvailabilityResponse,
 )
 from backend.modules.llamacpp.server import llama_manager
 
@@ -80,6 +82,29 @@ async def install(req: InstallRequest) -> StreamingResponse:
             yield json.dumps(event) + "\n"
 
     return StreamingResponse(gen(), media_type="application/x-ndjson")
+
+
+@router.get("/install/variants", response_model=VariantAvailabilityResponse)
+async def install_variants(tag: str = "latest") -> VariantAvailabilityResponse:
+    """Which variants this release actually has a build for, on this OS/arch.
+
+    Called at pane-load time so the picker can grey out a variant before the
+    user picks it, instead of only discovering it doesn't exist after a click
+    on Install (`select_asset` inside `install_server`).
+    """
+    async with httpx.AsyncClient(timeout=15) as client:
+        try:
+            info = await binaries.variant_availability(client, tag)
+        except httpx.HTTPError as exc:
+            os_token, arch = binaries.platform_tokens()
+            return VariantAvailabilityResponse(
+                tag=tag,
+                os=os_token,
+                arch=arch,
+                variants={},
+                error=f"could not reach the llama.cpp releases API: {exc}",
+            )
+    return VariantAvailabilityResponse(**info)
 
 
 @router.post("/install/remove")

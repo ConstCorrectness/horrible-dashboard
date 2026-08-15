@@ -28,6 +28,15 @@ class RemoveInstallRequest(BaseModel):
     variant: str = "cpu"
 
 
+class VariantAvailabilityResponse(BaseModel):
+    tag: str
+    os: str
+    arch: str
+    #: variant -> whether this release publishes a build for it on this OS/arch.
+    variants: dict[str, bool]
+    error: str = ""
+
+
 class SpawnRequest(BaseModel):
     """Start a server on a GGUF the catalog knows about.
 
