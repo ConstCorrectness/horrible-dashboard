@@ -1,6 +1,6 @@
 [project]
 name = "horrible-dashboard"
-version = "0.1.0"
+version = "0.2.0"
 description = "Unified one-stop app for everything — emacs for the agentic era"
 readme = "README.md"
 requires-python = ">=3.12"
