@@ -364,6 +364,84 @@ def test_catalog_lists_managed_models_and_skips_projectors(data_dir: Path) -> No
     assert models[0].to_dict()["deletable"] is True
 
 
+def _real_gguf(path: Path) -> None:
+    """A structurally valid two-block GGUF, via the header reader's own test writer.
+
+    The offload plan is a sum over the tensor directory, so a file the reader
+    rejects (`_write_gguf` above) cannot exercise it at all.
+    """
+    import struct
+
+    from backend.tests.test_interpretability_gguf import _kv, _pstr, write_gguf
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    u32 = 4
+    write_gguf(
+        path,
+        metadata=[
+            _kv("general.architecture", 8, _pstr("llama")),
+            _kv("llama.block_count", u32, struct.pack("<I", 2)),
+            _kv("llama.embedding_length", u32, struct.pack("<I", 64)),
+            _kv("llama.attention.head_count", u32, struct.pack("<I", 8)),
+            _kv("llama.attention.head_count_kv", u32, struct.pack("<I", 2)),
+            _kv("llama.context_length", u32, struct.pack("<I", 4096)),
+        ],
+        tensors=[
+            ("token_embd.weight", (64, 256), 0),  # F32 — the "outside the stack" bytes
+            ("blk.0.attn_q.weight", (64, 64), 0),
+            ("blk.1.attn_q.weight", (64, 64), 0),
+            ("output_norm.weight", (64,), 0),
+        ],
+    )
+
+
+def test_layer_plan_separates_the_blocks_from_the_output_tensors(
+    data_dir: Path,
+) -> None:
+    from backend.modules.llamacpp import offload
+
+    target = catalog.models_root() / "acme--tiny" / "tiny.gguf"
+    _real_gguf(target)
+    plan = offload.layer_plan(str(target))
+
+    assert plan["error"] == ""
+    assert plan["layerCount"] == 2
+    # Each block holds one 64×64 F32 tensor; the embedding and final norm sit
+    # outside the stack, because `--n-gpu-layers` only reaches them past the count.
+    assert plan["layerBytes"] == [64 * 64 * 4, 64 * 64 * 4]
+    assert plan["overheadBytes"] == 64 * 256 * 4 + 64 * 4
+    assert plan["totalBytes"] == sum(plan["layerBytes"]) + plan["overheadBytes"]
+    assert plan["complete"] is True
+    assert plan["contextLength"] == 4096
+
+
+def test_layer_plan_sizes_the_kv_cache_from_the_grouped_query_heads(
+    data_dir: Path,
+) -> None:
+    """The GQA head count is the point: reading `head_count` instead would report a
+    cache four times too large on this model and call it measured."""
+    from backend.modules.llamacpp import offload
+
+    target = catalog.models_root() / "acme--tiny" / "tiny.gguf"
+    _real_gguf(target)
+    plan = offload.layer_plan(str(target))
+
+    # 2 tensors (K,V) × 2 layers × 2 kv heads × (64/8) head dim × 2 bytes.
+    assert plan["kvBytesPerToken"] == 2 * 2 * 2 * 8 * 2
+
+
+def test_layer_plan_route_refuses_a_path_outside_the_catalog(data_dir: Path) -> None:
+    """It opens a client-supplied path, so an uncatalogued one is an arbitrary-file
+    read — the same boundary the delete route draws."""
+    outside = data_dir / "elsewhere" / "someone-elses.gguf"
+    _real_gguf(outside)
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/llamacpp/models/layers", params={"path": str(outside)}
+        )
+    assert response.status_code == 404
+
+
 def test_delete_refuses_a_path_outside_the_managed_directory(data_dir: Path) -> None:
     outside = data_dir / "elsewhere" / "someone-elses.gguf"
     _write_gguf(outside)

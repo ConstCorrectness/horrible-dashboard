@@ -61,6 +61,57 @@ DEFAULT_CAPTURE = (
 #: flash attention disabled.
 ATTENTION_CAPTURE = ("kq_soft_max", "kq-", "kq_mask")
 
+#: State-space (Mamba / Mamba2 / Jamba / Falcon-H1) nodes.
+#:
+#: `DEFAULT_CAPTURE` above is a *transformer* capture set — `attn_norm`, `kqv_out`,
+#: `ffn_*`. On an SSM model none of those exist, so tracing one used to yield the
+#: residual stream and **nothing whatsoever about the mechanism**, which reads as
+#: "tracing is broken on this model" rather than "we never asked for those nodes".
+#:
+#: Prefixes rather than an enumeration, because the mechanism selection is already a
+#: substring match (`Tracer.wanted`) and the exact names vary by architecture:
+#: `ssm_conv1d` and `ssm_conv1d_q` are both real, `ssm_scan` is not. The names were
+#: verified against the literals in the installed llama.dll (b10448) rather than
+#: assumed — a capture set that matches nothing fails silently, which is the exact
+#: failure this exists to fix.
+SSM_CAPTURE = ("ssm_",)
+
+#: RWKV's time-mixing and channel-mixing blocks, the same idea for that family.
+RWKV_CAPTURE = ("time_mix_", "channel_mix_", "token_shift")
+
+#: `general.architecture` prefix → the extra capture group it needs. Matched as a
+#: prefix so `mamba2`, `rwkv6`, `rwkv6qwen2` and `rwkv7` come along without a list
+#: that has to be revised every time upstream adds a variant.
+ARCH_CAPTURE: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("mamba", SSM_CAPTURE),
+    ("jamba", SSM_CAPTURE),
+    ("falcon-h", SSM_CAPTURE),
+    ("falcon_h", SSM_CAPTURE),
+    ("granitemoehybrid", SSM_CAPTURE),
+    ("plamo2", SSM_CAPTURE),
+    ("nemotron_h", SSM_CAPTURE),
+    ("rwkv", RWKV_CAPTURE),
+    ("arwkv", RWKV_CAPTURE),
+)
+
+
+def capture_for(architecture: str) -> tuple[str, ...]:
+    """The capture set for a model, as a **union** with the transformer defaults.
+
+    Union and never replacement: a hybrid (Jamba, Falcon-H1, Nemotron-H) interleaves
+    attention blocks with SSM blocks, so swapping the list on an architecture match
+    would blind the trace to half of every such model — and would do it quietly,
+    since what is left still produces a plausible-looking trace.
+    """
+    lowered = (architecture or "").strip().lower()
+    extra: list[str] = []
+    for prefix, group in ARCH_CAPTURE:
+        if not lowered.startswith(prefix):
+            continue
+        extra.extend(p for p in group if p not in extra)
+    return DEFAULT_CAPTURE + tuple(extra)
+
+
 #: A single record larger than this is summarised rather than stored. One node
 #: is never worth a fifth of the whole trace budget.
 MAX_RECORD_BYTES = 64 * 1024 * 1024
@@ -149,7 +200,14 @@ class Tracer:
         self.layers = {int(v) for v in spec.get("layers") or []}
         self.attention = bool(spec.get("attention"))
         patterns = [str(p) for p in spec.get("capture") or []]
-        self.patterns = tuple(patterns) if patterns else DEFAULT_CAPTURE
+        # An explicit capture list is taken as given; otherwise the default set is
+        # chosen by architecture, so a Mamba or RWKV model records its own mechanism
+        # instead of only the residual stream. See `capture_for`.
+        self.patterns = (
+            tuple(patterns)
+            if patterns
+            else capture_for(str(spec.get("architecture") or ""))
+        )
         if self.attention:
             self.patterns = self.patterns + ATTENTION_CAPTURE
         self.byte_budget = int(spec.get("byteBudget") or 0)

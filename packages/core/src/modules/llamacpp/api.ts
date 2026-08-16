@@ -58,6 +58,32 @@ export interface ModelsResponse {
   suggested: { repo: string; label: string; note: string }[];
 }
 
+/**
+ * Where one GGUF's bytes sit, block by block — the input to the offload preview.
+ *
+ * `layerBytes` are the file's real tensor sizes, mixed quantization and all.
+ * `overheadBytes` is everything outside the stack (embeddings, final norm, output
+ * head) and is separate because `--n-gpu-layers` only reaches it once the count
+ * exceeds the block count. `kvBytesPerToken` is per *token* so the caller can
+ * multiply by a context size the user is still free to change.
+ */
+export interface LayerPlan {
+  path: string;
+  layerCount: number;
+  layerBytes: number[];
+  overheadBytes: number;
+  totalBytes: number;
+  kvBytesPerToken: number | null;
+  contextLength: number | null;
+  /** False when a tensor's quantization was unrecognized: totals are a floor. */
+  complete: boolean;
+  error: string;
+}
+
+export function getLayerPlan(path: string): Promise<LayerPlan> {
+  return apiGet<LayerPlan>(`/llamacpp/models/layers?path=${encodeURIComponent(path)}`);
+}
+
 export interface RepoFile {
   path: string;
   sizeBytes: number;
@@ -123,8 +149,14 @@ export interface StartOptions {
   modelPath: string;
   alias?: string;
   contextSize?: number;
-  gpuLayers?: number;
-  threads?: number;
+  /**
+   * Layers offloaded to the GPU. **`null` means "ask the hardware probe"** and an
+   * explicit `0` means pure CPU — they are different requests, which is why this is
+   * nullable rather than defaulting to 0. Sending 0 because a form field had to hold
+   * *something* is how a machine with a 4090 ends up running on its CPU.
+   */
+  gpuLayers?: number | null;
+  threads?: number | null;
 }
 
 export function startServer(options: StartOptions): Promise<LlamaStatus> {
@@ -243,6 +275,30 @@ export function getTrace(traceId: string): Promise<TraceDetail> {
 
 export function getRecordValues(traceId: string, index: number): Promise<RecordValues> {
   return apiGet<RecordValues>(`/llamacpp/traces/${encodeURIComponent(traceId)}/record/${index}`);
+}
+
+/** One pass's value of a watched node's statistic. `value` is null when that pass
+ * has the node but nothing measured — drawn as a gap, never interpolated. */
+export interface SeriesPoint {
+  passIndex: number;
+  value: number | null;
+  fidelity: string;
+}
+
+export interface TraceSeries {
+  name: string;
+  stat: string;
+  points: SeriesPoint[];
+  error: string;
+}
+
+/** A watched node's statistic across every forward pass. Addressed by **name**,
+ * because that is what a pin is — the same node in pass 3 is a different record. */
+export function getTraceSeries(traceId: string, name: string, stat = 'rms'): Promise<TraceSeries> {
+  return apiGet<TraceSeries>(
+    `/llamacpp/traces/${encodeURIComponent(traceId)}/series` +
+      `?name=${encodeURIComponent(name)}&stat=${encodeURIComponent(stat)}`,
+  );
 }
 
 export function estimateTrace(options: TraceOptions): Promise<TraceEstimate> {

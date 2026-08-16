@@ -389,6 +389,135 @@ def test_truncation_is_declared(client) -> None:
     assert body["truncated"] is True
 
 
+def test_capture_set_is_transformer_only_for_a_transformer() -> None:
+    from backend.modules.llamacpp import tracer
+
+    assert tracer.capture_for("llama") == tracer.DEFAULT_CAPTURE
+    assert tracer.capture_for("") == tracer.DEFAULT_CAPTURE
+
+
+def test_capture_set_adds_the_state_space_nodes_for_an_ssm_model() -> None:
+    """Without this a Mamba trace records the residual stream and nothing about the
+    mechanism, which reads as a broken tracer rather than an unasked-for capture."""
+    from backend.modules.llamacpp import tracer
+
+    for arch in ("mamba", "mamba2", "jamba", "falcon-h1", "nemotron_h"):
+        patterns = tracer.capture_for(arch)
+        assert "ssm_" in patterns, arch
+        # Union, never replacement: a hybrid interleaves attention blocks with SSM
+        # blocks, so dropping the transformer patterns would blind half of it.
+        assert set(tracer.DEFAULT_CAPTURE).issubset(patterns), arch
+
+
+def test_capture_set_covers_the_rwkv_variants_by_prefix() -> None:
+    from backend.modules.llamacpp import tracer
+
+    for arch in ("rwkv6", "rwkv7", "rwkv6qwen2", "arwkv7"):
+        assert "time_mix_" in tracer.capture_for(arch), arch
+
+
+def test_ssm_capture_matches_the_names_this_llama_build_actually_uses() -> None:
+    """Names verified against the literals in the installed llama.dll, not guessed:
+    `ssm_conv1d` is real and `ssm_scan` is not. A capture pattern that matches
+    nothing fails silently, which is the whole failure mode being fixed here."""
+    from backend.modules.llamacpp.tracer import Tracer
+
+    tracer = Tracer({"architecture": "mamba2"})
+    for name in ("ssm_in-0", "ssm_conv1d-0", "ssm_x-3", "ssm_dt-3", "ssm_out-11"):
+        assert tracer.wanted(name), name
+    # …and the transformer nodes still match, for a hybrid.
+    assert tracer.wanted("ffn_out-2")
+
+
+def _multipass_trace(trace_id: str = "series") -> None:
+    """The same node captured in three passes — what a pin watches. Pass 1 is a
+    `summary` record with no stored statistic, i.e. a real gap."""
+    directory = traces.traces_root() / trace_id
+    writer = traces.TraceWriter(
+        directory,
+        {
+            "traceId": trace_id,
+            "modelSha": "abc",
+            "llamaBuild": "b",
+            "byteOrder": "little",
+        },
+    )
+    for pass_index, values in ((0, (1.0, 1.0, 1.0, 1.0)), (2, (3.0, 3.0, 3.0, 3.0))):
+        writer.append(
+            name="l_out-7",
+            op="MUL",
+            dtype="f32",
+            ne=[4, 1, 1, 1],
+            nb=[4, 16, 0, 0],
+            pass_index=pass_index,
+            fidelity="full",
+            payload=struct.pack("<4f", *values),
+        )
+    writer.append(
+        name="l_out-7",
+        op="MUL",
+        dtype="f32",
+        ne=[4, 1, 1, 1],
+        nb=[4, 16, 0, 0],
+        pass_index=1,
+        fidelity="summary",
+        summary={},
+    )
+    writer.close([])
+
+
+def test_series_reports_one_point_per_pass_in_pass_order(client) -> None:
+    _multipass_trace()
+    body = client.get(
+        "/api/llamacpp/traces/series/series", params={"name": "l_out-7"}
+    ).json()
+
+    assert [p["passIndex"] for p in body["points"]] == [0, 1, 2]
+    # rms of four 1.0s is 1.0; of four 3.0s is 3.0.
+    assert body["points"][0]["value"] == pytest.approx(1.0)
+    assert body["points"][2]["value"] == pytest.approx(3.0)
+
+
+def test_series_leaves_an_unmeasured_pass_as_a_gap(client) -> None:
+    """A `summary` record with no stored statistic has nothing to report. Emitting
+    0.0 would draw a plunge to zero that never happened."""
+    _multipass_trace()
+    body = client.get(
+        "/api/llamacpp/traces/series/series", params={"name": "l_out-7"}
+    ).json()
+    gap = body["points"][1]
+    assert gap["value"] is None
+    assert gap["fidelity"] == "summary"
+
+
+def test_series_summarizes_the_whole_record_not_a_prefix(client) -> None:
+    """`get_record` caps at `limit` because it ships values to a browser. A series
+    compares passes, so a statistic over a prefix would not be a comparison."""
+    write_trace()
+    capped = client.get("/api/llamacpp/traces/t1/record/0?limit=2").json()
+    assert capped["summary"]["absMax"] == 2.0  # only saw 1.0, -2.0
+
+    series = client.get(
+        "/api/llamacpp/traces/t1/series", params={"name": "inp_embd"}
+    ).json()
+    assert series["points"][0]["value"] == pytest.approx(
+        client.get("/api/llamacpp/traces/t1/record/0").json()["summary"]["rms"]
+    )
+
+
+def test_series_404s_for_a_node_this_trace_never_captured(client) -> None:
+    """A pin can name a node the capture set didn't include. That has to be an
+    honest 404 the pane renders as "unresolved", not an empty series that looks
+    like a node which was captured and happened to be flat."""
+    write_trace()
+    assert (
+        client.get(
+            "/api/llamacpp/traces/t1/series", params={"name": "ssm_in-0"}
+        ).status_code
+        == 404
+    )
+
+
 def test_missing_trace_and_record_are_404(client) -> None:
     assert client.get("/api/llamacpp/traces/nope").status_code == 404
     write_trace()

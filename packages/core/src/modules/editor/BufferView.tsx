@@ -28,16 +28,19 @@ import {
 import { ApiError } from '../../api';
 import { dialogs } from '../../dialogs';
 import { registerCloseGuard, setPaneDirty } from '../../layout/close-guards';
+import { retargetPane } from '../../layout/controller';
 import { getLocus, setLocus, subscribeLocus } from '../../locus';
 import { registry } from '../../registry';
 import { usePaneParams } from '../../panes';
 import { useSetting } from '../../settings';
+import { isVirtualPath } from '../files/api';
+import { getRoots, loadRoots } from '../files/store';
 import { autosuggest } from './autosuggest';
 import { registerBuffer, type BufferSnapshot } from './buffers';
 import { openBuffer, setActiveBufferSource, setActiveSaveAs } from './index';
 import { dirOf, lspExtension, lspLanguageId } from './lsp';
 import { readDiagnostics } from './lsp-registry';
-import { createNote, loadSource, saveSource } from './sources';
+import { dirname, joinPath, loadSource, saveSource, sourceTitle } from './sources';
 import { dbGhostFetch, indexBuffer, indexBufferNow } from './symbolCompletion';
 
 const FILE_URI = 'workspace-file:';
@@ -100,6 +103,28 @@ function lspFor(source: string | null, title: string, settings: IntellisenseSett
   });
 }
 
+/**
+ * The workspace directory an untitled buffer saves into: the **first real
+ * workspace root**, which is also what the backend anchors a relative path to
+ * (`_resolve_relative`), so the path shown here is the path written. Virtual roots
+ * (Drive) are skipped — they're read-only. Null when no root is configured at all
+ * (`HORRIBLE_NO_DEFAULT_ROOT`), which is the one case Save has nowhere to go.
+ */
+async function defaultSaveDir(): Promise<string | null> {
+  if (getRoots().length === 0) await loadRoots().catch(() => undefined);
+  return getRoots().find((r) => !isVirtualPath(r.path))?.path ?? null;
+}
+
+/** A filename for an untitled buffer: its tab title if it has a real one, else
+ * `untitled`. An extension is appended only when the title carries none, so
+ * "notes.md" stays as typed and "notes" becomes a markdown file. */
+function suggestedFilename(title: string, langHint: string | null): string {
+  const base = title && title !== 'Untitled' && title !== '…' ? title : 'untitled';
+  if (/\.[a-z0-9]{1,8}$/i.test(base)) return base;
+  const ext = langHint === 'python' ? 'py' : langHint === 'javascript' ? 'js' : 'md';
+  return `${base}.${ext}`;
+}
+
 function languageFor(title: string) {
   if (/\.(tsx?|jsx?|mjs|cjs)$/i.test(title)) {
     return javascript({ typescript: /\.tsx?$/i.test(title), jsx: /x$/i.test(title) });
@@ -153,6 +178,9 @@ export function BufferView() {
   const [readOnly, setReadOnly] = useState(false);
   const [proposing, setProposing] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  // Where an untitled buffer would land, resolved once so the header can answer
+  // "where does Save put this?" before the Save As dialog opens.
+  const [saveDir, setSaveDir] = useState<string | null>(null);
   const autosuggestOn = useSetting<boolean>('editor.autosuggest') ?? false;
   // Interpreter for basedpyright (Python third-party import completions); overrides
   // the backend's auto-detected one. Captured when a buffer opens (see the load
@@ -344,6 +372,19 @@ export function BufferView() {
     };
   }, [source]);
 
+  // Resolve the untitled buffer's would-be destination (a sourced buffer already
+  // shows its own path).
+  useEffect(() => {
+    if (source) return;
+    let cancelled = false;
+    void defaultSaveDir().then((dir) => {
+      if (!cancelled) setSaveDir(dir);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [source]);
+
   // Drop the active-context marker when this buffer unmounts, so a closed pane
   // doesn't keep feeding stale content to the agent.
   useEffect(() => {
@@ -406,43 +447,69 @@ export function BufferView() {
     }
   };
 
-  // Save the current content to a **new** destination (VS Code's "Save As…"):
-  // a workspace file path for file buffers, or a new note otherwise. Writes a
-  // copy and leaves this buffer's own source untouched — used from the close
-  // prompt and for sourceless buffers that have nowhere else to go. Returns
-  // whether it saved.
+  /**
+   * Re-point this pane at a source it didn't have before (an untitled buffer that
+   * just became a file). Retargeting keeps the pane's area, tab position and region
+   * strips — reopening would leave the untitled pane behind next to a second one.
+   * The dirty flag is cleared first so the retarget can't trip the close guard.
+   *
+   * Returns false when the pane can't be retargeted (no instance id, or that file is
+   * already open in another buffer), leaving the caller to just report the save.
+   */
+  const adoptSource = (uri: string): boolean => {
+    const instance = instanceIdRef.current;
+    if (!instance) return false;
+    setDirty(false);
+    setPaneDirty(instance, false);
+    return (
+      retargetPane(instance, `editor.buffer:${uri}`, { source: uri, title: sourceTitle(uri) }) !==
+      null
+    );
+  };
+
+  // Save the current content to a **new** destination (VS Code's "Save As…"): always
+  // a real file under a workspace root. An untitled buffer used to become a `note:`,
+  // which put work somewhere the file tree, git, and every other tool couldn't see it;
+  // a buffer with no source is an unsaved *file*, so it saves as one.
+  //
+  // The prompt is prefilled with the **full absolute path**, so where the bytes land
+  // is visible before confirming rather than implied by a bare title.
+  //
+  // An untitled buffer then **adopts** the file it just wrote (`adoptSource`) — the
+  // title bar, tab, and later Mod-s saves all follow it. A buffer that already has a
+  // source keeps it: Save As writes a copy there, as it did before.
   const saveAs = async (): Promise<boolean> => {
     const view = viewRef.current;
     if (!view) return false;
     const content = view.state.doc.toString();
-    const FILE = 'workspace-file:';
+    const untitled = !source;
     try {
-      if (source && source.startsWith(FILE)) {
-        const dest = await dialogs.prompt({
-          title: 'Save As',
-          message: 'Path to save a copy to',
-          defaultValue: source.slice(FILE.length),
-          confirmLabel: 'Save',
-        });
-        const path = dest?.trim();
-        if (!path) return false;
-        setStatus('Saving…');
-        await saveSource(`${FILE}${path}`, content);
+      let defaultValue: string;
+      if (source && source.startsWith(FILE_URI)) {
+        defaultValue = source.slice(FILE_URI.length);
       } else {
-        const name = await dialogs.prompt({
-          title: 'Save As note',
-          message: 'Title for the new note',
-          defaultValue: title === 'Untitled' ? '' : title,
-          placeholder: 'Untitled',
-          confirmLabel: 'Save',
-        });
-        const noteTitle = name?.trim();
-        if (!noteTitle) return false;
-        setStatus('Saving…');
-        await createNote(noteTitle, content);
+        const dir = await defaultSaveDir();
+        if (!dir) {
+          setStatus('No workspace root configured — add one in Settings → Files to save.');
+          return false;
+        }
+        defaultValue = joinPath(dir, suggestedFilename(title, langHint));
       }
-      setStatus('Saved a copy');
-      setTimeout(() => setStatus((s) => (s === 'Saved a copy' ? null : s)), 1500);
+      const dest = await dialogs.prompt({
+        title: 'Save As',
+        message: `Path to save the file to (a bare name lands in ${dirname(defaultValue) || 'the workspace root'})`,
+        defaultValue,
+        confirmLabel: 'Save',
+      });
+      const path = dest?.trim();
+      if (!path) return false;
+      setStatus('Saving…');
+      await saveSource(`${FILE_URI}${path}`, content);
+
+      if (untitled && adoptSource(`${FILE_URI}${path}`)) return true;
+      const label = untitled ? `Saved ${path}` : 'Saved a copy';
+      setStatus(label);
+      setTimeout(() => setStatus((s) => (s === label ? null : s)), 1500);
       return true;
     } catch (err) {
       setStatus(err instanceof Error ? err.message : String(err));
@@ -618,6 +685,13 @@ export function BufferView() {
     // `save`/`snapshotRef`/`propose` read current values via refs; only `source` re-registers.
   }, [source]);
 
+  // The header's second line of identity: the file this buffer *is*, or — for an
+  // untitled one — the file it would become. A tab title is only a basename, so
+  // without this two `index.ts` buffers are indistinguishable and an untitled buffer
+  // gives no clue where Save writes.
+  const pathLabel =
+    filePath ?? (source ? null : saveDir && joinPath(saveDir, suggestedFilename(title, langHint)));
+
   return (
     <div className="editor-buffer">
       <div className="editor-header">
@@ -625,6 +699,14 @@ export function BufferView() {
           {title}
           {dirty ? ' •' : ''}
         </span>
+        {pathLabel && (
+          <span
+            className="editor-path"
+            title={filePath ?? `Unsaved — Save writes a file here (you can change it)`}
+          >
+            {pathLabel}
+          </span>
+        )}
         <span className="editor-status">{status}</span>
         {readOnly ? (
           <span className="editor-readonly" title="This source can't be written back">

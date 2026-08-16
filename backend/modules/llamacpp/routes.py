@@ -9,6 +9,7 @@ stream instead of leaving a broadcast nobody is listening to.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -20,20 +21,23 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 
 from backend.modules.hardware import probe as hardware
-from backend.modules.llamacpp import binaries, catalog, trace_runner, traces
+from backend.modules.llamacpp import binaries, catalog, offload, trace_runner, traces
 from backend.modules.llamacpp.models import (
     DeleteModelRequest,
     DownloadRequest,
     EstimateRequest,
     EstimateResponse,
     InstallRequest,
+    LayerPlanResponse,
     ModelEntry,
     ModelsResponse,
     RecordValues,
     RemoveInstallRequest,
     RepoFilesResponse,
+    SeriesPoint,
     SpawnRequest,
     StatusResponse,
+    TraceSeriesResponse,
     TraceDetail,
     TraceListResponse,
     TraceRequest,
@@ -111,6 +115,22 @@ async def repo_files(repo: str) -> RepoFilesResponse:
     return RepoFilesResponse(repo=repo, files=files)
 
 
+@router.get("/models/layers", response_model=LayerPlanResponse)
+async def model_layers(path: str) -> LayerPlanResponse:
+    """Per-layer byte sizes for one GGUF, so the caller can show what fits in VRAM.
+
+    Restricted to files the **catalog already knows about**: this opens and reads a
+    path the client supplied, and a route that reads an arbitrary path is an
+    arbitrary-file-read route. `find_model` resolves against the managed directory,
+    the extra dirs, and the Ollama/LM Studio stores — the same set the model picker
+    offers — so anything reachable here was already listed.
+    """
+    if catalog.find_model(path) is None:
+        raise HTTPException(status_code=404, detail="not a model in the catalog")
+    plan = await asyncio.to_thread(offload.layer_plan, path)
+    return LayerPlanResponse(**plan)
+
+
 @router.post("/models/download")
 async def download(req: DownloadRequest) -> StreamingResponse:
     async def gen() -> AsyncIterator[str]:
@@ -175,6 +195,24 @@ _RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
 #: A record's values are decoded server-side and capped: a residual activation
 #: is tens of thousands of floats and no pane renders them all at once.
 _VALUE_CAP = 8192
+
+
+def _architecture(model_path: str) -> str:
+    """`general.architecture` from the GGUF header, or "" if it can't be read.
+
+    Decides the tracer's default capture set (`tracer.capture_for`), so a Mamba or
+    RWKV model records its own mechanism rather than only the residual stream.
+    Failing soft is right here: an unreadable header means the transformer defaults,
+    which is what every previous trace used and is never worse than today.
+    """
+    from backend.modules.interpretability import gguf
+
+    try:
+        header = gguf.read_header(Path(model_path).expanduser())
+    except (OSError, gguf.GgufError, ValueError) as exc:
+        logger.info("llamacpp: no architecture for %s (%s)", model_path, exc)
+        return ""
+    return str(header.metadata.get("general.architecture") or "")
 
 
 def _dims(model_path: str) -> dict[str, int]:
@@ -279,6 +317,10 @@ async def create_trace(req: TraceRequest) -> StreamingResponse:
                 else req.tokenCap
             ),
             "gpuLayers": req.gpuLayers,
+            # Read here rather than in the tracer subprocess: the header is already
+            # opened on this side for the estimate, and the subprocess should be
+            # handed a decided spec rather than re-deriving one.
+            "architecture": await asyncio.to_thread(_architecture, req.modelPath),
         }
         async for event in trace_runner.run_trace(spec):
             yield json.dumps(event) + "\n"
@@ -341,6 +383,55 @@ def get_record(trace_id: str, index: int, limit: int = _VALUE_CAP) -> RecordValu
         truncated=wanted < record.length,
         summary=traces.summarize(values),
     )
+
+
+@router.get("/traces/{trace_id}/series", response_model=TraceSeriesResponse)
+def get_series(trace_id: str, name: str, stat: str = "rms") -> TraceSeriesResponse:
+    """One node's statistic per forward pass — the watch window's sparkline.
+
+    Addressed by **node name**, not record index, because that is what a pin is: the
+    same node in pass 3 is a different record, and asking for it by index would mean
+    the client resolving the very thing it is asking about.
+
+    Summarizes the **whole** record rather than the first `_VALUE_CAP` values the way
+    `get_record` does. A series is a comparison across passes, and a statistic over a
+    prefix compared against a statistic over a different prefix is not one. These are
+    activations of a few tens of KB, so reading them whole is cheap; `get_record` caps
+    because it ships the values themselves to a browser, which this does not.
+    """
+    trace = _require(trace_id)
+    wanted = name.strip()
+    if not wanted:
+        raise HTTPException(status_code=422, detail="name is required")
+
+    matches = [r for r in trace.records if r.name == wanted]
+    if not matches:
+        raise HTTPException(
+            status_code=404, detail=f"no node named {wanted!r} in this trace"
+        )
+
+    points: list[SeriesPoint] = []
+    with trace.blob.open("rb") as handle:
+        for record in sorted(matches, key=lambda r: r.pass_index):
+            value: float | None = None
+            if record.fidelity == "summary" or record.length == 0:
+                # A summary record has no bytes by construction. It may still carry
+                # the statistic from when it was summarized; if it does not, the pass
+                # is a gap rather than a zero.
+                raw_stat = record.summary.get(stat)
+                value = float(raw_stat) if isinstance(raw_stat, (int, float)) else None
+            else:
+                handle.seek(record.offset)
+                values = traces.decode(handle.read(record.length), record.dtype)
+                computed = traces.summarize(values).get(stat)
+                value = float(computed) if computed is not None else None
+            points.append(
+                SeriesPoint(
+                    passIndex=record.pass_index, value=value, fidelity=record.fidelity
+                )
+            )
+
+    return TraceSeriesResponse(name=wanted, stat=stat, points=points)
 
 
 @router.get("/traces/{trace_id}/tensors")

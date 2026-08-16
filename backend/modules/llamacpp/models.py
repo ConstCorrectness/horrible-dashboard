@@ -74,6 +74,52 @@ class ModelsResponse(BaseModel):
     suggested: list[dict[str, str]] = Field(default_factory=list)
 
 
+class LayerPlanResponse(BaseModel):
+    """Where one GGUF's bytes sit, block by block.
+
+    `layerBytes` is indexed by transformer block; `overheadBytes` is everything
+    outside the stack (embeddings, final norm, output head), kept separate because
+    `--n-gpu-layers` moves the blocks and only reaches the output tensors when the
+    count exceeds the block count.
+    """
+
+    path: str = ""
+    layerCount: int = 0
+    layerBytes: list[int] = Field(default_factory=list)
+    overheadBytes: int = 0
+    totalBytes: int = 0
+    #: KV cache cost of a *single token* across all layers, so the caller can
+    #: multiply by a context size it is still letting the user change. None when
+    #: the metadata lacks a head count — an invented cache size would sit next to
+    #: measured ones and look equally solid.
+    kvBytesPerToken: int | None = None
+    contextLength: int | None = None
+    #: False when a tensor used an unrecognized quantization, making every total a
+    #: floor rather than an answer.
+    complete: bool = True
+    error: str = ""
+
+
+class SeriesPoint(BaseModel):
+    passIndex: int
+    #: None when that pass has the node but no values to summarize — a `summary`
+    #: record carrying no stored statistic. Drawn as a gap, never interpolated:
+    #: a straight line through a pass we did not measure is a fabricated reading.
+    value: float | None = None
+    fidelity: str = ""
+
+
+class TraceSeriesResponse(BaseModel):
+    """One node's statistic across every forward pass of a trace — the watch
+    window's sparkline, and the only view here that is *about* generation rather
+    than about a single pass."""
+
+    name: str = ""
+    stat: str = "rms"
+    points: list[SeriesPoint] = Field(default_factory=list)
+    error: str = ""
+
+
 class RepoFilesResponse(BaseModel):
     repo: str
     files: list[dict[str, Any]] = Field(default_factory=list)

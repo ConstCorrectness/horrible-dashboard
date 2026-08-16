@@ -345,6 +345,19 @@ body {
   font-weight: 600;
 }
 
+/* The buffer's full path (or, when untitled, where Save would write it). Shrinks
+   and ellipsizes before the title or the status do — a deep path must not push the
+   Save button off the header. */
+.editor-path {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-dim);
+  font-size: 0.75rem;
+}
+
 .editor-status {
   margin-left: auto;
   color: var(--text-dim);
@@ -6026,6 +6039,122 @@ kbd {
   color: var(--text-dim);
 }
 
+/* Why the probe chose what it chose, under the control it decided. Indented and
+   quiet: it explains a default rather than competing with it. */
+.llama-why {
+  margin: 0;
+  padding-left: 0.7rem;
+  border-left: 2px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+/* The offload preview: the model's layer stack drawn against the card's capacity,
+   with the GPU-layers slider sitting on top of it. */
+.llama-offload {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.llama-offload-head {
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.llama-offload-slider {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.llama-offload-slider input {
+  flex: 1;
+  min-width: 0;
+}
+
+.llama-offload-count {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Stacked segments, not a percentage fill: "how much is on the GPU" and "how much
+   is left in RAM" are two quantities, and one bar with one number hides the second. */
+.llama-offload-bar {
+  position: relative;
+  display: flex;
+  height: 14px;
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--surface-2, rgb(255 255 255 / 6%));
+}
+
+.llama-offload-gpu {
+  background: var(--accent, #6ea8fe);
+}
+
+/* The KV cache is VRAM the weights don't account for, so it gets its own band
+   rather than being folded into the weights and quietly overflowing the card. */
+.llama-offload-kv {
+  background: rgb(110 200 140 / 70%);
+}
+
+.llama-offload-cpu {
+  background: rgb(255 255 255 / 14%);
+}
+
+/* The capacity line. Drawn over the segments so "past this point it does not fit"
+   is a position rather than a sentence. */
+.llama-offload-limit {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  background: var(--text);
+  box-shadow: 0 0 0 1px var(--surface, #12121a);
+}
+
+.llama-offload-over .llama-offload-gpu,
+.llama-offload-over .llama-offload-kv {
+  background: rgb(255 120 110 / 80%);
+}
+
+.llama-offload-warn {
+  color: rgb(255 140 130);
+}
+
+.llama-linkbtn.llama-inline {
+  margin-left: 0;
+}
+
+/* The machine itself, above the build and offload controls that depend on it. */
+.llama-machine {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin: 0 0 0.4rem;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+.llama-linkbtn {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent, #6ea8fe);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
 .llama-error {
   margin: 0;
   font-size: 11px;
@@ -6199,6 +6328,157 @@ kbd {
   flex: 1 1 auto;
   font-family: var(--font-mono, monospace);
   overflow-wrap: anywhere;
+}
+
+/* A node row is the record button plus its pin toggle, so the button stays the
+   full-width click target for selecting. */
+.llama-record-row {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.llama-pin {
+  flex: 0 0 auto;
+  padding: 0.1rem 0.2rem;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  cursor: pointer;
+  opacity: 0.35;
+  filter: grayscale(1);
+}
+
+.llama-record-row:hover .llama-pin {
+  opacity: 0.75;
+}
+
+/* A pinned node reads as pinned without hovering — it is the state the watch card
+   above is showing, and a toggle you have to hunt for is not a toggle. */
+.llama-pin-on,
+.llama-record-row:hover .llama-pin-on {
+  opacity: 1;
+  filter: none;
+}
+
+.llama-pin:disabled {
+  cursor: not-allowed;
+  opacity: 0.15;
+}
+
+/* Block header inside the node list. */
+.llama-group {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.3rem 0.1rem;
+  border-top: 1px solid var(--border);
+}
+
+/* --- the watch window --- */
+
+.llama-watch {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.llama-watch-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.llama-watch-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.llama-watch-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font-family: var(--font-mono, monospace);
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+/* A pin naming a node this trace never captured is shown, not dropped: that state
+   is what a capture set which skipped the node looks like, and it is a finding. */
+.llama-watch-missing {
+  opacity: 0.55;
+}
+
+.llama-watch-missing .llama-watch-name {
+  cursor: default;
+  text-decoration: line-through;
+}
+
+.llama-spark {
+  flex: 0 0 auto;
+  width: 96px;
+  height: 18px;
+  overflow: visible;
+}
+
+.llama-spark-line {
+  fill: none;
+  stroke: var(--accent, #6ea8fe);
+  stroke-width: 1.2;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.llama-spark-dot {
+  fill: var(--accent, #6ea8fe);
+}
+
+/* --- the node filter --- */
+
+.llama-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.llama-filter-search {
+  flex: 1 1 auto;
+  min-width: 6rem;
+}
+
+.llama-filter-layer {
+  width: 3.5rem;
+}
+
+.llama-filter-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.llama-chip {
+  padding: 0.05rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-dim);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.llama-chip-on {
+  border-color: var(--accent, #6ea8fe);
+  color: var(--accent, #6ea8fe);
 }
 
 /* Fidelity is the honesty knob and has to be visible at a glance: a `summary`

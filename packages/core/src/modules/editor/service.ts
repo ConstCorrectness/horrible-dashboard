@@ -41,6 +41,14 @@ export interface EditorService {
    * hot-poll loops where a backend fetch per tick would be wasteful.
    */
   peekBufferContent(uri: string): string | null;
+  /**
+   * The live selection in a mounted buffer. Null when the buffer isn't mounted —
+   * a selection only exists in a CodeMirror view, so unlike {@link getBufferContent}
+   * there is no persisted fallback. An empty `text` is a real answer (a bare
+   * cursor), and callers that want "the selection, or the whole file" must check
+   * `text` rather than the null.
+   */
+  getBufferSelection(uri: string): { text: string; from: number; to: number } | null;
   /** Replace an open buffer's content. Returns false if it isn't currently mounted. */
   setBufferContent(uri: string, content: string): boolean;
   /** Source URIs of all currently mounted buffers. */
@@ -102,6 +110,13 @@ const editorService: EditorService = {
 
   peekBufferContent(uri) {
     return getBuffer(uri)?.snapshot().content ?? null;
+  },
+
+  getBufferSelection(uri) {
+    const snapshot = getBuffer(uri)?.snapshot();
+    if (!snapshot) return null;
+    const { text, from, to } = snapshot.selection;
+    return { text, from, to };
   },
 
   setBufferContent(uri, content) {

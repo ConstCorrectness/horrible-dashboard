@@ -1,5 +1,61 @@
+import { revealSection } from '../../layout/controller';
+import { minibuffer } from '../../minibuffer';
 import { registry, type ModuleManifest } from '../../registry';
+import type { EditorService } from '../editor/service';
 import { LlamaCppPane } from './ServerPane';
+import { sendTracePrompt } from './trace-prompt';
+
+/** Enough of the buffer to name it in the traces section. */
+function bufferLabel(uri: string): string {
+  const path = uri.replace(/^workspace-file:/, '');
+  return path.split(/[\\/]/).pop() || path;
+}
+
+/**
+ * Trace the editor's selection: what the model does with *your* code.
+ *
+ * The traces section's prompt was a fixed `'The capital of France is'`, which
+ * demonstrates the machinery and answers nothing you were actually wondering.
+ * Feeding it the buffer makes the token strip your identifiers and (with attention
+ * on) the attention map a map over your own code.
+ *
+ * The editor is reached through its registered **service**, not by importing its
+ * internals — the same seam the visualizer uses. A selection only exists in a
+ * mounted CodeMirror view, so an unmounted buffer is reported rather than silently
+ * traced from its persisted bytes: tracing something other than what is on screen
+ * is worse than declining.
+ *
+ * An *untitled* buffer is reported specifically rather than as "no buffer": it is
+ * on screen, so "needs an open buffer" would read as a bug. The editor tracks the
+ * active buffer by source URI and an unsaved one has none, which is a real gap and
+ * not worth papering over with a guess about which pane was meant.
+ */
+function traceSelection(): void {
+  const editor = registry.getService<EditorService>('editor');
+  const uri = editor?.getActiveBufferSource();
+  if (!editor || !uri) {
+    minibuffer.say(
+      'Trace selection needs a saved buffer — an untitled one has no source to read',
+      'error',
+    );
+    return;
+  }
+  const selection = editor.getBufferSelection(uri);
+  if (!selection) {
+    minibuffer.say('That buffer is not currently open in a visible pane', 'error');
+    return;
+  }
+  // No selection means the cursor is somewhere — trace the whole buffer, the way
+  // "run selection" tools treat an empty selection as "the file".
+  const text = selection.text || editor.peekBufferContent(uri) || '';
+  if (!text.trim()) {
+    minibuffer.say('Nothing to trace — the buffer is empty', 'error');
+    return;
+  }
+  const scope = selection.text ? 'selection' : 'whole file';
+  sendTracePrompt({ prompt: text, label: `${bufferLabel(uri)} (${scope})` });
+  revealSection('traces', 'llamacpp.server');
+}
 
 /**
  * llama.cpp: the node serving its own weights.
@@ -37,6 +93,12 @@ export const llamacppModule: ModuleManifest = {
       id: 'llamacpp.open',
       title: 'llama.cpp: Server and models',
       run: () => registry.openPanel('llamacpp.server'),
+    },
+    {
+      id: 'llamacpp.traceSelection',
+      title: 'llama.cpp: Trace editor selection',
+      run: traceSelection,
+      slash: 'trace-selection',
     },
   ],
   settings: [

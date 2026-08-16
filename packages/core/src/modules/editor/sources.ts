@@ -58,6 +58,19 @@ function basename(p: string): string {
   return parts[parts.length - 1] || p;
 }
 
+/** Join a directory and a name with whichever separator the directory already uses,
+ * so a Windows root doesn't grow a mixed `C:\Users\x/notes.md`. */
+export function joinPath(dir: string, name: string): string {
+  const sep = dir.includes('\\') ? '\\' : '/';
+  return `${dir.replace(/[\\/]+$/, '')}${sep}${name}`;
+}
+
+/** The directory portion of a path (empty when there is none). */
+export function dirname(p: string): string {
+  const cut = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
+  return cut > 0 ? p.slice(0, cut) : '';
+}
+
 /** Split `github:<owner>/<repo>@<ref>/<path>` into its parts. */
 export function parseGithubUri(uri: string): {
   owner: string;

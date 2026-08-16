@@ -73,9 +73,18 @@ the component.
   registry (`registry.getService('editor')`, from `service.ts`) — `openBufferFromContent`
   (materialize content as a note or `scratch/` file), `getBufferContent` (live, or the
   persisted bytes via `loadSource` when the tab is unmounted), `peekBufferContent` (sync,
-  live-only), `setBufferContent`, `getActiveBufferSource`, and `listBuffers`. The
-  visualizer uses this to bridge templates ⇄ buffers (see
-  [visualizer › Editor integration](visualizer.mdx#editor-integration)).
+  live-only), `getBufferSelection` (live-only **by nature** — a selection exists in a
+  CodeMirror view and nowhere else, so this returns null for an unmounted tab rather
+  than falling back to bytes), `setBufferContent`, `getActiveBufferSource`, and
+  `listBuffers`. The visualizer uses this to bridge templates ⇄ buffers (see
+  [visualizer › Editor integration](visualizer.mdx#editor-integration)), and
+  [llama.cpp](llamacpp.mdx#tracing-what-you-are-actually-writing) uses it to trace the
+  selection through a model.
+
+  Note what the service **cannot** reach: an untitled buffer. `getActiveBufferSource`
+  is keyed by source URI and an unsaved buffer has none, so it is invisible to every
+  cross-module consumer until it is saved. Callers should say that specifically rather
+  than reporting "no open buffer" about a buffer that is plainly open.
 - **Left region strip:** `editor.recentNotes` (**`embedded`**) — the most-recently-updated notes
   (`GET /notes`); click a row to open it as a `note:` buffer, with a "New note"
   affordance. Refreshes on window focus so notes created/saved elsewhere appear.
@@ -127,11 +136,37 @@ want to save the changes you made to_ `{title}`_?"_ / _"Your changes will be los
 if you don't save."_ — with **Save** (default) / **Don't Save** / **Cancel**. The save
 must succeed for the close to proceed; a failed or cancelled save keeps the buffer
 open. Like VS Code there's no separate "Save As…" button: a **sourceless (untitled)
-buffer has nowhere to write, so its Save falls through to the Save As flow** —
-`saveAs()` prompts for a destination (a `workspace-file:` path, or a new `note:`
-for note/untitled buffers) and writes there without re-pointing the closing buffer.
+buffer has nowhere to write, so its Save falls through to the Save As flow**.
 `dialogs.choice` is the general multi-button dialog kind (alongside
 `prompt`/`confirm`); the `<Dialogs />` component renders it.
+
+### Save As writes a file, not a note
+
+`saveAs()` always writes a **`workspace-file:`** — an untitled buffer is an unsaved
+*file*, and turning it into a `note:` (as this used to) put the work somewhere the
+file tree, git, and every other tool couldn't see it. Notes remain a first-class
+source; they're just something you open deliberately (`/new`), not what Save
+silently produces.
+
+Three consequences worth knowing:
+
+- **The destination is shown, not implied.** The prompt is prefilled with the full
+  absolute path and names the directory a bare name would land in. That directory is
+  the first non-virtual **workspace root**, which is also what the backend anchors a
+  relative path to (`_resolve_relative` in `backend/modules/files/routes.py`), so the
+  path shown is the path written. The header carries the same information for every
+  buffer: the file's full path, or — while untitled — the file it would become. With
+  no workspace root configured at all (`HORRIBLE_NO_DEFAULT_ROOT`) Save says so
+  instead of silently inventing a destination.
+- **An untitled buffer adopts what it just wrote.** It `retargetPane`s onto the new
+  `workspace-file:` source, so the title bar, the tab, and every later `mod+s` follow
+  the file — the buffer stops being "Untitled" the moment it stops being untitled.
+  Retargeting rather than reopening keeps the pane's area, tab position and region
+  strips. If that file is already open in another buffer the retarget is refused and
+  the save is simply reported.
+- **A buffer that already has a source keeps it.** Save As there writes a *copy* to
+  the new path and leaves the buffer pointed at its own source — which is what the
+  close prompt needs, since re-pointing a closing buffer would be meaningless.
 
 Closing the whole tab/window is guarded separately: dirty buffers flag themselves
 via `setPaneDirty`, and a `beforeunload` handler triggers the browser's native

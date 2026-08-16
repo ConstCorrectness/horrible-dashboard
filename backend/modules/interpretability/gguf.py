@@ -207,6 +207,11 @@ _BLOCK_RULES: tuple[tuple[str, str], ...] = (
     ("ffn_gate_inp", "moe"),
     ("_exps", "moe"),
     ("_shexp", "moe"),
+    # State-space blocks (Mamba/Mamba2, Jamba, Falcon-H1, Nemotron-H). Without this
+    # every SSM tensor falls through to the bare-norm or "other" rule and the model
+    # explorer's tree is one undifferentiated bucket — which looks like the model
+    # having no structure rather than like us not naming it.
+    ("ssm_", "ssm"),
     ("attn_", "attention"),
     # Gemma-family sandwich norms. Named unambiguously for the sub-block they
     # close, so attributing them is reading, not guessing — and it keeps the

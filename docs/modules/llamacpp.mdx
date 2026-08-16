@@ -100,6 +100,74 @@ trace. Those request fields are **nullable**, and the resolution is an `is None`
 check rather than a falsiness one: an explicit `0` is a request for pure CPU and
 has to survive.
 
+**A form must send the nulls, or none of the above happens.** The pane originally
+initialized its own state to `variant: 'cpu'` and `gpuLayers: 0` — plausible-looking
+defaults that are in fact concrete user instructions, so `variant in ("", "auto")`
+and `gpuLayers is None` never fired and the whole probe was bypassed by its primary
+caller. A machine with a 4090 installed a CPU build and offloaded nothing, with
+nothing in the UI to explain it. The pane now holds `'auto'` and `null`, renders the
+resolved value as the input's **placeholder**, and prints the matching `reasons`
+string under the control. Three properties are load-bearing:
+
+- **An empty box is a question, a typed number is an instruction.** `0` in the GPU
+  layers box still means pure CPU, and says so, rather than being silently
+  reinterpreted as "auto".
+- **The reading sits next to the decision.** The probe's findings used to live only
+  in the Settings page. The pane now shows the accelerator line above the Build
+  card, with a Re-probe button, because that is where the choice is made.
+- **Unknown is not none.** With `certain: false` the line says the probe could not
+  ask — the same rule the [hardware](hardware.mdx) settings section follows.
+
+### The offload preview — how many layers actually fit
+
+`GET /models/layers` (`offload.py`) sums the selected GGUF's tensor directory into
+per-block byte totals, and the pane draws the stack against the card's capacity with
+the GPU-layers slider on top of it. Everything it needs was already on disk — the
+directory carries a size and a block index per tensor — so the answer to "how many of
+these fit?" was one sum away and was simply never taken.
+
+Two of llama.cpp's own rules are load-bearing, and reversing either draws a confident
+picture of the wrong thing:
+
+- **The offloaded blocks are the LAST N.** `llm_load_tensors` sets
+  `i_gpu_start = n_layer - n_gpu_layers`. Taking the first N gives the same total
+  (blocks are near-uniform) while marking the wrong end of the stack.
+- **The output tensors only move once N exceeds the block count** — what `-ngl 99` is
+  for. On a large-vocabulary model that is most of the file: Gemma 4 E4B keeps
+  **2.9 GB of its 5.3 GB** in the embedding and output head, so folding them into
+  "layers" would be wrong by more than half. `layerBytes` and `overheadBytes` are
+  therefore separate fields, and the bar shows the jump when the slider passes the
+  end.
+
+The KV cache is the one **modelled** quantity, and it earns its place: it is computed
+from `attention.head_count_kv`, so a GQA model's four-times-smaller cache is reported
+as such rather than inflated from the query head count. It is returned **per token**
+so the pane multiplies by the context size the user is still free to change — at
+65k context on a 20B model the cache alone is 3 GB, which is the difference between
+fitting and an OOM at load, and baking a context into the server's answer would make
+it silently wrong the moment the field moved. It gets its own band on the bar rather
+than being added to the weights, because it is VRAM the file size does not account for.
+
+What it does **not** claim: compute buffers, the CUDA context and driver overhead
+depend on the build and the batch size, not on the weights. Rather than a fudge factor
+hidden inside the total, a flat `VRAM_RESERVE_BYTES` is held back and named in the
+tooltip. And with no measured VRAM — a card reporting no memory size, a probe that
+could not ask, or unified memory where the "VRAM" *is* the RAM — the ceiling is simply
+not drawn and no verdict is given, because "unknown" rendering as "fits" is the exact
+failure the hardware module exists to prevent.
+
+The arithmetic lives in `offload.ts` (pure, unit-tested) rather than in the component,
+including the `Fit it` suggestion, which is the largest count that still fits and is
+reported as `layerCount + 1` when everything does — that being the value to actually
+send.
+
+:::note[The probe's default does not know your context]
+`hardware.defaults()` decides `gpuLayers` from VRAM alone, so on a 12 GB card it says
+"all". The preview will show that overflowing once you raise the context, because it
+knows the model and the context and the probe knows neither. The preview is right; the
+default is a starting point.
+:::
+
 ### Verification says what it actually knows
 
 GitHub publishes a `digest` for release assets. When it is there, a mismatch aborts
@@ -234,6 +302,7 @@ model than the one its settings show.
 | Section | `llamacpp.server` → `models` | Key <kbd>m</kbd> — catalog + downloads |
 | Section | `llamacpp.server` → `traces` | Key <kbd>t</kbd> — the activation scrubber |
 | Command | `llamacpp.open` | llama.cpp: Server and models |
+| Command | `llamacpp.traceSelection` | llama.cpp: Trace editor selection (`/trace-selection`) |
 | Setting | `llamacpp.modelDirs` | Extra GGUF directories to scan |
 | Setting | `llamacpp.diskBudgetGb` | Ceiling for the managed directory |
 | Setting | `llamacpp.traceBudgetGb` | Ceiling for stored traces (default 2 GB) |
@@ -248,6 +317,39 @@ find weights → serve them → look at what you served is one working position.
 Provider and endpoint overrides are edited in **Settings → Agent orchestrator**,
 beside the model override they have to agree with.
 
+### Tracing what you are actually writing
+
+`llamacpp.traceSelection` (`/trace-selection`) sends the **editor's selection** — or
+the whole buffer when nothing is selected — into the traces section as the prompt,
+then reveals that section. The prompt box was otherwise a fixed
+`'The capital of France is'`, which demonstrates the machinery and answers nothing
+anyone was wondering; fed the buffer instead, the token strip becomes your own
+identifiers and (with attention on) the attention map is a map over your code. It
+pairs naturally with the fact that traces apply **no chat template**: what is
+tokenized is exactly the text, which is what you want for a code fragment.
+
+Four things it does deliberately:
+
+- **The editor is reached through its registered service**, `EditorService`
+  (`registry.getService('editor')`), which gained `getBufferSelection` for this —
+  the same seam the visualizer uses, never a deep import.
+- **An unmounted buffer is declined, not guessed.** A selection exists only in a live
+  CodeMirror view; falling back to the persisted bytes would trace something other
+  than what is on screen.
+- **An untitled buffer is reported specifically.** The editor tracks the active
+  buffer by source URI, and an unsaved one has none — so the message says "needs a
+  saved buffer" rather than "needs an open buffer", which would read as a bug when
+  one is plainly open. See [editor](editor.mdx#save-as-writes-a-file-not-a-note).
+- **The origin is shown and clears on edit.** The section prints "From `foo.py`
+  (selection)"; typing in the box drops the label, because a textarea that
+  silently repopulated itself is indistinguishable from a bug.
+
+The handoff itself is `trace-prompt.ts`: a pending value *plus* a subscription,
+because revealing the section mounts it fresh (a prompt pushed first has no listener
+yet) while a push into an already-open section has no mount to read it. Either
+mechanism alone drops half the cases, and the read clears the value so a later visit
+does not resurrect an old selection over what you were typing.
+
 ## Backend surface
 
 | Method | Path | Purpose |
@@ -259,13 +361,15 @@ beside the model override they have to agree with.
 | `GET` | `/api/llamacpp/repo?repo=` | GGUF files in a Hugging Face repo, with sizes |
 | `POST` | `/api/llamacpp/models/download` | Fetch one GGUF (NDJSON progress) |
 | `POST` | `/api/llamacpp/models/delete` | Delete a managed model (403 otherwise) |
+| `GET` | `/api/llamacpp/models/layers` | Per-block byte sizes + KV cost per token, for the offload preview. **Catalog-only** — it opens a client-supplied path, so an uncatalogued one 404s rather than becoming an arbitrary-file read |
 | `POST` | `/api/llamacpp/start` | Spawn on a chosen GGUF, optionally waiting for ready |
 | `POST` | `/api/llamacpp/stop` | Terminate |
 | `GET` | `/api/llamacpp/traces` | Stored traces, disk usage, and whether tracing is available at all |
 | `POST` | `/api/llamacpp/traces/estimate` | Pre-flight cost, from the GGUF header |
 | `POST` | `/api/llamacpp/traces` | Run one traced forward pass (NDJSON progress) |
 | `GET` | `/api/llamacpp/traces/{id}` | Manifest, record list, tokens |
-| `GET` | `/api/llamacpp/traces/{id}/record/{i}` | One record's values, decoded server-side |
+| `GET` | `/api/llamacpp/traces/{id}/record/{i}` | One record's values, decoded server-side (capped at `_VALUE_CAP`) |
+| `GET` | `/api/llamacpp/traces/{id}/series` | One node's statistic per forward pass, **by name**. Summarizes the whole record, unlike `/record/{i}` |
 | `GET` | `/api/llamacpp/traces/{id}/tensors` | The raw blob, honouring `Range` |
 | `DELETE` | `/api/llamacpp/traces/{id}` | Delete a trace |
 
@@ -316,6 +420,95 @@ the two llama.cpps genuinely disagree — which is why a trace may only be overl
 a chat turn when **both** `llamaBuild` and `modelSha` match (`traces.matches_run`).
 A pane that overlaid them anyway would be showing a forward pass that did not
 produce the answer above it.
+
+### The watch window — pinned nodes, gdb-style
+
+The scrubber could show exactly one node at a time, so the two questions an
+interpretability session is made of — *what does this node do as the model
+generates?* and *how do these two compare?* — could only be answered by clicking
+back and forth and remembering numbers. **Pinning** answers both: pinned nodes stack
+in a Watch card above the list, all visible at once, re-resolved for whichever pass
+is on screen.
+
+**A pin holds a node NAME, not a record index**, and that is the whole design. A
+watch in a debugger is an expression re-evaluated at each stop, not a pointer to one
+evaluation of it. So a pin survives switching pass (each generated token is its own
+forward pass with its own records under the same names) and survives opening a
+*different trace of the same model* — the closest thing here to re-running a program
+under gdb. Pins are keyed by **model**, not by trace, for the same reason: "watch
+layer 41's residual" is a fact about the architecture, and keying by trace id would
+throw the list away exactly when it became useful, on the second trace.
+
+Three states are deliberate:
+
+- **A pin naming a node this trace never captured is shown as unresolved**, struck
+  through with "not captured in this trace" — never silently dropped. It is a real
+  finding: pin `kq_soft_max-17` from an attention-on trace, open an attention-off
+  one, and the gap tells you the capture set differed rather than pretending the
+  node was never interesting.
+- **A `summary` pin shows statistics and no strip.** The rule that a summary carries
+  statistics *instead of* a tensor is preserved rather than special-cased away.
+- **The cap is 8, and it says why.** Each pin is a request per pass change; an
+  uncapped watch list turns switching pass into a request storm. `pin all` on a
+  block fills up to the cap rather than dropping the ones that fit.
+
+The sparkline is a second route, `GET /traces/{id}/series?name=…`, and it exists
+because the manifest cannot answer it: `tracer._capture` writes `summary` **only**
+for `fidelity="summary"` records, so exactly the records that have data carry no
+statistics. It summarizes the **whole** record where `/record/{i}` caps at
+`_VALUE_CAP` — a series is a comparison across passes, and a statistic over a prefix
+compared against one over a different prefix is not a comparison. This is measurable,
+not theoretical: on a 9-token prompt pass `l_out-41` has 23040 values, and the capped
+route reports rms 0.894 against the whole record's 1.248. Where the record fits under
+the cap the two agree to the last digit. A pass with nothing measured contributes
+`null` and is **drawn as a gap**, never interpolated.
+
+The node list gained filters to match — name search, layer range, and kind toggles
+built from a pure `node-kind.ts` classifier. Two details worth keeping:
+
+- **Kind is derived on the frontend from the node name**, not stamped on the record
+  at write time, so it works on every trace already on disk rather than only on ones
+  recorded after the change.
+- **Narrowing the layer range hides the layerless nodes** (`inp_embd`,
+  `result_norm`, `result_output`) and leaving it untouched keeps them — mirroring
+  `TraceFilter.wanted` in the tracer, which refuses to let a layer selection silently
+  drop the two ends of the story.
+- **Only the kinds present are offered** as toggles. A Mamba trace showing an
+  "attention" chip that matches nothing is worse than no chip.
+
+### Architectures beyond the transformer
+
+`DEFAULT_CAPTURE` is a *transformer* capture set — `attn_norm`, `kqv_out`, `ffn_*`.
+llama.cpp also runs Mamba/Mamba2, RWKV and hybrids (Jamba, Falcon-H1, Nemotron-H),
+and on those none of those names exist: tracing one recorded the residual stream and
+**nothing whatsoever about the mechanism**, which reads as a broken tracer rather
+than as an unasked-for capture. `tracer.capture_for(architecture)` now adds an SSM or
+RWKV group, chosen by `general.architecture` read from the GGUF header at request
+time (`routes._architecture`, failing soft to the transformer defaults).
+
+Two rules:
+
+- **Union, never replacement.** A hybrid interleaves attention blocks with SSM
+  blocks, so swapping the list on an architecture match would blind the trace to half
+  of every such model — quietly, since what remained would still look plausible.
+- **The names were verified, not guessed.** They come from the string literals in the
+  installed `llama.dll` (b10448): `ssm_conv1d` is real and `ssm_scan` is not. A
+  capture pattern matching nothing fails silently, which is the exact failure being
+  fixed, so the patterns are prefixes (`ssm_`, `time_mix_`, `channel_mix_`) matched
+  the same substring way `Tracer.wanted` already works. `gguf._BLOCK_RULES` gained
+  `("ssm_", "ssm")` too, or the model explorer files every Mamba tensor under "other".
+
+:::caution[Diffusion is not covered]
+Image diffusion is `stable-diffusion.cpp` — a different binary this module does not
+run, and nothing here traces it. Diffusion *language* models (LLaDA, Dream) do exist
+in llama.cpp, but they denoise the whole sequence iteratively, so their steps are not
+`passIndex`-as-generated-token and the tracer's autoregressive `llama_decode` loop
+does not express them. Both are open, not half-supported.
+:::
+
+The SSM capture set is verified against the build's own strings and against
+`Tracer.wanted`, but **not yet against real Mamba weights** — no Mamba GGUF is
+present on the development machine.
 
 ### Why snapshots, not a stream
 

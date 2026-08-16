@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { usePaneSection } from '../../layout/use-sections';
+import { getHardware, refreshHardware, type Hardware } from '../hardware/api';
 import {
   deleteModel,
   downloadModel,
@@ -18,6 +19,7 @@ import {
   type Progress,
   type RepoFile,
 } from './api';
+import { OffloadPreview } from './OffloadPreview';
 import { TracesSection } from './TracesSection';
 
 /**
@@ -58,24 +60,103 @@ function ProgressBar({ progress }: { progress: Progress }) {
   );
 }
 
+/** The probe's number as a person reads it — 999 is the sentinel for "all of them". */
+function tuned(value: number | undefined): string {
+  if (value === undefined) return 'auto';
+  return value === 999 ? 'all' : String(value);
+}
+
+/**
+ * What the machine is, above the controls that depend on it.
+ *
+ * The probe's findings used to live only in Settings, three clicks from the form
+ * whose defaults they decide. Rendering the reading here is what makes a CPU build
+ * on a machine with a card explicable rather than mysterious.
+ *
+ * The rule inherited from the hardware module: **"unknown" is never drawn as
+ * "none"** — an absent `nvidia-smi` and an absent GPU are different facts.
+ */
+function MachineLine({
+  hardware,
+  onReprobe,
+}: {
+  hardware: Hardware | null;
+  onReprobe: () => void;
+}) {
+  if (!hardware) return null;
+  const { profile } = hardware;
+  const primary = profile.primary;
+  return (
+    <p className="llama-machine">
+      {primary ? (
+        <>
+          <span className="llama-dot llama-dot-on" />
+          <b>{primary.name}</b>
+          {primary.vramMb !== null && (
+            <>
+              {' · '}
+              {(primary.vramMb / 1024).toFixed(primary.vramMb >= 10_240 ? 0 : 1)} GB
+              {primary.unified ? ' unified' : ' VRAM'}
+            </>
+          )}
+        </>
+      ) : profile.certain ? (
+        <>
+          <span className="llama-dot" />
+          No accelerator — this machine runs on its CPU.
+        </>
+      ) : (
+        <>
+          <span className="llama-dot" />
+          <b>Accelerator unknown</b> — the probe could not ask, which is not the same as none.
+        </>
+      )}
+      {profile.overridden && <span className="llama-tag">your override</span>}
+      <button className="llama-linkbtn" onClick={onReprobe}>
+        Re-probe
+      </button>
+    </p>
+  );
+}
+
 function ServerSection({
   status,
   models,
+  hardware,
+  reprobe,
   refresh,
 }: {
   status: LlamaStatus | null;
   models: ModelEntry[];
+  hardware: Hardware | null;
+  reprobe: () => void;
   refresh: () => void;
 }) {
   const [progress, setProgress] = useState<Progress | null>(null);
   const [error, setError] = useState('');
-  const [variant, setVariant] = useState('cpu');
+  // `auto` and null, never 'cpu' and 0: the backend resolves those through the
+  // hardware probe (`routes.py` — `variant in ("", "auto")`, `gpuLayers is None`),
+  // and a form that always sends a concrete value silently bypasses the probe
+  // entirely. An explicit 0 remains meaningful — it means pure CPU on purpose.
+  const [variant, setVariant] = useState('auto');
   const [selected, setSelected] = useState('');
   const [contextSize, setContextSize] = useState(4096);
-  const [gpuLayers, setGpuLayers] = useState(0);
+  const [gpuLayers, setGpuLayers] = useState<number | null>(null);
+  const [threads, setThreads] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
 
   const modelPath = selected || models[0]?.path || '';
+  const defaults = hardware?.defaults;
+  const reasons = defaults?.reasons ?? {};
+  const model = models.find((m) => m.path === modelPath);
+  const accelerator = hardware?.profile.primary ?? null;
+  // What would actually be sent: the typed value, or the probe's answer when the
+  // field is on auto. 999 is the probe's "all of them" sentinel, and the preview
+  // needs a real count, so it clamps against the file's own layer count.
+  const effectiveLayers = gpuLayers ?? defaults?.gpuLayers ?? 0;
+  // A context above what the weights were trained for is accepted by llama-server
+  // and degrades quietly, so say it here where the number is typed.
+  const overContext = !!model?.contextLength && contextSize > model.contextLength;
 
   const install = async () => {
     setBusy(true);
@@ -100,7 +181,7 @@ function ServerSection({
     setBusy(true);
     setError('');
     try {
-      const next = await startServer({ modelPath, contextSize, gpuLayers });
+      const next = await startServer({ modelPath, contextSize, gpuLayers, threads });
       if (!next.ready && next.error) setError(next.error);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -126,6 +207,7 @@ function ServerSection({
     <div className="llama-section">
       <div className="llama-card">
         <h3>Build</h3>
+        <MachineLine hardware={hardware} onReprobe={reprobe} />
         {install0 ? (
           <p className="llama-meta">
             <code>{install0.tag}</code> · {install0.variant} · {formatBytes(install0.sizeBytes)}{' '}
@@ -149,7 +231,15 @@ function ServerSection({
           </p>
         )}
         <div className="llama-row">
-          <select value={variant} onChange={(e) => setVariant(e.target.value)} disabled={busy}>
+          <select
+            value={variant}
+            onChange={(e) => setVariant(e.target.value)}
+            disabled={busy}
+            title={reasons.llamaVariant}
+          >
+            <option value="auto">
+              {defaults ? `Auto — ${defaults.llamaVariant}` : 'Auto (recommended)'}
+            </option>
             <option value="cpu">CPU (works everywhere)</option>
             <option value="cuda">CUDA (NVIDIA)</option>
             <option value="vulkan">Vulkan</option>
@@ -160,6 +250,17 @@ function ServerSection({
             {install0 ? 'Install latest' : 'Install'}
           </button>
         </div>
+        {/* The reason is the whole difference between a settings change and a bug
+            report, so it is shown rather than tucked into a tooltip. */}
+        {variant === 'auto' && reasons.llamaVariant && (
+          <p className="llama-why">{reasons.llamaVariant}</p>
+        )}
+        {variant !== 'auto' && (
+          <p className="llama-why">
+            Your choice, not the probe’s. A build whose runtime this machine cannot load fails at
+            spawn.
+          </p>
+        )}
         {progress && <ProgressBar progress={progress} />}
       </div>
 
@@ -198,6 +299,9 @@ function ServerSection({
                 ))}
               </select>
             </div>
+            {/* An empty box means "ask the probe" and sends null; a typed number is
+                an instruction, including 0. That distinction is the whole point of
+                the nullable request field — see StartOptions. */}
             <div className="llama-row">
               <label>
                 Context
@@ -209,13 +313,30 @@ function ServerSection({
                   onChange={(e) => setContextSize(e.target.valueAsNumber || 4096)}
                 />
               </label>
-              <label title="Layers offloaded to the GPU. 0 = pure CPU; a CPU-only build ignores anything higher.">
+              <label title="Layers offloaded to the GPU. Empty asks the hardware probe; 0 is pure CPU on purpose. A CPU-only build ignores anything higher.">
                 GPU layers
                 <input
                   type="number"
                   min={0}
-                  value={gpuLayers}
-                  onChange={(e) => setGpuLayers(e.target.valueAsNumber || 0)}
+                  placeholder={tuned(defaults?.gpuLayers)}
+                  value={gpuLayers ?? ''}
+                  onChange={(e) =>
+                    setGpuLayers(
+                      Number.isNaN(e.target.valueAsNumber) ? null : e.target.valueAsNumber,
+                    )
+                  }
+                />
+              </label>
+              <label title="Empty asks the hardware probe, which leaves one core for the rest of the app.">
+                Threads
+                <input
+                  type="number"
+                  min={1}
+                  placeholder={tuned(defaults?.threads)}
+                  value={threads ?? ''}
+                  onChange={(e) =>
+                    setThreads(Number.isNaN(e.target.valueAsNumber) ? null : e.target.valueAsNumber)
+                  }
                 />
               </label>
               <button
@@ -225,6 +346,35 @@ function ServerSection({
                 Start
               </button>
             </div>
+            {gpuLayers === null && reasons.gpuLayers && (
+              <p className="llama-why">
+                {tuned(defaults?.gpuLayers)} layers on the GPU — {reasons.gpuLayers}
+              </p>
+            )}
+            {gpuLayers === 0 && (
+              <p className="llama-why">
+                Pure CPU, because you asked for it — clear the box for the probe’s answer.
+              </p>
+            )}
+            {/* The same number as the box above, as a picture of the stack it is
+                dividing. Driven by the effective count so `auto` is shown rather
+                than left blank, and dragging it makes the choice explicit. */}
+            <OffloadPreview
+              modelPath={modelPath}
+              contextSize={contextSize}
+              layers={effectiveLayers}
+              vramMb={accelerator?.vramMb ?? null}
+              unified={accelerator?.unified ?? false}
+              isAuto={gpuLayers === null}
+              onChange={setGpuLayers}
+              onAuto={() => setGpuLayers(null)}
+            />
+            {overContext && (
+              <p className="llama-note">
+                {model?.name} was trained for {model?.contextLength?.toLocaleString()} tokens.
+                llama-server accepts a larger window and the quality falls off past the trained one.
+              </p>
+            )}
             {!status?.installed && <p className="llama-note">Install a build first.</p>}
           </>
         )}
@@ -396,6 +546,7 @@ export function LlamaCppPane() {
   const { section } = usePaneSection();
   const [status, setStatus] = useState<LlamaStatus | null>(null);
   const [models, setModels] = useState<ModelsResponse | null>(null);
+  const [hardware, setHardware] = useState<Hardware | null>(null);
   // A status poll that resolves after the pane unmounted (or after a newer one)
   // must not write state — the classic "stopped server shows as running" flicker.
   const alive = useRef(true);
@@ -409,9 +560,22 @@ export function LlamaCppPane() {
       .catch(() => undefined);
   }, []);
 
+  // Deliberately not on the 3s poll: the probe is cached process-wide and only
+  // changes when someone asks for it to (a settings override, the Re-probe button),
+  // so re-fetching it every tick would be spawning nothing and reading the same
+  // answer forever.
+  const reprobe = useCallback(() => {
+    void refreshHardware()
+      .then((h) => alive.current && setHardware(h))
+      .catch(() => undefined);
+  }, []);
+
   useEffect(() => {
     alive.current = true;
     refresh();
+    void getHardware()
+      .then((h) => alive.current && setHardware(h))
+      .catch(() => undefined);
     // Loading a large GGUF takes tens of seconds and the log tail is the only
     // sign of progress, so poll while the pane is open.
     const timer = window.setInterval(refresh, 3000);
@@ -428,7 +592,13 @@ export function LlamaCppPane() {
       ) : section === 'models' ? (
         <ModelsSection data={models} refresh={refresh} />
       ) : (
-        <ServerSection status={status} models={models?.models ?? []} refresh={refresh} />
+        <ServerSection
+          status={status}
+          models={models?.models ?? []}
+          hardware={hardware}
+          reprobe={reprobe}
+          refresh={refresh}
+        />
       )}
     </div>
   );
