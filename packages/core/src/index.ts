@@ -24,6 +24,12 @@ export {
 export { apiUrl, getBackendOrigin, initBackendOrigin, wsUrl } from './origin';
 export { setWindowControl, windowControl, type ResizeEdge, type WindowControl } from './window';
 export {
+  isAppFullscreen,
+  setAppFullscreen,
+  subscribeFullscreen,
+  toggleAppFullscreen,
+} from './fullscreen';
+export {
   loadPlugins,
   pluginLoadErrors,
   type InstalledPlugin,
@@ -123,6 +129,8 @@ export {
   focusPaneDom,
   fullscreenArea,
   fullscreenFocusedArea,
+  isPresenting,
+  presentPane,
   dockSidesOf,
   installFrameController,
   isDockable,
@@ -148,11 +156,13 @@ export {
   desktopViewport,
   focusWindow,
   focusWindowDirection,
+  minimizePane,
   moveWindowToDesktop,
   movePaneTo,
   setBackdrop,
   setDesktopMeasurer,
   setDesktopMode,
+  setPaneMinimized,
   setPaneWindowed,
   setWindowMode,
   snapWindow,

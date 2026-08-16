@@ -8,6 +8,7 @@ import {
   activateTaskbarEntry,
   closePaneGuarded,
   layoutStore,
+  minimizePane,
   openContextMenu,
   setPaneWindowed,
   setWindowMode,
@@ -15,12 +16,17 @@ import {
   type TaskbarEntry,
 } from '@horrible/core';
 
+import { useHorizontalWheel } from '../../hooks/useHorizontalWheel';
+
 export function WindowButtons({ showLabels }: { showLabels: boolean }) {
   const { frame } = useSyncExternalStore(layoutStore.subscribe, layoutStore.getSnapshot);
   const entries = taskbarEntries(frame);
+  // Called before the early return: a hook after a conditional return is a
+  // different hook count between renders.
+  const wheelRef = useHorizontalWheel<HTMLDivElement>();
   if (!entries.length) return null;
   return (
-    <div className="os-taskbar-windows" role="group" aria-label="Open panes">
+    <div className="os-taskbar-windows" ref={wheelRef} role="group" aria-label="Open panes">
       {entries.map((e) => (
         <button
           key={e.instanceId}
@@ -32,6 +38,11 @@ export function WindowButtons({ showLabels }: { showLabels: boolean }) {
           aria-pressed={e.state === 'focused'}
           title={e.title}
           onClick={() => activateTaskbarEntry(e.instanceId)}
+          // Double-click always minimizes, whatever the first click did. The
+          // single click toggles (show ⇄ hide), so on a pane that was not
+          // showing the pair reads as "bring it up, then put it away" — which
+          // is what a user double-clicking a taskbar button is asking for.
+          onDoubleClick={() => minimizePane(e.instanceId)}
           onContextMenu={(ev) => {
             if (openContextMenu(ev, { kind: 'taskbar.window', instanceId: e.instanceId })) {
               ev.preventDefault();
@@ -59,12 +70,23 @@ export function WindowButtons({ showLabels }: { showLabels: boolean }) {
 /** The per-button right-click menu, contributed by the `desktop` module. */
 export function windowButtonMenu(entry: TaskbarEntry) {
   const windowed = entry.location.kind === 'window';
+  // Showing (focused or merely on screen) offers Minimize; out of sight
+  // (minimized, or a background tab) offers Show. Naming the verb by the state
+  // rather than by focus is what makes Minimize reachable for a window you can
+  // see but have not clicked into.
+  const onScreen = entry.state === 'focused' || entry.state === 'open';
   return [
-    {
-      id: 'taskbar.activate',
-      label: entry.state === 'focused' ? 'Minimize' : 'Show',
-      run: () => void activateTaskbarEntry(entry.instanceId),
-    },
+    onScreen
+      ? {
+          id: 'taskbar.minimize',
+          label: 'Minimize',
+          run: () => void minimizePane(entry.instanceId),
+        }
+      : {
+          id: 'taskbar.activate',
+          label: 'Show',
+          run: () => void activateTaskbarEntry(entry.instanceId),
+        },
     windowed
       ? {
           id: 'taskbar.maximize',

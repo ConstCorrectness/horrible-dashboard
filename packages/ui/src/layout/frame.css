@@ -54,8 +54,31 @@
   -webkit-user-select: none;
   user-select: none;
 }
-.frame-tabs--native .frame-tabs-scroll {
-  overflow-x: hidden;
+/* NOT `overflow-x: hidden`, which is what this used to be. Under the native
+   titlebar the strip is also the drag region, but hiding the overflow made the
+   tabs unscrollable in the desktop build outright — with 14 frame presets plus
+   any custom workspaces, the later tabs were simply unreachable, and dropping
+   the taskbar's desktop pips made this the only switcher. Scrolling and dragging
+   coexist: `data-tauri-drag-region` is only honoured on the empty strip space. */
+.frame-tabs-scroll {
+  scrollbar-width: none;
+}
+.frame-tabs-scroll::-webkit-scrollbar {
+  display: none;
+}
+/* The scrollbar is hidden, so the edge fade is the only sign there is more to
+   see. `data-overflowing` is stamped by `useHorizontalWheel` only while the
+   content genuinely exceeds the strip — fading unconditionally would dim the
+   first tab of a strip that fits, which reads as a rendering fault. */
+.frame-tabs-scroll[data-overflowing] {
+  mask-image: linear-gradient(90deg, transparent 0, #000 14px, #000 calc(100% - 14px), transparent);
+}
+/* The active desktop's paradigm, shown on its own tab. Dim and small: it is a
+   status readout, not a second control competing with the tray's toggle. */
+.frame-tab-mode {
+  font-size: 10px;
+  opacity: 0.55;
+  margin-left: 2px;
 }
 .frame-tab {
   display: inline-flex;
@@ -1299,4 +1322,25 @@
 .frame-minibuffer-match--best {
   color: var(--text);
   background: var(--bg-raised);
+}
+
+/* The minibuffer as a floating-desktop overlay.
+ *
+ * Same component, different mount: on a floating desktop there is no frame to be
+ * the bottom row of, so it hovers just above the taskbar instead and renders
+ * nothing at all when idle. `bottom` is the taskbar's own height token, so the
+ * two cannot drift apart, and the z-index clears the window layer — a prompt
+ * that opens behind a window is a prompt the user cannot answer. */
+.frame-minibuffer--overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: var(--taskbar-h, 40px);
+  height: auto;
+  min-height: 28px;
+  padding: 0.25rem 0.6rem;
+  border-top: 1px solid var(--border);
+  background: var(--bg-raised);
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.35);
+  z-index: 50;
 }

@@ -1,3 +1,4 @@
+import { toggleRegionView } from '../../layout/controller';
 import { registry, type ModuleManifest } from '../../registry';
 import { setSetting } from '../../settings';
 import './games.css';
@@ -30,8 +31,10 @@ export const gamesModule: ModuleManifest = {
   // DashArena: the game-tuned workspace. The Games client fills the whole window —
   // it is a single-window console (Play / Board / Build / Replays / Career / Social),
   // with the live spectator surfaces (Games Log, Episodes) folded into its own bottom
-  // drawer rather than tiled as sibling documents. The standalone Log/Episodes panels
-  // stay registered so a power user can still pop one out onto the rail.
+  // drawer rather than tiled as sibling documents. Log/Episodes are registered as
+  // `embedded` views: they exist so the region strip has something to render, not
+  // as panes of their own — a launcher entry for one would be a second home for
+  // content the lobby already shows.
   frames: [
     {
       id: 'dasharena',
@@ -62,10 +65,17 @@ export const gamesModule: ModuleManifest = {
       ],
     },
     {
+      // Both of these are declared just above as the lobby's bottom region
+      // strips, so `embedded` is what they already were in practice. Without it
+      // they also appeared in the start menu and the palette as standalone
+      // openers — a second, competing home for content that already has one,
+      // which is the exact case `embedded` exists to prevent. Reaching them is
+      // the region toggle (see the commands below), not a new pane.
       id: 'games.log',
       title: 'Games Log',
       component: GamesLogPanel,
       role: 'document',
+      embedded: true,
       icon: '📜',
       singleton: true,
     },
@@ -74,6 +84,7 @@ export const gamesModule: ModuleManifest = {
       title: 'Episodes',
       component: EpisodePanel,
       role: 'document',
+      embedded: true,
       icon: '🎞',
       singleton: true,
     },
@@ -82,6 +93,8 @@ export const gamesModule: ModuleManifest = {
       title: 'Arcade Fighter',
       component: FighterArcadePanel,
       role: 'document',
+      // Same as hassault: a game wants the screen, not a slice of it.
+      fullscreen: true,
       icon: '🕹',
       singleton: true,
     },
@@ -139,12 +152,16 @@ export const gamesModule: ModuleManifest = {
     {
       id: 'games.openLog',
       title: 'Games: Open games log',
-      run: () => registry.openPanel('games.log'),
+      // Through the region rather than `openPanel`: both of these are the
+      // lobby's bottom strips and are now `embedded`, so opening one as its own
+      // pane would be the second home the embedding removes. `toggleRegionView`
+      // opens the host if it isn't already there.
+      run: () => toggleRegionView('games.log'),
     },
     {
       id: 'games.openEpisodes',
       title: 'Games: Open episode visualizer',
-      run: () => registry.openPanel('games.episodes'),
+      run: () => toggleRegionView('games.episodes'),
     },
     {
       id: 'games.openReplays',

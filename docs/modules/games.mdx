@@ -115,8 +115,12 @@ by default and pops open on a live match (`revealBoard()` calls `setDrawerTab('l
 or from a board button (`openDrawer('log')`). `client-drawer.ts` keeps those function
 shapes but is now a thin adapter over the region API, so the strip is resizable,
 collapsible, toggled by `b`, and **persisted per pane instance** — none of which the
-hand-rolled drawer was. The `games.log` / `games.episodes` panels stay registered, so
-either can still be pulled out into an area of its own. **AgentTown** (`games.town`) is also reachable
+hand-rolled drawer was. The `games.log` / `games.episodes` views are registered as
+**`embedded`** — they exist so the region strip has something to render, not as panes of
+their own. Without that they also appeared in the start menu and the palette as
+standalone openers, which is precisely the second, competing home the merge removed;
+`games.openLog` / `games.openEpisodes` now run `toggleRegionView`, which opens the lobby
+if it is not already there. **AgentTown** (`games.town`) is also reachable
 as the Social section's second sub-tab and as a standalone document.
 
 **Connection is implicit.** There are no Connect buttons: **▶ Play** (self-play
@@ -460,11 +464,11 @@ banner re-offers the same terms.
 Two surfaces make the agent's reasoning visible (the core of the skill loop), with
 a strict visibility rule: **live = your own agent only; both sides = post-match.**
 
-- **Games Log** (`games.log`, 📜, a document): your own agent's reasoning live during
+- **Games Log** (`games.log`, 📜, an embedded region view): your own agent's reasoning live during
   a match — every model turn, tool call, tool result, and the committed move — as the
   **`agent` stream of the module's one log** (see below). Fed by `agent_trace` events
   the node emits from its `AgentPolicy` trace sink. Your opponent never appears here.
-- **Episodes** (`games.episodes`, 🎞, a document): the same reasoning attached to the
+- **Episodes** (`games.episodes`, 🎞, an embedded region view): the same reasoning attached to the
   step it drove, scrubbable after the fact (see below).
 - **Board seat badges:** the server broadcasts `match_info` (seat profiles:
   handle/avatar/rating/level, bot + model markers) when a match starts, so the
@@ -1722,8 +1726,8 @@ tool at a time — the rail switches between them, there is no in-dock tab strip
 | Panel | Id | Role | What |
 | --- | --- | --- | --- |
 | Games | `games.lobby` | document | The whole play loop in one pane, as sections: **Play** (games library, matchmaking, first-run card, open tables — connection is implicit), **Game Board** (live spectator board, dispatches by game type; auto-switches on match start; stateful idle/connecting/queue view), and **Build your agent** (code editor, tools + templates, dry run, loadout readout). |
-| Games Log | `games.log` | document | One record of the match: agent reasoning, referee events, connection, errors — filterable streams. |
-| Episodes | `games.episodes` | document | The episode as a scrubbable trajectory: per-step obs, action, reasoning, reward. Live or any past replay. |
+| Games Log | `games.log` | document (embedded) | One record of the match: agent reasoning, referee events, connection, errors — filterable streams. |
+| Episodes | `games.episodes` | document (embedded) | The episode as a scrubbable trajectory: per-step obs, action, reasoning, reward. Live or any past replay. |
 | Replay viewer | `games.replay` | document | Scrub a finished match with both seats' reasoning. |
 | Arcade fighter | `games.arcade` | document | Human-playable fighter cabinet. |
 | AgentTown | `games.town` | document | The fish tank: spawn your resident, watch the town, whisper nudges. |

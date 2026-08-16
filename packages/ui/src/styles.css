@@ -591,7 +591,7 @@ body {
 
 .ctx-menu-item {
   display: grid;
-  grid-template-columns: 1rem 1fr auto auto;
+  grid-template-columns: 1rem minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 0.35rem;
   text-align: left;
@@ -626,15 +626,41 @@ body {
   font-size: 0.75rem;
 }
 
+/* Label + optional detail, stacked. The column is `minmax(0, 1fr)` so this is
+   what absorbs a narrow menu, and the hint beside it keeps its own size. */
+.ctx-menu-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
 .ctx-menu-label {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
+/* A sentence about the item, under its name. Wraps rather than truncating —
+   the point of a detail is that it is read, and an ellipsized description
+   tells the user less than no description at all. */
+.ctx-menu-detail {
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  line-height: 1.35;
+  white-space: normal;
+}
+
+/* A hint shares the row, so it must never grow past its half of it: prose in
+   this slot is what used to squeeze the label out of existence. */
 .ctx-menu-hint {
   color: var(--text-dim);
   font-size: 0.72rem;
   padding-left: 0.75rem;
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ctx-menu-sep {

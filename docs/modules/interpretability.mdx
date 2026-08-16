@@ -291,7 +291,7 @@ to prevent.
 | Kind | ID | Notes |
 | --- | --- | --- |
 | Layout | `interpretability` | "Interpretability" workspace in the top tab strip |
-| Panel | `interpretability.context` | Singleton; role `widget` (holds a center area) |
+| Panel | `interpretability.context` | Singleton; role `document` |
 | Panel | `interpretability.architecture` | Model explorer; sits beside the context view |
 | Command | `interpretability.open` | Inspect context window |
 | Command | `interpretability.openDiagram` | Explore model structure |
@@ -331,9 +331,11 @@ a turn has run, so a layout with no way to drive one would be a dead end. The tw
 live in **separate visible areas** (center + dock) deliberately: panes in inactive
 tabs unmount, which would drop the pane's live `/ws` subscription mid-turn.
 
-Note the role split this forces. A center area accepts `document` or `widget` panes —
-`tool` panes are dock-only — so both panes are `role: 'widget'` even though they read
-like tools. Same inversion as the observability module.
+Both panes are `role: 'document'`. They were `widget`, which is centre-placeable but
+**alone** — and the `lab` preset tabs the context view, the model explorer, the Hugging
+Face hub and llama.cpp into one area, which only documents do. They also *are*
+documents by the test in [windowing.mdx](../architecture/windowing.mdx): surfaces you
+read and work in, not tiles you glance at.
 
 ## Backend surface
 

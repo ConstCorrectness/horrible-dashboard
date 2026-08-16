@@ -170,6 +170,7 @@ export function seedFromPreset(preset: FramePreset, opts: SeedOptions): FrameSta
     mode: preset.mode ?? 'tiling',
     backdrop: preset.backdrop ?? { id: 'none' },
     fullscreenAreaId: null,
+    presentedInstanceId: null,
     focusedAreaId: firstArea(normalized).id,
     focusedInstanceId: null,
     focusedWindowId: null,

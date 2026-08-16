@@ -16,6 +16,9 @@
  *   window layer   30   (per-window offsets are capped inside this band)
  *   taskbar        40
  *   start menu     45
+ *   presented pane 48   (over the taskbar and the workspace strip, by design —
+ *                        but deliberately BELOW the spotlight, so mod+k still
+ *                        reaches the user while a game fills the screen)
  *   spotlight      50
  *   toasts       9999   (styles.css)
  *   dialogs     10000   (styles.css)
@@ -29,6 +32,13 @@
      underneath; only the windows in it are interactive. */
   pointer-events: none;
   overflow: hidden;
+}
+
+/* A presented window escapes this layer's box, so the layer must stop clipping
+   it. `overflow: hidden` is what keeps an ordinary dragged window from scrolling
+   the shell, and it is restored the moment presentation ends. */
+.os-window-layer.is-presenting {
+  overflow: visible;
 }
 
 .os-window {
@@ -97,6 +107,42 @@
   border-radius: 0;
 }
 
+/* The presented window: over the workspace strip and the taskbar, which a
+   maximized window deliberately stops short of. `fixed`, not `absolute`, because
+   the window layer is inset below the strip and above the taskbar — the two
+   surfaces presentation exists to cover. All the window's own decoration goes
+   flat: a rounded, shadowed, bevelled rectangle claiming to be the whole screen
+   shows a seam of desktop down every edge.
+
+   **Order matters.** This must come AFTER `.os-window`, whose `position:
+   absolute` has identical specificity, so source order is the only tiebreak.
+   Placed above it the base rule wins and a presented window fills just the
+   window layer — i.e. exactly the two surfaces it was supposed to cover, and
+   nothing else changes. It looks almost right, which is what makes it easy to
+   miss; it shipped that way once already. */
+.os-window--presented {
+  position: fixed;
+  inset: 0;
+  width: auto;
+  height: auto;
+  z-index: 48;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* The titlebar stays, but recedes: it carries the way out (the ⛶ button and the
+   close control), and a fullscreen surface with no visible exit is the state
+   people quit the app to escape. Escape also works, and the title says so. */
+.os-window--presented .os-window-titlebar {
+  opacity: 0.25;
+  transition: opacity 120ms ease;
+}
+.os-window--presented .os-window-titlebar:hover,
+.os-window--presented .os-window-titlebar:focus-within {
+  opacity: 1;
+}
+
 .os-window--dragging {
   /* No transition while dragging: the rect is already following the pointer, and
      an eased transform would lag a frame behind it. */
@@ -155,6 +201,11 @@
 
 .os-window-tabs::-webkit-scrollbar {
   display: none;
+}
+
+/* See taskbar.css — same contract, stamped by `useHorizontalWheel`. */
+.os-window-tabs[data-overflowing] {
+  mask-image: linear-gradient(90deg, transparent 0, #000 12px, #000 calc(100% - 12px), transparent);
 }
 
 .os-window-tab {

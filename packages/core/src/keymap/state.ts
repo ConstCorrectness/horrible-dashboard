@@ -91,7 +91,10 @@ export function readKeyContext(): KeyContext {
     captureView: capture?.viewId ?? null,
     textInput: typeof document !== 'undefined' && isEditableTarget(document.activeElement),
     dialogOpen: dialogsStore.getActive() !== null,
-    fullscreenArea: frame.fullscreenAreaId !== null,
+    // Either mechanism counts: a `when: fullscreenArea` binding means "something
+    // is filling the screen", and a presented window is that just as much as a
+    // fullscreened centre area is.
+    fullscreenArea: frame.fullscreenAreaId !== null || frame.presentedInstanceId !== null,
     windowFocused: frame.focusedWindowId !== null,
     desktopMode: frame.mode,
     shellView,

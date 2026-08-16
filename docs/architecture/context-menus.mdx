@@ -65,6 +65,21 @@ A provider that returns `[]` is dropped entirely, so declining a target costs
 nothing and never leaves a stray divider. A provider that **throws** is logged and
 skipped: one module's bad provider must not take down the whole menu.
 
+### `hint` beside, `detail` below
+
+An item can carry two kinds of secondary text and they are not interchangeable.
+A **`hint`** shares the row with the label, right-aligned: a keybinding, a parent
+directory, a one-word state. A **`detail`** is a sentence and is drawn on its own
+line underneath.
+
+The row can only lay out one of those well. The label column is
+`minmax(0, 1fr)`, so it is what gives way when the row is crowded — passing prose
+as a `hint` took the whole 340px and ellipsized the label to nothing. That is
+literally what happened to the theme picker: every entry showed a full sentence
+about a theme and none of them showed its *name*, in a menu whose only job is to
+let you pick one by name. Both the theme and backdrop pickers now pass their
+description as `detail`; a `hint` is additionally capped at half the row.
+
 ### Absent, not disabled
 
 A virtual root in the file tree (a mounted Drive) is read-only and has no local

@@ -21,6 +21,7 @@ import {
   focusWindow,
   layoutStore,
   MIN_WINDOW_SIZE,
+  presentPane,
   releaseCapture,
   resolveView,
   setPaneWindowed,
@@ -31,6 +32,7 @@ import {
   type WindowState,
 } from '@horrible/core';
 
+import { useHorizontalWheel } from '../hooks/useHorizontalWheel';
 import { PaneHost } from '../layout/PaneHost';
 import type { DragState } from './WindowLayer';
 
@@ -49,6 +51,7 @@ const EDGES = [
 export function DesktopWindow({
   win,
   focused,
+  presented,
   mergeTarget,
   bounds,
   onDragMove,
@@ -56,6 +59,8 @@ export function DesktopWindow({
 }: {
   win: WindowState;
   focused: boolean;
+  /** This window holds the presented pane — it fills the screen, chrome and all. */
+  presented: boolean;
   /** True while another window is being dragged over THIS one's tab strip. */
   mergeTarget: boolean;
   bounds: () => DOMRect | null;
@@ -72,6 +77,8 @@ export function DesktopWindow({
   // move and the release land in the same frame.
   const zoneRef = useRef<SnapZone | null>(null);
   const mergeRef = useRef<string | null>(null);
+  // Merged windows can hold more tabs than the titlebar is wide.
+  const tabWheelRef = useHorizontalWheel<HTMLDivElement>();
 
   const rect = live ?? win.rect;
   const active = win.area.tabs[win.area.activeTab];
@@ -191,6 +198,7 @@ export function DesktopWindow({
         focused ? 'os-window--focused' : '',
         minimized ? 'os-window--minimized' : '',
         maximized ? 'os-window--maximized' : '',
+        presented ? 'os-window--presented' : '',
         mergeTarget ? 'os-window--merge-target' : '',
         live ? 'os-window--dragging' : '',
       ]
@@ -198,13 +206,20 @@ export function DesktopWindow({
         .join(' ')}
       aria-hidden={minimized || undefined}
       data-window-id={win.id}
-      style={{
-        left: rect.x,
-        top: rect.y,
-        width: rect.w,
-        height: rect.h,
-        zIndex: win.z,
-      }}
+      // Presented geometry is `position: fixed` in the stylesheet, so the inline
+      // rect has to be dropped entirely — leaving `left`/`top` behind would
+      // offset a fixed element by the window's old desktop position.
+      style={
+        presented
+          ? undefined
+          : {
+              left: rect.x,
+              top: rect.y,
+              width: rect.w,
+              height: rect.h,
+              zIndex: win.z,
+            }
+      }
       onPointerDownCapture={() => {
         if (!focused) focusWindow(win.id);
       }}
@@ -215,11 +230,19 @@ export function DesktopWindow({
         // `data-tauri-drag-region` — see note 1 at the top of this file.
         data-window-titlebar=""
         data-window-id={win.id}
-        onPointerDown={(e) => startGesture(e, 'move')}
-        onDoubleClick={() => toggleWindowMaximized(win.id)}
+        // Neither gesture while presented: the window is `position: fixed` and
+        // has no rect of its own to move or restore to, so both would commit
+        // geometry that nothing is rendering and the user would find the window
+        // somewhere unexpected on leaving fullscreen.
+        onPointerDown={(e) => {
+          if (!presented) startGesture(e, 'move');
+        }}
+        onDoubleClick={() => {
+          if (!presented) toggleWindowMaximized(win.id);
+        }}
       >
         {win.area.tabs.length > 1 ? (
-          <div className="os-window-tabs" role="tablist">
+          <div className="os-window-tabs" ref={tabWheelRef} role="tablist">
             {win.area.tabs.map((tab, i) => (
               <button
                 key={tab.instanceId}
@@ -273,6 +296,21 @@ export function DesktopWindow({
           >
             {maximized ? '❐' : '□'}
           </button>
+          {/* Only for a view that declares `fullscreen`. Presenting is a real
+              escalation — it hides the taskbar and, on desktop, takes the whole
+              display — so it is offered where a pane has said it wants the
+              screen, not on every window as a bigger maximize. */}
+          {decl?.fullscreen && (
+            <button
+              className="os-window-btn"
+              title={presented ? 'Leave fullscreen (Esc)' : 'Fullscreen'}
+              aria-pressed={presented}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => presentPane(presented ? null : (active?.instanceId ?? null))}
+            >
+              {presented ? '⤡' : '⛶'}
+            </button>
+          )}
           <button
             className="os-window-btn os-window-btn--close"
             title="Close"
@@ -289,6 +327,7 @@ export function DesktopWindow({
       {/* Resize grips last so they sit above the body's own pointer handlers. */}
       {!maximized &&
         !minimized &&
+        !presented &&
         EDGES.map((edge) => (
           <div
             key={edge[0]}

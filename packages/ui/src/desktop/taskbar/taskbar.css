@@ -32,7 +32,10 @@
   left: 0;
   right: 0;
   bottom: 0;
-  transform: translateY(calc(100% - 3px));
+  /* 6px, not 3: at three the reveal strip is smaller than the pointer's own
+     hotspot tolerance, so an auto-hidden taskbar reads as one that has simply
+     gone, and the Start button with it. */
+  transform: translateY(calc(100% - 6px));
   transition: transform 140ms ease;
 }
 
@@ -44,7 +47,7 @@
 .os-taskbar--top.is-autohide {
   top: 0;
   bottom: auto;
-  transform: translateY(calc(-100% + 3px));
+  transform: translateY(calc(-100% + 6px));
 }
 
 .os-taskbar-spacer {
@@ -65,6 +68,14 @@
 
 .os-taskbar-windows::-webkit-scrollbar {
   display: none;
+}
+
+/* Edge fade while there is more than fits — the scrollbar is hidden, and
+   `useHorizontalWheel` (which also makes a plain vertical wheel scroll this
+   strip) stamps the attribute only when it measures real overflow. */
+.os-taskbar-windows[data-overflowing],
+.os-taskbar-desktops[data-overflowing] {
+  mask-image: linear-gradient(90deg, transparent 0, #000 14px, #000 calc(100% - 14px), transparent);
 }
 
 .os-taskbar-btn {
@@ -193,6 +204,54 @@
 .os-start-list {
   overflow-y: auto;
   padding: 0 6px 8px;
+  /* Both needed so the footer keeps its strip: without them the list is sized to
+     its content and pushes the footer out of the menu's max-height. */
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Sticky, so the heading of the group you are scrolling through stays legible —
+   with sixty entries the labels otherwise scroll away in the first flick. */
+.os-start-group-head {
+  position: sticky;
+  top: 0;
+  margin: 0;
+  padding: 8px 8px 4px;
+  background: var(--bg-raised);
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.os-start-footer {
+  display: flex;
+  gap: 2px;
+  padding: 6px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated, var(--bg-raised));
+}
+
+.os-start-foot-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  justify-content: center;
+  padding: 6px 4px;
+  border: 0;
+  border-radius: var(--radius-sm, 5px);
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.os-start-foot-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-strong);
 }
 
 .os-start-item {
@@ -342,4 +401,50 @@
 .os-taskbar-date {
   color: var(--text-dim);
   font-size: 10px;
+}
+
+/* The M-x zone. The minibuffer is the frame's bottom row, so on a floating
+   desktop this button is the whole of its visible presence — hence a real
+   label rather than a glyph, and a monospace one so it reads as the emacs
+   keystroke it names rather than as an abbreviation. */
+.os-taskbar-mx {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.os-taskbar-mx-btn {
+  display: flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: var(--taskbar-btn-radius, 6px);
+  background: transparent;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.os-taskbar-mx-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* The echo area. Truncates rather than growing: it sits between the open panes
+   and the tray, and a long message must not push either off the strip. */
+.os-taskbar-echo {
+  min-width: 0;
+  max-width: 22rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.os-taskbar-echo.is-error {
+  color: var(--danger);
 }

@@ -14,6 +14,7 @@ import {
   fullscreenArea,
   joinAreaDirection,
   layoutStore,
+  minimizePane,
   moveTabToSplit,
   openContextMenu,
   openFramePane,
@@ -147,6 +148,15 @@ addContextMenuProvider({
         run: () => void moveTabToSplit(areaId, instanceId, 'below'),
       },
       {
+        id: 'tab.minimize',
+        label: 'Minimize',
+        hint: 'taskbar',
+        // Named in the hint because a minimized tile leaves no trace in the
+        // frame — the taskbar button is the only way back, and a verb that
+        // makes a pane vanish should say where it went.
+        run: () => void minimizePane(instanceId),
+      },
+      {
         id: 'tab.float',
         label: 'Float',
         run: () => void registry.layoutController?.setPaneFloating(instanceId, true),
@@ -188,7 +198,11 @@ export function AreaHeader({ area }: { area: AreaNode }) {
   /** Which tab slot the in-flight drag would land in, for the insertion marker. */
   const [dropIndex, setDropIndex] = useState<number | null>(null);
 
-  const active: PaneState | undefined = area.tabs[area.activeTab];
+  // Minimized tabs stay in `area.tabs` (that is how restoring is exact) but are
+  // not part of the strip and are never the pane the header describes.
+  const activeTab: PaneState | undefined = area.tabs[area.activeTab];
+  const active: PaneState | undefined = activeTab?.minimized ? undefined : activeTab;
+  const shownTabs = area.tabs.filter((t) => !t.minimized).length;
   const activeDecl = active ? resolveView(active.viewId) : undefined;
   const regionPositions = (resolveView(active?.viewId ?? '')?.regions ?? []).reduce(
     (set, r) => set.add(r.position ?? 'right'),
@@ -251,101 +265,106 @@ export function AreaHeader({ area }: { area: AreaNode }) {
         )}
       </div>
 
-      {area.tabs.length > 0 ? (
+      {shownTabs > 0 ? (
         <div className="frame-area-tabs" role="tablist">
-          {area.tabs.map((pane, index) => (
-            <div
-              key={pane.instanceId}
-              // `draggable` on the wrapper, not the label button: a drag started on
-              // the close button would otherwise never fire its click.
-              draggable
-              className={[
-                'frame-area-tab',
-                index === area.activeTab ? 'active' : '',
-                dropIndex === index ? 'frame-area-tab--drop' : '',
-              ]
-                .filter(Boolean)
-                .join(' ')}
-              onDragStart={(e) => {
-                e.dataTransfer.effectAllowed = 'move';
-                // Some browsers cancel a drag with an empty dataTransfer; the
-                // payload itself rides the store (see layout/drag.ts).
-                e.dataTransfer.setData('text/plain', paneTitle(pane));
-                paneDrag.begin({
-                  kind: 'pane',
-                  instanceId: pane.instanceId,
-                  viewId: pane.viewId,
-                  title: paneTitle(pane),
-                });
-              }}
-              onDragEnd={() => {
-                paneDrag.end();
-                setDropIndex(null);
-              }}
-              onDragOver={(e) => {
-                // Read the payload from the store, not from the render closure:
-                // `dragstart` and `dragover` can both land before React has
-                // re-rendered, and a closure captured pre-drag still says "no
-                // drag in flight" — the drop then silently does nothing.
-                if (!paneDrag.getSnapshot()) return;
-                // Stopped, or the area beneath claims the drop and the pane lands
-                // at the end of the strip instead of where the marker is drawn.
-                e.preventDefault();
-                e.stopPropagation();
-                e.dataTransfer.dropEffect = 'move';
-                setDropIndex(index);
-              }}
-              onDragLeave={() => setDropIndex((at) => (at === index ? null : at))}
-              onDrop={(e) => {
-                const payload = paneDrag.getSnapshot();
-                if (!payload) return;
-                e.preventDefault();
-                e.stopPropagation();
-                setDropIndex(null);
-                dropPaneOnTab(payload, area.id, index);
-                paneDrag.end();
-              }}
-              onContextMenu={(e) => {
-                if (
-                  openContextMenu(e, {
-                    kind: 'area.tab',
-                    areaId: area.id,
+          {/* Mapped over the full list, skipping minimized ones, so `index` stays
+              the real index into `area.tabs` — every tab verb here (activate,
+              reorder, drop) addresses tabs by position. */}
+          {area.tabs.map((pane, index) =>
+            pane.minimized ? null : (
+              <div
+                key={pane.instanceId}
+                // `draggable` on the wrapper, not the label button: a drag started on
+                // the close button would otherwise never fire its click.
+                draggable
+                className={[
+                  'frame-area-tab',
+                  index === area.activeTab ? 'active' : '',
+                  dropIndex === index ? 'frame-area-tab--drop' : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
+                onDragStart={(e) => {
+                  e.dataTransfer.effectAllowed = 'move';
+                  // Some browsers cancel a drag with an empty dataTransfer; the
+                  // payload itself rides the store (see layout/drag.ts).
+                  e.dataTransfer.setData('text/plain', paneTitle(pane));
+                  paneDrag.begin({
+                    kind: 'pane',
                     instanceId: pane.instanceId,
                     viewId: pane.viewId,
                     title: paneTitle(pane),
-                  })
-                ) {
+                  });
+                }}
+                onDragEnd={() => {
+                  paneDrag.end();
+                  setDropIndex(null);
+                }}
+                onDragOver={(e) => {
+                  // Read the payload from the store, not from the render closure:
+                  // `dragstart` and `dragover` can both land before React has
+                  // re-rendered, and a closure captured pre-drag still says "no
+                  // drag in flight" — the drop then silently does nothing.
+                  if (!paneDrag.getSnapshot()) return;
+                  // Stopped, or the area beneath claims the drop and the pane lands
+                  // at the end of the strip instead of where the marker is drawn.
                   e.preventDefault();
-                }
-              }}
-            >
-              <button
-                role="tab"
-                aria-selected={index === area.activeTab}
-                className="frame-area-tab-btn"
-                title={paneTitle(pane)}
-                onClick={() =>
-                  layoutStore.dispatch({ type: 'SET_ACTIVE_TAB', areaId: area.id, index })
-                }
-                // Middle-click closes, as everywhere else tabs exist.
-                onAuxClick={(e) => {
-                  if (e.button === 1) {
+                  e.stopPropagation();
+                  e.dataTransfer.dropEffect = 'move';
+                  setDropIndex(index);
+                }}
+                onDragLeave={() => setDropIndex((at) => (at === index ? null : at))}
+                onDrop={(e) => {
+                  const payload = paneDrag.getSnapshot();
+                  if (!payload) return;
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setDropIndex(null);
+                  dropPaneOnTab(payload, area.id, index);
+                  paneDrag.end();
+                }}
+                onContextMenu={(e) => {
+                  if (
+                    openContextMenu(e, {
+                      kind: 'area.tab',
+                      areaId: area.id,
+                      instanceId: pane.instanceId,
+                      viewId: pane.viewId,
+                      title: paneTitle(pane),
+                    })
+                  ) {
                     e.preventDefault();
-                    closeTab(pane);
                   }
                 }}
               >
-                {paneTitle(pane)}
-              </button>
-              <button
-                className="frame-area-tab-close"
-                title={`Close ${paneTitle(pane)}`}
-                onClick={() => closeTab(pane)}
-              >
-                ×
-              </button>
-            </div>
-          ))}
+                <button
+                  role="tab"
+                  aria-selected={index === area.activeTab}
+                  className="frame-area-tab-btn"
+                  title={paneTitle(pane)}
+                  onClick={() =>
+                    layoutStore.dispatch({ type: 'SET_ACTIVE_TAB', areaId: area.id, index })
+                  }
+                  // Middle-click closes, as everywhere else tabs exist.
+                  onAuxClick={(e) => {
+                    if (e.button === 1) {
+                      e.preventDefault();
+                      closeTab(pane);
+                    }
+                  }}
+                >
+                  {paneTitle(pane)}
+                </button>
+                <button
+                  className="frame-area-tab-close"
+                  title={`Close ${paneTitle(pane)}`}
+                  onClick={() => closeTab(pane)}
+                >
+                  ×
+                </button>
+              </div>
+            ),
+          )}
           <div className="frame-area-tab-add">
             <button
               className="frame-area-tab-add-btn"

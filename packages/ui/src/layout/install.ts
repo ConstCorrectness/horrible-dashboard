@@ -81,7 +81,11 @@ export function installFrameShell(): void {
     commands: [
       {
         id: 'area.fullscreen',
-        title: 'Area: Toggle fullscreen',
+        // Kept under its old id (saved keymap overrides name it) but it is no
+        // longer area-only: on a floating desktop it presents the focused
+        // window's pane over the whole shell. One key, one meaning — "let this
+        // thing fill the screen" — regardless of which paradigm you are in.
+        title: 'Toggle fullscreen for the focused pane',
         run: () => fullscreenFocusedArea(),
       },
       ...NAVS.map((dir) => ({

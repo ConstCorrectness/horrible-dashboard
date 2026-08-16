@@ -73,6 +73,7 @@ export function createEmptyFrame(): FrameState {
     mode: 'tiling',
     backdrop: { id: DEFAULT_BACKDROP },
     fullscreenAreaId: null,
+    presentedInstanceId: null,
     focusedAreaId: areaId(0),
     focusedInstanceId: null,
     focusedWindowId: null,

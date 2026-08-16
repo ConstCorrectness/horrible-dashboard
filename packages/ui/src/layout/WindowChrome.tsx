@@ -14,7 +14,9 @@
  * `hasCapability('chrome.workspaceTabs')` before mounting them.
  */
 import { useEffect, useState } from 'react';
-import { windowControl, type ResizeEdge } from '@horrible/core';
+import { hasCapability, windowControl, type ResizeEdge } from '@horrible/core';
+
+import { useAppFullscreen } from '../hooks/useAppFullscreen';
 
 const MinimizeIcon = () => (
   <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
@@ -35,6 +37,28 @@ const RestoreIcon = () => (
   </svg>
 );
 
+const FullscreenIcon = () => (
+  <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
+    <path
+      d="M1 3.5V1h2.5M6.5 1H9v2.5M9 6.5V9H6.5M3.5 9H1V6.5"
+      stroke="currentColor"
+      strokeWidth="1"
+      fill="none"
+    />
+  </svg>
+);
+
+const LeaveFullscreenIcon = () => (
+  <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
+    <path
+      d="M3.5 1v2.5H1M9 3.5H6.5V1M6.5 9V6.5H9M1 6.5h2.5V9"
+      stroke="currentColor"
+      strokeWidth="1"
+      fill="none"
+    />
+  </svg>
+);
+
 const CloseIcon = () => (
   <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden>
     <path d="M1 1l8 8M9 1l-8 8" stroke="currentColor" strokeWidth="1" fill="none" />
@@ -45,6 +69,8 @@ const CloseIcon = () => (
 export function WindowControls() {
   const wc = windowControl();
   const [maximized, setMaximized] = useState(false);
+  const canFullscreen = hasCapability('window.fullscreen');
+  const { fullscreen, toggle: toggleFullscreen } = useAppFullscreen();
 
   useEffect(() => {
     if (!wc) return;
@@ -61,6 +87,19 @@ export function WindowControls() {
 
   return (
     <div className="win-controls">
+      {/* Ahead of minimize: fullscreen is a state of the whole app, where the
+          other three act on the window as an object. F11 does the same thing,
+          but a keybinding nobody is told about is not an affordance. */}
+      {canFullscreen && (
+        <button
+          className="win-btn"
+          title={fullscreen ? 'Leave fullscreen (F11)' : 'Fullscreen (F11)'}
+          aria-pressed={fullscreen}
+          onClick={toggleFullscreen}
+        >
+          {fullscreen ? <LeaveFullscreenIcon /> : <FullscreenIcon />}
+        </button>
+      )}
       <button className="win-btn" title="Minimize" onClick={() => void wc.minimize()}>
         <MinimizeIcon />
       </button>

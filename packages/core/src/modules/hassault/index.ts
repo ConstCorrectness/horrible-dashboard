@@ -19,6 +19,11 @@ export const hassaultModule: ModuleManifest = {
       title: 'HorribleAssault',
       component: HorribleAssaultPanel,
       role: 'document',
+      // A first-person shooter has no use for a taskbar in its peripheral
+      // vision, and on the desktop build presenting it takes the OS window
+      // fullscreen too — which is what makes pointer lock and a full field of
+      // view behave the way the game assumes.
+      fullscreen: true,
       icon: '🔫',
       singleton: true,
     },

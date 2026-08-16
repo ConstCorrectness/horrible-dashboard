@@ -78,7 +78,11 @@ export const llamacppModule: ModuleManifest = {
       id: 'llamacpp.server',
       title: 'llama.cpp',
       component: LlamaCppPane,
-      role: 'widget',
+      // A three-section management console — pick a build, browse GGUFs, read a
+      // trace — is a surface you work in, not a tile you glance at. It was a
+      // `widget`, which reserves a whole centre area for one pane; the `lab`
+      // preset tabs it with three others, which is a document's behaviour.
+      role: 'document',
       icon: '🦙',
       singleton: true,
       sections: [

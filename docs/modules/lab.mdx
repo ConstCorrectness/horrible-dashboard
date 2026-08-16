@@ -94,8 +94,12 @@ Models only — a dataset describes nothing about the running model.
 Section commands (`section.show:lab.hub:models`, …) are synthesized by the registry,
 so both sections are reachable from the palette without being declared as commands.
 
-The panel is `role: 'widget'` rather than `tool` for the usual reason: a centre area
-takes `document` or `widget` panes, and `tool` panes are dock-only.
+The panel is `role: 'document'`. It was a `widget` — chosen only to make it
+centre-placeable, since `tool` panes are dock-only — but `widget` means centre-placeable
+**alone**, and this module's own `lab` preset tabs the hub with the model explorer, the
+context view and llama.cpp in a single area. A pane a preset tabs cannot be a widget.
+It is also the honest reading: a repository browser is something you work in, not a
+readout you glance at.
 
 ## Testing
 

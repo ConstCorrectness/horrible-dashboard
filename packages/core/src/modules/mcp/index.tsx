@@ -21,11 +21,14 @@ export const mcpModule: ModuleManifest = {
       id: 'mcp.servers',
       title: 'MCP Servers',
       component: McpServersPane,
-      // A tool pane, docked beside the other configuration surfaces: you consult it
-      // while working, you don't work *in* it.
-      role: 'tool',
+      // A `document` that stays rail-toggleable. It was a dock-only `tool`, but
+      // five sections — one of them an authoring surface — do not fit a 280px
+      // rail, and everything the pane is for happens *in* it. `dockable` keeps
+      // the rail glyph and the left dock available for the times you just want
+      // to check a server's status beside your work.
+      role: 'document',
       icon: '🔌',
-      defaultDock: 'left',
+      dockable: 'left',
       singleton: true,
       // Two sections, one component: finding a server and running one are the same
       // objects at two moments, and the discover half hands its result straight to

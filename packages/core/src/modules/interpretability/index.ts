@@ -16,22 +16,24 @@ export const interpretabilityModule: ModuleManifest = {
   panels: [
     {
       // `widget` rather than `tool`: this is the subject of its workspace, so it
-      // has to be able to hold a center area (a center area takes document or
-      // widget panes; tool panes are dock-only).
+      // `document`: a surface you read and work in, and one that tabs. It was a
+      // `widget` to make it centre-placeable, but widget means centre-placeable
+      // *alone* — and the `lab` preset tabs this with the model explorer, the
+      // Hugging Face hub and llama.cpp in a single area, which only documents do.
       id: 'interpretability.context',
       title: 'Context window',
       component: InterpretabilityPanel,
-      role: 'widget',
+      role: 'document',
       icon: '🔍',
       singleton: true,
     },
     {
       // Sits beside the context view: what the model *is*, next to what it was
-      // given. Also `widget` so it can hold a center area of its own.
+      // given. A document for the same reason.
       id: 'interpretability.architecture',
       title: 'Model explorer',
       component: ModelExplorer,
-      role: 'widget',
+      role: 'document',
       icon: '🧬',
       singleton: true,
     },

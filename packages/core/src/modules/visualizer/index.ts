@@ -11,6 +11,9 @@ export const visualizerModule: ModuleManifest = {
       title: 'Visualizer',
       component: VisualizerWidget,
       role: 'document',
+      // A rendered animation is something you show; the surrounding shell is a
+      // border around it.
+      fullscreen: true,
       icon: '🎞',
       agentTools: [
         {

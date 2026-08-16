@@ -135,14 +135,32 @@ export function WindowLayer() {
   if (frame.windows.length === 0) return <div className="os-window-layer" ref={ref} aria-hidden />;
 
   const ordered = [...frame.windows].sort((a, b) => a.z - b.z);
+  // The presented pane's window, if any. Resolved to a *window* id here so
+  // `DesktopWindow` takes a boolean and does not have to search the frame.
+  const presentedWindowId = frame.presentedInstanceId
+    ? (ordered.find((w) => w.area.tabs.some((t) => t.instanceId === frame.presentedInstanceId))
+        ?.id ?? null)
+    : null;
 
   return (
-    <div className="os-window-layer" ref={ref}>
+    <div
+      className={`os-window-layer${presentedWindowId ? ' is-presenting' : ''}`}
+      ref={ref}
+      // A presented window escapes this layer's bounds, so the layer must stop
+      // clipping it — `overflow: hidden` is what keeps a dragged window from
+      // scrolling the shell the rest of the time.
+    >
       {drag?.zone && <SnapOverlay zone={drag.zone} />}
       {ordered.map((win: WindowState) => (
         <DesktopWindow
           key={win.id}
           win={win}
+          // Presented, not re-rendered elsewhere: promoting the window in place
+          // keeps the pane at the same position in the React tree. Rendering it
+          // into a separate full-screen layer would reconcile as a different
+          // element and remount the pane — killing a live PTY, socket or engine,
+          // which is exactly what `pane-lifetime` exists to prevent.
+          presented={presentedWindowId === win.id}
           focused={frame.focusedWindowId === win.id}
           mergeTarget={drag?.mergeTargetId === win.id}
           bounds={bounds}

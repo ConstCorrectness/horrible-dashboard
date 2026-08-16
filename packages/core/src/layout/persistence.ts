@@ -197,7 +197,11 @@ export function bindAutosave(): void {
  * load the active one into the store. */
 export async function hydrate(): Promise<void> {
   let state = await getWorkspaces();
-  const defaultPreset = presetFor('dashboard') ?? registry.framePresets[0];
+  // The empty floating `desktop`, not `dashboard`: a first launch should land on
+  // a bare desktop the way logging into a machine does, not on a pre-arranged
+  // nine-pane workspace. Only the *empty slate* is affected — an install that
+  // already has workspaces keeps opening whichever one it was left on.
+  const defaultPreset = presetFor('desktop') ?? presetFor('dashboard') ?? registry.framePresets[0];
   if (state.workspaces.length === 0 && defaultPreset) {
     await saveWorkspace(defaultPreset.id, {
       name: defaultPreset.name,

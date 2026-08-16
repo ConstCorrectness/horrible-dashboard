@@ -102,6 +102,7 @@ export function explodeToWindows(
     windowViewport: surface,
     focusedAreaId: empty.id,
     fullscreenAreaId: null,
+    presentedInstanceId: null,
     paneSeq: seq,
   };
 }

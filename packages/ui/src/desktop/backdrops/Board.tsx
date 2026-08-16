@@ -14,13 +14,32 @@
 import { PaneInstanceContext, PaneParamsContext, registry, resolveView } from '@horrible/core';
 import { useMemo } from 'react';
 
-/** The one widget every install has, so an unconfigured board is not blank. */
-const DEFAULT_WIDGETS = ['dashboard.welcome'];
+/**
+ * What an unconfigured board shows: every view that declares `role: 'widget'`.
+ *
+ * This is the one place the third role means something outside the tiling grid.
+ * A widget is defined as a readout — glanceable, no interaction depth, sized to
+ * a tile — which is exactly the board's tenancy, so "the registered widgets" is
+ * a better default than one hardcoded id and it grows as modules are added.
+ *
+ * Capped, because a board is a glance and twenty tiles is a wall of text; and
+ * `dashboard.welcome` is pinned first so an install with no other widgets still
+ * shows something rather than an empty-state message.
+ */
+const MAX_DEFAULT_TILES = 6;
+
+function defaultWidgets(): string[] {
+  const ids = registry.widgets
+    .filter((w) => w.role === 'widget' && !w.embedded)
+    .map((w) => w.id)
+    .sort((a, b) => (a === 'dashboard.welcome' ? -1 : b === 'dashboard.welcome' ? 1 : 0));
+  return ids.length ? ids.slice(0, MAX_DEFAULT_TILES) : ['dashboard.welcome'];
+}
 
 export function BoardBackdrop({ params }: { params?: Record<string, unknown> }) {
   const requested = Array.isArray(params?.widgets)
     ? (params.widgets as unknown[]).filter((v): v is string => typeof v === 'string')
-    : DEFAULT_WIDGETS;
+    : defaultWidgets();
   const columns = clampInt(params?.columns, 3, 1, 6);
 
   const tiles = requested
@@ -32,9 +51,13 @@ export function BoardBackdrop({ params }: { params?: Record<string, unknown> }) 
   if (!tiles.length) {
     return (
       <div className="os-backdrop-board is-empty">
+        {/* Names something that exists. This used to send the reader to a
+            "Configure backdrop" item on the desktop menu, which was never
+            built — an empty state whose only instruction is a dead end is worse
+            than one that just says the board is empty. */}
         <p>
-          No widgets on this board yet. Right-click the desktop and choose{' '}
-          <strong>Configure backdrop</strong> to add some.
+          Nothing on this board. Ask the agent to put widgets on it — “put the training metrics on
+          the desktop” — or pick another backdrop by right-clicking the desktop.
         </p>
       </div>
     );

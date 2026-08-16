@@ -164,8 +164,8 @@ keymaps; this service is for registry command bindings.)
 | --- | --- |
 | `t` / `n` / `b` | toggle the focused pane's left / right / bottom **region** strip |
 | declared letters (`o`, `s`, `g`, …) | reveal that region view on the focused pane |
-| `ctrl+space` (Linux) · `mod+alt+f` (mac/Windows) | fullscreen the focused area (in-window) |
-| `f11` (desktop only) | toggle native OS-window fullscreen (`window.fullscreen`) |
+| `ctrl+space` (Linux) · `mod+alt+f` (mac/Windows) | fullscreen the focused pane — the focused area on a tiling desktop, the focused window's pane on a floating one |
+| `f11` (desktop only) | toggle native OS-window fullscreen. Desktop-only because `f11` is browser-owned and **unpreventable** — the browser layout reaches app fullscreen through the tray control instead |
 | `alt+arrows` | move focus between areas |
 | `alt+shift+arrows` | move the active pane to the neighboring area |
 | `mod+alt+arrows` | split the focused area in that direction |
@@ -195,7 +195,7 @@ gracefully:
 | `notifications.system` | Web Notifications (tab-scoped)     | OS notifications                 |
 | `window.multi`         | no (single tab, pop-out = new tab) | yes (panel pop-out to OS window) |
 | `window.perWorkspace`  | no                                 | **yes** (open a workspace in its own OS window) |
-| `window.fullscreen`    | no (in-window fullscreen-area only) | **yes** (F11 toggles native OS-window fullscreen) |
+| `window.fullscreen`    | **yes** (DOM Fullscreen API; tray control, no F11) | **yes** (native OS-window fullscreen; F11 or the titlebar control) |
 | `chrome.workspaceTabs` | no (the frame renders its own tab strip) | **yes** (undecorated window; the tab strip is the titlebar) |
 | `shortcuts.global`     | no                                 | **yes** (`global: true` bindings registered with the OS) |
 | `tray`                 | no                                 | yes                              |
@@ -208,9 +208,15 @@ desktop entry wires a `WindowControl` seam (`packages/core/src/window.ts`) to
 the shell's `window_*` commands (`apps/desktop/src-tauri/src/window.rs`).
 Shipped so far:
 
-- **`window.fullscreen`** — `F11` (command `shell.toggleFullscreen`) toggles
-  native OS-window fullscreen, distinct from the frame's in-window
-  `area.fullscreen` (`ctrl+space`).
+- **`window.fullscreen`** — `shell.toggleFullscreen` takes the whole app
+  fullscreen, distinct from the frame's in-window `area.fullscreen` and from a
+  presented pane. It is granted in **both** layouts: `toggleAppFullscreen`
+  (`core/fullscreen.ts`) drives the native OS window through the `WindowControl`
+  seam where there is one, and the DOM Fullscreen API where there is not. The
+  **key** is native-only — `keymap/reserved.ts` declares `f11` browser-owned with
+  `preventable: false`, so binding it in a tab yields a binding that silently
+  never fires. The tray's `⛶` button is what makes the feature reachable in the
+  browser.
 - **`chrome.workspaceTabs`** — the desktop window is **undecorated**
   (`decorations: false`) and the workspace tab strip is its titlebar: the strip's
   empty space is a native `data-tauri-drag-region` (moves the window, maximizes

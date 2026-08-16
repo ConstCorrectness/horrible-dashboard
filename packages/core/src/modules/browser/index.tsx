@@ -21,6 +21,9 @@ export const browserModule: ModuleManifest = {
       title: 'Browser',
       component: BrowserPanel,
       role: 'document',
+      // A web page is a full-page medium; reading one inside a window inside a
+      // desktop inside a window is two frames too many.
+      fullscreen: true,
       icon: '🌐',
       // Non-singleton: open as many browser tabs as you like.
       // The agent reads/opens the web through these (see agentTools.ts).

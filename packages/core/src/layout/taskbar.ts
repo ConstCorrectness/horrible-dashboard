@@ -22,7 +22,7 @@ export type TaskbarState =
   | 'focused'
   /** Open and on screen, but not focused. Click focuses. */
   | 'open'
-  /** In a window that is minimized. Click restores and focuses. */
+  /** Minimized — a minimized window, or a minimized centre pane. Click restores. */
   | 'minimized'
   /** Open but not showing: a background tab, or a tool in a hidden dock. */
   | 'hidden';
@@ -88,6 +88,10 @@ function stateOf(frame: FrameState, located: ReturnType<typeof listPanes>[number
     if (!dock.visible || dock.activeTool !== pane.instanceId) return 'hidden';
     return frame.focusedInstanceId === pane.instanceId ? 'focused' : 'open';
   }
+  // Minimized beats every other reading: the pane may still be its area's
+  // `activeTab` (nothing else in the area was live to hand it to), and reporting
+  // that as "focused" would offer to minimize something already minimized.
+  if (pane.minimized) return 'minimized';
   // Centre area: showing only if it is its area's active tab.
   //
   // "Focused" here is the active tab of the **focused area**, not

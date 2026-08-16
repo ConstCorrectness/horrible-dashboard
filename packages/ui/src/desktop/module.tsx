@@ -17,10 +17,12 @@ import {
   snapWindow,
   toggleWindowMaximized,
   toggleWindowMinimized,
+  getSetting,
   layoutStore,
   registry,
   setBackdrop,
   setDesktopMode,
+  setSetting,
   taskbarEntries,
   toggleDesktopMode,
   type ContextMenuItem,
@@ -33,7 +35,13 @@ import { BUILTIN_BACKDROPS } from './backdrops';
 /** The four directions, in the order the frame's own bindings use. */
 const NAVS = ['left', 'right', 'up', 'down'] as const;
 import { OOBE_COMPLETE_KEY } from './constants';
-import { DEFAULT_TASKBAR, TASKBAR_SETTING_KEY } from './Taskbar';
+import {
+  DEFAULT_TASKBAR,
+  mergeTaskbarConfig,
+  TASKBAR_SETTING_KEY,
+  ZONES,
+  zoneRank,
+} from './Taskbar';
 import { windowButtonMenu } from './taskbar/WindowButtons';
 import { themeMenuItems } from './taskbar/Tray';
 
@@ -174,9 +182,154 @@ export const desktopModule: ModuleManifest = {
   contextMenu: [
     { kind: 'desktop', items: () => desktopMenuItems() },
     { kind: 'taskbar.window', items: (target) => taskbarWindowMenu(target) },
+    { kind: 'taskbar', items: () => taskbarMenu() },
     { kind: 'taskbar.theme', items: () => themeMenuItems(currentThemeId()) },
+    { kind: 'shell.app', items: () => appMenuItems() },
   ],
 };
+
+/**
+ * The app menu, from the logo at the top-left.
+ *
+ * That button used to run `shell.home`, which could not do anything: `home` is
+ * the desktop now, and the desktop is the only view the button is ever visible
+ * from. So the one piece of permanent chrome in the corner every OS puts its
+ * menu in did nothing at all. These are the app-level destinations — the things
+ * that are about the *installation* rather than about what is on screen.
+ */
+export function appMenuItems(): ContextMenuItem[] {
+  const { frame } = layoutStore.getSnapshot();
+  const tiling = frame.mode === 'tiling';
+  return [
+    {
+      id: 'shell.setup',
+      label: 'Setup…',
+      hint: 'Local model, account, connectors',
+      run: () => void registry.runCommand('shell.setup'),
+    },
+    {
+      id: 'settings.open',
+      label: 'Settings',
+      run: () => registry.openPanel('settings.home'),
+    },
+    { id: 'app.theme', label: 'Theme', run: () => {}, submenu: themeMenuItems(currentThemeId()) },
+    { id: 'app.backdrop', label: 'Backdrop', run: () => {}, submenu: backdropMenuItems() },
+    {
+      id: 'shell.commandPalette',
+      label: 'Search everything…',
+      run: () => void registry.runCommand('shell.commandPalette'),
+    },
+    {
+      id: 'desktop.toggleMode',
+      label: tiling ? 'Switch to floating windows' : 'Switch to tiling',
+      checked: tiling,
+      run: () => void toggleDesktopMode(),
+    },
+    {
+      id: 'shell.oobe',
+      label: 'Run first-run setup again',
+      run: () => void registry.runCommand('shell.oobe'),
+    },
+  ];
+}
+
+/**
+ * The backdrop picker, resolved from the registry at click time so a plugin's
+ * backdrop appears without the menu knowing plugins exist. Shared by the
+ * desktop's right-click menu and the app menu — two lists would drift.
+ */
+function backdropMenuItems(): ContextMenuItem[] {
+  const { frame } = layoutStore.getSnapshot();
+  return registry.backdrops.map((b) => ({
+    id: `desktop.backdrop:${b.id}`,
+    label: b.title,
+    // `detail`, not `hint`, for the same reason the theme picker uses it: a
+    // description is prose and takes the row away from the name.
+    detail: b.description,
+    checked: frame.backdrop.id === b.id,
+    run: () => void setBackdrop({ id: b.id }),
+  }));
+}
+
+/**
+ * Customizing the taskbar, from a right-click on the strip.
+ *
+ * The config was already a setting (`desktop.taskbar`) and already merged over
+ * the defaults — what it had no way of being was *edited*, short of typing JSON
+ * into the settings page. Everything here writes that same setting through the
+ * same merge, so the menu and a hand-written value cannot mean different things.
+ *
+ * Zones are toggles rather than a reorderable list: a menu is a poor reordering
+ * surface, and the order that matters (start … spacer … tray, clock) is the one
+ * people keep. Toggling a zone off removes it and toggling it back inserts it at
+ * its **default position**, so the strip cannot end up in an order the user
+ * never asked for just because they turned the clock off and on again.
+ */
+function taskbarMenu(): ContextMenuItem[] {
+  const config = mergeTaskbarConfig(getSetting<string>(TASKBAR_SETTING_KEY));
+  const write = (patch: Partial<typeof config>) =>
+    void setSetting(TASKBAR_SETTING_KEY, JSON.stringify({ ...config, ...patch }));
+
+  const toggleZone = (zone: string) => {
+    if (config.zones.includes(zone)) {
+      write({ zones: config.zones.filter((z) => z !== zone) });
+      return;
+    }
+    // Re-inserted at its canonical position, not appended: a zone switched off
+    // and on again should land back where it belongs, not at the far end of the
+    // strip past the clock.
+    const next = [...config.zones];
+    const at = next.findIndex((z) => zoneRank(z) > zoneRank(zone));
+    next.splice(at < 0 ? next.length : at, 0, zone);
+    write({ zones: next });
+  };
+
+  return [
+    {
+      id: 'taskbar.zones',
+      label: 'Show',
+      run: () => {},
+      submenu: Object.entries(ZONES).map(([id, zone]) => ({
+        id: `taskbar.zone:${id}`,
+        label: zone.title,
+        checked: config.zones.includes(id),
+        run: () => toggleZone(id),
+      })),
+    },
+    {
+      id: 'taskbar.position',
+      label: 'Position',
+      run: () => {},
+      submenu: (['bottom', 'top'] as const).map((position) => ({
+        id: `taskbar.position:${position}`,
+        label: position === 'bottom' ? 'Bottom' : 'Top',
+        checked: config.position === position,
+        run: () => write({ position }),
+      })),
+    },
+    {
+      id: 'taskbar.labels',
+      label: 'Show labels',
+      checked: config.showLabels,
+      run: () => write({ showLabels: !config.showLabels }),
+    },
+    {
+      id: 'taskbar.autohide',
+      label: 'Auto-hide',
+      detail: 'Slides away until the pointer reaches the edge.',
+      checked: config.autoHide,
+      run: () => write({ autoHide: !config.autoHide }),
+    },
+    {
+      id: 'taskbar.reset',
+      label: 'Reset the taskbar',
+      // The escape hatch, and the reason zones can be hidden freely: turning off
+      // every zone leaves a bare strip that still right-clicks, so there is no
+      // way to customize yourself out of reach of this item.
+      run: () => void setSetting(TASKBAR_SETTING_KEY, JSON.stringify(DEFAULT_TASKBAR)),
+    },
+  ];
+}
 
 /** Items for one taskbar button, resolved from that pane's live entry. */
 function taskbarWindowMenu(target: ContextTarget): ContextMenuItem[] {
@@ -196,20 +349,7 @@ function desktopMenuItems(): ContextMenuItem[] {
   const tiling = frame.mode === 'tiling';
   const hasWindows = frame.windows.length > 0;
   return [
-    {
-      id: 'desktop.backdrop',
-      label: 'Backdrop',
-      run: () => {},
-      // Resolved from the registry at click time, so a plugin's backdrop is in
-      // the menu without the menu knowing plugins exist.
-      submenu: registry.backdrops.map((b) => ({
-        id: `desktop.backdrop:${b.id}`,
-        label: b.title,
-        hint: b.description,
-        checked: frame.backdrop.id === b.id,
-        run: () => void setBackdrop({ id: b.id }),
-      })),
-    },
+    { id: 'desktop.backdrop', label: 'Backdrop', run: () => {}, submenu: backdropMenuItems() },
     // The whole item is dropped, not disabled and not left as an empty submenu,
     // when there are no windows: there is no state in which "arrange nothing"
     // becomes meaningful from here, and a parent whose submenu is dropped is a

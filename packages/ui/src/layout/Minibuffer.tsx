@@ -11,6 +11,21 @@
  *
  * Matching and command resolution live in core/minibuffer.ts; this is the
  * rendering and the key handling.
+ *
+ * ## Two mounts, one component
+ *
+ * This used to render only inside `Frame`, which mounts only on a **tiling**
+ * desktop. On a floating one `alt+x` therefore opened the minibuffer store and
+ * nothing appeared — the command ran, the state flipped, and there was no UI
+ * anywhere to show it. Worse, so did every `dialogs.prompt()`: an editor asking
+ * "Save as?" waited forever on an answer the user was never shown.
+ *
+ * So the floating desktop mounts it as an **overlay** (`variant="overlay"`): the
+ * same component, floating just above the taskbar, rendering *nothing* when
+ * idle. Idle is the difference — a permanent status strip makes sense as the
+ * frame's bottom row, but stacked over a taskbar it is a second status bar
+ * saying much the same thing. The taskbar's `mx` zone carries the idle half
+ * (the button and the echo) instead.
  */
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
@@ -65,12 +80,15 @@ function BackendIndicator() {
   );
 }
 
-export function Minibuffer() {
+export function Minibuffer({ variant = 'strip' }: { variant?: 'strip' | 'overlay' }) {
   const state = useSyncExternalStore(minibuffer.subscribe, minibuffer.getSnapshot);
   const prompt = usePendingPrompt();
   const status = useStatusText();
   const inputRef = useRef<HTMLInputElement>(null);
   const [promptValue, setPromptValue] = useState('');
+  const overlay = variant === 'overlay';
+  const cls = (state: string) =>
+    `frame-minibuffer frame-minibuffer--${state}${overlay ? ' frame-minibuffer--overlay' : ''}`;
 
   // Seed the field each time a new prompt arrives, and take focus.
   useEffect(() => {
@@ -87,7 +105,7 @@ export function Minibuffer() {
   if (prompt) {
     const settle = (value: string | null) => dialogsStore.resolvePrompt(prompt.id, value);
     return (
-      <div className="frame-minibuffer frame-minibuffer--prompt">
+      <div className={cls('prompt')}>
         <label className="frame-minibuffer-label" htmlFor="minibuffer-input">
           {prompt.title}
         </label>
@@ -124,7 +142,7 @@ export function Minibuffer() {
   if (state.open) {
     const matches = matchCommands(state.query);
     return (
-      <div className="frame-minibuffer frame-minibuffer--input">
+      <div className={cls('input')}>
         <span className="frame-minibuffer-label">M-x</span>
         <input
           id="minibuffer-input"
@@ -170,6 +188,11 @@ export function Minibuffer() {
       </div>
     );
   }
+
+  // Idle. The overlay has nothing to say — the taskbar's `mx` zone is the
+  // desktop's status line, and a floating strip repeating it would be a second
+  // one hovering over the first.
+  if (overlay) return null;
 
   return (
     <div className="frame-minibuffer frame-minibuffer--status">

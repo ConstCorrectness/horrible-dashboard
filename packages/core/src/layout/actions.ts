@@ -77,7 +77,15 @@ export type LayoutAction =
    */
   | { type: 'FOCUS_PANE'; instanceId: string | null }
   | { type: 'SET_FULLSCREEN'; areaId: string | null }
+  /** Present a windowed pane over the whole shell, or clear (`instanceId: null`). */
+  | { type: 'SET_PRESENTED'; instanceId: string | null }
   | { type: 'SET_HEADER_COLLAPSED'; areaId: string; collapsed: boolean }
+  /**
+   * Minimize/restore a pane that lives in a centre area — the tiling counterpart
+   * of `SET_WINDOW_MODE: 'minimized'`. The pane keeps its area and its index;
+   * only `activeTab` moves, so restoring is exact. See `PaneState.minimized`.
+   */
+  | { type: 'SET_PANE_MINIMIZED'; instanceId: string; minimized: boolean }
   // Docks
   | { type: 'SET_DOCK'; side: DockSide; patch: Partial<Pick<DockState, 'visible' | 'size'>> }
   | { type: 'INSERT_TOOL'; side: DockSide; pane: PaneState; activate?: boolean }

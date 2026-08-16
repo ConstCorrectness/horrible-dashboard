@@ -265,6 +265,20 @@ function reduceFrame(frame: FrameState, action: LayoutAction): FrameState {
       return { ...frame, fullscreenAreaId: action.areaId };
     }
 
+    case 'SET_PRESENTED': {
+      if (frame.presentedInstanceId === action.instanceId) return frame;
+      // Only a pane that actually lives in a window can be presented. A centre
+      // or docked pane has its own mechanism (`fullscreenAreaId`), and accepting
+      // one here would set a flag no renderer reads — the pane would look
+      // untouched and the Escape ladder would silently have a rung that does
+      // nothing.
+      if (action.instanceId !== null) {
+        const located = findPaneAnywhere(frame, action.instanceId);
+        if (located?.location.kind !== 'window') return frame;
+      }
+      return { ...frame, presentedInstanceId: action.instanceId };
+    }
+
     case 'SET_HEADER_COLLAPSED': {
       const found = findAreaAnywhere(frame, action.areaId);
       if (!found || (found.area.headerCollapsed ?? false) === action.collapsed) return frame;
@@ -273,6 +287,46 @@ function reduceFrame(frame: FrameState, action: LayoutAction): FrameState {
         headerCollapsed: action.collapsed,
       }));
       return next ?? frame;
+    }
+
+    case 'SET_PANE_MINIMIZED': {
+      const located = findPaneAnywhere(frame, action.instanceId);
+      // Centre areas only. A windowed pane minimizes through its window (the
+      // whole window, tabs and all), and a dock tool minimizes by its dock
+      // closing — setting the flag on either would be a second, invisible
+      // hidden-ness that nothing else in the frame reads.
+      if (located?.location.kind !== 'area') return frame;
+      if ((located.pane.minimized ?? false) === action.minimized) return frame;
+      const areaId = located.location.areaId;
+      const withFlag = updatePaneAnywhere(frame, action.instanceId, (pane) => {
+        const next = { ...pane };
+        if (action.minimized) next.minimized = true;
+        else delete next.minimized;
+        return next;
+      });
+      if (!withFlag) return frame;
+      const next = updateAreaAnywhere(withFlag, areaId, (area) => {
+        const index = area.tabs.findIndex((t) => t.instanceId === action.instanceId);
+        if (index < 0) return area;
+        if (!action.minimized) return { ...area, activeTab: index };
+        if (area.activeTab !== index) return area;
+        // The active tab is going away, so something else has to show. Prefer the
+        // tab to its left (where the eye already is), then the first live one to
+        // its right. If every tab is minimized the index is left alone and the
+        // area renders empty — an honest, reversible state, and the alternative
+        // (collapsing the area) would destroy the split the user built.
+        const live = (i: number) => i >= 0 && i < area.tabs.length && !area.tabs[i].minimized;
+        for (let i = index - 1; i >= 0; i -= 1) if (live(i)) return { ...area, activeTab: i };
+        for (let i = index + 1; i < area.tabs.length; i += 1) {
+          if (live(i)) return { ...area, activeTab: i };
+        }
+        return area;
+      });
+      const settled = next ?? withFlag;
+      // Restoring focuses: the taskbar click that restores a pane is the user
+      // saying "show me this", and leaving focus on whatever was there before
+      // makes the very next keystroke go somewhere else.
+      return action.minimized ? settled : { ...settled, focusedAreaId: areaId };
     }
 
     case 'SET_DOCK': {
@@ -614,6 +668,17 @@ function sanitizeFocus(frame: FrameState): FrameState {
   }
   if (next.focusedWindowId && !next.windows.some((w) => w.id === next.focusedWindowId)) {
     next = { ...next, focusedWindowId: null };
+  }
+  // Same argument for the presented pane, and it matters more: presentation
+  // hides the taskbar and the workspace strip, so a stale id is not a mis-aimed
+  // keybinding but a screen with nothing on it and no chrome to escape by. It
+  // goes stale from closing the pane, closing the window, docking it back into
+  // the frame, or flipping the desktop to tiling — four verbs, one sweep.
+  if (
+    next.presentedInstanceId &&
+    findPaneAnywhere(next, next.presentedInstanceId)?.location.kind !== 'window'
+  ) {
+    next = { ...next, presentedInstanceId: null };
   }
   return next;
 }

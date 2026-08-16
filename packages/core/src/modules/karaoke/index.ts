@@ -37,6 +37,9 @@ export const karaokeModule: ModuleManifest = {
       title: 'Karaoke',
       component: KaraokeStagePanel,
       role: 'document',
+      // The stage is pointed at a room, not at the person driving it. Chrome
+      // around the lyrics is chrome the singers are reading past.
+      fullscreen: true,
       icon: '🎤',
       singleton: true,
       // Takes the keyboard so the transport bindings below reach it and the

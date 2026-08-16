@@ -47,6 +47,17 @@ export interface ContextMenuItem {
   checked?: boolean;
   /** A short right-aligned hint: a keybinding, a target path. */
   hint?: string;
+  /**
+   * A sentence about what this item *is*, rendered on its own line under the
+   * label rather than beside it.
+   *
+   * Distinct from `hint` because the two are different shapes and the row can
+   * only lay out one of them well: a hint is a few characters and shares the
+   * row, while a detail is prose. Passing prose as a hint is what put a theme's
+   * whole description in the right-hand column and squeezed "Midnight" down to
+   * an ellipsis — the picker then named none of the things it was picking from.
+   */
+  detail?: string;
   /** Nested items. A submenu with no items is dropped rather than shown empty. */
   submenu?: ContextMenuItem[];
 }

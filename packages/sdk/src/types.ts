@@ -211,6 +211,21 @@ export interface PanelDecl {
    * `useCapture().request()` at the moment it needs the keyboard.
    */
   capture?: PaneCaptureDecl;
+  /**
+   * This view can be **presented**: shown over the entire shell, past the
+   * workspace strip and the taskbar, and — on a native shell — taking the OS
+   * window fullscreen with it. For a game, a karaoke stage or a full-page
+   * browser, the surrounding chrome is not context, it is a border.
+   *
+   * Opt-in rather than universal on purpose. Every pane can already be
+   * maximized inside the desktop; escalating that to the whole display for
+   * panes that never asked would turn an ordinary "bigger, please" into
+   * something the user has to find their way back out of.
+   *
+   * Close to but not the same as `capture`, which is about the keyboard. A
+   * terminal captures keys and should stay in its dock; a game wants both.
+   */
+  fullscreen?: boolean;
 }
 
 /**
@@ -290,6 +305,21 @@ export interface WidgetDecl {
    * `useCapture().request()` at the moment it needs the keyboard.
    */
   capture?: PaneCaptureDecl;
+  /**
+   * This view can be **presented**: shown over the entire shell, past the
+   * workspace strip and the taskbar, and — on a native shell — taking the OS
+   * window fullscreen with it. For a game, a karaoke stage or a full-page
+   * browser, the surrounding chrome is not context, it is a border.
+   *
+   * Opt-in rather than universal on purpose. Every pane can already be
+   * maximized inside the desktop; escalating that to the whole display for
+   * panes that never asked would turn an ordinary "bigger, please" into
+   * something the user has to find their way back out of.
+   *
+   * Close to but not the same as `capture`, which is about the keyboard. A
+   * terminal captures keys and should stay in its dock; a game wants both.
+   */
+  fullscreen?: boolean;
 }
 
 /**

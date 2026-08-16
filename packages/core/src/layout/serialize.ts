@@ -80,10 +80,16 @@ const RENAMED_VIEWS: Readonly<Record<string, string>> = {
 };
 
 export function serialize(frame: FrameState): SerializedLayout {
+  // `presentedInstanceId` is dropped rather than written and ignored on the way
+  // back. It is a momentary way of looking at a pane, not a property of the
+  // workspace — and a blob carrying it would look, to anyone reading one, like a
+  // state the loader is supposed to restore.
+  const persisted: Partial<FrameState> = { ...frame };
+  delete persisted.presentedInstanceId;
   return {
     schema: FRAME_SCHEMA,
     version: FRAME_VERSION,
-    frame: frame as unknown as Record<string, unknown>,
+    frame: persisted as unknown as Record<string, unknown>,
   };
 }
 
@@ -155,6 +161,12 @@ export function deserialize(
       // removed is resolved away by `activeSectionOf`, which has to handle that
       // case regardless (sections can disappear while a pane is open).
       if (typeof p.activeSection === 'string') pane.activeSection = p.activeSection;
+      // Additive, like `dockSize`: an older blob simply has none and the pane
+      // comes back showing. Persisted rather than cleared on load because a
+      // minimized pane is still the user's arrangement — restoring the workspace
+      // with everything they had put away popped back open would be the frame
+      // undoing their tidying every reload.
+      if (p.minimized === true) pane.minimized = true;
       return pane;
     };
 
@@ -377,6 +389,11 @@ export function deserialize(
       mode,
       backdrop,
       fullscreenAreaId,
+      // Never restored, and never written either (see `serializeFrame`). A
+      // presented pane covers the workspace strip and the taskbar; bringing a
+      // workspace back into that state hands the user a screen with no visible
+      // way out and no memory of having asked for it.
+      presentedInstanceId: null,
       focusedAreaId,
       focusedInstanceId,
       focusedWindowId,

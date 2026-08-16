@@ -6,7 +6,9 @@
  * the Frame component on mount (`installFrameController`).
  */
 import { hasAgentContext, readAgentContext } from '../agent-context';
+import { isAppFullscreen, setAppFullscreen } from '../fullscreen';
 import { currentThemeId, THEMES } from '../theme';
+import { windowControl } from '../window';
 import {
   registry,
   type LayoutController,
@@ -1191,16 +1193,12 @@ export function setWindowMode(idOrInstance: string | undefined, mode: WindowMode
  * caller branching: clicking the thing you are already looking at **hides** it,
  * and clicking anything else brings it forward. A taskbar where the focused
  * button does nothing is one that silently swallows every second click.
- *
- * Hiding only means something for a window (minimize). A focused centre pane or
- * dock tool has nowhere to go — a tiling layout has no "hidden" state for the
- * area you are in — so its click focuses, which it already is.
  */
 export function activateTaskbarEntry(instanceId: string): boolean {
   const f = frame();
   const located = findPaneAnywhere(f, instanceId);
   if (!located) return false;
-  const { location } = located;
+  const { pane, location } = located;
   if (location.kind === 'window') {
     const win = f.windows.find((w) => w.id === location.windowId);
     const showing =
@@ -1210,7 +1208,67 @@ export function activateTaskbarEntry(instanceId: string): boolean {
       win.area.tabs[win.area.activeTab]?.instanceId === instanceId;
     if (showing) return setWindowMode(win.id, 'minimized');
   }
+  // A minimized centre pane restores; a showing one hides. This used to be
+  // window-only, which meant that on a tiling desktop — most workspaces —
+  // nothing on the taskbar could be minimized at all.
+  if (location.kind === 'area') {
+    if (pane.minimized) return setPaneMinimized(instanceId, false);
+    const area = findArea(f.center, location.areaId);
+    const showing =
+      area?.tabs[area.activeTab]?.instanceId === instanceId && f.focusedAreaId === location.areaId;
+    if (showing) return setPaneMinimized(instanceId, true);
+  }
+  // A dock tool hides by its dock closing — the same state its rail button
+  // toggles. Without this branch a docked pane (the agent, the explorer) was the
+  // one thing on the taskbar whose button had no second half.
+  if (location.kind === 'dock') {
+    const dock = f.docks[location.dock];
+    if (dock.visible && dock.activeTool === instanceId && f.focusedInstanceId === instanceId) {
+      return minimizePane(instanceId);
+    }
+  }
   focusInstance(located);
+  return true;
+}
+
+/**
+ * Minimize a pane whatever it lives in — the taskbar's double-click gesture and
+ * its context menu both land here.
+ *
+ * Unlike `activateTaskbarEntry` this never toggles and never focuses: "minimize"
+ * asked for directly should hide the pane whether or not it happened to be the
+ * focused one, so a double-click doesn't depend on what the first click of it
+ * did.
+ */
+export function minimizePane(instanceId: string): boolean {
+  const f = frame();
+  const located = findPaneAnywhere(f, instanceId);
+  if (!located) return false;
+  const { location } = located;
+  if (location.kind === 'window') return setWindowMode(location.windowId, 'minimized');
+  if (location.kind === 'dock') {
+    // A dock tool's minimize is its dock closing — the same thing the activity
+    // rail's button does, and it comes back from the same place. A per-pane
+    // hidden flag here would be a second mechanism for one visible state.
+    if (!f.docks[location.dock].visible) return false;
+    const before = layoutStore.getSnapshot();
+    return (
+      layoutStore.dispatch({
+        type: 'SET_DOCK',
+        side: location.dock,
+        patch: { visible: false },
+      }) !== before
+    );
+  }
+  return setPaneMinimized(instanceId, true);
+}
+
+/** Minimize/restore a centre pane. See `PaneState.minimized`. */
+export function setPaneMinimized(instanceId: string, minimized: boolean): boolean {
+  const before = layoutStore.getSnapshot();
+  const after = layoutStore.dispatch({ type: 'SET_PANE_MINIMIZED', instanceId, minimized });
+  if (after === before) return false;
+  if (!minimized) queueMicrotask(() => focusPaneDom(instanceId));
   return true;
 }
 
@@ -1385,11 +1443,88 @@ export function fullscreenArea(areaOrInstanceId: string | null, on?: boolean): b
   return true;
 }
 
-/** Toggle fullscreen on the focused area (the `ctrl+space` command). */
+/**
+ * Present a pane over everything — including the workspace strip and the
+ * taskbar, which a maximized window stops short of by design.
+ *
+ * One verb, two mechanisms, because a pane has two possible homes: a windowed
+ * pane sets `presentedInstanceId`, a centre or docked one goes through the
+ * frame's existing area-fullscreen. Callers should not have to know which, and
+ * the keybinding certainly does not.
+ *
+ * On a native shell, presenting a pane whose view declares `fullscreen` also
+ * takes the OS window fullscreen — the point of the opt-in. A pane that has not
+ * asked for the screen does not get it: promoting every presented pane to OS
+ * fullscreen would make an ordinary "show me this bigger" gesture swallow the
+ * user's whole display.
+ */
+export function presentPane(instanceId: string | null): boolean {
+  const f = frame();
+  if (instanceId === null) {
+    if (f.fullscreenAreaId) fullscreenArea(null);
+    if (f.presentedInstanceId) {
+      layoutStore.dispatch({ type: 'SET_PRESENTED', instanceId: null });
+      void restoreAppFullscreen();
+    }
+    return true;
+  }
+  const located = findPaneAnywhere(f, instanceId);
+  if (!located) return false;
+  if (located.location.kind !== 'window') return fullscreenArea(instanceId, true);
+  layoutStore.dispatch({ type: 'SET_PRESENTED', instanceId });
+  void escalateAppFullscreen(located.pane.viewId);
+  return true;
+}
+
+/**
+ * Whether the app was already OS-fullscreen when a presentation escalated it.
+ *
+ * Null means "no escalation is in flight". Without this, leaving a presented
+ * game would drop an app the user had put in fullscreen themselves back into a
+ * window — undoing a state this code never set.
+ */
+let fullscreenBeforePresent: boolean | null = null;
+
+async function escalateAppFullscreen(viewId: string): Promise<void> {
+  if (!resolveView(viewId)?.fullscreen) return;
+  if (!windowControl()) return;
+  fullscreenBeforePresent = await isAppFullscreen();
+  if (!fullscreenBeforePresent) await setAppFullscreen(true);
+}
+
+async function restoreAppFullscreen(): Promise<void> {
+  const before = fullscreenBeforePresent;
+  fullscreenBeforePresent = null;
+  if (before === false) await setAppFullscreen(false);
+}
+
+/** Is anything presented, by either mechanism? */
+export function isPresenting(): boolean {
+  const f = frame();
+  return f.presentedInstanceId !== null || f.fullscreenAreaId !== null;
+}
+
+/**
+ * Toggle presentation on whatever is focused (the `area.fullscreen` command).
+ *
+ * Reads the window before the area: on a floating desktop `focusedAreaId` still
+ * names whatever centre area was focused last, so checking it first would
+ * fullscreen an invisible area of the hidden tiling tree and appear to do
+ * nothing at all.
+ */
 export function fullscreenFocusedArea(): void {
   const f = frame();
-  if (f.fullscreenAreaId) fullscreenArea(null);
-  else if (f.focusedAreaId) fullscreenArea(f.focusedAreaId, true);
+  if (isPresenting()) {
+    presentPane(null);
+    return;
+  }
+  const win = f.focusedWindowId ? f.windows.find((w) => w.id === f.focusedWindowId) : null;
+  const activeTab = win?.area.tabs[win.area.activeTab];
+  if (activeTab) {
+    presentPane(activeTab.instanceId);
+    return;
+  }
+  if (f.focusedAreaId) fullscreenArea(f.focusedAreaId, true);
 }
 
 // ---------------------------------------------------------------------------
@@ -1438,6 +1573,7 @@ export function describeLayout(): Record<string, unknown> {
   return {
     workspaceId: snap.workspaceId,
     fullscreenAreaId: f.fullscreenAreaId,
+    presentedInstanceId: f.presentedInstanceId,
     center: describeNode(f.center),
     docks: Object.fromEntries(
       (['left', 'right', 'bottom'] as const).map((side) => {

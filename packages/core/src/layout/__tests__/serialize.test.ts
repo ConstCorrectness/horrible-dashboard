@@ -56,6 +56,20 @@ describe('serialize round-trip', () => {
       .children[0];
     expect(backArea.tabs[0].regions).toEqual({ right: region });
   });
+
+  it('round-trips a minimized pane, so a tidied workspace stays tidied', () => {
+    const frame = JSON.parse(JSON.stringify(seeded())) as FrameState;
+    const area = (frame.center as { children: Array<{ tabs?: Array<Record<string, unknown>> }> })
+      .children[0];
+    area.tabs![0].minimized = true;
+    const back = deserialize(serialize(frame), KNOWN)!;
+    const backArea = (back.center as { children: Array<{ tabs: Array<{ minimized?: boolean }> }> })
+      .children[0];
+    expect(backArea.tabs[0].minimized).toBe(true);
+    // Absent rather than `false` on the ones that are showing — the flag is
+    // additive, and a blob written before minimizing existed has none at all.
+    expect(backArea.tabs[1].minimized).toBeUndefined();
+  });
 });
 
 describe('v1 → v2 migration', () => {

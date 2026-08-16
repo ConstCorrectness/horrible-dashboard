@@ -3,7 +3,8 @@ import {
   closeTransientChrome,
   DEFAULT_ESCAPE_HOLD_MS,
   dialogsStore,
-  fullscreenArea,
+  isPresenting,
+  presentPane,
   getSetting,
   hasCapability,
   installKeymap,
@@ -11,6 +12,7 @@ import {
   layoutStore,
   onExternalOpenFailed,
   startAutoUpdateChecks,
+  toggleAppFullscreen,
   registry,
   setBackdrop,
   setDesktopMode,
@@ -36,6 +38,7 @@ import { Taskbar } from './desktop/Taskbar';
 import { registerDesktopModule } from './desktop/module';
 import { WindowLayer } from './desktop/WindowLayer';
 import { Frame } from './layout/Frame';
+import { Minibuffer } from './layout/Minibuffer';
 import { installFrameShell, openPaneWhenReady, switchWorkspaceWhenReady } from './layout/install';
 import { WindowResizeHandles } from './layout/WindowChrome';
 import { DetachedTitlebar, WorkspaceTabs } from './layout/WorkspaceTabs';
@@ -132,11 +135,15 @@ export function AppShell({
   );
 
   useEffect(() => {
-    // OS-window fullscreen is a phase-2 native-shell capability (F11); distinct
-    // from the frame's in-window `area.fullscreen` (ctrl+space). Only register
-    // it where a native shell grants the capability, so the browser keeps its
-    // own native F11 and the palette stays clean.
-    const nativeFullscreen = hasCapability('window.fullscreen');
+    // App-window fullscreen, distinct from the frame's in-window
+    // `area.fullscreen` and from a presented pane. Granted in BOTH layouts now:
+    // the browser has no OS window but the DOM Fullscreen API covers the same
+    // ground, and `toggleAppFullscreen` picks the mechanism.
+    const canFullscreen = hasCapability('window.fullscreen');
+    // The KEY, however, stays native-only. `keymap/reserved.ts` declares `f11`
+    // owned by the browser with `preventable: false`, so binding it in the
+    // browser layout would produce a binding that silently never fires.
+    const nativeFullscreenKey = canFullscreen && windowControl() !== null;
     // First: the layout engine's controller, commands and hydration. The
     // desktop is the landing surface, so the tiling Frame may never mount —
     // and everything from the agent's layout tools to the backdrop commands
@@ -181,21 +188,37 @@ export function AppShell({
             setView('desktop');
           },
         },
-        ...(nativeFullscreen
+        {
+          // Re-enter the first-run wizard without a restart. `desktop.oobeComplete`
+          // is read once at mount (deliberately — reading it reactively yanks the
+          // user back into the wizard the moment the settings store republishes),
+          // so clearing the setting alone did nothing until the next launch, which
+          // is what the setting's own description had to admit. This command lives
+          // here because `setView` is only in scope here.
+          id: 'shell.oobe',
+          title: 'Show the first-run setup wizard',
+          run: async () => {
+            await setSetting(OOBE_COMPLETE_KEY, false);
+            setView('oobe');
+          },
+        },
+        ...(canFullscreen
           ? [
               {
                 id: 'shell.toggleFullscreen',
                 title: 'Window: Toggle fullscreen',
                 run: async () => {
-                  const on = await windowControl()?.toggleFullscreen();
-                  if (on !== undefined) {
-                    toastsStore.add(
-                      'info',
-                      on ? 'Fullscreen' : 'Windowed',
-                      on ? 'Press F11 to exit.' : 'Press F11 for fullscreen.',
-                      1500,
-                    );
-                  }
+                  const on = await toggleAppFullscreen();
+                  // The hint names the key only where the key exists; in the
+                  // browser F11 belongs to the browser and telling the user to
+                  // press it would be advice for a different application.
+                  const exit = nativeFullscreenKey ? 'Press F11 to exit.' : 'Press Escape to exit.';
+                  toastsStore.add(
+                    'info',
+                    on ? 'Fullscreen' : 'Windowed',
+                    on ? exit : 'The app is back in a window.',
+                    1500,
+                  );
                 },
               },
             ]
@@ -208,7 +231,7 @@ export function AppShell({
         // Code convention) — the comment was stale, not the behavior. `alt+x`
         // (minibuffer) is the binding that genuinely must never be shadowed.
         { key: 'mod+k', command: 'shell.commandPalette' },
-        ...(nativeFullscreen ? [{ key: 'f11', command: 'shell.toggleFullscreen' }] : []),
+        ...(nativeFullscreenKey ? [{ key: 'f11', command: 'shell.toggleFullscreen' }] : []),
       ],
       settings: [
         {
@@ -244,8 +267,12 @@ export function AppShell({
         },
         dismissDialog: () => dialogsStore.dismissActive(),
         exitFullscreen: () => {
-          if (!layoutStore.getSnapshot().frame.fullscreenAreaId) return false;
-          fullscreenArea(null);
+          // Both mechanisms, one rung. `presentPane(null)` clears whichever is
+          // live — the tiling area or a presented window — and unwinds the OS
+          // fullscreen it may have escalated to. Checking only
+          // `fullscreenAreaId` here left a presented pane with no Escape at all.
+          if (!isPresenting()) return false;
+          presentPane(null);
           return true;
         },
         closeTransient: () => closeTransientChrome(),
@@ -300,6 +327,12 @@ export function AppShell({
           then stops at the taskbar, and a maximized window cannot cover it. A
           detached per-workspace window has no taskbar: it holds one desktop and
           has nothing to switch between. */}
+      {/* The minibuffer on a floating desktop, where the Frame that normally
+          hosts it is not mounted. Without this `alt+x` flipped a store nothing
+          rendered, and — worse — a `dialogs.prompt()` waited forever on an
+          answer the user was never shown. It renders nothing when idle; the
+          taskbar's `mx` zone is the desktop's status line. */}
+      {view === 'desktop' && !tiling && <Minibuffer variant="overlay" />}
       {!detached && view === 'desktop' && <Taskbar />}
       {/* Half-typed chord (mod+k …) — without this the keyboard just goes quiet
           for a second and the user has no idea the shell is waiting. */}

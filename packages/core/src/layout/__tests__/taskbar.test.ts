@@ -9,7 +9,13 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { registry } from '../../registry';
-import { activateTaskbarEntry, openPaneInArea, setPaneWindowed, toggleDock } from '../controller';
+import {
+  activateTaskbarEntry,
+  minimizePane,
+  openPaneInArea,
+  setPaneWindowed,
+  toggleDock,
+} from '../controller';
 import { collectAreas } from '../model';
 import { seedFromPreset, type FramePreset } from '../presets';
 import { layoutStore } from '../store';
@@ -187,5 +193,75 @@ describe('activate', () => {
 
   it('returns false for an unknown instance rather than throwing', () => {
     expect(activateTaskbarEntry('nope#9')).toBe(false);
+  });
+});
+
+/**
+ * Minimizing a pane that is NOT in a window. Most workspaces are tiling, so
+ * before this the taskbar's hide half only worked on the one desktop paradigm
+ * the user was least likely to be in.
+ */
+describe('minimizing a centre pane', () => {
+  const soleTab = () => collectAreas(frame().center)[0].tabs[0].instanceId;
+
+  it('hides it from its area and reports it minimized', () => {
+    const a = soleTab();
+    activateTaskbarEntry(a);
+    expect(entry(a)!.state).toBe('minimized');
+    // Still in the tree, at its index: that is what makes restoring exact.
+    expect(collectAreas(frame().center)[0].tabs[0].minimized).toBe(true);
+  });
+
+  it('keeps the area, so the split the user built survives', () => {
+    const areasBefore = collectAreas(frame().center).length;
+    activateTaskbarEntry(soleTab());
+    expect(collectAreas(frame().center).length).toBe(areasBefore);
+  });
+
+  it('hands the area to a live sibling tab rather than showing nothing', () => {
+    const areaId = collectAreas(frame().center)[0].id;
+    const a = soleTab();
+    const b = openPaneInArea('t.b', areaId)!;
+    // `b` is active; minimizing it must fall back to `a`, not leave the area
+    // pointing at a pane that no longer renders.
+    minimizePane(b);
+    const area = collectAreas(frame().center).find((x) => x.id === areaId)!;
+    expect(area.tabs[area.activeTab].instanceId).toBe(a);
+  });
+
+  it('restores to exactly the tab it was, and focuses it', () => {
+    const areaId = collectAreas(frame().center)[0].id;
+    const b = openPaneInArea('t.b', areaId)!;
+    minimizePane(b);
+    activateTaskbarEntry(b);
+    const area = collectAreas(frame().center).find((x) => x.id === areaId)!;
+    expect(area.tabs[area.activeTab].instanceId).toBe(b);
+    expect(entry(b)!.state).toBe('focused');
+  });
+
+  it('minimizes from any state, unlike the click toggle', () => {
+    const areaId = collectAreas(frame().center)[0].id;
+    const a = soleTab();
+    openPaneInArea('t.b', areaId);
+    // `a` is a background tab — a click would REVEAL it, but the double-click
+    // gesture and the menu item both mean "put it away" regardless.
+    expect(entry(a)!.state).toBe('hidden');
+    minimizePane(a);
+    expect(entry(a)!.state).toBe('minimized');
+  });
+
+  it('closes the dock for a docked tool instead of flagging the pane', () => {
+    const tool = frame().docks.left.tools[0].instanceId;
+    minimizePane(tool);
+    expect(frame().docks.left.visible).toBe(false);
+    // No second, invisible hidden-ness: the dock's own state is the only one.
+    expect(frame().docks.left.tools[0].minimized).toBeUndefined();
+  });
+
+  it('minimizes the whole window for a windowed pane', () => {
+    const a = soleTab();
+    setPaneWindowed(a, true);
+    minimizePane(a);
+    expect(frame().windows[0].mode).toBe('minimized');
   });
 });

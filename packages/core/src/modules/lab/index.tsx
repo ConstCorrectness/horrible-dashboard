@@ -21,12 +21,15 @@ export const labModule: ModuleManifest = {
   title: 'Lab',
   panels: [
     {
-      // `widget` rather than `tool`: this sits in a centre area beside the notebook,
-      // and a centre area takes document or widget panes only.
+      // `document`, not `widget`. Both live in a centre area, but a widget takes
+      // an area *alone* — and this module's own `lab` preset tabs the hub with
+      // the model explorer, the context view and llama.cpp in one area, which is
+      // a document's arrangement. A widget is a readout you glance at; this is a
+      // repository browser you work in.
       id: 'lab.hub',
       title: 'Hugging Face',
       component: LabHub,
-      role: 'widget',
+      role: 'document',
       icon: '🤗',
       singleton: true,
       // One component, two sections. A model repo and a dataset repo differ in

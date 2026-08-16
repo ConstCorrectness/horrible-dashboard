@@ -57,7 +57,11 @@ export function Area({
   focused: boolean;
   fullscreen?: boolean;
 }) {
-  const active = area.tabs[area.activeTab];
+  // A minimized tab can still be `activeTab` — when every tab in the area is
+  // minimized the index has nowhere to move to, and the area shows the view
+  // picker rather than the pane the user just put away.
+  const activeTab = area.tabs[area.activeTab];
+  const active = activeTab?.minimized ? undefined : activeTab;
   const dragging = useSyncExternalStore(paneDrag.subscribe, paneDrag.getSnapshot);
   // Tracked as a counter, not a boolean: dragenter/dragleave fire for every
   // descendant the pointer crosses, so a boolean flickers off over children.

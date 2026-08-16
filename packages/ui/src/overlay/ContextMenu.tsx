@@ -240,7 +240,12 @@ function MenuPanel({
                   }}
                 >
                   <span className="ctx-menu-check">{item.checked ? '✓' : ''}</span>
-                  <span className="ctx-menu-label">{item.label}</span>
+                  {/* The label and its detail are one column: a detail is prose
+                      and belongs under the name, not in the row beside it. */}
+                  <span className="ctx-menu-text">
+                    <span className="ctx-menu-label">{item.label}</span>
+                    {item.detail && <span className="ctx-menu-detail">{item.detail}</span>}
+                  </span>
                   {item.hint && <span className="ctx-menu-hint">{item.hint}</span>}
                   {hasSub && <span className="ctx-menu-more">›</span>}
                 </button>

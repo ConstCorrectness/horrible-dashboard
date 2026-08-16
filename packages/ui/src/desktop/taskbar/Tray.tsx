@@ -8,6 +8,7 @@
 import { useSyncExternalStore } from 'react';
 import {
   backendHealth,
+  hasCapability,
   layoutStore,
   THEMES,
   toggleDesktopMode,
@@ -15,13 +16,22 @@ import {
   setSetting,
   THEME_SETTING_KEY,
   openContextMenu,
+  type ContextMenuItem,
 } from '@horrible/core';
+
+import { useAppFullscreen } from '../../hooks/useAppFullscreen';
 
 export function Tray({ showLabels }: { showLabels: boolean }) {
   const health = useSyncExternalStore(backendHealth.subscribe, backendHealth.getSnapshot);
   const { frame } = useSyncExternalStore(layoutStore.subscribe, layoutStore.getSnapshot);
   const themeId = useThemeId();
   const tiling = frame.mode === 'tiling';
+  // The tray is where fullscreen becomes discoverable. F11 exists only on the
+  // native shell (the browser owns that key), and the titlebar cluster only
+  // renders under `chrome.workspaceTabs` — so without this button the browser
+  // layout has no fullscreen affordance at all.
+  const canFullscreen = hasCapability('window.fullscreen');
+  const { fullscreen, toggle: toggleFullscreen } = useAppFullscreen();
 
   // Three states, not two. `null` is "the first probe has not answered yet",
   // which is not the same fact as "the backend is down" and must not be painted
@@ -54,6 +64,18 @@ export function Tray({ showLabels }: { showLabels: boolean }) {
       >
         ◐
       </button>
+      {canFullscreen && (
+        <button
+          type="button"
+          className="os-tray-btn"
+          aria-label={fullscreen ? 'Leave fullscreen' : 'Fullscreen'}
+          aria-pressed={fullscreen}
+          title={fullscreen ? 'Leave fullscreen' : 'Fullscreen'}
+          onClick={toggleFullscreen}
+        >
+          {fullscreen ? '⤡' : '⛶'}
+        </button>
+      )}
       <span
         className={`os-tray-health is-${backend}`}
         title={
@@ -72,12 +94,18 @@ export function Tray({ showLabels }: { showLabels: boolean }) {
   );
 }
 
-/** The theme picker, shown from the tray's ◐ button. */
-export function themeMenuItems(currentId: string) {
+/**
+ * The theme picker, shown from the tray's ◐ button and from the app menu.
+ *
+ * The description goes in `detail`, not `hint`: a hint shares the row with the
+ * label, and a full sentence there took the whole width and left the theme's
+ * *name* — the one thing you are choosing by — ellipsized away.
+ */
+export function themeMenuItems(currentId: string): ContextMenuItem[] {
   return THEMES.map((t) => ({
     id: `theme:${t.id}`,
     label: t.title,
-    hint: t.description,
+    detail: t.description,
     checked: t.id === currentId,
     run: () => void setSetting(THEME_SETTING_KEY, t.id),
   }));

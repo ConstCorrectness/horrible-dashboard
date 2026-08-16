@@ -16,13 +16,59 @@
 //! core `WindowControl` seam; the shell stays a thin pass-through to tao's
 //! window API.
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Window};
 use tauri_runtime::ResizeDirection;
 
 /// Monotonic counter for unique `browser-<n>` pop-out window labels.
 static BROWSER_WINDOW_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// Labels of windows that were maximized when they went fullscreen, so leaving
+/// fullscreen puts them back. See [`enter_fullscreen`].
+static MAXIMIZED_BEFORE_FULLSCREEN: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+
+/// Enter OS-fullscreen, **un-maximizing first**.
+///
+/// This window is undecorated (`decorations: false`), and on Windows an
+/// undecorated maximized window has its client area clipped to the monitor's
+/// *work area* so the taskbar stays usable. That clip survives the switch to
+/// fullscreen: the window frame grows to the whole monitor and covers the
+/// taskbar, while the webview inside it stays work-area tall — which is exactly
+/// the taskbar-shaped black band along the bottom of a fullscreen app.
+///
+/// Dropping the maximized state first means Windows has no work-area clip to
+/// apply, so the webview gets the whole monitor. The previous state is
+/// remembered per window and re-applied on the way out, so a user who
+/// fullscreened a maximized window does not get a small one back.
+fn enter_fullscreen(window: &WebviewWindow) -> Result<(), String> {
+    let was_maximized = window.is_maximized().map_err(|e| e.to_string())?;
+    if was_maximized {
+        window.unmaximize().map_err(|e| e.to_string())?;
+        MAXIMIZED_BEFORE_FULLSCREEN
+            .lock()
+            .map_err(|e| e.to_string())?
+            .get_or_insert_with(HashSet::new)
+            .insert(window.label().to_string());
+    }
+    window.set_fullscreen(true).map_err(|e| e.to_string())
+}
+
+/// Leave OS-fullscreen, restoring the maximized state [`enter_fullscreen`] took away.
+fn leave_fullscreen(window: &WebviewWindow) -> Result<(), String> {
+    window.set_fullscreen(false).map_err(|e| e.to_string())?;
+    let restore = MAXIMIZED_BEFORE_FULLSCREEN
+        .lock()
+        .map_err(|e| e.to_string())?
+        .as_mut()
+        .is_some_and(|set| set.remove(window.label()));
+    if restore {
+        window.maximize().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
 
 /// Whether the calling window is currently OS-fullscreen.
 #[tauri::command]
@@ -33,7 +79,11 @@ pub fn window_is_fullscreen(window: WebviewWindow) -> Result<bool, String> {
 /// Set the calling window's OS-fullscreen state; returns the value applied.
 #[tauri::command]
 pub fn window_set_fullscreen(window: WebviewWindow, value: bool) -> Result<bool, String> {
-    window.set_fullscreen(value).map_err(|e| e.to_string())?;
+    if value {
+        enter_fullscreen(&window)?;
+    } else {
+        leave_fullscreen(&window)?;
+    }
     Ok(value)
 }
 
@@ -42,7 +92,11 @@ pub fn window_set_fullscreen(window: WebviewWindow, value: bool) -> Result<bool,
 #[tauri::command]
 pub fn window_toggle_fullscreen(window: WebviewWindow) -> Result<bool, String> {
     let next = !window.is_fullscreen().map_err(|e| e.to_string())?;
-    window.set_fullscreen(next).map_err(|e| e.to_string())?;
+    if next {
+        enter_fullscreen(&window)?;
+    } else {
+        leave_fullscreen(&window)?;
+    }
     Ok(next)
 }
 

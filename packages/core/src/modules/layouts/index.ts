@@ -15,6 +15,25 @@ export const layoutsModule: ModuleManifest = {
   id: 'layouts',
   title: 'Layouts',
   frames: [
+    /**
+     * The one you land on: an empty floating desktop, like logging into a fresh
+     * machine. A wallpaper, a taskbar, nothing open.
+     *
+     * It is deliberately first and deliberately empty. Booting into `dashboard`
+     * meant the app's opening move was to fill the screen with somebody else's
+     * arrangement of nine panes, before the user had asked for anything — and
+     * the presets beside it stop reading as *choices* when one of them has
+     * already been made for you. Every other preset is one click away on the
+     * strip, and this one is what "start minimal" means.
+     */
+    {
+      id: 'desktop',
+      name: 'Desktop',
+      icon: '⌂',
+      mode: 'floating',
+      backdrop: { id: 'aurora' },
+      frame: { center: { tabs: [] } },
+    },
     {
       id: 'dashboard',
       name: 'Dashboard',

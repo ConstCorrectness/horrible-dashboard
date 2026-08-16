@@ -173,10 +173,64 @@ Four rules there are load-bearing:
 
 `layout/taskbar.ts` derives the buttons, pure over `FrameState` + the registry — the
 same shape and for the same reason as `railEntries`. The strip itself is a zone
-container driven by the `desktop.taskbar` setting (`start`, `windows`, `spacer`,
-`desktops`, `tray`, `clock`); a stored config is **merged** over the defaults so a
+container driven by the `desktop.taskbar` setting (`start`, `windows`, `desktops`,
+`mx`, `tray`, `clock`, `spacer`); a stored config is **merged** over the defaults so a
 config written by an older build does not silently lose a zone the user never
 removed, and an unknown zone name is skipped rather than rendered as an error strip.
+
+**Right-click the strip to customize it** (the `taskbar` context-menu kind): which
+zones show, top or bottom, labels, auto-hide, and a reset. The config was always a
+setting; what it had no way of being was *edited*, short of typing JSON into the
+settings page — which is not something anyone discovers about their own taskbar. The
+menu writes that same setting through the same merge, so it and a hand-written value
+cannot mean different things. Zones are toggles rather than a reorderable list (a
+menu is a poor reordering surface), and a zone switched back on is spliced in at its
+canonical position — `zoneRank`, i.e. `ZONES`' own key order — rather than appended
+past the clock. _Reset the taskbar_ is the escape hatch that makes hiding everything
+safe: a bare strip still right-clicks, so there is no way to customize yourself out
+of reach of it.
+
+A stored `zones` array is otherwise taken **whole** — it is an explicit choice, and
+quietly adding to it would defeat the point of being able to hide a zone. That leaves
+one problem, and `ZONES_VERSION`/`ZONE_SINCE` is the answer to it: a zone introduced
+*after* the stored config was written is inserted, and a zone the user actually
+removed is not. Without the version the two are indistinguishable, and someone who
+customized their taskbar once would never receive another zone again. Bump the
+version and add the entry in the same change that adds the zone.
+
+The default zones are `start`, `windows`, `spacer`, `mx`, `tray`, `clock` — **`desktops` is
+registered but off**. The pips and the top workspace strip rendered the same list and
+ran the same verb (`registry.switchWorkspace`), so the shell shipped two always-visible
+switchers for one axis and neither read as *the* one. The strip won because it is the
+only one that can also name, create, reset and delete a workspace, and splitting
+"switch" from "manage" across two edges of the screen is what made the pair feel
+redundant rather than complementary. Anyone who wants the OS-conventional placement
+adds `"desktops"` back to `zones`.
+
+That makes the top strip the sole switcher, which is why it must scroll: both it and
+the taskbar's window buttons run `useHorizontalWheel`, so a plain vertical wheel moves
+them sideways. They are `overflow-x: auto` with the scrollbar hidden, so before that
+the overflow was reachable only by trackpad or shift+wheel — on a mouse, the later
+tabs simply did not exist. The hook also stamps `data-overflowing` when it measures
+real overflow, which is what the edge fade keys off; fading unconditionally dims the
+first tab of a strip that fits, and reads as a rendering fault.
+
+### The `mx` zone, and where the minibuffer went
+
+The minibuffer is the **frame's** bottom row, and the frame only mounts on a tiling
+desktop. On a floating one it was therefore not merely hidden but absent: `alt+x`
+flipped a store that nothing rendered, and — the part that was actually broken —
+every `dialogs.prompt()` waited forever on an answer the user was never shown, since
+the minibuffer is what serves prompts inline.
+
+So the shell mounts a second instance for the floating desktop,
+`<Minibuffer variant="overlay" />`, floating just above the taskbar and rendering
+**nothing when idle**. Idle is the whole difference: a permanent status strip is
+right as the frame's bottom row and wrong stacked over a taskbar, where it is a
+second status bar saying much the same thing. The taskbar's `mx` zone carries the
+idle half instead — the M-x button and the echo area — which is also the answer to
+"where is M-x?": a keystroke with no visible presence is one nobody finds, the same
+argument the tray's fullscreen button already makes.
 
 Two decisions in the derivation matter:
 
@@ -193,16 +247,83 @@ before `#2`, so panes would visibly reshuffle the tenth time you opened one.)
 Clicking follows the universal convention, in one verb (`activateTaskbarEntry`):
 clicking the thing you are already looking at **minimizes** it, clicking anything
 else brings it forward. A taskbar whose focused button does nothing silently
-swallows every second click.
+swallows every second click. **Double-clicking always minimizes** (`minimizePane`),
+whatever the first click did — a direct "put this away" that does not depend on
+what state the button happened to be in.
 
 The taskbar is also what makes minimize usable at all — a minimized window is off
 screen, and this is the only route back to it. It is the reason flipping a desktop
 to floating is safe: `explodeToWindows` turns hidden dock tools into _minimized_
 windows, and without a taskbar those panes would be unreachable.
 
+### Minimizing is not window-only
+
+"Minimize" originally meant `SET_WINDOW_MODE: 'minimized'` and nothing else, so on a
+**tiling** desktop — which is most workspaces — the hide half of that verb did
+nothing at all: the taskbar listed nine panes and could put none of them away.
+`minimizePane` resolves the gesture against where the pane actually lives:
+
+| Where the pane is | What minimize does                                        |
+| ----------------- | --------------------------------------------------------- |
+| a window          | `SET_WINDOW_MODE: 'minimized'` — the whole window, tabs and all |
+| a dock tool       | closes its dock, the same state its rail button toggles    |
+| a centre area     | sets `PaneState.minimized` (`SET_PANE_MINIMIZED`)          |
+
+A dock tool deliberately gets **no flag of its own**: its dock's `visible` already is
+the hidden state, and a per-pane flag beside it would be a second mechanism for one
+visible thing.
+
+A centre pane's flag lives on the pane and it **stays in its area, at its index**.
+That is the whole design: the split geometry, the tab order and the area itself all
+survive, so restoring puts the pane back exactly where it was. Lifting it out of the
+tree instead would collapse a single-pane area, and no verb can rebuild a split — the
+pane would come back merged into a neighbour's tab strip and the user's layout would
+be quietly worse every time they minimized something.
+
+Two consequences: the tab strip renders `area.tabs` **by index, skipping minimized
+ones** (filtering the array would misaddress every tab verb, which all take
+positions), and a minimized pane can still be `activeTab` when every tab in the area
+is minimized — the area then shows the view picker, which is honest and reversible.
+`taskbarEntries` checks the flag before anything else, or such a pane would report as
+`focused` and its button would offer to minimize what is already minimized.
+
+The flag is **persisted** (`serialize`), because a minimized pane is part of the
+arrangement the user made; reopening a workspace with everything they had tidied away
+popped back open is the frame undoing their work on every reload.
+
 The **start menu** lists `registry.panels` + `registry.widgets` minus `embedded`,
 filtered exactly as the palette's openers are — an embedded view lives inside a host
 pane, and a launcher entry would present it as a second, competing home.
+
+It is **grouped by pane role** (Documents / Tools / Widgets): sixty-odd entries in one
+alphabetical run said nothing about the model the user was choosing from, and the role
+is exactly the fact that decides where the thing will land. Searching flattens the
+groups — three headings over four results is more structure than content.
+
+Its **footer** is Settings / Setup / Theme. The bottom-left corner is where people go
+for settings, and the menu previously offered it only as one row of sixty, filed under
+S. Theme opens the tray's own `taskbar.theme` menu rather than a second list.
+
+## The app menu
+
+The logo at the top-left opens the `shell.app` context menu: Setup, Settings, Theme,
+Backdrop, the spotlight, the tiling/floating flip, and re-running first-run setup.
+
+It previously ran `shell.home`, which **could not do anything**. `home` is the desktop
+now, and the desktop is the only view the logo is ever visible from — so the one piece
+of permanent chrome in the corner every OS reserves for its menu was inert. The items
+here are the app-level destinations: the ones about the *installation* rather than
+about what is on screen.
+
+`shell.oobe` is new and is why "Run first-run setup again" works without a restart.
+`desktop.oobeComplete` is read **once**, at mount (reading it reactively yanks the user
+back into the wizard the moment the settings store republishes), so clearing the
+setting alone did nothing until the next launch — which the setting's own description
+had to admit. The command clears it *and* sets the shell view.
+
+The backdrop submenu is shared with the desktop's right-click menu through one
+`backdropMenuItems()`; two lists resolved from the same registry are two lists that
+drift.
 
 ## Boot and first run
 
@@ -337,6 +458,79 @@ drag never reaches the handler.
   already-snapped window does not overwrite the rect it was originally dragged to.
 - **Close** runs the existing `closePaneGuarded`, so a dirty pane still prompts.
 
+### Presenting a pane
+
+Maximize fills the window layer, which is inset below the workspace strip and above
+the taskbar. **Presenting** goes past both: `FrameState.presentedInstanceId` names a
+windowed pane, and the stylesheet promotes that window to `position: fixed; inset: 0`
+at z-index 48 — over the taskbar and the strip, still under the spotlight, so `mod+k`
+reaches the user while a game fills the screen.
+
+Four things here are load-bearing.
+
+**The window is promoted in place, never re-rendered somewhere else.** Rendering the
+pane into a separate full-screen layer reconciles as a different element and remounts
+it — killing a live PTY, socket or browser engine, the exact failure
+[pane-lifetime](windowing.mdx#pane-lifetime-unmount-is-not-close) exists to prevent.
+The window keeps its position in the React tree and only its CSS changes.
+
+**`presentPane` is one verb over two mechanisms.** A windowed pane sets
+`presentedInstanceId`; a centre or docked pane goes through the existing
+`fullscreenAreaId`. Callers — and the keybinding — should not have to know which, and
+`fullscreenFocusedArea` reads the focused *window* before the focused area, because on
+a floating desktop `focusedAreaId` still names whatever centre area was focused last
+and checking it first fullscreens an invisible area of the hidden tiling tree.
+
+**The reducer refuses a pane that is not in a window**, and `sanitizeFocus` clears the
+id the moment it stops naming one. Both matter more than the focus equivalents: a
+stale id here is not a mis-aimed keybinding but a screen with the chrome hidden and no
+visible way out. Closing the pane, closing the window, docking it back, and flipping
+to tiling all orphan it — four verbs, one sweep.
+
+**It is never serialized.** `serialize` deletes the field and `deserialize` forces it
+null. It is a momentary way of looking at a pane, not a property of the workspace, and
+restoring a layout into a chrome-less full-screen pane is a state the user has to
+guess their way out of.
+
+A view opts in with **`fullscreen: true`** (`PanelDecl`/`WidgetDecl`) — `hassault.play`,
+`karaoke.stage`, `games.arcade`, `browser.view`, `visualizer.pane`. Only those get the
+`⛶` titlebar button, and only those escalate to **OS-window fullscreen** on a native
+shell. Escalating every presented pane would turn an ordinary "show me this bigger"
+into something that swallows the display; and the escalation remembers whether the app
+was *already* fullscreen, so leaving a presented game does not drop an app the user had
+fullscreened themselves back into a window.
+
+Escape unwinds it through the existing ladder — `installKeymap`'s `exitFullscreen`,
+extended to call `presentPane(null)`. Checking only `fullscreenAreaId` there left a
+presented pane with no Escape at all.
+
+### App-window fullscreen
+
+Distinct again: this is the OS window (or, in the browser, the page), not a pane.
+`toggleAppFullscreen` in `core/fullscreen.ts` picks the mechanism — the `windowControl`
+seam under Tauri, the DOM Fullscreen API otherwise — so `window.fullscreen` is now
+granted in **both** layouts and the browser is no longer stuck windowed.
+
+What the capability does **not** grant is the `f11` binding. `keymap/reserved.ts`
+declares that key browser-owned with `preventable: false`, so a binding there would
+silently never fire; the key stays gated on the native seam, and the visible controls
+are what make the feature reachable in the browser: a `⛶` button in the tray (both
+layouts) and a fourth button at the head of the titlebar cluster under
+`chrome.workspaceTabs`. Both read live state through `subscribeFullscreen`, because a
+control that only re-reads on its own click shows the wrong icon the moment the user
+leaves fullscreen any other way — which is most of the ways people leave it.
+
+On the native shell the command **un-maximizes before it fullscreens**, and re-applies
+the maximized state on the way out (`enter_fullscreen`/`leave_fullscreen` in
+`src-tauri/src/window.rs`). The app window is undecorated, and Windows clips an
+undecorated _maximized_ window's client area to the monitor's **work area** so the
+taskbar stays usable. That clip survives the switch: the window frame grows to cover
+the whole monitor while the webview inside it stays work-area tall — which renders as
+a taskbar-shaped black band along the bottom of a fullscreen app, the OS taskbar
+hidden behind it. Dropping the maximized state first leaves Windows no work area to
+clip against. The previous state is remembered per window label, so someone who
+fullscreens a maximized window does not get a small one back.
+
 `mode` and `snap` are set through **one** action (`SET_WINDOW_MODE`) rather than
 several, so `restoreRect` is written and consumed in a single place.
 
@@ -368,16 +562,22 @@ the frame underneath stay clickable.
 Windows sit above the shell's views and below every overlay that can appear over them.
 Declared once, in `packages/ui/src/desktop/desktop.css`:
 
-| Layer        | z-index |
-| ------------ | ------- |
-| backdrop     | 0       |
-| shell views  | 1       |
-| window layer | 30      |
-| taskbar      | 40      |
-| start menu   | 45      |
-| spotlight    | 50      |
-| toasts       | 9999    |
-| dialogs      | 10000   |
+| Layer          | z-index |
+| -------------- | ------- |
+| backdrop       | 0       |
+| shell views    | 1       |
+| window layer   | 30      |
+| taskbar        | 40      |
+| start menu     | 45      |
+| presented pane | 48      |
+| spotlight      | 50      |
+| toasts         | 9999    |
+| dialogs        | 10000   |
+
+A presented pane sits above the taskbar and the workspace strip — that is the point of
+it — but deliberately **below** the spotlight, so `mod+k` still reaches the user while
+a game fills the screen. The window layer also drops its `overflow: hidden` while
+something is presented, since the promoted window has to escape the layer's box.
 
 On desktop the browser pane's **native child webview composites above all HTML**, so
 any overlay that must appear over it calls `suppressNativeOverlays()` — the treatment

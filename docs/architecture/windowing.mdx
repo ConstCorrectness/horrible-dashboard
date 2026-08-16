@@ -67,6 +67,34 @@ tiling-vs-floating desktops) belongs to that page.
   `dockable` becomes rail-toggleable **while still opening in the center** — that
   is the whole point of splitting the two axes.
 
+  **Which role a view should declare.** The three are easy to pick between by
+  what the pane *is*, rather than by where you first imagined putting it:
+  - a **document** is a surface you work *in* — one per subject, several open at
+    once, and it benefits from tabs;
+  - a **tool** is a *companion* to whatever you are working on — narrow,
+    singleton, always the same thing, useful alongside a document;
+  - a **widget** is a *readout* — glanceable, no interaction depth, sized to a
+    tile, and the thing you would put on the `board` backdrop.
+
+  That last clause is the one test that distinguishes `widget` from `document`
+  outside the tiling grid, and it settled several miscategorised panes. The
+  giveaway is the preset: `widget` takes a centre area **alone**, so any pane
+  that a frame preset *tabs* with others cannot be one. `lab.hub`,
+  `interpretability.context`, `interpretability.architecture` and
+  `llamacpp.server` were all declared `widget` purely to make them
+  centre-placeable — while the `lab` preset tabs all four into a single area,
+  which only documents do. They are documents now.
+
+  In the other direction, `mcp.servers` and `skills.library` were dock-only
+  `tool` panes: a five-section console with an authoring surface, and a browsable
+  catalogue, both squeezed into a 280px rail. Both are `document` +
+  `dockable: 'left'` now, which keeps the rail glyph for consulting one beside
+  your work without pretending the rail is where the work happens.
+
+  `clubhouse.account` stays a `widget` despite reading like a tool: the
+  `dashboard` preset gives it a centre area of its own beside `dashboard.welcome`,
+  which is exactly what the role means.
+
   Note that a narrow companion view is often better modeled as a **region strip**
   of its host pane than as a dockable view: most of the obvious candidates
   (`editor.recentNotes`, `network.chat`, `observability.logs`, `commons.requests`,
@@ -83,7 +111,7 @@ tiling-vs-floating desktops) belongs to that page.
   `mode` and `backdrop`,
   region state, focus, fullscreen. Switching workspaces switches the whole
   picture. `FramePreset`s (contributed via `ModuleManifest.frames`) seed
-  stable-id workspaces on first activation — **Dashboard**, **Scripting**,
+  stable-id workspaces on first activation — **Desktop**, **Dashboard**, **Scripting**,
   **Research** (console/arxiv/browser beside the viewers + library — see
   [research](../modules/research.mdx)), **Data Ops** (database console + REPL +
   library), **Web Ops** (embedded browser + its network views + search +
@@ -91,6 +119,15 @@ tiling-vs-floating desktops) belongs to that page.
   from the [records](../modules/records.mdx) module, **DashArena**
   from games, Training, Notebook, Orchestration); `layout.reset` restores the
   preset.
+
+  **Desktop is first and deliberately empty**: floating mode, an aurora backdrop,
+  no panes — what logging into a machine looks like. It is also what a fresh
+  install boots into (`hydrate` seeds it rather than `dashboard` on an empty
+  slate). Landing on Dashboard meant the app's opening move was to fill the screen
+  with somebody else's arrangement of nine panes before the user had asked for
+  anything, and the presets beside it stop reading as *choices* once one of them
+  has already been made for you. Only the empty slate is affected — an install
+  that already has workspaces still opens whichever one it was left on.
 - **A workspace carries a role, not just furniture.** A preset may declare
   `agent: '<roster id>'` — the roster agent its docked chat opens as. Switching to
   Data Ops makes the agent the `dba`; switching to Data Entry makes it `intake`,
@@ -123,7 +160,10 @@ flowchart TD
 - **PaneState** — one live pane instance (`${viewId}#${n}`); carries its params,
   its **persisted per-instance region strips**, its **`activeSection`** (see
   [Embedded views and sections](#embedded-views-and-sections)), and — when docked —
-  its **remembered `dockSize`**.
+  its **remembered `dockSize`**. A centre pane also carries **`minimized`**: it stays
+  in its area at its index but is skipped by the tab strip and never rendered, so
+  restoring is exact and the split survives (see
+  [desktop-shell.mdx](desktop-shell.mdx#minimizing-is-not-window-only)).
 - **DockState** — a fixed tool dock: visible flag, px size, stacked tools, one
   active. The px `size` is a **fallback**: a docked tool that the user has
   resized carries its own `dockSize`, so a narrow file tree and a wide agent chat
@@ -306,6 +346,14 @@ ignore.
 The `alt+x` binding is declared `override: true` so a focused editor pane can't
 shadow it — the minibuffer is the escape hatch and has to be reachable anywhere.
 
+**Anywhere includes a floating desktop**, where the frame is not mounted at all.
+It used to not: `alt+x` flipped a store nothing rendered, and every prompt waited
+forever on an answer the user was never shown. The shell mounts a second instance
+there — `<Minibuffer variant="overlay" />` — which floats above the taskbar and
+renders nothing in the **status** state, because the taskbar's `mx` zone is the
+desktop's status line. See
+[desktop-shell.mdx](desktop-shell.mdx#the-mx-zone-and-where-the-minibuffer-went).
+
 ### Activity rails
 
 There is one rail per side, each driving the dock on that side — a left-edge
@@ -394,7 +442,9 @@ existing instance instead of duplicating.
   `draggable` sits on the tab **wrapper**, not on the label button, or a drag
   started on the close button would swallow its click. Right-clicking a tab opens
   the `area.tab` [context menu](context-menus.mdx) (Close / Close Others / Close
-  to the Right / Close All, then Split Right / Split Down / Float).
+  to the Right / Close All, then Minimize / Split Right / Split Down / Float).
+  *Minimize* names the taskbar in its hint, because a minimized tile leaves no
+  trace in the frame and its taskbar button is the only way back.
 
   `REORDER_TAB` carries `activeTab` **by identity, not by index**. Every naive
   reorder bug is the same one: the user drags a background tab past the active one

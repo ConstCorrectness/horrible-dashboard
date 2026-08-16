@@ -1361,9 +1361,14 @@ reshaping the roster of a match you are only visiting.
 
 ## Contributions to the layout shell
 
-- **Panels:** `hassault.play` (HorribleAssault, role `document`, singleton). A
-  `document` because it wants the centre area and a lot of pixels, and it grabs
-  pointer lock, which would be hostile in a narrow dock.
+- **Panels:** `hassault.play` (HorribleAssault, role `document`, singleton,
+  `fullscreen: true`). A `document` because it wants the centre area and a lot of
+  pixels, and it grabs pointer lock, which would be hostile in a narrow dock. The
+  `fullscreen` opt-in earns it the `⛶` titlebar control and Escape-able
+  presentation over the taskbar and the workspace strip — and on the desktop build
+  that escalates to OS-window fullscreen, which is what makes pointer lock and the
+  full field of view behave the way the game assumes. See
+  [desktop-shell.mdx](../architecture/desktop-shell.mdx#presenting-a-pane).
 - **Commands:** `hassault.open` (HorribleAssault: Open).
 - **Settings:** `hassault.installPath` — the folder containing `packages/maps`.
   Blank auto-detects the usual per-platform locations. **Optional**: it only adds

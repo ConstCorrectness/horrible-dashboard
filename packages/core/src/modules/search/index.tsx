@@ -25,6 +25,11 @@ export const searchModule: ModuleManifest = {
       title: 'Web Search',
       component: SearchPanel,
       role: 'tool',
+      // Declared, not left implicit. A `tool` with no `defaultDock` still lands
+      // in a dock — whichever the fallback picks — so its home was decided by
+      // omission rather than by anyone. Right, beside the agent: you read
+      // results while working in the centre.
+      defaultDock: 'right',
       icon: '🔎',
     },
   ],

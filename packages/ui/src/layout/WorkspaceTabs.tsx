@@ -4,11 +4,13 @@
  * create one, and a right-click menu (rename / reset preset / delete custom).
  * Replaces the old rail-as-switcher.
  */
+import { useSyncExternalStore } from 'react';
 import {
   addContextMenuProvider,
   dialogs,
   framePersistence,
   hasCapability,
+  layoutStore,
   openContextMenu,
   registry,
   toastsStore,
@@ -17,6 +19,7 @@ import {
   type ContextMenuItem,
 } from '@horrible/core';
 
+import { useHorizontalWheel } from '../hooks/useHorizontalWheel';
 import { WindowControls } from './WindowChrome';
 
 // The strip renders from AppShell before the Frame ever mounts (home view), so
@@ -46,7 +49,11 @@ addContextMenuProvider({
         run: () => void windowControl()?.openWorkspaceWindow(id),
       });
     }
-    items.push({ id: 'workspace.rename', label: 'Rename', run: () => void renameWorkspace(id, name) });
+    items.push({
+      id: 'workspace.rename',
+      label: 'Rename',
+      run: () => void renameWorkspace(id, name),
+    });
     items.push(
       target.isPreset
         ? { id: 'workspace.reset', label: 'Reset to preset', run: () => void resetWorkspace(id) }
@@ -96,6 +103,11 @@ export function WorkspaceTabs() {
   // the webview), and it hosts the min/max/close controls. Interactive children
   // (tabs, buttons) aren't drag regions, so their clicks still land.
   const nativeChrome = hasCapability('chrome.workspaceTabs');
+  // This strip is now the only workspace switcher — the taskbar's pips were
+  // dropped — so it has to stay reachable once the tabs outgrow the width.
+  const wheelRef = useHorizontalWheel<HTMLDivElement>();
+  const { frame } = useSyncExternalStore(layoutStore.subscribe, layoutStore.getSnapshot);
+  const mode = frame.mode;
   const presets = registry.framePresets;
   const presetIds = new Set(presets.map((p) => p.id));
   const entries = [
@@ -111,15 +123,26 @@ export function WorkspaceTabs() {
       role="tablist"
       aria-label="Workspaces"
     >
+      {/* The app menu. It used to run `shell.home`, which was a no-op — `home`
+          is the desktop now, and the desktop is the only view this button is
+          ever visible from, so the corner of the screen every OS reserves for
+          its menu did nothing. The items live in the `desktop` module's
+          `shell.app` provider; the menu opens at the button's bottom-left so it
+          hangs under the logo rather than under the pointer. */}
       <button
         className="frame-tabs-home"
-        title="Home"
-        onClick={() => void registry.runCommand('shell.home')}
+        title="Menu"
+        aria-haspopup="menu"
+        onClick={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          openContextMenu({ clientX: r.left, clientY: r.bottom }, { kind: 'shell.app' });
+        }}
       >
-        <img src="/logo.svg" alt="Home" />
+        <img src="/logo.svg" alt="Menu" />
       </button>
       <div
         className="frame-tabs-scroll"
+        ref={wheelRef}
         {...(nativeChrome ? { 'data-tauri-drag-region': '' } : {})}
       >
         {entries.map((entry) => (
@@ -143,6 +166,20 @@ export function WorkspaceTabs() {
           >
             {entry.glyph ? <span className="frame-tab-glyph">{entry.glyph}</span> : null}
             <span className="frame-tab-label">{entry.label}</span>
+            {/* Which paradigm this desktop runs, on the tab it belongs to. The
+                mode is a property of a workspace, but `FrameState` only holds
+                the active one's — so only the active tab can honestly show it.
+                A span, not a button: this sits inside a button already, and
+                nesting one is invalid. The tray's ▦/❐ toggle is the control. */}
+            {entry.id === activeId && (
+              <span
+                className="frame-tab-mode"
+                aria-hidden="true"
+                title={mode === 'tiling' ? 'Tiling' : 'Floating windows'}
+              >
+                {mode === 'tiling' ? '▦' : '❐'}
+              </span>
+            )}
           </button>
         ))}
         <button

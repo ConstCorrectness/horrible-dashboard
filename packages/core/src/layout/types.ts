@@ -50,6 +50,21 @@ export interface PaneState {
    * until the user resizes — the dock's own `size` is the fallback.
    */
   dockSize?: number;
+  /**
+   * Minimized: open, listed in the taskbar, but not showing.
+   *
+   * A *window* has its own `mode: 'minimized'`, so this flag is only ever set on
+   * a pane in a centre area — which is precisely where minimizing used to be
+   * impossible, because the taskbar's one verb could hide a window and nothing
+   * else, and most workspaces are tiling.
+   *
+   * It is a flag rather than a parking list on the frame, so the pane stays in
+   * its area at its index: the split geometry, the tab order and the area itself
+   * all survive, and restoring puts the pane back exactly where it was. Pulling
+   * it out of the tree instead would collapse a single-pane area and there is no
+   * verb that can rebuild a split (see `move_pane` in the layout tools).
+   */
+  minimized?: boolean;
 }
 
 /**
@@ -196,6 +211,22 @@ export interface FrameState {
   backdrop: BackdropRef;
   /** Area temporarily filling the whole frame (Blender ctrl+space), or null. */
   fullscreenAreaId: string | null;
+  /**
+   * A **windowed** pane instance presented over the entire shell — past the
+   * workspace strip and the taskbar, which a maximized window deliberately stops
+   * short of. Null unless something is presented.
+   *
+   * The floating-mode counterpart of `fullscreenAreaId`, and separate from it
+   * because the two name different things: an area in the centre tree versus a
+   * pane instance in a window, validated against different halves of the state.
+   * `presentPane` picks whichever applies, so callers use one verb.
+   *
+   * Deliberately **not serialized**. It is a way of looking at a pane for a
+   * moment, not a property of the workspace; restoring a saved layout into a
+   * full-screen pane with the chrome hidden is a state the user has to guess
+   * their way out of.
+   */
+  presentedInstanceId: string | null;
   /** Focused center area — area verbs (split/join/nav) and role routing target it. */
   focusedAreaId: string | null;
   /**

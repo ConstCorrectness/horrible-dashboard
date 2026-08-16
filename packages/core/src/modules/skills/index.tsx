@@ -18,10 +18,13 @@ export const skillsModule: ModuleManifest = {
       id: 'skills.library',
       title: 'Skills',
       component: SkillsPane,
-      // A tool pane: you consult and tune it while working, you don't work inside it.
-      role: 'tool',
+      // A browsable library — the same shape as the marketplace, which is a
+      // document. It was a dock-only `tool`, which put a catalogue you read and
+      // edit into a 280px rail. `dockable` keeps the rail glyph for consulting
+      // it alongside something else.
+      role: 'document',
       icon: '🎓',
-      defaultDock: 'left',
+      dockable: 'left',
       singleton: true,
     },
   ],

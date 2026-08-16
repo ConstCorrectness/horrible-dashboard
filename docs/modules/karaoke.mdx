@@ -71,7 +71,7 @@ running order on the left, search on the right.
 
 | View | Id | Role | Notes |
 | --- | --- | --- | --- |
-| Karaoke stage | `karaoke.stage` | `document` | Singleton. Takes **keyboard capture** so its single-key transport bindings don't fight the shell's. |
+| Karaoke stage | `karaoke.stage` | `document` | Singleton. Takes **keyboard capture** so its single-key transport bindings don't fight the shell's, and declares `fullscreen: true` — the stage is pointed at a room, and chrome around the lyrics is chrome the singers read past. |
 | Queue | `karaoke.queue` | `tool` (left) | Running order, reorder, history. |
 | Find songs | `karaoke.search` | `tool` (right) | YouTube search + the downloaded library, in one pane. |
 
