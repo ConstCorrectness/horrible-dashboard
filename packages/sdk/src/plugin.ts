@@ -5,6 +5,7 @@
  * they run unsandboxed in the app realm. See docs/architecture/plugin-sdk.md.
  */
 import type {
+  BackdropDecl,
   Capability,
   CommandDecl,
   ExplorerSourceDecl,
@@ -100,6 +101,8 @@ export interface PluginContributions {
    * See `ExplorerSourceDecl`.
    */
   explorerSources?: ExplorerSourceDecl[];
+  /** Desktop backdrops this plugin offers (ids namespaced). See `BackdropDecl`. */
+  backdrops?: BackdropDecl[];
 }
 
 export interface HorriblePlugin {

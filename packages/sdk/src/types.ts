@@ -293,6 +293,36 @@ export interface WidgetDecl {
 }
 
 /**
+ * What a desktop renders *behind* its windows. A backdrop is a registered
+ * provider rather than a settings string so a module or plugin can contribute
+ * one — a wallpaper, a procedural animation, a live node-state view, or a full
+ * dashboard surface are the same kind of thing to the desktop.
+ *
+ * See docs/architecture/desktop-shell.mdx.
+ */
+export interface BackdropDecl {
+  id: string;
+  title: string;
+  /**
+   * `params` are the ones stored on `FrameState.backdrop` for this desktop, so a
+   * provider is a pure function of the desktop's own configuration — the same
+   * provider renders different wallpapers on two desktops.
+   */
+  component: ComponentType<{ params?: Record<string, unknown> }>;
+  /**
+   * The backdrop wants pointer events (a dashboard you click) rather than being
+   * purely decorative. Decorative backdrops stay `pointer-events: none` so the
+   * desktop's own right-click menu and marquee selection keep working over the
+   * whole surface; an interactive one takes the pointer and gives up that menu
+   * outside its own empty space.
+   */
+  interactive?: boolean;
+  /** Short line shown beside the title in the backdrop picker. */
+  description?: string;
+  requiredCapabilities?: Capability[];
+}
+
+/**
  * A JSON-serializable snapshot of a pane's current state/selection, read by the
  * agent on demand (pull, not push). Returned by an `useAgentContext` provider.
  */

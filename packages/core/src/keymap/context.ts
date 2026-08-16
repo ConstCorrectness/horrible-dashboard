@@ -28,7 +28,15 @@ export interface KeyContext {
   dialogOpen: boolean;
   /** An area is fullscreened in-window. */
   fullscreenArea: boolean;
-  shellView: 'home' | 'workspace';
+  /**
+   * A desktop window holds focus. Lets the window bindings and the frame's
+   * identical `alt+arrow` area bindings coexist on a tiling desktop, where both
+   * are live at once.
+   */
+  windowFocused: boolean;
+  /** The active desktop's paradigm. */
+  desktopMode: 'floating' | 'tiling';
+  shellView: 'boot' | 'oobe' | 'desktop';
   platform: KeyPlatform;
   host: 'browser' | 'desktop';
 }
@@ -68,10 +76,21 @@ export const CONTEXT_KEYS: ContextKeyDoc[] = [
   { key: 'dialogOpen', type: 'boolean', description: 'A modal dialog is open.' },
   { key: 'fullscreenArea', type: 'boolean', description: 'An area is fullscreened in-window.' },
   {
+    key: 'windowFocused',
+    type: 'boolean',
+    description: 'A desktop window (not a tiled area) holds focus.',
+  },
+  {
+    key: 'desktopMode',
+    type: 'string',
+    description: "The active desktop's paradigm.",
+    values: ['floating', 'tiling'],
+  },
+  {
     key: 'shellView',
     type: 'string',
     description: 'Which top-level shell surface is showing.',
-    values: ['home', 'workspace'],
+    values: ['boot', 'oobe', 'desktop'],
   },
   { key: 'platform', type: 'string', description: 'OS family.', values: ['mac', 'win', 'linux'] },
   {

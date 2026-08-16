@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { deserialize, FRAME_SCHEMA, FRAME_VERSION, serialize } from '../serialize';
 import { seedFromPreset, type FramePreset } from '../presets';
+import { DEFAULT_BACKDROP } from '../types';
 import type { FrameState, RegionState } from '../types';
 
 const KNOWN = new Set([
@@ -54,6 +55,131 @@ describe('serialize round-trip', () => {
     const backArea = (back.center as { children: Array<{ tabs: Array<{ regions?: unknown }> }> })
       .children[0];
     expect(backArea.tabs[0].regions).toEqual({ right: region });
+  });
+});
+
+describe('v1 → v2 migration', () => {
+  /**
+   * A blob exactly as the pre-desktop build wrote it: `floating[]` with rects that
+   * are fractions of the old center grid, no `windows`, no `mode`, no `backdrop`.
+   * This is the single most important test in the desktop refactor — it is what
+   * proves an existing user's saved workspaces still open.
+   */
+  function v1Blob() {
+    const frame = JSON.parse(JSON.stringify(seeded())) as Record<string, unknown>;
+    delete frame.windows;
+    delete frame.windowViewport;
+    delete frame.mode;
+    delete frame.backdrop;
+    delete frame.focusedWindowId;
+    frame.floating = [
+      {
+        pane: { instanceId: 'scratch.note#7', viewId: 'scratch.note' },
+        rect: { x: 0.2, y: 0.15, w: 0.5, h: 0.55 },
+        z: 3,
+      },
+    ];
+    return { schema: FRAME_SCHEMA, version: 1, frame };
+  }
+
+  it('opens a v1 workspace as a TILING desktop, unchanged', () => {
+    const back = deserialize(v1Blob(), KNOWN)!;
+    // The whole point: a workspace saved before the desktop shell existed must
+    // come back as the frame its owner left, not as a wallpaper full of windows.
+    expect(back.mode).toBe('tiling');
+    // The backdrop is the one thing that does NOT come back as it was, because
+    // there was nothing there to come back: a v1 desktop had no backdrop, so a
+    // migrated one gets the default rather than `none`. Picking `none` here
+    // would read as conservative and would in fact hand every upgrading user a
+    // blank landing surface for a feature they never turned off.
+    expect(back.backdrop).toEqual({ id: DEFAULT_BACKDROP });
+    expect(back.docks.left.tools).toHaveLength(1);
+    const area = (back.center as { children: Array<{ tabs: unknown[] }> }).children[0];
+    expect(area.tabs).toHaveLength(2);
+  });
+
+  it('migrates floating panes into windows on a unit viewport', () => {
+    const back = deserialize(v1Blob(), KNOWN)!;
+    expect(back.windows).toHaveLength(1);
+    const w = back.windows[0];
+    expect(w.area.tabs.map((t) => t.instanceId)).toEqual(['scratch.note#7']);
+    expect(w.mode).toBe('normal');
+    expect(w.z).toBe(3);
+    // The old fractions are carried through as-is against a 1×1 basis, so the
+    // ordinary rescale-on-measure path turns them into pixels with no
+    // migration-only arithmetic to get wrong.
+    expect(back.windowViewport).toEqual({ w: 1, h: 1 });
+    expect(w.rect).toEqual({ x: 0.2, y: 0.15, w: 0.5, h: 0.55 });
+  });
+
+  it('mints non-colliding ids for migrated windows', () => {
+    const blob = v1Blob();
+    (blob.frame.floating as unknown[]).push({
+      pane: { instanceId: 'files.tree#8', viewId: 'files.tree' },
+      rect: { x: 0.3, y: 0.3, w: 0.4, h: 0.4 },
+      z: 4,
+    });
+    const back = deserialize(blob, KNOWN)!;
+    expect(back.windows).toHaveLength(2);
+    const ids = back.windows.map((w) => w.id);
+    const areaIds = back.windows.map((w) => w.area.id);
+    expect(new Set([...ids, ...areaIds]).size).toBe(4);
+    // And the counter is past every id it just minted, so the next window opened
+    // cannot be handed one of them again.
+    for (const id of [...ids, ...areaIds]) {
+      expect(Number(id.slice(1))).toBeLessThan(back.paneSeq);
+    }
+  });
+
+  it('still round-trips at v2 once written back', () => {
+    const migrated = deserialize(v1Blob(), KNOWN)!;
+    const rewritten = serialize(migrated);
+    expect(rewritten.version).toBe(FRAME_VERSION);
+    expect(deserialize(rewritten, KNOWN)).toEqual(migrated);
+  });
+
+  it('refuses a blob from a newer schema rather than misreading it', () => {
+    const blob = serialize(seeded());
+    expect(deserialize({ ...blob, version: FRAME_VERSION + 1 }, KNOWN)).toBeNull();
+  });
+});
+
+describe('window state round-trip', () => {
+  it('preserves rect, mode, snap, restoreRect and merged tabs', () => {
+    const frame = seeded();
+    const withWindow: FrameState = {
+      ...frame,
+      // Past every id below: the counter is what stops a restored layout minting
+      // an id it already uses, and the deserializer repairs it if it isn't.
+      paneSeq: 42,
+      windowViewport: { w: 1600, h: 900 },
+      windows: [
+        {
+          id: 'w40',
+          area: {
+            kind: 'area',
+            id: 'a41',
+            tabs: [
+              { instanceId: 'scratch.note#20', viewId: 'scratch.note' },
+              { instanceId: 'files.tree#21', viewId: 'files.tree' },
+            ],
+            activeTab: 1,
+          },
+          rect: { x: 0, y: 0, w: 800, h: 900 },
+          restoreRect: { x: 120, y: 90, w: 640, h: 480 },
+          mode: 'normal',
+          snap: 'left',
+          z: 2,
+        },
+      ],
+      focusedWindowId: 'w40',
+    };
+    expect(deserialize(serialize(withWindow), KNOWN)).toEqual(withWindow);
+  });
+
+  it('drops a focusedWindowId that no longer names a window', () => {
+    const frame: FrameState = { ...seeded(), focusedWindowId: 'w-gone' };
+    expect(deserialize(serialize(frame), KNOWN)!.focusedWindowId).toBeNull();
   });
 });
 
@@ -123,19 +249,26 @@ describe('deserialize rejects non-frame blobs', () => {
 });
 
 describe('deserialize pruning', () => {
-  it('prunes panes with unknown views from tabs, docks, and floating', () => {
+  it('prunes panes with unknown views from tabs, docks, and windows', () => {
     const frame = seeded();
     const blob = JSON.parse(JSON.stringify(serialize(frame))) as Record<string, unknown>;
     const f = blob.frame as {
       center: { children: Array<{ tabs: Array<{ viewId: string }> }> };
       docks: { left: { tools: Array<{ viewId: string }> } };
-      floating: unknown[];
+      windows: unknown[];
     };
     f.center.children[0].tabs[1].viewId = 'ghost.pane';
     f.docks.left.tools[0].viewId = 'ghost.tool';
-    f.floating.push({
-      pane: { instanceId: 'ghost.float#9', viewId: 'ghost.float' },
-      rect: { x: 0.1, y: 0.1, w: 0.3, h: 0.3 },
+    f.windows.push({
+      id: 'w90',
+      area: {
+        kind: 'area',
+        id: 'a91',
+        tabs: [{ instanceId: 'ghost.win#9', viewId: 'ghost.win' }],
+        activeTab: 0,
+      },
+      rect: { x: 10, y: 10, w: 300, h: 300 },
+      mode: 'normal',
       z: 1,
     });
     const back = deserialize(blob, KNOWN)!;
@@ -143,7 +276,9 @@ describe('deserialize pruning', () => {
     expect(area.tabs).toHaveLength(1);
     expect(back.docks.left.tools).toHaveLength(0);
     expect(back.docks.left.visible).toBe(false);
-    expect(back.floating).toHaveLength(0);
+    // The whole window goes, not just its tab — a titlebar with nothing under it
+    // is not a state the running app can produce.
+    expect(back.windows).toHaveLength(0);
   });
 
   it('prunes unknown region views and repairs activeView', () => {

@@ -10,6 +10,7 @@ import type {
   AgentCommandDecl,
   AgentContextSnapshot,
   AgentToolDecl,
+  BackdropDecl,
   CollabDecl,
   CommandDecl,
   DockSide,
@@ -32,6 +33,7 @@ export type {
   AgentCommandDecl,
   AgentContextSnapshot,
   AgentToolDecl,
+  BackdropDecl,
   CollabDecl,
   CommandDecl,
   DockSide,
@@ -79,6 +81,8 @@ export interface ModuleManifest {
   widgets?: WidgetDecl[];
   /** Predefined full-frame workspaces (center tree + docks). */
   frames?: FramePreset[];
+  /** Backdrops this module offers a desktop. See `BackdropDecl`. */
+  backdrops?: BackdropDecl[];
   keybindings?: KeybindingDecl[];
   settings?: SettingDecl[];
   settingsSections?: SettingsSectionDecl[];
@@ -97,8 +101,20 @@ export interface ModuleManifest {
   contextMenu?: ContextMenuProvider[];
 }
 
-/** Top-level shell surfaces. `home` is the first-open view; `workspace` hosts panels. */
-export type ShellView = 'home' | 'workspace';
+/**
+ * Top-level shell surfaces.
+ *
+ * There is exactly **one** main surface: `desktop`. `boot` and `oobe` are the
+ * states before you reach it.
+ *
+ * Both of the old views are gone, for the same reason. `workspace` was not a
+ * surface at all — a desktop IS a workspace, and whether it shows the tiling
+ * frame or free windows is that desktop's `mode`, so making it a view meant one
+ * fact had two homes that could disagree. `home` was a second landing screen
+ * competing with the desktop for the same job; it survives as the `splash`
+ * **backdrop**, which is strictly more useful, since windows can float over it.
+ */
+export type ShellView = 'boot' | 'oobe' | 'desktop';
 
 /** An active pane instance in the workspace layout. */
 export interface OpenPaneInfo {
@@ -261,7 +277,16 @@ class ModuleRegistry {
         });
       }
     }
-    return [...openers, ...sections, ...toggles, ...picks.values()];
+    // One switch command per registered backdrop, synthesized rather than
+    // declared for the same reason the pane openers are: a plugin contributes a
+    // provider and its command exists, with nobody maintaining a second list
+    // that can fall out of step with the first.
+    const backdrops: CommandDecl[] = this.backdrops.map((b) => ({
+      id: `desktop.backdrop:${b.id}`,
+      title: `Desktop: Use the ${b.title} backdrop`,
+      run: () => frameCommandHandler()?.applyBackdrop(b.id),
+    }));
+    return [...openers, ...sections, ...toggles, ...picks.values(), ...backdrops];
   }
 
   get panels(): PanelDecl[] {
@@ -312,6 +337,21 @@ class ModuleRegistry {
   /** Predefined full-frame workspaces, in module registration order. */
   get framePresets(): FramePreset[] {
     return [...this.modules.values()].flatMap((m) => m.frames ?? []);
+  }
+
+  /** Every contributed desktop backdrop, in module registration order. */
+  get backdrops(): BackdropDecl[] {
+    return [...this.modules.values()].flatMap((m) => m.backdrops ?? []);
+  }
+
+  /**
+   * Look up one backdrop by id. Returns undefined for an id whose provider is
+   * not registered — a desktop saved against a plugin that has since been
+   * uninstalled. The caller falls back rather than blanking the desktop, since
+   * a missing wallpaper is not a reason to lose the windows on top of it.
+   */
+  backdrop(id: string): BackdropDecl | undefined {
+    return this.backdrops.find((b) => b.id === id);
   }
 
   get keybindings(): KeybindingDecl[] {

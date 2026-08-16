@@ -45,19 +45,62 @@ export { onSocketOpen, sendChannel, subscribeChannel, type WsMessage } from './w
 // registry / controller, never the store directly).
 export { layoutStore } from './layout/store';
 export type { LayoutAction } from './layout/actions';
-export { findArea, firstArea, listPanes, MIN_FRACTION } from './layout/model';
+export {
+  findArea,
+  findAreaAnywhere,
+  findPaneAnywhere,
+  findWindow,
+  firstArea,
+  listPanes,
+  MIN_FRACTION,
+} from './layout/model';
+export {
+  arrangeWindows,
+  cascadeRect,
+  clampRect,
+  DEFAULT_SNAP,
+  MIN_WINDOW_SIZE,
+  rectForZone,
+  rescaleRect,
+  snapZoneAt,
+  TITLEBAR_KEEP,
+  type ArrangeStyle,
+  type SnapConfig,
+} from './layout/snap';
+export { explodeToWindows, NOMINAL_VIEWPORT, tileWindows } from './layout/windows';
 export { hideRailView, moveViewToDock, railEntries, RAIL_SECTIONS } from './layout/rail';
+export { taskbarEntries } from './layout/taskbar';
+export type { TaskbarEntry, TaskbarState } from './layout/taskbar';
 export type { RailEntry, RailSide, RailState } from './layout/rail';
 export { getRailPrefs, railPrefsStore, resetRailPrefs, setViewHidden } from './layout/rail-prefs';
 export type { RailPrefs } from './layout/rail-prefs';
 export { dropPaneOnArea, dropPaneOnTab, paneDrag } from './layout/drag';
 export type { DragPayload } from './layout/drag';
+export { DEFAULT_BACKDROP } from './layout/types';
+export {
+  parseSpotlightQuery,
+  spotlightResults,
+  type SpotlightAction,
+  type SpotlightItem,
+  type SpotlightKind,
+} from './spotlight';
+export {
+  KEYMAP_PRESET_KEY,
+  KEYMAP_PRESETS,
+  presetBindings,
+  type KeymapPreset,
+} from './keymap/presets';
 export { matchCommands, minibuffer, resolveCommand } from './minibuffer';
 export type { MinibufferState } from './minibuffer';
 export type {
   AreaNode,
   DockState,
-  FloatingPane,
+  BackdropRef,
+  DesktopMode,
+  SnapZone,
+  WindowMode,
+  WindowRect,
+  WindowState,
   FrameState,
   LayoutNode,
   LayoutStoreState,
@@ -99,6 +142,23 @@ export {
   roleOf,
   sectionsOf,
   setCenterMeasurer,
+  activateTaskbarEntry,
+  arrangeDesktop,
+  cycleWindows,
+  desktopViewport,
+  focusWindow,
+  focusWindowDirection,
+  moveWindowToDesktop,
+  movePaneTo,
+  setBackdrop,
+  setDesktopMeasurer,
+  setDesktopMode,
+  setPaneWindowed,
+  setWindowMode,
+  snapWindow,
+  toggleDesktopMode,
+  toggleWindowMaximized,
+  toggleWindowMinimized,
   setPaneSection,
   setRegionView,
   splitAreaBy,
@@ -131,6 +191,7 @@ export {
   useAgentContext,
 } from './agent-context';
 export { backendHealth, type BackendHealth } from './health';
+export { bootFailed, bootReady, bootStep, bootStore, type BootPhase, type BootState } from './boot';
 export { PaneParamsContext, usePaneParams, type PaneParams } from './panes';
 export { recordClientIo, telemetryStore, type IoEvent, type IoSource } from './telemetry';
 export {
@@ -160,6 +221,7 @@ export {
   type AgentCommandDecl,
   type AgentContextSnapshot,
   type AgentToolDecl,
+  type BackdropDecl,
   type CommandDecl,
   type DockSide,
   type JSONSchema,
@@ -297,7 +359,7 @@ export { llamacppModule } from './modules/llamacpp';
 export { observabilityModule } from './modules/observability';
 export { marketplaceModule } from './modules/marketplace';
 export { settingsModule } from './modules/settings';
-export { keymapModule } from './modules/keymap';
+export { initKeymapPreset, keymapModule } from './modules/keymap';
 export { hassaultModule } from './modules/hassault';
 export {
   socialModule,

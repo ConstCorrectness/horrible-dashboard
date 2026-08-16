@@ -15,7 +15,8 @@ flowchart TB
     subgraph Shell["Layout shell (packages/ui)"]
         direction LR
         WS["Frame<br/>tabs · rail · docks · areas"]
-        CP["Command palette"]
+        WL["Window layer<br/>free windows over the desktop"]
+        CP["Spotlight"]
         SB["Status bar"]
         KB["Keybinding service"]
     end
@@ -26,7 +27,7 @@ flowchart TB
 
 ## Implementation status
 
-Implemented: module registry, command palette (Ctrl+K), keybinding service
+Implemented: module registry, spotlight (Ctrl+K), keybinding service
 (`mod+` prefix), capability service, and both entries (`apps/web` on port 5173
 proxying `/api` and `/ws` to the backend on port 8000; `apps/desktop` Tauri shell
 loading the same dev server). The shared `/ws` socket is consumed via a single
@@ -38,14 +39,36 @@ channel that drives the agent orchestrator (see
 is a bidirectional router: telemetry pushes outbound while one receive loop
 dispatches inbound channel messages.
 
-The shell has two top-level **views** (switched by the shell's own
-`shell.home` / `shell.workspace` commands):
+The shell has exactly **one** main view. `ShellView` is `'boot' | 'oobe' |
+'desktop'`, and the first two are the states before you arrive at it.
 
-- **`home`** — the default on open: a minimal centered surface (3D
-  dashboard-friend avatar, greeting, ask bar streaming from the local model) that
-  hosts agent onboarding until a local model is configured (see
-  `docs/modules/agent-chat.md`). Modeled on chat-first launchers, deliberately
-  free of workspace chrome. The avatar (`packages/core/src/Avatar3D.tsx` — moved
+That is a change from the original two-view design, and the two views it replaced
+were both removed for the same reason:
+
+- **`workspace` was never a surface.** A desktop *is* a workspace, and whether it
+  shows the tiling frame or free-floating windows is that desktop's `mode`. Making
+  it a view meant one fact had two homes that could disagree, and flipping paradigm
+  became a navigation instead of a property change. The desktop view renders the
+  backdrop always, with the tiling frame mounted opaquely over it while
+  `frame.mode === 'tiling'` — so a flip is a mount, not a route change.
+- **`home` was a second landing screen** competing with the desktop for the same
+  job. It survives as the `splash` **backdrop** — same avatar, greeting and ask bar,
+  now with windows able to float over it. `shell.home` still exists and still means
+  "take me to the landing surface"; the destination is now the desktop.
+
+Installing the layout engine is correspondingly a **shell** job rather than the
+frame's: `packages/ui/src/layout/install.ts` installs the LayoutController, binds the
+autosave, registers the `frame` module's commands and hydrates the active workspace.
+That used to live in `Frame.tsx`'s mount effect, which worked only while the frame
+was the only place you could be — once the desktop became the landing surface a
+fresh boot installed none of it, and every one of those failures was silent.
+
+See [desktop-shell.mdx](desktop-shell.mdx) for the desktop, its backdrops, the
+taskbar and the boot flow.
+
+The two things that survived from the old `home` view:
+
+- The avatar (`packages/core/src/Avatar3D.tsx` — moved
   to core so feature modules like the agent chat pane can use it too) is a
   rigged glTF character (`/my-avatar.glb`) loaded with three's `GLTFLoader`,
   with pointer-tracking. It expresses the agent's **emotional mood** as a looping
@@ -55,9 +78,10 @@ The shell has two top-level **views** (switched by the shell's own
   selects the active one, cross-fading on change. Adding a mood is one `.glb`
   plus one line in the map. Orbiting the avatar is **Dashy**, the dashboard
   mascot — a cute glowing orb with eyes that face the viewer, whose glow doubles
-  as the agent status light. three is dynamically imported so the workspace view
-  never loads it.
-- **`workspace`** — the **frame**: a hybrid VS Code/Blender layout engine.
+  as the agent status light. three is dynamically imported so a desktop not
+  showing the `splash` backdrop never loads it.
+- The **frame** — a hybrid VS Code/Blender layout engine, now mounted only while
+  the active desktop is in tiling mode.
   Documents tab into a Blender-style center grid of splittable **areas**, tools
   live in three fixed **docks** behind VS Code-style **activity rails**, and
   widgets take areas of their own. Several **workflow workspaces** exist —
@@ -70,17 +94,25 @@ The shell has two top-level **views** (switched by the shell's own
 
 A persistent **workspace tab strip** across the top (home/logo at its left, one
 tab per workspace preset + a `＋` for custom ones) is the only chrome shared by
-both views — the single workspace switcher (Blender-style). Clicking a tab
-enters the workspace view and activates that workspace. Inside the workspace
-view, the frame adds an **activity rail down each side**, each driving the dock
+every desktop — the single workspace switcher (Blender-style). Clicking a tab
+activates that desktop. On a **tiling** desktop the frame adds an
+**activity rail down each side**, each driving the dock
 on that side (click opens a tool in its dock, click again hides the dock; the
-left rail also carries the bottom dock's tools and the command palette), and a
+left rail also carries the bottom dock's tools), and a
 **minibuffer** along the very bottom — status line when idle, `alt+x` for slash
 commands, and where `dialogs.prompt()` renders (see
 [windowing.mdx](windowing.mdx#the-minibuffer)).
-Individual panes are opened from the palette, a rail (tools), or each area's
-type switcher. The Frame stays mounted across view switches so its layout
-survives a trip home.
+Individual panes are opened from the spotlight, the start menu, a rail (tools), or
+each area's type switcher. On a **floating** desktop the rails and docks are not
+shown at all and `openPane` routes to a window instead — routing a tool to its dock
+there would open it somewhere the user cannot see.
+
+A **window layer** sits over the view as a sibling of it, not inside it, so
+free-floating windows are not clipped to the frame's center grid and do not vanish
+when the frame unmounts (`.shell-view[hidden]` is `display: none`). It is bounded by
+`.shell-content`, which keeps a window titlebar from sliding under the workspace strip
+and its Tauri drag region — and the taskbar sits outside `.shell-content`, so a
+maximized window cannot cover it. See [desktop-shell.mdx](desktop-shell.mdx).
 
 Branding: source art lives in `assets/` (`logo.svg`, `banner.svg`) —
 `pnpm build:icons` regenerates the web favicon (`apps/web/public/favicon.ico`,
@@ -98,10 +130,13 @@ placement comes from the panel declaration; the user can rearrange freely).
 
 Everything user-facing routes through two shell services:
 
-- **Command palette** — every module capability is a registered command
+- **Spotlight** (`mod+k`) — every module capability is a registered command
   (`module.verb` ids, e.g. `terminal.new`, `chat.focusInput`). Panels' buttons
-  invoke commands; the palette and keybindings invoke the same commands. This is
-  what keeps both layouts behaviorally identical.
+  invoke commands; the spotlight and keybindings invoke the same commands. This is
+  what keeps both layouts behaviorally identical. The spotlight also searches open
+  panes and falls through to the **agent** when nothing matches, so one keystroke
+  covers ask, run and open — see
+  [desktop-shell.mdx](desktop-shell.mdx#spotlight).
 - **Keybinding service** — maps keys to command ids, conditioned on the focused
   pane and on whether a pane has captured the keyboard. Modules declare defaults,
   the user can rebind anything, and on desktop it registers OS global shortcuts.
@@ -137,7 +172,7 @@ keymaps; this service is for registry command bindings.)
 | `mod+alt+j` | join the focused area with a neighbor |
 | `mod+b` / `mod+alt+b` / `mod+j` | toggle the left / right / bottom dock |
 | `mod+1..9` (desktop) · `alt+1..9` (browser) | switch workspace by position |
-| `mod+k` | command palette (a focused pane may shadow it — the terminal binds it to `terminal.clear`) |
+| `mod+k` | spotlight — ask, run a command, or jump to a pane (a focused pane may shadow it — the terminal binds it to `terminal.clear`) |
 | `alt+x` | minibuffer / M-x — slash commands (`override`, never shadowable) |
 | `mod+k mod+s` | Keyboard Shortcuts pane |
 
@@ -185,7 +220,7 @@ Shipped so far:
 - **`window.perWorkspace`** — a workspace tab's context menu gains **Open in new
   window**, which opens (or focuses) a second OS window via `window_open_workspace`.
   The new window is labelled `ws-<id>` and opens **detached**: `AppShell` drops the
-  workspace-switcher strip and home view for a slim draggable titlebar
+  workspace-switcher strip and the taskbar for a slim draggable titlebar
   (`DetachedTitlebar` — workspace name + window controls) over that one workspace's
   frame (rail + docks + center), Blender detached-area style. Its target workspace
   arrives via a Tauri **initialization-script** global
@@ -237,7 +272,8 @@ origin switch (`packages/core/src/origin.ts`, set once at boot via
   it on app exit. The frontend polls the `backend_status` Tauri command at boot
   and uses **absolute** http/ws URLs from then on — no Vite proxy in the loop,
   so dev and packaged builds exercise the same path. If the backend never comes
-  up, boot proceeds pluginless and the home view shows the backend-down hint.
+  up, boot proceeds pluginless; the boot splash records the failed step and the
+  taskbar's tray shows the backend as offline.
 
 A packaged desktop build has no repo checkout: the supervisor reports
 `unavailable`, which is the plug point for a future bundled/downloaded runtime

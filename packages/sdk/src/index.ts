@@ -12,6 +12,7 @@ export type {
   AgentCommandDecl,
   AgentContextSnapshot,
   AgentToolDecl,
+  BackdropDecl,
   Capability,
   CollabDecl,
   CommandDecl,

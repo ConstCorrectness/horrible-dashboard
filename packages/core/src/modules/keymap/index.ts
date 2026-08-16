@@ -3,6 +3,9 @@
  * the assistant read and edit bindings on the user's behalf ("I don't like this,
  * change Tab so it does X"). See docs/modules/keymap.mdx.
  */
+import { getSetting, settingsStore } from '../../settings';
+import { KEYMAP_PRESET_KEY, KEYMAP_PRESETS, presetBindings } from '../../keymap/presets';
+import { setKeymapPreset } from '../../keymap/state';
 import type { ModuleManifest } from '../../registry';
 import { registry } from '../../registry';
 import { keymapAgentTools } from './tools';
@@ -48,5 +51,26 @@ export const keymapModule: ModuleManifest = {
       type: 'number',
       default: 400,
     },
+    {
+      key: KEYMAP_PRESET_KEY,
+      title: 'Shortcut preset',
+      description: KEYMAP_PRESETS.map((p) => `${p.title}: ${p.description}`).join(' · '),
+      type: 'enum',
+      enumValues: KEYMAP_PRESETS.map((p) => p.id),
+      default: 'default',
+    },
   ],
 };
+
+/**
+ * Keep the resolver in step with the `keymap.preset` setting.
+ *
+ * Subscribed rather than read once at boot so switching preset takes effect on
+ * the next keystroke — a shortcut set that needs a restart to apply is one the
+ * user will conclude is broken.
+ */
+export function initKeymapPreset(): () => void {
+  const apply = () => setKeymapPreset(presetBindings(getSetting<string>(KEYMAP_PRESET_KEY)));
+  apply();
+  return settingsStore.subscribe(apply);
+}

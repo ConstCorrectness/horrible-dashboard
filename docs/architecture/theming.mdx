@@ -28,9 +28,68 @@ That pairing is the whole idea of `studio`, and it is fragile in one direction:
 brightening either the raised surface or the border collapses it back into
 `midnight`.
 
+The desktop shell added four more, each built around one idea rather than around a
+hue:
+
+| id | The idea |
+| --- | --- |
+| `glass` | Translucent chrome over the desktop backdrop. Real `backdrop-filter` blur on windows and the taskbar, large radii, and window controls on the **left**. |
+| `hud` | Terminal cyberpunk. Near-black, **every radius 0**, hairline accent borders, mono type in the chrome as well as the content, and a glow instead of a drop shadow — a dark theme's shadow on a dark ground is invisible. |
+| `daylight` | The light productivity theme: opaque surfaces, a faint cool tint, and elevation you can actually see because the ground is bright. |
+| `retro` | Beveled grey 90s chrome, square corners, hard offset shadows, and a teal desktop. |
+
+Three of those are worth pointing at, because each proves a rule rather than just
+picking colours.
+
+`hud` sets every radius to 0, which makes it the theme that **audits the radius
+tokens**: a component that hardcoded a `border-radius` is visible there and nowhere
+else.
+
+`daylight` and `retro` set `color-scheme: light`. That is not decoration — it is
+what flips native scrollbars, form controls and the caret. Without it a light theme
+keeps dark scrollbars and looks broken in exactly the places CSS cannot reach.
+`daylight` also has to invert `--accent-contrast` to white: on a light theme the
+accent is dark, and leaving that token alone is how every primary button loses its
+label. `--bg-inset` flips the same way — it is a *black* wash in the dark themes, and
+left alone a code block becomes a hole punched in the page.
+
+`retro` is the reason the OS-chrome bevel pair exists at all; see below.
+
+## The OS-chrome tokens
+
+Windows, the taskbar and the snap preview read **only** a `--win-*` / `--taskbar-*`
+group, so a theme restyles the entire desktop by redefining tokens and touching no
+component. `packages/ui/src/desktop/desktop.css` contains no per-theme branch.
+
+The group is **derived once**, in the alias block at the bottom of `themes.css`
+(`--win-bg: var(--bg-raised)`, `--win-radius: var(--radius-lg)`, and so on). A new
+theme therefore inherits a coherent desktop for free and overrides only what it
+actually wants to differ — which is what keeps the group from becoming a second
+palette every theme has to restate.
+
+Two of them carry more weight than the rest.
+
+**`--win-border-light` / `--win-border-dark` are a pair.** `desktop.css` always
+assigns all four window border colours from them. Set them to contrasting values and
+you get a raised bevel (`retro`); leave them equal and the bevel vanishes
+(everything else). One rule, two looks, no conditional anywhere.
+
+That pair is also why **nothing may set `border-color` on a window**. The shorthand
+overrides all four sides at once, which flattens the bevel — and it did, on the
+focused window, i.e. on the only window the user is looking at. Focus is carried by
+the titlebar (`--win-titlebar-bg-active`) and the shadow instead, which is the older
+and more universal convention anyway.
+
+**`--win-controls-order`** is a flex `order`: `1` puts the window controls after the
+title (Windows-style), `-1` before it (macOS-style, which `glass` uses). Control
+*placement* is layout rather than colour, so it is still a token and still not a
+JavaScript branch. It moves the group; it does not restyle the buttons into traffic
+lights, which would need a component fork.
+
 ## Selecting one
 
-Settings → Theme, or the command palette (`Theme: Midnight`, `Theme: Studio`). The
+Settings → Theme, the tray's ◐ button on the taskbar, the command palette, or the
+agent (`desktop.set_theme`, in the lazily-loaded `desktop` tool group). The
 choice is the `settings.theme` setting, so it persists server-side like any other
 override and follows the user to any browser pointed at the node.
 
@@ -43,8 +102,11 @@ correcting itself.
 1. Add a `:root[data-theme='<id>']` block to `themes.css` declaring the **full**
    primitive set. Copy an existing block — a missing primitive silently falls back
    to the default theme's value, which reads as a bug rather than as inheritance.
-2. Register it in `THEMES` in `theme.ts`. The settings enum and the palette
-   commands are both derived from that array, so there is nothing else to update.
+2. Register it in `THEMES` in `theme.ts`. The settings enum, the palette commands,
+   the taskbar's theme menu and the agent's `desktop.set_theme` catalog are all
+   derived from that array, so there is nothing else to update.
+3. Override only the `--win-*` / `--taskbar-*` tokens you want to differ. The rest
+   are derived from your primitives and will already look right.
 
 Do not add a primitive to one theme only. A token that exists in one theme and not
 another is a component that renders correctly under exactly one setting.

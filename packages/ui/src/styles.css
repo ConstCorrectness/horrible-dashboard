@@ -3056,6 +3056,60 @@ kbd {
   cursor: default;
 }
 
+/* --- spotlight ------------------------------------------------------------ */
+
+.spotlight-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spotlight-icon {
+  flex: 0 0 auto;
+  width: 1.1em;
+  text-align: center;
+}
+
+/* Open panes read as the concrete things they are; commands stay quieter, since
+   there are hundreds of them and only a handful of panes. */
+.palette li.spotlight-pane .spotlight-title {
+  color: var(--text-strong);
+}
+
+.palette li.spotlight-command {
+  color: var(--text);
+}
+
+.palette li.spotlight-agent {
+  color: var(--text-strong);
+  border-top: 1px solid var(--border);
+  margin-top: 2px;
+  padding-top: 0.55rem;
+  border-radius: 0 0 6px 6px;
+}
+
+.spotlight-answer {
+  padding: 0.75rem 1rem 1rem;
+  overflow: auto;
+}
+
+.spotlight-asked {
+  margin: 0 0 0.5rem;
+  color: var(--text-dim);
+  font-size: 0.85em;
+}
+
+.spotlight-reply {
+  color: var(--text);
+  font-size: 0.95em;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
 /* Dashboard */
 .dashboard-toolbar {
   display: flex;

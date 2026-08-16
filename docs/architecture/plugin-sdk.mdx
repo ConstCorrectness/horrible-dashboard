@@ -42,7 +42,7 @@ export default definePlugin({
       settings: [{ key: 'my-plugin.size', title: 'Size', type: 'number', default: 5 }],
       // A browser inside the Explorer pane, rather than a pane of its own.
       explorerSources: [{ id: 'my-plugin.stuff', label: 'Stuff', component: Browser }],
-      // panels?, keybindings? — same shapes built-in modules use
+      // panels?, keybindings?, backdrops? — same shapes built-in modules use
     };
   },
 });
@@ -54,6 +54,13 @@ export default definePlugin({
 - **Namespacing is enforced:** every contributed command/panel/widget id **and
   setting key** must start with `<pluginId>.` — the loader rejects the plugin
   otherwise.
+- **`backdrops`** contribute a desktop backdrop (`BackdropDecl` — an id, a title
+  and a component taking that desktop's stored `params`). It is a first-class
+  registry collection, so a plugin's backdrop appears in the desktop's right-click
+  menu, the first-run picker and the agent's `desktop.set_backdrop` catalog with no
+  further registration — and its `desktop.backdrop:<id>` command is synthesized, so
+  there is no second list to keep in step. See
+  [desktop-shell.mdx](desktop-shell.mdx#backdrops).
 - **`explorerSources`** is the one place a contribution lands inside *someone
   else's* pane: a tab in [Explorer](../modules/explorer.mdx), beside Files and
   Notebooks. It exists so a plugin that wants to let you browse something does not

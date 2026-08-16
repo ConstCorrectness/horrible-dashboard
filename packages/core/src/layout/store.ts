@@ -9,9 +9,11 @@
  */
 import type { LayoutAction } from './actions';
 import {
+  areaId,
   areaOfInstance,
   createEmptyFrame,
   findArea,
+  findAreaAnywhere,
   findPaneAnywhere,
   insertPane,
   joinArea,
@@ -22,9 +24,60 @@ import {
   setActiveTab,
   setSplitSizes,
   splitArea,
+  updateAreaAnywhere,
   updatePaneAnywhere,
+  windowId,
 } from './model';
-import type { AreaNode, DockSide, FrameState, LayoutStoreState } from './types';
+import { cascadeRect, clampRect, rectForZone, rescaleRect } from './snap';
+import { explodeToWindows, NOMINAL_VIEWPORT, tileWindows } from './windows';
+import type {
+  AreaNode,
+  DockSide,
+  FrameState,
+  LayoutNode,
+  LayoutStoreState,
+  SnapZone,
+  WindowRect,
+  WindowState,
+} from './types';
+
+/**
+ * Apply a center-tree editor to whichever host owns `areaId` — the center tree, or a
+ * window's area.
+ *
+ * The tree editors in model.ts take *any* `LayoutNode` as their root and signal "no
+ * such area" by returning null, and a window's bare `AreaNode` is a valid root. So the
+ * identical function that retabs a center area retabs a window, and window tabs need
+ * no second implementation to fall out of step with the first.
+ */
+function editArea(
+  frame: FrameState,
+  areaId: string,
+  edit: (root: LayoutNode) => LayoutNode | null,
+): FrameState | null {
+  const center = edit(frame.center);
+  if (center) return { ...frame, center };
+  const win = frame.windows.find((w) => w.area.id === areaId);
+  if (!win) return null;
+  const next = edit(win.area);
+  if (!next || next.kind !== 'area') return null;
+  return {
+    ...frame,
+    windows: frame.windows.map((w) => (w === win ? { ...w, area: next } : w)),
+  };
+}
+
+/** The next z, with the stack renormalized to 1..n so it can't grow without bound. */
+function raiseToFront(windows: WindowState[], id: string): WindowState[] {
+  const ordered = [...windows].sort((a, b) => a.z - b.z);
+  const rest = ordered.filter((w) => w.id !== id);
+  const target = ordered.find((w) => w.id === id);
+  if (!target) return windows;
+  const z = new Map<string, number>();
+  rest.forEach((w, i) => z.set(w.id, i + 1));
+  z.set(id, rest.length + 1);
+  return windows.map((w) => (w.z === z.get(w.id) ? w : { ...w, z: z.get(w.id)! }));
+}
 
 function reduceFrame(frame: FrameState, action: LayoutAction): FrameState {
   switch (action.type) {
@@ -32,11 +85,18 @@ function reduceFrame(frame: FrameState, action: LayoutAction): FrameState {
       return action.frame;
 
     case 'INSERT_PANE': {
-      const center = insertPane(frame.center, action.areaId, action.pane, {
-        activate: action.activate,
-      });
-      if (!center) return frame;
-      return { ...frame, center, paneSeq: frame.paneSeq + 1, focusedAreaId: action.areaId };
+      const next = editArea(frame, action.areaId, (root) =>
+        insertPane(root, action.areaId, action.pane, { activate: action.activate }),
+      );
+      if (!next) return frame;
+      return {
+        ...next,
+        paneSeq: frame.paneSeq + 1,
+        // Only a center area can be the focused area; inserting into a window's
+        // tab strip must not repoint the area verbs at something that isn't in
+        // the center tree.
+        focusedAreaId: findArea(next.center, action.areaId) ? action.areaId : frame.focusedAreaId,
+      };
     }
 
     case 'REMOVE_PANE': {
@@ -64,13 +124,21 @@ function reduceFrame(frame: FrameState, action: LayoutAction): FrameState {
     }
 
     case 'SET_ACTIVE_TAB': {
-      const center = setActiveTab(frame.center, action.areaId, action.index);
-      return center ? { ...frame, center, focusedAreaId: action.areaId } : frame;
+      const next = editArea(frame, action.areaId, (root) =>
+        setActiveTab(root, action.areaId, action.index),
+      );
+      if (!next) return frame;
+      return {
+        ...next,
+        focusedAreaId: findArea(next.center, action.areaId) ? action.areaId : frame.focusedAreaId,
+      };
     }
 
     case 'REORDER_TAB': {
-      const center = reorderTab(frame.center, action.areaId, action.from, action.to);
-      return center ? { ...frame, center } : frame;
+      const next = editArea(frame, action.areaId, (root) =>
+        reorderTab(root, action.areaId, action.from, action.to),
+      );
+      return next ?? frame;
     }
 
     case 'SET_PANE_VIEW': {
@@ -198,14 +266,13 @@ function reduceFrame(frame: FrameState, action: LayoutAction): FrameState {
     }
 
     case 'SET_HEADER_COLLAPSED': {
-      let found = false;
-      const center = ((): FrameState['center'] | null => {
-        const area = findArea(frame.center, action.areaId);
-        if (!area || (area.headerCollapsed ?? false) === action.collapsed) return null;
-        found = true;
-        return replaceArea(frame.center, area, { ...area, headerCollapsed: action.collapsed });
-      })();
-      return found && center ? { ...frame, center } : frame;
+      const found = findAreaAnywhere(frame, action.areaId);
+      if (!found || (found.area.headerCollapsed ?? false) === action.collapsed) return frame;
+      const next = updateAreaAnywhere(frame, action.areaId, (area) => ({
+        ...area,
+        headerCollapsed: action.collapsed,
+      }));
+      return next ?? frame;
     }
 
     case 'SET_DOCK': {
@@ -317,77 +384,238 @@ function reduceFrame(frame: FrameState, action: LayoutAction): FrameState {
       };
     }
 
-    case 'FLOAT_PANE': {
+    case 'WINDOW_FROM_PANE': {
       const located = findPaneAnywhere(frame, action.instanceId);
-      if (!located || located.location.kind === 'floating') return frame;
+      // Already alone in its own window — popping it out again is a no-op rather
+      // than a second window holding the same pane.
+      if (!located) return frame;
+      const from = located.location;
+      if (from.kind === 'window') {
+        const win = frame.windows.find((w) => w.id === from.windowId);
+        if (win && win.area.tabs.length === 1) return frame;
+      }
       const res = removePaneAnywhere(frame, action.instanceId);
       if (!res) return frame;
-      const z = Math.max(0, ...res.frame.floating.map((f) => f.z)) + 1;
+      const viewport = frame.windowViewport ?? NOMINAL_VIEWPORT;
+      const id = windowId(res.frame.paneSeq);
+      const area: AreaNode = {
+        kind: 'area',
+        id: areaId(res.frame.paneSeq + 1),
+        tabs: [res.removed],
+        activeTab: 0,
+      };
+      const rect = clampRect(
+        action.rect ?? cascadeRect(res.frame.windows.length, viewport),
+        viewport,
+      );
       return {
         ...res.frame,
-        floating: [
-          ...res.frame.floating,
-          { pane: res.removed, rect: action.rect ?? { x: 0.2, y: 0.15, w: 0.5, h: 0.55 }, z },
+        // Two ids minted (the window and its area), so the counter moves by two.
+        paneSeq: res.frame.paneSeq + 2,
+        windows: [
+          ...res.frame.windows,
+          { id, area, rect, mode: 'normal', z: res.frame.windows.length + 1 },
         ],
+        focusedWindowId: id,
       };
     }
 
-    case 'DOCK_FLOATING': {
-      const float = frame.floating.find((f) => f.pane.instanceId === action.instanceId);
-      if (!float) return frame;
+    case 'DOCK_WINDOW': {
+      const win = frame.windows.find((w) => w.id === action.windowId);
+      if (!win) return frame;
       const targetId = action.areaId ?? frame.focusedAreaId;
       if (!targetId || !findArea(frame.center, targetId)) return frame;
-      const center = insertPane(frame.center, targetId, float.pane);
-      if (!center) return frame;
+      let center: LayoutNode | null = frame.center;
+      // Every tab comes back, not just the active one: a window is its area, and
+      // silently dropping its background tabs would lose the user's panes.
+      for (const tab of win.area.tabs) {
+        const next: LayoutNode | null = insertPane(center, targetId, tab, { activate: false });
+        if (next) center = next;
+      }
+      if (center === frame.center) return frame;
       return {
         ...frame,
         center,
-        floating: frame.floating.filter((f) => f !== float),
+        windows: frame.windows.filter((w) => w !== win),
         focusedAreaId: targetId,
+        focusedWindowId: frame.focusedWindowId === win.id ? null : frame.focusedWindowId,
       };
     }
 
-    case 'SET_FLOATING_RECT': {
-      const floating = frame.floating.map((f) =>
-        f.pane.instanceId === action.instanceId ? { ...f, rect: action.rect } : f,
-      );
-      return { ...frame, floating };
-    }
-
-    case 'BRING_FLOATING_FRONT': {
-      const target = frame.floating.find((f) => f.pane.instanceId === action.instanceId);
-      if (!target) return frame;
-      const top = Math.max(...frame.floating.map((f) => f.z));
-      if (target.z === top) return frame;
+    case 'SET_WINDOW_RECT': {
+      const win = frame.windows.find((w) => w.id === action.windowId);
+      if (!win) return frame;
+      // Clamping lives here rather than in the pointer handler so that a rect
+      // arriving from an agent tool obeys exactly the same rules as one dragged.
+      const rect = clampRect(action.rect, frame.windowViewport ?? NOMINAL_VIEWPORT);
+      if (sameRect(win.rect, rect) && !win.snap && win.mode === 'normal') return frame;
       return {
         ...frame,
-        floating: frame.floating.map((f) => (f === target ? { ...f, z: top + 1 } : f)),
+        windows: frame.windows.map((w) =>
+          w === win
+            ? // Moving or resizing by hand un-snaps and un-maximizes: the window is
+              // now wherever the user put it, and springing back later would be a
+              // ghost the user cannot explain.
+              { ...w, rect, mode: w.mode === 'minimized' ? w.mode : 'normal', snap: undefined }
+            : w,
+        ),
       };
+    }
+
+    case 'BRING_WINDOW_FRONT': {
+      const win = frame.windows.find((w) => w.id === action.windowId);
+      if (!win) return frame;
+      const windows = raiseToFront(frame.windows, action.windowId);
+      if (windows.every((w, i) => w === frame.windows[i])) return frame;
+      return { ...frame, windows };
+    }
+
+    case 'FOCUS_WINDOW': {
+      if (action.windowId !== null && !frame.windows.some((w) => w.id === action.windowId)) {
+        return frame;
+      }
+      if (frame.focusedWindowId === action.windowId) return frame;
+      return { ...frame, focusedWindowId: action.windowId };
+    }
+
+    case 'SET_WINDOW_MODE': {
+      const win = frame.windows.find((w) => w.id === action.windowId);
+      if (!win) return frame;
+      const viewport = action.viewport ?? frame.windowViewport ?? NOMINAL_VIEWPORT;
+      const next = ((): WindowState => {
+        if (action.mode === 'minimized') {
+          // Geometry untouched: restoring must return exactly where it was.
+          return { ...win, mode: 'minimized' };
+        }
+        if (action.mode === 'maximized' || action.snap) {
+          const zone: SnapZone = action.snap ?? 'max';
+          return {
+            ...win,
+            mode: action.mode === 'maximized' ? 'maximized' : 'normal',
+            snap: action.snap,
+            // Only capture a restore rect when leaving a free-floating state —
+            // maximizing an already-snapped window must not overwrite the rect it
+            // was originally dragged to.
+            restoreRect: win.snap || win.mode === 'maximized' ? win.restoreRect : win.rect,
+            rect: rectForZone(zone, viewport),
+          };
+        }
+        // 'normal': come back to the remembered rect, if there is one.
+        return {
+          ...win,
+          mode: 'normal',
+          snap: undefined,
+          rect: win.restoreRect ? clampRect(win.restoreRect, viewport) : win.rect,
+          restoreRect: undefined,
+        };
+      })();
+      return {
+        ...frame,
+        windows: raiseToFront(
+          frame.windows.map((w) => (w === win ? next : w)),
+          // A window being un-minimized comes to the front; one being minimized
+          // must not, or it would raise itself on the way out.
+          action.mode === 'minimized' ? '' : win.id,
+        ),
+      };
+    }
+
+    case 'MERGE_INTO_WINDOW': {
+      const target = frame.windows.find((w) => w.id === action.windowId);
+      if (!target) return frame;
+      const located = findPaneAnywhere(frame, action.instanceId);
+      if (!located) return frame;
+      if (located.location.kind === 'window' && located.location.windowId === target.id) {
+        return frame;
+      }
+      const res = removePaneAnywhere(frame, action.instanceId);
+      if (!res) return frame;
+      // Re-find: removing the pane may have closed the source window, and could in
+      // principle have been the target itself.
+      const host = res.frame.windows.find((w) => w.id === action.windowId);
+      if (!host) return frame;
+      const merged = insertPane(host.area, host.area.id, res.removed);
+      if (!merged || merged.kind !== 'area') return frame;
+      const reordered =
+        action.index === undefined
+          ? merged
+          : ((reorderTab(merged, merged.id, merged.tabs.length - 1, action.index) ??
+              merged) as AreaNode);
+      return {
+        ...res.frame,
+        windows: res.frame.windows.map((w) => (w.id === host.id ? { ...w, area: reordered } : w)),
+        focusedWindowId: host.id,
+      };
+    }
+
+    case 'SET_WINDOW_VIEWPORT': {
+      const { viewport } = action;
+      if (viewport.w <= 0 || viewport.h <= 0) return frame;
+      const from = frame.windowViewport;
+      if (from && from.w === viewport.w && from.h === viewport.h) return frame;
+      if (!from) return { ...frame, windowViewport: viewport };
+      return {
+        ...frame,
+        windowViewport: viewport,
+        windows: frame.windows.map((w) => {
+          // A snapped or maximized window re-derives its rect from the zone rather
+          // than being scaled: half of the new surface is exactly half, where a
+          // scaled rect would be off by the rounding of the old one.
+          const zone: SnapZone | null = w.snap ?? (w.mode === 'maximized' ? 'max' : null);
+          const rect = zone
+            ? rectForZone(zone, viewport)
+            : clampRect(rescaleRect(w.rect, from, viewport), viewport);
+          return {
+            ...w,
+            rect,
+            restoreRect: w.restoreRect ? rescaleRect(w.restoreRect, from, viewport) : undefined,
+          };
+        }),
+      };
+    }
+
+    case 'SET_DESKTOP_MODE': {
+      if (frame.mode === action.mode) return frame;
+      const next =
+        action.mode === 'floating'
+          ? explodeToWindows(frame, action.viewport)
+          : tileWindows(frame, action.dockFor ?? {});
+      return { ...next, mode: action.mode };
+    }
+
+    case 'SET_BACKDROP': {
+      const { backdrop } = action;
+      if (
+        frame.backdrop.id === backdrop.id &&
+        JSON.stringify(frame.backdrop.params ?? null) === JSON.stringify(backdrop.params ?? null)
+      ) {
+        return frame;
+      }
+      return { ...frame, backdrop };
     }
   }
 }
 
-/** Swap one known area node for another (identity-based, used for tiny patches). */
-function replaceArea(
-  root: FrameState['center'],
-  from: AreaNode,
-  to: AreaNode,
-): FrameState['center'] {
-  if (root === from) return to;
-  if (root.kind === 'area') return root;
-  return { ...root, children: root.children.map((c) => replaceArea(c, from, to)) };
+function sameRect(a: WindowRect, b: WindowRect): boolean {
+  return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
 }
 
 /**
- * Drop `focusedInstanceId` when it no longer names a live pane. Done here, once,
- * after every action rather than inside each closing verb — REMOVE_PANE,
- * JOIN_AREA and RETARGET_PANE can all orphan it, and a missed case would leave
- * pane-scoped keybindings resolving against a pane that isn't on screen.
+ * Drop `focusedInstanceId`/`focusedWindowId` when they no longer name live things.
+ * Done here, once, after every action rather than inside each closing verb —
+ * REMOVE_PANE, JOIN_AREA, RETARGET_PANE, DOCK_WINDOW and the mode switch can all
+ * orphan one, and a missed case would leave pane-scoped keybindings resolving
+ * against a pane that isn't on screen.
  */
 function sanitizeFocus(frame: FrameState): FrameState {
-  if (!frame.focusedInstanceId) return frame;
-  if (findPaneAnywhere(frame, frame.focusedInstanceId)) return frame;
-  return { ...frame, focusedInstanceId: null };
+  let next = frame;
+  if (next.focusedInstanceId && !findPaneAnywhere(next, next.focusedInstanceId)) {
+    next = { ...next, focusedInstanceId: null };
+  }
+  if (next.focusedWindowId && !next.windows.some((w) => w.id === next.focusedWindowId)) {
+    next = { ...next, focusedWindowId: null };
+  }
+  return next;
 }
 
 function reduce(state: LayoutStoreState, action: LayoutAction): LayoutStoreState {
@@ -401,6 +629,11 @@ function reduce(state: LayoutStoreState, action: LayoutAction): LayoutStoreState
   }
   const frame = sanitizeFocus(reduceFrame(state.frame, action));
   if (frame === state.frame) return state;
+  // A viewport change is a *projection* of the same layout onto a differently
+  // sized surface, not a user edit. Bumping `revision` for it would make every
+  // browser resize dirty the workspace, and the 600ms autosave debounce would
+  // turn a slow window-drag of the app edge into a continuous stream of PUTs.
+  if (action.type === 'SET_WINDOW_VIEWPORT') return { ...state, frame };
   return { ...state, frame, revision: state.revision + 1 };
 }
 

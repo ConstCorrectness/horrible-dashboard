@@ -14,6 +14,8 @@ export interface FrameCommandHandler {
   pickView(regionViewId: string): void;
   /** Show `section` on the focused instance of `hostViewId`, opening it if needed. */
   revealSection(section: string, hostViewId: string): void;
+  /** Put a registered backdrop on the active desktop, dropping the old params. */
+  applyBackdrop(backdropId: string): void;
 }
 
 let handler: FrameCommandHandler | null = null;

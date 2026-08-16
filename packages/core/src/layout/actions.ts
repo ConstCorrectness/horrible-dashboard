@@ -7,6 +7,8 @@
  */
 import type {
   AreaSplitDirection,
+  BackdropRef,
+  DesktopMode,
   DockSide,
   DockState,
   FrameState,
@@ -14,6 +16,9 @@ import type {
   PaneState,
   RegionPosition,
   RegionState,
+  SnapZone,
+  WindowMode,
+  WindowRect,
 } from './types';
 
 export type LayoutAction =
@@ -91,16 +96,65 @@ export type LayoutAction =
    * width the user just chose.
    */
   | { type: 'SET_TOOL_SIZE'; side: DockSide; instanceId: string; size: number }
-  // Floating layer
+  // Windows (the desktop layer)
+  //
+  // Note what is NOT here: there are no window-tab actions. A window's content is an
+  // `AreaNode`, so `SET_ACTIVE_TAB`, `REORDER_TAB`, `INSERT_PANE` and
+  // `SET_HEADER_COLLAPSED` above address window tabs by area id already (they resolve
+  // through `findAreaAnywhere`). A parallel set would be the same code twice, and the
+  // copy would drift.
+  /**
+   * Pop a pane out of wherever it lives into its own window (the old `FLOAT_PANE`).
+   * `rect` is in pixels against `FrameState.windowViewport`; omitted, the window
+   * lands on a cascade so an agent that supplied no geometry still gets a usable box.
+   */
+  | { type: 'WINDOW_FROM_PANE'; instanceId: string; rect?: WindowRect }
+  /** Put a window's panes back into a center area (the old `DOCK_FLOATING`). */
+  | { type: 'DOCK_WINDOW'; windowId: string; areaId?: string }
+  | { type: 'SET_WINDOW_RECT'; windowId: string; rect: WindowRect }
+  | { type: 'BRING_WINDOW_FRONT'; windowId: string }
+  | { type: 'FOCUS_WINDOW'; windowId: string | null }
+  /**
+   * Minimize / maximize / restore / snap — deliberately ONE verb, so that
+   * `restoreRect` is written and consumed in a single place. Maximizing or snapping
+   * stores the current rect; `normal` reads it back and clears it. Minimizing leaves
+   * `rect` untouched (restoring returns exactly where it was) and does **not**
+   * unmount the pane.
+   */
   | {
-      type: 'FLOAT_PANE';
-      instanceId: string;
-      rect?: { x: number; y: number; w: number; h: number };
+      type: 'SET_WINDOW_MODE';
+      windowId: string;
+      mode: WindowMode;
+      snap?: SnapZone;
+      viewport?: { w: number; h: number };
     }
-  | { type: 'DOCK_FLOATING'; instanceId: string; areaId?: string }
+  /** Titlebar merge: move a pane into another window's tab strip (macOS/Win11). */
+  | { type: 'MERGE_INTO_WINDOW'; instanceId: string; windowId: string; index?: number }
+  /**
+   * The desktop surface was measured or resized: rescale every rect from
+   * `windowViewport` to `viewport` and record the new size.
+   *
+   * This must NOT mark the layout dirty — it is a projection of the same layout onto
+   * a different-sized surface, not a user edit. Bumping `revision` here would make
+   * every browser resize dirty the workspace and drive the 600ms autosave debounce
+   * into a continuous write loop.
+   */
+  | { type: 'SET_WINDOW_VIEWPORT'; viewport: { w: number; h: number } }
+  // Desktop
+  /**
+   * Flip this desktop between the tiling frame and free windows, rearranging the
+   * panes to match (see `explodeToWindows` / `tileWindows`).
+   *
+   * `dockFor` maps a view id to the dock it belongs in, so that tools going back to a
+   * tiling desktop return to their rail instead of landing in the grid. The caller
+   * resolves it from the registry and passes it in, because the reducer and the model
+   * are deliberately registry-free — the same arrangement `seedFromPreset` uses for
+   * `regionsFor`/`dockSizeFor`.
+   */
   | {
-      type: 'SET_FLOATING_RECT';
-      instanceId: string;
-      rect: { x: number; y: number; w: number; h: number };
+      type: 'SET_DESKTOP_MODE';
+      mode: DesktopMode;
+      viewport: { w: number; h: number };
+      dockFor?: Record<string, DockSide>;
     }
-  | { type: 'BRING_FLOATING_FRONT'; instanceId: string };
+  | { type: 'SET_BACKDROP'; backdrop: BackdropRef };

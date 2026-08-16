@@ -8,21 +8,51 @@
  * callers treat as "reseed from preset".
  */
 import type { SerializedLayout } from '../workspace';
-import { createDock, createEmptyFrame, findArea, firstArea, normalize } from './model';
+import {
+  areaId,
+  createDock,
+  createEmptyFrame,
+  findArea,
+  firstArea,
+  normalize,
+  windowId,
+} from './model';
+import { DEFAULT_BACKDROP } from './types';
 import type {
   AreaNode,
+  BackdropRef,
+  DesktopMode,
   DockSide,
   DockState,
-  FloatingPane,
   FrameState,
   LayoutNode,
   PaneState,
   RegionPosition,
   RegionState,
+  SnapZone,
+  WindowMode,
+  WindowRect,
+  WindowState,
 } from './types';
 
 export const FRAME_SCHEMA = 'horrible.frame';
-export const FRAME_VERSION = 1;
+/**
+ * v2 added the desktop shell: `floating[]` (fractions of the center grid) became
+ * `windows[]` (pixels against `windowViewport`), plus `mode` and `backdrop`.
+ *
+ * The guard in `deserialize` rejects a blob whose version is *higher* than this, so
+ * an older build reading a v2 blob reseeds from the preset — i.e. **downgrading
+ * discards the layout rather than corrupting it**. That is the intended trade; the
+ * alternative is an old build interpreting pixel rects as fractions and putting every
+ * window in the top-left few pixels.
+ */
+export const FRAME_VERSION = 2;
+
+const SNAP_ZONES = new Set(['left', 'right', 'top', 'bottom', 'tl', 'tr', 'bl', 'br', 'max']);
+/** Where a v2 window with an unreadable rect lands. */
+const DEFAULT_WINDOW_RECT: WindowRect = { x: 60, y: 48, w: 720, h: 480 };
+/** The v1 default, in the old fractional basis. */
+const LEGACY_RECT: WindowRect = { x: 0.2, y: 0.15, w: 0.5, h: 0.55 };
 
 const DOCK_SIDES: readonly DockSide[] = ['left', 'right', 'bottom'];
 const REGION_POSITIONS: readonly RegionPosition[] = ['left', 'right', 'bottom'];
@@ -200,8 +230,10 @@ export function deserialize(
       return null;
     };
 
+    // `w` joins `a`/`s`: window ids draw from the same counter, so a restored
+    // layout must not mint a window id that already exists.
     const trackNodeSeq = (id: string): void => {
-      const m = /^[as](\d+)$/.exec(id);
+      const m = /^[asw](\d+)$/.exec(id);
       if (m) maxSeq = Math.max(maxSeq, Number(m[1]));
     };
 
@@ -232,27 +264,87 @@ export function deserialize(
       };
     }
 
-    const floating: FloatingPane[] = (Array.isArray(src.floating) ? src.floating : [])
-      .map((f): FloatingPane | null => {
-        if (!f || typeof f !== 'object') return null;
-        const entry = f as Record<string, unknown>;
-        const pane = readPane(entry.pane);
-        if (!pane) return null;
-        const rect = entry.rect as Record<string, unknown> | undefined;
-        const num = (v: unknown, d: number): number =>
-          typeof v === 'number' && Number.isFinite(v) ? v : d;
+    const num = (v: unknown, d: number): number =>
+      typeof v === 'number' && Number.isFinite(v) ? v : d;
+    const readRect = (v: unknown, d: WindowRect): WindowRect => {
+      const r = v as Record<string, unknown> | undefined;
+      return { x: num(r?.x, d.x), y: num(r?.y, d.y), w: num(r?.w, d.w), h: num(r?.h, d.h) };
+    };
+
+    // v2 windows, or v1 `floating` migrated in. A v1 rect is a FRACTION of the old
+    // center grid, so it is read as-is and paired with a 1×1 `windowViewport`: the
+    // ordinary rescale-on-measure path then multiplies it up to real pixels on the
+    // first `SET_WINDOW_VIEWPORT`, with no migration-only code to get wrong.
+    const legacy = blob.version < 2;
+    const rawWindows = Array.isArray(src.windows)
+      ? src.windows
+      : legacy && Array.isArray(src.floating)
+        ? src.floating
+        : [];
+    const windows: WindowState[] = rawWindows
+      .map((w, index): WindowState | null => {
+        if (!w || typeof w !== 'object') return null;
+        const entry = w as Record<string, unknown>;
+        // v1: `{ pane, rect, z }`. v2: `{ id, area, rect, mode, snap, z }`.
+        const areaSrc = entry.area as Record<string, unknown> | undefined;
+        const tabs = (Array.isArray(areaSrc?.tabs) ? areaSrc.tabs : [entry.pane])
+          .map(readPane)
+          .filter((p): p is PaneState => p !== null);
+        // A window whose every tab named an uninstalled view is dropped whole,
+        // rather than left as a titlebar with nothing under it.
+        if (tabs.length === 0) return null;
+        // Generated ids are derived from the entry's index, not a shared counter:
+        // a legacy blob supplies neither id, and two entries that both carried a
+        // `z` would otherwise be handed the same one.
+        const base = maxSeq + 1 + index * 2;
+        const id = typeof entry.id === 'string' ? entry.id : windowId(base);
+        const aid = typeof areaSrc?.id === 'string' ? areaSrc.id : areaId(base + 1);
+        trackNodeSeq(id);
+        trackNodeSeq(aid);
+        const mode: WindowMode =
+          entry.mode === 'minimized' || entry.mode === 'maximized' ? entry.mode : 'normal';
+        const snap = SNAP_ZONES.has(entry.snap as string) ? (entry.snap as SnapZone) : undefined;
         return {
-          pane,
-          rect: {
-            x: clamp01(num(rect?.x, 0.2)),
-            y: clamp01(num(rect?.y, 0.15)),
-            w: Math.min(Math.max(num(rect?.w, 0.5), 0.1), 1),
-            h: Math.min(Math.max(num(rect?.h, 0.55), 0.1), 1),
+          id,
+          area: {
+            kind: 'area',
+            id: aid,
+            tabs,
+            activeTab: Math.min(Math.max(num(areaSrc?.activeTab, 0), 0), tabs.length - 1),
+            ...(areaSrc?.headerCollapsed === true ? { headerCollapsed: true } : {}),
           },
-          z: num(entry.z, 1),
+          rect: readRect(entry.rect, legacy ? LEGACY_RECT : DEFAULT_WINDOW_RECT),
+          ...(entry.restoreRect
+            ? { restoreRect: readRect(entry.restoreRect, DEFAULT_WINDOW_RECT) }
+            : {}),
+          mode,
+          ...(snap ? { snap } : {}),
+          z: num(entry.z, index + 1),
         };
       })
-      .filter((f): f is FloatingPane => f !== null);
+      .filter((w): w is WindowState => w !== null);
+
+    const rawViewport = src.windowViewport as Record<string, unknown> | undefined;
+    const windowViewport = legacy
+      ? // See above: unit basis, so old fractions become pixels on first measure.
+        windows.length > 0
+        ? { w: 1, h: 1 }
+        : null
+      : rawViewport && num(rawViewport.w, 0) > 0 && num(rawViewport.h, 0) > 0
+        ? { w: num(rawViewport.w, 0), h: num(rawViewport.h, 0) }
+        : null;
+
+    const mode: DesktopMode = src.mode === 'floating' ? 'floating' : 'tiling';
+    const backdropSrc = src.backdrop as Record<string, unknown> | undefined;
+    const backdrop: BackdropRef =
+      backdropSrc && typeof backdropSrc.id === 'string'
+        ? {
+            id: backdropSrc.id,
+            ...(backdropSrc.params && typeof backdropSrc.params === 'object'
+              ? { params: backdropSrc.params as Record<string, unknown> }
+              : {}),
+          }
+        : { id: DEFAULT_BACKDROP };
 
     const focusedAreaId =
       typeof src.focusedAreaId === 'string' && findArea(center, src.focusedAreaId)
@@ -272,13 +364,22 @@ export function deserialize(
     const focusedInstanceId =
       typeof src.focusedInstanceId === 'string' ? src.focusedInstanceId : null;
 
+    const focusedWindowId =
+      typeof src.focusedWindowId === 'string' && windows.some((w) => w.id === src.focusedWindowId)
+        ? src.focusedWindowId
+        : null;
+
     return {
       center,
       docks,
-      floating,
+      windows,
+      windowViewport,
+      mode,
+      backdrop,
       fullscreenAreaId,
       focusedAreaId,
       focusedInstanceId,
+      focusedWindowId,
       paneSeq,
     };
   } catch {
@@ -333,8 +434,4 @@ function renormalizeSizes(sizes: number[]): number[] {
 
 function clampSize(value: unknown, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 48 ? value : fallback;
-}
-
-function clamp01(value: number): number {
-  return Math.min(Math.max(value, 0), 0.95);
 }

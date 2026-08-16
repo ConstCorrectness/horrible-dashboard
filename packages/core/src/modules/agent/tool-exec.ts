@@ -8,24 +8,42 @@
  * the strips inside a pane. See docs/modules/agent-chat.md and docs/modules/repl.md.
  */
 import {
+  arrangeDesktop,
   describeLayout,
   fullscreenArea,
   joinAreaDirection,
   listOpenPanesDetailed,
   movePaneTo,
+  moveWindowToDesktop,
   openToolInDock,
   readPaneAgentContext,
   resizeAreaPx,
   resolveView,
   roleOf,
+  setBackdrop,
+  setDesktopMode,
   setPaneSection,
+  setPaneWindowed,
   setRegionView,
+  setWindowMode,
   showTarget,
+  snapWindow,
   splitAreaBy,
   toggleDock,
   toggleRegion,
 } from '../../layout/controller';
-import type { DockSide, NavDirection, RegionPosition } from '../../layout/types';
+import { windowOfInstance } from '../../layout/model';
+import { layoutStore } from '../../layout/store';
+import type {
+  DesktopMode,
+  DockSide,
+  NavDirection,
+  RegionPosition,
+  SnapZone,
+  WindowRect,
+} from '../../layout/types';
+import { applyTheme, isKnownTheme, THEME_SETTING_KEY } from '../../theme';
+import { getSetting, setSetting } from '../../settings';
 import { registry, type SplitDirection } from '../../registry';
 import { executeDynamicTool, serializeManifest } from './manifest';
 import { LAYOUT_VERBS, nearestToolNames } from './tool-names';
@@ -34,6 +52,46 @@ const SPLIT_DIRS: readonly SplitDirection[] = ['left', 'right', 'above', 'below'
 const NAV_DIRS: readonly NavDirection[] = ['left', 'right', 'up', 'down'];
 const DOCK_SIDES: readonly DockSide[] = ['left', 'right', 'bottom'];
 const REGION_POSITIONS: readonly RegionPosition[] = ['left', 'right', 'bottom'];
+const SNAP_ZONES: readonly SnapZone[] = [
+  'left',
+  'right',
+  'top',
+  'bottom',
+  'tl',
+  'tr',
+  'bl',
+  'br',
+  'max',
+];
+const ARRANGE_STYLES = ['grid', 'cascade', 'columns', 'rows'] as const;
+
+/**
+ * The taskbar config setting key.
+ *
+ * Duplicated from packages/ui rather than imported: core must not depend on ui.
+ * It is a string constant on a stored document, so the cost of the duplication
+ * is bounded and the alternative is a package cycle.
+ */
+const TASKBAR_SETTING_KEY = 'desktop.taskbar';
+
+/** A snap zone from the wire, or null - never a guess. */
+function resolveSnapZone(value: unknown): SnapZone | null {
+  const v = String(value);
+  return (SNAP_ZONES as readonly string[]).includes(v) ? (v as SnapZone) : null;
+}
+
+/**
+ * A pixel rect from the wire. Every field must be a finite number: a partial
+ * rect would place a window somewhere nobody asked for.
+ */
+function resolveRect(value: unknown): WindowRect | null {
+  if (!value || typeof value !== 'object') return null;
+  const r = value as Record<string, unknown>;
+  const nums = ['x', 'y', 'w', 'h'].map((k) => Number(r[k]));
+  return nums.every((n) => Number.isFinite(n))
+    ? { x: nums[0], y: nums[1], w: nums[2], h: nums[3] }
+    : null;
+}
 
 /**
  * Orientation aliases the agent may pass instead of a concrete side: `vertical`
@@ -144,17 +202,140 @@ export async function executeTool(name: string, args: Record<string, unknown>): 
     case 'move_pane': {
       const direction = args.direction != null ? resolveNavDirection(args.direction) : null;
       const areaId = args.areaId != null ? String(args.areaId) : undefined;
-      if (!areaId && !direction) {
-        return { error: `pass areaId, or direction (${NAV_DIRS.join(', ')})` };
+      // `edge` splits the destination and drops the pane into the new half. This
+      // is what closes the long-standing gap where a pane opened into the wrong
+      // place could not be moved beside another one at all — `move_pane` could
+      // only tab into an existing area or step to an adjacent one.
+      // Same vocabulary as `split_area` — including its `vertical`/`horizontal`
+      // aliases — so one concept has one spelling across the whole tool surface.
+      const edge = args.edge != null ? resolveSplitDirection(args.edge) : null;
+      if (args.edge != null && !edge) {
+        return { error: `edge must be one of ${SPLIT_DIRS.join(', ')}, vertical, or horizontal` };
       }
-      const ok = movePaneTo(String(args.instanceId), { areaId, direction: direction ?? undefined });
+      // `edge` counts as having named a destination. It is checked here rather
+      // than only alongside areaId/direction because `edge` ALONE is the natural
+      // call — "split where this pane already is" — and `movePaneTo` resolves the
+      // host from the pane's own area. Requiring a companion argument made the
+      // most useful form of the verb unreachable.
+      if (!areaId && !direction && !edge) {
+        return { error: `pass areaId, direction (${NAV_DIRS.join(', ')}), or edge` };
+      }
+      const ok = movePaneTo(String(args.instanceId), {
+        areaId,
+        direction: direction ?? undefined,
+        edge: edge ?? undefined,
+      });
       return ok ? { ok } : { error: 'unknown pane/area, or the move breaks area rules' };
     }
-    case 'float_pane':
-    case 'dock_pane': {
-      if (!lc) return { error: 'workspace not ready' };
-      const ok = lc.setPaneFloating(String(args.instanceId), name === 'float_pane');
-      return ok ? { ok } : { error: 'pane already in that state, or unknown instanceId' };
+    // ----------------------------------------------------------- windows
+    case 'open_window': {
+      const instanceId = String(args.instanceId);
+      if (!setPaneWindowed(instanceId, true)) {
+        return { error: 'already a window, or unknown instanceId' };
+      }
+      // Placement is applied after the window exists, so a bad snap/rect leaves
+      // an ordinary window rather than failing the whole call.
+      if (args.snap != null) {
+        const zone = resolveSnapZone(args.snap);
+        if (!zone) return { ok: true, warning: `unknown snap zone "${String(args.snap)}"` };
+        snapWindow(instanceId, zone);
+      } else if (args.rect != null) {
+        const rect = resolveRect(args.rect);
+        if (!rect) return { ok: true, warning: 'rect needs finite x, y, w and h' };
+        const win = windowOfInstance(layoutStore.getSnapshot().frame, instanceId);
+        if (win) layoutStore.dispatch({ type: 'SET_WINDOW_RECT', windowId: win.id, rect });
+      }
+      return { ok: true };
+    }
+    case 'dock_window': {
+      const ok = setPaneWindowed(String(args.instanceId), false);
+      return ok ? { ok } : { error: 'not a window, or unknown instanceId' };
+    }
+    case 'window_state': {
+      const instanceId = String(args.instanceId);
+      switch (String(args.state)) {
+        case 'minimize':
+          return { ok: setWindowMode(instanceId, 'minimized') };
+        case 'maximize':
+          return { ok: setWindowMode(instanceId, 'maximized') };
+        case 'restore':
+          return { ok: setWindowMode(instanceId, 'normal') };
+        case 'snap': {
+          const zone = resolveSnapZone(args.snap);
+          if (!zone) return { error: `snap must be one of ${SNAP_ZONES.join(', ')}` };
+          return { ok: snapWindow(instanceId, zone) };
+        }
+        case 'move_to_desktop': {
+          const workspaceId = args.workspaceId != null ? String(args.workspaceId) : '';
+          if (!workspaceId) return { error: 'move_to_desktop needs workspaceId' };
+          // Async: it edits another workspace's stored blob. Reported as started
+          // rather than awaited, matching the other cross-workspace verbs.
+          void moveWindowToDesktop(instanceId, workspaceId);
+          return { ok: true };
+        }
+        default:
+          return {
+            error: 'state must be minimize, maximize, restore, snap or move_to_desktop',
+          };
+      }
+    }
+    case 'arrange_windows': {
+      const style = String(args.style);
+      if (!(ARRANGE_STYLES as readonly string[]).includes(style)) {
+        return { error: `style must be one of ${ARRANGE_STYLES.join(', ')}` };
+      }
+      const ok = arrangeDesktop(style as (typeof ARRANGE_STYLES)[number]);
+      return ok ? { ok } : { error: 'no open windows to arrange' };
+    }
+
+    // ------------------------------------------------------- appearance
+    case 'desktop.set_backdrop': {
+      const id = String(args.id);
+      if (!registry.backdrop(id)) {
+        return {
+          error: `unknown backdrop "${id}"`,
+          available: registry.backdrops.map((b) => b.id),
+        };
+      }
+      const params =
+        args.params && typeof args.params === 'object'
+          ? (args.params as Record<string, unknown>)
+          : undefined;
+      return { ok: setBackdrop(params ? { id, params } : { id }) };
+    }
+    case 'desktop.set_theme': {
+      const id = String(args.id);
+      if (!isKnownTheme(id)) return { error: `unknown theme "${id}"` };
+      // Applied AND persisted: applying alone reverts on the next settings
+      // publish, persisting alone leaves the current page on the old theme.
+      applyTheme(id);
+      void setSetting(THEME_SETTING_KEY, id);
+      return { ok: true };
+    }
+    case 'desktop.set_mode': {
+      const mode = String(args.mode);
+      if (mode !== 'tiling' && mode !== 'floating') {
+        return { error: 'mode must be tiling or floating' };
+      }
+      return { ok: setDesktopMode(mode as DesktopMode) };
+    }
+    case 'desktop.configure_taskbar': {
+      // Merged over what is stored, not replaced: the tool documents omitted
+      // fields as "left alone", and a whole-object write would silently reset
+      // every zone the caller did not happen to mention.
+      let current: Record<string, unknown> = {};
+      try {
+        const stored = getSetting<string>(TASKBAR_SETTING_KEY);
+        current = stored ? (JSON.parse(stored) as Record<string, unknown>) : {};
+      } catch {
+        current = {};
+      }
+      const next = { ...current };
+      for (const key of ['position', 'zones', 'showLabels', 'autoHide']) {
+        if (args[key] !== undefined) next[key] = args[key];
+      }
+      void setSetting(TASKBAR_SETTING_KEY, JSON.stringify(next));
+      return { ok: true, taskbar: next };
     }
 
     // ------------------------------------------------------------- areas

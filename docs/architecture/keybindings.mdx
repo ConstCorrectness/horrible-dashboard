@@ -80,7 +80,9 @@ invent a key that silently never matches.
 | `textInput` | boolean | An input/textarea/contenteditable holds DOM focus |
 | `dialogOpen` | boolean | A modal dialog is open |
 | `fullscreenArea` | boolean | An area is fullscreened in-window |
-| `shellView` | string | `home` or `workspace` |
+| `windowFocused` | boolean | A desktop window (not a tiled area) holds focus |
+| `desktopMode` | string | `floating` or `tiling` — the active desktop's paradigm |
+| `shellView` | string | `boot`, `oobe` or `desktop` |
 | `platform` | string | `mac` / `win` / `linux` |
 | `host` | string | `browser` or `desktop` |
 
@@ -95,12 +97,57 @@ The legacy `scope: '<viewId>'` field is shorthand for
    filtered before anything else is considered (see below).
 1. **`source: 'user'`** beats a shipped default.
 2. **`override: true`** — for shortcuts that must never be shadowed. `alt+x`
-   (the minibuffer) is the one that ships with it. The command palette's `mod+k`
+   (the minibuffer) is the one that ships with it. The spotlight's `mod+k`
    deliberately does **not**: a focused terminal shadowing it with
    `terminal.clear` is the iTerm/VS Code convention and is intended.
 3. **The more specific satisfied `when`** — naming `paneInstance` beats naming
    `paneFocus` beats naming nothing. `priority` is an explicit thumb.
 4. **Registration order**, earlier first.
+
+## Desktop and window bindings
+
+Every chord below was checked against `reserved.ts` before it was chosen. The
+conventional ones are unavailable: `alt+tab` never reaches the page on Windows or
+Linux, `meta+m` is macOS minimize, and `meta+space` / `ctrl+space` are Spotlight and
+the IME toggle. **A binding that silently never fires is worse than a less familiar
+one that does**, which is the whole reason that table exists.
+
+| Action | Binding | Why not the convention |
+| --- | --- | --- |
+| Spotlight (ask / run / open) | `mod+k` | `mod+space` is macOS Spotlight and the Windows IME switch |
+| Cycle windows | ``alt+` `` / ``alt+shift+` `` | `alt+tab` is OS-level and unpreventable |
+| Directional window focus | `alt+←↑↓→` | — |
+| Snap half / maximize | `mod+shift+←↑↓→` | `mod+alt+arrow` is already the frame's split |
+| Minimize / maximize | `mod+alt+↓` / `mod+alt+↑` | `meta+m` is macOS minimize |
+| Toggle tiling / floating | `mod+alt+t` | — |
+| Switch desktop | `mod+alt+1..9` | plain `mod+1..9` is browser tab switching |
+
+The directional four are the interesting case. `alt+←` is *already* the frame's
+`area.focus:left`, and both are live at once on a tiling desktop — a tiling desktop
+can hold floating windows. So the window bindings carry `when: "windowFocused"`,
+and precedence rule 3 resolves it: a binding naming a context key beats one naming
+nothing, so `area.focus:left` owns the chord normally and `window.focus:left` takes
+it the moment a window has focus. No mode flag, no second dispatcher.
+
+## Presets
+
+`keymap.preset` selects a named alternative default set — today `default` and `i3`.
+
+A preset is expressed as **ordinary overrides**, the same shape the Shortcuts pane
+writes, and applied through the same resolver. There is deliberately no second
+dispatcher and no second notion of "a default". It layers *between* the shipped
+defaults and the user's own edits, so:
+
+- a preset's `disabled` entry suppresses a shipped default (that is how the i3 set
+  takes `mod+k` away from the spotlight, with no special case in the resolver);
+- a hand rebind still beats the preset it was layered over;
+- switching back to `default` removes the set cleanly, because it was never *saved*
+  as if the user had typed it.
+
+The i3 set makes two forced deviations, both worth stating because they look like
+mistakes. The i3 modifier is the **Super key**, which a web page never receives as a
+chord on its own, so `mod` here is ctrl/cmd. And workspace switching stays on
+`mod+alt+<n>`: plain `mod+<n>` is browser tab switching and is not cancellable.
 
 ## Input capture
 

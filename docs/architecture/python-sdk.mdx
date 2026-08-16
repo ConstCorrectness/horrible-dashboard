@@ -98,17 +98,26 @@ Arrange the frame — the same layout verbs the agent drives. Targets are
 
 | Method | Relayed tool | Notes |
 | --- | --- | --- |
-| `dash.layout.describe()` | `get_layout` | the whole frame: center split tree (areas, tabs, regions), docks, floating, fullscreen/focus |
+| `dash.layout.describe()` | `get_layout` | the whole frame: center split tree (areas, tabs, regions), docks, windows, fullscreen/focus, plus `desktop` (mode, backdrop, and the backdrop/theme catalogs) |
 | `dash.layout.split(instance_id, direction, view_id=None)` | `split_area` | `direction` `left`/`right`/`above`/`below` (or `vertical`/`horizontal`); `view_id` opens a different view in the new area, else duplicates |
 | `dash.layout.join(instance_id, direction)` | `join_area` | absorb the aligned neighbor (`left`/`right`/`up`/`down`); document tabs are adopted |
-| `dash.layout.move(instance_id, area_id=None, direction=None)` | `move_pane` | into an exact area, or toward a neighbor |
+| `dash.layout.move(instance_id, area_id=None, direction=None, edge=None)` | `move_pane` | into an exact area, toward a neighbor, or onto an area's `edge` — which splits it and lands the pane in the new half |
 | `dash.layout.resize(instance_id, width=None, height=None)` | `resize_area` | pixels |
 | `dash.layout.fullscreen(instance_id=None, on=True)` | `fullscreen_area` | expand an area to fill the frame / restore |
 | `dash.layout.toggle_region(instance_id, position, open=None)` | `toggle_region` | flip a pane's `left`/`right`/`bottom` region strip |
 | `dash.layout.set_region_view(instance_id, view_id)` | `set_region_view` | show a specific region view on its host pane |
 | `dash.layout.open_tool(view_id, dock=None)` | `open_tool_in_dock` | open/focus a tool in a dock |
 | `dash.layout.toggle_dock(dock, visible=None)` | `toggle_dock` | show/hide a dock |
-| `dash.layout.float(instance_id)` / `dock(instance_id)` | `float_pane` / `dock_pane` | pop out to a floating card / put back |
+| `dash.layout.window(instance_id, snap=None, rect=None)` | `open_window` | pop out into a desktop window, optionally snapped or at an exact rect |
+| `dash.layout.dock(instance_id)` | `dock_window` | put a windowed pane back into the tiling frame |
+| `dash.layout.window_state(instance_id, state, snap=None, workspace_id=None)` | `window_state` | `minimize` / `maximize` / `restore` / `snap` / `move_to_desktop` |
+| `dash.layout.arrange(style='grid')` | `arrange_windows` | lay every open window out (`grid`/`cascade`/`columns`/`rows`) |
+| `dash.layout.mode(mode)` | `desktop.set_mode` | flip this desktop between `tiling` and `floating` |
+| `dash.layout.backdrop(id, **params)` | `desktop.set_backdrop` | ids from `describe()["desktop"]["backdrops"]` |
+| `dash.layout.theme(id)` | `desktop.set_theme` | ids from `describe()["desktop"]["themes"]` |
+
+`window_state("…", "minimize")` **hides, it does not close** — the pane keeps running
+and comes back from the taskbar.
 
 ### `dash.io` (backend-local)
 

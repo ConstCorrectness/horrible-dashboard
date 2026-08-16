@@ -5,6 +5,7 @@
  * snapshot can precompute the ids an operation will assign. No React, no
  * registry, no DOM: geometry works on unit-square rects derived from the tree.
  */
+import { DEFAULT_BACKDROP } from './types';
 import type {
   AreaNode,
   AreaSplitDirection,
@@ -17,6 +18,7 @@ import type {
   PaneState,
   Rect,
   SplitNode,
+  WindowState,
 } from './types';
 
 /** Alignment tolerance for rect comparisons on the unit square. */
@@ -38,6 +40,10 @@ export function splitId(seq: number): string {
   return `s${seq}`;
 }
 
+export function windowId(seq: number): string {
+  return `w${seq}`;
+}
+
 export function instanceId(viewId: string, seq: number): string {
   return `${viewId}#${seq}`;
 }
@@ -50,15 +56,26 @@ export function createDock(side: DockSide): DockState {
   return { visible: false, size: DEFAULT_DOCK_SIZES[side], tools: [], activeTool: null };
 }
 
-/** A minimal valid frame: one empty area, hidden docks. */
+/**
+ * A minimal valid frame: one empty area, hidden docks, no windows.
+ *
+ * `mode` defaults to `tiling` rather than `floating` so that anything constructing a
+ * frame without an explicit opinion — `resetLayout`, a preset seed, a blob too
+ * corrupt to salvage — reproduces the pre-desktop behaviour. New desktops are made
+ * floating by the code that creates them, deliberately, one place.
+ */
 export function createEmptyFrame(): FrameState {
   return {
     center: createArea(areaId(0)),
     docks: { left: createDock('left'), right: createDock('right'), bottom: createDock('bottom') },
-    floating: [],
+    windows: [],
+    windowViewport: null,
+    mode: 'tiling',
+    backdrop: { id: DEFAULT_BACKDROP },
     fullscreenAreaId: null,
     focusedAreaId: areaId(0),
     focusedInstanceId: null,
+    focusedWindowId: null,
     paneSeq: 1,
   };
 }
@@ -527,8 +544,57 @@ export function reorderTab(
 }
 
 // ---------------------------------------------------------------------------
-// Frame-level pane lookups/edits (center + docks + floating)
+// Frame-level pane lookups/edits (center + docks + windows)
 // ---------------------------------------------------------------------------
+
+export function findWindow(frame: FrameState, id: string): WindowState | null {
+  return frame.windows.find((w) => w.id === id) ?? null;
+}
+
+/** The window whose area holds `instanceId`, or null. */
+export function windowOfInstance(frame: FrameState, instanceId: string): WindowState | null {
+  return frame.windows.find((w) => w.area.tabs.some((t) => t.instanceId === instanceId)) ?? null;
+}
+
+/** Where an area lives — the center tree, or one window. */
+export type AreaHost = { kind: 'center' } | { kind: 'window'; windowId: string };
+
+/**
+ * Find an area by id **anywhere**: the center tree or any window.
+ *
+ * This is what lets a window's tabs be driven by the same verbs a center area's are
+ * (`SET_ACTIVE_TAB`, `REORDER_TAB`, `INSERT_PANE`, `dropPaneOnTab`) instead of a
+ * parallel set that would drift. Center is searched first — window area ids come from
+ * the same `paneSeq` counter, so they never collide.
+ */
+export function findAreaAnywhere(
+  frame: FrameState,
+  id: string,
+): { area: AreaNode; host: AreaHost } | null {
+  const inCenter = findArea(frame.center, id);
+  if (inCenter) return { area: inCenter, host: { kind: 'center' } };
+  const win = frame.windows.find((w) => w.area.id === id);
+  return win ? { area: win.area, host: { kind: 'window', windowId: win.id } } : null;
+}
+
+/** Apply `fn` to an area wherever it lives. Null if unknown. */
+export function updateAreaAnywhere(
+  frame: FrameState,
+  id: string,
+  fn: (area: AreaNode) => AreaNode,
+): FrameState | null {
+  const found = findAreaAnywhere(frame, id);
+  if (!found) return null;
+  if (found.host.kind === 'window') {
+    const windowId = found.host.windowId;
+    return {
+      ...frame,
+      windows: frame.windows.map((w) => (w.id === windowId ? { ...w, area: fn(w.area) } : w)),
+    };
+  }
+  const center = replaceNode(frame.center, id, (node) => fn(node as AreaNode));
+  return center ? { ...frame, center } : null;
+}
 
 export function findPaneAnywhere(frame: FrameState, instanceId: string): LocatedPane | null {
   const area = areaOfInstance(frame.center, instanceId);
@@ -542,8 +608,13 @@ export function findPaneAnywhere(frame: FrameState, instanceId: string): Located
     const tool = frame.docks[side].tools.find((t) => t.instanceId === instanceId);
     if (tool) return { pane: tool, location: { kind: 'dock', dock: side } };
   }
-  const float = frame.floating.find((f) => f.pane.instanceId === instanceId);
-  if (float) return { pane: float.pane, location: { kind: 'floating' } };
+  const win = windowOfInstance(frame, instanceId);
+  if (win) {
+    return {
+      pane: win.area.tabs.find((t) => t.instanceId === instanceId)!,
+      location: { kind: 'window', windowId: win.id, areaId: win.area.id },
+    };
+  }
   return null;
 }
 
@@ -559,15 +630,23 @@ export function listPanes(frame: FrameState): LocatedPane[] {
       out.push({ pane: tool, location: { kind: 'dock', dock: side } });
     }
   }
-  for (const f of frame.floating) out.push({ pane: f.pane, location: { kind: 'floating' } });
+  for (const win of frame.windows) {
+    for (const tab of win.area.tabs) {
+      out.push({ pane: tab, location: { kind: 'window', windowId: win.id, areaId: win.area.id } });
+    }
+  }
   return out;
 }
 
 /**
  * The panes actually on screen: each area's active tab, each visible dock's active
- * tool, and every floating pane. Distinct from `listPanes`, which includes the
- * background tabs — those are unmounted, so their live state isn't readable anyway.
- * A fullscreened area hides everything else, including the docks.
+ * tool, and each non-minimized window's active tab. Distinct from `listPanes`, which
+ * includes the background tabs — those are unmounted, so their live state isn't
+ * readable anyway. A fullscreened area hides everything else, including the docks.
+ *
+ * A **minimized** window is excluded even though its pane stays mounted: "visible"
+ * here means "the user can see it", which is what the agent's context builder and
+ * the screenshot paths ask this for.
  */
 export function visiblePanes(frame: FrameState): LocatedPane[] {
   const out: LocatedPane[] = [];
@@ -586,7 +665,12 @@ export function visiblePanes(frame: FrameState): LocatedPane[] {
     const tool = dock.tools.find((t) => t.instanceId === dock.activeTool);
     if (tool) out.push({ pane: tool, location: { kind: 'dock', dock: side } });
   }
-  for (const f of frame.floating) out.push({ pane: f.pane, location: { kind: 'floating' } });
+  for (const win of frame.windows) {
+    if (win.mode === 'minimized') continue;
+    const tab = win.area.tabs[win.area.activeTab];
+    if (tab)
+      out.push({ pane: tab, location: { kind: 'window', windowId: win.id, areaId: win.area.id } });
+  }
   return out;
 }
 
@@ -624,13 +708,21 @@ export function updatePaneAnywhere(
   }
   return {
     ...frame,
-    floating: frame.floating.map((f) =>
-      f.pane.instanceId === instanceId ? { ...f, pane: fn(f.pane) } : f,
+    windows: frame.windows.map((w) =>
+      w.id === location.windowId
+        ? {
+            ...w,
+            area: {
+              ...w.area,
+              tabs: w.area.tabs.map((t) => (t.instanceId === instanceId ? fn(t) : t)),
+            },
+          }
+        : w,
     ),
   };
 }
 
-/** Remove a pane instance from wherever it lives (center, dock, or floating). */
+/** Remove a pane instance from wherever it lives (center, dock, or window). */
 export function removePaneAnywhere(
   frame: FrameState,
   instanceId: string,
@@ -675,9 +767,28 @@ export function removePaneAnywhere(
       removed,
     };
   }
-  const float = frame.floating.find((f) => f.pane.instanceId === instanceId)!;
+  const win = frame.windows.find((w) => w.id === location.windowId)!;
+  const removed = win.area.tabs.find((t) => t.instanceId === instanceId)!;
+  const tabs = win.area.tabs.filter((t) => t.instanceId !== instanceId);
+  const windows = tabs.length
+    ? frame.windows.map((w) =>
+        w === win
+          ? {
+              ...w,
+              area: { ...w.area, tabs, activeTab: Math.min(w.area.activeTab, tabs.length - 1) },
+            }
+          : w,
+      )
+    : // A window is its area: emptying the last tab closes the window rather than
+      // leaving a titlebar with nothing under it.
+      frame.windows.filter((w) => w !== win);
   return {
-    frame: { ...frame, floating: frame.floating.filter((f) => f !== float) },
-    removed: float.pane,
+    frame: {
+      ...frame,
+      windows,
+      focusedWindowId:
+        tabs.length === 0 && frame.focusedWindowId === win.id ? null : frame.focusedWindowId,
+    },
+    removed,
   };
 }

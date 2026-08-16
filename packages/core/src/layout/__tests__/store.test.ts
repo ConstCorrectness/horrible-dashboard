@@ -274,24 +274,24 @@ describe('dock and floating actions', () => {
     ).toBe(sized);
   });
 
-  it('FLOAT_PANE → DOCK_FLOATING round-trips a pane through the floating layer', () => {
+  it('WINDOW_FROM_PANE → DOCK_WINDOW round-trips a pane through the window layer', () => {
     load();
     const snap = layoutStore.getSnapshot();
     const areaNode = (snap.frame.center as { children: AreaNode[] }).children[0];
     const inst = areaNode.tabs[0].instanceId;
-    const floated = layoutStore.dispatch({ type: 'FLOAT_PANE', instanceId: inst });
-    expect(findPaneAnywhere(floated.frame, inst)?.location).toEqual({ kind: 'floating' });
+    const windowed = layoutStore.dispatch({ type: 'WINDOW_FROM_PANE', instanceId: inst });
+    const located = findPaneAnywhere(windowed.frame, inst)!;
+    expect(located.location.kind).toBe('window');
+    expect(windowed.frame.windows).toHaveLength(1);
+    const windowId = (located.location as { windowId: string }).windowId;
     const target = collectAreaIds()[0];
-    const docked = layoutStore.dispatch({
-      type: 'DOCK_FLOATING',
-      instanceId: inst,
-      areaId: target,
-    });
+    const docked = layoutStore.dispatch({ type: 'DOCK_WINDOW', windowId, areaId: target });
     expect(findPaneAnywhere(docked.frame, inst)?.location).toEqual({
       kind: 'area',
       areaId: target,
     });
-    expect(docked.frame.floating).toHaveLength(0);
+    expect(docked.frame.windows).toHaveLength(0);
+    expect(docked.frame.focusedWindowId).toBeNull();
   });
 
   it('REMOVE_PANE keeps a valid frame when the last center pane closes', () => {

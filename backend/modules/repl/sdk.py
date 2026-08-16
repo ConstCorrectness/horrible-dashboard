@@ -114,14 +114,19 @@ class _Layout:
         instance_id: str,
         area_id: str | None = None,
         direction: str | None = None,
+        edge: str | None = None,
     ) -> Any:
-        """Move a center pane into `area_id` (from `describe()`), or toward
-        `direction` (`left`/`right`/`up`/`down`)."""
+        """Move a center pane into `area_id` (from `describe()`), toward
+        `direction` (`left`/`right`/`up`/`down`), or onto an area's `edge`
+        (`left`/`right`/`above`/`below`), which splits it and lands the pane in
+        the new half."""
         args: dict[str, Any] = {"instanceId": instance_id}
         if area_id is not None:
             args["areaId"] = area_id
         if direction is not None:
             args["direction"] = direction
+        if edge is not None:
+            args["edge"] = edge
         return self._call("move_pane", args)
 
     def resize(
@@ -168,13 +173,66 @@ class _Layout:
             args["visible"] = visible
         return self._call("toggle_dock", args)
 
-    def float(self, instance_id: str) -> Any:
-        """Pop a pane out into a floating card over the center grid."""
-        return self._call("float_pane", {"instanceId": instance_id})
+    def window(
+        self,
+        instance_id: str,
+        snap: str | None = None,
+        rect: dict[str, float] | None = None,
+    ) -> Any:
+        """Pop a pane out into a free-floating desktop window.
+
+        `snap` places it in a screen region (`left`/`right`/`top`/`bottom`, a
+        corner, or `max`); `rect` gives exact pixels. Windows work on a tiling
+        desktop too — there they are the escape hatch for a pane that should not
+        participate in the tiling.
+        """
+        args: dict[str, Any] = {"instanceId": instance_id}
+        if snap is not None:
+            args["snap"] = snap
+        if rect is not None:
+            args["rect"] = rect
+        return self._call("open_window", args)
 
     def dock(self, instance_id: str) -> Any:
-        """Put a floating pane back into the center grid."""
-        return self._call("dock_pane", {"instanceId": instance_id})
+        """Put a windowed pane back into the tiling frame."""
+        return self._call("dock_window", {"instanceId": instance_id})
+
+    def window_state(
+        self,
+        instance_id: str,
+        state: str,
+        snap: str | None = None,
+        workspace_id: str | None = None,
+    ) -> Any:
+        """`minimize`, `maximize`, `restore`, `snap` or `move_to_desktop`.
+
+        A minimized window keeps running — it is hidden, not closed.
+        """
+        args: dict[str, Any] = {"instanceId": instance_id, "state": state}
+        if snap is not None:
+            args["snap"] = snap
+        if workspace_id is not None:
+            args["workspaceId"] = workspace_id
+        return self._call("window_state", args)
+
+    def arrange(self, style: str = "grid") -> Any:
+        """Lay every open window out: `grid`, `cascade`, `columns` or `rows`."""
+        return self._call("arrange_windows", {"style": style})
+
+    def mode(self, mode: str) -> Any:
+        """Switch this desktop between `tiling` and `floating`."""
+        return self._call("desktop.set_mode", {"mode": mode})
+
+    def backdrop(self, backdrop_id: str, **params: Any) -> Any:
+        """Set the desktop backdrop. Ids are in `describe()["desktop"]["backdrops"]`."""
+        args: dict[str, Any] = {"id": backdrop_id}
+        if params:
+            args["params"] = params
+        return self._call("desktop.set_backdrop", args)
+
+    def theme(self, theme_id: str) -> Any:
+        """Switch the app theme. Ids are in `describe()["desktop"]["themes"]`."""
+        return self._call("desktop.set_theme", {"id": theme_id})
 
 
 class _Io:

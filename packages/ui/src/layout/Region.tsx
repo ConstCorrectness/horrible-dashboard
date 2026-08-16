@@ -263,7 +263,7 @@ function latestRegion(instanceId: string, position: RegionPosition): RegionState
     walk(frame.docks.left.tools) ??
     walk(frame.docks.right.tools) ??
     walk(frame.docks.bottom.tools) ??
-    walk(frame.floating.map((f) => f.pane))
+    walk(frame.windows.flatMap((w) => w.area.tabs))
   );
 }
 

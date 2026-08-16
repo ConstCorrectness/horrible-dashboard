@@ -1,0 +1,427 @@
+---
+title: Desktop shell
+description: The OS-style desktop — windows, snapping, backdrops, and the tiling/floating mode switch.
+---
+
+# The desktop shell
+
+The shell presents itself like an operating system: you arrive at a **desktop** with a
+backdrop, open things as free-floating **windows**, snap them to edges, and switch
+between **desktops**. The tiling frame is not retired — it is one of the two modes a
+desktop can be in.
+
+This page covers the desktop: windows as an interaction model, the backdrop, and the
+mode switch. The _data_ those windows live in is `FrameState`, documented in
+[windowing.mdx](windowing.mdx).
+
+:::info Status
+All of it has landed: the window model and its migration, the window layer, the
+backdrop providers, the taskbar and start menu, the boot splash and first-run flow,
+the spotlight, the four extra themes, the wallpaper routes, and the agent verbs.
+:::
+
+## There is one shell view
+
+A desktop **is** a workspace, and whether it shows the tiling frame or free windows
+is that desktop's `mode`. So there is exactly one main surface, not two:
+
+```
+ShellView = 'boot' | 'oobe' | 'desktop'
+```
+
+Both of the old views are gone, for the same reason. `workspace` was never a
+surface — making it one meant a single fact (this desktop tiles) had two homes that
+could disagree, and switching paradigm became a _navigation_ rather than a property
+change. And `home` — the avatar and ask bar — was a second landing screen competing
+with the desktop for the same job; it survives as the `splash` **backdrop**, which
+is strictly more useful, because windows can float over it.
+
+The consequence worth remembering: flipping a desktop between tiling and floating is
+a mount, never a route change, and nothing in the shell "navigates" any more.
+
+Installing the frame engine is correspondingly **not** the tiling frame's job. The
+controller the agent tools drive, the debounced autosave, the `frame` module's
+commands and workspace hydration all live in `packages/ui/src/layout/install.ts` and
+run from the shell. They used to sit in `Frame.tsx`'s mount effect, which was
+survivable only while the frame was the only place you could be: once the desktop
+became the landing surface, a fresh boot installed none of it — no layout agent
+tools, no region or backdrop commands, no hydrated workspace — until the user
+happened to visit the workspace. Every one of those failures is silent.
+
+## The two modes
+
+A desktop is either **floating** or **tiling** (`FrameState.mode`), i3-style. It is a
+property of the desktop, not a global setting, so "documents tiled on desktop 2,
+everything loose on desktop 1" is expressible.
+
+|                   | `floating`                 | `tiling`                     |
+| ----------------- | -------------------------- | ---------------------------- |
+| Windows           | the primary way panes open | allowed, as the escape hatch |
+| Center split tree | retained, not shown        | the main surface             |
+| Rails and docks   | hidden                     | shown                        |
+| Backdrop          | visible edge to edge       | covered by the frame         |
+
+Windows exist in **both** modes. A floating window on a tiling desktop is deliberate —
+it is i3's floating layer, the thing you reach for when a pane should not participate
+in the tiling.
+
+### Flipping a desktop
+
+`setDesktopMode` runs one of two pure conversions in `layout/windows.ts`:
+
+- **`explodeToWindows`** — one window per non-empty center area, carrying its tabs
+  whole, positioned at the **pixel rect that area currently occupies**, so the flip is
+  visually continuous rather than a pile of cascaded boxes. Docked tools become
+  windows too: a visible one at the dock's geometry, a hidden one **minimized** —
+  which is the honest analogue, since it was already mounted and reachable from the
+  rail rather than on screen.
+- **`tileWindows`** — windows return to the center tree in z-order, alternating split
+  orientation. A pane whose view belongs in a dock goes back to that dock rather than
+  into the document grid, and a minimized window's panes become **background tabs**:
+  mounted but not showing, which is what minimized meant.
+
+**The round trip is not lossless, and the code does not pretend otherwise.** Going to
+floating cannot express split ratios as anything but the rects they occupy; coming
+back cannot recover the ratios you had dragged. What _is_ guaranteed — and what the
+tests assert — is that the set of open pane instances is preserved exactly: no pane is
+ever dropped and none is duplicated. Everything else is a best effort at continuity.
+
+The registry is consulted by the _caller_, not the model: `setDesktopMode` resolves a
+`viewId → DockSide` map and passes it in, keeping `layout/model.ts` and the reducer
+registry-free, the same arrangement `seedFromPreset` uses for `regionsFor`.
+
+## Backdrops
+
+A backdrop is a **registered provider** (`BackdropDecl`, contributed through
+`ModuleManifest.backdrops` and exported from the SDK), not a settings string — a
+wallpaper, a procedural animation, a live node-state view and a full dashboard are
+the same kind of thing to the desktop, and a plugin should be able to add one.
+
+| id       | What it is                                                                                                          |
+| -------- | ------------------------------------------------------------------------------------------------------------------- |
+| `none`   | Flat `--bg`.                                                                                                        |
+| `aurora` | **The default.** Three blurred CSS gradients drifting on a long keyframe, built from theme tokens.                  |
+| `grid`   | Canvas: a drifting grid with a scanline sweep. Pairs with `hud`.                                                    |
+| `image`  | A wallpaper the user uploaded. `params: { url, fit, dim }`.                                                         |
+| `splash` | The old home screen — avatar, ask bar, connector tiles — with windows over the top.                                 |
+| `pulse`  | Canvas: one ripple per request through this node, read from the same `telemetryStore` the observability panel uses. |
+| `board`  | Widgets laid straight onto the desktop.                                                                             |
+
+Nothing here bundles third-party imagery: the drawn ones are arithmetic, the live
+ones render the node's own state, and `image` shows what the user supplied. Same
+rule as the maps and the search engines.
+
+A provider declares `interactive` when it wants pointer events (`splash`, `board`).
+A decorative one stays `pointer-events: none` and a transparent catcher over it
+collects the clicks, so the desktop's right-click menu works across the whole
+surface. That catcher is skipped entirely for an interactive backdrop, which would
+otherwise be sealed behind it.
+
+**An unregistered backdrop id falls back rather than blanking the desktop.** A
+plugin can be uninstalled while a saved workspace still names its backdrop; losing a
+wallpaper is not a reason to lose the windows on top of it.
+
+The switch commands (`desktop.backdrop:<id>`) are **synthesized by the registry**,
+one per registered provider, exactly as the pane openers are — so a plugin's
+backdrop gets its command without a second list that can fall out of step.
+
+### Canvas backdrops
+
+`backdrops/canvas.ts` gathers the three things a canvas backdrop always has to get
+right, so a new one cannot forget one:
+
+- **Theme tokens are read through `readThemeTokens` and the effect resubscribes on
+  `useThemeId`.** A canvas cannot use a CSS variable, so it resolves colours once —
+  and this is a repeat bug in this codebase, so the hook makes it structural.
+- **The loop stops on `visibilitychange`.** `requestAnimationFrame` does not fire in
+  a hidden window at all, so a loop driving its own clock off frame deltas resumes
+  with a multi-minute jump. `dt` is clamped and the clock resets on resume.
+- **The backing store follows `devicePixelRatio`**, via `setTransform` rather than
+  `scale` — this runs on every resize and `scale` compounds.
+
+`pulse` adds one of its own: events are upserted by `(source, id)` (the backend
+re-emits one to fill in a streamed body), so "new" has to mean _a key never seen_,
+not "the array got longer". Ripples are placed by hashing the endpoint, so the same
+target always pulses in the same spot and the backdrop reads as a map of what this
+node talks to rather than as noise.
+
+### Wallpapers
+
+The one piece of the desktop that needs the server, because it is a _file_:
+`backend/modules/desktop/` serves `GET`/`POST /api/desktop/wallpapers` and
+`GET`/`DELETE /api/desktop/wallpapers/{id}` out of `$HORRIBLE_DATA_DIR/wallpapers/`
+(via `backend.paths`, never an inline `os.environ.get`).
+
+Four rules there are load-bearing:
+
+- **The stored extension comes from the content-type table, never the uploaded
+  filename.** Trusting the client's extension is how an upload route starts writing
+  `.html` into a directory it also serves.
+- **The id is 32 hex characters, pattern-enforced at the route boundary**, and
+  `_resolve` re-checks that the resolved path is inside the wallpaper directory. The
+  pattern is the guard; the check is the assertion that the guard held. A `..` here
+  is how a read route becomes an arbitrary-file-read.
+- Uploads land via `.part` + rename, so a truncated image is never listed.
+- The stored `url` is **api-relative** (`/desktop/wallpapers/<id>`). The backend
+  origin differs between the dev server, a packaged desktop build and a LAN-bound
+  node, so an absolute URL baked into a saved workspace stops resolving the moment
+  any of that changes. The frontend prepends `/api` — `apiUrl` prepends the _origin_
+  only, and getting that wrong fails **silently**, because a `background-image` that
+  404s simply paints nothing and the desktop looks like the wallpaper was never set.
+
+## The taskbar
+
+`layout/taskbar.ts` derives the buttons, pure over `FrameState` + the registry — the
+same shape and for the same reason as `railEntries`. The strip itself is a zone
+container driven by the `desktop.taskbar` setting (`start`, `windows`, `spacer`,
+`desktops`, `tray`, `clock`); a stored config is **merged** over the defaults so a
+config written by an older build does not silently lose a zone the user never
+removed, and an unknown zone name is skipped rather than rendered as an error strip.
+
+Two decisions in the derivation matter:
+
+**A button is per pane instance, not per window.** A window merged into three tabs
+is three things the user can switch to, and one button for it would make two of them
+unreachable from here.
+
+**The order is stable** — by the numeric suffix of the instance id, i.e. by the
+order panes were opened. Nothing about focus, z-order or minimizing may reorder it,
+because a taskbar that reshuffles on focus moves the button out from under a pointer
+already travelling toward it. (Comparing the ids as plain strings would put `#10`
+before `#2`, so panes would visibly reshuffle the tenth time you opened one.)
+
+Clicking follows the universal convention, in one verb (`activateTaskbarEntry`):
+clicking the thing you are already looking at **minimizes** it, clicking anything
+else brings it forward. A taskbar whose focused button does nothing silently
+swallows every second click.
+
+The taskbar is also what makes minimize usable at all — a minimized window is off
+screen, and this is the only route back to it. It is the reason flipping a desktop
+to floating is safe: `explodeToWindows` turns hidden dock tools into _minimized_
+windows, and without a taskbar those panes would be unreachable.
+
+The **start menu** lists `registry.panels` + `registry.widgets` minus `embedded`,
+filtered exactly as the palette's openers are — an embedded view lives inside a host
+pane, and a launcher entry would present it as a second, competing home.
+
+## Boot and first run
+
+`AppRoot` shows the boot splash until `bootReady()`, then mounts the shell. That
+gate is **not cosmetic**: `AppShell` installs the frame engine on mount, and that
+hydrates the active workspace — which prunes panes whose views are not registered.
+Mounting the shell before `boot()` has registered its modules and awaited
+`loadPlugins()` would not just look wrong, it would silently delete the user's
+layout and then save the result.
+
+The splash narrates the **real** boot (`bootStore`), one step per thing that
+actually happened, with real timings. A fake progress bar that always takes 800 ms
+says nothing when the backend is not answering, which is exactly the moment the user
+most needs to be told something. Individual steps are non-fatal — a plugin that
+failed to load degrades the app rather than stopping it — and only a throw sets
+`phase: 'failed'`. The step list is time-gated (1.2 s), so a fast boot is a logo and
+a fade while a stalled one explains itself without being asked. The progress bar is
+deliberately **indeterminate**: the step count is known but their durations are not
+remotely comparable, so a real percentage would sit at 90% through the one step that
+actually takes time.
+
+First run (`desktop.oobeComplete` unset) goes through a three-step wizard — who you
+are, what it looks like, what it can reach — before the desktop. The third step is
+the **existing** `SetupCard`, not a copy of it: model / account / connectors already
+had one flow with a carefully argued shape (the account and the connectors are two
+steps on purpose — see that component), and a first-run duplicate would be a second
+thing to keep in step with reality. Every step is skippable, and "Skip setup" leaves
+the whole wizard rather than advancing one screen — a setup flow you cannot leave is
+one people close the app to escape.
+
+The wizard is a **view, not a modal**. It owns the screen until it is finished or
+skipped; a dismissible overlay over a half-configured desktop is exactly the "did I
+finish that?" state it exists to avoid.
+
+## Spotlight
+
+`mod+k` opens one surface that takes anything: commands, panes you already have
+open, and the agent. It **replaced** the command palette rather than sitting beside
+it — the agent is meant to be always available, and two overlays competing for one
+keystroke means the user has to decide which one they want before they can start
+typing.
+
+`spotlight.ts` resolves the list, pure over the registry + a frame snapshot. Three
+things it settles:
+
+- **Open panes rank above commands.** Typing "terminal" almost always means the
+  terminal you have, not the command that opens another one.
+- **`>` / `@` / `?`** restrict to commands / panes / the agent.
+- **The agent is the fallback.** It is offered last when other things matched, and
+  first — alone — when nothing did. A palette that answers a typed sentence with "no
+  matching commands" is the failure this surface exists to remove. It is _not_
+  offered for an empty query, so opening the surface is not a prompt.
+
+An ask keeps the spotlight open, unlike every other action: the answer is the point,
+and closing to deliver it somewhere else would mean going to find it.
+
+## Windows
+
+A window's content is an `AreaNode` — the same node the center grid uses — so a plain
+window is an area with one tab and a merged window is an area with several. See
+[windowing.mdx](windowing.mdx#model) for why that matters.
+
+### Geometry
+
+Rects are **pixels**, against `FrameState.windowViewport`. The window layer measures
+itself and owns the single `SET_WINDOW_VIEWPORT` dispatch, because every rect in the
+store is relative to that number and exactly one element may be its authority.
+
+Two rules that are bugs if forgotten:
+
+- **The viewport must be re-reported after every workspace load.** `LOAD_WORKSPACE`
+  replaces the whole frame with the deserialized one, whose `windowViewport` is
+  whatever was stored — null for a fresh or migrated blob. The element has not
+  resized, so a `ResizeObserver` alone stays silent, and a migrated v1 window (saved
+  on a 1×1 basis) would never scale up into pixels: it would render a few pixels wide.
+- **`SET_WINDOW_VIEWPORT` must not bump `revision`.** It is a projection, not an edit.
+  Marking it dirty makes every browser resize dirty the workspace and drives the 600 ms
+  autosave debounce into a continuous write loop.
+
+Geometry is committed to the store on pointer-**up**; the in-flight rect is local
+component state. Dispatching per frame would bump `revision` a hundred times per drag.
+
+Clamping lives in the **reducer**, not the drag handler, so a rect arriving from an
+agent tool obeys the same rules as one dragged by hand. `clampRect` keeps a strip of
+titlebar on the surface and never allows a negative `y` — a window above the surface
+hides its own titlebar behind the app's title strip, where dragging moves the OS
+window and the user cannot get it back.
+
+### Snapping
+
+`layout/snap.ts` is pure geometry, shared by the drag preview and the agent's snap
+verb so the two cannot disagree — a preview promising one rect while the drop delivers
+another is a bug nobody reports precisely.
+
+- Corners are tested **before** edges: inside a corner box the pointer is within the
+  edge threshold of two sides at once, and whichever edge test ran first would win
+  arbitrarily.
+- The **top edge maximizes** rather than snapping to a top half — the near-universal
+  convention, and a "top half" is the one snap nobody reaches for.
+- Halves and quarters tile the surface exactly; the far half absorbs the odd pixel of
+  an odd width, so the two always sum to the full extent instead of overlapping or
+  leaving a seam.
+- A snapped or maximized window **re-derives** its rect from the zone when the surface
+  resizes, rather than being scaled: half of the new surface is exactly half, where a
+  scaled rect would carry the rounding of the old one.
+
+The drop decision is resolved **synchronously** during the drag and kept in a ref.
+Reading it back from React state at pointerup loses the last frame's zone whenever the
+move and the release land in the same frame — an intermittent failure to snap that
+only shows up when moving fast.
+
+### Merging and tearing
+
+Dropping a window on another window's titlebar merges them into tabs
+(`MERGE_INTO_WINDOW`). The titlebar is marked with `data-window-titlebar` for the
+hit-test — and **never** with `data-tauri-drag-region`, which belongs to the app's own
+top strip. On a window, that attribute would drag the whole OS window instead of the
+window under the pointer.
+
+Dragging a window also **releases keyboard/pointer capture** first. A captured pane —
+a game, a terminal, the server-rendered browser — otherwise keeps the pointer and the
+drag never reaches the handler.
+
+### Minimize, maximize, close
+
+- **Minimize keeps the pane mounted.** A minimized terminal keeps running and a
+  minimized game keeps its socket. See
+  [windowing.mdx](windowing.mdx#pane-lifetime-unmount-is-not-close) for the two ways
+  this is easy to break.
+- **Maximize** stores the rect it came from and restores to it. Capturing a restore
+  rect only happens when leaving a _free-floating_ state, so maximizing an
+  already-snapped window does not overwrite the rect it was originally dragged to.
+- **Close** runs the existing `closePaneGuarded`, so a dirty pane still prompts.
+
+`mode` and `snap` are set through **one** action (`SET_WINDOW_MODE`) rather than
+several, so `restoreRect` is written and consumed in a single place.
+
+## Where it mounts
+
+The window layer is a **sibling of the shell's views**, inside `.shell-content`:
+
+```
+.shell
+├── WorkspaceTabs          ← saved layouts + Tauri drag region + app controls
+├── .shell-content         (position: relative)
+│   ├── .shell-view        home
+│   ├── .shell-view        workspace (the frame)
+│   └── .os-window-layer   ← windows, over both
+└── (taskbar)
+```
+
+Sibling rather than child because `.shell-view[hidden]` is `display: none` — a window
+layer nested inside a view would vanish the moment you went home. Inside
+`.shell-content` rather than `.shell` because that bounds the coordinate space below
+the workspace strip, which is what stops a window titlebar sliding under the drag
+region.
+
+The layer is `pointer-events: none` with `auto` on each window, so the backdrop and
+the frame underneath stay clickable.
+
+## Z-index scale
+
+Windows sit above the shell's views and below every overlay that can appear over them.
+Declared once, in `packages/ui/src/desktop/desktop.css`:
+
+| Layer        | z-index |
+| ------------ | ------- |
+| backdrop     | 0       |
+| shell views  | 1       |
+| window layer | 30      |
+| taskbar      | 40      |
+| start menu   | 45      |
+| spotlight    | 50      |
+| toasts       | 9999    |
+| dialogs      | 10000   |
+
+On desktop the browser pane's **native child webview composites above all HTML**, so
+any overlay that must appear over it calls `suppressNativeOverlays()` — the treatment
+the command palette already uses.
+
+## Agent verbs
+
+Split across two groups, deliberately.
+
+**Arranging** lives in the existing `layout` group: `open_window` (with `snap` or an
+exact `rect`), `dock_window`, `window_state`
+(`minimize`/`maximize`/`restore`/`snap`/`move_to_desktop` in one schema rather than
+five), and `arrange_windows`. `move_pane` also gained `edge`, which splits the
+destination and drops the pane into the new half — the fix for the long-standing gap
+where a pane opened into the wrong place could not be moved beside another one at
+all. `edge` **alone** is a valid call: it means "split where this pane already is".
+
+**Appearance** is its own lazily-loaded `desktop` group: `desktop.set_backdrop`,
+`desktop.set_theme`, `desktop.set_mode`, `desktop.configure_taskbar`. It is not in
+the always-on core on purpose. Restyling the desktop is a rare request, the core was
+cut 34 → 11 tools for a measured reason (see
+[agent-chat.mdx](../modules/agent-chat.mdx)), and anything in the core is paid for on
+every turn by every agent — including the ones that never touch it. The group loads
+on demand, or when the prompt mentions a theme, wallpaper, backdrop or taskbar.
+
+`get_layout` reports `desktop.mode`, `desktop.backdrop`, the open `windows`, and the
+**catalogs** (`desktop.backdrops`, `desktop.themes`) — so the appearance verbs have
+ids the model cannot guess without two more always-on `list_*` schemas.
+
+Every one of these refuses bad input **with the valid options** rather than guessing:
+an unknown backdrop returns the registered ids, an unknown snap zone returns the nine
+zones.
+
+## Theming
+
+All window and taskbar chrome reads a `--win-*` / `--taskbar-*` token group, so a
+theme restyles the whole desktop by redefining tokens and touching no component. The
+bevel is why `--win-border-light` and `--win-border-dark` exist as a pair: a retro
+theme sets them to contrasting values and gets a raised edge; every other theme sets
+them equal and the bevel disappears, with no branching anywhere.
+
+That pair is also why **nothing may set `border-color` on a window**: the shorthand
+overrides all four sides and flattens the bevel. Focus is carried by the titlebar
+(`--win-titlebar-bg-active`) and the shadow instead. Control placement (left vs
+right) is a flex `order` token, not a JS branch.
+
+See [theming.mdx](theming.mdx).

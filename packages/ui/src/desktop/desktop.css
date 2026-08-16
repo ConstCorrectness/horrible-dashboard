@@ -1,0 +1,303 @@
+/*
+ * The desktop shell: window layer, window chrome, snap preview.
+ *
+ * Every colour, radius, border and shadow here is a token. A theme restyles the
+ * whole desktop by redefining the `--win-*` / `--taskbar-*` group in themes.css and
+ * touching no component — the rule stated in docs/architecture/theming.mdx. The
+ * bevel is the reason `--win-border-light`/`--win-border-dark` exist as a pair:
+ * a retro theme sets them to contrasting values and gets a raised edge, every other
+ * theme sets them equal and the bevel disappears with no branching anywhere.
+ *
+ * The z-index scale is documented once, here, because windows have to sit above the
+ * shell's views but below every overlay that can appear over them:
+ *
+ *   backdrop        0
+ *   shell views     1
+ *   window layer   30   (per-window offsets are capped inside this band)
+ *   taskbar        40
+ *   start menu     45
+ *   spotlight      50
+ *   toasts       9999   (styles.css)
+ *   dialogs     10000   (styles.css)
+ */
+
+.os-window-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  /* The layer itself must not eat clicks meant for the backdrop or the frame
+     underneath; only the windows in it are interactive. */
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.os-window {
+  position: absolute;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--win-bg, var(--bg-raised));
+  border: var(--win-border, 1px solid var(--border));
+  /* Four sides from the light/dark pair — equal in most themes (flat edge),
+     contrasting in retro (raised bevel). Nothing may override this with the
+     `border-color` shorthand; see the focus rule below. */
+  border-top-color: var(--win-border-light, var(--border));
+  border-left-color: var(--win-border-light, var(--border));
+  border-bottom-color: var(--win-border-dark, var(--border));
+  border-right-color: var(--win-border-dark, var(--border));
+  border-radius: var(--win-radius, var(--radius-lg, 9px));
+  box-shadow: var(--win-shadow, var(--shadow-overlay));
+  backdrop-filter: var(--win-backdrop-filter, none);
+  overflow: hidden;
+}
+
+/* A minimized window keeps its pane MOUNTED — a terminal keeps running, a game
+   keeps its socket, and restoring is instant.
+ *
+ * Moved offscreen rather than `display:none`, because that collapses a canvas or an
+ * xterm to zero size and many of them never recover their measurement when shown
+ * again. The inline left/top/width/height stay in effect (that is what preserves the
+ * measured size); only the translate takes it off screen.
+ *
+ * `visibility: hidden` rather than `opacity: 0` so it is out of the accessibility
+ * tree and untabbable, and `pointer-events: none` so it cannot eat a click over the
+ * area it used to occupy. */
+.os-window--minimized {
+  transform: translateY(-200vh);
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Focus is carried by the TITLEBAR and the shadow, never by `border-color`.
+ *
+ * Setting `border-color` here overrode all four sides at once, which silently
+ * destroyed the bevel on the focused window — i.e. on the only window you are
+ * actually looking at. A retro theme sets `--win-border-light`/`-dark` to
+ * contrasting values precisely so the four sides differ; a shorthand override
+ * flattens them back to one colour and the whole reason the pair exists is gone.
+ *
+ * Colouring the active titlebar is also the older and more universal convention
+ * (classic Windows, macOS and every tiling WM do it), so nothing is lost. */
+.os-window--focused {
+  box-shadow: var(--win-shadow-focus, var(--shadow-overlay));
+}
+
+.os-window--focused > .os-window-titlebar {
+  background: var(--win-titlebar-bg-active, var(--win-titlebar-bg, var(--bg-elevated)));
+  border-bottom-color: var(--win-border-focus, var(--accent));
+}
+
+.os-window--focused .os-window-title {
+  color: var(--win-title-fg-active, var(--text-strong));
+}
+
+.os-window--maximized {
+  border-radius: 0;
+}
+
+.os-window--dragging {
+  /* No transition while dragging: the rect is already following the pointer, and
+     an eased transform would lag a frame behind it. */
+  transition: none;
+  user-select: none;
+}
+
+.os-window--merge-target .os-window-titlebar {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.os-window-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: var(--win-titlebar-h, 30px);
+  padding: 0 4px 0 8px;
+  background: var(--win-titlebar-bg, var(--bg-elevated));
+  border-bottom: 1px solid var(--border);
+  cursor: grab;
+  user-select: none;
+  flex: 0 0 auto;
+}
+
+.os-window--dragging .os-window-titlebar {
+  cursor: grabbing;
+}
+
+.os-window-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
+.os-window-icon {
+  flex: 0 0 auto;
+}
+
+.os-window-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.os-window-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.os-window-tab {
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm, 4px);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.os-window-tab:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.os-window-tab.is-active {
+  background: var(--win-bg, var(--bg-raised));
+  color: var(--text-strong);
+}
+
+.os-window-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  /* Traffic-light themes put the controls on the left. One token, a flex order
+     change, no JavaScript branch and no per-platform component. */
+  order: var(--win-controls-order, 1);
+}
+
+.os-window-btn {
+  width: 24px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  border-radius: var(--radius-sm, 4px);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.os-window-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-strong);
+}
+
+.os-window-btn--close:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+.os-window-body {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+/* --- resize grips ------------------------------------------------------- */
+
+.os-window-resize {
+  position: absolute;
+  /* Wider than it looks: an edge only as thick as its border is a target users
+     miss, and the corners need to win over the edges they overlap. */
+  --grip: 6px;
+}
+
+.os-window-resize--n,
+.os-window-resize--s {
+  left: var(--grip);
+  right: var(--grip);
+  height: var(--grip);
+  cursor: ns-resize;
+}
+.os-window-resize--n {
+  top: 0;
+}
+.os-window-resize--s {
+  bottom: 0;
+}
+
+.os-window-resize--w,
+.os-window-resize--e {
+  top: var(--grip);
+  bottom: var(--grip);
+  width: var(--grip);
+  cursor: ew-resize;
+}
+.os-window-resize--w {
+  left: 0;
+}
+.os-window-resize--e {
+  right: 0;
+}
+
+.os-window-resize--nw,
+.os-window-resize--ne,
+.os-window-resize--sw,
+.os-window-resize--se {
+  width: calc(var(--grip) * 2);
+  height: calc(var(--grip) * 2);
+}
+.os-window-resize--nw {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
+}
+.os-window-resize--ne {
+  top: 0;
+  right: 0;
+  cursor: nesw-resize;
+}
+.os-window-resize--sw {
+  bottom: 0;
+  left: 0;
+  cursor: nesw-resize;
+}
+.os-window-resize--se {
+  bottom: 0;
+  right: 0;
+  cursor: nwse-resize;
+}
+
+/* --- snap preview -------------------------------------------------------- */
+
+.os-snap-overlay {
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+  background: var(--snap-preview-bg, color-mix(in srgb, var(--accent) 22%, transparent));
+  border: 2px solid var(--accent);
+  border-radius: var(--win-radius, var(--radius-lg, 9px));
+  transition:
+    left 90ms ease,
+    top 90ms ease,
+    width 90ms ease,
+    height 90ms ease;
+}

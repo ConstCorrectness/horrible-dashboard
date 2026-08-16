@@ -135,6 +135,237 @@
   --font-display: 'Instrument Serif', Georgia, 'Times New Roman', serif;
 }
 
+/* ------------------------------------------------------------------- glass --
+ *
+ * Translucent chrome over the backdrop: large radii, soft shadows, and real
+ * blur behind every window and the taskbar. The point is that the desktop
+ * backdrop stays visible *through* the app — so this is the one theme where the
+ * `--win-backdrop-filter` token earns its keep, and where surfaces are declared
+ * with alpha rather than as flat colours.
+ *
+ * Window controls sit on the LEFT here (`--win-controls-order`), the macOS
+ * convention. The glyphs stay `─ □ ✕` rather than becoming traffic lights: the
+ * token moves the group, it does not restyle the buttons, and pretending
+ * otherwise would need a component fork.
+ */
+:root[data-theme='glass'] {
+  color-scheme: dark;
+
+  --bg: #0f1218;
+  --bg-raised: rgb(30 34 44 / 72%);
+  --bg-elevated: rgb(38 43 55 / 78%);
+  --bg-hover: rgb(58 64 80 / 70%);
+  --bg-inset: rgb(0 0 0 / 22%);
+
+  --border: rgb(255 255 255 / 12%);
+  --border-strong: rgb(255 255 255 / 22%);
+
+  --text-strong: #f5f7fa;
+  --text: #dce0e8;
+  --text-dim: #9aa2b1;
+  --text-faint: #6b7383;
+
+  --accent: #7cc4ff;
+  --accent-2: #c08cff;
+  --accent-contrast: #0b0d10;
+
+  --success: #5fd67a;
+  --warn: #ffd08a;
+  --danger: #ff7b83;
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
+
+  --shadow-card: 0 8px 32px rgb(0 0 0 / 32%);
+  --shadow-overlay: 0 24px 64px rgb(0 0 0 / 50%);
+
+  --font-sans: 'DM Sans', 'Segoe UI', system-ui, sans-serif;
+  --font-display: 'Instrument Serif', Georgia, 'Times New Roman', serif;
+
+  /* OS chrome: blur is the whole theme. */
+  --win-backdrop-filter: blur(20px) saturate(150%);
+  --taskbar-backdrop-filter: blur(20px) saturate(150%);
+  --taskbar-bg: rgb(24 28 36 / 65%);
+  --win-titlebar-h: 34px;
+  --win-controls-order: -1;
+}
+
+/* --------------------------------------------------------------------- hud --
+ *
+ * A terminal-cyberpunk heads-up display: near-black, SHARP corners everywhere,
+ * hairline accent borders, and mono type in the chrome as well as the content.
+ * Depth comes from a glow rather than a drop shadow — a dark theme's shadow on a
+ * dark ground is invisible, so this one lights the edge instead.
+ *
+ * Every radius is 0 on purpose. This is the theme that proves the radius tokens
+ * are actually threaded through: if a component hardcoded a `border-radius`, it
+ * is visible here and nowhere else.
+ */
+:root[data-theme='hud'] {
+  color-scheme: dark;
+
+  --bg: #04070a;
+  --bg-raised: #080d12;
+  --bg-elevated: #0c141b;
+  --bg-hover: #10202a;
+  --bg-inset: rgb(0 0 0 / 45%);
+
+  --border: #12303c;
+  --border-strong: #1d5468;
+
+  --text-strong: #d8fff4;
+  --text: #9fe8d8;
+  --text-dim: #4f8a83;
+  --text-faint: #2f5a57;
+
+  --accent: #00e5c0;
+  --accent-2: #ff4d9d;
+  --accent-contrast: #02100d;
+
+  --success: #00e57a;
+  --warn: #ffc400;
+  --danger: #ff3860;
+
+  --radius-sm: 0;
+  --radius-md: 0;
+  --radius-lg: 0;
+  --radius-xl: 0;
+
+  --shadow-card: 0 0 0 1px rgb(0 229 192 / 12%);
+  --shadow-overlay: 0 0 24px rgb(0 229 192 / 18%);
+
+  /* Mono in the chrome too — that is what makes it read as an instrument panel
+     rather than as a dark app. `--font-mono` is declared on the same element
+     (the alias block below), so this `var()` resolves. */
+  --font-sans: var(--font-mono);
+  --font-display: var(--font-mono);
+
+  --win-shadow: 0 0 20px rgb(0 229 192 / 14%);
+  --win-shadow-focus: 0 0 28px rgb(0 229 192 / 30%);
+  --win-titlebar-h: 26px;
+  --taskbar-h: 34px;
+}
+
+/* ---------------------------------------------------------------- daylight --
+ *
+ * The productivity light theme: opaque surfaces, a faint cool tint, medium
+ * radii, and elevation you can actually see because the ground is bright.
+ *
+ * `color-scheme: light` is not decoration — it is what makes native scrollbars,
+ * form controls and the caret flip. Without it a light theme keeps dark
+ * scrollbars and looks broken in exactly the places CSS cannot reach.
+ */
+:root[data-theme='daylight'] {
+  color-scheme: light;
+
+  --bg: #f2f4f8;
+  --bg-raised: #ffffff;
+  --bg-elevated: #f7f9fc;
+  --bg-hover: #e7ebf2;
+  /* Inset is a black wash in the dark themes; here it must be a LIGHT wash or a
+     code block becomes a hole punched in the page. */
+  --bg-inset: rgb(16 24 40 / 5%);
+
+  --border: #d8dee9;
+  --border-strong: #b9c2d0;
+
+  --text-strong: #10151f;
+  --text: #2b3444;
+  --text-dim: #667085;
+  --text-faint: #98a2b3;
+
+  --accent: #2563eb;
+  --accent-2: #7c3aed;
+  /* On a light theme the accent is dark, so its contrast colour flips to white —
+     the one token that must invert or every primary button loses its label. */
+  --accent-contrast: #ffffff;
+
+  --success: #12813f;
+  --warn: #a25b00;
+  --danger: #c02434;
+
+  --radius-sm: 5px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  --shadow-card: 0 1px 3px rgb(16 24 40 / 10%), 0 1px 2px rgb(16 24 40 / 6%);
+  --shadow-overlay: 0 12px 32px rgb(16 24 40 / 16%);
+
+  --font-sans: 'DM Sans', 'Segoe UI', system-ui, sans-serif;
+  --font-display: 'Instrument Serif', Georgia, 'Times New Roman', serif;
+
+  --taskbar-bg: #ffffff;
+  --win-titlebar-bg: #f7f9fc;
+}
+
+/* ------------------------------------------------------------------- retro --
+ *
+ * Beveled 90s desktop: chunky grey chrome, square corners, and a raised edge on
+ * every window drawn by the `--win-border-light` / `--win-border-dark` pair.
+ *
+ * That pair is the reason the pair exists at all. `desktop.css` always sets four
+ * border colours from it; here they differ and you get a bevel, in every other
+ * theme they are equal and the bevel vanishes. One rule, two looks, no branch.
+ */
+:root[data-theme='retro'] {
+  color-scheme: light;
+
+  --bg: #008080;
+  --bg-raised: #c0c0c0;
+  --bg-elevated: #d4d0c8;
+  --bg-hover: #dfdcd6;
+  --bg-inset: rgb(0 0 0 / 8%);
+
+  --border: #808080;
+  --border-strong: #404040;
+
+  --text-strong: #000000;
+  --text: #1a1a1a;
+  --text-dim: #555555;
+  --text-faint: #808080;
+
+  --accent: #000080;
+  --accent-2: #1084d0;
+  --accent-contrast: #ffffff;
+
+  --success: #007800;
+  --warn: #806000;
+  --danger: #a00000;
+
+  --radius-sm: 0;
+  --radius-md: 0;
+  --radius-lg: 0;
+  --radius-xl: 0;
+
+  /* No soft shadows in 1995 — a hard offset block is the period-correct one. */
+  --shadow-card: 2px 2px 0 rgb(0 0 0 / 35%);
+  --shadow-overlay: 3px 3px 0 rgb(0 0 0 / 40%);
+
+  --font-sans: 'Tahoma', 'MS Sans Serif', 'Segoe UI', system-ui, sans-serif;
+  --font-display: 'Tahoma', 'MS Sans Serif', system-ui, sans-serif;
+
+  /* The bevel. */
+  --win-border: 2px solid #c0c0c0;
+  --win-border-light: #ffffff;
+  --win-border-dark: #404040;
+  --win-border-focus: #000080;
+  /* The 90s pair: grey when inactive, blue gradient when focused. This is the
+     one theme where the active titlebar is the whole focus signal. */
+  --win-titlebar-bg: linear-gradient(90deg, #808080, #b0b0b0);
+  --win-titlebar-bg-active: linear-gradient(90deg, #000080, #1084d0);
+  --win-title-fg-active: #ffffff;
+  --win-titlebar-h: 24px;
+  --win-shadow: 2px 2px 0 rgb(0 0 0 / 35%);
+  --win-shadow-focus: 2px 2px 0 rgb(0 0 0 / 45%);
+  --taskbar-bg: #c0c0c0;
+  --taskbar-h: 34px;
+  /* The desktop's own ground: the teal is the wallpaper, not a surface. */
+  --desktop-bg: #008080;
+}
+
 /* ------------------------------------------------------------- derived + aliases
  *
  * Theme-independent by construction: everything here is a `var()` on a primitive
@@ -177,4 +408,51 @@
   --ok: var(--success);
   --warning: var(--warn);
   --error: var(--danger);
+
+  /* A second accent, for the two-tone surfaces (the aurora backdrop, gradients).
+     Defaults to the primary so a theme that has no opinion still renders one
+     coherent hue rather than a stray fallback colour. */
+  --accent-2: var(--accent);
+
+  /* -------------------------------------------------- OS chrome (--win-*) --
+   *
+   * Windows, the taskbar and the snap preview read ONLY these. They are derived
+   * here rather than restated per theme, so a new theme inherits a coherent
+   * desktop for free and overrides only what it actually wants to differ — which
+   * is what keeps `desktop.css` free of per-theme branches.
+   *
+   * The light/dark border pair is the load-bearing one: `desktop.css` always
+   * assigns all four window border colours from it, so a theme that sets the two
+   * to different values gets a raised bevel (see `retro`) and every theme that
+   * leaves them equal gets a flat edge, with no conditional anywhere. */
+  --win-bg: var(--bg-raised);
+  --win-border: 1px solid var(--border);
+  --win-border-light: var(--border);
+  --win-border-dark: var(--border);
+  --win-border-focus: var(--accent);
+  --win-radius: var(--radius-lg);
+  /* The INACTIVE titlebar. Focus swaps to `--win-titlebar-bg-active`, which
+     defaults to the same value — most themes signal focus with the accent
+     border-bottom and the shadow, and only a theme with a real active-titlebar
+     tradition (retro) overrides it. */
+  --win-titlebar-bg: var(--bg-elevated);
+  --win-titlebar-bg-active: var(--win-titlebar-bg);
+  --win-title-fg-active: var(--text-strong);
+  --win-titlebar-h: 30px;
+  --win-shadow: var(--shadow-overlay);
+  --win-shadow-focus: var(--shadow-overlay);
+  --win-backdrop-filter: none;
+  /* Flex `order` for the window's control group: 1 puts it after the title
+     (Windows-style), -1 before it (macOS-style). Layout, not colour — which is
+     why it is a token and not a component branch. */
+  --win-controls-order: 1;
+
+  --taskbar-bg: var(--bg-elevated);
+  --taskbar-h: 40px;
+  --taskbar-radius: var(--radius-sm);
+  --taskbar-backdrop-filter: none;
+
+  --snap-preview-bg: color-mix(in srgb, var(--accent) 22%, transparent);
+  /* The desktop's ground, behind every backdrop provider. */
+  --desktop-bg: var(--bg);
 }

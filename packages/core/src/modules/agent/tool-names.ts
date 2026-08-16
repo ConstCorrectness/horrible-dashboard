@@ -33,8 +33,10 @@ export const LAYOUT_VERBS: readonly string[] = [
   'set_region_view',
   'open_tool_in_dock',
   'toggle_dock',
-  'float_pane',
-  'dock_pane',
+  'open_window',
+  'dock_window',
+  'window_state',
+  'arrange_windows',
   'create_workspace',
   'switch_workspace',
 ];

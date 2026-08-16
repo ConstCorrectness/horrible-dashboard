@@ -1,8 +1,9 @@
 /**
  * Data model for the frame layout engine — the pure, React-free source of truth
  * for everything the workspace shows: the Blender-style center area grid, the
- * three fixed tool docks, the floating layer, fullscreen, and per-pane region
- * strips. Rendering lives in packages/ui/src/layout; this layer is plain data +
+ * three fixed tool docks, the desktop's windows and backdrop, fullscreen, and
+ * per-pane region strips. Rendering lives in packages/ui/src/layout and
+ * packages/ui/src/desktop; this layer is plain data +
  * pure functions so it can be unit-tested and driven identically by user
  * gestures, keybindings, and the agent's layout tools. See
  * docs/architecture/windowing.mdx.
@@ -94,32 +95,125 @@ export interface DockState {
   activeTool: string | null;
 }
 
-/** A lightweight in-window floating pane (not an OS window). */
-export interface FloatingPane {
-  pane: PaneState;
-  /** Fractions of the center grid's bounds, so rects survive resizes/DPI. */
-  rect: { x: number; y: number; w: number; h: number };
+/** A window's position and size, in pixels within the desktop surface. */
+export interface WindowRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * A window's own state, independent of where it sits. `minimized` keeps the pane
+ * **mounted** (a minimized terminal is still running — see
+ * docs/architecture/desktop-shell.mdx); only the chrome is hidden.
+ */
+export type WindowMode = 'normal' | 'minimized' | 'maximized';
+
+/**
+ * Where a window has been snapped. `max` is the whole surface; the four edges are
+ * halves and the four corners are quarters. Stored rather than re-derived from the
+ * rect, because a window the user dragged to exactly half-width is not snapped and
+ * must not spring back to the restore rect when nudged.
+ */
+export type SnapZone = 'left' | 'right' | 'top' | 'bottom' | 'tl' | 'tr' | 'bl' | 'br' | 'max';
+
+/**
+ * One OS-style window on the desktop.
+ *
+ * Its content is an **`AreaNode` — the same node type the center grid uses**. That is
+ * the whole trick behind "one pane per window, tabs optional": a plain window is an
+ * area with one tab, a merged window is an area with several, and every piece of tab
+ * machinery that already exists (the tab strip in `AreaHeader`, `dropPaneOnTab`,
+ * `SET_ACTIVE_TAB`, `REORDER_TAB`, the role invariant) applies to windows unchanged
+ * instead of being duplicated in a parallel vocabulary.
+ *
+ * Geometry is **pixels**, against `FrameState.windowViewport` — the surface size the
+ * rects were last measured on. Fractions survive a resize but cannot express a minimum
+ * size and reflow a window's contents on every drag of the app edge; pixels plus a
+ * remembered viewport let a layout be rescaled proportionally when it is opened at a
+ * different size, while staying pixel-stable during ordinary use.
+ */
+export interface WindowState {
+  /** Unique per workspace, `w<n>` (n from `FrameState.paneSeq`). */
+  id: string;
+  area: AreaNode;
+  rect: WindowRect;
+  /** Geometry to return to when un-maximizing or un-snapping. */
+  restoreRect?: WindowRect;
+  mode: WindowMode;
+  snap?: SnapZone;
   z: number;
 }
+
+/** Which paradigm a desktop runs: free windows, or the tiling frame engine. */
+export type DesktopMode = 'floating' | 'tiling';
+
+/** The backdrop a desktop renders behind its windows (a registered provider id). */
+export interface BackdropRef {
+  id: string;
+  params?: Record<string, unknown>;
+}
+
+/**
+ * The backdrop a desktop gets when it has never been told otherwise — a fresh
+ * frame, and a v1 blob being migrated.
+ *
+ * A migrated desktop deliberately does **not** get `none`. The rest of the
+ * migration preserves what the user had, but there is nothing to preserve here:
+ * before v2 a desktop had no backdrop at all, because there was no surface it
+ * could show on. Choosing `none` would not be conservative, it would hand every
+ * existing user a blank landing screen for a feature they never turned off.
+ *
+ * A model-layer constant, not the registry's: the reducer and the deserializer
+ * must be able to name it without knowing which providers are registered — and
+ * an unregistered id already falls back gracefully at render time.
+ */
+export const DEFAULT_BACKDROP = 'aurora';
 
 /** Everything one workspace shows. Serialized as the workspace's layout blob. */
 export interface FrameState {
   center: LayoutNode;
   docks: Record<DockSide, DockState>;
-  floating: FloatingPane[];
+  /**
+   * The windows on this desktop. Present in **both** modes: a floating window on a
+   * tiling desktop is the deliberate escape hatch (i3's floating layer), so the
+   * center tree and the window list always coexist.
+   */
+  windows: WindowState[];
+  /**
+   * The desktop-surface size `windows[].rect` was last measured against, or null
+   * before anything has measured it. Rects are rescaled through this when the
+   * surface turns out to be a different size than when they were saved (a second
+   * monitor, a resized app, a phone). Migrated v1 blobs arrive as `{w:1,h:1}`, which
+   * makes their old fractional rects rescale into pixels through the ordinary path
+   * with no special case.
+   */
+  windowViewport: { w: number; h: number } | null;
+  /** This desktop's paradigm. Rails and docks render only when `tiling`. */
+  mode: DesktopMode;
+  /** What paints behind the windows. */
+  backdrop: BackdropRef;
   /** Area temporarily filling the whole frame (Blender ctrl+space), or null. */
   fullscreenAreaId: string | null;
   /** Focused center area — area verbs (split/join/nav) and role routing target it. */
   focusedAreaId: string | null;
   /**
    * The focused pane **instance**, wherever it lives — a center tab, a docked
-   * tool, or a floating pane. This is the keyboard's idea of "where you are":
+   * tool, or a window tab. This is the keyboard's idea of "where you are":
    * `focusedAreaId` only ever names a center area, so before this existed,
    * clicking a docked tool left every pane-scoped command pointed at whatever
    * center area was focused last. The view id and location are derived from it
    * (`findPaneAnywhere`) rather than stored, so they cannot drift.
    */
   focusedInstanceId: string | null;
+  /**
+   * The focused **window**, for the keyboard's window verbs (snap, minimize, cycle).
+   * Null means focus is in the tiled frame or a dock. Distinct from
+   * `focusedInstanceId`, which names a pane: a window verb acts on the whole window,
+   * including the tabs that aren't showing.
+   */
+  focusedWindowId: string | null;
   /** Monotonic id counter for pane instances and tree nodes. Never reset. */
   paneSeq: number;
 }
@@ -151,7 +245,8 @@ export interface Rect {
 export type PaneLocation =
   | { kind: 'area'; areaId: string }
   | { kind: 'dock'; dock: DockSide }
-  | { kind: 'floating' };
+  /** `areaId` is the window's own area, so area verbs work on window tabs too. */
+  | { kind: 'window'; windowId: string; areaId: string };
 
 /** A pane plus its location, as returned by `listPanes`. */
 export interface LocatedPane {

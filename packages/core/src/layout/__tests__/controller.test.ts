@@ -15,6 +15,7 @@ import {
   areaHostingView,
   dockSidesOf,
   isDockable,
+  movePaneTo,
   openDocument,
   openPane,
   openPaneInArea,
@@ -75,6 +76,60 @@ beforeEach(() => {
     frame: seedFromPreset(preset, {
       knownViews: new Set(['t.doc', 't.tool', 't.rightTool', 't.widget', 't.promoted', 't.multi']),
     }),
+  });
+});
+
+describe('movePaneTo with an edge (the split gap)', () => {
+  /**
+   * Until this landed, `move_pane`/`join_area` could only move a pane between areas
+   * that already existed, so a pane opened into the wrong place often could not be
+   * fixed at all — the agent guide had to tell the model "do not open then move".
+   * These are the cases that were impossible.
+   */
+  it('splits the target area and lands the pane in the new half', () => {
+    const inst = openPane('t.multiDoc')!;
+    const host = areaHostingView('t.doc')!;
+    expect(movePaneTo(inst, { areaId: host, edge: 'below' })).toBe(true);
+
+    const snap = layoutStore.getSnapshot().frame;
+    const located = findPaneAnywhere(snap, inst)!;
+    expect(located.location.kind).toBe('area');
+    // In a NEW area beside the host, not merged into it as a tab and not left
+    // where it started — that new area is the thing that could not be created.
+    const landed = (located.location as { areaId: string }).areaId;
+    expect(landed).not.toBe(host);
+    expect(collectAreas(snap.center).some((a) => a.id === landed)).toBe(true);
+    // The host kept its own pane: a split, not a move-over-the-top.
+    expect(areaHostingView('t.doc')).toBe(host);
+  });
+
+  it('carries a pane out of a dock into a fresh split', () => {
+    // The move that was most clearly impossible: a docked tool had no route into
+    // the center grid except an area that happened to already be empty.
+    const inst = openToolInDock('t.tool', 'left')!;
+    const host = areaHostingView('t.doc')!;
+    expect(movePaneTo(inst, { areaId: host, edge: 'right' })).toBe(true);
+    const snap = layoutStore.getSnapshot().frame;
+    expect(findPaneAnywhere(snap, inst)?.location.kind).toBe('area');
+    expect(snap.docks.left.tools).toHaveLength(0);
+  });
+
+  it('does not duplicate the pane', () => {
+    const inst = openPane('t.multiDoc')!;
+    movePaneTo(inst, { areaId: areaHostingView('t.doc')!, edge: 'below' });
+    const all = collectAreas(layoutStore.getSnapshot().frame.center).flatMap((a) =>
+      a.tabs.map((t) => t.instanceId),
+    );
+    expect(all.filter((id) => id === inst)).toHaveLength(1);
+  });
+
+  it('refuses to split an area off itself when the pane is its only tab', () => {
+    // That would move the pane into a new half and leave the old one empty: a
+    // no-op dressed up as a layout change.
+    const host = areaHostingView('t.doc')!;
+    const pane = collectAreas(layoutStore.getSnapshot().frame.center).find((a) => a.id === host)!
+      .tabs[0];
+    expect(movePaneTo(pane.instanceId, { areaId: host, edge: 'right' })).toBe(false);
   });
 });
 

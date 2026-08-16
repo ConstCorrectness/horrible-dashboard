@@ -8,6 +8,8 @@
  */
 import { areaId, createDock, createEmptyFrame, firstArea, instanceId, normalize } from './model';
 import type {
+  BackdropRef,
+  DesktopMode,
   DockSide,
   DockState,
   FrameState,
@@ -51,6 +53,14 @@ export interface FramePreset {
    * `main`, the same way `seedFromPreset` skips unknown views.
    */
   agent?: string;
+  /**
+   * The paradigm this arrangement is meant for. Defaults to `tiling`, because a
+   * preset describes a split tree and docks — the things only a tiling desktop
+   * renders. A preset that wants a wallpaper-and-windows desktop says so.
+   */
+  mode?: DesktopMode;
+  /** Backdrop for the seeded desktop. Defaults to `none`. */
+  backdrop?: BackdropRef;
   frame: {
     center: PresetNode;
     docks?: Partial<Record<DockSide, PresetDock>>;
@@ -115,8 +125,13 @@ export function seedFromPreset(preset: FramePreset, opts: SeedOptions): FrameSta
   };
 
   const center = buildNode(preset.frame.center);
-  const empty = createEmptyFrame();
-  if (!center) return empty;
+  if (!center) {
+    return {
+      ...createEmptyFrame(),
+      mode: preset.mode ?? 'tiling',
+      backdrop: preset.backdrop ?? { id: 'none' },
+    };
+  }
 
   const docks = {} as Record<DockSide, DockState>;
   for (const side of ['left', 'right', 'bottom'] as const) {
@@ -150,10 +165,14 @@ export function seedFromPreset(preset: FramePreset, opts: SeedOptions): FrameSta
   return {
     center: normalized,
     docks,
-    floating: [],
+    windows: [],
+    windowViewport: null,
+    mode: preset.mode ?? 'tiling',
+    backdrop: preset.backdrop ?? { id: 'none' },
     fullscreenAreaId: null,
     focusedAreaId: firstArea(normalized).id,
     focusedInstanceId: null,
+    focusedWindowId: null,
     paneSeq: seq,
   };
 }

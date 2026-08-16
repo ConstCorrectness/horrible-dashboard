@@ -71,6 +71,14 @@ flowchart TD
 An XDG variable is honoured **only when absolute**, which is what the spec says: a
 relative value is defined to be ignored, not resolved against the cwd.
 
+### What lives under `data_dir()`
+
+Among others: `app.db`, `secrets.db` (the key is deliberately *not* here — see
+below), `lancedb/`, `llamacpp/`, `karaoke/`, `geoip/`, `workspaces.json`, and
+**`wallpapers/`** — the images a user uploads for the `image` desktop backdrop. No
+imagery ships with the app, so that directory is empty on a fresh install; see
+[desktop-shell.mdx](desktop-shell.mdx#wallpapers) for the upload rules.
+
 ### Why `%LOCALAPPDATA%` and not `%APPDATA%`
 
 Tauri's own `app_data_dir` picks roaming `%APPDATA%`, and this deliberately

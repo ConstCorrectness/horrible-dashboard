@@ -40,6 +40,28 @@ export const THEMES: ThemeDecl[] = [
     description:
       'Softer borders, larger radii and real elevation, with editorial serif display type.',
   },
+  {
+    id: 'glass',
+    title: 'Glass',
+    description:
+      'Translucent, blurred chrome so the desktop backdrop shows through. Window controls on the left.',
+  },
+  {
+    id: 'hud',
+    title: 'HUD',
+    description:
+      'Terminal cyberpunk: near-black, square corners, mono chrome, and a glow instead of a shadow.',
+  },
+  {
+    id: 'daylight',
+    title: 'Daylight',
+    description: 'A light, opaque productivity theme with visible elevation.',
+  },
+  {
+    id: 'retro',
+    title: 'Retro',
+    description: 'Beveled grey 90s chrome, square corners, and a teal desktop.',
+  },
 ];
 
 export const THEME_SETTING_KEY = 'settings.theme';

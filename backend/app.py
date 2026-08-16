@@ -137,6 +137,7 @@ from backend.modules.training.kernels import (
     handle_training_message,
     training_kernels,
 )
+from backend.modules.desktop import router as desktop_router
 from backend.modules.workspace import router as workspace_router
 from backend.modules.database import router as database_router
 from backend.modules.visualizer import visualizer_manager
@@ -227,6 +228,7 @@ def resolved_paths() -> dict[str, object]:
 
 app.include_router(agent_router, prefix="/api")
 app.include_router(workspace_router, prefix="/api")
+app.include_router(desktop_router, prefix="/api")
 app.include_router(database_router, prefix="/api")
 app.include_router(library_router, prefix="/api")
 app.include_router(karaoke_router, prefix="/api")

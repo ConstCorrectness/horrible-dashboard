@@ -328,7 +328,9 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
         "move_pane",
         "Move a center pane into another area: pass areaId (from get_layout) for "
         "an exact target, or direction to move it to the neighboring area. "
-        "Documents stack as tabs; widgets need an empty target area.",
+        "Documents stack as tabs by default; pass edge to split the target area "
+        "instead and drop the pane into the new half, which is how you place a "
+        "pane beside another one that is already open.",
         {
             "instanceId": {"type": "string", "description": "Pane to move"},
             "areaId": {
@@ -336,6 +338,15 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
                 "description": "Target area (from get_layout)",
             },
             "direction": {"type": "string", "enum": ["left", "right", "up", "down"]},
+            "edge": {
+                "type": "string",
+                "enum": ["left", "right", "above", "below"],
+                "description": (
+                    "Split the target area toward this edge and put the pane in "
+                    "the new half, rather than tabbing it in. Same vocabulary as "
+                    "split_area."
+                ),
+            },
         },
         ["instanceId"],
     ),
@@ -392,18 +403,92 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
         ["dock"],
     ),
     _tool(
-        "float_pane",
-        "Pop an open pane out into a floating card over the center grid. "
-        "instanceId from list_open_panes.",
+        "open_window",
+        "Pop an open pane out into a free-floating desktop window. instanceId "
+        "from list_open_panes. Optionally place it: snap puts it in a screen "
+        "region, or rect gives exact pixels. Windows work on both a floating and "
+        "a tiling desktop — on a tiling one a window is the escape hatch for a "
+        "pane that should not participate in the tiling.",
+        {
+            "instanceId": {"type": "string"},
+            "snap": {
+                "type": "string",
+                "enum": [
+                    "left",
+                    "right",
+                    "top",
+                    "bottom",
+                    "tl",
+                    "tr",
+                    "bl",
+                    "br",
+                    "max",
+                ],
+                "description": "Screen region to snap to. `top` maximizes.",
+            },
+            "rect": {
+                "type": "object",
+                "description": "Exact pixel rect. Ignored when snap is given.",
+                "properties": {
+                    "x": {"type": "number"},
+                    "y": {"type": "number"},
+                    "w": {"type": "number"},
+                    "h": {"type": "number"},
+                },
+            },
+        },
+        ["instanceId"],
+    ),
+    _tool(
+        "dock_window",
+        "Put a windowed pane back into the tiling frame (a center area, or its "
+        "dock for a tool pane). instanceId from list_open_panes.",
         {"instanceId": {"type": "string"}},
         ["instanceId"],
     ),
     _tool(
-        "dock_pane",
-        "Put a floating pane back into the center grid. instanceId from "
-        "list_open_panes.",
-        {"instanceId": {"type": "string"}},
-        ["instanceId"],
+        "window_state",
+        "Minimize, maximize, restore or snap a window, or send it to another "
+        "desktop. One verb rather than five, so the whole vocabulary costs one "
+        "schema. A minimized window keeps running — it is hidden, not closed.",
+        {
+            "instanceId": {"type": "string", "description": "A pane in the window"},
+            "state": {
+                "type": "string",
+                "enum": ["minimize", "maximize", "restore", "snap", "move_to_desktop"],
+            },
+            "snap": {
+                "type": "string",
+                "enum": [
+                    "left",
+                    "right",
+                    "top",
+                    "bottom",
+                    "tl",
+                    "tr",
+                    "bl",
+                    "br",
+                    "max",
+                ],
+                "description": "Required when state is `snap`.",
+            },
+            "workspaceId": {
+                "type": "string",
+                "description": "Required when state is `move_to_desktop`.",
+            },
+        },
+        ["instanceId", "state"],
+    ),
+    _tool(
+        "arrange_windows",
+        "Lay every open window out at once. Minimized windows are left alone.",
+        {
+            "style": {
+                "type": "string",
+                "enum": ["grid", "cascade", "columns", "rows"],
+            }
+        },
+        ["style"],
     ),
     _tool(
         "create_workspace",
@@ -416,6 +501,61 @@ LAYOUT_TOOLS: list[dict[str, Any]] = [
         "Switch to a workspace by its id (from list_workspaces).",
         {"id": {"type": "string"}},
         ["id"],
+    ),
+]
+
+#: Appearance verbs, in their own lazily-loaded `desktop` group.
+#:
+#: Deliberately NOT in `layout`. Restyling the desktop is a rare request, and the
+#: always-on core was cut 34 -> 11 tools for a measured reason (see
+#: docs/modules/agent-chat.mdx): anything that lives in the core is paid for on
+#: every turn by every agent, including the ones that never touch it. These load
+#: on demand, or when the prompt mentions a theme or a wallpaper.
+DESKTOP_TOOLS: list[dict[str, Any]] = [
+    _tool(
+        "desktop.set_backdrop",
+        "Set what the active desktop shows behind its windows. Ids come from "
+        "get_layout (`desktop.backdrops`). `image` takes params {url, fit, dim}; "
+        "the url must be one returned by the wallpaper routes.",
+        {
+            "id": {"type": "string", "description": "A registered backdrop id"},
+            "params": {
+                "type": "object",
+                "description": "Provider-specific options. Replaces the old ones.",
+            },
+        },
+        ["id"],
+    ),
+    _tool(
+        "desktop.set_theme",
+        "Switch the app theme. Ids from get_layout (`desktop.themes`).",
+        {"id": {"type": "string"}},
+        ["id"],
+    ),
+    _tool(
+        "desktop.set_mode",
+        "Switch the active desktop between the tiling frame and free-floating "
+        "windows. Every open pane survives either way, but split ratios do not "
+        "round-trip exactly — say so if the user is likely to care.",
+        {"mode": {"type": "string", "enum": ["tiling", "floating"]}},
+        ["mode"],
+    ),
+    _tool(
+        "desktop.configure_taskbar",
+        "Reconfigure the taskbar. Omitted fields are left alone.",
+        {
+            "position": {"type": "string", "enum": ["bottom", "top"]},
+            "zones": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": ["start", "windows", "spacer", "desktops", "tray", "clock"],
+                },
+                "description": "Zones in render order. An empty list is a bare strip.",
+            },
+            "showLabels": {"type": "boolean"},
+            "autoHide": {"type": "boolean"},
+        },
     ),
 ]
 
@@ -628,6 +768,10 @@ _GROUP_DESCRIPTIONS: dict[str, str] = {
         "move panes between docks and regions, create and switch workspaces. "
         "(Reading the layout needs no load — those verbs are always present.)"
     ),
+    "desktop": (
+        "How the desktop looks: its backdrop or wallpaper, the app theme, the "
+        "taskbar's zones, and whether the desktop tiles or floats its windows."
+    ),
     "files": "Browse, read, search, create, and edit files in the workspace.",
     "editor": "Inspect and modify open editor buffers (read, propose edits, format, rename).",
     "terminal": "Run shell commands and manage terminal sessions.",
@@ -701,6 +845,16 @@ _GROUP_KEYWORDS: dict[str, tuple[str, ...]] = {
     # Deliberately narrow: these must be words that only mean *arranging the shell*.
     # "open" and "close" are not here — they'd preload the arrangement verbs on
     # nearly every turn, which is exactly the cost this split exists to avoid.
+    "desktop": (
+        "theme",
+        "wallpaper",
+        "backdrop",
+        "taskbar",
+        "desktop",
+        "dark mode",
+        "light mode",
+        "tiling",
+    ),
     "layout": (
         "layout",
         "pane",
@@ -970,6 +1124,7 @@ def _all_dynamic_tools(
     out: list[dict[str, Any]] = []
     candidates = (
         list(LAYOUT_WRITE_TOOLS)
+        + list(DESKTOP_TOOLS)
         + _plugins.provider_tools(grouped=True)
         + _manifest_to_tools(getattr(conn, "agent_tools", []))
     )

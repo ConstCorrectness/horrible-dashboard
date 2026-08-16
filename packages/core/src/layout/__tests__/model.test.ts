@@ -268,19 +268,31 @@ describe('frame-level pane ops', () => {
           activeTool: 'files.tree#2',
         },
       },
-      floating: [{ pane: pane('scratch.note', 3), rect: { x: 0.1, y: 0.1, w: 0.4, h: 0.4 }, z: 1 }],
-      paneSeq: 4,
+      windows: [
+        {
+          id: 'w10',
+          area: { kind: 'area', id: 'a11', tabs: [pane('scratch.note', 3)], activeTab: 0 },
+          rect: { x: 40, y: 40, w: 400, h: 300 },
+          mode: 'normal',
+          z: 1,
+        },
+      ],
+      paneSeq: 12,
     };
   }
 
-  it('finds and lists panes across center, docks, and floating', () => {
+  it('finds and lists panes across center, docks, and windows', () => {
     const frame = frameWithEverything();
     expect(listPanes(frame)).toHaveLength(3);
     expect(findPaneAnywhere(frame, 'files.tree#2')?.location).toEqual({
       kind: 'dock',
       dock: 'left',
     });
-    expect(findPaneAnywhere(frame, 'scratch.note#3')?.location).toEqual({ kind: 'floating' });
+    expect(findPaneAnywhere(frame, 'scratch.note#3')?.location).toEqual({
+      kind: 'window',
+      windowId: 'w10',
+      areaId: 'a11',
+    });
   });
 
   it('updates a pane in a dock', () => {
@@ -300,11 +312,33 @@ describe('frame-level pane ops', () => {
     expect(res.frame.docks.left.activeTool).toBeNull();
   });
 
-  it('removing a floating pane leaves the rest intact', () => {
+  it("removing a window's only pane closes the window and leaves the rest intact", () => {
     const frame = frameWithEverything();
     const res = removePaneAnywhere(frame, 'scratch.note#3')!;
-    expect(res.frame.floating).toHaveLength(0);
+    expect(res.frame.windows).toHaveLength(0);
     expect(areaOfInstance(res.frame.center, 'scratch.note#1')).not.toBeNull();
+  });
+
+  it('removing one tab of a merged window keeps the window open', () => {
+    const base = frameWithEverything();
+    const frame = {
+      ...base,
+      windows: [
+        {
+          ...base.windows[0],
+          area: {
+            ...base.windows[0].area,
+            tabs: [...base.windows[0].area.tabs, pane('files.tree', 4)],
+            activeTab: 1,
+          },
+        },
+      ],
+    };
+    const res = removePaneAnywhere(frame, 'files.tree#4')!;
+    expect(res.frame.windows).toHaveLength(1);
+    expect(res.frame.windows[0].area.tabs).toHaveLength(1);
+    // The active index followed the removal instead of dangling past the end.
+    expect(res.frame.windows[0].area.activeTab).toBe(0);
   });
 
   it('removal repairs focus and fullscreen pointing at the dropped area', () => {

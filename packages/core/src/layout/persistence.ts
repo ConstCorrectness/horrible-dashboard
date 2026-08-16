@@ -15,13 +15,13 @@ import {
   type Workspace as WorkspaceModel,
 } from '../workspace';
 import { workspaceStore } from '../workspace-store';
-import { createEmptyFrame, listPanes } from './model';
+import { areaId, createEmptyFrame, listPanes, windowId } from './model';
 import { closeWorkspaceSessions } from './pane-lifetime';
 import { seedFromPreset, type FramePreset } from './presets';
 import { isDockable, regionsFor, resolveView } from './controller';
 import { deserialize, serialize } from './serialize';
 import { layoutStore } from './store';
-import type { FrameState } from './types';
+import type { FrameState, WindowState } from './types';
 
 const AUTOSAVE_MS = 600;
 
@@ -127,6 +127,46 @@ async function saveSnapshotNow(): Promise<void> {
   if (!snap.hydrated || !snap.workspaceId || snap.revision === lastSavedRevision) return;
   lastSavedRevision = snap.revision;
   await saveWorkspace(snap.workspaceId, { layout: serialize(snap.frame) });
+}
+
+/**
+ * Add a window to a workspace that is **not** the one loaded — "send this window to
+ * Desktop 2".
+ *
+ * It edits the destination's stored blob directly rather than going through the
+ * store, because the store holds exactly one workspace at a time; loading the target
+ * to edit it would yank the user's screen out from under them. Returns false if the
+ * workspace is gone or its blob isn't one of ours, so the caller can leave the window
+ * where it is instead of dropping it.
+ *
+ * The window is re-seated at ids drawn from the destination's own counter: ids are
+ * unique per workspace, and carrying them across would risk colliding with whatever
+ * is already there.
+ */
+export async function addWindowToWorkspace(
+  workspaceId: string,
+  win: WindowState,
+): Promise<boolean> {
+  const state = await getWorkspaces();
+  const target = state.workspaces.find((w) => w.id === workspaceId);
+  if (!target) return false;
+  const frameState = frameOf(target);
+  const seq = frameState.paneSeq;
+  const landed: FrameState = {
+    ...frameState,
+    windows: [
+      ...frameState.windows,
+      {
+        ...win,
+        id: windowId(seq),
+        area: { ...win.area, id: areaId(seq + 1) },
+        z: frameState.windows.length + 1,
+      },
+    ],
+    paneSeq: seq + 2,
+  };
+  await saveWorkspace(workspaceId, { layout: serialize(landed) });
+  return true;
 }
 
 /** Persist any pending edits now (cancels the debounce). Await before switching. */

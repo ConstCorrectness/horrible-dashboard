@@ -5,8 +5,8 @@ sidebar_label: Windowing
 
 # Windowing: the frame
 
-The `workspace` view (see [layout-shell.mdx](layout-shell.mdx)) is the **frame** —
-a custom layout engine that hybridizes VS Code and Blender:
+A desktop in **tiling** mode (see [layout-shell.mdx](layout-shell.mdx)) shows the
+**frame** — a custom layout engine that hybridizes VS Code and Blender:
 
 - a **workspace tab strip** across the top (Blender-style, the single switcher);
 - VS Code-style **activity rails** down both sides, three fixed **tool docks**, and
@@ -15,7 +15,13 @@ a custom layout engine that hybridizes VS Code and Blender:
 - a Blender-style **center grid** of recursively split **areas**;
 - per-pane **region strips** (the successor of panel groups — see
   [panel-groups.mdx](panel-groups.mdx));
-- an in-window **floating layer** and a **fullscreen-area** mode.
+- a **fullscreen-area** mode.
+
+The frame's old in-window floating layer has been promoted into the desktop shell's
+**window layer**, which floats over the whole shell rather than being clipped inside
+the center grid — see [desktop-shell.mdx](desktop-shell.mdx). Windows live on
+`FrameState` and so are described here; how they are _presented_ (backdrop, taskbar,
+tiling-vs-floating desktops) belongs to that page.
 
 ## Decisions
 
@@ -30,7 +36,10 @@ a custom layout engine that hybridizes VS Code and Blender:
   `presets.ts` (frame seeds) — all unit-tested (`pnpm --filter @horrible/core
   test`). `packages/ui/src/layout/` renders it: `Frame`, `WorkspaceTabs`,
   `ActivityRail`, `Dock`, `CenterGrid`, `Area`, `AreaHeader`, `Region`,
-  `PaneHost`, `CornerGrip`, `FloatingLayer`, `Sash`.
+  `PaneHost`, `CornerGrip`, `Sash` — plus `packages/ui/src/desktop/` for the window
+  layer, the backdrops and the taskbar, and `layout/install.ts`, which installs the
+  engine from the **shell** rather than from `Frame`'s mount (the frame does not
+  mount at all on a floating desktop).
 - **Three pane roles = default placement.** Every view (panel or widget
   declaration) declares `role: 'document' | 'tool' | 'widget'`, which says where
   an `openPanel` with no further instruction puts it:
@@ -70,7 +79,8 @@ a custom layout engine that hybridizes VS Code and Blender:
   which removes the second home rather than merely discouraging it. See
   [Embedded views and sections](#embedded-views-and-sections).
 - **Workspaces are full frames (Blender model).** A workspace persists
-  *everything*: the center tree, dock visibility/sizes/contents, floating panes,
+  *everything*: the center tree, dock visibility/sizes/contents, windows, its own
+  `mode` and `backdrop`,
   region state, focus, fullscreen. Switching workspaces switches the whole
   picture. `FramePreset`s (contributed via `ModuleManifest.frames`) seed
   stable-id workspaces on first activation — **Dashboard**, **Scripting**,
@@ -97,7 +107,8 @@ a custom layout engine that hybridizes VS Code and Blender:
 flowchart TD
     F["FrameState (one workspace)"] --> C["center: LayoutNode"]
     F --> DL["docks.left/right/bottom: DockState"]
-    F --> FL["floating: FloatingPane[]"]
+    F --> FL["windows: WindowState[]"]
+    FL --> WA["area: AreaNode — the SAME node type the center grid uses"]
     C --> S["SplitNode — row/column, fractional sizes"]
     S --> A["AreaNode — tabs: PaneState[], activeTab"]
     S --> S2["SplitNode (nested …)"]
@@ -122,7 +133,42 @@ flowchart TD
   than snapping to the built-in default. A view can declare a starting width with
   `defaultDockSize` (`agent.chat` opens at 420); switching the active tool
   therefore changes the dock's extent.
-- **FloatingPane** — an in-window card over the center grid (fractional rect).
+- **WindowState** — one OS-style window on the desktop, replacing the old
+  `FloatingPane`. Two things changed with it, and both matter:
+
+  Its **content is an `AreaNode`**, the same node type the center grid uses. That
+  is what makes "one pane per window, tabs optional" nearly free: a plain window is
+  an area with one tab, a merged window is an area with several, and the existing
+  tab strip, `dropPaneOnTab`, `SET_ACTIVE_TAB` and `REORDER_TAB` all apply to
+  windows unchanged rather than being duplicated in a parallel vocabulary that
+  would drift. `findAreaAnywhere`/`updateAreaAnywhere` (`layout/model.ts`) resolve
+  an area id against the center tree **or any window**, which is the seam that makes
+  that work.
+
+  Its **geometry is pixels**, measured against `FrameState.windowViewport` — the
+  surface size the rects were last measured on. The old fractional rect was
+  fractions of `.frame-center`, which is precisely what pinned floating cards
+  inside the tiling frame; a window now floats over the whole shell. Fractions also
+  cannot express a minimum size, and would reflow a window's contents on every drag
+  of the app's edge. On load, if the surface turns out to be a different size than
+  when the layout was saved, every rect is rescaled proportionally through
+  `SET_WINDOW_VIEWPORT` — which deliberately **does not bump `revision`**: it is a
+  projection of the same layout onto a different surface, not a user edit, and
+  marking it dirty would make every browser resize dirty the workspace and drive
+  the 600 ms autosave debounce into a continuous write loop.
+
+  `mode` is `normal | minimized | maximized`, and `snap` records the zone a window
+  occupies. `snap` is **stored rather than re-derived** from the rect, because a
+  window the user happened to drag to exactly half-width is not snapped and must
+  not spring back to a restore rect when nudged.
+
+  A minimized window keeps its pane **mounted** — see
+  [Pane lifetime](#pane-lifetime-unmount-is-not-close).
+
+- **windowViewport** — the surface size `windows[].rect` was last measured
+  against, or `null` before anything measured it. A migrated v1 layout arrives as
+  `{w:1,h:1}` so its old fractions become pixels through the ordinary rescale path,
+  with no migration-only arithmetic to get wrong.
 
 ### Embedded views and sections
 
@@ -382,10 +428,28 @@ existing instance instead of duplicating.
   has to decide whether to accept the drop *while the drag is over it*, which the
   HTML5 API alone can't answer.
 
-  Tabs now drag between center areas as well (see **Tab gestures** above). What
-  is still missing is dropping onto an area *edge* to create a split in one
-  gesture — `move_pane`/`join_area` can't create a new split either, so an agent
-  that opened a pane in the wrong place still has no way to fix it.
+  Tabs now drag between center areas as well (see **Tab gestures** above).
+
+  **Moving a pane can now create a split.** `movePaneTo(instanceId, { areaId, edge })`
+  splits the target area and lands the pane in the new half, in **one dispatch** —
+  `SPLIT_AREA` carries the pane rather than a split being followed by an insert, so a
+  failure can't leave an empty area on screen and there is no undo step between the
+  two halves. The pane may come from anywhere, including a dock or a window, since
+  the split is the destination rather than the source.
+
+  This closes a long-standing gap in the model. Until now `move_pane`/`join_area`
+  could only move a pane between areas that **already existed**, so a pane opened
+  into the wrong place frequently could not be fixed at all, and the agent guide had
+  to advise "do not open then move" — advice about a limitation rather than a design.
+  The same primitive backs the desktop's drag-to-edge snapping, so there is one
+  implementation with two callers.
+
+  :::note
+  The agent's `move_pane` tool now exposes `edge` too, so this is reachable from a
+  tool call and not only from a drag. `split_area` is still the better verb when the
+  pane is not open yet — it opens and places in one step; `move_pane` with `edge` is
+  for a pane that already exists somewhere else.
+  :::
 
 ## The controller: one set of verbs, three callers
 
@@ -476,7 +540,7 @@ not new — notebook and training kernels are already process-global for exactly
 reason ("closing a pane leaves the kernel running; reopening reattaches") — this
 generalizes it to the frontend.
 
-Two details are load-bearing:
+Three details are load-bearing:
 
 - **Keys are workspace-scoped.** `paneSeq` lives on `FrameState`, so instance ids are
   unique only *within* a frame: two workspaces can each hold a
@@ -485,6 +549,18 @@ Two details are load-bearing:
 - **The terminal keeps its DOM element**, not just its session. Moving the xterm host
   between mounts preserves the rendered scrollback exactly; rebuilding the terminal
   around a surviving PTY would not.
+- **A pane that changes workspace must be re-keyed.** `movePaneSession(from, to)`
+  moves a live resource to the new key without disposing or recreating it. Moving a
+  window to another desktop otherwise looks like a different pane — because the key
+  is `(workspaceId, instanceId)` — and "send this terminal to Desktop 2" would
+  silently kill the shell.
+
+**Minimizing must not unmount either.** A minimized window is moved off screen with
+a transform, not `display: none` and not by rendering different JSX: an early return
+with a different tree makes React reconcile the body to a different position and
+rebuild the subtree, which is exactly this failure with a new trigger. `display:none`
+is also wrong here for a second reason — it collapses a canvas or an xterm to zero
+size, and many of them never recover their measurement when shown again.
 
 If a close path is ever missed the resource leaks until the page closes, where the
 backend reaps it anyway (PTYs die with their `/ws` connection). That is deliberately
@@ -498,17 +574,37 @@ autosave reads both from the same snapshot at fire time, so a workspace switch
 layout under the wrong id — this retired the old engine's race-guard refs.
 
 Layouts serialize as a **versioned envelope**
-`{ schema: 'horrible.frame', version: 1, frame }` to
+`{ schema: 'horrible.frame', version: 2, frame }` to
 `PUT /api/workspaces/{id}`; the backend (`backend/modules/workspace/`) still
-stores each `layout` **opaquely**. `deserialize` validates defensively, prunes
-panes whose views no longer exist (e.g. an uninstalled plugin), and returns
-`null` for anything that isn't a frame blob — pre-frame legacy layouts are
-discarded by design and reseed from their preset.
+stores each `layout` **opaquely** — which is why the desktop shell needed no
+backend change at all for `mode`, `backdrop` or `windows`. `deserialize` validates
+defensively, prunes panes whose views no longer exist (e.g. an uninstalled plugin),
+and returns `null` for anything that isn't a frame blob — pre-frame legacy layouts
+are discarded by design and reseed from their preset.
+
+**v1 → v2** is the desktop shell's migration. `floating[]` becomes `windows[]`, and
+the old fractional rects are carried over by setting `windowViewport` to `{w:1,h:1}`
+so they scale into pixels through the **ordinary rescale path** rather than through
+migration-only arithmetic that only ever runs once and is therefore never exercised
+again. `mode` defaults to `tiling`, so an existing workspace opens exactly as its
+owner left it rather than as a wallpaper full of windows.
+
+The backdrop is the one thing that deliberately does **not** come back as it was: a
+v1 desktop had no backdrop, because there was no surface one could show on. Choosing
+`none` would look conservative and would in fact hand every upgrading user a blank
+landing screen for a feature they never turned off, so a migrated desktop gets
+`DEFAULT_BACKDROP`.
+
+The version guard rejects a blob whose version is **higher** than this build's, so
+an older build reading a v2 blob reseeds from the preset — **downgrading discards
+the layout rather than corrupting it**. That is the intended trade: the alternative
+is an old build reading pixel rects as fractions and stacking every window in the
+top-left few pixels.
 
 ## Browser vs desktop
 
 The engine is web-only and shared verbatim by the browser and the desktop shell
-(no per-platform fork). The floating layer and the frame's `area.fullscreen`
+(no per-platform fork). The window layer and the frame's `area.fullscreen`
 mode are in-window; the phase-2 native shell claims the OS-level versions
 through new capabilities, all via the `WindowControl` seam. Shipped (phase 2
 complete): **`window.fullscreen`** — on desktop `F11` (`shell.toggleFullscreen`)
@@ -569,7 +665,7 @@ would (`await __horribleFrame.exec('get_layout', {})`). Not set in production.
 ## Status
 
 Implemented: the full frame (tab strip, activity rail, three docks, center area
-grid, floating layer, fullscreen-area, minibuffer), three roles as default
+grid, window layer, fullscreen-area, minibuffer), three roles as default
 placement with opt-in `dockable`, per-tool remembered dock sizes, drag-out from
 rails, docks, and region strips,
 engine-native **persisted regions**, corner-drag split/join, the keyboard-first

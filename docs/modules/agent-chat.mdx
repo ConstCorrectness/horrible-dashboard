@@ -473,7 +473,9 @@ role + regions), `list_open_panes` (instances with location), **`get_layout`**
 (the whole frame — the orientation read), `list_workspaces`,
 `get_pane_context(instanceId)`. Panes: `open_pane(id)` (role-routed),
 `close_pane(id)`, `focus_pane(instanceId)`, `move_pane(instanceId, areaId? |
-direction?)`, `float_pane`/`dock_pane(instanceId)`. Areas:
+direction? | edge?)`. Windows: `open_window(instanceId, snap?, rect?)`,
+`dock_window(instanceId)`, `window_state(instanceId, state, …)`,
+`arrange_windows(style)`. Areas:
 `split_area(instanceId, direction, viewId?)`, `join_area(instanceId,
 direction)`, `resize_area(instanceId, width?, height?)`,
 `fullscreen_area(instanceId?, on?)`. Regions & docks: `toggle_region(instanceId,
@@ -482,7 +484,20 @@ position, open?)`, `set_region_view(instanceId, viewId)`,
 `create_workspace(name)`, `switch_workspace(id)`. `split_area`'s `direction`
 takes the model-friendly orientations **`vertical`** (areas side by side) and
 **`horizontal`** (stacked) as well as the four concrete sides
-(`left`/`right`/`above`/`below`), resolved in `tool-exec.ts`.
+(`left`/`right`/`above`/`below`), resolved in `tool-exec.ts`. `move_pane`'s `edge`
+takes the same vocabulary and is what lets a pane opened in the wrong place be moved
+*beside* another one — without it, `move_pane` could only tab into an existing area
+or step to an adjacent one, which is why the guide used to say "do not open then
+move". `edge` alone is a valid call: it means "split where this pane already is".
+
+**Appearance verbs are a separate, lazily-loaded `desktop` group**
+(`desktop.set_backdrop`, `desktop.set_theme`, `desktop.set_mode`,
+`desktop.configure_taskbar`) rather than part of the layout core. Restyling the
+desktop is a rare request and every always-on tool is paid for on every turn by every
+agent — the same reasoning that cut the core 34 → 11 below. The group loads on demand
+or on a theme/wallpaper/taskbar keyword, and `get_layout` carries the backdrop and
+theme **catalogs** so those verbs have ids the model cannot guess without two more
+always-on `list_*` schemas.
 
 The layout verbs are **layout-only and ungated** (like `open_pane`), and they
 execute through the same frame-controller functions the user's gestures and

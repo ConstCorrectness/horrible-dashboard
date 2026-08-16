@@ -69,6 +69,31 @@ export function closePaneSession(key: string): void {
 }
 
 /**
+ * Re-key a live resource when its pane changes workspace — moving a window to
+ * another desktop.
+ *
+ * A session key is `(workspaceId, instanceId)`, so without this the pane arrives on
+ * the far desktop looking like one that has never been opened: it creates a *second*
+ * PTY or browser engine, and the original is orphaned under a key nothing will ever
+ * mount again. The user's shell, with its history and running process, silently
+ * disappears — the exact failure this module exists to prevent, reached by a path it
+ * did not originally have.
+ *
+ * Nothing is disposed and nothing is created: the same resource answers to a new key.
+ * A no-op when the pane has no live resource, which is the common case.
+ */
+export function movePaneSession(fromKey: string, toKey: string): void {
+  if (fromKey === toKey) return;
+  const entry = live.get(fromKey);
+  if (!entry) return;
+  // Refuse to overwrite: a resource already at the destination would be dropped
+  // without being disposed, leaking it for the life of the page.
+  if (live.has(toKey)) return;
+  live.delete(fromKey);
+  live.set(toKey, entry);
+}
+
+/**
  * Dispose every resource of a workspace except the panes in `keep`.
  *
  * For workspace delete (`keep` empty) and layout reset, where panes disappear
