@@ -35,6 +35,7 @@ To prevent spam, Clubhouse enforces anti-abuse checks on `/start_phone_number_au
 - **Bypass Solution:** Because standard Python HTTP clients (like `httpx`) generate TLS/JA3 fingerprints that are flagged by Cloudflare/Clubhouse's WAF, the login request is immediately gated, and the SMS is not dispatched. However, the standard .NET 8 `HttpClient` TLS fingerprint is trust-listed. Under this context, the Clubhouse API successfully dispatches the SMS verification text even if it returns `send_rc_token: true`.
 - **Implementation:** The backend now packages and compiles a native C# helper console app (`ch-auth-helper`) under [backend/modules/clubhouse/auth_helper/](file:///home/horrible/horrible-dashboard/backend/modules/clubhouse/auth_helper/).
 - **Execution:** When `/auth/start` or `/auth/complete` is called, the Python backend executes this native helper as a subprocess, matching the exact TLS signature of official trusted clients (like Clubdeck). This successfully bypasses the bot gate, allowing the SMS verification text to arrive on the user's phone.
+- **Platform:** `WinHttpHandler` is Windows-only — it is the Windows HTTP stack, and constructing it elsewhere throws at startup, so the helper simply refused to run on Linux and macOS. It now picks `HttpClientHandler` off Windows so the helper builds and runs everywhere. Be clear about what that buys, though: the *bypass* is the WinHttp fingerprint, so off Windows the helper still runs but is as gateable as plain `httpx` — **Token-Connect is the reliable path there**.
 
 ### 3. Headers & Endpoints Reference
 
@@ -239,7 +240,9 @@ Keeps the room voice session active (heartbeat ping). Should be called every 30 
 
 ### 11. `POST /channels/{channel}/mute`
 
-Notifies Clubhouse of speaker mute/unmute state.
+Notifies Clubhouse of speaker mute/unmute state. Relays to upstream
+`/mute_speaker` — **not** `/update_is_muted`, which no longer exists and answers
+404, so the mute button used to fail silently.
 
 - **Request Schema:** `MuteRequest` (`is_muted` boolean)
 - **Response Schema:** Generic success object.
@@ -261,11 +264,90 @@ Accepts an invitation to speak from a moderator.
 - **Response Schema:** Generic success object.
 - **Errors:** **409 Conflict** if not connected.
 
+> [!NOTE]
+> The `user_id` sent upstream is **always the connected account's own**, never the
+> one in the body: you can only accept your own invitation, and forwarding a
+> stale id from the UI made upstream reject the call.
+
+### 14. Moderation & room control
+
+These exist because a room you _host_ needs more than joining and muting. All
+409 when not connected, and all return a generic success object.
+
+| Route                                       | Request                                        | Upstream                                                   |
+| ------------------------------------------- | ---------------------------------------------- | ---------------------------------------------------------- |
+| `POST /channels/{channel}/invite_speaker`   | `InviteUserRequest`                            | `/invite_speaker` — promote an audience member              |
+| `POST /channels/{channel}/topic`            | `UpdateTopicRequest`                           | `/set_channel_title`                                        |
+| `POST /channels/{channel}/handraise_settings` | `HandraiseSettingsRequest`                   | `/update_is_ask_to_join_allowed`                            |
+| `POST /channels/{channel}/chat_settings`    | `ChatSettingsRequest`                          | `/enable_channel_messages` or `/disable_channel_messages`   |
+| `POST /send_channel_message`                | `SendChannelMessageRequest`                    | `/send_channel_message`                                     |
+
+### 15. `GET /channels/{channel}/chat`
+
+The chat backlog, fetched on join so a late arrival sees what was already said —
+live messages arrive over PubNub, which only carries what is sent after you
+subscribe.
+
+- **Response:** `{ "comments": [...] }`
+- **Degrades rather than fails:** chat can be disabled by a moderator and older
+  rooms predate the endpoint, so an upstream error returns an **empty backlog**.
+  A room with no chat is not a failed join.
+
+### Feed pagination
+
+`GET /channels` walks up to **four pages** of `/get_feed_v3` rather than one,
+deduplicating by channel id across pages. One page is a partial hallway, which
+made the rooms list look like Clubhouse was empty.
+
+---
+
+## Voice agent
+
+The room view can put an **LLM agent in the room**: it listens, decides when it
+is its turn, and speaks. Three backend routes back it, all on the agent module:
+
+- **`POST /api/agent/stt`** — an uploaded WebM/Opus chunk in, transcript out.
+  Local Whisper (`whisper-tiny.en`), decoded via `ffmpeg` as a plain subprocess
+  on a worker thread (asyncio cannot spawn one under `uvicorn --reload` on
+  Windows). Whisper answers silence with its priors rather than with nothing, so
+  a small set of known hallucinations (`"you"`, `"thank you"`, …) is filtered to
+  empty — otherwise the agent answers a room that said nothing.
+- **`POST /api/agent/generate`** — one complete, non-streamed generation with
+  `system` / `temperature` / `max_tokens`. Separate from streaming `/chat`
+  because the answer has to be finished before TTS can be handed anything.
+- **`GET /api/agent/tts?text=`** — MP3 audio, via Edge TTS.
+
+Turn-taking is client-side in
+[useClubhouseVoice.ts](file:///C:/Users/Horrible/Code/horrible-dashboard/packages/core/src/modules/clubhouse/useClubhouseVoice.ts):
+speech accumulates and a configurable silence delay triggers the turn, so the
+agent waits for a pause instead of interrupting.
+
+### Why Edge TTS and not local XTTS
+
+XTTS-v2 was tried first and dropped. It held a model in VRAM **alongside the
+local LLM** and OOM'd against it, and took seconds per utterance — dead air in a
+live room. Edge TTS has no local weights and starts immediately. The trade is
+explicit: it is a network call, so utterances leave the machine.
+
+### Installing it
+
+Both services are **optional** and lazy-imported — Whisper pulls in torch (~1–2
+GB), which every other module does fine without:
+
+```bash
+uv sync --extra voice
+```
+
+Without the extra, `/api/agent/stt` and `/api/agent/tts` answer **503** with an
+install hint rather than 500, and the rest of the Clubhouse module is unaffected.
+Decoding also needs `ffmpeg` on `PATH` (the same optional binary karaoke's pitch
+shift uses).
+
 ---
 
 ## Contributions to the Layout Shell
 
-- **Singleton Panel:** `clubhouse.account` — The unified "Clubhouse" panel. Displays the account onboarding/connection card when disconnected, and the live rooms list when connected. Declares `dockable: 'right'`, so it opens in a center area by default but can also be toggled into the right dock from the rail — see [Windowing](../architecture/windowing.mdx).
+- **Singleton Panel:** `clubhouse.account` — The unified "Clubhouse" panel. Displays the account onboarding/connection card when disconnected, and the live rooms list when connected. Inside a room it is a three-panel view — participants, chat, and agent settings — each independently toggleable, so a narrow pane can show only what is being used. Declares `dockable: 'right'`, so it opens in a center area by default but can also be toggled into the right dock from the rail — see [Windowing](../architecture/windowing.mdx).
 - **Commands:**
   - `clubhouse.connect` — Opens the unified Clubhouse panel.
 

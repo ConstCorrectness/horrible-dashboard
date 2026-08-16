@@ -76,6 +76,17 @@ clip = ["onnxruntime>=1.18", "tokenizers>=0.20"]
 # still an extra because most nodes never point at an Oracle instance:
 # `uv sync --extra oracle`.
 oracle = ["oracledb>=2.5"]
+# Voice for the Clubhouse agent: local Whisper speech-to-text plus Edge text-to-speech.
+# Whisper needs torch (~1-2 GB), which is exactly why this is an extra and not a core
+# dep — every other module works without a word of audio. Both services are
+# lazy-imported and `/api/agent/stt|tts` answer 503 rather than 500 when it's missing:
+# `uv sync --extra voice`. Decoding the browser's WebM/Opus chunks also needs `ffmpeg`
+# on PATH (the same optional binary karaoke's pitch shift uses).
+voice = [
+    "torch>=2.0.0",
+    "transformers>=4.40.0",
+    "edge-tts>=7.0.0",
+]
 # Vector stores the database console can query natively (json dialect). Each is
 # lazy-imported by its driver, so the console lists the provider either way and only
 # fails — with an install hint — when you actually run a query against one.

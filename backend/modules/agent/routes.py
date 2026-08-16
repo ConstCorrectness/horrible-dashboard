@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, HTTPException, UploadFile
+from fastapi.responses import Response, StreamingResponse
 
 from backend.modules.agent import providers as P
 from backend.modules.agent.models import (
@@ -145,6 +145,39 @@ async def chat(req: ChatRequest) -> StreamingResponse:
     return StreamingResponse(gen(), media_type="application/x-ndjson")
 
 
+@router.post("/generate")
+async def generate(req: ChatRequest) -> dict[str, str]:
+    """One complete, non-streamed generation.
+
+    The streaming ``/chat`` route is the wrong shape for a caller that needs the
+    whole answer before it can act on it — the Clubhouse voice agent has to hand
+    finished text to TTS, so consuming a token stream only to rejoin it adds a
+    round of buffering for nothing.
+    """
+    config = _load_config()
+    if config is None:
+        raise HTTPException(
+            status_code=409, detail="Agent not configured — finish onboarding"
+        )
+    info = P.provider_for(config.provider)
+    endpoint = config.endpoint or info.default_endpoint
+    async with instrumented_client(timeout=30) as client:
+        try:
+            completion = await P.generate(
+                client,
+                info,
+                endpoint,
+                config.model,
+                req.prompt,
+                max_tokens=req.max_tokens,
+                temperature=req.temperature,
+                system=req.system,
+            )
+        except httpx.HTTPError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"completion": completion}
+
+
 _COMPLETE_SYSTEM = (
     "You are an inline code/text completion engine. Continue the text at the "
     "<CURSOR> marker so it fits naturally between the text before and after it. "
@@ -243,3 +276,40 @@ def roster() -> RosterResponse:
             for spec in list_agents()
         ]
     )
+
+
+@router.get("/tts")
+async def tts(text: str) -> Response:
+    """Speak ``text`` as MP3 audio.
+
+    Lazy-imported and 503s rather than 500s when the ``voice`` extra is missing:
+    speech synthesis is optional (``uv sync --extra voice``), and every other
+    agent route works without it."""
+    try:
+        from backend.modules.agent.edge_tts_service import edge_tts_service
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Text-to-speech unavailable — install it with `uv sync --extra voice`",
+        ) from exc
+
+    audio_bytes = await edge_tts_service.generate_audio(text)
+    return Response(content=audio_bytes, media_type="audio/mpeg")
+
+
+@router.post("/stt")
+async def stt(file: UploadFile) -> dict[str, str]:
+    """Transcribe an uploaded audio chunk (WebM/Opus) to text.
+
+    Same optionality as :func:`tts` — Whisper pulls in torch, which is far too
+    heavy to make every install pay for."""
+    try:
+        from backend.modules.agent.stt_service import stt_service
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Speech-to-text unavailable — install it with `uv sync --extra voice`",
+        ) from exc
+
+    audio_bytes = await file.read()
+    return {"text": await stt_service.transcribe(audio_bytes)}

@@ -34,6 +34,10 @@ from backend.modules.clubhouse.models import (
     StartAuthRequest,
     StartAuthResult,
     TokenConnectRequest,
+    SendChannelMessageRequest,
+    HandraiseSettingsRequest,
+    UpdateTopicRequest,
+    ChatSettingsRequest,
 )
 from backend.modules.telemetry.instrument import instrumented_client
 from backend import paths
@@ -208,9 +212,8 @@ async def _ch_authed_post(
             message = res.json().get("error_message") or message
         except (ValueError, AttributeError):
             pass
-        status_code = (
-            res.status_code if res.status_code in (400, 401, 403, 429) else 502
-        )
+        status_code = res.status_code if 400 <= res.status_code < 500 else 502
+        logger.warning("Clubhouse API error for %s: %s %s", path, status_code, message)
         raise HTTPException(status_code=status_code, detail=f"Clubhouse: {message}")
     return res.json()
 
@@ -240,9 +243,7 @@ async def _ch_authed_get(
             message = res.json().get("error_message") or message
         except (ValueError, AttributeError):
             pass
-        status_code = (
-            res.status_code if res.status_code in (400, 401, 403, 429) else 502
-        )
+        status_code = res.status_code if 400 <= res.status_code < 500 else 502
         raise HTTPException(status_code=status_code, detail=f"Clubhouse: {message}")
     return res.json()
 
@@ -272,7 +273,7 @@ async def _ch_post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
             message = res.json().get("error_message") or message
         except (ValueError, AttributeError):
             pass
-        status = res.status_code if res.status_code in (400, 401, 403, 429) else 502
+        status = res.status_code if 400 <= res.status_code < 500 else 502
         raise HTTPException(status_code=status, detail=f"Clubhouse: {message}")
     return res.json()
 
@@ -362,49 +363,69 @@ async def connect_with_token(body: TokenConnectRequest) -> ClubhouseStatus:
 async def channels() -> dict[str, Any]:
     """Live rooms right now (Clubhouse POST /get_feed_v3)."""
     auth = _require_auth()
-    raw = await _ch_authed_post(
-        "/get_feed_v3",
-        {},
-        auth["auth_token"],
-        auth["user_id"],
-        auth.get("device_id"),
-    )
 
     channels_list = []
-    items = raw.get("items", []) or []
-    for item in items:
-        if "channel" in item and item["channel"]:
-            ch_raw = item["channel"]
+    cursor = None
+    seen_channels = set()
 
-            # Map social_club to club
-            club_data = None
-            if ch_raw.get("social_club"):
-                club_data = {"name": ch_raw["social_club"].get("name")}
+    # Fetch up to 4 pages to get a good number of live rooms
+    for _ in range(4):
+        payload = {}
+        if cursor:
+            payload["cursor"] = cursor
 
-            # Map users
-            users_list = []
-            for u in ch_raw.get("users", []):
-                users_list.append(
+        raw = await _ch_authed_post(
+            "/get_feed_v3",
+            payload,
+            auth["auth_token"],
+            auth["user_id"],
+            auth.get("device_id"),
+        )
+
+        items = raw.get("items", []) or []
+        for item in items:
+            if "channel" in item and item["channel"]:
+                ch_raw = item["channel"]
+                channel_id = ch_raw.get("channel")
+
+                # Prevent duplicates across pages
+                if not channel_id or channel_id in seen_channels:
+                    continue
+                seen_channels.add(channel_id)
+
+                # Map social_club to club
+                club_data = None
+                if ch_raw.get("social_club"):
+                    club_data = {"name": ch_raw["social_club"].get("name")}
+
+                # Map users
+                users_list = []
+                for u in ch_raw.get("users", []):
+                    users_list.append(
+                        {
+                            "user_id": u.get("user_id"),
+                            "name": u.get("name"),
+                            "username": u.get("username"),
+                            "photo_url": u.get("photo_url"),
+                            "is_speaker": u.get("is_speaker"),
+                            "is_moderator": u.get("is_moderator", False),
+                        }
+                    )
+
+                channels_list.append(
                     {
-                        "user_id": u.get("user_id"),
-                        "name": u.get("name"),
-                        "username": u.get("username"),
-                        "photo_url": u.get("photo_url"),
-                        "is_speaker": u.get("is_speaker"),
-                        "is_moderator": u.get("is_moderator", False),
+                        "channel": channel_id,
+                        "topic": ch_raw.get("topic"),
+                        "num_speakers": ch_raw.get("num_speakers"),
+                        "num_all": ch_raw.get("num_all"),
+                        "club": club_data,
+                        "users": users_list,
                     }
                 )
 
-            channels_list.append(
-                {
-                    "channel": ch_raw.get("channel"),
-                    "topic": ch_raw.get("topic"),
-                    "num_speakers": ch_raw.get("num_speakers"),
-                    "num_all": ch_raw.get("num_all"),
-                    "club": club_data,
-                    "users": users_list,
-                }
-            )
+        cursor = raw.get("next_cursor") or raw.get("cursor")
+        if not cursor:
+            break
 
     return {"channels": channels_list}
 
@@ -420,6 +441,32 @@ async def following() -> dict[str, Any]:
         auth["user_id"],
         auth.get("device_id"),
     )
+
+
+@router.get("/channels/{channel}/chat")
+async def get_channel_chat(channel: str) -> dict[str, Any]:
+    """Recent chat backlog for a channel, so a late joiner sees what was said.
+
+    Chat is not available in every room (a moderator can disable it, and older
+    rooms predate the endpoint), and a room with no chat is not an error — an
+    empty backlog is the right answer, so an upstream failure degrades to one
+    rather than failing the join.
+    """
+    auth = _require_auth()
+    try:
+        res = await _ch_authed_get(
+            "/get_channel_messages",
+            auth["auth_token"],
+            auth["user_id"],
+            auth.get("device_id"),
+            {"channel": channel},
+        )
+        return {"comments": res.get("messages", [])}
+    except HTTPException as exc:
+        logger.info(
+            "Clubhouse chat backlog unavailable for %s: %s", channel, exc.detail
+        )
+        return {"comments": []}
 
 
 @router.delete("/auth", response_model=ClubhouseStatus)
@@ -552,10 +599,10 @@ async def active_ping(channel: str) -> dict[str, Any]:
 
 @router.post("/channels/{channel}/mute")
 async def mute_channel(channel: str, body: MuteRequest) -> dict[str, Any]:
-    """Notify Clubhouse of speaker mute/unmute state (Clubhouse POST /update_is_muted)."""
+    """Notify Clubhouse of speaker mute/unmute state (Clubhouse POST /mute_speaker)."""
     auth = _require_auth()
     return await _ch_authed_post(
-        "/update_is_muted",
+        "/mute_speaker",
         {"channel": channel, "is_muted": body.is_muted},
         auth["auth_token"],
         auth["user_id"],
@@ -588,6 +635,19 @@ async def accept_speaker(
     auth = _require_auth()
     return await _ch_authed_post(
         "/accept_speaker_invite",
+        {"channel": channel, "user_id": auth["user_id"]},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+@router.post("/channels/{channel}/invite_speaker")
+async def invite_speaker(channel: str, body: InviteUserRequest) -> dict[str, Any]:
+    """Invite an audience member to speak (Clubhouse POST /invite_speaker)."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/invite_speaker",
         {"channel": channel, "user_id": body.user_id},
         auth["auth_token"],
         auth["user_id"],
@@ -658,6 +718,71 @@ async def invite_user(channel: str, body: InviteUserRequest) -> dict[str, Any]:
     return await _ch_authed_post(
         "/invite_to_existing_channel",
         {"channel": channel, "user_id": body.user_id},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+@router.post("/send_channel_message")
+async def send_channel_message(body: SendChannelMessageRequest) -> dict[str, Any]:
+    """Send a message to the active channel."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/send_channel_message",
+        {"channel": body.channel, "message": body.message},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+@router.post("/channels/{channel}/handraise_settings")
+async def change_handraise_settings(
+    channel: str, body: HandraiseSettingsRequest
+) -> dict[str, Any]:
+    """Change the hand-raise policy for the channel."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/update_is_ask_to_join_allowed",
+        {
+            "channel": channel,
+            "is_ask_to_join_allowed": body.is_enabled,
+            "handraise_permission": body.handraise_permission,
+        },
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+@router.post("/channels/{channel}/topic")
+async def update_channel_topic(
+    channel: str, body: UpdateTopicRequest
+) -> dict[str, Any]:
+    """Change the room's title."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/set_channel_title",
+        {"channel": channel, "title": body.topic},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+@router.post("/channels/{channel}/chat_settings")
+async def update_chat_settings(
+    channel: str, body: ChatSettingsRequest
+) -> dict[str, Any]:
+    """Enable or disable chat in the room."""
+    auth = _require_auth()
+    endpoint = (
+        "/enable_channel_messages" if body.enable_chat else "/disable_channel_messages"
+    )
+    return await _ch_authed_post(
+        endpoint,
+        {"channel": channel},
         auth["auth_token"],
         auth["user_id"],
         auth.get("device_id"),

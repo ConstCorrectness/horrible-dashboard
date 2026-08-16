@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
+import { apiUrl } from '../../origin';
 import { useAgentContext } from '../../agent-context';
 import { toastsStore } from '../../toasts';
 import {
@@ -11,6 +12,10 @@ import {
   followClubhouseUser,
   unfollowClubhouseUser,
   inviteToClubhouseChannel,
+  inviteClubhouseSpeaker,
+  updateClubhouseTopic,
+  updateClubhouseHandraiseSettings,
+  updateClubhouseChatSettings,
   searchClubhouseUsers,
   getClubhouseFollowing,
   type Channel,
@@ -28,13 +33,43 @@ import { useClubhouseVoice } from './useClubhouseVoice';
 export function RoomsPanel() {
   const [state, setState] = useState<'loading' | 'disconnected' | 'ready' | 'error'>('loading');
   const [channels, setChannels] = useState<Channel[]>([]);
-  const [myUserId, setMyUserId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeRoomInfo, setActiveRoomInfo] = useState<Channel | null>(null);
   const [commentText, setCommentText] = useState('');
   const [selectedUser, setSelectedUser] = useState<ClubhouseUserProfile | null>(null);
   const [loadingProfile, setLoadingProfile] = useState(false);
+
+  // Voice Agent States
+  const [agentEnabled, setAgentEnabled] = useState(false);
+  const [isAgentSpeaking, setIsAgentSpeaking] = useState(false);
+  const [agentTranscript, setAgentTranscript] = useState<string | null>(null);
+  const [sttChunkMs, setSttChunkMs] = useState(5000);
+  const [agentTemperature, setAgentTemperature] = useState(0.7);
+  const [agentMaxTokens, setAgentMaxTokens] = useState(150);
+  const [agentSystemPrompt, setAgentSystemPrompt] = useState(
+    'You are an AI participant in a voice chat room. Reply concisely with a natural, conversational response.',
+  );
+  const [agentRespondsToVoice, setAgentRespondsToVoice] = useState(true);
+  const [agentRespondsToChat, setAgentRespondsToChat] = useState(false);
+  const [agentPromptPresets, setAgentPromptPresets] = useState<{ name: string; prompt: string }[]>(
+    () => {
+      try {
+        return JSON.parse(localStorage.getItem('agentPresets') || '[]');
+      } catch {
+        return [];
+      }
+    },
+  );
+  const [myUserId, setMyUserId] = useState<number | null>(null);
+
+  // Room settings modal states
+  const [showRoomSettingsModal, setShowRoomSettingsModal] = useState(false);
+  const [settingTopic, setSettingTopic] = useState('');
+  const [settingHandraiseEnabled, setSettingHandraiseEnabled] = useState(true);
+  const [settingHandraisePermission, setSettingHandraisePermission] = useState<number>(1);
+  const [settingChatEnabled, setSettingChatEnabled] = useState(true);
+  const [savingSettings, setSavingSettings] = useState(false);
 
   // New states for extended Clubhouse functionality
   const [showStartRoomModal, setShowStartRoomModal] = useState(false);
@@ -48,6 +83,11 @@ export function RoomsPanel() {
   const [peopleSearchQuery, setPeopleSearchQuery] = useState('');
   const [peopleSearchResults, setPeopleSearchResults] = useState<SearchUserResult[]>([]);
   const [loadingPeople, setLoadingPeople] = useState(false);
+
+  // Use a horizontal tab bar for the room view instead of vertical accordions
+  const [activeRoomTab, setActiveRoomTab] = useState<'participants' | 'chat' | 'agent'>(
+    'participants',
+  );
 
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [followingUsers, setFollowingUsers] = useState<FollowUser[]>([]);
@@ -65,13 +105,25 @@ export function RoomsPanel() {
       setShowStartRoomModal(false);
       setNewRoomTopic('');
       if (res.channel) {
+        const meUser: ChannelUser | null = myUserId
+          ? {
+              user_id: myUserId,
+              name: 'Me (Creator)',
+              username: 'me',
+              photo_url: null,
+              is_speaker: true,
+              is_moderator: true,
+            }
+          : null;
+
+        const initialUsers = meUser ? [meUser] : [];
         const roomInfo: Channel = {
           channel: res.channel,
           topic: newRoomTopic.trim() || 'My New Room',
           num_speakers: 1,
           num_all: 1,
           club: null,
-          users: [],
+          users: initialUsers,
         };
         setActiveRoomInfo(roomInfo);
         void joinRoom(res.channel, roomInfo.users);
@@ -81,6 +133,41 @@ export function RoomsPanel() {
       toastsStore.add('error', 'Failed to start room', String(err));
     } finally {
       setCreatingRoom(false);
+    }
+  };
+
+  const handleOpenRoomSettings = () => {
+    if (!activeRoomInfo) return;
+    setSettingTopic(activeRoomInfo.topic || '');
+    setSettingHandraiseEnabled(true);
+    setSettingHandraisePermission(1);
+    setSettingChatEnabled(true);
+    setShowRoomSettingsModal(true);
+  };
+
+  const handleSaveRoomSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeChannel) return;
+    setSavingSettings(true);
+    try {
+      await updateClubhouseTopic(activeChannel, settingTopic.trim());
+      await updateClubhouseHandraiseSettings(
+        activeChannel,
+        settingHandraiseEnabled,
+        settingHandraisePermission,
+      );
+      await updateClubhouseChatSettings(activeChannel, settingChatEnabled);
+      toastsStore.add('success', 'Room Settings', 'Successfully updated room settings');
+      setShowRoomSettingsModal(false);
+      if (activeRoomInfo) setActiveRoomInfo({ ...activeRoomInfo, topic: settingTopic.trim() });
+    } catch (err) {
+      toastsStore.add(
+        'error',
+        'Update Failed',
+        err instanceof Error ? err.message : 'Could not update all settings',
+      );
+    } finally {
+      setSavingSettings(false);
     }
   };
 
@@ -211,6 +298,47 @@ export function RoomsPanel() {
             </div>
           </div>
 
+          <div className="ch-profile-actions">
+            {!isCurrentUser &&
+              activeChannel &&
+              (() => {
+                const amIMod = activeRoomInfo?.users.find(
+                  (u) => u.user_id === myUserId,
+                )?.is_moderator;
+                const isTheySpeaker =
+                  liveUsers.find((u) => u.userId === selectedUser.user_id)?.isSpeaker ??
+                  activeRoomInfo?.users.find((u) => u.user_id === selectedUser.user_id)?.is_speaker;
+
+                if (amIMod && !isTheySpeaker) {
+                  return (
+                    <button
+                      className="ch-btn-action"
+                      onClick={async () => {
+                        try {
+                          await inviteClubhouseSpeaker(activeChannel, selectedUser.user_id);
+                          toastsStore.add(
+                            'success',
+                            'Invite Sent',
+                            `Invited ${selectedUser.name} to speak.`,
+                          );
+                          setSelectedUser(null);
+                        } catch (err) {
+                          toastsStore.add(
+                            'error',
+                            'Failed',
+                            err instanceof Error ? err.message : 'Could not invite speaker',
+                          );
+                        }
+                      }}
+                    >
+                      🎤 Invite to Stage
+                    </button>
+                  );
+                }
+                return null;
+              })()}
+          </div>
+
           <div className="ch-profile-stats">
             <div className="ch-profile-stat">
               <span className="ch-profile-stat-val">{selectedUser.num_followers ?? 0}</span>
@@ -261,6 +389,8 @@ export function RoomsPanel() {
     liveUsers,
     speakerInvite,
     speakingVolumes,
+    playAgentAudio,
+    stopAgentAudio,
     loading: voiceLoading,
     error: voiceError,
     joinRoom,
@@ -271,7 +401,51 @@ export function RoomsPanel() {
     dismissSpeakerInvite,
     sendComment,
     sendReaction,
-  } = useClubhouseVoice();
+  } = useClubhouseVoice({
+    sttChunkIntervalMs: sttChunkMs,
+    onBargeIn: () => {
+      console.log('Barge-in occurred, aborting LLM if generating...');
+      if (agentAbortControllerRef.current) {
+        agentAbortControllerRef.current.abort();
+        agentAbortControllerRef.current = null;
+      }
+      setIsAgentSpeaking(false);
+    },
+    onTranscribe: (text) => {
+      if (!agentEnabled) return;
+      if (text.trim().length > 0) {
+        setAgentTranscript(text.trim());
+      }
+    },
+    onSpeakerInvite: (invite) => {
+      toastsStore.add('info', 'Speaker Invite', `${invite.moderatorName} wants you to speak!`);
+      if (Notification.permission === 'granted') {
+        new Notification('Speaker Invite', { body: `${invite.moderatorName} wants you to speak!` });
+      }
+      if (agentEnabled) {
+        acceptSpeakerInvite(invite.moderatorId);
+        toastsStore.add(
+          'info',
+          'Agent',
+          `Auto-accepted speaker invite from ${invite.moderatorName}`,
+        );
+      }
+    },
+    onHandRaise: (_userId, userName) => {
+      // Check if current user is a moderator
+      const amIMod = activeRoomInfo?.users.find((u) => u.user_id === myUserId)?.is_moderator;
+      if (amIMod) {
+        toastsStore.add('info', 'Hand Raised', `${userName} wants to come up on stage.`);
+        if (
+          typeof window !== 'undefined' &&
+          'Notification' in window &&
+          Notification.permission === 'granted'
+        ) {
+          new Notification('Hand Raised', { body: `${userName} wants to come up on stage.` });
+        }
+      }
+    },
+  });
 
   const load = async () => {
     setState('loading');
@@ -294,6 +468,13 @@ export function RoomsPanel() {
 
   useEffect(() => {
     void load();
+    if (
+      typeof window !== 'undefined' &&
+      'Notification' in window &&
+      Notification.permission === 'default'
+    ) {
+      Notification.requestPermission().catch(() => {});
+    }
   }, []);
 
   // Poll active channel details when joined to keep participant lists updated in real-time
@@ -304,6 +485,7 @@ export function RoomsPanel() {
       try {
         const details = await getClubhouseChannelDetails(activeChannel);
         setChannels((prev) => prev.map((ch) => (ch.channel === activeChannel ? details : ch)));
+        setActiveRoomInfo(details); // update active room info for the UI
       } catch (err) {
         console.error('Failed to poll active channel details:', err);
       }
@@ -321,6 +503,131 @@ export function RoomsPanel() {
       chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [comments]);
+
+  const agentAbortControllerRef = useRef<AbortController | null>(null);
+
+  // Voice Agent Logic
+  const triggerAgentResponse = async (text: string, source: 'chat' | 'voice' = 'voice') => {
+    if (!text || isAgentSpeaking) return;
+    try {
+      setIsAgentSpeaking(true);
+
+      const amISpeaker = activeRoomInfo?.users.find((u) => u.user_id === myUserId)?.is_speaker;
+      const liveMe = liveUsers.find((u) => u.userId === myUserId);
+      const isActuallySpeaker = liveMe?.isSpeaker || amISpeaker || false;
+
+      // Handle custom /agent commands (Authorized users / mods only for settings)
+      if (text.startsWith('/agent')) {
+        const parts = text.trim().split(' ');
+        const cmd = parts[1];
+        const amIMod = activeRoomInfo?.users.find((u) => u.user_id === myUserId)?.is_moderator;
+
+        if (cmd === 'topic' && activeChannel) {
+          if (amIMod) {
+            const newTopic = parts.slice(2).join(' ');
+            await updateClubhouseTopic(activeChannel, newTopic);
+            await sendComment(`🤖 Room topic updated to: ${newTopic}`);
+            if (activeRoomInfo) setActiveRoomInfo({ ...activeRoomInfo, topic: newTopic });
+          } else {
+            await sendComment(`🤖 Only moderators can change the topic.`);
+          }
+          setIsAgentSpeaking(false);
+          return;
+        } else if (cmd === 'chat' && activeChannel) {
+          if (amIMod) {
+            const enable = parts[2] === 'on';
+            await updateClubhouseChatSettings(activeChannel, enable);
+            await sendComment(`🤖 Room chat is now ${enable ? 'enabled' : 'disabled'}.`);
+          } else {
+            await sendComment(`🤖 Only moderators can change chat settings.`);
+          }
+          setIsAgentSpeaking(false);
+          return;
+        } else if (cmd === 'handraise' && activeChannel) {
+          if (amIMod) {
+            const enable = parts[2] === 'on';
+            await updateClubhouseHandraiseSettings(activeChannel, enable, 1);
+            await sendComment(`🤖 Hand raising is now ${enable ? 'enabled' : 'disabled'}.`);
+          } else {
+            await sendComment(`🤖 Only moderators can change handraise settings.`);
+          }
+          setIsAgentSpeaking(false);
+          return;
+        } else if (cmd === 'questionnaire') {
+          if (amIMod) {
+            setAgentSystemPrompt(
+              'You are a questionnaire bot. Ask the audience 5 questions one by one about their experience and gather feedback. Keep it engaging. Acknowledge their answers before asking the next question.',
+            );
+            await sendComment(`🤖 Agent is now in questionnaire mode! Let's get started.`);
+            text = 'Initiate the questionnaire by asking the first question.';
+          } else {
+            await sendComment(`🤖 Only moderators can start a questionnaire.`);
+            setIsAgentSpeaking(false);
+            return;
+          }
+        } else if (cmd === 'search') {
+          const query = parts.slice(2).join(' ');
+          await sendComment(`🤖 Searching the web for: ${query}...`);
+          // TODO: route this through the search module's `search.web` tool. Until
+          // then it asks the model from its own knowledge, which is not a search.
+          text = `Please perform a simulated web search or provide factual knowledge about: ${query}. Synthesize it into a brief answer.`;
+        }
+      }
+
+      agentAbortControllerRef.current = new AbortController();
+
+      const promptText = text.trim()
+        ? source === 'chat'
+          ? `Another user just typed in chat: "${text}".`
+          : `Another speaker just said: "${text}".`
+        : `(The room is silent. It's your turn to speak, initiate the conversation or say something interesting.)`;
+
+      const req = await fetch(apiUrl('/api/agent/generate'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal: agentAbortControllerRef.current.signal,
+        body: JSON.stringify({
+          prompt: promptText,
+          system: agentSystemPrompt,
+          temperature: agentTemperature,
+          max_tokens: agentMaxTokens,
+        }),
+      });
+      agentAbortControllerRef.current = null;
+      const data = await req.json();
+
+      if (data.completion) {
+        const responseText = data.completion.trim();
+        await sendComment(`🤖 ${responseText}`);
+        if (isActuallySpeaker) {
+          await playAgentAudio(responseText);
+        }
+      }
+      setIsAgentSpeaking(false);
+    } catch (e) {
+      if (e instanceof Error && e.name === 'AbortError') return;
+      console.error('Agent response failed:', e);
+      setIsAgentSpeaking(false);
+    }
+  };
+
+  const prevCommentsLengthRef = useRef(0);
+  useEffect(() => {
+    if (comments.length > prevCommentsLengthRef.current) {
+      const newComment = comments[comments.length - 1];
+      prevCommentsLengthRef.current = comments.length;
+      if (agentEnabled && agentRespondsToChat && !newComment.text?.startsWith('🤖')) {
+        triggerAgentResponse(newComment.text || '', 'chat');
+      }
+    }
+  }, [comments, agentEnabled, agentRespondsToChat, myUserId, isAgentSpeaking]);
+
+  useEffect(() => {
+    if (agentTranscript && agentEnabled && agentRespondsToVoice) {
+      triggerAgentResponse(agentTranscript, 'voice');
+      setAgentTranscript(null);
+    }
+  }, [agentTranscript, agentEnabled, agentRespondsToVoice]);
 
   // Filter channels based on search query
   const filteredChannels = channels.filter((c) => {
@@ -348,8 +655,21 @@ export function RoomsPanel() {
   const handleSendComment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!commentText.trim()) return;
-    await sendComment(commentText.trim());
+
+    // Optimistically clear the input, but we don't optimistically add it yet
+    // since the hook already does optimistic adding.
+    const textToSend = commentText.trim();
     setCommentText('');
+
+    try {
+      await sendComment(textToSend);
+    } catch (err: unknown) {
+      toastsStore.add(
+        'error',
+        'Failed to send message',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
   };
 
   const REACTIONS = ['❤️', '😂', '👍', '🙌', '👏', '🔥'];
@@ -358,7 +678,7 @@ export function RoomsPanel() {
   if (joined && activeChannel) {
     const currentRoom = channels.find((ch) => ch.channel === activeChannel) || activeRoomInfo;
     const isCurrentUserSpeaker =
-      currentRoom?.users.find((u) => u.user_id === myUserId)?.is_speaker ?? false;
+      activeRoomInfo?.users.find((u) => u.user_id === myUserId)?.is_speaker ?? false;
     const moderators = currentRoom?.users.filter((u) => u.is_moderator && u.user_id) ?? [];
     const speakers = currentRoom?.users.filter((u) => u.is_speaker) ?? [];
     const audience = currentRoom?.users.filter((u) => !u.is_speaker) ?? [];
@@ -1725,6 +2045,30 @@ export function RoomsPanel() {
             >
               ➕ Invite Friends
             </button>
+            {(() => {
+              const amIMod = activeRoomInfo?.users.find(
+                (u) => u.user_id === myUserId,
+              )?.is_moderator;
+              if (amIMod) {
+                return (
+                  <button
+                    className="ch-btn-action"
+                    style={{
+                      padding: '0.4rem 0.8rem',
+                      borderRadius: '20px',
+                      fontSize: '0.75rem',
+                      fontWeight: 600,
+                      flex: 'none',
+                      background: 'rgba(255, 255, 255, 0.05)',
+                    }}
+                    onClick={handleOpenRoomSettings}
+                  >
+                    ⚙ Settings
+                  </button>
+                );
+              }
+              return null;
+            })()}
           </div>
 
           <div className="ch-room-title-section">
@@ -1748,84 +2092,472 @@ export function RoomsPanel() {
         </div>
 
         {/* Main Content Area */}
-        <div className="ch-room-scroller">
-          {/* Participants Area */}
-          <div className="ch-participants-section">
-            {/* Speakers */}
-            <div className="ch-section-heading">
-              <span>Speakers ({speakers.length})</span>
-            </div>
-            <div className="ch-speakers-grid">{speakers.map((u) => renderUserCard(u, true))}</div>
-
-            {/* Audience */}
-            {audience.length > 0 && (
-              <>
-                <div className="ch-section-heading">
-                  <span>Audience ({audience.length})</span>
-                </div>
-                <div className="ch-listeners-grid">
-                  {audience.map((u) => renderUserCard(u, false))}
-                </div>
-              </>
-            )}
-          </div>
-
-          {/* Chat / Comments Feed */}
-          <div className="ch-chat-section">
-            <div
-              className="ch-section-heading"
+        <div className="ch-room-scroller" style={{ display: 'flex', flexDirection: 'column' }}>
+          {/* Horizontal Tabs */}
+          <div style={{ display: 'flex', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
+            <button
+              onClick={() => setActiveRoomTab('participants')}
               style={{
-                padding: '0.75rem 1rem 0.25rem 1rem',
-                background: '#111317',
-                borderBottom: '1px solid rgba(255,255,255,0.03)',
+                flex: 1,
+                padding: '0.75rem',
+                background: activeRoomTab === 'participants' ? '#1d2026' : 'transparent',
+                color: activeRoomTab === 'participants' ? '#fff' : '#94a3b8',
+                border: 'none',
+                cursor: 'pointer',
+                fontWeight: activeRoomTab === 'participants' ? 600 : 400,
               }}
             >
-              <span>Live Chat</span>
-            </div>
-            <div className="ch-chat-scroll">
-              {comments.length === 0 ? (
-                <div className="ch-chat-empty">
-                  💬
-                  <span>No messages yet. Be the first to start the chat!</span>
-                </div>
-              ) : (
-                comments.map((c) => (
-                  <div key={c.id} className="ch-comment-item">
-                    {c.userPhoto ? (
-                      <img className="ch-comment-avatar" src={c.userPhoto} alt="" />
-                    ) : (
-                      <div
-                        className="ch-comment-avatar"
+              👥 Participants ({speakers.length + audience.length})
+            </button>
+            <button
+              onClick={() => setActiveRoomTab('chat')}
+              style={{
+                flex: 1,
+                padding: '0.75rem',
+                background: activeRoomTab === 'chat' ? '#1d2026' : 'transparent',
+                color: activeRoomTab === 'chat' ? '#fff' : '#94a3b8',
+                border: 'none',
+                cursor: 'pointer',
+                fontWeight: activeRoomTab === 'chat' ? 600 : 400,
+              }}
+            >
+              💬 Live Chat
+            </button>
+            <button
+              onClick={() => setActiveRoomTab('agent')}
+              style={{
+                flex: 1,
+                padding: '0.75rem',
+                background: activeRoomTab === 'agent' ? '#1d2026' : 'transparent',
+                color: activeRoomTab === 'agent' ? '#fff' : '#94a3b8',
+                border: 'none',
+                cursor: 'pointer',
+                fontWeight: activeRoomTab === 'agent' ? 600 : 400,
+              }}
+            >
+              🤖 Agent Settings
+            </button>
+          </div>
+
+          <div style={{ flex: 1, overflowY: 'auto', position: 'relative' }}>
+            {/* Participants Area */}
+            {activeRoomTab === 'participants' && (
+              <div className="ch-participants-section">
+                {/* Speakers */}
+                {speakers.length > 0 && (
+                  <>
+                    <div
+                      className="ch-section-heading"
+                      style={{
+                        borderTop: 'none',
+                        background: 'transparent',
+                        padding: '1rem 1rem 0.5rem 1rem',
+                      }}
+                    >
+                      <span
                         style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          background: '#2e333d',
-                          color: 'var(--text-dim)',
-                          fontSize: '0.65rem',
-                          fontWeight: 600,
+                          fontSize: '0.75rem',
+                          color: '#64748b',
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.05em',
                         }}
                       >
-                        {c.userName.slice(0, 2).toUpperCase()}
-                      </div>
-                    )}
-                    <div className="ch-comment-content">
-                      <div className="ch-comment-header">
-                        <span className="ch-comment-user">{c.userName}</span>
-                        <span className="ch-comment-time">
-                          {new Date(c.timestamp).toLocaleTimeString([], {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })}
-                        </span>
-                      </div>
-                      <div className="ch-comment-bubble">{c.text}</div>
+                        Speakers ({speakers.length})
+                      </span>
                     </div>
+                    <div className="ch-speakers-grid">
+                      {speakers.map((u) => renderUserCard(u, true))}
+                    </div>
+                  </>
+                )}
+
+                {/* Audience */}
+                {audience.length > 0 && (
+                  <>
+                    <div
+                      className="ch-section-heading"
+                      style={{
+                        marginTop: '0.5rem',
+                        borderTop: 'none',
+                        background: 'transparent',
+                        padding: '1rem 1rem 0.5rem 1rem',
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: '0.75rem',
+                          color: '#64748b',
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.05em',
+                        }}
+                      >
+                        Audience ({audience.length})
+                      </span>
+                    </div>
+                    <div className="ch-listeners-grid">
+                      {audience.map((u) => renderUserCard(u, false))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Chat / Comments Feed */}
+            {activeRoomTab === 'chat' && (
+              <div className="ch-chat-section" style={{ height: '100%' }}>
+                <div className="ch-chat-scroll" style={{ height: '100%' }}>
+                  {comments.length === 0 ? (
+                    <div className="ch-chat-empty">
+                      💬
+                      <span>No messages yet. Be the first to start the chat!</span>
+                    </div>
+                  ) : (
+                    comments.map((c) => (
+                      <div key={c.id} className="ch-comment-item">
+                        {c.userPhoto ? (
+                          <img className="ch-comment-avatar" src={c.userPhoto} alt="" />
+                        ) : (
+                          <div
+                            className="ch-comment-avatar"
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              background: '#2e333d',
+                              color: 'var(--text-dim)',
+                              fontSize: '0.65rem',
+                              fontWeight: 600,
+                            }}
+                          >
+                            {c.userName.slice(0, 2).toUpperCase()}
+                          </div>
+                        )}
+                        <div className="ch-comment-content">
+                          <div className="ch-comment-header">
+                            <span className="ch-comment-user">{c.userName}</span>
+                            <span className="ch-comment-time">
+                              {new Date(c.timestamp).toLocaleTimeString([], {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </span>
+                          </div>
+                          <div className="ch-comment-bubble">{c.text}</div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                  <div ref={chatEndRef} />
+                </div>
+              </div>
+            )}
+
+            {/* Agent Settings Panel */}
+            {activeRoomTab === 'agent' && (
+              <div className="ch-agent-section">
+                <div
+                  style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '1rem',
+                      background: 'rgba(255,255,255,0.03)',
+                      borderRadius: '8px',
+                    }}
+                  >
+                    <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>Enable Voice Agent</span>
+                    <button
+                      className={`ch-btn-action ${agentEnabled ? 'mic-active' : ''}`}
+                      onClick={() => setAgentEnabled(!agentEnabled)}
+                      style={{ padding: '0.5rem 1rem', fontSize: '0.8rem' }}
+                    >
+                      {agentEnabled ? '🤖 ON' : '🤖 OFF'}
+                    </button>
                   </div>
-                ))
-              )}
-              <div ref={chatEndRef} />
-            </div>
+
+                  {agentEnabled && (
+                    <div
+                      style={{
+                        padding: '1rem',
+                        background: 'rgba(0,0,0,0.2)',
+                        borderRadius: '8px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '1rem',
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: 'flex',
+                          gap: '1rem',
+                          flexWrap: 'wrap',
+                          borderBottom: '1px solid rgba(255,255,255,0.05)',
+                          paddingBottom: '1rem',
+                        }}
+                      >
+                        <label
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.5rem',
+                            fontSize: '0.8rem',
+                            color: '#f1f5f9',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={agentRespondsToVoice}
+                            onChange={(e) => setAgentRespondsToVoice(e.target.checked)}
+                            style={{ accentColor: 'var(--accent)' }}
+                          />
+                          Respond to Voice (Stage)
+                        </label>
+                        <label
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.5rem',
+                            fontSize: '0.8rem',
+                            color: '#f1f5f9',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={agentRespondsToChat}
+                            onChange={(e) => setAgentRespondsToChat(e.target.checked)}
+                            style={{ accentColor: 'var(--accent)' }}
+                          />
+                          Respond to Live Chat
+                        </label>
+                      </div>
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                          }}
+                        >
+                          <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>
+                            System Prompt / Persona:
+                          </span>
+                          <div style={{ display: 'flex', gap: '0.5rem' }}>
+                            <select
+                              onChange={(e) => {
+                                if (e.target.value) setAgentSystemPrompt(e.target.value);
+                              }}
+                              style={{
+                                padding: '0.2rem',
+                                fontSize: '0.7rem',
+                                background: '#1d2026',
+                                color: '#f1f5f9',
+                                border: '1px solid #2e333d',
+                              }}
+                            >
+                              <option value="">Load Preset...</option>
+                              {agentPromptPresets.map((p, i) => (
+                                <option key={i} value={p.prompt}>
+                                  {p.name}
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              className="ch-btn-action"
+                              style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}
+                              onClick={() => {
+                                const name = prompt('Name for this preset:');
+                                if (name) {
+                                  const newPresets = [
+                                    ...agentPromptPresets,
+                                    { name, prompt: agentSystemPrompt },
+                                  ];
+                                  setAgentPromptPresets(newPresets);
+                                  localStorage.setItem('agentPresets', JSON.stringify(newPresets));
+                                }
+                              }}
+                            >
+                              Save
+                            </button>
+                          </div>
+                        </div>
+                        <textarea
+                          value={agentSystemPrompt}
+                          onChange={(e) => setAgentSystemPrompt(e.target.value)}
+                          placeholder="System Prompt / Persona"
+                          style={{
+                            width: '100%',
+                            minHeight: '80px',
+                            padding: '0.75rem',
+                            fontSize: '0.8rem',
+                            background: '#1d2026',
+                            color: '#f1f5f9',
+                            border: '1px solid #2e333d',
+                            borderRadius: '8px',
+                            resize: 'vertical',
+                          }}
+                        />
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                        <div
+                          style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '0.4rem',
+                            flex: 1,
+                            minWidth: '120px',
+                          }}
+                        >
+                          <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>
+                            Pause Detection:
+                          </span>
+                          <select
+                            style={{
+                              width: '100%',
+                              padding: '0.5rem',
+                              fontSize: '0.8rem',
+                              background: '#1d2026',
+                              color: '#f1f5f9',
+                              border: '1px solid #2e333d',
+                              borderRadius: '4px',
+                            }}
+                            value={sttChunkMs}
+                            onChange={(e) => setSttChunkMs(Number(e.target.value))}
+                          >
+                            <option value={2000}>Fast (2s pause)</option>
+                            <option value={5000}>Normal (5s pause)</option>
+                            <option value={8000}>Patient (8s pause)</option>
+                          </select>
+                        </div>
+
+                        <div
+                          style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '0.4rem',
+                            flex: 1,
+                            minWidth: '100px',
+                          }}
+                        >
+                          <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>
+                            Temperature:
+                          </span>
+                          <input
+                            type="number"
+                            min="0"
+                            max="2"
+                            step="0.1"
+                            value={agentTemperature}
+                            onChange={(e) => setAgentTemperature(Number(e.target.value))}
+                            style={{
+                              width: '100%',
+                              padding: '0.5rem',
+                              fontSize: '0.8rem',
+                              background: '#1d2026',
+                              color: '#f1f5f9',
+                              border: '1px solid #2e333d',
+                              borderRadius: '4px',
+                            }}
+                          />
+                        </div>
+
+                        <div
+                          style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '0.4rem',
+                            flex: 1,
+                            minWidth: '100px',
+                          }}
+                        >
+                          <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>
+                            Max Tokens:
+                          </span>
+                          <input
+                            type="number"
+                            min="20"
+                            max="500"
+                            step="10"
+                            value={agentMaxTokens}
+                            onChange={(e) => setAgentMaxTokens(Number(e.target.value))}
+                            style={{
+                              width: '100%',
+                              padding: '0.5rem',
+                              fontSize: '0.8rem',
+                              background: '#1d2026',
+                              color: '#f1f5f9',
+                              border: '1px solid #2e333d',
+                              borderRadius: '4px',
+                            }}
+                          />
+                        </div>
+                      </div>
+
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'flex-end',
+                          gap: '0.5rem',
+                          marginTop: '0.5rem',
+                          borderTop: '1px solid rgba(255,255,255,0.05)',
+                          paddingTop: '1rem',
+                        }}
+                      >
+                        <button
+                          className="ch-btn-action"
+                          style={{
+                            padding: '0.6rem 1.2rem',
+                            fontSize: '0.85rem',
+                            background: '#e11d48',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '20px',
+                            cursor: 'pointer',
+                          }}
+                          onClick={stopAgentAudio}
+                          disabled={!isAgentSpeaking}
+                        >
+                          ✋ Interrupt
+                        </button>
+                        <button
+                          className="ch-btn-action"
+                          style={{
+                            padding: '0.6rem 1.2rem',
+                            fontSize: '0.85rem',
+                            background: '#2e333d',
+                            border: 'none',
+                            borderRadius: '20px',
+                            cursor: 'pointer',
+                          }}
+                          onClick={() => triggerAgentResponse(' ')}
+                          disabled={isAgentSpeaking}
+                        >
+                          🗣️ Speak Now
+                        </button>
+                      </div>
+                      {!isCurrentUserSpeaker && (
+                        <p
+                          style={{
+                            fontSize: '0.75rem',
+                            color: '#94a3b8',
+                            margin: '0',
+                            textAlign: 'right',
+                          }}
+                        >
+                          ℹ️ You are in the audience. Agent will respond in text chat only.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
 
@@ -1879,6 +2611,7 @@ export function RoomsPanel() {
 
           {/* Action buttons (Mute/Raise hand/Accept) */}
           <div className="ch-stage-actions-row">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}></div>
             {isCurrentUserSpeaker ? (
               <button
                 className={`ch-btn-action ${isMuted ? 'mic-muted' : 'mic-active'}`}
@@ -1988,6 +2721,71 @@ export function RoomsPanel() {
                     })}
                   </ul>
                 )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Room Settings Modal */}
+        {showRoomSettingsModal && (
+          <div className="ch-modal-overlay" onClick={() => setShowRoomSettingsModal(false)}>
+            <div className="ch-modal-card ch-settings-modal" onClick={(e) => e.stopPropagation()}>
+              <div className="ch-modal-header">
+                <h3 className="ch-modal-title">Room Settings</h3>
+                <button className="ch-modal-close" onClick={() => setShowRoomSettingsModal(false)}>
+                  ✕
+                </button>
+              </div>
+              <div className="ch-modal-body">
+                <form onSubmit={handleSaveRoomSettings} className="ch-start-room-form">
+                  <div className="ch-form-group">
+                    <label>Room Topic</label>
+                    <input
+                      type="text"
+                      placeholder="What is this room about?"
+                      value={settingTopic}
+                      onChange={(e) => setSettingTopic(e.target.value)}
+                      className="ch-input"
+                    />
+                  </div>
+                  <div className="ch-form-group">
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <input
+                        type="checkbox"
+                        checked={settingHandraiseEnabled}
+                        onChange={(e) => setSettingHandraiseEnabled(e.target.checked)}
+                      />{' '}
+                      Enable Hand Raising
+                    </label>
+                  </div>
+                  {settingHandraiseEnabled && (
+                    <div className="ch-form-group">
+                      <label>Who can raise hands?</label>
+                      <select
+                        value={settingHandraisePermission}
+                        onChange={(e) => setSettingHandraisePermission(Number(e.target.value))}
+                        className="ch-input"
+                        style={{ width: '100%' }}
+                      >
+                        <option value={1}>Everyone</option>
+                        <option value={2}>Followed by Speakers</option>
+                      </select>
+                    </div>
+                  )}
+                  <div className="ch-form-group">
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <input
+                        type="checkbox"
+                        checked={settingChatEnabled}
+                        onChange={(e) => setSettingChatEnabled(e.target.checked)}
+                      />{' '}
+                      Enable Room Chat
+                    </label>
+                  </div>
+                  <button type="submit" className="ch-btn-submit" disabled={savingSettings}>
+                    {savingSettings ? 'Saving...' : 'Save Settings'}
+                  </button>
+                </form>
               </div>
             </div>
           </div>
