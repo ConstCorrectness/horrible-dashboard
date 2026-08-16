@@ -7,6 +7,7 @@ import {
   downloadModel,
   formatBytes,
   formatParams,
+  getInstallVariants,
   getLlamaModels,
   getLlamaStatus,
   getRepoFiles,
@@ -18,6 +19,7 @@ import {
   type ModelsResponse,
   type Progress,
   type RepoFile,
+  type VariantAvailability,
 } from './api';
 import { OffloadPreview } from './OffloadPreview';
 import { TracesSection } from './TracesSection';
@@ -144,6 +146,23 @@ function ServerSection({
   const [gpuLayers, setGpuLayers] = useState<number | null>(null);
   const [threads, setThreads] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
+  const [availability, setAvailability] = useState<VariantAvailability | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getInstallVariants().then(
+      (info) => {
+        if (!cancelled) setAvailability(info);
+      },
+      () => {
+        // A failed lookup leaves every option enabled — an unknown answer must
+        // not be shown as "unavailable", which would misrepresent the release.
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const modelPath = selected || models[0]?.path || '';
   const defaults = hardware?.defaults;
@@ -237,14 +256,28 @@ function ServerSection({
             disabled={busy}
             title={reasons.llamaVariant}
           >
+            {/* `auto` is never greyed out: it names no asset of its own — the probe
+                resolves it to one at install time — so availability cannot answer for it. */}
             <option value="auto">
               {defaults ? `Auto — ${defaults.llamaVariant}` : 'Auto (recommended)'}
             </option>
-            <option value="cpu">CPU (works everywhere)</option>
-            <option value="cuda">CUDA (NVIDIA)</option>
-            <option value="vulkan">Vulkan</option>
-            <option value="hip">HIP / ROCm (AMD)</option>
-            <option value="sycl">SYCL (Intel)</option>
+            {(
+              [
+                ['cpu', 'CPU (works everywhere)'],
+                ['cuda', 'CUDA (NVIDIA)'],
+                ['vulkan', 'Vulkan'],
+                ['hip', 'HIP / ROCm (AMD)'],
+                ['sycl', 'SYCL (Intel)'],
+              ] as const
+            ).map(([value, label]) => {
+              const available = availability?.variants[value];
+              return (
+                <option key={value} value={value} disabled={available === false}>
+                  {label}
+                  {available === false ? ` — no ${availability?.tag} build for this platform` : ''}
+                </option>
+              );
+            })}
           </select>
           <button onClick={() => void install()} disabled={busy}>
             {install0 ? 'Install latest' : 'Install'}
@@ -261,6 +294,7 @@ function ServerSection({
             spawn.
           </p>
         )}
+        {availability?.error && <p className="llama-note">{availability.error}</p>}
         {progress && <ProgressBar progress={progress} />}
       </div>
 

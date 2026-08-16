@@ -107,6 +107,19 @@ export function getLlamaModels(): Promise<ModelsResponse> {
   return apiGet<ModelsResponse>('/llamacpp/models');
 }
 
+/** Which variants the current llama.cpp release actually publishes for this OS/arch. */
+export interface VariantAvailability {
+  tag: string;
+  os: string;
+  arch: string;
+  variants: Record<string, boolean>;
+  error: string;
+}
+
+export function getInstallVariants(tag = 'latest'): Promise<VariantAvailability> {
+  return apiGet<VariantAvailability>(`/llamacpp/install/variants?tag=${encodeURIComponent(tag)}`);
+}
+
 export function getRepoFiles(
   repo: string,
 ): Promise<{ repo: string; files: RepoFile[]; error: string }> {

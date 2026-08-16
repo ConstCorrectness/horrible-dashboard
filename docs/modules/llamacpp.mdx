@@ -77,6 +77,18 @@ carry meaning — OS, arch, accelerator — with two rules that are the whole te
 When nothing matches, the error names the assets it *did* see, rather than failing
 blind on a release whose naming moved again.
 
+### The picker knows before you click install
+
+`select_asset` used to run only *after* the user picked a variant and hit
+Install — a release publishing no CUDA build for Linux surfaced as an error only
+once the download was already "starting." `GET /llamacpp/install/variants` runs
+the same match ahead of time, for every variant against the current release and
+this OS/arch, and the pane's `<select>` greys out (`disabled`) any option that
+comes back unavailable, labelled with the release tag. It reuses `select_asset`
+rather than a second notion of "available" that could disagree with what
+actually gates the download; a failed lookup (offline, GitHub down) leaves every
+option enabled, since "we could not ask" must never be shown as "unavailable."
+
 ### Which variant, though — the hardware probe decides
 
 `variant` used to default to a flat `cpu`, which is correct on a machine with no
