@@ -307,7 +307,9 @@ def test_mute_channel(client, tmp_path, monkeypatch) -> None:
     _connect(tmp_path)
 
     async def fake_post(path, payload, token, user_id, device_id=None):
-        assert (path, token, user_id, device_id) == ("/update_is_muted", "T", 4242, "D")
+        # `/mute_speaker`, not `/update_is_muted`: the latter is gone upstream and
+        # answers 404, so the mute button silently did nothing.
+        assert (path, token, user_id, device_id) == ("/mute_speaker", "T", 4242, "D")
         assert payload == {"channel": "my-channel", "is_muted": True}
         return {"success": True}
 
@@ -349,7 +351,10 @@ def test_accept_speaker(client, tmp_path, monkeypatch) -> None:
             4242,
             "D",
         )
-        assert payload == {"channel": "my-channel", "user_id": 12345}
+        # The accepting user is always *us* — you can only accept your own
+        # invitation. Forwarding the body's `user_id` let a stale id from the UI
+        # accept on behalf of someone else, which upstream rejects.
+        assert payload == {"channel": "my-channel", "user_id": 4242}
         return {"success": True}
 
     monkeypatch.setattr(routes, "_ch_authed_post", fake_post)

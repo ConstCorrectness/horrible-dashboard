@@ -114,8 +114,41 @@ export function acceptClubhouseSpeaker(channel: string, userId: number): Promise
   return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/accept_speaker`, { user_id: userId });
 }
 
+export function inviteClubhouseSpeaker(channel: string, userId: number): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/invite_speaker`, { user_id: userId });
+}
+
+export function updateClubhouseTopic(channel: string, topic: string): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/topic`, { topic });
+}
+
+export function updateClubhouseHandraiseSettings(channel: string, isEnabled: boolean, permission: number): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/handraise_settings`, { is_enabled: isEnabled, handraise_permission: permission });
+}
+
+export function updateClubhouseChatSettings(channel: string, enableChat: boolean): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/channels/${channel}/chat_settings`, { enable_chat: enableChat });
+}
+
 export function getClubhouseChannelDetails(channel: string): Promise<Channel> {
   return apiGet<Channel>(`/clubhouse/channels/${channel}`);
+}
+
+export interface ApiChatComment {
+  message?: string;
+  text?: string;
+  user_profile?: {
+    name?: string;
+    photo_url?: string;
+  };
+  from_name?: string;
+  from_photo_url?: string;
+  time_created?: string;
+  [key: string]: unknown;
+}
+
+export function getClubhouseChannelChat(channel: string): Promise<{ comments: ApiChatComment[] }> {
+  return apiGet<{ comments: ApiChatComment[] }>(`/clubhouse/channels/${channel}/chat`);
 }
 
 export interface ClubhouseUserProfile {
@@ -177,5 +210,12 @@ export function inviteToClubhouseChannel(channel: string, userId: number): Promi
 
 export function searchClubhouseUsers(query: string): Promise<{ users: SearchUserResult[] }> {
   return apiGet<{ users: SearchUserResult[] }>(`/clubhouse/users/search?query=${encodeURIComponent(query)}`);
+}
+
+export function sendChannelMessage(channel: string, message: string): Promise<{ success: boolean }> {
+  return apiPost<{ success: boolean }>(`/clubhouse/send_channel_message`, {
+    channel,
+    message
+  });
 }
 

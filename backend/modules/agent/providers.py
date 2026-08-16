@@ -709,10 +709,21 @@ async def generate(
     prompt: str,
     max_tokens: int = 64,
     temperature: float = 0.2,
+    system: str | None = None,
 ) -> str:
     """One non-streaming, short completion (for editor autosuggest), normalized
     across dialects to a plain string. Token-capped to keep latency low; low
-    ``temperature`` by default so code completions are stable, not creative."""
+    ``temperature`` by default so code completions are stable, not creative.
+
+    ``system`` rides the dialect's own system channel rather than being glued
+    onto the prompt, because Ollama's ``/api/generate`` takes a top-level
+    ``system`` field while the chat dialects take a leading message — and a
+    persona pasted into the prompt is answered rather than adopted."""
+    messages: list[dict[str, str]] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
     if info.dialect == "litellm":
         from backend.modules.database.secrets_store import get_secret_or_none
 
@@ -723,7 +734,7 @@ async def generate(
 
         response = await litellm.acompletion(
             model=model,
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
             max_tokens=max_tokens,
             temperature=temperature,
             **api_key_kwargs,
@@ -731,22 +742,22 @@ async def generate(
         return response.choices[0].message.content or ""
 
     if info.dialect == "ollama":
-        res = await client.post(
-            f"{endpoint}/api/generate",
-            json={
-                "model": model,
-                "prompt": prompt,
-                "stream": False,
-                "options": {"num_predict": max_tokens, "temperature": temperature},
-            },
-        )
+        payload: dict[str, Any] = {
+            "model": model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {"num_predict": max_tokens, "temperature": temperature},
+        }
+        if system:
+            payload["system"] = system
+        res = await client.post(f"{endpoint}/api/generate", json=payload)
         res.raise_for_status()
         return res.json().get("response", "")
     res = await client.post(
         f"{endpoint}/v1/chat/completions",
         json={
             "model": model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
             "stream": False,
             "max_tokens": max_tokens,
             "temperature": temperature,

@@ -1,5 +1,6 @@
+import { apiUrl } from '../../origin';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import AgoraRTC, { IAgoraRTCClient, IMicrophoneAudioTrack } from 'agora-rtc-sdk-ng';
+import AgoraRTC, { IAgoraRTCClient, ILocalAudioTrack } from 'agora-rtc-sdk-ng';
 import PubNub from 'pubnub';
 import {
   joinClubhouseChannel,
@@ -9,13 +10,27 @@ import {
   setClubhouseHand,
   acceptClubhouseSpeaker,
   getClubhouseStatus,
+  getClubhouseChannelChat,
+  sendChannelMessage,
   JoinChannelResult,
   ChannelUser,
+  ApiChatComment
 } from './api';
 
 const CLUBCARD_AGORA_APP_ID = '938d7e95aeaa4f4ca1f416ab40a498d9';
 const CLUBCARD_PUBNUB_SUB_KEY = 'sub-c-a4abea84-9ca3-11ea-8e71-f2b83ac9263d';
 const CLUBCARD_PUBNUB_PUB_KEY = 'pub-c-6878d382-5ae6-4494-9099-f930f938868b';
+
+export interface UseClubhouseVoiceProps {
+  onLiveUsersChange?: (users: LiveUserState[]) => void;
+  onCommentsChange?: (comments: ChatComment[]) => void;
+  onSpeakingVolumesChange?: (volumes: Record<number, number>) => void;
+  onTranscribe?: (text: string) => void;
+  onBargeIn?: () => void;
+  onSpeakerInvite?: (invite: SpeakerInvite) => void;
+  onHandRaise?: (userId: number, userName: string) => void;
+  sttChunkIntervalMs?: number;
+}
 
 export interface ChatComment {
   id: string;
@@ -39,13 +54,13 @@ export interface SpeakerInvite {
   moderatorPhoto: string | null;
 }
 
-// Per-user live state tracked inside the room
 export interface LiveUserState {
   userId: number;
   handRaised: boolean;
   isSpeaker: boolean;
   isMuted: boolean;
 }
+
 
 export interface PubNubRoomMessage {
   action?: string;
@@ -69,6 +84,7 @@ export interface PubNubRoomMessage {
   } | null;
   from_name?: string | null;
   from_photo_url?: string | null;
+  from_user_id?: number | null;
   // Room event payloads
   user_id?: number | null;
   club_id?: number | null;
@@ -82,7 +98,7 @@ export interface PubNubRoomMessage {
   moderator_photo_url?: string | null;
 }
 
-export function useClubhouseVoice() {
+export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
   const [joined, setJoined] = useState(false);
   const [activeChannel, setActiveChannel] = useState<string | null>(null);
   const [isMuted, setIsMuted] = useState(false);
@@ -99,8 +115,36 @@ export function useClubhouseVoice() {
   // Map of uid → volume level (0–100) from Agora volume indicator
   const [speakingVolumes, setSpeakingVolumes] = useState<Record<number, number>>({});
 
+  // Audio Mixer Refs
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const agentAudioDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
+  const sttDestRef = useRef<MediaStreamAudioDestinationNode | null>(null);
+  const sttRecorderRef = useRef<MediaRecorder | null>(null);
+  const physicalMicStreamRef = useRef<MediaStream | null>(null);
+  const humanGainRef = useRef<GainNode | null>(null);
+  const onTranscribeRef = useRef(props?.onTranscribe);
+  const onBargeInRef = useRef(props?.onBargeIn);
+  const onSpeakerInviteRef = useRef(props?.onSpeakerInvite);
+  const onHandRaiseRef = useRef(props?.onHandRaise);
+  
+  // VAD & Agent Audio control
+  const vadIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const agentAudioSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const isAgentSpeakingRef = useRef(false);
+  const agentTtsAbortControllerRef = useRef<AbortController | null>(null);
+  
+  const chunkIntervalRef = useRef(props?.sttChunkIntervalMs || 5000);
+
+  useEffect(() => {
+    onTranscribeRef.current = props?.onTranscribe;
+    onBargeInRef.current = props?.onBargeIn;
+    onSpeakerInviteRef.current = props?.onSpeakerInvite;
+    onHandRaiseRef.current = props?.onHandRaise;
+    chunkIntervalRef.current = props?.sttChunkIntervalMs || 5000;
+  }, [props?.onTranscribe, props?.onBargeIn, props?.onSpeakerInvite, props?.onHandRaise, props?.sttChunkIntervalMs]);
+
   const rtcClientRef = useRef<IAgoraRTCClient | null>(null);
-  const localAudioTrackRef = useRef<IMicrophoneAudioTrack | null>(null);
+  const localAudioTrackRef = useRef<ILocalAudioTrack | null>(null);
   const pubnubRef = useRef<PubNub | null>(null);
   const pingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const volumeIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -150,6 +194,29 @@ export function useClubhouseVoice() {
   const joinRoom = async (channelName: string, initialUsers?: ChannelUser[]) => {
     setLoading(true);
     setError(null);
+    setComments([]);
+    setActiveReactions([]);
+
+    // Fetch historical chat
+    try {
+      const chatRes = await fetch(apiUrl(`/api/clubhouse/channels/${channelName}/chat`));
+      if (chatRes.ok) {
+        const chatData = await chatRes.json();
+        if (chatData.comments && Array.isArray(chatData.comments)) {
+          const newComments = chatData.comments.map((c: ApiChatComment) => ({
+            id: c.time_created || Math.random().toString(),
+            userName: c.from_name || c.user_profile?.name || 'Unknown',
+            userPhoto: c.from_photo_url || c.user_profile?.photo_url || null,
+            text: c.message || c.text || '',
+            timestamp: c.time_created ? Date.parse(c.time_created) : Date.now()
+          })).filter((c: ChatComment) => c.text.length > 0);
+          setComments(newComments.reverse()); // usually oldest first
+        }
+      }
+    } catch (e) {
+      console.error('Failed to fetch historical chat:', e);
+    }
+
     try {
       // Get own profile status first
       const status = await getClubhouseStatus();
@@ -175,6 +242,13 @@ export function useClubhouseVoice() {
         if (mediaType === 'audio') {
           const remoteAudioTrack = user.audioTrack;
           remoteAudioTrack?.play();
+          
+          if (remoteAudioTrack && audioCtxRef.current && sttDestRef.current) {
+            const track = remoteAudioTrack.getMediaStreamTrack();
+            const stream = new MediaStream([track]);
+            const source = audioCtxRef.current.createMediaStreamSource(stream);
+            source.connect(sttDestRef.current);
+          }
         }
       });
 
@@ -190,12 +264,142 @@ export function useClubhouseVoice() {
         chDetails.user_id ?? undefined
       );
 
-      // e. Create and publish microphone stream
-      const micTrack = await AgoraRTC.createMicrophoneAudioTrack();
-      localAudioTrackRef.current = micTrack;
-      await client.publish(micTrack);
-      // Join as listener by default (muted)
-      await micTrack.setEnabled(false);
+      // e. Create Audio Mixer
+      const AudioContext = window.AudioContext || (window as unknown as { webkitAudioContext: typeof window.AudioContext }).webkitAudioContext;
+      const audioCtx = new AudioContext();
+      audioCtxRef.current = audioCtx;
+      
+      const dest = audioCtx.createMediaStreamDestination();
+      agentAudioDestRef.current = dest;
+      
+      const sttDest = audioCtx.createMediaStreamDestination();
+      sttDestRef.current = sttDest;
+      
+      // Start STT Recorder with VAD
+      try {
+        const analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 256;
+        sttDest.stream.getAudioTracks().forEach(track => {
+          const stream = new MediaStream([track]);
+          const src = audioCtx.createMediaStreamSource(stream);
+          src.connect(analyser);
+        });
+        
+        let silenceTicks = 0;
+        let isSpeaking = false;
+        
+        const startRecordingChunk = () => {
+          if (!sttDestRef.current) return;
+          const recorder = new MediaRecorder(sttDestRef.current.stream);
+          sttRecorderRef.current = recorder;
+          
+          recorder.ondataavailable = async (e) => {
+            if (e.data.size > 0 && onTranscribeRef.current) {
+              const formData = new FormData();
+              formData.append('file', new File([e.data], 'chunk.webm', { type: e.data.type || 'audio/webm' }));
+              try {
+                const res = await fetch(apiUrl('/api/agent/stt'), { method: 'POST', body: formData });
+                const json = await res.json();
+                if (onTranscribeRef.current && json.text && json.text.trim()) {
+                  onTranscribeRef.current(json.text.trim());
+                }
+              } catch (err) {
+                console.error('STT failed:', err);
+              }
+            }
+          };
+          
+          recorder.start();
+        };
+        
+        startRecordingChunk();
+        
+        vadIntervalRef.current = setInterval(() => {
+          const dataArray = new Uint8Array(analyser.frequencyBinCount);
+          analyser.getByteFrequencyData(dataArray);
+          let sum = 0;
+          for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+          const avgVolume = sum / dataArray.length;
+          
+          if (avgVolume > 5) {
+            // Human is speaking
+            if (!isSpeaking && onBargeInRef.current) {
+              onBargeInRef.current();
+            }
+            isSpeaking = true;
+            silenceTicks = 0;
+            
+            // Barge-in: Stop agent if it's currently speaking
+            if (isAgentSpeakingRef.current) {
+              console.log("BARGE-IN DETECTED! Stopping agent audio.");
+              if (agentAudioSourceRef.current) {
+                try {
+                  agentAudioSourceRef.current.stop();
+                } catch {
+                  /* ignore */
+                }
+              }
+              if (agentTtsAbortControllerRef.current) {
+                try {
+                  agentTtsAbortControllerRef.current.abort();
+                } catch {
+                  /* ignore */
+                }
+              }
+              isAgentSpeakingRef.current = false;
+            }
+          } else {
+            // Silence
+            if (isSpeaking) {
+              silenceTicks++;
+              if (silenceTicks > 15) { // ~750ms of silence at 50ms interval
+                isSpeaking = false;
+                silenceTicks = 0;
+                // End of speech detected, send chunk!
+                if (sttRecorderRef.current && sttRecorderRef.current.state !== 'inactive') {
+                  sttRecorderRef.current.stop();
+                  startRecordingChunk();
+                }
+              }
+            }
+          }
+        }, 50);
+
+      } catch (err) {
+        console.error('Failed to start VAD STT recorder:', err);
+      }
+      
+      // Get physical mic (Optional, handle missing permissions or timeouts gracefully)
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw new Error('MediaDevices API not available (requires secure context).');
+        }
+        
+        const micStream = await Promise.race([
+          navigator.mediaDevices.getUserMedia({ audio: true }),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Microphone permission timeout')), 3000))
+        ]);
+        
+        physicalMicStreamRef.current = micStream;
+        const micSource = audioCtx.createMediaStreamSource(micStream);
+        
+        const humanGain = audioCtx.createGain();
+        humanGain.gain.value = 0; // muted by default
+        humanGainRef.current = humanGain;
+        
+        micSource.connect(humanGain);
+        humanGain.connect(dest);
+        humanGain.connect(sttDest);
+      } catch (err) {
+        console.warn('Could not access physical microphone, continuing as listener:', err);
+      }
+
+      // Create and publish mixed microphone stream
+      const mixedTrack = AgoraRTC.createCustomAudioTrack({
+        mediaStreamTrack: dest.stream.getAudioTracks()[0]
+      });
+      localAudioTrackRef.current = mixedTrack;
+      await client.publish(mixedTrack);
       setIsMuted(true);
 
       // e2. Start Agora volume indicator — fires every 200ms with per-user volumes
@@ -237,23 +441,19 @@ export function useClubhouseVoice() {
         pubnub.setToken(chDetails.pubnub_token);
         pubnubRef.current = pubnub;
 
-        console.log('[PubNub] Initialized (PAMv3). userId:', myUserIdStr, 'origin:', chDetails.pubnub_origin);
-
         pubnub.addListener({
           message: (event) => {
-            console.log('[PubNub] RAW message:', { channel: event.channel, message: event.message });
-
+            console.log('PubNub Message Received:', event);
             const msg = event.message as PubNubRoomMessage;
             if (!msg) return;
 
             const sender = msg.user_profile || msg.user || {};
-            const senderId = sender.user_id ?? msg.user_id;
+            const senderId = sender.user_id ?? msg.user_id ?? msg.from_user_id;
 
             // --- Room signaling events ---
             const action = msg.action;
 
             if (action === 'join_channel') {
-              // Someone joined the room
               if (senderId != null) {
                 updateLiveUser(senderId, {
                   isSpeaker: msg.is_speaker ?? false,
@@ -261,20 +461,21 @@ export function useClubhouseVoice() {
                 });
               }
             } else if (action === 'leave_channel' || action === 'remove_speaker') {
-              // Someone left or was removed
               if (senderId != null) {
                 removeLiveUser(senderId);
               }
             } else if (action === 'raise_hands' || action === 'hand_raised') {
               if (senderId != null) {
                 updateLiveUser(senderId, { handRaised: true });
+                if (onHandRaiseRef.current && senderId !== myUserId) {
+                  onHandRaiseRef.current(senderId, sender.name || msg.from_name || 'Someone');
+                }
               }
             } else if (action === 'lower_hands' || action === 'unraise_hands') {
               if (senderId != null) {
                 updateLiveUser(senderId, { handRaised: false });
               }
             } else if (action === 'make_speaker' || action === 'accept_speaker_invite') {
-              // User was promoted to speaker
               if (senderId != null) {
                 updateLiveUser(senderId, { isSpeaker: true, handRaised: false });
               }
@@ -283,24 +484,24 @@ export function useClubhouseVoice() {
                 updateLiveUser(senderId, { isMuted: msg.is_muted ?? true });
               }
             } else if (action === 'invite_speaker') {
-              // A moderator is inviting us to speak
               const targetId = msg.user_id;
-              if (targetId != null && targetId === myUserId) {
-                setSpeakerInvite({
+              if (targetId != null && Number(targetId) === Number(myUserId)) {
+                const invite: SpeakerInvite = {
                   moderatorId: msg.moderator_id ?? (senderId ?? 0),
                   moderatorName: msg.moderator_name || sender.name || 'A moderator',
                   moderatorPhoto: msg.moderator_photo_url || sender.photo_url || null,
-                });
+                };
+                setSpeakerInvite(invite);
+                if (onSpeakerInviteRef.current) {
+                  onSpeakerInviteRef.current(invite);
+                }
               }
             }
 
             // --- Chat messages ---
-            if (action === 'post_to_chat' || (!action && (msg.text || msg.body || msg.message))) {
+            if (action === 'chat_message' || action === 'chat' || action === 'post_to_chat' || action === 'new_channel_message' || (!action && (msg.text || msg.body || msg.message))) {
               const text = msg.text || msg.body || msg.message;
               if (text && typeof text === 'string') {
-                // Skip own messages (shown locally immediately)
-                if (senderId != null && myUserId != null && senderId === myUserId) return;
-                console.log('[PubNub] Chat message:', text);
                 setComments(prev => [
                   ...prev,
                   {
@@ -318,7 +519,7 @@ export function useClubhouseVoice() {
             if (action === 'react' || (!action && (msg.emoji || msg.reaction))) {
               const emoji = msg.emoji || msg.reaction;
               if (emoji && typeof emoji === 'string') {
-                if (senderId != null && myUserId != null && senderId === myUserId) return;
+                if (senderId != null && myUserId != null && Number(senderId) === Number(myUserId)) return;
                 const reactionId = String(event.timetoken || Math.random());
                 const x = 15 + Math.random() * 70;
                 const y = 80 + Math.random() * 10;
@@ -328,31 +529,15 @@ export function useClubhouseVoice() {
                 }, 3000);
               }
             }
-          },
-          signal: (event) => {
-            console.log('[PubNub] Signal:', event);
-          },
-          status: (statusEvent) => {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const s = statusEvent as any;
-            console.log('[PubNub] Status:', statusEvent.category, {
-              affectedChannels: s.affectedChannels,
-              statusCode: s.statusCode,
-              error: s.error,
-            });
           }
         });
 
-        // Subscribe only to channels in the PAMv3 token grant
-        const channelsToSubscribe = [`channel_all.${channelName}`];
-        if (myUserId) {
-          channelsToSubscribe.push(`users.${myUserId}`);
-          channelsToSubscribe.push(`channel_user.${channelName}.${myUserId}`);
-        }
-        console.log('[PubNub] Subscribing to:', channelsToSubscribe);
+        const channelsToSubscribe = [
+          `channel_all.${channelName}`,
+          `channel_user.${channelName}.${myUserId}`,
+          `users.${myUserId}`
+        ];
         pubnub.subscribe({ channels: channelsToSubscribe });
-      } else {
-        console.warn('[PubNub] Not initialized — pubnub_enable:', chDetails.pubnub_enable);
       }
 
       // g. Heartbeat ping loop (every 30s)
@@ -372,9 +557,25 @@ export function useClubhouseVoice() {
       setSpeakerInvite(null);
       setSpeakingVolumes({});
 
-      // Seed live user state from the room's initial user list
       if (initialUsers) {
         seedLiveUsers(initialUsers);
+      }
+      
+      try {
+        const chatRes = await getClubhouseChannelChat(channelName);
+        if (chatRes.comments && chatRes.comments.length > 0) {
+          const mappedComments: ChatComment[] = chatRes.comments.map((msg) => ({
+            id: String(msg.message_id || msg.time_created || Math.random()),
+            userName: String(msg.user_profile?.name || msg.from_name || 'Anonymous'),
+            userPhoto: msg.user_profile?.photo_url || msg.from_photo_url || null,
+            text: String(msg.message || msg.text || msg.body || ''),
+            timestamp: msg.time_created ? new Date(msg.time_created).getTime() : Date.now()
+          })).filter((c: ChatComment) => c.text);
+          // Only take last 50 messages to prevent huge lists
+          setComments(mappedComments.slice(-50));
+        }
+      } catch (err) {
+        console.warn('Failed to fetch initial chat history:', err);
       }
     } catch (e) {
       const errMsg = e instanceof Error ? e.message : String(e);
@@ -400,11 +601,27 @@ export function useClubhouseVoice() {
       clearInterval(volumeIntervalRef.current);
       volumeIntervalRef.current = null;
     }
+    if (vadIntervalRef.current) {
+      clearInterval(vadIntervalRef.current);
+      vadIntervalRef.current = null;
+    }
 
     if (localAudioTrackRef.current) {
-      try { localAudioTrackRef.current.stop(); localAudioTrackRef.current.close(); }
-      catch (err) { console.error('Error stopping mic track:', err); }
+      localAudioTrackRef.current.close();
       localAudioTrackRef.current = null;
+    }
+    if (physicalMicStreamRef.current) {
+      physicalMicStreamRef.current.getTracks().forEach(t => t.stop());
+      physicalMicStreamRef.current = null;
+    }
+    if (sttRecorderRef.current) {
+      sttRecorderRef.current.stop();
+      sttRecorderRef.current = null;
+    }
+    
+    if (audioCtxRef.current) {
+      audioCtxRef.current.close();
+      audioCtxRef.current = null;
     }
 
     if (rtcClientRef.current) {
@@ -438,8 +655,8 @@ export function useClubhouseVoice() {
     if (!activeChannel) return;
     const nextMuteState = !isMuted;
     try {
-      if (localAudioTrackRef.current) {
-        await localAudioTrackRef.current.setEnabled(!nextMuteState);
+      if (humanGainRef.current) {
+        humanGainRef.current.gain.value = nextMuteState ? 0 : 1;
       }
       setIsMuted(nextMuteState);
       await muteClubhouseChannel(activeChannel, nextMuteState);
@@ -486,38 +703,32 @@ export function useClubhouseVoice() {
 
   // 7. Post a comment chat message to the room
   const sendComment = async (text: string) => {
-    if (!pubnubRef.current || !activeChannel) return;
-    const profile = myProfileRef.current;
-    const commentId = 'my-msg-' + Math.random().toString(36).slice(2, 9);
-    const timestamp = Date.now();
+    if (!pubnubRef.current || !activeChannel || !text) return;
 
-    // Add locally for instant feedback
-    setComments(prev => [...prev, {
-      id: commentId,
-      userName: profile?.name || 'Anonymous',
-      userPhoto: profile?.photoUrl || null,
-      text,
-      timestamp
-    }]);
-
-    const payload = {
-      action: 'post_to_chat',
-      text,
-      user_profile: {
-        name: profile?.name || 'Anonymous',
-        photo_url: profile?.photoUrl || null,
-        user_id: profile?.userId || null
-      },
-      timestamp
-    };
-    try {
-      await pubnubRef.current.publish({ channel: `channel_all.${activeChannel}`, message: payload });
-    } catch {
-      try {
-        await pubnubRef.current.publish({ channel: activeChannel, message: payload });
-      } catch (err2) {
-        console.error('Failed to publish comment:', err2);
+    // Clubhouse chat messages have a 280-character limit
+    const MAX_LEN = 270;
+    const chunks: string[] = [];
+    let current = text;
+    while (current.length > 0) {
+      if (current.length <= MAX_LEN) {
+        chunks.push(current);
+        break;
       }
+      let splitIdx = current.lastIndexOf(' ', MAX_LEN);
+      if (splitIdx === -1) splitIdx = MAX_LEN;
+      chunks.push(current.substring(0, splitIdx));
+      current = current.substring(splitIdx).trim();
+    }
+
+    try {
+      for (const chunk of chunks) {
+        await sendChannelMessage(activeChannel, chunk);
+        // Add a tiny delay between chunks so they appear in order
+        await new Promise(r => setTimeout(r, 300));
+      }
+    } catch (err2) {
+      console.error('Failed to publish comment:', err2);
+      throw err2;
     }
   };
 
@@ -546,14 +757,74 @@ export function useClubhouseVoice() {
     };
     try {
       await pubnubRef.current.publish({ channel: `channel_all.${activeChannel}`, message: payload });
-    } catch {
-      try {
-        await pubnubRef.current.publish({ channel: activeChannel, message: payload });
-      } catch (err2) {
-        console.error('Failed to publish reaction:', err2);
-      }
+    } catch (err2) {
+      console.error('Failed to publish reaction:', err2);
     }
   };
+
+  // Play Agent Audio through the mixer
+  const stopAgentAudio = useCallback(() => {
+    if (isAgentSpeakingRef.current) {
+      console.log("Interrupting agent audio manually.");
+      if (agentAudioSourceRef.current) {
+        try { agentAudioSourceRef.current.stop(); } catch { /* ignore */ }
+      }
+      if (agentTtsAbortControllerRef.current) {
+        try { agentTtsAbortControllerRef.current.abort(); } catch { /* ignore */ }
+      }
+      isAgentSpeakingRef.current = false;
+    }
+  }, []);
+
+  const playAgentAudio = useCallback(async (text: string) => {
+    if (!audioCtxRef.current || !agentAudioDestRef.current || !localAudioTrackRef.current) return;
+    try {
+      isAgentSpeakingRef.current = true;
+      agentTtsAbortControllerRef.current = new AbortController();
+      const url = `/api/agent/tts?text=${encodeURIComponent(text)}`;
+      const res = await fetch(url, { signal: agentTtsAbortControllerRef.current.signal });
+      const arrayBuffer = await res.arrayBuffer();
+      const audioBuffer = await audioCtxRef.current.decodeAudioData(arrayBuffer);
+      
+      // Clear the abort controller after successful fetch
+      agentTtsAbortControllerRef.current = null;
+      
+      const source = audioCtxRef.current.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(agentAudioDestRef.current);
+      source.connect(audioCtxRef.current.destination); // Play locally so the user hears it too
+      
+      agentAudioSourceRef.current = source;
+      isAgentSpeakingRef.current = true;
+      
+      const wasMuted = isMuted;
+      if (wasMuted && activeChannel) {
+        try {
+          await muteClubhouseChannel(activeChannel, false);
+        } catch (e) {
+          console.error('Failed to unmute channel for agent TTS:', e);
+        }
+      }
+
+      return new Promise<void>((resolve) => {
+        source.onended = async () => {
+          isAgentSpeakingRef.current = false;
+          if (wasMuted && activeChannel) {
+            try {
+              await muteClubhouseChannel(activeChannel, true);
+            } catch (e) {
+              console.error('Failed to restore mute state after agent TTS:', e);
+            }
+          }
+          resolve();
+        };
+        source.start();
+      });
+    } catch (e) {
+      isAgentSpeakingRef.current = false;
+      console.error('Failed to play agent audio:', e);
+    }
+  }, [isMuted, activeChannel]);
 
   return {
     joined,
@@ -565,6 +836,8 @@ export function useClubhouseVoice() {
     liveUsers,
     speakerInvite,
     speakingVolumes,
+    playAgentAudio,
+    stopAgentAudio,
     loading,
     error,
     joinRoom,

@@ -5,6 +5,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using System.Runtime.InteropServices;
 
 class Program
 {
@@ -32,10 +33,21 @@ class Program
         // whose fingerprint is trust-listed by Cloudflare (same stack as
         // Edge and Windows Update). This bypasses the reCAPTCHA gate on
         // Clubhouse's auth endpoint.
-        var handler = new WinHttpHandler
+        HttpMessageHandler handler;
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
-            AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
-        };
+            handler = new WinHttpHandler
+            {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            };
+        }
+        else
+        {
+            handler = new HttpClientHandler
+            {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate,
+            };
+        }
 
         using var client = new HttpClient(handler);
         client.DefaultRequestHeaders.Add("CH-Languages", "en-US");
