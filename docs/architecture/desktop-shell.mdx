@@ -78,6 +78,14 @@ both paradigms meant repeatedly paying for a round trip instead of just keeping 
 desktops. The tray's ▦/❐ is now an **indicator** that opens a menu; converting in
 place is still there, listed last and labelled with what it costs.
 
+**No ambient control flips a desktop.** The tray indicator, the app menu (logo) and
+the desktop's right-click menu all open the same `modeMenuItems` list — make a
+desktop, save this arrangement as one, and only last, convert in place. There is
+also **no keybinding**: `mod+alt+t` used to toggle, and a lossy whole-desktop
+rewrite is not something a mistyped chord should be able to do. `desktop.toggleMode`
+/ `desktop.tiling` / `desktop.floating` remain as palette commands and agent verbs,
+with titles that say sizes are not preserved.
+
 Because the mode is per workspace, the shell adapts to it:
 
 | | tiling desktop | floating desktop |
@@ -323,6 +331,13 @@ whole desktop to tiling was the only way to see the pane again. The pane was nev
 closed — it simply had no surface, which is exactly what minimized means everywhere
 else in the shell.
 
+Which is also why **dock-back is not offered on a floating desktop at all**: it and
+Minimize would produce the same visible result and take the same recovery, so the
+window's ⤵ button and the taskbar menu's *Dock back into the frame* are both hidden
+when `frame.mode === 'floating'`. Both check the mode rather than assuming it from
+"we are drawing a window" — a window on a **tiling** desktop docks back into a frame
+that is genuinely there, and keeps the control.
+
 #### Attention: a pane that finished while you were elsewhere
 
 Minimizing is non-destructive, and panes keep working while put away — a deep-research
@@ -368,6 +383,15 @@ alphabetical run said nothing about the model the user was choosing from, and th
 is exactly the fact that decides where the thing will land. Searching flattens the
 groups — three headings over four results is more structure than content.
 
+Search matches the **owning module** as well as the view's own title
+(`registry.viewOwner`), and each row shows that module name trailing when the two
+differ. A view's title says what the pane is; the module's says what feature it
+belongs to, and those are frequently different words — the Observability module's
+pane is called *Data flow*, so a search for the feature came back empty on a pane
+that was sitting right there under Tools. Labelling it is the other half: without
+the module name on the row, a user browsing the list has no way to connect the two
+names either. This is why no module has to rename its panes to be findable.
+
 Its **footer** is Settings / Setup / Theme. The bottom-left corner is where people go
 for settings, and the menu previously offered it only as one row of sixty, filed under
 S. Theme opens the tray's own `taskbar.theme` menu rather than a second list.
@@ -375,7 +399,11 @@ S. Theme opens the tray's own `taskbar.theme` menu rather than a second list.
 ## The app menu
 
 The logo at the top-left opens the `shell.app` context menu: Setup, Settings, Theme,
-Backdrop, the spotlight, the tiling/floating flip, and re-running first-run setup.
+Backdrop, the spotlight, a **Desktops** submenu, and re-running first-run setup.
+That submenu is `modeMenuItems()` — the same list the tray indicator and the
+desktop's right-click menu open — and it reports which paradigm this desktop is,
+rather than offering to flip it. See [the paradigm belongs to the
+workspace](#the-paradigm-belongs-to-the-workspace).
 
 It previously ran `shell.home`, which **could not do anything**. `home` is the desktop
 now, and the desktop is the only view the logo is ever visible from — so the one piece

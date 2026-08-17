@@ -437,6 +437,25 @@ class ModuleRegistry {
   }
 
   /**
+   * Title of the module that declared a view, for launchers.
+   *
+   * A view's title says what the pane *is* ("Data flow"); the module's says what
+   * feature it belongs to ("Observability"). Those differ often enough that
+   * searching a launcher for the feature name found nothing — the pane was
+   * present under a name the user had no reason to guess. Every surface that
+   * lists views can match and label with this, so no module has to rename its
+   * panes to be findable.
+   */
+  viewOwner(viewId: string): string | undefined {
+    for (const m of this.modules.values()) {
+      const declared =
+        m.panels?.some((p) => p.id === viewId) || m.widgets?.some((w) => w.id === viewId);
+      if (declared) return m.title;
+    }
+    return undefined;
+  }
+
+  /**
    * Title of the module that declared `settingKey`, for grouping the settings
    * page by contributor. Falls back to `undefined` for an unknown key.
    */

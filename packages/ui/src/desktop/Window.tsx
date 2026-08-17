@@ -14,7 +14,7 @@
  *    in-flight rect is local state; dispatching per frame would bump `revision` a
  *    hundred times per drag and drive the autosave debounce into a write loop.
  */
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useRef, useState, useSyncExternalStore } from 'react';
 import {
   clampRect,
   closePaneGuarded,
@@ -83,6 +83,10 @@ export function DesktopWindow({
   const rect = live ?? win.rect;
   const active = win.area.tabs[win.area.activeTab];
   const decl = active ? resolveView(active.viewId) : null;
+  // Windows exist on a tiling desktop too (a pane popped out of the frame), so
+  // this is read per render rather than assumed from "we are rendering a window".
+  const floatingDesktop =
+    useSyncExternalStore(layoutStore.subscribe, layoutStore.getSnapshot).frame.mode === 'floating';
 
   const startGesture = useCallback(
     (e: React.PointerEvent, kind: 'move' | 'resize', edge?: readonly [string, number, number]) => {
@@ -272,14 +276,24 @@ export function DesktopWindow({
           </span>
         )}
         <div className="os-window-controls">
-          <button
-            className="os-window-btn"
-            title="Dock back into the frame"
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={() => active && setPaneWindowed(active.instanceId, false)}
-          >
-            ⤵
-          </button>
+          {/* Dock-back is a **tiling-desktop** verb, and only there.
+           *
+           * A floating desktop retains the centre tree but never draws it, so
+           * putting a pane back in the frame there hides it and leaves it on the
+           * taskbar as minimized — the same outcome, and the same recovery, as
+           * the ─ button beside it. Two controls doing one thing under different
+           * names is what made this corner confusing, so the one that describes a
+           * destination the user cannot see is the one that goes. */}
+          {!floatingDesktop && (
+            <button
+              className="os-window-btn"
+              title="Dock back into the frame"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => active && setPaneWindowed(active.instanceId, false)}
+            >
+              ⤵
+            </button>
+          )}
           <button
             className="os-window-btn"
             title="Minimize"

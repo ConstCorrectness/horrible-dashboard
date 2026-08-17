@@ -317,6 +317,23 @@
   flex: 0 0 auto;
 }
 
+.os-start-title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The owning module, trailing and dim: it is what you searched by, not what you
+   are picking. Loud enough to read, quiet enough that the pane's own name still
+   reads as the label of the row. */
+.os-start-owner {
+  flex: 0 0 auto;
+  margin-left: 8px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
 .os-start-empty {
   margin: 12px 8px;
   color: var(--text-dim);

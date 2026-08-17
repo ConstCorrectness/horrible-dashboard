@@ -55,19 +55,26 @@ export const desktopModule: ModuleManifest = {
   title: 'Desktop',
   backdrops: BUILTIN_BACKDROPS,
   commands: [
+    // Converting a desktop in place is **lossy** — `explodeToWindows` can only
+    // express split ratios as the rects they happened to occupy and `tileWindows`
+    // cannot recover the ratios you dragged, so a round trip quietly degrades the
+    // arrangement. The paradigm is a property of the workspace, chosen when you
+    // make one (Start ▸ New tiled / New floating); these stay for the cases where
+    // converting is genuinely what you want, but they say so in their titles and
+    // live in the palette rather than under an ambient one-click control.
     {
       id: 'desktop.toggleMode',
-      title: 'Desktop: Toggle tiling / floating',
+      title: 'Desktop: Convert this desktop (tiling ⇄ floating) — sizes are not preserved',
       run: () => void toggleDesktopMode(),
     },
     {
       id: 'desktop.tiling',
-      title: 'Desktop: Switch to tiling',
+      title: 'Desktop: Convert this desktop to tiling — sizes are not preserved',
       run: () => void setDesktopMode('tiling'),
     },
     {
       id: 'desktop.floating',
-      title: 'Desktop: Switch to floating windows',
+      title: 'Desktop: Convert this desktop to floating windows — sizes are not preserved',
       run: () => void setDesktopMode('floating'),
     },
     {
@@ -143,7 +150,9 @@ export const desktopModule: ModuleManifest = {
     { key: 'alt+shift+grave', command: 'window.prev' },
     { key: 'mod+alt+down', command: 'window.minimize' },
     { key: 'mod+alt+up', command: 'window.maximize' },
-    { key: 'mod+alt+t', command: 'desktop.toggleMode' },
+    // No chord for `desktop.toggleMode`. It rearranges every pane on the desktop
+    // and cannot be undone exactly, and a lossy whole-desktop rewrite is not
+    // something a mistyped chord should be able to do. It is a palette verb.
     // Snapping is `mod+shift+arrow` rather than `mod+alt+arrow`, which the frame
     // already uses to split an area — the two would collide on a tiling desktop,
     // where both are live.
@@ -255,11 +264,14 @@ export function appMenuItems(): ContextMenuItem[] {
       label: 'Search everything…',
       run: () => void registry.runCommand('shell.commandPalette'),
     },
+    // The same menu the tray's ▦/❐ indicator opens, not a flip. You change
+    // paradigm by switching to a desktop that has the one you want; this row
+    // reports which kind you are on and offers to make another.
     {
-      id: 'desktop.toggleMode',
-      label: tiling ? 'Switch to floating windows' : 'Switch to tiling',
-      checked: tiling,
-      run: () => void toggleDesktopMode(),
+      id: 'app.desktops',
+      label: tiling ? 'Desktops (this one tiles)' : 'Desktops (this one floats)',
+      run: () => {},
+      submenu: modeMenuItems(),
     },
     {
       id: 'shell.oobe',
@@ -414,10 +426,10 @@ function desktopMenuItems(): ContextMenuItem[] {
         ]
       : []),
     {
-      id: 'desktop.toggleMode',
-      label: tiling ? 'Switch to floating windows' : 'Switch to tiling',
-      checked: tiling,
-      run: () => void toggleDesktopMode(),
+      id: 'desktop.desktops',
+      label: tiling ? 'Desktops (this one tiles)' : 'Desktops (this one floats)',
+      run: () => {},
+      submenu: modeMenuItems(),
     },
   ];
 }

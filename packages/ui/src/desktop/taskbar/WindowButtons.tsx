@@ -106,7 +106,11 @@ export function windowButtonMenu(entry: TaskbarEntry) {
           label: 'Open in a window',
           run: () => void setPaneWindowed(entry.instanceId, true),
         },
-    ...(windowed
+    // Dock-back only on a tiling desktop. On a floating one the frame is retained
+    // but never drawn, so "dock back" and "minimize" have the same visible effect
+    // and the same recovery — and the row above already offers Minimize by name.
+    // See the matching note on the window's ⤵ button.
+    ...(windowed && layoutStore.getSnapshot().frame.mode !== 'floating'
       ? [
           {
             id: 'taskbar.dock',

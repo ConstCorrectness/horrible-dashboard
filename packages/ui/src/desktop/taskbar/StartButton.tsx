@@ -79,7 +79,18 @@ function StartMenu({ onClose }: { onClose: () => void }) {
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return views;
-    return views.filter((v) => v.title.toLowerCase().includes(q) || v.id.includes(q));
+    // Matched against the owning **module** as well as the pane's own title,
+    // because the two are often different words for one feature: the
+    // Observability module's pane is called "Data flow", so a search for the
+    // thing the user came looking for used to come back empty on a pane that
+    // was right there. The id is matched too, but an id is not something anyone
+    // types on purpose.
+    return views.filter(
+      (v) =>
+        v.title.toLowerCase().includes(q) ||
+        v.id.includes(q) ||
+        (registry.viewOwner(v.id)?.toLowerCase().includes(q) ?? false),
+    );
   }, [views, query]);
 
   useEffect(() => {
@@ -302,6 +313,11 @@ function DesktopsGroup({ onClose }: { onClose: () => void }) {
 }
 
 function StartItem({ view, onLaunch }: { view: View; onLaunch: (id: string) => void }) {
+  // The module name, but only when it says something the title does not — the
+  // launcher's job here is to close the gap between what a pane is called and
+  // what feature it belongs to, and "Settings · Settings" closes nothing.
+  const owner = registry.viewOwner(view.id);
+  const feature = owner && owner.toLowerCase() !== view.title.toLowerCase() ? owner : null;
   return (
     <button
       type="button"
@@ -312,7 +328,8 @@ function StartItem({ view, onLaunch }: { view: View; onLaunch: (id: string) => v
       <span className="os-start-icon" aria-hidden="true">
         {view.icon ?? view.title[0]}
       </span>
-      <span>{view.title}</span>
+      <span className="os-start-title">{view.title}</span>
+      {feature && <span className="os-start-owner">{feature}</span>}
     </button>
   );
 }
