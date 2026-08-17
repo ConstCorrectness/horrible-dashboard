@@ -886,6 +886,21 @@ export function townWhisper(text: string): void {
   sendChannel('games', 'town_whisper', { text });
 }
 
+/** Claim or rename a cottage lot on Homes Lane in AgentTown. */
+export function townClaimHouse(houseId: string, name: string): void {
+  sendChannel('games', 'town_claim_house', { house_id: houseId, name });
+}
+
+/** Call a meetup with friends or town residents at a designated location. */
+export function townMeetup(place: string, message?: string): void {
+  sendChannel('games', 'town_meetup', { place, message });
+}
+
+/** Propose or enact a town decree or community initiative. */
+export function townDecree(title: string, content: string): void {
+  sendChannel('games', 'town_decree', { title, content });
+}
+
 // ---- The Plaza (human social layer) ----------------------------------------
 
 /** Enter the Plaza. The node auto-connects to the game server. No display name

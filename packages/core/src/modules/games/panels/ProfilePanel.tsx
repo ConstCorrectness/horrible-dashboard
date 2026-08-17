@@ -40,6 +40,7 @@ import {
 } from '../profile-api';
 import { invalidateProfileCards } from '../../people/profile-cards';
 import { openReplay } from '../replay-focus';
+import { openGamesSection } from '../hub-section';
 import { GamesMui } from '../mui-theme';
 import { ProfileComments } from './ProfileComments';
 import { ProfileCustomize } from './ProfileCustomize';
@@ -67,6 +68,8 @@ export function ProfilePanel() {
   const { social, accountId } = useGames();
   const [cards, setCards] = useState<TierCard[]>([]);
   const [log, setLog] = useState<MatchEntry[]>([]);
+  const [socialMe, setSocialMe] = useState<{ code?: string; person_id?: string; display_name?: string } | null>(null);
+  const [copiedCode, setCopiedCode] = useState(false);
 
   // Custom states for editing
   const [editingAvatar, setEditingAvatar] = useState(false);
@@ -90,6 +93,9 @@ export function ProfilePanel() {
     apiGet<{ entries: MatchEntry[] }>('/games/match-log?limit=30')
       .then((r) => setLog(r.entries))
       .catch(() => setLog([]));
+    apiGet<{ code?: string; person_id?: string; display_name?: string }>('/social/me')
+      .then(setSocialMe)
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -293,10 +299,35 @@ export function ProfilePanel() {
                 </div>
 
                 <div style={{ flex: 1, minWidth: '200px' }}>
-                  <Typography variant="h5" sx={{ fontWeight: 800, mb: 0.2 }}>
-                    {profile.handle ?? profile.account_id}
-                  </Typography>
-                  <Typography variant="body2" sx={{ color: 'text.secondary', fontSize: '0.78rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <Typography variant="h5" sx={{ fontWeight: 800 }}>
+                      {profile.display_name || profile.handle || profile.account_id}
+                    </Typography>
+                    {profile.handle && (
+                      <Chip
+                        size="small"
+                        label={`@${profile.handle}`}
+                        sx={{ fontWeight: 700, bgcolor: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8' }}
+                      />
+                    )}
+                    {socialMe?.code && (
+                      <Chip
+                        size="small"
+                        label={copiedCode ? '✓ Copied' : `Friend Code: ${socialMe.code}`}
+                        onClick={() => {
+                          if (socialMe.code) {
+                            navigator.clipboard.writeText(socialMe.code);
+                            setCopiedCode(true);
+                            setTimeout(() => setCopiedCode(false), 2000);
+                          }
+                        }}
+                        title="Click to copy your self-certifying friend code"
+                        sx={{ cursor: 'pointer', borderColor: 'rgba(255,255,255,0.2)' }}
+                        variant="outlined"
+                      />
+                    )}
+                  </div>
+                  <Typography variant="body2" sx={{ color: 'text.secondary', fontSize: '0.78rem', mt: 0.2 }}>
                     ID: {profile.account_id}
                   </Typography>
                   {profile.status_text && (
@@ -565,6 +596,23 @@ export function ProfilePanel() {
                     </CardContent>
                   </Card>
                 )}
+
+                {/* AgentTown Resident Presence */}
+                <Card sx={{ borderColor: 'divider' }}>
+                  <CardContent sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.8rem' }}>
+                    <div>
+                      <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
+                        🏛 AgentTown Resident Presence
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.8rem', mt: 0.3 }}>
+                        Your autonomous agent lives, works, and socializes in AgentTown. Observe its activity, wanderings, and whisper task directives into its next tick.
+                      </Typography>
+                    </div>
+                    <Button size="small" variant="contained" onClick={() => openGamesSection('social')}>
+                      Observe in AgentTown →
+                    </Button>
+                  </CardContent>
+                </Card>
 
                 {/* Recent Matches */}
                 <Card sx={{ borderColor: 'divider' }}>

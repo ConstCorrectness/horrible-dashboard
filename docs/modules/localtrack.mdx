@@ -1,0 +1,192 @@
+---
+sidebar_position: 16
+sidebar_label: LocalTrack
+---
+
+# Module: localtrack
+
+**LocalTrack** is a lightweight, open-source local experiment tracking system inspired by Weights & Biases (W&B) and MLflow. It provides customizable drag-and-drop metric panels, multi-run comparison with synchronized color-coded overlays, real-time Exponential Moving Average (EMA) smoothing, high-throughput metric ingestion, and native Hugging Face / PyTorch logging integration.
+
+---
+
+## Overview
+
+LocalTrack is designed for zero-configuration, privacy-preserving local ML workflows. All experiment metadata, parameters, metric time-series, and artifact files are stored locally in the node's SQLite database (`$HORRIBLE_DATA_DIR/localtrack.db`).
+
+### Key Features
+
+- **W&B-Style Workspace**: Draggable, resizable grid of line charts, scalar metric cards, and comparative bar charts with project-keyed layout persistence in `localStorage`.
+- **Custom Vector Icon**: Custom designed SVG icon (`LocalTrackIcon`) representing loss and accuracy metric curves.
+- **Multi-Run Comparison**: Collapsible left sidebar with eye visibility toggles (`👁`) to overlay multiple runs simultaneously with vibrant, distinguishable color palettes.
+- **High-Density Charting**: Powered by `uPlot` and server-side **LTTB (Largest Triangle Three Buckets)** downsampling to visualize 100,000+ metric points at 60fps without lag.
+- **Noise Smoothing**: Live Exponential Moving Average (EMA) slider (`0.00` to `0.99`) for readable loss and reward curves.
+- **Regex Metric Filtering**: Instant panel search and filtering above the grid (e.g. `loss`, `eval/.*`).
+- **Run Details Modal**: Tabbed view displaying single-run charts, hyperparameter configurations, hardware info, and artifact file downloads (`config.json`, `trainer_state.json`).
+- **Python Client SDK & Hugging Face Callback**: `BaseLocalTrackLogger` abstract base class, asynchronous batching client, and `LocalTrackHFCallback(TrainerCallback)`.
+- **Orchestrator Agent Tools**: Native `localtrack.*` tool group for multi-turn conversational experiment queries, run comparisons, and project management.
+
+---
+
+## Architecture
+
+```mermaid
+graph TD
+    subgraph Client["Python Client SDK (backend/sdk/localtrack)"]
+        ABC[BaseLocalTrackLogger ABC] --> HF[LocalTrackHFCallback]
+        ABC --> PyClient[LocalTrackClient]
+        HF -->|on_train_begin| R_Create[POST /api/localtrack/runs]
+        HF -->|on_log (async batch)| R_Ingest[POST /api/localtrack/metrics/ingest]
+        HF -->|on_train_end| R_Finish[PATCH /api/localtrack/runs/{id} + Artifacts]
+    end
+
+    subgraph Backend["FastAPI Backend (backend/modules/localtrack)"]
+        Router[FastAPI Routes]
+        Store[LocalTrackStore / SQLite Engine]
+        LTTB[LTTB Downsampling & EMA Engine]
+        AgentTools[localtrack.* Agent Tools]
+        DB[(Local SQLite at paths.data_dir)]
+        
+        Router --> Store
+        Store --> DB
+        Router --> LTTB
+        AgentTools --> Store
+    end
+
+    subgraph Frontend["React Dashboard (packages/core/src/modules/localtrack)"]
+        Manifest[ModuleManifest: localtrackModule]
+        Pane[LocalTrackWorkspacePane]
+        Sidebar[RunsSidebar: multi-run selection]
+        Grid[WorkspaceGrid: regex filter & EMA slider]
+        Chart[ChartPanel: uPlot multi-line overlay]
+        Details[RunDetailsModal: Overview / Files]
+        
+        Sidebar -->|Toggle Visibility| Chart
+        Grid --> Chart
+    end
+
+    R_Create --> Router
+    R_Ingest --> Router
+    R_Finish --> Router
+    Router -->|Downsampled time-series| Pane
+```
+
+---
+
+## Template Notebooks (`notebooks/`)
+
+LocalTrack includes pre-built Jupyter Notebook templates (`.ipynb`) ready to run inside the dashboard's notebook editor:
+
+1. **`notebooks/01_localtrack_huggingface_training.ipynb`**:
+   Fine-tuning models with PyTorch & Hugging Face `transformers` while streaming telemetry through `LocalTrackHFCallback`.
+2. **`notebooks/02_localtrack_experiment_analysis.ipynb`**:
+   Fetching historical runs, Pandas DataFrame comparisons, and LTTB downsampled time-series querying across multiple models.
+3. **`notebooks/03_localtrack_llm_evaluations.ipynb`**:
+   Evaluating LLM reasoning benchmarks, streaming running accuracy curves, and uploading summary artifacts.
+
+---
+
+## Orchestrator Agent Tools (`localtrack.*`)
+
+LocalTrack exports tools to the central AI orchestrator agent:
+
+| Tool Name | Description | Side Effect |
+| :--- | :--- | :--- |
+| `localtrack.list_projects` | List all experiment tracking projects and run counts | Read-only |
+| `localtrack.create_project` | Create a new experiment tracking project | Yes (Gated) |
+| `localtrack.list_runs` | List runs for a project with status and summaries | Read-only |
+| `localtrack.get_run` | Get full configuration, hyperparameters, and artifacts | Read-only |
+| `localtrack.query_metrics` | Fetch downsampled metric curves across multiple runs | Read-only |
+| `localtrack.get_metric_keys` | Discover all logged metric keys | Read-only |
+
+### Multi-Turn Agent Evaluation Suite
+Evaluated via `backend/tests/test_localtrack_agent_eval.py`:
+- Automatic keyword preloading for prompts mentioning `"loss curves"`, `"experiment tracking"`, `"wandb"`, or `"localtrack"`.
+- Multi-turn tool execution inspecting projects, comparing metric series, creating projects, and retrieving artifact files.
+
+---
+
+## Python Client & Hugging Face Integration
+
+### Hugging Face `TrainerCallback` Example
+
+```python
+from transformers import Trainer, TrainingArguments
+from backend.sdk.localtrack import LocalTrackHFCallback
+
+# Initialize callback
+callback = LocalTrackHFCallback(
+    project_name="my-llm-finetuning",
+    run_name="llama3-lora-run-1",
+    base_url="http://127.0.0.1:8000",
+    tags=["llama-3", "lora", "sft"],
+)
+
+training_args = TrainingArguments(
+    output_dir="./results",
+    learning_rate=2e-4,
+    per_device_train_batch_size=4,
+    num_train_epochs=3,
+    logging_steps=10,
+    report_to=["none"], # No need for external cloud trackers
+)
+
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=train_dataset,
+    callbacks=[callback],
+)
+
+trainer.train()
+```
+
+### Custom PyTorch / Python Logging
+
+```python
+from backend.sdk.localtrack import LocalTrackClient
+
+logger = LocalTrackClient(base_url="http://127.0.0.1:8000")
+
+# Initialize run
+run_id = logger.init_run(
+    project_name="rl-experiments",
+    run_name="ppo-halfcheetah-v4",
+    config={"lr": 3e-4, "gamma": 0.99, "clip_eps": 0.2},
+    tags=["rl", "ppo"],
+)
+
+# In training loop
+for step in range(1000):
+    loss, reward = train_step()
+    logger.log_metrics({"train/loss": loss, "eval/reward": reward}, step=step)
+
+# Upload saved weights or config
+logger.log_artifact("config.json")
+logger.finish_run(status="finished")
+```
+
+---
+
+## Model Context Protocol (MCP) & Agent Skills
+
+LocalTrack also integrates with external Weights & Biases (W&B) endpoints:
+- **MCP Server Catalog**: Registered in `backend/modules/mcp/curated.json` supporting both hosted HTTP (`https://mcp.withwandb.com/mcp`) and local `uvx wandb-mcp-server`.
+- **Agent Skills**: Registered in `.claude/skills/` (`wandb-primary`, `wandb-eval-tables`, `wandb-autoresearch`).
+
+---
+
+## Core API Endpoints
+
+- `GET /api/localtrack/projects`: List projects with run counts and activity dates.
+- `POST /api/localtrack/projects`: Create or update a project.
+- `DELETE /api/localtrack/projects/{id}`: Delete a project and all associated runs.
+- `GET /api/localtrack/runs?project_id={id}`: List runs for an active project.
+- `POST /api/localtrack/runs`: Create an experiment run.
+- `GET /api/localtrack/runs/{id}`: Get run configuration, summary stats, and hardware info.
+- `PATCH /api/localtrack/runs/{id}`: Update run status (`running`, `finished`, `failed`) and metrics summary.
+- `POST /api/localtrack/metrics/ingest`: High-throughput batch ingestion of metric logs.
+- `GET /api/localtrack/metrics/keys`: Discover all logged metric keys.
+- `POST /api/localtrack/metrics/query`: Fetch time-series metric data with server-side LTTB downsampling and smoothing.
+- `POST /api/localtrack/runs/{id}/artifacts`: Upload artifact files (`config.json`, `trainer_state.json`).
+- `GET /api/localtrack/runs/{id}/artifacts`: List run artifacts.
+- `GET /api/localtrack/runs/{id}/artifacts/{artifact_id}/download`: Download an artifact.

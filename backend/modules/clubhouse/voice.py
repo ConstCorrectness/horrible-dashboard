@@ -171,6 +171,7 @@ class VoiceConfig:
     # Speak replies aloud (TTS into the room) vs. only posting them to room chat.
     speak: bool = True
     post_to_chat: bool = True
+    robot_emoji_prefix: bool = False
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> VoiceConfig:
@@ -204,6 +205,9 @@ class VoiceConfig:
             model=str(raw.get("model") or base.model),
             speak=bool(raw.get("speak", base.speak)),
             post_to_chat=bool(raw.get("post_to_chat", raw.get("postToChat", True))),
+            robot_emoji_prefix=bool(
+                raw.get("robot_emoji_prefix", raw.get("robotEmojiPrefix", False))
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -223,6 +227,7 @@ class VoiceConfig:
             "model": self.model,
             "speak": self.speak,
             "postToChat": self.post_to_chat,
+            "robotEmojiPrefix": self.robot_emoji_prefix,
         }
 
 
@@ -420,7 +425,16 @@ def render_room_brief(room: RoomSnapshot) -> str:
 
 
 def render_bios(room: RoomSnapshot) -> str | None:
-    """Profile lines for the people the agent has bios for."""
+    """Profile and learned memory lines for people currently present."""
+    try:
+        from backend.modules.clubhouse.people_memory import people_memory_store
+
+        user_ids = [m.user_id for m in room.members if m.user_id]
+        if memory_brief := people_memory_store.format_room_memory(user_ids):
+            return memory_brief
+    except Exception:
+        pass
+
     withbio = [m for m in room.members if m.bio and m.name]
     if not withbio:
         return None

@@ -22,6 +22,7 @@ import {
   layoutStore,
   openContextMenu,
   registry,
+  resolveViewIcon,
   useWorkspaces,
   type PaneRole,
   type PanelDecl,
@@ -318,6 +319,7 @@ function StartItem({ view, onLaunch }: { view: View; onLaunch: (id: string) => v
   // what feature it belongs to, and "Settings · Settings" closes nothing.
   const owner = registry.viewOwner(view.id);
   const feature = owner && owner.toLowerCase() !== view.title.toLowerCase() ? owner : null;
+  const icon = resolveViewIcon(view.id, view.icon, view.title);
   return (
     <button
       type="button"
@@ -326,7 +328,7 @@ function StartItem({ view, onLaunch }: { view: View; onLaunch: (id: string) => v
       onClick={() => onLaunch(view.id)}
     >
       <span className="os-start-icon" aria-hidden="true">
-        {view.icon ?? view.title[0]}
+        {icon}
       </span>
       <span className="os-start-title">{view.title}</span>
       {feature && <span className="os-start-owner">{feature}</span>}

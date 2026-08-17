@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import { useAgentContext } from '../../agent-context';
 import { toastsStore } from '../../toasts';
+import { getAgentStatus, saveAgentConfig, type AgentStatus } from '../agent/api';
 import {
   getClubhouseChannels,
   getClubhouseStatus,
@@ -17,12 +18,18 @@ import {
   updateClubhouseChatSettings,
   searchClubhouseUsers,
   getClubhouseFollowing,
+  listPeopleMemory,
+  addPersonNote,
+  removePersonNote,
+  forgetPersonMemory,
   type Channel,
   type ChannelUser,
   type ClubhouseUserProfile,
   type SearchUserResult,
   type FollowUser,
+  type PersonMemory,
 } from './api';
+import { MediaInsightsModal } from './MediaInsightsModal';
 import { useClubhouseVoice } from './useClubhouseVoice';
 import {
   DEFAULT_VOICE_CONFIG,
@@ -133,10 +140,59 @@ export function RoomsPanel() {
   const [peopleSearchResults, setPeopleSearchResults] = useState<SearchUserResult[]>([]);
   const [loadingPeople, setLoadingPeople] = useState(false);
 
-  // Use a horizontal tab bar for the room view instead of vertical accordions
-  const [activeRoomTab, setActiveRoomTab] = useState<'participants' | 'chat' | 'agent'>(
-    'participants',
-  );
+  // Voice Agent Settings sidebar visibility (right-hand column) and resizable splitter
+  const [showAgentSidebar, setShowAgentSidebar] = useState(true);
+  const [showNetworkModal, setShowNetworkModal] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(340);
+  const [isDraggingSplitter, setIsDraggingSplitter] = useState(false);
+  const splitContainerRef = useRef<HTMLDivElement>(null);
+  const [agentEngineStatus, setAgentEngineStatus] = useState<AgentStatus | null>(null);
+  const [switchingModel, setSwitchingModel] = useState(false);
+
+  // Resize drag handling for vertical splitter between stage/chat and agent sidebar
+  useEffect(() => {
+    if (!isDraggingSplitter) return;
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!splitContainerRef.current) return;
+      const rect = splitContainerRef.current.getBoundingClientRect();
+      const newWidth = rect.right - e.clientX;
+      const minW = 240;
+      const maxW = Math.max(minW, rect.width - 280);
+      setSidebarWidth(Math.min(maxW, Math.max(minW, newWidth)));
+    };
+    const handleMouseUp = () => {
+      setIsDraggingSplitter(false);
+    };
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isDraggingSplitter]);
+
+  // People Knowledge & Memory
+  const [peopleMemory, setPeopleMemory] = useState<PersonMemory[]>([]);
+  const [peopleMemoryQuery, setPeopleMemoryQuery] = useState('');
+  const [peopleMemoryLoading, setPeopleMemoryLoading] = useState(false);
+  const [newNoteInputs, setNewNoteInputs] = useState<{ [uid: number]: string }>({});
+
+  const refreshPeopleMemory = async (q = peopleMemoryQuery) => {
+    setPeopleMemoryLoading(true);
+    try {
+      const data = await listPeopleMemory(q);
+      setPeopleMemory(data);
+    } catch {
+      // ignore
+    } finally {
+      setPeopleMemoryLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void getAgentStatus().then(setAgentEngineStatus).catch(() => {});
+    void refreshPeopleMemory();
+  }, []);
 
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [followingUsers, setFollowingUsers] = useState<FollowUser[]>([]);
@@ -427,6 +483,10 @@ export function RoomsPanel() {
   };
 
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  const chatScrollTopRef = useRef<number | null>(null);
+  const isNearBottomRef = useRef<boolean>(true);
+  const enqueueUtteranceRef = useRef<(text: string, source: 'voice' | 'chat', force?: boolean) => void>(() => {});
 
   const {
     joined,
@@ -451,6 +511,7 @@ export function RoomsPanel() {
     dismissSpeakerInvite,
     sendComment,
     sendReaction,
+    getNetworkInsights,
   } = useClubhouseVoice({
     sttChunkIntervalMs: sttChunkMs,
     onBargeIn: () => {
@@ -464,7 +525,7 @@ export function RoomsPanel() {
       // Every transcript is offered to the agent, even when it is disabled or busy:
       // the *backend* decides whether to answer, and it wants to hear the room
       // either way so it can follow a conversation it is staying out of.
-      if (text.trim().length > 0) enqueueUtterance(text.trim(), 'voice');
+      if (text.trim().length > 0) enqueueUtteranceRef.current(text.trim(), 'voice');
     },
     onVoiceError: (message) => {
       toastsStore.add('warning', 'Voice', message);
@@ -554,12 +615,13 @@ export function RoomsPanel() {
     return () => clearInterval(interval);
   }, [joined, activeChannel]);
 
-  // Scroll to bottom of chat when new comments arrive
+  // Scroll to bottom of chat when new comments arrive if user was already near the bottom
   useEffect(() => {
-    if (chatEndRef.current) {
+    if (chatEndRef.current && isNearBottomRef.current) {
       chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [comments]);
+
 
   const agentAbortControllerRef = useRef<AbortController | null>(null);
 
@@ -648,6 +710,7 @@ export function RoomsPanel() {
    */
   const agentQueueRef = useRef<{ text: string; source: 'voice' | 'chat'; force?: boolean }[]>([]);
   const agentBusyRef = useRef(false);
+  const agentSentTextsRef = useRef<Set<string>>(new Set());
 
   const drainAgentQueue = async () => {
     if (agentBusyRef.current) return;
@@ -670,13 +733,23 @@ export function RoomsPanel() {
           if (result.notice) {
             toastsStore.add('info', 'Agent', result.notice);
             if (agentConfigRef.current.postToChat) {
-              await sendComment(`🤖 ${result.notice}`).catch(() => {});
+              const textToSend = agentConfigRef.current.robotEmojiPrefix
+                ? `🤖 ${result.notice}`
+                : result.notice;
+              agentSentTextsRef.current.add(textToSend.trim());
+              agentSentTextsRef.current.add(result.notice.trim());
+              await sendComment(textToSend).catch(() => {});
             }
           }
           if (result.spoke && result.reply) {
             setIsAgentSpeaking(true);
             if (agentConfigRef.current.postToChat) {
-              await sendComment(`🤖 ${result.reply}`).catch(() => {});
+              const textToSend = agentConfigRef.current.robotEmojiPrefix
+                ? `🤖 ${result.reply}`
+                : result.reply;
+              agentSentTextsRef.current.add(textToSend.trim());
+              agentSentTextsRef.current.add(result.reply.trim());
+              await sendComment(textToSend).catch(() => {});
             }
             // Speaking aloud requires being on stage; in the audience the reply
             // reaches the room as text only (the backend's room brief says so too,
@@ -707,6 +780,7 @@ export function RoomsPanel() {
       agentQueueRef.current.splice(0, agentQueueRef.current.length - 6);
     void drainAgentQueue();
   };
+  enqueueUtteranceRef.current = enqueueUtterance;
 
   // Refs so the queue drain reads current values without being re-created (and
   // without the stale closures the old `useEffect`-driven version captured).
@@ -758,12 +832,19 @@ export function RoomsPanel() {
     if (comments.length > prevCommentsLengthRef.current) {
       const newComment = comments[comments.length - 1];
       prevCommentsLengthRef.current = comments.length;
-      // The agent's own posts are prefixed; feeding them back is a self-reply loop.
-      if (!newComment.text?.startsWith('🤖')) {
-        enqueueUtterance(newComment.text || '', 'chat');
+      const rawText = (newComment.text || '').trim();
+      // The agent's own posts should not be enqueued to avoid self-reply loops.
+      const isAgentSelf =
+        rawText.startsWith('🤖') ||
+        agentSentTextsRef.current.has(rawText) ||
+        (newComment.userName &&
+          myProfileName &&
+          newComment.userName.toLowerCase() === myProfileName.toLowerCase());
+      if (!isAgentSelf) {
+        enqueueUtterance(rawText, 'chat');
       }
     }
-  }, [comments]);
+  }, [comments, myProfileName]);
 
   // Filter channels based on search query
   const filteredChannels = channels.filter((c) => {
@@ -2205,6 +2286,40 @@ export function RoomsPanel() {
               }
               return null;
             })()}
+            <button
+              className="ch-btn-action"
+              style={{
+                padding: '0.4rem 0.8rem',
+                borderRadius: '20px',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                flex: 'none',
+                background: showNetworkModal ? 'rgba(56, 189, 248, 0.2)' : 'rgba(255, 255, 255, 0.05)',
+                color: showNetworkModal ? '#38bdf8' : '#94a3b8',
+                border: showNetworkModal ? '1px solid rgba(56, 189, 248, 0.4)' : '1px solid transparent',
+              }}
+              onClick={() => setShowNetworkModal(true)}
+              title="Inspect WebRTC, Agora UDP, PubNub WSS, protocols and IP domains"
+            >
+              📡 Network Insights
+            </button>
+            <button
+              className="ch-btn-action"
+              style={{
+                padding: '0.4rem 0.8rem',
+                borderRadius: '20px',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                flex: 'none',
+                background: showAgentSidebar ? 'rgba(167, 139, 250, 0.18)' : 'rgba(255, 255, 255, 0.05)',
+                color: showAgentSidebar ? '#c4b5fd' : '#94a3b8',
+                border: showAgentSidebar ? '1px solid rgba(167, 139, 250, 0.4)' : '1px solid transparent',
+              }}
+              onClick={() => setShowAgentSidebar((v) => !v)}
+              title="Toggle Voice Agent panel on the right side"
+            >
+              🤖 {showAgentSidebar ? 'Agent Panel (Open)' : 'Agent Panel'}
+            </button>
           </div>
 
           <div className="ch-room-title-section">
@@ -2227,58 +2342,41 @@ export function RoomsPanel() {
           />
         </div>
 
-        {/* Main Content Area */}
-        <div className="ch-room-scroller" style={{ display: 'flex', flexDirection: 'column' }}>
-          {/* Horizontal Tabs */}
-          <div style={{ display: 'flex', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-            <button
-              onClick={() => setActiveRoomTab('participants')}
-              style={{
-                flex: 1,
-                padding: '0.75rem',
-                background: activeRoomTab === 'participants' ? '#1d2026' : 'transparent',
-                color: activeRoomTab === 'participants' ? '#fff' : '#94a3b8',
-                border: 'none',
-                cursor: 'pointer',
-                fontWeight: activeRoomTab === 'participants' ? 600 : 400,
-              }}
-            >
-              👥 Participants ({speakers.length + audience.length})
-            </button>
-            <button
-              onClick={() => setActiveRoomTab('chat')}
-              style={{
-                flex: 1,
-                padding: '0.75rem',
-                background: activeRoomTab === 'chat' ? '#1d2026' : 'transparent',
-                color: activeRoomTab === 'chat' ? '#fff' : '#94a3b8',
-                border: 'none',
-                cursor: 'pointer',
-                fontWeight: activeRoomTab === 'chat' ? 600 : 400,
-              }}
-            >
-              💬 Live Chat
-            </button>
-            <button
-              onClick={() => setActiveRoomTab('agent')}
-              style={{
-                flex: 1,
-                padding: '0.75rem',
-                background: activeRoomTab === 'agent' ? '#1d2026' : 'transparent',
-                color: activeRoomTab === 'agent' ? '#fff' : '#94a3b8',
-                border: 'none',
-                cursor: 'pointer',
-                fontWeight: activeRoomTab === 'agent' ? 600 : 400,
-              }}
-            >
-              🤖 Agent Settings
-            </button>
-          </div>
-
-          <div style={{ flex: 1, overflowY: 'auto', position: 'relative' }}>
-            {/* Participants Area */}
-            {activeRoomTab === 'participants' && (
-              <div className="ch-participants-section">
+        {/* Main Content Area: 2-Column Side-by-Side Layout with Moveable Vertical Splitter */}
+        <div
+          ref={splitContainerRef}
+          className="ch-room-scroller"
+          style={{
+            display: 'flex',
+            flexDirection: 'row',
+            flex: 1,
+            minHeight: 0,
+            overflow: 'hidden',
+            position: 'relative',
+          }}
+        >
+          {/* Left Column: Stage (Participants on Top + Live Chat Below) */}
+          <div
+            style={{
+              flex: 1,
+              display: 'flex',
+              flexDirection: 'column',
+              minHeight: 0,
+              minWidth: '240px',
+              overflow: 'hidden',
+            }}
+          >
+              {/* 1. Participants Area (Top Half) */}
+              <div
+                className="ch-participants-section"
+                style={{
+                  flex: '0 0 auto',
+                  maxHeight: '42%',
+                  overflowY: 'auto',
+                  borderBottom: '1px solid rgba(255,255,255,0.08)',
+                  background: 'rgba(29, 32, 38, 0.5)',
+                }}
+              >
                 {/* Speakers */}
                 {speakers.length > 0 && (
                   <>
@@ -2287,18 +2385,22 @@ export function RoomsPanel() {
                       style={{
                         borderTop: 'none',
                         background: 'transparent',
-                        padding: '1rem 1rem 0.5rem 1rem',
+                        padding: '0.6rem 0.8rem 0.4rem',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
                       }}
                     >
                       <span
                         style={{
-                          fontSize: '0.75rem',
-                          color: '#64748b',
+                          fontSize: '0.72rem',
+                          color: '#38bdf8',
                           textTransform: 'uppercase',
                           letterSpacing: '0.05em',
+                          fontWeight: 700,
                         }}
                       >
-                        Speakers ({speakers.length})
+                        🎙️ Speakers ({speakers.length})
                       </span>
                     </div>
                     <div className="ch-speakers-grid">
@@ -2313,21 +2415,25 @@ export function RoomsPanel() {
                     <div
                       className="ch-section-heading"
                       style={{
-                        marginTop: '0.5rem',
+                        marginTop: '0.3rem',
                         borderTop: 'none',
                         background: 'transparent',
-                        padding: '1rem 1rem 0.5rem 1rem',
+                        padding: '0.4rem 0.8rem',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
                       }}
                     >
                       <span
                         style={{
-                          fontSize: '0.75rem',
+                          fontSize: '0.72rem',
                           color: '#64748b',
                           textTransform: 'uppercase',
                           letterSpacing: '0.05em',
+                          fontWeight: 700,
                         }}
                       >
-                        Audience ({audience.length})
+                        🎧 Audience ({audience.length})
                       </span>
                     </div>
                     <div className="ch-listeners-grid">
@@ -2336,16 +2442,55 @@ export function RoomsPanel() {
                   </>
                 )}
               </div>
-            )}
 
-            {/* Chat / Comments Feed */}
-            {activeRoomTab === 'chat' && (
-              <div className="ch-chat-section" style={{ height: '100%' }}>
-                <div className="ch-chat-scroll" style={{ height: '100%' }}>
+              {/* 2. Live Chat / Comments Feed (Directly Underneath Participants) */}
+              <div
+                className="ch-chat-section"
+                style={{
+                  flex: 1,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  minHeight: 0,
+                  overflow: 'hidden',
+                  background: '#0d1117',
+                }}
+              >
+                <div
+                  style={{
+                    padding: '0.4rem 0.8rem',
+                    background: 'rgba(255,255,255,0.03)',
+                    borderBottom: '1px solid rgba(255,255,255,0.06)',
+                    fontSize: '0.72rem',
+                    fontWeight: 700,
+                    color: 'var(--text-dim, #94a3b8)',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.05em',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                  }}
+                >
+                  <span>💬 Live Room Chat ({comments.length})</span>
+                  <span style={{ fontSize: '0.65rem', color: '#64748b', textTransform: 'none' }}>
+                    Real-time audience & stage messages
+                  </span>
+                </div>
+
+                <div
+                  ref={chatScrollRef}
+                  className="ch-chat-scroll"
+                  style={{ flex: 1, overflowY: 'auto', padding: '0.75rem' }}
+                  onScroll={(e) => {
+                    const el = e.currentTarget;
+                    chatScrollTopRef.current = el.scrollTop;
+                    const distanceToBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+                    isNearBottomRef.current = distanceToBottom < 60;
+                  }}
+                >
                   {comments.length === 0 ? (
-                    <div className="ch-chat-empty">
-                      💬
-                      <span>No messages yet. Be the first to start the chat!</span>
+                    <div className="ch-chat-empty" style={{ minHeight: '120px' }}>
+                      <span style={{ fontSize: '1.5rem' }}>💬</span>
+                      <span>No messages yet. Send a message to chat with the room!</span>
                     </div>
                   ) : (
                     comments.map((c) => (
@@ -2384,35 +2529,127 @@ export function RoomsPanel() {
                     ))
                   )}
                   <div ref={chatEndRef} />
-                </div>
               </div>
-            )}
+            </div>
+          </div>
 
-            {/* Agent Settings Panel */}
-            {activeRoomTab === 'agent' && (
-              <div className="ch-agent-section">
-                <div
-                  style={{ padding: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}
+          {/* Moveable Vertical Splitter Handle */}
+          {showAgentSidebar && (
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              title="Drag to resize panes"
+              onMouseDown={(e) => {
+                e.preventDefault();
+                setIsDraggingSplitter(true);
+              }}
+              style={{
+                width: '6px',
+                cursor: 'col-resize',
+                background: isDraggingSplitter ? 'var(--accent, #6366f1)' : 'rgba(255,255,255,0.06)',
+                transition: isDraggingSplitter ? 'none' : 'background 0.15s ease',
+                position: 'relative',
+                zIndex: 10,
+                flexShrink: 0,
+                userSelect: 'none',
+              }}
+              onMouseEnter={(e) => {
+                if (!isDraggingSplitter) (e.currentTarget as HTMLElement).style.background = 'rgba(167, 139, 250, 0.4)';
+              }}
+              onMouseLeave={(e) => {
+                if (!isDraggingSplitter) (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.06)';
+              }}
+            />
+          )}
+
+          {/* Right Column: Voice Agent Settings Sidebar */}
+          {showAgentSidebar && (
+            <div
+              className="ch-agent-section"
+              style={{
+                width: `${sidebarWidth}px`,
+                minWidth: '240px',
+                flexShrink: 0,
+                background: '#12151b',
+                display: 'flex',
+                flexDirection: 'column',
+                minHeight: 0,
+                overflow: 'hidden',
+              }}
+            >
+              {/* Sticky Sidebar Header */}
+              <div
+                style={{
+                  padding: '0.65rem 0.9rem',
+                  background: '#161922',
+                  borderBottom: '1px solid rgba(255,255,255,0.08)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexShrink: 0,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#a78bfa' }}>
+                    🤖 Voice Agent
+                  </span>
+                  {agentEnabled && (
+                    <span
+                      style={{
+                        fontSize: '0.62rem',
+                        background: 'rgba(167, 139, 250, 0.2)',
+                        color: '#c4b5fd',
+                        padding: '1px 6px',
+                        borderRadius: 6,
+                        fontWeight: 700,
+                      }}
+                    >
+                      ACTIVE
+                    </span>
+                  )}
+                </div>
+                <button
+                  className={`ch-btn-action ${agentEnabled ? 'mic-active' : ''}`}
+                  onClick={() => patchAgentConfig({ enabled: !agentEnabled })}
+                  style={{ padding: '0.25rem 0.65rem', fontSize: '0.75rem', borderRadius: '12px' }}
                 >
+                  {agentEnabled ? '🤖 ON' : '🤖 OFF'}
+                </button>
+              </div>
+
+              {/* Scrollable Sidebar Body */}
+              <div
+                style={{
+                  flex: 1,
+                  overflowY: 'auto',
+                  padding: '0.85rem',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.85rem',
+                }}
+              >
+                {!agentEnabled && (
                   <div
                     style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
                       padding: '1rem',
-                      background: 'rgba(255,255,255,0.03)',
+                      background: 'rgba(255,255,255,0.02)',
+                      border: '1px dashed rgba(255,255,255,0.1)',
                       borderRadius: '8px',
+                      textAlign: 'center',
+                      color: '#94a3b8',
+                      fontSize: '0.78rem',
                     }}
                   >
-                    <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>Enable Voice Agent</span>
+                    <p style={{ margin: '0 0 0.5rem' }}>Voice Agent is currently paused in this room.</p>
                     <button
-                      className={`ch-btn-action ${agentEnabled ? 'mic-active' : ''}`}
-                      onClick={() => patchAgentConfig({ enabled: !agentEnabled })}
-                      style={{ padding: '0.5rem 1rem', fontSize: '0.8rem' }}
+                      className="ch-btn-action mic-active"
+                      onClick={() => patchAgentConfig({ enabled: true })}
+                      style={{ padding: '0.35rem 0.8rem', fontSize: '0.75rem' }}
                     >
-                      {agentEnabled ? '🤖 ON' : '🤖 OFF'}
+                      Turn On Agent
                     </button>
                   </div>
+                )}
 
                   {agentEnabled && (
                     <div
@@ -2440,6 +2677,7 @@ export function RoomsPanel() {
                             ['respondToChat', 'Respond to Live Chat'],
                             ['speak', 'Speak aloud (TTS)'],
                             ['postToChat', 'Also post replies to chat'],
+                            ['robotEmojiPrefix', 'Prefix chat with 🤖'],
                           ] as const
                         ).map(([key, label]) => (
                           <label
@@ -2462,6 +2700,48 @@ export function RoomsPanel() {
                             {label}
                           </label>
                         ))}
+                      </div>
+
+                      {/* Engine Model Selector */}
+                      <div style={agentFieldStyle}>
+                        <label style={agentLabelStyle}>⚡ Active Engine Model</label>
+                        <select
+                          style={agentInputStyle}
+                          value={agentEngineStatus?.model || ''}
+                          disabled={switchingModel}
+                          onChange={async (e) => {
+                            const newModel = e.target.value;
+                            if (!agentEngineStatus?.provider) return;
+                            setSwitchingModel(true);
+                            try {
+                              await saveAgentConfig(
+                                newModel,
+                                agentEngineStatus.provider,
+                                agentEngineStatus.endpoint || undefined,
+                              );
+                              const updated = await getAgentStatus();
+                              setAgentEngineStatus(updated);
+                              toastsStore.add('success', 'Model Switched', `Voice Agent now using ${newModel}`);
+                            } catch (err) {
+                              toastsStore.add('error', 'Model Switch Failed', err instanceof Error ? err.message : String(err));
+                            } finally {
+                              setSwitchingModel(false);
+                            }
+                          }}
+                        >
+                          {agentEngineStatus?.available_models && agentEngineStatus.available_models.length > 0 ? (
+                            agentEngineStatus.available_models.map((m) => (
+                              <option key={m} value={m}>
+                                {m.includes('3b') || m.includes('2b') || m.includes('1b') ? `⚡ ${m} (Fast - Recommended)` : m}
+                              </option>
+                            ))
+                          ) : (
+                            <option value={agentEngineStatus?.model || ''}>{agentEngineStatus?.model || 'Loading...'}</option>
+                          )}
+                        </select>
+                        <span style={{ fontSize: '0.68rem', color: '#94a3b8' }}>
+                          Fast models (e.g. <strong>llama-3.2-3b-instruct</strong> or <strong>gemma-4-e2b</strong>) give sub-3s voice turns.
+                        </span>
                       </div>
 
                       {/* When it speaks, and to whom it listens. */}
@@ -2783,6 +3063,263 @@ export function RoomsPanel() {
                             </div>
                           </details>
                         )}
+
+                        {/* People Knowledge & Profile Memory */}
+                        <div
+                          style={{
+                            background: 'rgba(0,0,0,0.25)',
+                            borderRadius: '8px',
+                            padding: '0.75rem',
+                            border: '1px solid rgba(255,255,255,0.06)',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '0.6rem',
+                            marginTop: '0.4rem',
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                            }}
+                          >
+                            <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#38bdf8' }}>
+                              👥 People Knowledge ({peopleMemory.length})
+                            </span>
+                            <button
+                              className="ch-btn-action"
+                              style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem' }}
+                              onClick={() => void refreshPeopleMemory()}
+                              disabled={peopleMemoryLoading}
+                            >
+                              {peopleMemoryLoading ? '...' : '🔄 Refresh'}
+                            </button>
+                          </div>
+
+                          <input
+                            type="text"
+                            placeholder="Search remembered people..."
+                            value={peopleMemoryQuery}
+                            onChange={(e) => {
+                              setPeopleMemoryQuery(e.target.value);
+                              void refreshPeopleMemory(e.target.value);
+                            }}
+                            style={{
+                              ...agentInputStyle,
+                              padding: '0.35rem 0.6rem',
+                              fontSize: '0.75rem',
+                            }}
+                          />
+
+                          {peopleMemory.length === 0 ? (
+                            <p style={{ fontSize: '0.72rem', color: '#64748b', margin: '0.2rem 0' }}>
+                              No users remembered yet. The agent automatically learns people and their facts when they speak or chat!
+                            </p>
+                          ) : (
+                            <div
+                              style={{
+                                maxHeight: '220px',
+                                overflowY: 'auto',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '0.5rem',
+                              }}
+                            >
+                              {peopleMemory.map((p) => {
+                                const noteInput = newNoteInputs[p.user_id] || '';
+                                return (
+                                  <div
+                                    key={p.user_id}
+                                    style={{
+                                      background: 'rgba(255,255,255,0.03)',
+                                      borderRadius: '6px',
+                                      padding: '0.5rem 0.6rem',
+                                      border: '1px solid rgba(255,255,255,0.04)',
+                                      display: 'flex',
+                                      flexDirection: 'column',
+                                      gap: '0.3rem',
+                                    }}
+                                  >
+                                    <div
+                                      style={{
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'space-between',
+                                      }}
+                                    >
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                        {p.photo_url ? (
+                                          <img
+                                            src={p.photo_url}
+                                            alt=""
+                                            style={{ width: '20px', height: '20px', borderRadius: '6px' }}
+                                          />
+                                        ) : (
+                                          <div
+                                            style={{
+                                              width: '20px',
+                                              height: '20px',
+                                              borderRadius: '6px',
+                                              background: '#334155',
+                                              fontSize: '0.6rem',
+                                              display: 'flex',
+                                              alignItems: 'center',
+                                              justifyContent: 'center',
+                                              color: '#cbd5e1',
+                                            }}
+                                          >
+                                            {p.name.slice(0, 1).toUpperCase()}
+                                          </div>
+                                        )}
+                                        <span style={{ fontSize: '0.78rem', fontWeight: 600, color: '#f1f5f9' }}>
+                                          {p.name}
+                                        </span>
+                                        {p.username && (
+                                          <span style={{ fontSize: '0.7rem', color: '#64748b' }}>
+                                            @{p.username}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <button
+                                        style={{
+                                          background: 'transparent',
+                                          border: 'none',
+                                          color: '#ef4444',
+                                          fontSize: '0.65rem',
+                                          cursor: 'pointer',
+                                          padding: '2px 4px',
+                                        }}
+                                        title="Forget this person"
+                                        onClick={async () => {
+                                          await forgetPersonMemory(p.user_id);
+                                          void refreshPeopleMemory();
+                                        }}
+                                      >
+                                        ✕
+                                      </button>
+                                    </div>
+
+                                    {p.bio && (
+                                      <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>
+                                        {p.bio.slice(0, 90)}{p.bio.length > 90 ? '...' : ''}
+                                      </div>
+                                    )}
+
+                                    {/* Notes / Learned Facts */}
+                                    {p.notes.length > 0 && (
+                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                        {p.notes.map((note, nIdx) => (
+                                          <div
+                                            key={nIdx}
+                                            style={{
+                                              fontSize: '0.68rem',
+                                              color: '#a78bfa',
+                                              display: 'flex',
+                                              alignItems: 'center',
+                                              justifyContent: 'space-between',
+                                              background: 'rgba(167, 139, 250, 0.08)',
+                                              padding: '2px 6px',
+                                              borderRadius: '4px',
+                                            }}
+                                          >
+                                            <span>💡 {note}</span>
+                                            <button
+                                              style={{
+                                                background: 'transparent',
+                                                border: 'none',
+                                                color: '#94a3b8',
+                                                cursor: 'pointer',
+                                                fontSize: '0.6rem',
+                                                padding: '0 2px',
+                                              }}
+                                              onClick={async () => {
+                                                await removePersonNote(p.user_id, nIdx);
+                                                void refreshPeopleMemory();
+                                              }}
+                                            >
+                                              ✕
+                                            </button>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+
+                                    {/* Add Note Input */}
+                                    <form
+                                      onSubmit={async (e) => {
+                                        e.preventDefault();
+                                        if (!noteInput.trim()) return;
+                                        await addPersonNote(p.user_id, noteInput.trim());
+                                        setNewNoteInputs((prev) => ({ ...prev, [p.user_id]: '' }));
+                                        void refreshPeopleMemory();
+                                      }}
+                                      style={{ display: 'flex', gap: '0.3rem', marginTop: '2px' }}
+                                    >
+                                      <input
+                                        type="text"
+                                        placeholder="+ Add note / fact..."
+                                        value={noteInput}
+                                        onChange={(e) =>
+                                          setNewNoteInputs((prev) => ({
+                                            ...prev,
+                                            [p.user_id]: e.target.value,
+                                          }))
+                                        }
+                                        style={{
+                                          ...agentInputStyle,
+                                          padding: '0.2rem 0.4rem',
+                                          fontSize: '0.68rem',
+                                          flex: 1,
+                                        }}
+                                      />
+                                      <button
+                                        type="submit"
+                                        className="ch-btn-action"
+                                        style={{ padding: '0.2rem 0.5rem', fontSize: '0.68rem' }}
+                                      >
+                                        Add
+                                      </button>
+                                    </form>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                          <span style={{ fontSize: '0.65rem', color: '#64748b' }}>
+                            💡 Spoken / Chat commands: <code>/agent whois @name</code>, <code>/agent remember @name fact</code>, <code>/agent people</code>
+                          </span>
+                        </div>
+
+                        {/* Compact Media Telemetry & Protocol Summary Card */}
+                        <div
+                          style={{
+                            background: 'rgba(0,0,0,0.2)',
+                            borderRadius: '8px',
+                            padding: '0.6rem 0.8rem',
+                            border: '1px solid rgba(255,255,255,0.05)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            marginTop: '0.4rem',
+                          }}
+                        >
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                            <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#38bdf8' }}>
+                              📡 Protocols & Media Telemetry
+                            </span>
+                            <span style={{ fontSize: '0.65rem', color: '#94a3b8' }}>
+                              UDP/Opus • PubNub WSS • Agora RTN
+                            </span>
+                          </div>
+                          <button
+                            className="ch-btn-action"
+                            style={{ padding: '0.25rem 0.6rem', fontSize: '0.68rem' }}
+                            onClick={() => setShowNetworkModal(true)}
+                          >
+                            Inspect
+                          </button>
+                        </div>
                       </div>
 
                       <div
@@ -2865,10 +3402,9 @@ export function RoomsPanel() {
                       )}
                     </div>
                   )}
-                </div>
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
 
         {/* Bottom Interactive Area */}
@@ -3499,6 +4035,13 @@ export function RoomsPanel() {
           </div>
         </div>
       )}
+
+      <MediaInsightsModal
+        isOpen={showNetworkModal}
+        onClose={() => setShowNetworkModal(false)}
+        getInsights={getNetworkInsights}
+        channelName={activeChannel}
+      />
 
       {showStartRoomModal && (
         <div className="ch-modal-overlay" onClick={() => setShowStartRoomModal(false)}>

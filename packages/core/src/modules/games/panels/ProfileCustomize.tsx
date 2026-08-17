@@ -1,17 +1,3 @@
-/**
- * The customization editor: background, status line, and pinned showcases.
- *
- * Every write goes through `patchProfile`, which is patch-style — an absent field
- * means "leave it alone". Clearing artwork is therefore an explicit empty string,
- * never a null, because otherwise "don't touch my background" and "remove my
- * background" would be the same request.
- *
- * Backgrounds default to **CSS gradients, not image files**: they cost no bytes, no
- * volume space and no moderation, they scale to any pane width, and they can't be
- * someone else's copyright — the same rule the maps and audio in HorribleAssault
- * follow. An upload overrides whichever preset is picked, which is why the picker
- * shows the uploaded state rather than pretending a preset is still selected.
- */
 import { useCallback, useState, type ChangeEvent } from 'react';
 
 import {
@@ -31,7 +17,6 @@ export interface ProfileCustomizeProps {
   onChanged: () => void;
 }
 
-/** Steam pins three. More than that stops being a highlight and becomes a list. */
 const MAX_SHOWCASES = 3;
 
 export function ProfileCustomize({ profile, showcaseOptions, onChanged }: ProfileCustomizeProps) {
@@ -69,7 +54,6 @@ export function ProfileCustomize({ profile, showcaseOptions, onChanged }: Profil
         setError(err instanceof Error ? err.message : String(err));
       } finally {
         setBusy(false);
-        // Let the same file be chosen again after a failure.
         e.target.value = '';
       }
     },
@@ -91,7 +75,7 @@ export function ProfileCustomize({ profile, showcaseOptions, onChanged }: Profil
 
   return (
     <div className="profile-editor">
-      <label className="people-label">Status</label>
+      <label className="people-label">Status & Callsign Tagline</label>
       <form
         style={{ display: 'flex', gap: '0.4rem' }}
         onSubmit={(e) => {
@@ -102,7 +86,7 @@ export function ProfileCustomize({ profile, showcaseOptions, onChanged }: Profil
         <input
           value={status}
           maxLength={80}
-          placeholder="afk til 6 · grinding ladder · open to challenges"
+          placeholder="afk til 6 · training harness in AgentTown · open to challenges"
           onChange={(e) => setStatus(e.target.value)}
           style={{ flex: 1 }}
         />
@@ -111,7 +95,7 @@ export function ProfileCustomize({ profile, showcaseOptions, onChanged }: Profil
         </button>
       </form>
 
-      <label className="people-label">Background</label>
+      <label className="people-label">Profile Banner / Background</label>
       <div className="profile-bg-picker">
         {BACKGROUND_PRESETS.map((preset) => (
           <button
@@ -123,8 +107,6 @@ export function ProfileCustomize({ profile, showcaseOptions, onChanged }: Profil
             disabled={busy}
             data-selected={!uploaded && profile.background_id === preset.id ? 'true' : 'false'}
             onClick={() =>
-              // Clear any upload at the same time, or the preset would be picked
-              // and then invisible underneath the image.
               void apply({ background_id: preset.id, background_url: '' })
             }
           />
@@ -147,7 +129,7 @@ export function ProfileCustomize({ profile, showcaseOptions, onChanged }: Profil
 
       {showcaseOptions.length > 0 && (
         <>
-          <label className="people-label">Showcase (up to {MAX_SHOWCASES})</label>
+          <label className="people-label">Showcase Pinned Badges (up to {MAX_SHOWCASES})</label>
           <div className="profile-bg-picker">
             {showcaseOptions.map((option) => (
               <button

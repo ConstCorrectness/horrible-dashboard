@@ -894,6 +894,55 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     [isMuted, activeChannel, reportVoiceError, session],
   );
 
+  const getNetworkInsights = useCallback((): MediaNetworkInsights => {
+    let rtt = 0;
+    let sendBps = 0;
+    let recvBps = 0;
+    let sendBytes = 0;
+    let recvBytes = 0;
+    let bw = 0;
+    const connState = session.rtcClient ? (session.rtcClient.connectionState || 'CONNECTED') : (joined ? 'CONNECTED' : 'DISCONNECTED');
+
+    if (session.rtcClient && typeof session.rtcClient.getRTCStats === 'function') {
+      try {
+        const stats = session.rtcClient.getRTCStats();
+        rtt = stats.RTT ?? 0;
+        sendBps = Math.round((stats.SendBitrate ?? 0) / 1000);
+        recvBps = Math.round((stats.RecvBitrate ?? 0) / 1000);
+        sendBytes = stats.SendBytes ?? 0;
+        recvBytes = stats.RecvBytes ?? 0;
+        bw = Math.round((stats.OutgoingAvailableBandwidth ?? 0) / 1000);
+      } catch {}
+    }
+
+    return {
+      webrtcState: connState,
+      rttMs: rtt,
+      sendBitrateKbps: sendBps,
+      recvBitrateKbps: recvBps,
+      sendBytes,
+      recvBytes,
+      outgoingBandwidthKbps: bw,
+      codec: 'Opus (48 kHz, 2-channel, 20ms frame)',
+      sampleRateHz: session.audioCtx?.sampleRate || 48000,
+      audioChannels: 2,
+      transportProtocol: 'UDP / DTLS 1.2 / SRTP (Agora SD-RTN)',
+      rtcDomains: ['agora.io', 'sd-rtn.com', 'webrtc.clubhouse.com', 'edge.agora.io'],
+      pubnubOrigin: 'pubsub.pubnub.com',
+      pubnubProtocol: 'WSS (WebSocket Secure) / TLS 1.3',
+      pubnubChannels: activeChannel
+        ? [`channel_users:${activeChannel}`, `channel_actions:${activeChannel}`, `channel_messages:${activeChannel}`]
+        : [],
+      heartbeatIntervalS: 30,
+      apiGateway: 'https://api.clubhouse.com/api/v2',
+      mediaCdn: 'https://clubhouse-prod.s3.amazonaws.com (AWS S3)',
+      backendBridge: `${window.location.origin}/api/clubhouse`,
+      sttEndpoint: '/api/agent/stt (Fast Whisper / VAD)',
+      llmEndpoint: 'http://localhost:1234/v1 (LM Studio OpenAI API)',
+      ttsEngine: 'Web Speech Synthesis / Kokoro TTS',
+    };
+  }, [session, joined, activeChannel]);
+
   return {
     joined,
     activeChannel,
@@ -918,5 +967,31 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     sendComment,
     sendReaction,
     seedLiveUsers,
+    getNetworkInsights,
   };
+}
+
+export interface MediaNetworkInsights {
+  webrtcState: string;
+  rttMs: number;
+  sendBitrateKbps: number;
+  recvBitrateKbps: number;
+  sendBytes: number;
+  recvBytes: number;
+  outgoingBandwidthKbps: number;
+  codec: string;
+  sampleRateHz: number;
+  audioChannels: number;
+  transportProtocol: string;
+  rtcDomains: string[];
+  pubnubOrigin: string;
+  pubnubProtocol: string;
+  pubnubChannels: string[];
+  heartbeatIntervalS: number;
+  apiGateway: string;
+  mediaCdn: string;
+  backendBridge: string;
+  sttEndpoint: string;
+  llmEndpoint: string;
+  ttsEngine: string;
 }

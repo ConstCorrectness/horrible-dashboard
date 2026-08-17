@@ -211,3 +211,31 @@ class CreateMatchRequest(BaseModel):
     """An explicit id, for handing a friend an invite that resolves to *this*
     match rather than to whatever happens to be open on the map."""
     id: str | None = None
+
+
+class TacticalOut(BaseModel):
+    id: str
+    name: str
+    type: str
+    fuseTime: float
+    radius: float
+    duration: float
+    maxDamage: float
+    bounceDamping: float = 0.55
+
+
+class LaunchNativeRequest(BaseModel):
+    room_id: str
+    map_name: str
+    callsign: str | None = None
+    fullscreen: bool = False
+    raw_input: bool = True
+    max_fps: int = 240
+
+
+class LaunchNativeResponse(BaseModel):
+    launched: bool
+    pid: int | None = None
+    connect_args: list[str] = []
+    message: str | None = None
+

@@ -26,6 +26,7 @@ export interface VoiceAgentConfig {
   library: string;
   speak: boolean;
   postToChat: boolean;
+  robotEmojiPrefix: boolean;
 }
 
 export const DEFAULT_VOICE_CONFIG: VoiceAgentConfig = {
@@ -44,6 +45,7 @@ export const DEFAULT_VOICE_CONFIG: VoiceAgentConfig = {
   library: 'default',
   speak: true,
   postToChat: true,
+  robotEmojiPrefix: false,
 };
 
 /** One member of the room as the pane currently sees them. */

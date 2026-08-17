@@ -787,3 +787,88 @@ async def update_chat_settings(
         auth["user_id"],
         auth.get("device_id"),
     )
+
+
+# --- People Knowledge & Profile Memory Endpoints ---
+
+
+@router.get("/people-memory")
+def list_people_memory(q: str = "", limit: int = 50) -> list[dict[str, Any]]:
+    """List or search all users stored in the agent's persistent memory."""
+    from backend.modules.clubhouse.people_memory import people_memory_store
+
+    if q.strip():
+        results = people_memory_store.search(q.strip())[:limit]
+    else:
+        results = people_memory_store.list_all(limit)
+    return [p.to_dict() for p in results]
+
+
+@router.get("/people-memory/{user_id}")
+def get_person_memory(user_id: int) -> dict[str, Any]:
+    """Get persistent memory details for a specific user."""
+    from backend.modules.clubhouse.people_memory import people_memory_store
+
+    person = people_memory_store.get(user_id)
+    if not person:
+        raise HTTPException(status_code=404, detail="Person not found in memory")
+    return person.to_dict()
+
+
+@router.post("/people-memory/{user_id}/notes")
+def add_person_note(user_id: int, body: dict[str, str]) -> dict[str, Any]:
+    """Add a learned note / fact to a person's profile."""
+    from backend.modules.clubhouse.people_memory import people_memory_store
+
+    note = (body.get("note") or "").strip()
+    if not note:
+        raise HTTPException(status_code=400, detail="Note cannot be empty")
+    person = people_memory_store.add_note(user_id, note)
+    if not person:
+        raise HTTPException(status_code=404, detail="Person not found in memory")
+    return person.to_dict()
+
+
+@router.delete("/people-memory/{user_id}/notes/{note_idx}")
+def remove_person_note(user_id: int, note_idx: int) -> dict[str, Any]:
+    """Delete a learned note from a person's profile."""
+    from backend.modules.clubhouse.people_memory import people_memory_store
+
+    person = people_memory_store.remove_note(user_id, note_idx)
+    if not person:
+        raise HTTPException(status_code=404, detail="Person not found in memory")
+    return person.to_dict()
+
+
+@router.post("/people-memory/{user_id}/tags")
+def add_person_tag(user_id: int, body: dict[str, str]) -> dict[str, Any]:
+    """Add a tag to a user in memory."""
+    from backend.modules.clubhouse.people_memory import people_memory_store
+
+    tag = (body.get("tag") or "").strip()
+    if not tag:
+        raise HTTPException(status_code=400, detail="Tag cannot be empty")
+    person = people_memory_store.add_tag(user_id, tag)
+    if not person:
+        raise HTTPException(status_code=404, detail="Person not found in memory")
+    return person.to_dict()
+
+
+@router.delete("/people-memory/{user_id}/tags/{tag}")
+def remove_person_tag(user_id: int, tag: str) -> dict[str, Any]:
+    """Remove a tag from a user in memory."""
+    from backend.modules.clubhouse.people_memory import people_memory_store
+
+    person = people_memory_store.remove_tag(user_id, tag)
+    if not person:
+        raise HTTPException(status_code=404, detail="Person not found in memory")
+    return person.to_dict()
+
+
+@router.delete("/people-memory/{user_id}")
+def forget_person_memory(user_id: int) -> dict[str, Any]:
+    """Forget all stored knowledge about a user."""
+    from backend.modules.clubhouse.people_memory import people_memory_store
+
+    forgotten = people_memory_store.forget_person(user_id)
+    return {"user_id": user_id, "forgotten": forgotten}

@@ -29,6 +29,7 @@ import {
   type GameAction,
 } from './controls';
 import type { MatchInvite, Invitee } from './api';
+import { VoiceCommsPanel } from './panels/VoiceCommsPanel';
 import type { MatchPeer } from './session';
 
 /** How often the browser re-asks while it is the visible panel. */
@@ -181,6 +182,10 @@ export function SettingsPanel() {
             </button>
           ))}
         </div>
+      </div>
+
+      <div style={{ marginTop: '1rem' }}>
+        <VoiceCommsPanel />
       </div>
     </div>
   );

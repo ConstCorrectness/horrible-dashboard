@@ -42,6 +42,16 @@ export interface PlayerProfile {
   next_level_xp: number | null;
 }
 
+export interface ProfileCard {
+  account_id: string;
+  handle: string;
+  display_name: string;
+  avatar: string;
+  avatar_url: string | null;
+  status_text: string;
+  level: number;
+}
+
 export interface ProfileComment {
   id: string;
   account_id: string;
@@ -58,11 +68,12 @@ export interface ProfileComment {
  * artwork is an explicit `''`, never `null`. */
 export interface ProfilePatch {
   avatar?: string;
-  bio?: string;
   avatar_url?: string;
-  background_url?: string;
-  background_id?: string;
+  display_name?: string;
   status_text?: string;
+  bio?: string;
+  background_id?: string;
+  background_url?: string;
   showcase?: Showcase[];
 }
 
@@ -82,148 +93,97 @@ export function mediaUrl(ref: string | null | undefined): string | null {
   return `/api/games/profile/media/${encodeURIComponent(sha)}`;
 }
 
+export interface BackgroundPreset {
+  id: string;
+  label: string;
+  css: string;
+}
+
+/** Shipped backgrounds: purely CSS, no asset downloads, available offline. */
+export const BACKGROUND_PRESETS: BackgroundPreset[] = [
+  { id: 'slate', label: 'Slate', css: 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)' },
+  { id: 'ember', label: 'Ember', css: 'linear-gradient(135deg, #451a03 0%, #7c2d12 50%, #1c1917 100%)' },
+  { id: 'aurora', label: 'Aurora', css: 'linear-gradient(135deg, #064e3b 0%, #0c4a6e 50%, #0f172a 100%)' },
+  { id: 'neon', label: 'Neon', css: 'linear-gradient(135deg, #581c87 0%, #831843 50%, #0f172a 100%)' },
+  { id: 'terminal', label: 'Terminal', css: 'linear-gradient(135deg, #022c22 0%, #052e16 50%, #000000 100%)' },
+  { id: 'gold', label: 'Gold', css: 'linear-gradient(135deg, #713f12 0%, #854d0e 50%, #1c1917 100%)' },
+];
+
+export function backgroundCss(presetId: string | null | undefined): string | null {
+  if (!presetId) return null;
+  const p = BACKGROUND_PRESETS.find((x) => x.id === presetId);
+  return p ? p.css : null;
+}
+
 export async function fetchProfile(handle: string): Promise<PlayerProfile | null> {
-  const res = await apiGet<{ profile?: PlayerProfile; error?: string }>(
-    `/games/profile/${encodeURIComponent(handle)}`,
-  );
-  return res.profile ?? null;
+  const norm = handle.replace(/^@/, '');
+  try {
+    return await apiGet<PlayerProfile>(`/games/profile/${encodeURIComponent(norm)}`);
+  } catch {
+    return null;
+  }
 }
 
-/** The slice of a profile a *list row* needs. Deliberately not a `PlayerProfile`:
- * a friends list wants a face and a level, and fetching whole profiles to render
- * one line each is what makes a roster slow. */
-export interface ProfileCard {
-  handle: string;
-  display_name: string;
-  avatar: string;
-  avatar_url: string | null;
-  status_text: string;
-  level: number;
-  xp: number;
+export async function fetchProfileCards(
+  handles: string[],
+): Promise<Record<string, ProfileCard>> {
+  if (handles.length === 0) return {};
+  try {
+    const raw = await apiPost<{ cards: Record<string, ProfileCard> }>(
+      '/games/profile/cards',
+      { handles },
+    );
+    return raw.cards ?? {};
+  } catch {
+    return {};
+  }
 }
 
-/**
- * Avatar/level/status for many callsigns in one request, keyed by handle.
- *
- * Unknown handles are simply absent — a friend who has never signed in to the
- * game server is normal, not an error, and the roster still renders them from
- * local data.
- */
-export async function fetchProfileCards(handles: string[]): Promise<Record<string, ProfileCard>> {
-  const wanted = handles.filter(Boolean);
-  if (wanted.length === 0) return {};
-  const res = await apiPost<{ cards?: Record<string, ProfileCard>; error?: string }>(
-    '/games/profiles/cards',
-    { handles: wanted },
-  );
-  return res.cards ?? {};
+export async function patchProfile(patch: ProfilePatch): Promise<PlayerProfile> {
+  return apiPost<PlayerProfile>('/games/profile/me', patch);
 }
 
-export async function patchProfile(patch: ProfilePatch): Promise<PlayerProfile | null> {
-  const res = await apiPost<{ profile?: PlayerProfile; error?: string }>('/games/profile', patch);
-  if (res.error) throw new Error(res.error);
-  return res.profile ?? null;
-}
-
-export interface UploadResult {
-  sha256: string;
-  /** The server-relative `/media/<sha>` reference to store on the profile. */
-  url: string;
-  mime: string;
-  bytes: number;
-}
-
-/**
- * Upload a profile image.
- *
- * Sends the **file itself**, with its real MIME as the Content-Type. It used to
- * send a base64 data URL into the `avatar` column, which the server truncates to 8
- * characters — so every upload silently became eight bytes of base64 and the
- * picture never appeared. The server now checks the declared type against the
- * bytes' magic number, so a data URL would be rejected outright rather than stored
- * wrong.
- */
 export async function uploadProfileImage(
   file: File,
   kind: 'avatar' | 'background',
-): Promise<UploadResult> {
-  const res = await fetch(apiUrl(`/api/games/profile/media?kind=${kind}`), {
+): Promise<{ url: string }> {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('kind', kind);
+
+  const res = await fetch(apiUrl('/games/profile/upload'), {
     method: 'POST',
-    headers: { 'Content-Type': file.type },
-    body: file,
+    body: form,
   });
-  const data = (await res.json()) as Partial<UploadResult> & { error?: string };
-  if (data.error) throw new Error(data.error);
-  if (!data.sha256 || !data.url) throw new Error('upload failed');
-  return data as UploadResult;
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { detail?: string; error?: string };
+    throw new Error(body.detail || body.error || `Upload failed: ${res.statusText}`);
+  }
+  return res.json() as Promise<{ url: string }>;
 }
 
-export async function fetchComments(handle: string, before?: number): Promise<ProfileComment[]> {
-  const query = before === undefined ? '' : `?before=${before}`;
-  const res = await apiGet<{ comments?: ProfileComment[]; error?: string }>(
-    `/games/profile/${encodeURIComponent(handle)}/comments${query}`,
+export async function fetchComments(handle: string): Promise<ProfileComment[]> {
+  const norm = handle.replace(/^@/, '');
+  const r = await apiGet<{ comments: ProfileComment[] }>(
+    `/games/profile/${encodeURIComponent(norm)}/comments`,
   );
-  return res.comments ?? [];
+  return r.comments ?? [];
 }
 
-export async function addComment(handle: string, body: string): Promise<ProfileComment> {
-  const res = await apiPost<{ comment?: ProfileComment; error?: string }>(
-    `/games/profile/${encodeURIComponent(handle)}/comments`,
-    { body },
-  );
-  if (res.error) throw new Error(res.error);
-  if (!res.comment) throw new Error('could not post that comment');
-  return res.comment;
+export async function addComment(
+  handle: string,
+  body: string,
+): Promise<ProfileComment> {
+  const norm = handle.replace(/^@/, '');
+  return apiPost<ProfileComment>(`/games/profile/${encodeURIComponent(norm)}/comments`, {
+    body,
+  });
 }
 
-export async function hideComment(commentId: string): Promise<void> {
-  const res = await apiDelete<{ ok?: boolean; error?: string }>(
+export async function hideComment(
+  commentId: string,
+): Promise<{ ok: boolean }> {
+  return apiDelete<{ ok: boolean }>(
     `/games/profile/comments/${encodeURIComponent(commentId)}`,
   );
-  if (res.error) throw new Error(res.error);
-}
-
-/**
- * The preset backgrounds, for players who don't want to upload one.
- *
- * CSS gradients rather than image files, deliberately: they cost no bytes, no
- * volume space and no moderation, they scale to any pane width, and they can't be
- * someone else's copyright — the same rule the maps and audio in HorribleAssault
- * follow. An uploaded image overrides whichever of these is picked.
- */
-export const BACKGROUND_PRESETS: { id: string; label: string; css: string }[] = [
-  {
-    id: 'ember',
-    label: 'Ember',
-    css: 'linear-gradient(135deg, #2b1408 0%, #7a2f0e 55%, #c2560f 100%)',
-  },
-  {
-    id: 'cyan',
-    label: 'Cyan',
-    css: 'linear-gradient(135deg, #04212b 0%, #0b5468 55%, #12a3c2 100%)',
-  },
-  {
-    id: 'violet',
-    label: 'Violet',
-    css: 'linear-gradient(135deg, #1a0b2e 0%, #4a1d76 55%, #7b3fe4 100%)',
-  },
-  {
-    id: 'moss',
-    label: 'Moss',
-    css: 'linear-gradient(135deg, #0d1f14 0%, #1f4a2c 55%, #3f9c5c 100%)',
-  },
-  {
-    id: 'slate',
-    label: 'Slate',
-    css: 'linear-gradient(135deg, #14171c 0%, #2b323d 55%, #4a5568 100%)',
-  },
-  {
-    id: 'rose',
-    label: 'Rose',
-    css: 'linear-gradient(135deg, #2b0a16 0%, #7a1533 55%, #d13a63 100%)',
-  },
-];
-
-export function backgroundCss(id: string | null | undefined): string | null {
-  return BACKGROUND_PRESETS.find((p) => p.id === id)?.css ?? null;
 }

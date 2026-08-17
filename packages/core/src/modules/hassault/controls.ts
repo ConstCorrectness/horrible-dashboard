@@ -29,6 +29,7 @@ export type GameAction =
   | 'jump'
   | 'crouch'
   | 'reload'
+  | 'inspect'
   | 'scores'
   | 'noclip'
   | 'weapon1'
@@ -73,6 +74,12 @@ export const ACTIONS: readonly ActionDoc[] = [
     note: 'Silent, shorter, and steadier — for 40% of your speed. Crouching in mid-air costs nothing.',
   },
   { action: 'reload', label: 'Reload', group: 'Combat' },
+  {
+    action: 'inspect',
+    label: 'Inspect Weapon (Ogre-Twitch)',
+    group: 'Combat',
+    note: 'Admire your weapon skin finish in first-person and spectator view.',
+  },
   { action: 'weapon1', label: 'Weapon 1', group: 'Combat' },
   { action: 'weapon2', label: 'Weapon 2', group: 'Combat' },
   { action: 'weapon3', label: 'Weapon 3', group: 'Combat' },
@@ -93,11 +100,9 @@ export const DEFAULT_CONTROLS: Bindings = {
   left: ['KeyA', 'ArrowLeft'],
   right: ['KeyD', 'ArrowRight'],
   jump: ['Space'],
-  // Ctrl and C, which is where every shooter puts it. Note these are *physical*
-  // keys and the pane holds keyboard capture while you play, so `ControlLeft` here
-  // is a crouch and not the first half of one of the shell's chords.
   crouch: ['ControlLeft', 'KeyC'],
   reload: ['KeyR'],
+  inspect: ['KeyF'],
   scores: ['Tab'],
   noclip: ['KeyV'],
   weapon1: ['Digit1'],

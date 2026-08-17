@@ -4,9 +4,12 @@ import { PaneInstanceContext, useAgentContext } from '../../agent-context';
 import { lockEscape, unlockEscape, useCapture } from '../../keymap';
 import { setSetting, useSetting } from '../../settings';
 import {
+  dismissMatchSummary,
   getInstallStatus,
+  getLatestMatchSummary,
   getMapCubes,
   getMapInfo,
+  getProcessStatus,
   getSession,
   listInvitees,
   listMaps,
@@ -15,12 +18,15 @@ import {
   type Invitee,
   type MapInfo,
   type MapSummary,
+  type PostMatchSummary,
   type SessionInfo,
   type WeaponSpec,
 } from './api';
 import { GameAudio } from './audio';
 import { AvatarPool } from './avatars';
 import { createBackdrop, type Backdrop } from './backdrop';
+import { MatchCompanion } from './panels/MatchCompanion';
+import { PostMatchDebrief } from './panels/PostMatchDebrief';
 import {
   EMPTY_PROGRESS,
   SIGNED_OUT,
@@ -270,9 +276,34 @@ export function HorribleAssaultPanel() {
   const storedControls = useSetting<string>(CONTROLS_KEY);
   const controls = useMemo(() => parseControls(storedControls), [storedControls]);
   const codes = useMemo(() => codeMap(controls), [controls]);
-  /** Recent noises, for the direction ring. Not audio — the synth consumes the
-   * same events separately, in the frame loop. */
+  /** Recent noises, for the direction ring. */
   const [heard, setHeard] = useState<{ id: number; at: number; event: NoiseEvent }[]>([]);
+
+  // ---- Native process lifecycle bridge ---------------------------------------
+  const [nativeRunning, setNativeRunning] = useState(false);
+  const [nativePid, setNativePid] = useState<number | undefined>();
+  const [postMatchSummary, setPostMatchSummary] = useState<PostMatchSummary | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const interval = setInterval(async () => {
+      try {
+        const [proc, sum] = await Promise.all([getProcessStatus(), getLatestMatchSummary()]);
+        if (!active) return;
+        setNativeRunning(proc.running);
+        setNativePid(proc.pid);
+        if (sum && !proc.running) {
+          setPostMatchSummary(sum);
+        }
+      } catch {
+        // ignore background poll failures
+      }
+    }, 1500);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, []);
 
   // Mutable simulation state, kept out of React: this updates every frame and
   // re-rendering the component 60 times a second would be absurd.
@@ -1724,7 +1755,33 @@ export function HorribleAssaultPanel() {
           />
         )}
 
-        {phase !== 'playing' && (
+        {nativeRunning && (
+          <div style={{ position: 'absolute', inset: 0, zIndex: 100 }}>
+            <MatchCompanion
+              mapName={mapName}
+              room={net.room || 'match_live'}
+              pid={nativePid}
+              onExitMatch={() => setNativeRunning(false)}
+            />
+          </div>
+        )}
+
+        {postMatchSummary && (
+          <PostMatchDebrief
+            summary={postMatchSummary}
+            onDismiss={() => {
+              void dismissMatchSummary();
+              setPostMatchSummary(null);
+            }}
+            onRequeue={() => {
+              void dismissMatchSummary();
+              setPostMatchSummary(null);
+              host(3);
+            }}
+          />
+        )}
+
+        {phase !== 'playing' && !nativeRunning && (
           <BootOverlay
             phase={phase}
             progress={progress}

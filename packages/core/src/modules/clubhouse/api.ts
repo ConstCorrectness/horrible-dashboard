@@ -219,3 +219,50 @@ export function sendChannelMessage(channel: string, message: string): Promise<{ 
   });
 }
 
+// --- People Knowledge & Profile Memory Types & API ---
+
+export interface PersonMemory {
+  user_id: number;
+  name: string;
+  username: string;
+  bio: string | null;
+  photo_url: string | null;
+  twitter: string | null;
+  instagram: string | null;
+  notes: string[];
+  tags: string[];
+  rooms_seen: string[];
+  first_seen_ts: number;
+  last_seen_ts: number;
+  interaction_count: number;
+  summary: string | null;
+}
+
+export function listPeopleMemory(query: string = ''): Promise<PersonMemory[]> {
+  return apiGet<PersonMemory[]>(`/clubhouse/people-memory${query ? `?q=${encodeURIComponent(query)}` : ''}`);
+}
+
+export function getPersonMemory(userId: number): Promise<PersonMemory> {
+  return apiGet<PersonMemory>(`/clubhouse/people-memory/${userId}`);
+}
+
+export function addPersonNote(userId: number, note: string): Promise<PersonMemory> {
+  return apiPost<PersonMemory>(`/clubhouse/people-memory/${userId}/notes`, { note });
+}
+
+export function removePersonNote(userId: number, noteIdx: number): Promise<PersonMemory> {
+  return apiDelete<PersonMemory>(`/clubhouse/people-memory/${userId}/notes/${noteIdx}`);
+}
+
+export function addPersonTag(userId: number, tag: string): Promise<PersonMemory> {
+  return apiPost<PersonMemory>(`/clubhouse/people-memory/${userId}/tags`, { tag });
+}
+
+export function removePersonTag(userId: number, tag: string): Promise<PersonMemory> {
+  return apiDelete<PersonMemory>(`/clubhouse/people-memory/${userId}/tags/${encodeURIComponent(tag)}`);
+}
+
+export function forgetPersonMemory(userId: number): Promise<{ user_id: number; forgotten: boolean }> {
+  return apiDelete<{ user_id: number; forgotten: boolean }>(`/clubhouse/people-memory/${userId}`);
+}
+

@@ -189,6 +189,66 @@ class Weapon:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class TacticalUtility:
+    """Tactical utility grenade or device (Smoke, Flashbang, HE Frag)."""
+
+    id: str
+    name: str
+    type: str  # "smoke" | "flash" | "he"
+    fuse_time: float  # Seconds before detonation
+    radius: float  # Effective radius in cubes
+    duration: float  # Effect duration in seconds (e.g. smoke cloud lifetime)
+    max_damage: float  # Peak damage at epicenter
+    bounce_damping: float = 0.55  # Velocity preservation on wall/floor bounce
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "type": self.type,
+            "fuseTime": self.fuse_time,
+            "radius": self.radius,
+            "duration": self.duration,
+            "maxDamage": self.max_damage,
+            "bounceDamping": self.bounce_damping,
+        }
+
+
+TACTICALS: tuple[TacticalUtility, ...] = (
+    TacticalUtility(
+        id="smoke",
+        name="Smoke Grenade",
+        type="smoke",
+        fuse_time=1.8,
+        radius=6.5,
+        duration=16.0,
+        max_damage=0.0,
+        bounce_damping=0.5,
+    ),
+    TacticalUtility(
+        id="flashbang",
+        name="Flashbang",
+        type="flash",
+        fuse_time=1.5,
+        radius=24.0,
+        duration=4.5,
+        max_damage=5.0,
+        bounce_damping=0.6,
+    ),
+    TacticalUtility(
+        id="he_grenade",
+        name="HE Frag Grenade",
+        type="he",
+        fuse_time=2.0,
+        radius=8.5,
+        duration=0.0,
+        max_damage=105.0,
+        bounce_damping=0.55,
+    ),
+)
+
+
 # The loadout. AssaultCube-flavoured rather than AssaultCube-derived: these are
 # tuned against our own movement speed (22 cubes/s, which is not AC's), so
 # copying its damage table would produce a different game wearing its numbers.

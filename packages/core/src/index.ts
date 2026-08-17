@@ -75,7 +75,7 @@ export {
 } from './layout/snap';
 export { explodeToWindows, NOMINAL_VIEWPORT, tileWindows } from './layout/windows';
 export { hideRailView, moveViewToDock, railEntries, RAIL_SECTIONS } from './layout/rail';
-export { taskbarEntries, zonesForMode } from './layout/taskbar';
+export { resolveViewIcon, taskbarEntries, zonesForMode } from './layout/taskbar';
 export type { TaskbarEntry, TaskbarState } from './layout/taskbar';
 export type { RailEntry, RailSide, RailState } from './layout/rail';
 export { getRailPrefs, railPrefsStore, resetRailPrefs, setViewHidden } from './layout/rail-prefs';
@@ -322,6 +322,7 @@ export {
 export { docsHover, docsKeymap, renderDocEntry, symbolAt } from './docs/cm-docs';
 export { renderMarkdown as renderDocMarkdown } from './docs/markdown';
 export { trainingModule } from './modules/training';
+export { localtrackModule } from './modules/localtrack';
 export { notebookModule } from './modules/notebook';
 export { visualizerModule } from './modules/visualizer';
 export { flowModule } from './modules/flow';

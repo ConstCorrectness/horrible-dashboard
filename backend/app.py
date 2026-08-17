@@ -138,6 +138,10 @@ from backend.modules.training.kernels import (
     handle_training_message,
     training_kernels,
 )
+from backend.modules.localtrack import (
+    register_agent_tools as register_localtrack_tools,
+    router as localtrack_router,
+)
 from backend.modules.desktop import router as desktop_router
 from backend.modules.workspace import router as workspace_router
 from backend.modules.database import router as database_router
@@ -274,11 +278,15 @@ app.include_router(games_router, prefix="/api")
 app.include_router(code_router, prefix="/api")
 app.include_router(git_router, prefix="/api")
 app.include_router(symdex_router, prefix="/api")
+app.include_router(localtrack_router)
 
 # Register the training module's backend agent tools into the sdk registry (the
 # training module is a first-party consumer of the same registry backend plugins
 # write to). Grouped under `training`, disclosed progressively by the orchestrator.
 register_training_tools()
+
+# Register the LocalTrack experiment tracking agent tools (grouped under `localtrack`)
+register_localtrack_tools()
 
 # Register the games module's backend agent tools (grouped under `games`); the
 # manual-play seat drives its move through game.getObservation/game.chooseAction.

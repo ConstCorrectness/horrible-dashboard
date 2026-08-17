@@ -832,6 +832,10 @@ _GROUP_DESCRIPTIONS: dict[str, str] = {
         "reports), plus capturing pages and PDFs into the knowledge library."
     ),
     "arxiv": "Search arXiv, read abstracts, and download papers into the library.",
+    "localtrack": (
+        "Track machine learning experiments locally: inspect projects, list runs, "
+        "query loss/accuracy metric series with server-side downsampling, and view hyperparameters."
+    ),
     "records": (
         "The user's own record tables (papers to read, contacts, intake forms, any "
         "row-shaped data): read them, propose field values for review, and define "
@@ -1012,6 +1016,22 @@ _GROUP_KEYWORDS: dict[str, tuple[str, ...]] = {
         "manim",
         "venv",
         "model",
+    ),
+    "localtrack": (
+        "localtrack",
+        "experiment",
+        "experiments",
+        "metric",
+        "metrics",
+        "loss curve",
+        "loss curves",
+        "hyperparameter",
+        "hyperparameters",
+        "wandb",
+        "weights and biases",
+        "track run",
+        "runs",
+        "tracking",
     ),
     "notebook": ("notebook", "cell", "kernel", "ipynb", "jupyter"),
     "symbols": (

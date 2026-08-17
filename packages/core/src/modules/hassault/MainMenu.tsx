@@ -22,6 +22,7 @@
 import { useState, type CSSProperties } from 'react';
 
 import type { Invitee, MapSummary, MatchInvite, SessionInfo } from './api';
+import { launchNativeFps } from './api';
 import { describeControls, type Bindings } from './controls';
 import {
   ControlsPanel,
@@ -30,12 +31,14 @@ import {
   SettingsPanel,
   styles as panel,
 } from './menu-panels';
+import { ArmoryMarketplace } from './panels/ArmoryMarketplace';
 import type { MatchPeer } from './session';
 
-export type MenuSection = 'play' | 'servers' | 'friends' | 'settings' | 'controls';
+export type MenuSection = 'play' | 'armory' | 'servers' | 'friends' | 'settings' | 'controls';
 
 const SECTIONS: { id: MenuSection; label: string; hint: string }[] = [
   { id: 'play', label: 'Play', hint: 'Pick a map and start' },
+  { id: 'armory', label: 'Armory & Skins', hint: 'CS-style float wear, rare drops & trade-up contracts' },
   { id: 'servers', label: 'Servers', hint: 'Matches here, on the LAN, and on friends’ machines' },
   { id: 'friends', label: 'Friends', hint: 'Who is about, and who invited you' },
   { id: 'settings', label: 'Settings', hint: 'Sensitivity, view, sound' },
@@ -122,6 +125,7 @@ export function MainMenu(props: MainMenuProps) {
             </div>
           )}
           {section === 'play' && <PlaySection {...props} />}
+          {section === 'armory' && <ArmoryMarketplace />}
           {section === 'servers' && (
             <ServerBrowserPanel
               maps={props.maps}
@@ -170,6 +174,8 @@ const BOT_COUNTS = [0, 1, 3, 5, 7];
  */
 function PlaySection(props: MainMenuProps) {
   const [bots, setBots] = useState(3);
+  const [launchingNative, setLaunchingNative] = useState(false);
+  const [nativeStatus, setNativeStatus] = useState<string | null>(null);
   const bundled = props.maps.filter((m) => m.source === 'bundled');
   const installed = props.maps.filter((m) => m.source !== 'bundled');
   const chosen = props.maps.find((m) => m.name === props.mapName);
@@ -269,6 +275,62 @@ function PlaySection(props: MainMenuProps) {
           >
             Host
           </button>
+        </div>
+      </div>
+
+      <div style={panel.row}>
+        <div style={panel.rowMain}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#38bdf8', fontWeight: 700 }}>
+            ⚡ Native High-Performance Client
+          </span>
+          <span style={panel.dim}>
+            Launch the native C++ / Vulkan client with 1,000Hz+ Raw Input (`WM_INPUT`), 240+ FPS, and sub-tick UDP networking directly to this match server.
+          </span>
+          {nativeStatus && (
+            <span style={{ fontSize: '0.72rem', color: nativeStatus.includes('PID') ? '#4ade80' : '#f87171', marginTop: '0.2rem' }}>
+              {nativeStatus}
+            </span>
+          )}
+        </div>
+        <button
+          onClick={async () => {
+            setLaunchingNative(true);
+            setNativeStatus(null);
+            try {
+              const res = await launchNativeFps({
+                room_id: props.room || 'session_host',
+                map_name: props.mapName,
+                callsign: props.account?.callsign || undefined,
+                raw_input: true,
+                max_fps: 240,
+              });
+              setNativeStatus(res.message || (res.launched ? 'Launched!' : 'Binary not found'));
+            } catch (err) {
+              setNativeStatus(err instanceof Error ? err.message : 'Launch failed');
+            } finally {
+              setLaunchingNative(false);
+            }
+          }}
+          disabled={!props.ready || launchingNative}
+          style={{ ...primary, background: '#0284c7', borderColor: '#38bdf8' }}
+        >
+          {launchingNative ? 'Launching…' : '⚡ Launch Native FPS'}
+        </button>
+      </div>
+
+      <h4 style={panel.heading}>Tactical Equipment</h4>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.4rem', marginBottom: '0.6rem' }}>
+        <div style={{ background: 'var(--bg-tertiary, #161b22)', padding: '0.4rem 0.6rem', borderRadius: 4, border: '1px solid var(--border-dim, #30363d)' }}>
+          <div style={{ fontWeight: 700, fontSize: '0.78rem' }}>💨 Smoke Grenade</div>
+          <div style={{ fontSize: '0.68rem', color: 'var(--text-dim)' }}>6.5c radius · 16s duration</div>
+        </div>
+        <div style={{ background: 'var(--bg-tertiary, #161b22)', padding: '0.4rem 0.6rem', borderRadius: 4, border: '1px solid var(--border-dim, #30363d)' }}>
+          <div style={{ fontWeight: 700, fontSize: '0.78rem' }}>⚡ Flashbang</div>
+          <div style={{ fontSize: '0.68rem', color: 'var(--text-dim)' }}>24c radius · 4.5s blind</div>
+        </div>
+        <div style={{ background: 'var(--bg-tertiary, #161b22)', padding: '0.4rem 0.6rem', borderRadius: 4, border: '1px solid var(--border-dim, #30363d)' }}>
+          <div style={{ fontWeight: 700, fontSize: '0.78rem' }}>💣 HE Frag Grenade</div>
+          <div style={{ fontSize: '0.68rem', color: 'var(--text-dim)' }}>8.5c radius · 105 max dmg</div>
         </div>
       </div>
 

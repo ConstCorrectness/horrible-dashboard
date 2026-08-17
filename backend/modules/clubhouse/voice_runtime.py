@@ -38,14 +38,13 @@ from backend.modules.clubhouse.voice import (
 
 logger = logging.getLogger(__name__)
 
-# Wall-clock ceiling on one turn's generation. A reply that lands after the room has
-# moved on is worse than no reply: people have started a new subject and the agent
-# answers the old one. Better to drop it and say so.
-GENERATION_TIMEOUT_S = 25.0
+# Wall-clock ceiling on one turn's generation. Increased to 45.0s to accommodate
+# model weight loading and local GGUF llama.cpp inference.
+GENERATION_TIMEOUT_S = 45.0
 
 # Retrieval is on the critical path of a live conversation, so it gets a tighter
 # budget than the generation it feeds.
-RETRIEVAL_TIMEOUT_S = 8.0
+RETRIEVAL_TIMEOUT_S = 10.0
 
 _QUESTION_HINTS = (
     "who is",
@@ -211,20 +210,26 @@ async def generate_reply(messages: list[dict[str, str]], config: VoiceConfig) ->
     flattens the system tier for templates that only accept one system message.
     """
     from backend.modules.agent import providers as P
-    from backend.modules.agent.routes import _load_config
+    from backend.modules.agent.routes import _endpoint_for, _load_config
+    from backend.modules.settings.routes import get_value
     from backend.modules.telemetry.instrument import instrumented_client
 
     config_obj = _load_config()
     if config_obj is None:
         raise RuntimeError("Agent not configured — finish onboarding")
     info = P.provider_for(config_obj.provider)
-    endpoint = config_obj.endpoint or info.default_endpoint
-    model = config.model or config_obj.model
+    endpoint = _endpoint_for(info, config_obj)
+    model = config_obj.model
 
-    async with instrumented_client(timeout=GENERATION_TIMEOUT_S) as client:
+    timeout_val = float(
+        get_value("voice.generationTimeout", GENERATION_TIMEOUT_S)
+        or GENERATION_TIMEOUT_S
+    )
+
+    async with instrumented_client(timeout=timeout_val) as client:
         result = await asyncio.wait_for(
             P.chat(client, info, endpoint, model, messages, []),
-            timeout=GENERATION_TIMEOUT_S,
+            timeout=timeout_val,
         )
     return result.content or ""
 
@@ -245,8 +250,33 @@ async def run_turn(
     config = session.config
     session.room = room
 
+    # Auto-learn and track speaker profile / notes in persistent people memory
+    from backend.modules.clubhouse.people_memory import people_memory_store
+
+    if speaker and speaker != "Someone":
+        target = _resolve_member(room, speaker)
+        if target and target.user_id:
+            people_memory_store.learn_user(
+                target.user_id,
+                target.name,
+                bio=target.bio,
+                room_topic=room.topic or room.channel,
+            )
+        people_memory_store.auto_extract_facts(speaker, utterance)
+
     command = parse_command(utterance)
     query = _strip_command(utterance) if command else utterance
+
+    # Handle immediate synchronous memory & room commands
+    if command:
+        cmd_result = await run_command(command, room, session)
+        if cmd_result:
+            return {
+                "spoke": False,
+                "reason": f"command:{command.name}",
+                "reply": "",
+                "notice": cmd_result.get("notice", ""),
+            }
 
     retrieval: str | None = None
     if wants_retrieval(utterance, config) and query:
@@ -316,14 +346,87 @@ async def run_turn(
 async def run_command(
     command: Command, room: RoomSnapshot, session: VoiceSession
 ) -> dict[str, Any] | None:
-    """Execute a room-changing ``/agent`` command, or None if it isn't one.
-
-    Every branch checks moderator status against the **room snapshot**, not against
-    what the caller claims: the pane sends the snapshot, but the check living here
-    means one place decides, and it is the same place for chat and voice.
-    """
+    """Execute a room or memory ``/agent`` command, or None if it isn't one."""
     from backend.modules.clubhouse import models, routes as ch
+    from backend.modules.clubhouse.people_memory import people_memory_store
 
+    cmd = command.name.lower()
+
+    # --- People Knowledge & Memory Commands (available to everyone) ---
+    if cmd in {"whois", "profile"}:
+        if not command.arg:
+            return {"handled": True, "notice": "Usage: /agent whois <name or @username>"}
+        person = people_memory_store.find_by_name_or_username(command.arg)
+        if person is None:
+            # Check current room members
+            mem = _resolve_member(room, command.arg)
+            if mem:
+                person = people_memory_store.learn_user(mem.user_id, mem.name, bio=mem.bio, room_topic=room.topic)
+        if person is None:
+            return {"handled": True, "notice": f"I don't have profile memory for “{command.arg}” yet."}
+        parts = [f"👤 {person.name}"]
+        if person.username:
+            parts[0] += f" (@{person.username})"
+        if person.bio:
+            parts.append(f"Bio: {person.bio}")
+        if person.notes:
+            parts.append("Learned notes: " + "; ".join(person.notes))
+        if person.tags:
+            parts.append("Tags: " + ", ".join(person.tags))
+        if person.rooms_seen:
+            parts.append(f"Seen in {len(person.rooms_seen)} room(s)")
+        return {"handled": True, "notice": " | ".join(parts)}
+
+    if cmd == "remember":
+        # Format: /agent remember <name> <fact> or /agent remember @user <fact>
+        parts = command.arg.split(maxsplit=1)
+        if len(parts) < 2:
+            return {"handled": True, "notice": "Usage: /agent remember <name> <fact to remember>"}
+        target_name, fact = parts[0], parts[1]
+        person = people_memory_store.find_by_name_or_username(target_name)
+        if person is None:
+            mem = _resolve_member(room, target_name)
+            if mem and mem.user_id:
+                person = people_memory_store.learn_user(mem.user_id, mem.name, bio=mem.bio, room_topic=room.topic)
+        if person:
+            people_memory_store.add_note(person.user_id, fact)
+            return {"handled": True, "notice": f"🧠 Remembered about {person.name}: “{fact}”"}
+        return {"handled": True, "notice": f"Couldn't identify “{target_name}” in this room or memory."}
+
+    if cmd == "forget":
+        if not command.arg:
+            return {"handled": True, "notice": "Usage: /agent forget <name>"}
+        if people_memory_store.forget_person(command.arg):
+            return {"handled": True, "notice": f"🧹 Wiped memories for “{command.arg}”."}
+        return {"handled": True, "notice": f"No stored memory found for “{command.arg}”."}
+
+    if cmd == "notes":
+        if not command.arg:
+            return {"handled": True, "notice": "Usage: /agent notes <name>"}
+        person = people_memory_store.find_by_name_or_username(command.arg)
+        if not person or not person.notes:
+            return {"handled": True, "notice": f"No notes stored for “{command.arg}”."}
+        return {"handled": True, "notice": f"Notes for {person.name}: " + "; ".join(person.notes)}
+
+    if cmd in {"people", "roster"}:
+        known = [p for m in room.members if (p := people_memory_store.get(m.user_id))]
+        if not known:
+            return {"handled": True, "notice": f"There are {len(room.members)} people in this room, none in persistent memory yet."}
+        summary = ", ".join(f"{p.name} ({len(p.notes)} notes)" for p in known[:10])
+        return {"handled": True, "notice": f"Recognized {len(known)} people in room: {summary}"}
+
+    if cmd == "tag":
+        parts = command.arg.split(maxsplit=1)
+        if len(parts) < 2:
+            return {"handled": True, "notice": "Usage: /agent tag <name> <tag>"}
+        target_name, tag = parts[0], parts[1]
+        person = people_memory_store.find_by_name_or_username(target_name)
+        if person:
+            people_memory_store.add_tag(person.user_id, tag)
+            return {"handled": True, "notice": f"Tagged {person.name} with #{tag}"}
+        return {"handled": True, "notice": f"Couldn't find “{target_name}”."}
+
+    # --- Moderator-only room control commands ---
     if not command.moderator_only:
         return None
     if not room.am_i_moderator():

@@ -50,6 +50,42 @@ export interface TaskbarEntry {
  * changes — i.e. by the order the panes were opened — and nothing about focus,
  * z-order or minimizing can reorder them.
  */
+const DEFAULT_ICONS: Record<string, string> = {
+  observability: '📡',
+  localtrack: '∿',
+  agent: '🤖',
+  browser: '🌐',
+  editor: '✎',
+  terminal: '',
+  files: '📁',
+  explorer: '🗂',
+  database: '🛢',
+  notebook: '📓',
+  training: '⚡',
+  git: '⎇',
+  github: '🐙',
+  settings: '⚙',
+  repl: 'λ',
+  flow: '⬡',
+  research: '🔬',
+  karaoke: '🎤',
+  hassault: '🎯',
+  games: '🕹',
+  mcp: '🔌',
+  skills: '🧩',
+  scratch: '📝',
+  records: '▦',
+  code: '≡',
+  dashboard: '👋',
+};
+
+export function resolveViewIcon(viewId: string, declaredIcon?: string, title?: string): string {
+  if (declaredIcon && declaredIcon.trim()) return declaredIcon;
+  const prefix = viewId.split('.')[0];
+  if (DEFAULT_ICONS[prefix]) return DEFAULT_ICONS[prefix];
+  return title && title.length > 0 ? title[0] : '❐';
+}
+
 export function taskbarEntries(frame: FrameState): TaskbarEntry[] {
   const views = [...registry.panels, ...registry.widgets];
   const decl = (viewId: string) => views.find((v) => v.id === viewId);
@@ -64,7 +100,7 @@ export function taskbarEntries(frame: FrameState): TaskbarEntry[] {
           instanceId: pane.instanceId,
           viewId: pane.viewId,
           title: paneTitle(d.title, pane.params),
-          icon: d.icon ?? d.title[0],
+          icon: resolveViewIcon(pane.viewId, d.icon, d.title),
           state: stateOf(frame, located),
           attention: pane.attention ?? false,
           ...(location.kind === 'window' ? { windowId: location.windowId } : {}),

@@ -89,5 +89,34 @@
         "transport": { "type": "stdio" }
       }
     ]
+  },
+  {
+    "name": "ai.wandb/mcp-server",
+    "title": "Weights & Biases (W&B)",
+    "description": "Query and analyze your W&B experiment runs, metrics, traces, evaluations, and artifacts.",
+    "note": "Connect to hosted W&B at https://mcp.withwandb.com/mcp or run locally via uvx wandb-mcp-server. Requires WANDB_API_KEY.",
+    "repository": "https://github.com/wandb/wandb-mcp-server",
+    "remotes": [
+      {
+        "type": "http",
+        "url": "https://mcp.withwandb.com/mcp"
+      }
+    ],
+    "packages": [
+      {
+        "registryType": "pypi",
+        "identifier": "wandb-mcp-server",
+        "runtimeHint": "uvx",
+        "environmentVariables": [
+          {
+            "name": "WANDB_API_KEY",
+            "description": "Weights & Biases API Key (from wandb.ai/authorize)",
+            "isRequired": true,
+            "isSecret": true
+          }
+        ],
+        "transport": { "type": "stdio" }
+      }
+    ]
   }
 ]

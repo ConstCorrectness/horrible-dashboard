@@ -2,7 +2,7 @@
  * REST client for the HorribleAssault map pipeline. Mirrors
  * `backend/modules/hassault/models.py`; the backend stays the source of truth.
  */
-import { apiGet } from '../../api';
+import { apiGet, apiPost } from '../../api';
 import { apiUrl } from '../../origin';
 
 export interface MapSummary {
@@ -177,6 +177,33 @@ export interface ServerBrowse {
   peers_answered: number;
 }
 
+export interface TacticalSpec {
+  id: string;
+  name: string;
+  type: 'smoke' | 'flash' | 'he';
+  fuseTime: number;
+  radius: number;
+  duration: number;
+  maxDamage: number;
+  bounceDamping: number;
+}
+
+export interface LaunchNativeOptions {
+  room_id: string;
+  map_name: string;
+  callsign?: string;
+  fullscreen?: boolean;
+  raw_input?: boolean;
+  max_fps?: number;
+}
+
+export interface LaunchNativeResult {
+  launched: boolean;
+  pid?: number;
+  connect_args: string[];
+  message?: string;
+}
+
 export function listMatches(): Promise<MatchSummary[]> {
   return apiGet<MatchSummary[]>('/hassault/matches');
 }
@@ -189,6 +216,60 @@ export function browseServers(): Promise<ServerBrowse> {
 
 export function listWeapons(): Promise<WeaponSpec[]> {
   return apiGet<WeaponSpec[]>('/hassault/weapons');
+}
+
+export function listTacticals(): Promise<TacticalSpec[]> {
+  return apiGet<TacticalSpec[]>('/hassault/tacticals');
+}
+
+export function launchNativeFps(opts: LaunchNativeOptions): Promise<LaunchNativeResult> {
+  return apiPost<LaunchNativeResult>('/hassault/launch_native', opts);
+}
+
+export interface SkinDefinition {
+  id: string;
+  name: string;
+  weaponId: string;
+  rarity: 'consumer' | 'industrial' | 'mil_spec' | 'restricted' | 'classified' | 'covert' | 'special';
+  rarityColor: string;
+  collection: string;
+  baseColor: string;
+  accentColor: string;
+  patternType: string;
+  description: string;
+}
+
+export interface SkinInstance {
+  instanceId: string;
+  skinId: string;
+  floatValue: number;
+  wearName: string;
+  patternSeed: number;
+  acquiredAt: number;
+  isEquipped: boolean;
+  isTradable: boolean;
+  statTrackerKills: number | null;
+  definition?: SkinDefinition;
+}
+
+export function listSkinCatalog(): Promise<SkinDefinition[]> {
+  return apiGet<SkinDefinition[]>('/hassault/skins/catalog');
+}
+
+export function getSkinInventory(): Promise<SkinInstance[]> {
+  return apiGet<SkinInstance[]>('/hassault/skins/inventory');
+}
+
+export function equipSkin(instanceId: string): Promise<{ ok: boolean }> {
+  return apiPost<{ ok: boolean }>(`/hassault/skins/equip?instance_id=${encodeURIComponent(instanceId)}`, {});
+}
+
+export function claimLevelUpDrop(): Promise<SkinInstance> {
+  return apiPost<SkinInstance>('/hassault/skins/claim_drop', {});
+}
+
+export function executeTradeUp(instanceIds: string[]): Promise<SkinInstance> {
+  return apiPost<SkinInstance>('/hassault/skins/tradeup', instanceIds);
 }
 
 export function listInvitees(): Promise<Invitee[]> {
@@ -290,4 +371,35 @@ export interface SessionInfo {
  * claimed on another machine shows up here. Slower, so it's opt-in. */
 export function getSession(refresh = false): Promise<SessionInfo> {
   return apiGet<SessionInfo>(`/hassault/session${refresh ? '?refresh=true' : ''}`);
+}
+
+export interface PostMatchSummary {
+  mapName: string;
+  won: boolean;
+  kills: number;
+  deaths: number;
+  headshots: number;
+  headshotPercent: number;
+  damageDealt: number;
+  isMvp: boolean;
+  xpGained: number;
+  currentLevel: number;
+  levelProgressPercent: number;
+  ratingDelta: number;
+  newRating: number;
+  ratingTier: string;
+  earnedDrop: SkinInstance | null;
+  timestamp: number;
+}
+
+export function getProcessStatus(): Promise<{ running: boolean; pid?: number }> {
+  return apiGet<{ running: boolean; pid?: number }>('/hassault/match/process_status');
+}
+
+export function getLatestMatchSummary(): Promise<PostMatchSummary | null> {
+  return apiGet<PostMatchSummary | null>('/hassault/match/latest_summary');
+}
+
+export function dismissMatchSummary(): Promise<{ ok: boolean }> {
+  return apiPost<{ ok: boolean }>('/hassault/match/dismiss_summary', {});
 }

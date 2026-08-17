@@ -13,20 +13,18 @@ export const observabilityModule: ModuleManifest = {
   panels: [
     {
       id: 'observability.logs',
-      title: 'Observability',
+      title: 'Observability (Network & API Calls)',
       component: ObservabilityPanel,
-      role: 'widget',
-      icon: '⊡',
+      role: 'document',
+      icon: '📡',
       singleton: true,
-      // Embedded: the fuller inspector behind `observability.io`'s bottom strip.
-      // The compact widget is the destination; this is its expanded view.
-      embedded: true,
+      dockable: ['bottom', 'right'],
     },
   ],
   widgets: [
     {
       id: 'observability.io',
-      title: 'Data flow',
+      title: 'Data Flow Monitor',
       component: ObservabilityWidget,
       role: 'tool',
       icon: '◉',
@@ -49,6 +47,11 @@ export const observabilityModule: ModuleManifest = {
     },
   ],
   commands: [
+    {
+      id: 'observability.openLogs',
+      title: 'Observability: Open Request & Endpoint Inspector',
+      run: () => registry.openPanel('observability.logs'),
+    },
     {
       id: 'observability.open',
       title: 'Observability: Open data-flow view',
