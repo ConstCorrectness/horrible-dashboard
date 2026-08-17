@@ -237,13 +237,31 @@ export async function switchWorkspace(id: string): Promise<void> {
   void setActiveWorkspace(id);
 }
 
-/** Prompt-free create, shared by the workspace.new command and the agent tool. */
-export async function createNamedWorkspace(name: string): Promise<{ id: string; name: string }> {
+/**
+ * Prompt-free create, shared by the workspace.new commands and the agent tool.
+ *
+ * `mode` is the desktop's paradigm and belongs to the workspace, not to a global
+ * switch: choosing it here is what makes "documents tiled on one desktop,
+ * everything loose on another" the normal way to have both, instead of converting
+ * one desktop back and forth through a lossy flip.
+ *
+ * `fromCurrent` seeds the new workspace with the arrangement on screen right now —
+ * "save this as a desktop" — rather than an empty frame. The current frame is
+ * copied *before* the switch, since `load` replaces it.
+ */
+export async function createNamedWorkspace(
+  name: string,
+  { mode, fromCurrent = false }: { mode?: FrameState['mode']; fromCurrent?: boolean } = {},
+): Promise<{ id: string; name: string }> {
+  const current = layoutStore.getSnapshot().frame;
   await flush();
   const ws = await apiCreateWorkspace(name);
   const state = await getWorkspaces();
   publish(state.workspaces, ws.id);
-  load(ws.id, createEmptyFrame());
+  const seed = fromCurrent
+    ? structuredClone(current)
+    : { ...createEmptyFrame(), mode: mode ?? 'tiling' };
+  load(ws.id, mode ? { ...seed, mode } : seed);
   void setActiveWorkspace(ws.id);
   return { id: ws.id, name: ws.name };
 }

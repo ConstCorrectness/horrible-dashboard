@@ -113,6 +113,18 @@
   align-items: center;
   min-height: 30px;
 }
+
+/* A floating desktop under the native shell: no tabs, but the strip still has to
+   exist as the undecorated window's titlebar — it carries the drag region and the
+   min/max/close cluster. Slimmer than the tabbed strip, since there is nothing in
+   it but empty draggable space. */
+.frame-tabs--bare {
+  padding: 0;
+  align-items: center;
+  min-height: 28px;
+  background: transparent;
+  border-bottom: none;
+}
 .detached-title {
   align-self: center;
   padding: 0 10px;

@@ -183,10 +183,46 @@ export const desktopModule: ModuleManifest = {
     { kind: 'desktop', items: () => desktopMenuItems() },
     { kind: 'taskbar.window', items: (target) => taskbarWindowMenu(target) },
     { kind: 'taskbar', items: () => taskbarMenu() },
+    { kind: 'taskbar.mode', items: () => modeMenuItems() },
     { kind: 'taskbar.theme', items: () => themeMenuItems(currentThemeId()) },
     { kind: 'shell.app', items: () => appMenuItems() },
   ],
 };
+
+/**
+ * The desktop-paradigm menu, from the tray's ▦/❐ indicator.
+ *
+ * Making a new desktop is offered *first* and converting this one last, because
+ * converting is the lossy operation: split ratios survive a flip only as the rects
+ * they happened to occupy, and coming back cannot recover them. The wording says so
+ * rather than presenting the two as equivalent.
+ */
+function modeMenuItems(): ContextMenuItem[] {
+  const tiling = layoutStore.getSnapshot().frame.mode === 'tiling';
+  return [
+    {
+      id: 'mode.newTiled',
+      label: 'New tiled desktop',
+      run: () => void registry.runCommand('workspace.new'),
+    },
+    {
+      id: 'mode.newFloating',
+      label: 'New floating desktop',
+      run: () => void registry.runCommand('workspace.newFloating'),
+    },
+    {
+      id: 'mode.saveAs',
+      label: 'Save this arrangement as a desktop',
+      run: () => void registry.runCommand('workspace.saveAs'),
+    },
+    {
+      id: 'mode.convert',
+      label: tiling ? 'Convert this desktop to floating' : 'Convert this desktop to tiling',
+      detail: 'Rearranges everything; split sizes are not preserved',
+      run: () => void toggleDesktopMode(),
+    },
+  ];
+}
 
 /**
  * The app menu, from the logo at the top-left.

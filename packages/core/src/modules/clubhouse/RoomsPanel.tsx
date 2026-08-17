@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 
-import { apiUrl } from '../../origin';
 import { useAgentContext } from '../../agent-context';
 import { toastsStore } from '../../toasts';
 import {
@@ -25,6 +24,40 @@ import {
   type FollowUser,
 } from './api';
 import { useClubhouseVoice } from './useClubhouseVoice';
+import {
+  DEFAULT_VOICE_CONFIG,
+  getVoiceState,
+  pushVoiceConfig,
+  resetVoiceMemory,
+  takeVoiceTurn,
+  type VoiceAgentConfig,
+  type VoiceRoom,
+  type VoiceStateTurn,
+} from './voiceAgent';
+
+// Shared styling for the Agent tab's form fields — the panel styles inline, and
+// repeating these objects per control is what made the old block hard to extend.
+const agentFieldStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '0.4rem',
+  flex: 1,
+  minWidth: '140px',
+};
+const agentLabelStyle: React.CSSProperties = {
+  fontSize: '0.75rem',
+  color: '#94a3b8',
+  fontWeight: 600,
+};
+const agentInputStyle: React.CSSProperties = {
+  width: '100%',
+  padding: '0.5rem',
+  fontSize: '0.8rem',
+  background: '#1d2026',
+  color: '#f1f5f9',
+  border: '1px solid #2e333d',
+  borderRadius: '4px',
+};
 
 /**
  * Live Clubhouse rooms panel. Handles searching, joining rooms, active call stage,
@@ -40,18 +73,23 @@ export function RoomsPanel() {
   const [selectedUser, setSelectedUser] = useState<ClubhouseUserProfile | null>(null);
   const [loadingProfile, setLoadingProfile] = useState(false);
 
-  // Voice Agent States
-  const [agentEnabled, setAgentEnabled] = useState(false);
+  // Voice agent. The conversation itself lives on the backend (one session per
+  // channel); this is the settings mirror plus the local "is it talking" flag.
+  const [agentConfig, setAgentConfig] = useState<VoiceAgentConfig>(() => {
+    try {
+      const saved = localStorage.getItem('clubhouseVoiceConfig');
+      return saved ? { ...DEFAULT_VOICE_CONFIG, ...JSON.parse(saved) } : DEFAULT_VOICE_CONFIG;
+    } catch {
+      return DEFAULT_VOICE_CONFIG;
+    }
+  });
+  const agentEnabled = agentConfig.enabled;
   const [isAgentSpeaking, setIsAgentSpeaking] = useState(false);
-  const [agentTranscript, setAgentTranscript] = useState<string | null>(null);
+  // Why the agent stayed quiet on the last turn. Rendered in the Agent tab, because
+  // a deliberate silence and a broken pipeline are indistinguishable without it.
+  const [agentReason, setAgentReason] = useState<string | null>(null);
+  const [agentMemory, setAgentMemory] = useState<VoiceStateTurn[]>([]);
   const [sttChunkMs, setSttChunkMs] = useState(5000);
-  const [agentTemperature, setAgentTemperature] = useState(0.7);
-  const [agentMaxTokens, setAgentMaxTokens] = useState(150);
-  const [agentSystemPrompt, setAgentSystemPrompt] = useState(
-    'You are an AI participant in a voice chat room. Reply concisely with a natural, conversational response.',
-  );
-  const [agentRespondsToVoice, setAgentRespondsToVoice] = useState(true);
-  const [agentRespondsToChat, setAgentRespondsToChat] = useState(false);
   const [agentPromptPresets, setAgentPromptPresets] = useState<{ name: string; prompt: string }[]>(
     () => {
       try {
@@ -61,6 +99,17 @@ export function RoomsPanel() {
       }
     },
   );
+
+  const patchAgentConfig = (patch: Partial<VoiceAgentConfig>) =>
+    setAgentConfig((prev) => {
+      const next = { ...prev, ...patch };
+      try {
+        localStorage.setItem('clubhouseVoiceConfig', JSON.stringify(next));
+      } catch {
+        /* storage unavailable — the backend still has the live config */
+      }
+      return next;
+    });
   const [myUserId, setMyUserId] = useState<number | null>(null);
 
   // Room settings modal states
@@ -393,6 +442,7 @@ export function RoomsPanel() {
     stopAgentAudio,
     loading: voiceLoading,
     error: voiceError,
+    voiceError: speechError,
     joinRoom,
     leaveRoom,
     toggleMute,
@@ -404,7 +454,6 @@ export function RoomsPanel() {
   } = useClubhouseVoice({
     sttChunkIntervalMs: sttChunkMs,
     onBargeIn: () => {
-      console.log('Barge-in occurred, aborting LLM if generating...');
       if (agentAbortControllerRef.current) {
         agentAbortControllerRef.current.abort();
         agentAbortControllerRef.current = null;
@@ -412,14 +461,20 @@ export function RoomsPanel() {
       setIsAgentSpeaking(false);
     },
     onTranscribe: (text) => {
-      if (!agentEnabled) return;
-      if (text.trim().length > 0) {
-        setAgentTranscript(text.trim());
-      }
+      // Every transcript is offered to the agent, even when it is disabled or busy:
+      // the *backend* decides whether to answer, and it wants to hear the room
+      // either way so it can follow a conversation it is staying out of.
+      if (text.trim().length > 0) enqueueUtterance(text.trim(), 'voice');
+    },
+    onVoiceError: (message) => {
+      toastsStore.add('warning', 'Voice', message);
     },
     onSpeakerInvite: (invite) => {
       toastsStore.add('info', 'Speaker Invite', `${invite.moderatorName} wants you to speak!`);
-      if (Notification.permission === 'granted') {
+      // `Notification` is absent in some webviews (and the Tauri shell is one of the
+      // places this pane runs), where an unguarded read throws inside the callback
+      // and takes the rest of the invite handling with it.
+      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
         new Notification('Speaker Invite', { body: `${invite.moderatorName} wants you to speak!` });
       }
       if (agentEnabled) {
@@ -457,6 +512,8 @@ export function RoomsPanel() {
         return;
       }
       setMyUserId(status.user_id);
+      // The agent introduces itself by this name and answers to it as a wake word.
+      setMyProfileName(status.name || '');
       const res = await getClubhouseChannels();
       setChannels(res.channels ?? []);
       setState('ready');
@@ -506,128 +563,207 @@ export function RoomsPanel() {
 
   const agentAbortControllerRef = useRef<AbortController | null>(null);
 
-  // Voice Agent Logic
-  const triggerAgentResponse = async (text: string, source: 'chat' | 'voice' = 'voice') => {
-    if (!text || isAgentSpeaking) return;
+  /**
+   * Bios for the people on stage, so the agent knows who it is talking to rather
+   * than just their names.
+   *
+   * Only speakers, and cached for the session: the room list carries no bio, so each
+   * one is a separate profile fetch, and doing that for a 300-person audience would
+   * be 300 requests to learn about people who are not talking. A missing bio is
+   * cached as null so a private profile isn't re-fetched every ten seconds.
+   */
+  const profileCacheRef = useRef<Map<number, string | null>>(new Map());
+  useEffect(() => {
+    if (!joined || !agentEnabled) return;
+    const speakers = liveUsers.filter((u) => u.isSpeaker).slice(0, 12);
+    const missing = speakers.filter((u) => !profileCacheRef.current.has(u.userId));
+    if (missing.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      for (const u of missing) {
+        if (cancelled) return;
+        try {
+          const profile = await getClubhouseUserProfile(u.userId);
+          profileCacheRef.current.set(u.userId, profile.bio);
+        } catch {
+          profileCacheRef.current.set(u.userId, null);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [joined, agentEnabled, liveUsers]);
+
+  /**
+   * The room as the backend agent should see it, merging the sources that each know
+   * part of it: `activeRoomInfo` (polled Clubhouse details — names, moderator flags),
+   * `liveUsers`/`speakingVolumes` (the PubNub + Agora feeds, seconds fresher about
+   * who is muted, has a hand up, or is talking right now), and the profile cache.
+   */
+  const buildRoomSnapshot = (): VoiceRoom => {
+    // Read through refs, not the render-time values: a turn can take several
+    // seconds, and the queue drain that calls this was created in an earlier
+    // render. Closing over the room would describe it as it was when someone
+    // started speaking, not as it is when the agent answers.
+    const info = activeRoomInfoRef.current;
+    const live = liveUsersRef.current;
+    const volumes = speakingVolumesRef.current;
+    const details = info?.users ?? [];
+    const ids = new Set<number>([
+      ...details.map((u) => u.user_id).filter((id): id is number => id != null),
+      ...live.map((u) => u.userId),
+    ]);
+    const members = [...ids].map((id) => {
+      const d = details.find((u) => u.user_id === id);
+      const liveUser = live.find((u) => u.userId === id);
+      return {
+        user_id: id,
+        name: d?.name ?? '',
+        is_speaker: liveUser?.isSpeaker ?? d?.is_speaker ?? false,
+        is_moderator: d?.is_moderator ?? false,
+        is_muted: liveUser?.isMuted ?? false,
+        hand_raised: liveUser?.handRaised ?? false,
+        speaking: (volumes[id] ?? 0) > 5,
+        bio: profileCacheRef.current.get(id) ?? null,
+      };
+    });
+    return {
+      topic: activeRoomInfo?.topic ?? null,
+      club: activeRoomInfo?.club?.name ?? null,
+      members,
+      my_user_id: myUserId,
+      my_name: myProfileName || 'the agent',
+    };
+  };
+
+  /**
+   * One utterance → the backend session → speak / post / stay quiet.
+   *
+   * Serialized through a queue rather than dropped. The old code returned early
+   * whenever `isAgentSpeaking` was set, so anything said while the agent was talking
+   * (or thinking) vanished — including the reply to a question someone had just
+   * asked it. A room does not pause for the agent, so the utterances are held and
+   * processed in order instead.
+   */
+  const agentQueueRef = useRef<{ text: string; source: 'voice' | 'chat'; force?: boolean }[]>([]);
+  const agentBusyRef = useRef(false);
+
+  const drainAgentQueue = async () => {
+    if (agentBusyRef.current) return;
+    agentBusyRef.current = true;
     try {
-      setIsAgentSpeaking(true);
-
-      const amISpeaker = activeRoomInfo?.users.find((u) => u.user_id === myUserId)?.is_speaker;
-      const liveMe = liveUsers.find((u) => u.userId === myUserId);
-      const isActuallySpeaker = liveMe?.isSpeaker || amISpeaker || false;
-
-      // Handle custom /agent commands (Authorized users / mods only for settings)
-      if (text.startsWith('/agent')) {
-        const parts = text.trim().split(' ');
-        const cmd = parts[1];
-        const amIMod = activeRoomInfo?.users.find((u) => u.user_id === myUserId)?.is_moderator;
-
-        if (cmd === 'topic' && activeChannel) {
-          if (amIMod) {
-            const newTopic = parts.slice(2).join(' ');
-            await updateClubhouseTopic(activeChannel, newTopic);
-            await sendComment(`🤖 Room topic updated to: ${newTopic}`);
-            if (activeRoomInfo) setActiveRoomInfo({ ...activeRoomInfo, topic: newTopic });
-          } else {
-            await sendComment(`🤖 Only moderators can change the topic.`);
+      while (agentQueueRef.current.length > 0) {
+        const item = agentQueueRef.current.shift()!;
+        const channel = activeChannelRef.current;
+        if (!channel) continue;
+        try {
+          const result = await takeVoiceTurn({
+            channel,
+            text: item.text,
+            speaker: item.source === 'chat' ? 'Someone in chat' : 'A speaker',
+            source: item.source,
+            force: item.force,
+            room: buildRoomSnapshot(),
+          });
+          setAgentReason(result.reason);
+          if (result.notice) {
+            toastsStore.add('info', 'Agent', result.notice);
+            if (agentConfigRef.current.postToChat) {
+              await sendComment(`🤖 ${result.notice}`).catch(() => {});
+            }
           }
-          setIsAgentSpeaking(false);
-          return;
-        } else if (cmd === 'chat' && activeChannel) {
-          if (amIMod) {
-            const enable = parts[2] === 'on';
-            await updateClubhouseChatSettings(activeChannel, enable);
-            await sendComment(`🤖 Room chat is now ${enable ? 'enabled' : 'disabled'}.`);
-          } else {
-            await sendComment(`🤖 Only moderators can change chat settings.`);
-          }
-          setIsAgentSpeaking(false);
-          return;
-        } else if (cmd === 'handraise' && activeChannel) {
-          if (amIMod) {
-            const enable = parts[2] === 'on';
-            await updateClubhouseHandraiseSettings(activeChannel, enable, 1);
-            await sendComment(`🤖 Hand raising is now ${enable ? 'enabled' : 'disabled'}.`);
-          } else {
-            await sendComment(`🤖 Only moderators can change handraise settings.`);
-          }
-          setIsAgentSpeaking(false);
-          return;
-        } else if (cmd === 'questionnaire') {
-          if (amIMod) {
-            setAgentSystemPrompt(
-              'You are a questionnaire bot. Ask the audience 5 questions one by one about their experience and gather feedback. Keep it engaging. Acknowledge their answers before asking the next question.',
-            );
-            await sendComment(`🤖 Agent is now in questionnaire mode! Let's get started.`);
-            text = 'Initiate the questionnaire by asking the first question.';
-          } else {
-            await sendComment(`🤖 Only moderators can start a questionnaire.`);
+          if (result.spoke && result.reply) {
+            setIsAgentSpeaking(true);
+            if (agentConfigRef.current.postToChat) {
+              await sendComment(`🤖 ${result.reply}`).catch(() => {});
+            }
+            // Speaking aloud requires being on stage; in the audience the reply
+            // reaches the room as text only (the backend's room brief says so too,
+            // so the agent writes for the medium it actually has).
+            const onStage = liveUsers.find((u) => u.userId === myUserId)?.isSpeaker;
+            if (agentConfigRef.current.speak && onStage) {
+              await playAgentAudio(result.reply);
+            }
             setIsAgentSpeaking(false);
-            return;
           }
-        } else if (cmd === 'search') {
-          const query = parts.slice(2).join(' ');
-          await sendComment(`🤖 Searching the web for: ${query}...`);
-          // TODO: route this through the search module's `search.web` tool. Until
-          // then it asks the model from its own knowledge, which is not a search.
-          text = `Please perform a simulated web search or provide factual knowledge about: ${query}. Synthesize it into a brief answer.`;
+        } catch (e) {
+          console.error('Voice agent turn failed:', e);
+          setAgentReason(e instanceof Error ? e.message : String(e));
+          setIsAgentSpeaking(false);
         }
       }
-
-      agentAbortControllerRef.current = new AbortController();
-
-      const promptText = text.trim()
-        ? source === 'chat'
-          ? `Another user just typed in chat: "${text}".`
-          : `Another speaker just said: "${text}".`
-        : `(The room is silent. It's your turn to speak, initiate the conversation or say something interesting.)`;
-
-      const req = await fetch(apiUrl('/api/agent/generate'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: agentAbortControllerRef.current.signal,
-        body: JSON.stringify({
-          prompt: promptText,
-          system: agentSystemPrompt,
-          temperature: agentTemperature,
-          max_tokens: agentMaxTokens,
-        }),
-      });
-      agentAbortControllerRef.current = null;
-      const data = await req.json();
-
-      if (data.completion) {
-        const responseText = data.completion.trim();
-        await sendComment(`🤖 ${responseText}`);
-        if (isActuallySpeaker) {
-          await playAgentAudio(responseText);
-        }
-      }
-      setIsAgentSpeaking(false);
-    } catch (e) {
-      if (e instanceof Error && e.name === 'AbortError') return;
-      console.error('Agent response failed:', e);
-      setIsAgentSpeaking(false);
+    } finally {
+      agentBusyRef.current = false;
     }
   };
+
+  const enqueueUtterance = (text: string, source: 'voice' | 'chat', force = false) => {
+    if (!activeChannelRef.current) return;
+    agentQueueRef.current.push({ text, source, force });
+    // Bound the backlog: if the model is slower than the room, the oldest utterances
+    // are the least worth answering by the time it catches up.
+    if (agentQueueRef.current.length > 6)
+      agentQueueRef.current.splice(0, agentQueueRef.current.length - 6);
+    void drainAgentQueue();
+  };
+
+  // Refs so the queue drain reads current values without being re-created (and
+  // without the stale closures the old `useEffect`-driven version captured).
+  const activeChannelRef = useRef<string | null>(null);
+  const agentConfigRef = useRef(agentConfig);
+  const activeRoomInfoRef = useRef<Channel | null>(null);
+  const liveUsersRef = useRef(liveUsers);
+  const speakingVolumesRef = useRef(speakingVolumes);
+  const [myProfileName, setMyProfileName] = useState('');
+  useEffect(() => {
+    activeChannelRef.current = activeChannel;
+  }, [activeChannel]);
+  useEffect(() => {
+    agentConfigRef.current = agentConfig;
+  }, [agentConfig]);
+  useEffect(() => {
+    activeRoomInfoRef.current = activeRoomInfo;
+  }, [activeRoomInfo]);
+  useEffect(() => {
+    liveUsersRef.current = liveUsers;
+  }, [liveUsers]);
+  useEffect(() => {
+    speakingVolumesRef.current = speakingVolumes;
+  }, [speakingVolumes]);
+
+  // Push settings to the backend session whenever they change (and on join, since
+  // the session is created there and starts on defaults).
+  useEffect(() => {
+    if (!activeChannel) return;
+    void pushVoiceConfig(activeChannel, agentConfig).catch((e) =>
+      console.warn('Failed to sync voice agent config:', e),
+    );
+  }, [activeChannel, agentConfig]);
+
+  // Mirror what the agent remembers into the Agent tab.
+  useEffect(() => {
+    if (!activeChannel || !agentEnabled) return;
+    const tick = () =>
+      void getVoiceState(activeChannel)
+        .then((s) => setAgentMemory(s.turns))
+        .catch(() => {});
+    tick();
+    const interval = setInterval(tick, 5000);
+    return () => clearInterval(interval);
+  }, [activeChannel, agentEnabled]);
 
   const prevCommentsLengthRef = useRef(0);
   useEffect(() => {
     if (comments.length > prevCommentsLengthRef.current) {
       const newComment = comments[comments.length - 1];
       prevCommentsLengthRef.current = comments.length;
-      if (agentEnabled && agentRespondsToChat && !newComment.text?.startsWith('🤖')) {
-        triggerAgentResponse(newComment.text || '', 'chat');
+      // The agent's own posts are prefixed; feeding them back is a self-reply loop.
+      if (!newComment.text?.startsWith('🤖')) {
+        enqueueUtterance(newComment.text || '', 'chat');
       }
     }
-  }, [comments, agentEnabled, agentRespondsToChat, myUserId, isAgentSpeaking]);
-
-  useEffect(() => {
-    if (agentTranscript && agentEnabled && agentRespondsToVoice) {
-      triggerAgentResponse(agentTranscript, 'voice');
-      setAgentTranscript(null);
-    }
-  }, [agentTranscript, agentEnabled, agentRespondsToVoice]);
+  }, [comments]);
 
   // Filter channels based on search query
   const filteredChannels = channels.filter((c) => {
@@ -2271,7 +2407,7 @@ export function RoomsPanel() {
                     <span style={{ fontSize: '0.9rem', fontWeight: 600 }}>Enable Voice Agent</span>
                     <button
                       className={`ch-btn-action ${agentEnabled ? 'mic-active' : ''}`}
-                      onClick={() => setAgentEnabled(!agentEnabled)}
+                      onClick={() => patchAgentConfig({ enabled: !agentEnabled })}
                       style={{ padding: '0.5rem 1rem', fontSize: '0.8rem' }}
                     >
                       {agentEnabled ? '🤖 ON' : '🤖 OFF'}
@@ -2298,42 +2434,101 @@ export function RoomsPanel() {
                           paddingBottom: '1rem',
                         }}
                       >
-                        <label
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.5rem',
-                            fontSize: '0.8rem',
-                            color: '#f1f5f9',
-                            cursor: 'pointer',
-                          }}
-                        >
+                        {(
+                          [
+                            ['respondToVoice', 'Respond to Voice (Stage)'],
+                            ['respondToChat', 'Respond to Live Chat'],
+                            ['speak', 'Speak aloud (TTS)'],
+                            ['postToChat', 'Also post replies to chat'],
+                          ] as const
+                        ).map(([key, label]) => (
+                          <label
+                            key={key}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.5rem',
+                              fontSize: '0.8rem',
+                              color: '#f1f5f9',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={agentConfig[key]}
+                              onChange={(e) => patchAgentConfig({ [key]: e.target.checked })}
+                              style={{ accentColor: 'var(--accent)' }}
+                            />
+                            {label}
+                          </label>
+                        ))}
+                      </div>
+
+                      {/* When it speaks, and to whom it listens. */}
+                      <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                        <div style={agentFieldStyle}>
+                          <span style={agentLabelStyle}>When to speak:</span>
+                          <select
+                            style={agentInputStyle}
+                            value={agentConfig.posture}
+                            onChange={(e) =>
+                              patchAgentConfig({
+                                posture: e.target.value as VoiceAgentConfig['posture'],
+                              })
+                            }
+                          >
+                            <option value="addressed">Only when addressed</option>
+                            <option value="conversational">Conversational (with cooldown)</option>
+                            <option value="always">Always (replies to everything)</option>
+                          </select>
+                        </div>
+                        <div style={agentFieldStyle}>
+                          <span style={agentLabelStyle}>Wake words (comma separated):</span>
                           <input
-                            type="checkbox"
-                            checked={agentRespondsToVoice}
-                            onChange={(e) => setAgentRespondsToVoice(e.target.checked)}
-                            style={{ accentColor: 'var(--accent)' }}
+                            type="text"
+                            style={agentInputStyle}
+                            value={agentConfig.wakeWords.join(', ')}
+                            onChange={(e) =>
+                              patchAgentConfig({
+                                wakeWords: e.target.value
+                                  .split(',')
+                                  .map((w) => w.trim().toLowerCase())
+                                  .filter(Boolean),
+                              })
+                            }
+                            placeholder="agent, assistant, bot"
                           />
-                          Respond to Voice (Stage)
-                        </label>
-                        <label
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.5rem',
-                            fontSize: '0.8rem',
-                            color: '#f1f5f9',
-                            cursor: 'pointer',
-                          }}
-                        >
+                        </div>
+                      </div>
+
+                      {/* Looking things up. */}
+                      <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                        <div style={agentFieldStyle}>
+                          <span style={agentLabelStyle}>Look things up:</span>
+                          <select
+                            style={agentInputStyle}
+                            value={agentConfig.retrieval}
+                            onChange={(e) =>
+                              patchAgentConfig({
+                                retrieval: e.target.value as VoiceAgentConfig['retrieval'],
+                              })
+                            }
+                          >
+                            <option value="off">Never</option>
+                            <option value="command">Only on /agent search</option>
+                            <option value="auto">Automatically for questions</option>
+                          </select>
+                        </div>
+                        <div style={agentFieldStyle}>
+                          <span style={agentLabelStyle}>Knowledge library:</span>
                           <input
-                            type="checkbox"
-                            checked={agentRespondsToChat}
-                            onChange={(e) => setAgentRespondsToChat(e.target.checked)}
-                            style={{ accentColor: 'var(--accent)' }}
+                            type="text"
+                            style={agentInputStyle}
+                            value={agentConfig.library}
+                            onChange={(e) => patchAgentConfig({ library: e.target.value })}
+                            placeholder="default"
                           />
-                          Respond to Live Chat
-                        </label>
+                        </div>
                       </div>
 
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
@@ -2350,7 +2545,7 @@ export function RoomsPanel() {
                           <div style={{ display: 'flex', gap: '0.5rem' }}>
                             <select
                               onChange={(e) => {
-                                if (e.target.value) setAgentSystemPrompt(e.target.value);
+                                if (e.target.value) patchAgentConfig({ persona: e.target.value });
                               }}
                               style={{
                                 padding: '0.2rem',
@@ -2375,7 +2570,7 @@ export function RoomsPanel() {
                                 if (name) {
                                   const newPresets = [
                                     ...agentPromptPresets,
-                                    { name, prompt: agentSystemPrompt },
+                                    { name, prompt: agentConfig.persona },
                                   ];
                                   setAgentPromptPresets(newPresets);
                                   localStorage.setItem('agentPresets', JSON.stringify(newPresets));
@@ -2387,8 +2582,8 @@ export function RoomsPanel() {
                           </div>
                         </div>
                         <textarea
-                          value={agentSystemPrompt}
-                          onChange={(e) => setAgentSystemPrompt(e.target.value)}
+                          value={agentConfig.persona}
+                          onChange={(e) => patchAgentConfig({ persona: e.target.value })}
                           placeholder="System Prompt / Persona"
                           style={{
                             width: '100%',
@@ -2453,8 +2648,10 @@ export function RoomsPanel() {
                             min="0"
                             max="2"
                             step="0.1"
-                            value={agentTemperature}
-                            onChange={(e) => setAgentTemperature(Number(e.target.value))}
+                            value={agentConfig.temperature}
+                            onChange={(e) =>
+                              patchAgentConfig({ temperature: Number(e.target.value) })
+                            }
                             style={{
                               width: '100%',
                               padding: '0.5rem',
@@ -2484,8 +2681,10 @@ export function RoomsPanel() {
                             min="20"
                             max="500"
                             step="10"
-                            value={agentMaxTokens}
-                            onChange={(e) => setAgentMaxTokens(Number(e.target.value))}
+                            value={agentConfig.maxTokens}
+                            onChange={(e) =>
+                              patchAgentConfig({ maxTokens: Number(e.target.value) })
+                            }
                             style={{
                               width: '100%',
                               padding: '0.5rem',
@@ -2497,6 +2696,93 @@ export function RoomsPanel() {
                             }}
                           />
                         </div>
+                      </div>
+
+                      {/* Conversation memory + how long it waits between unprompted replies. */}
+                      <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                        <div style={agentFieldStyle}>
+                          <span style={agentLabelStyle}>Remember (turns):</span>
+                          <input
+                            type="number"
+                            min="0"
+                            max="40"
+                            step="2"
+                            style={agentInputStyle}
+                            value={agentConfig.memoryTurns}
+                            onChange={(e) =>
+                              patchAgentConfig({ memoryTurns: Number(e.target.value) })
+                            }
+                          />
+                        </div>
+                        <div style={agentFieldStyle}>
+                          <span style={agentLabelStyle}>Cooldown (seconds):</span>
+                          <input
+                            type="number"
+                            min="0"
+                            max="60"
+                            step="1"
+                            style={agentInputStyle}
+                            value={agentConfig.cooldownS}
+                            onChange={(e) =>
+                              patchAgentConfig({ cooldownS: Number(e.target.value) })
+                            }
+                          />
+                        </div>
+                      </div>
+
+                      {/* Why it did or didn't speak, and what it currently remembers. */}
+                      <div
+                        style={{
+                          background: 'rgba(255,255,255,0.03)',
+                          borderRadius: '8px',
+                          padding: '0.75rem',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.5rem',
+                        }}
+                      >
+                        <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>
+                          Last turn: <span style={{ color: '#f1f5f9' }}>{agentReason ?? '—'}</span>
+                        </div>
+                        {speechError && (
+                          <div style={{ fontSize: '0.75rem', color: '#fbbf24' }}>
+                            ⚠️ {speechError}
+                          </div>
+                        )}
+                        {agentMemory.length > 0 && (
+                          <details>
+                            <summary
+                              style={{ fontSize: '0.75rem', color: '#94a3b8', cursor: 'pointer' }}
+                            >
+                              Conversation memory ({agentMemory.length})
+                            </summary>
+                            <div
+                              style={{
+                                maxHeight: '160px',
+                                overflowY: 'auto',
+                                marginTop: '0.5rem',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '0.25rem',
+                              }}
+                            >
+                              {agentMemory.map((t, i) => (
+                                <div
+                                  key={i}
+                                  style={{
+                                    fontSize: '0.72rem',
+                                    color: t.role === 'agent' ? '#a5b4fc' : '#cbd5e1',
+                                  }}
+                                >
+                                  <strong>
+                                    {t.role === 'agent' ? 'Agent' : t.speaker || 'Room'}:
+                                  </strong>{' '}
+                                  {t.text}
+                                </div>
+                              ))}
+                            </div>
+                          </details>
+                        )}
                       </div>
 
                       <div
@@ -2535,10 +2821,34 @@ export function RoomsPanel() {
                             borderRadius: '20px',
                             cursor: 'pointer',
                           }}
-                          onClick={() => triggerAgentResponse(' ')}
+                          onClick={() =>
+                            enqueueUtterance(
+                              'Say something to the room — pick up the current conversation, or open one if it has gone quiet.',
+                              'voice',
+                              true,
+                            )
+                          }
                           disabled={isAgentSpeaking}
                         >
                           🗣️ Speak Now
+                        </button>
+                        <button
+                          className="ch-btn-action"
+                          style={{
+                            padding: '0.6rem 1.2rem',
+                            fontSize: '0.85rem',
+                            background: '#2e333d',
+                            border: 'none',
+                            borderRadius: '20px',
+                            cursor: 'pointer',
+                          }}
+                          onClick={() => {
+                            if (activeChannel) {
+                              void resetVoiceMemory(activeChannel).then(() => setAgentMemory([]));
+                            }
+                          }}
+                        >
+                          🧹 Forget
                         </button>
                       </div>
                       {!isCurrentUserSpeaker && (

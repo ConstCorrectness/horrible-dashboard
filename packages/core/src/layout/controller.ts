@@ -36,6 +36,7 @@ import {
 } from './model';
 import * as persistence from './persistence';
 import { closePaneSession, movePaneSession, paneSessionKey } from './pane-lifetime';
+import { taskbarEntries } from './taskbar';
 import { arrangeWindows, type ArrangeStyle } from './snap';
 import { layoutStore } from './store';
 import { NOMINAL_VIEWPORT } from './windows';
@@ -1194,11 +1195,38 @@ export function setWindowMode(idOrInstance: string | undefined, mode: WindowMode
  * and clicking anything else brings it forward. A taskbar where the focused
  * button does nothing is one that silently swallows every second click.
  */
+/**
+ * Flag a pane as wanting attention — its background work finished while it was
+ * out of sight. Its taskbar button flashes until the user looks at it.
+ *
+ * The point of minimizing being non-destructive: a pane can be put away and keep
+ * working (a research run, a training job, an ingest), so it needs a way to say it
+ * is done. No-op when the pane is already the one on screen and focused — flashing
+ * a button for something the user is looking at is noise.
+ */
+export function requestPaneAttention(instanceId: string, attention = true): boolean {
+  const f = frame();
+  const located = findPaneAnywhere(f, instanceId);
+  if (!located) return false;
+  if (attention) {
+    const entry = taskbarEntries(f).find((e) => e.instanceId === instanceId);
+    if (entry?.state === 'focused') return false;
+  }
+  const before = layoutStore.getSnapshot();
+  return layoutStore.dispatch({ type: 'SET_PANE_ATTENTION', instanceId, attention }) !== before;
+}
+
 export function activateTaskbarEntry(instanceId: string): boolean {
   const f = frame();
   const located = findPaneAnywhere(f, instanceId);
   if (!located) return false;
   const { pane, location } = located;
+  // Looking at it is what acknowledges it, wherever it lives and whatever the
+  // click then does. Clearing it anywhere else (on focus, on a timer) would let a
+  // button keep flashing after the user had plainly dealt with it.
+  if (pane.attention) {
+    layoutStore.dispatch({ type: 'SET_PANE_ATTENTION', instanceId, attention: false });
+  }
   if (location.kind === 'window') {
     const win = f.windows.find((w) => w.id === location.windowId);
     const showing =
@@ -1212,6 +1240,16 @@ export function activateTaskbarEntry(instanceId: string): boolean {
   // window-only, which meant that on a tiling desktop — most workspaces —
   // nothing on the taskbar could be minimized at all.
   if (location.kind === 'area') {
+    // A floating desktop does not render the centre tree, so a pane that ended up
+    // there — via "Dock back into the frame", or by being left behind when the
+    // desktop was flipped — is running with nowhere to be drawn. Restoring it as a
+    // window is the only way back, and it is what the taskbar button promises: the
+    // pane was never closed, it just had no surface. Without this the button was a
+    // dead end and flipping the whole desktop to tiling was the only recovery.
+    if (f.mode === 'floating') {
+      if (pane.minimized) setPaneMinimized(instanceId, false);
+      return setPaneWindowed(instanceId, true);
+    }
     if (pane.minimized) return setPaneMinimized(instanceId, false);
     const area = findArea(f.center, location.areaId);
     const showing =
@@ -1777,7 +1815,7 @@ export function installFrameController(): void {
         title: resolveView(pane.viewId)?.title ?? pane.viewId,
         hasContext: hasAgentContext(pane.instanceId),
       })),
-    createWorkspace: (name) => persistence.createNamedWorkspace(name),
+    createWorkspace: (name, options) => persistence.createNamedWorkspace(name, options),
     listWorkspaces: () => persistence.listWorkspaces(),
     resetLayout: () => void persistence.resetLayout(),
     deleteActiveWorkspace: () => void persistence.deleteActiveWorkspace(),

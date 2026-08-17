@@ -103,11 +103,32 @@ export function WorkspaceTabs() {
   // the webview), and it hosts the min/max/close controls. Interactive children
   // (tabs, buttons) aren't drag regions, so their clicks still land.
   const nativeChrome = hasCapability('chrome.workspaceTabs');
-  // This strip is now the only workspace switcher — the taskbar's pips were
-  // dropped — so it has to stay reachable once the tabs outgrow the width.
+  // Has to stay reachable once the tabs outgrow the width.
   const wheelRef = useHorizontalWheel<HTMLDivElement>();
   const { frame } = useSyncExternalStore(layoutStore.subscribe, layoutStore.getSnapshot);
   const mode = frame.mode;
+
+  /**
+   * A floating desktop hides the strip: it is a desktop, and a desktop does not
+   * have a tab bar. Switching moves to the taskbar's pips and management to the
+   * Start menu, so nothing the strip did becomes unreachable.
+   *
+   * It cannot simply not render, though. When the native shell grants
+   * `chrome.workspaceTabs` this strip **is** the undecorated window's titlebar —
+   * it carries `data-tauri-drag-region` and the min/max/close controls — so
+   * returning null there would leave a window that cannot be moved or closed. A
+   * slim drag bar takes its place instead, which is exactly what a detached
+   * per-workspace window already does.
+   */
+  if (mode === 'floating') {
+    if (!nativeChrome) return null;
+    return (
+      <header className="frame-tabs frame-tabs--native frame-tabs--bare">
+        <div className="frame-tabs-scroll" data-tauri-drag-region="" />
+        <WindowControls />
+      </header>
+    );
+  }
   const presets = registry.framePresets;
   const presetIds = new Set(presets.map((p) => p.id));
   const entries = [

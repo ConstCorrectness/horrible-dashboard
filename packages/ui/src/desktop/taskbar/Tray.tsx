@@ -11,7 +11,6 @@ import {
   hasCapability,
   layoutStore,
   THEMES,
-  toggleDesktopMode,
   useThemeId,
   setSetting,
   THEME_SETTING_KEY,
@@ -41,12 +40,32 @@ export function Tray({ showLabels }: { showLabels: boolean }) {
 
   return (
     <div className="os-taskbar-tray" role="group" aria-label="Status">
+      {/* An indicator, not a toggle.
+       *
+       * The paradigm is a property of the **workspace** now — you pick it when you
+       * make a desktop (Start ▸ New tiled / New floating), and you switch paradigms
+       * by switching desktops. This used to be a one-click flip, which invited the
+       * one operation the shell cannot do well: `explodeToWindows` cannot express
+       * split ratios as anything but the rects they occupy and `tileWindows` cannot
+       * recover the ratios you dragged, so every round trip quietly degraded the
+       * arrangement. Converting in place is still possible, but it now lives in the
+       * command palette where a destructive verb belongs rather than under a button
+       * sitting next to the clock.
+       */}
       <button
         type="button"
         className="os-tray-btn"
-        aria-label={tiling ? 'Switch to floating windows' : 'Switch to tiling'}
-        title={tiling ? 'Tiling — click for floating windows' : 'Floating — click for tiling'}
-        onClick={() => void toggleDesktopMode()}
+        aria-label={tiling ? 'Tiling desktop' : 'Floating desktop'}
+        title={
+          tiling
+            ? 'Tiling desktop — new desktops are made from the Start menu'
+            : 'Floating desktop — new desktops are made from the Start menu'
+        }
+        aria-haspopup="menu"
+        onClick={(ev) => {
+          const r = ev.currentTarget.getBoundingClientRect();
+          openContextMenu({ clientX: r.left, clientY: r.top }, { kind: 'taskbar.mode' });
+        }}
       >
         {tiling ? '▦' : '❐'}
       </button>

@@ -86,6 +86,12 @@ export type LayoutAction =
    * only `activeTab` moves, so restoring is exact. See `PaneState.minimized`.
    */
   | { type: 'SET_PANE_MINIMIZED'; instanceId: string; minimized: boolean }
+  /**
+   * Flag (or clear) a pane as wanting attention — its background work finished.
+   * Unlike `SET_PANE_MINIMIZED` this applies wherever the pane lives: a window,
+   * a dock tool and a centre tab can all be out of sight with a job running.
+   */
+  | { type: 'SET_PANE_ATTENTION'; instanceId: string; attention: boolean }
   // Docks
   | { type: 'SET_DOCK'; side: DockSide; patch: Partial<Pick<DockState, 'visible' | 'size'>> }
   | { type: 'INSERT_TOOL'; side: DockSide; pane: PaneState; activate?: boolean }

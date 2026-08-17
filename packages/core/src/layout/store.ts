@@ -289,6 +289,21 @@ function reduceFrame(frame: FrameState, action: LayoutAction): FrameState {
       return next ?? frame;
     }
 
+    case 'SET_PANE_ATTENTION': {
+      const located = findPaneAnywhere(frame, action.instanceId);
+      if (!located) return frame;
+      if ((located.pane.attention ?? false) === action.attention) return frame;
+      return (
+        updatePaneAnywhere(frame, action.instanceId, (pane) => {
+          const next = { ...pane };
+          // Absent rather than `false`, so a serialized layout does not carry a
+          // stale "was flashing once" flag for every pane the user ever opened.
+          if (action.attention) next.attention = true;
+          else delete next.attention;
+          return next;
+        }) ?? frame
+      );
+    }
     case 'SET_PANE_MINIMIZED': {
       const located = findPaneAnywhere(frame, action.instanceId);
       // Centre areas only. A windowed pane minimizes through its window (the

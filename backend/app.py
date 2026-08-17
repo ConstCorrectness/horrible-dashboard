@@ -45,6 +45,7 @@ from backend.modules.agent.orchestrator import handle_agent_message
 from backend.modules.browser import router as browser_router
 from backend.modules.chat import router as chat_router
 from backend.modules.clubhouse import router as clubhouse_router
+from backend.modules.clubhouse import voice_router as clubhouse_voice_router
 from backend.modules.code import handle_code_message, push_code_events
 from backend.modules.code import router as code_router
 from backend.modules.git import router as git_router
@@ -251,6 +252,7 @@ app.include_router(notebook_router, prefix="/api")
 app.include_router(docs_router, prefix="/api")
 app.include_router(notes_router, prefix="/api")
 app.include_router(clubhouse_router, prefix="/api")
+app.include_router(clubhouse_voice_router, prefix="/api")
 app.include_router(telemetry_router, prefix="/api")
 app.include_router(plugins_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")

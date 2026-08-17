@@ -31,10 +31,12 @@ export function WindowButtons({ showLabels }: { showLabels: boolean }) {
         <button
           key={e.instanceId}
           type="button"
-          className={`os-taskbar-btn is-${e.state}`}
+          className={`os-taskbar-btn is-${e.state}${e.attention ? ' wants-attention' : ''}`}
           // The accessible name always carries the title even when labels are
           // off — an icon-only taskbar is unusable to a screen reader otherwise.
-          aria-label={e.title}
+          // A flashing button is invisible to a screen reader, so the state that
+          // flash conveys is said out loud instead.
+          aria-label={e.attention ? `${e.title} — finished` : e.title}
           aria-pressed={e.state === 'focused'}
           title={e.title}
           onClick={() => activateTaskbarEntry(e.instanceId)}
@@ -46,6 +48,12 @@ export function WindowButtons({ showLabels }: { showLabels: boolean }) {
           onContextMenu={(ev) => {
             if (openContextMenu(ev, { kind: 'taskbar.window', instanceId: e.instanceId })) {
               ev.preventDefault();
+              // `preventDefault` only stops the *browser* menu. Without stopping
+              // propagation the event carried on to the taskbar container, whose own
+              // handler opened the taskbar menu on top of this one — so a right-click
+              // on a window button showed Position / Auto-hide / Reset, and Close was
+              // unreachable even though it has always been in this menu.
+              ev.stopPropagation();
             }
           }}
           onAuxClick={(ev) => {

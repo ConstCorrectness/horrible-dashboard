@@ -151,7 +151,8 @@ same flow visually.
    resolves the tool list (`_tools_for`), the model (`_orchestrator_model` — the
    override or the configured model), and the sampling temperature (`_tool_temperature`).
 4. **The loop (≤ `MAX_ROUNDS`).** Each round streams the provider via
-   `providers.chat_stream`; the model's reasoning (`thinking`/`reasoning_content`) and
+   `providers.chat_stream`, which first flattens the system tier (see
+   [below](#the-system-tier-is-several-messages-until-the-wire)); the model's reasoning (`thinking`/`reasoning_content`) and
    answer `content` token-deltas relay live as `reasoning`/`token` events the chat
    widget and home ask bar render as they arrive. A round ends with either
    `tool_calls` or a final answer.
@@ -172,6 +173,36 @@ same flow visually.
    supports it — before giving up and
    answering. The widget renders the reply plus the per-turn action log, and a completed
    turn auto-saves to its [session](#sessions-persistence).
+
+### The system tier is several messages until the wire
+
+`run_agent_turn` assembles the system tier as **separate messages**: the spec's system
+prompt, then the [skill catalog](./skills.mdx), then the guides for the groups the turn
+starts with. That split is deliberate — the
+[interpretability recorder](./interpretability.mdx) tells the blocks apart by position
+and content marker (`CATALOG_MARKER`) to attribute each one's per-turn token cost, and
+one glued string would make that impossible. The forced-tool nudge adds a *fourth*,
+mid-conversation.
+
+Many models' Jinja chat templates reject both shapes:
+
+```
+Error: Jinja Exception: System message must be at the beginning.
+```
+
+That is a **500 from the engine**, not a worse answer — the turn is lost outright. So
+the split survives right up to the wire and `providers.normalize_system_messages`
+flattens it inside `chat`/`chat_stream`, the one chokepoint every dialect and every
+call site passes through:
+
+- **leading** system messages are joined with a blank line, order preserved;
+- a **later** one becomes a `user` message, because its position is the point — a
+  nudge merged into the preamble would arrive before the failure it answers.
+
+It runs on every dialect, not just the strict ones: the flattened form is semantically
+identical, and branching would let a template's strictness decide whether the nudge was
+delivered at all. Because the recorder captures in the orchestrator, *before* the
+provider call, it still sees the unflattened blocks.
 
 The tool-calling loop itself is factored into a reusable
 **`run_agent_loop(conn, messages, tools, …, emit) → str`** (`orchestrator.py`):

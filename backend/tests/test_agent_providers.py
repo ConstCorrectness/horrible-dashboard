@@ -15,6 +15,87 @@ def _client(handler: Any) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
 
 
+# --- system-message flattening ---------------------------------------------------
+
+
+def test_leading_system_messages_are_merged_into_one() -> None:
+    """Many chat templates raise `System message must be at the beginning.` on the
+    second one — a 500 from the engine, so the turn is lost rather than degraded."""
+    out = P.normalize_system_messages(
+        [
+            {"role": "system", "content": "You are the orchestrator"},
+            {"role": "system", "content": "## Available skills"},
+            {"role": "system", "content": "github guide"},
+            {"role": "user", "content": "hi"},
+        ]
+    )
+    assert [m["role"] for m in out] == ["system", "user"]
+    assert out[0]["content"] == (
+        "You are the orchestrator\n\n## Available skills\n\ngithub guide"
+    )
+
+
+def test_mid_conversation_system_becomes_a_user_message() -> None:
+    """The forced-tool nudge answers the assistant turn before it, so it must keep
+    its position — merging it into the preamble would send it before the failure."""
+    out = P.normalize_system_messages(
+        [
+            {"role": "system", "content": "prompt"},
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "I'll open the pane."},
+            {"role": "system", "content": "Emit the tool call."},
+        ]
+    )
+    assert [m["role"] for m in out] == ["system", "user", "assistant", "user"]
+    assert out[-1]["content"] == "Emit the tool call."
+
+
+def test_flattening_is_a_no_op_on_an_already_valid_turn() -> None:
+    messages = [
+        {"role": "system", "content": "prompt"},
+        {"role": "user", "content": "hi"},
+    ]
+    assert P.normalize_system_messages(messages) == messages
+
+
+def test_a_turn_with_no_system_message_gains_none() -> None:
+    """An empty system message must not become an empty leading block either."""
+    assert P.normalize_system_messages([{"role": "user", "content": "hi"}]) == [
+        {"role": "user", "content": "hi"}
+    ]
+    assert P.normalize_system_messages(
+        [{"role": "system", "content": ""}, {"role": "user", "content": "hi"}]
+    ) == [{"role": "user", "content": "hi"}]
+
+
+def test_chat_sends_one_system_message_on_the_wire() -> None:
+    """The seam is what the fix rests on: every dialect goes through `chat`, so no
+    call site can reintroduce the shape the template rejects."""
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["messages"] = json.loads(request.content)["messages"]
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    async def go() -> None:
+        async with _client(handler) as c:
+            await P.chat(
+                c,
+                P.provider_for("lmstudio"),
+                "http://l",
+                "qwen",
+                [
+                    {"role": "system", "content": "a"},
+                    {"role": "system", "content": "b"},
+                    {"role": "user", "content": "hi"},
+                ],
+                [],
+            )
+
+    asyncio.run(go())
+    assert [m["role"] for m in seen["messages"]] == ["system", "user"]
+
+
 # --- dialect: chat normalization ------------------------------------------------
 
 

@@ -169,7 +169,21 @@ load.
 ## Adding a surface
 
 1. Call `openContextMenu(event, target)` from `onContextMenu`, and
-   `preventDefault()` only when it returns `true`.
+   `preventDefault()` **and `stopPropagation()`** only when it returns `true`.
+
+   :::warning A nested surface must stop propagation
+   `preventDefault()` suppresses the *browser's* menu; it does nothing about the
+   event continuing up the tree. Where a surface sits inside another one that also
+   has a menu — a taskbar window button inside the taskbar, a file row inside the
+   tree — the ancestor's handler runs next and calls `openContextMenu` again, and
+   because the store keeps a single `open` menu the ancestor's simply **replaces**
+   the one just opened.
+
+   The failure is quiet and looks like a missing feature rather than a bug: for a
+   while a right-click on a taskbar window button showed the taskbar's own menu
+   (Position / Auto-hide / Reset), so *Close* appeared not to exist even though
+   `windowButtonMenu` had always offered it.
+   :::
 2. Retarget any selection first if the click landed outside it — acting on a row
    the user cannot see highlighted is how *Delete* hits the wrong thing.
 3. Declare a provider in the owning module's manifest with `order: 0`.

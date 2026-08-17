@@ -8,7 +8,8 @@
  *
  * See docs/architecture/desktop-shell.mdx.
  */
-import { openContextMenu, useSetting } from '@horrible/core';
+import { useSyncExternalStore } from 'react';
+import { layoutStore, openContextMenu, useSetting, zonesForMode } from '@horrible/core';
 
 import { Clock } from './taskbar/Clock';
 import { DesktopSwitcher } from './taskbar/DesktopSwitcher';
@@ -47,17 +48,18 @@ export const ZONES_VERSION = 2;
 const ZONE_SINCE: Record<string, number> = { mx: 2 };
 
 /**
- * `desktops` is deliberately **not** in the default zones.
+ * `desktops` is deliberately **not** in the default zones — but it is inserted
+ * automatically on a floating desktop (see {@link Taskbar}).
  *
- * The pips and the top workspace strip rendered the same list and ran the same
- * verb (`registry.switchWorkspace`), so the shell shipped two always-visible
- * switchers for one axis and neither could be trusted as *the* one. The strip
- * won: it is the only one that can also name, create, reset and delete a
- * workspace, and splitting "switch" from "manage" across two edges of the screen
- * is what made the pair feel redundant rather than complementary.
+ * The pips and the top workspace strip render the same list and run the same verb
+ * (`registry.switchWorkspace`), so having both always visible meant two switchers
+ * for one axis and neither could be trusted as *the* one. On a **tiling** desktop
+ * the strip is still it.
  *
- * The zone stays registered in {@link ZONES}, so a stored config that names it
- * still renders it — this changes the default, it does not remove the feature.
+ * A floating desktop hides the strip — a desktop does not have a tab bar — so there
+ * the pips are the only switcher and are added for you. Management (rename, create,
+ * reset, delete) moved to the Start menu, which is what made hiding the strip
+ * possible at all: it used to be the only surface those verbs had.
  */
 export const DEFAULT_TASKBAR: TaskbarConfig = {
   position: 'bottom',
@@ -88,7 +90,20 @@ export const ZONES: Record<
 };
 
 export function Taskbar() {
-  const config = useTaskbarConfig();
+  const stored = useTaskbarConfig();
+  const { frame } = useSyncExternalStore(layoutStore.subscribe, layoutStore.getSnapshot);
+  /**
+   * On a floating desktop the top strip hides itself, so the pips become the only
+   * way to switch — they are inserted here rather than written into the stored
+   * config, because the mode is per **workspace**: persisting the zone would leave
+   * a second switcher on every tiling desktop, which is the redundancy that got the
+   * pips turned off by default in the first place.
+   *
+   * Respects an explicit choice: if the user has already put `desktops` in their
+   * zones, nothing is inserted and their ordering stands.
+   */
+  const zones = zonesForMode(stored.zones, frame.mode);
+  const config = zones === stored.zones ? stored : { ...stored, zones };
   return (
     <footer
       className={`os-taskbar os-taskbar--${config.position}${config.autoHide ? ' is-autohide' : ''}`}

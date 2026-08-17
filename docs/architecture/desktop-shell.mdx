@@ -65,6 +65,43 @@ Windows exist in **both** modes. A floating window on a tiling desktop is delibe
 it is i3's floating layer, the thing you reach for when a pane should not participate
 in the tiling.
 
+### The paradigm belongs to the workspace
+
+You choose it when you **make** a desktop — Start ▸ *New tiled desktop* / *New
+floating desktop*, or *Save this arrangement as a desktop* to keep what is on screen
+— and you switch paradigms by switching desktops. `createNamedWorkspace(name, {mode,
+fromCurrent})` is the one entry point; the agent tool and the commands share it.
+
+This replaced a one-click tray toggle, which invited the one operation the shell
+cannot do well (see below): every flip degraded the arrangement a little, so having
+both paradigms meant repeatedly paying for a round trip instead of just keeping two
+desktops. The tray's ▦/❐ is now an **indicator** that opens a menu; converting in
+place is still there, listed last and labelled with what it costs.
+
+Because the mode is per workspace, the shell adapts to it:
+
+| | tiling desktop | floating desktop |
+| --- | --- | --- |
+| Top workspace strip | shown — it is the switcher | **hidden** (a desktop has no tab bar) |
+| Taskbar `desktops` pips | off (would be a second switcher) | **inserted** by `zonesForMode` |
+| Workspace management | strip's right-click menu, and the Start menu | Start menu |
+
+`zonesForMode` derives the zone list per render rather than writing the pips into the
+stored config: the mode belongs to the workspace, so persisting the zone would leave a
+switcher behind on every tiling desktop visited later. An explicit choice still wins —
+a user who already placed the pips keeps their ordering.
+
+Hiding the strip needed management moved first: it was the only surface that could
+rename, create, reset and delete a workspace, which is exactly why the pips were off by
+default. That management now lives in the Start menu's **Desktops** group.
+
+:::warning The strip is also the titlebar
+Under `chrome.workspaceTabs` the strip **is** the undecorated native window's titlebar
+— it carries `data-tauri-drag-region` and the min/max/close cluster. So a floating
+desktop cannot simply not render it: it renders a slim bare drag bar
+(`frame-tabs--bare`) instead, or the window becomes unmovable and unclosable.
+:::
+
 ### Flipping a desktop
 
 `setDesktopMode` runs one of two pure conversions in `layout/windows.ts`:
@@ -272,6 +309,37 @@ nothing at all: the taskbar listed nine panes and could put none of them away.
 A dock tool deliberately gets **no flag of its own**: its dock's `visible` already is
 the hidden state, and a per-pane flag beside it would be a second mechanism for one
 visible thing.
+
+#### A pane with nowhere to be drawn is minimized
+
+On a floating desktop the centre tree is retained but never rendered, so a pane
+sitting in it cannot be on screen whatever its area says. `taskbarEntries` reports
+that as **`minimized`**, and `activateTaskbarEntry` restores it by making it a
+**window**.
+
+Without those two, "Dock back into the frame" on a floating desktop was a trap: the
+window vanished, the taskbar button stayed, clicking it did nothing, and flipping the
+whole desktop to tiling was the only way to see the pane again. The pane was never
+closed — it simply had no surface, which is exactly what minimized means everywhere
+else in the shell.
+
+#### Attention: a pane that finished while you were elsewhere
+
+Minimizing is non-destructive, and panes keep working while put away — a deep-research
+run, a training job, an ingest, a compile. `requestPaneAttention(instanceId)` sets
+`PaneState.attention`, and the pane's taskbar button pulses until the user looks at it.
+
+- **Cleared by `activateTaskbarEntry`, nowhere else.** Looking at the pane is what
+  acknowledges it; clearing on a timer or on any focus change would let a button keep
+  pulsing after the user had plainly dealt with it.
+- **Refused for the focused pane.** Flashing a button for the thing on screen is noise,
+  so `requestPaneAttention` returns `false` and changes nothing.
+- **A boolean, not a count.** The button is a flash, not an inbox; "three things
+  happened" is a story the pane tells once you are in it.
+- **Absent rather than `false`** on the pane, so a serialized layout never carries a
+  stale "was flashing once" flag for every pane ever opened.
+- The accessible name becomes `"<title> — finished"`, because a pulsing border conveys
+  nothing to a screen reader; reduced-motion keeps the ring and drops the animation.
 
 A centre pane's flag lives on the pane and it **stays in its area, at its index**.
 That is the whole design: the split geometry, the tab order and the area itself all

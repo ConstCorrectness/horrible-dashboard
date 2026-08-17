@@ -11,6 +11,7 @@
  * over a game socket is a profile readable only while playing, which is how the
  * Plaza ended up rendering the same invented bio for every player.
  */
+import { apiUrl } from '../../origin';
 import { apiDelete, apiGet, apiPost } from '../../api';
 
 /** One pinned showcase on a profile. Open-ended by design — a showcase is a
@@ -146,7 +147,7 @@ export async function uploadProfileImage(
   file: File,
   kind: 'avatar' | 'background',
 ): Promise<UploadResult> {
-  const res = await fetch(`/api/games/profile/media?kind=${kind}`, {
+  const res = await fetch(apiUrl(`/api/games/profile/media?kind=${kind}`), {
     method: 'POST',
     headers: { 'Content-Type': file.type },
     body: file,

@@ -199,6 +199,54 @@ def _parse_tool_calls(raw_calls: list[dict[str, Any]]) -> list[ToolCall]:
     ]
 
 
+def normalize_system_messages(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Reduce a turn to **one leading system message and no others**.
+
+    The orchestrator assembles the system tier as several separate messages on
+    purpose — the spec's prompt, the skill catalog, the tool-group guides — because
+    the interpretability recorder tells them apart by position and content marker,
+    and a single glued string would make that attribution impossible. It also appends
+    a system nudge mid-conversation when a weak model narrates a tool call instead of
+    emitting one.
+
+    Many models' Jinja chat templates reject both shapes outright::
+
+        raise_exception('System message must be at the beginning.')
+
+    which surfaces as a **500 from the engine, not a bad answer** — the whole turn is
+    lost. So the split survives right up to the wire and is flattened here, at the one
+    chokepoint every dialect passes through:
+
+    - leading system messages are **joined** (blank line between, order preserved);
+    - a *later* one becomes a ``user`` message, since its position is the point (a
+      nudge merged into the preamble would arrive before the failure it answers).
+
+    Ollama and litellm tolerate the original shape, but this runs on every dialect
+    anyway: the flattened form is semantically identical, and a per-dialect branch
+    would mean the strictness of a template decided whether the nudge was delivered.
+    """
+    leading: list[str] = []
+    rest: list[dict[str, Any]] = []
+    for msg in messages:
+        if msg.get("role") != "system":
+            rest.append(msg)
+            continue
+        content = msg.get("content") or ""
+        # `not rest` is what makes this "leading": once any non-system message has
+        # been seen, a system message is mid-conversation and keeps its place.
+        if not rest:
+            if content:
+                leading.append(content)
+        else:
+            rest.append({**msg, "role": "user"})
+    merged: list[dict[str, Any]] = []
+    if leading:
+        merged.append({"role": "system", "content": "\n\n".join(leading)})
+    return merged + rest
+
+
 async def list_models(
     client: httpx.AsyncClient, info: ProviderInfo, endpoint: str
 ) -> list[str]:
@@ -233,6 +281,7 @@ async def chat(
     tools: list[dict[str, Any]],
 ) -> ChatResult:
     """One non-streaming tool-calling round, normalized to a `ChatResult`."""
+    messages = normalize_system_messages(messages)
     if info.dialect == "litellm":
         from backend.modules.database.secrets_store import get_secret_or_none
 
@@ -310,6 +359,7 @@ async def chat_stream(
     structured tool calls instead of narrating them). ``tool_choice`` (``"required"``/
     ``"auto"``/a specific function) forces a call on the OpenAI dialect; Ollama has no
     reliable equivalent, so it's ignored there."""
+    messages = normalize_system_messages(messages)
     if info.dialect == "ollama":
         return await _ollama_chat_stream(
             client,

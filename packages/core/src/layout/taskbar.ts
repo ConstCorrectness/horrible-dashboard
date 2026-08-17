@@ -33,6 +33,8 @@ export interface TaskbarEntry {
   title: string;
   icon: string;
   state: TaskbarState;
+  /** The pane's background work finished while it was out of sight. */
+  attention: boolean;
   /** Set when the pane lives in a window — the taskbar's minimize target. */
   windowId?: string;
   /** Where the pane actually is, for callers that need to route the click. */
@@ -64,6 +66,7 @@ export function taskbarEntries(frame: FrameState): TaskbarEntry[] {
           title: paneTitle(d.title, pane.params),
           icon: d.icon ?? d.title[0],
           state: stateOf(frame, located),
+          attention: pane.attention ?? false,
           ...(location.kind === 'window' ? { windowId: location.windowId } : {}),
           location,
         },
@@ -92,6 +95,12 @@ function stateOf(frame: FrameState, located: ReturnType<typeof listPanes>[number
   // `activeTab` (nothing else in the area was live to hand it to), and reporting
   // that as "focused" would offer to minimize something already minimized.
   if (pane.minimized) return 'minimized';
+  // On a floating desktop the centre tree is retained but never rendered, so a
+  // pane living there cannot be on screen no matter what its area says. It is
+  // running and not displayed — which is precisely "minimized", and reporting it
+  // as `hidden`/`open` is what left "Dock back into the frame" looking like the
+  // pane had been destroyed: the button offered to focus something unreachable.
+  if (frame.mode === 'floating') return 'minimized';
   // Centre area: showing only if it is its area's active tab.
   //
   // "Focused" here is the active tab of the **focused area**, not
@@ -124,4 +133,29 @@ function compareInstanceIds(a: string, b: string): number {
   const nb = Number(b.split('#').pop());
   if (Number.isFinite(na) && Number.isFinite(nb) && na !== nb) return na - nb;
   return a.localeCompare(b);
+}
+
+/**
+ * The taskbar zones to render for a desktop's paradigm.
+ *
+ * A **floating** desktop hides the top workspace strip — a desktop does not have a
+ * tab bar — so the pips become the only switcher and are inserted for you. A tiling
+ * desktop keeps the strip, and a second always-visible switcher beside it is the
+ * redundancy that got the pips turned off by default in the first place.
+ *
+ * Derived per render rather than written into the stored config, because the mode
+ * belongs to the **workspace**: persisting the zone would leave a switcher behind on
+ * every tiling desktop the user later visited.
+ *
+ * They land immediately after the start button, where a desktop switcher sits in
+ * every OS that has one, and before `windows` — the open-pane list is the long
+ * growing thing and should not be shoved sideways by a fixed-width control.
+ */
+export function zonesForMode(zones: string[], mode: FrameState['mode']): string[] {
+  // An explicit choice stands: a user who already placed the pips has an ordering,
+  // and inserting a second copy would overrule a decision they made.
+  if (mode !== 'floating' || zones.includes('desktops')) return zones;
+  const at = zones.indexOf('start');
+  if (at < 0) return ['desktops', ...zones];
+  return [...zones.slice(0, at + 1), 'desktops', ...zones.slice(at + 1)];
 }

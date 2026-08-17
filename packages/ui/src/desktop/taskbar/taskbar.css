@@ -125,6 +125,42 @@
   opacity: 0.65;
 }
 
+/* A pane whose background work finished while it was out of sight — the research
+   run came back, the training job stopped, the ingest completed. It pulses until
+   the user looks at it, which is the whole point of being able to minimize
+   something that keeps working.
+
+   Deliberately a slow pulse rather than a hard blink: this fires on a taskbar that
+   may be on screen for hours, and the aggressive flash every OS eventually
+   abandoned is the reason they abandoned it. `is-focused` still wins on the border,
+   so acknowledging it visibly settles. */
+@keyframes os-taskbar-attention {
+  0%,
+  100% {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 0 transparent;
+  }
+  50% {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+}
+
+.os-taskbar-btn.wants-attention {
+  color: var(--text-strong);
+  border-color: var(--accent);
+  animation: os-taskbar-attention 1.6s ease-in-out infinite;
+}
+
+/* Reduced motion still needs the signal, just not the movement: the border and a
+   steady ring carry it without anything animating. */
+@media (prefers-reduced-motion: reduce) {
+  .os-taskbar-btn.wants-attention {
+    animation: none;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+}
+
 .os-taskbar-label {
   overflow: hidden;
   text-overflow: ellipsis;

@@ -75,7 +75,7 @@ export {
 } from './layout/snap';
 export { explodeToWindows, NOMINAL_VIEWPORT, tileWindows } from './layout/windows';
 export { hideRailView, moveViewToDock, railEntries, RAIL_SECTIONS } from './layout/rail';
-export { taskbarEntries } from './layout/taskbar';
+export { taskbarEntries, zonesForMode } from './layout/taskbar';
 export type { TaskbarEntry, TaskbarState } from './layout/taskbar';
 export type { RailEntry, RailSide, RailState } from './layout/rail';
 export { getRailPrefs, railPrefsStore, resetRailPrefs, setViewHidden } from './layout/rail-prefs';
@@ -157,6 +157,7 @@ export {
   focusWindow,
   focusWindowDirection,
   minimizePane,
+  requestPaneAttention,
   moveWindowToDesktop,
   movePaneTo,
   setBackdrop,

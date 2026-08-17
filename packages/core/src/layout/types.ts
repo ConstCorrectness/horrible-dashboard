@@ -65,6 +65,20 @@ export interface PaneState {
    * verb that can rebuild a split (see `move_pane` in the layout tools).
    */
   minimized?: boolean;
+  /**
+   * The pane wants looking at: a long job it was running has finished.
+   *
+   * The counterpart to minimizing being non-destructive. Once a pane can be put
+   * away while it keeps working — a deep-research run, a training job, a
+   * compile, an ingest — there has to be a way for it to say it is done, or
+   * "minimize it and get on with something else" means polling it by hand.
+   *
+   * Set by the pane through `requestPaneAttention`, cleared the moment the user
+   * actually looks at it. Deliberately a boolean and not a count: the taskbar
+   * button is a flash, not an inbox, and "3 things happened" is a story the pane
+   * itself should tell once you are in it.
+   */
+  attention?: boolean;
 }
 
 /**

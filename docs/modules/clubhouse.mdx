@@ -304,7 +304,7 @@ made the rooms list look like Clubhouse was empty.
 ## Voice agent
 
 The room view can put an **LLM agent in the room**: it listens, decides when it
-is its turn, and speaks. Three backend routes back it, all on the agent module:
+is its turn, and speaks. The speech pipeline is two routes on the agent module:
 
 - **`POST /api/agent/stt`** — an uploaded WebM/Opus chunk in, transcript out.
   Local Whisper (`whisper-tiny.en`), decoded via `ffmpeg` as a plain subprocess
@@ -312,15 +312,155 @@ is its turn, and speaks. Three backend routes back it, all on the agent module:
   Windows). Whisper answers silence with its priors rather than with nothing, so
   a small set of known hallucinations (`"you"`, `"thank you"`, …) is filtered to
   empty — otherwise the agent answers a room that said nothing.
-- **`POST /api/agent/generate`** — one complete, non-streamed generation with
-  `system` / `temperature` / `max_tokens`. Separate from streaming `/chat`
-  because the answer has to be finished before TTS can be handed anything.
 - **`GET /api/agent/tts?text=`** — MP3 audio, via Edge TTS.
 
-Turn-taking is client-side in
+Everything between those two — whether to answer, what the agent knows, what it
+remembers — is the **voice session**, and it lives on the server.
+
+### The conversation is a server-side session
+
+`backend/modules/clubhouse/voice.py` holds one session **per channel**, process-global
+(the [karaoke](./karaoke.mdx) precedent): a pane reload, a second pane, or a workspace
+switch rejoins the same conversation instead of resetting it. `voice_runtime.py` is the
+impure half — retrieval, generation, room commands — so the policy in `voice.py` is
+testable without a model, a network, or a connected account.
+
+This replaced a one-shot `POST /api/agent/generate` issued from the pane with the raw
+utterance as the entire prompt. That shape had three faults:
+
+- **No memory.** Every utterance was an independent completion, so the agent could not
+  follow a conversation or answer "what did you just say?".
+- **No room knowledge.** It did not know the topic, who was on stage, who was
+  moderating, or its own name — so "who's here?" was answered by invention.
+- **No way to look anything up.** `/agent search` built a prompt asking the model to
+  "perform a simulated web search", which is a hallucination with extra steps.
+
+### One generation per turn, deliberately
+
+The model never emits a tool call and never gets a second round. A live room is a
+realtime medium, and a tool-calling loop against a local model spends seconds per
+round while people talk over the silence. Instead the **server** decides,
+deterministically, what a turn needs before generating:
+
+| Need | How it is met | Cost |
+| --- | --- | --- |
+| Who is here, the topic, who is talking | `render_room_brief` — in the system prompt every turn | none |
+| Who these people are | bios fetched for **speakers only**, cached per session | one profile fetch each |
+| A fact from the web or a library | `gather_context` — real `quick_search` + library RAG, run **before** the generation | one concurrent lookup |
+| Change the room (topic, chat, hands, invite) | an explicit `/agent` command, never a model decision | no generation at all |
+
+Moderation is command-only on purpose: `invite_speaker` acts on a real person, and a
+small model asked to pick one will eventually pick wrong. For the same reason
+`_resolve_member` refuses an **ambiguous** name rather than taking the first match, and
+resolves only against people actually in the room — a global user search for "dave"
+would happily return a stranger.
+
+### When it speaks
+
+`should_respond` is a pure function, and every refusal carries a **reason** that the
+pane renders. A silent agent and a broken one are otherwise indistinguishable, which is
+the single most common "it doesn't respond" report.
+
+- **`addressed`** (default) — only when a wake word or its own name is said. Safest in
+  a room of strangers.
+- **`conversational`** — replies more freely, with a cooldown so two people talking
+  cannot produce two overlapping answers.
+- **`always`** — the old behaviour, now opt-in.
+
+Two rules are load-bearing. Wake words match on **word boundaries**, so "bot" does not
+fire inside "robot". And the agent never answers **its own voice**: its TTS is published
+into the room and comes back through the same transcription path, so `is_own_speech`
+compares a normalized word set with a similarity floor — an exact-match check would let
+every echo through, and the result sounds exactly like a broken agent talking to itself.
+Utterances shorter than three words are never treated as an echo, or one person saying
+"yes" would be silenced.
+
+Turn-taking (when a chunk is cut) stays client-side in
 [useClubhouseVoice.ts](file:///C:/Users/Horrible/Code/horrible-dashboard/packages/core/src/modules/clubhouse/useClubhouseVoice.ts):
-speech accumulates and a configurable silence delay triggers the turn, so the
-agent waits for a pause instead of interrupting.
+a VAD watches the mixed stream and a silence delay closes the chunk, so the agent waits
+for a pause instead of interrupting.
+
+### Utterances queue; they are not dropped
+
+The pane holds a serialized queue. The old code returned early whenever the agent was
+already speaking, so anything said while it talked or thought vanished — including the
+answer to a question it had just been asked. The backlog is capped at six, because if
+the model is slower than the room the oldest utterances are the least worth answering.
+
+Utterances are offered to the backend even when the agent is disabled or staying quiet:
+it wants to hear a conversation it is staying out of, or "what were we just talking
+about?" has no answer.
+
+### Replies are cleaned before they are spoken
+
+`clean_reply` strips speaker prefixes (`Agent:`) and stage directions (`*laughs*`) —
+small models emit both regardless of the prompt, and TTS reads them aloud — flattens
+markdown, and truncates on a **sentence boundary**, since a reply cut mid-word sounds
+like the connection dropped. The speech rules are also kept **separate from the
+persona** in the system prompt: the user edits the persona, and must not be able to
+delete the rules that keep a reply speakable.
+
+### Routes
+
+| Route | Purpose |
+| --- | --- |
+| `POST /api/clubhouse/voice/turn` | One utterance in, one decision out (`spoke` / `reason` / `reply` / `notice`) |
+| `POST /api/clubhouse/voice/config` | Replace a room's agent settings |
+| `GET /api/clubhouse/voice/config` | Read them back |
+| `GET /api/clubhouse/voice/state` | What the agent currently remembers (rendered in the Agent tab) |
+| `POST /api/clubhouse/voice/reset` | Forget the conversation, keep the settings |
+
+A turn carries a **room snapshot** pushed by the pane rather than polled by the server:
+the pane holds the PubNub feed and the Agora volume indicator, so it is seconds fresher
+about who is muted, has a hand up, or is speaking right now.
+
+A provider failure is **reported, never raised** — the route answers 200 with
+`reason: "model error"` and the provider's own message ("Failed to load model X"). A 500
+here is indistinguishable in the pane from an agent that chose not to answer, and the
+model not being loaded is the most common cause of a room agent that has gone quiet.
+
+The agent also takes a **per-room model override** (`model`, blank = the configured
+agent model). A live room is a latency budget, not a reasoning budget: the orchestrator
+may be on a 27B that takes twenty seconds a turn, which is unusable when people are
+talking.
+
+### The reply starts speaking before it has finished synthesizing
+
+`playAgentAudio` used to `await res.arrayBuffer()` for the whole utterance and then
+decode it, so nothing played until every sentence had been synthesized **and**
+transferred. That cost is paid in full no matter how fast the synthesizer is.
+
+The reply is now split by
+[speechChunks.ts](file:///C:/Users/Horrible/Code/horrible-dashboard/packages/core/src/modules/clubhouse/speechChunks.ts)
+and each chunk is fetched **one ahead** of the one playing, so the listener waits only
+for the first and every later synthesis hides behind the audio already running. The
+first chunk is deliberately the smallest — it is the only latency anyone experiences.
+
+Measured through `GET /api/agent/tts` on this machine, median of 5 warm runs:
+
+| reply | words | chunks | before (whole) | after (first chunk) |
+| --- | --- | --- | --- | --- |
+| short | 4 | 1 | 382 ms | 449 ms |
+| medium | 21 | 1 | 491 ms | 490 ms |
+| long | 69 | 2 | 785 ms | **478 ms** (1.6×) |
+
+Short and medium replies are a single chunk, so they are unchanged by construction —
+splitting a reply that already fits would add a round trip and save nothing. The win is
+on long replies, and it grows with length.
+
+:::note There is a ~435 ms floor, and only a local model removes it
+Latency against chunk size is flat below ~120 characters — 40 chars costs 437 ms and
+60 chars costs 438 ms — then grows. That floor is the round trip to Microsoft's
+service, not synthesis, so **no amount of chunking gets under it**. It is the one real
+argument for swapping in a local model (Kokoro-82M: Apache, ONNX, non-autoregressive,
+and it fits the ONNX setup CLIP already uses); privacy is the other, since utterances
+currently leave the machine. Chunking was the model-independent win and it is done —
+measure again before assuming a swap is needed for anything else.
+:::
+
+Barge-in now stops at a **chunk boundary** and drops the queue, rather than killing one
+monolithic buffer. The channel is unmuted once around the whole utterance, not per
+chunk: toggling between sentences would clip the start of each one.
 
 ### Why Edge TTS and not local XTTS
 
@@ -342,6 +482,22 @@ Without the extra, `/api/agent/stt` and `/api/agent/tts` answer **503** with an
 install hint rather than 500, and the rest of the Clubhouse module is unaffected.
 Decoding also needs `ffmpeg` on `PATH` (the same optional binary karaoke's pitch
 shift uses).
+
+The pane now **surfaces** that 503 as a toast and a line in the Agent tab. It used
+to call `res.json()` on the error body, read `undefined` off it and return silently,
+which made a missing install indistinguishable from a quiet room — the agent simply
+never heard anything and never said why.
+
+:::note Desktop
+The TTS fetch used a bare `/api/agent/tts` path while every other call in the module
+went through `apiUrl`. Under Tauri the frontend is served from its own origin and the
+backend lives on a port the shell reports at boot, so a relative `/api` URL resolves
+against the webview and never reaches the backend — the agent was mute on the desktop
+build. Relatedly, an `AudioContext` created without a user gesture starts `suspended`,
+and a suspended context is silent in the quietest possible way: the graph is wired,
+`MediaRecorder` produces valid-but-empty WebM, and the VAD analyser reads zero forever.
+The hook now resumes it explicitly after joining.
+:::
 
 ---
 

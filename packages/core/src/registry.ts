@@ -156,7 +156,15 @@ export interface LayoutController {
   focusPane(instanceId: string): boolean;
   /** List all active pane instances in the active workspace. */
   listOpenPanes(): OpenPaneInfo[];
-  createWorkspace(name: string): Promise<WorkspaceInfo>;
+  /**
+   * Create a workspace. `mode` is the desktop's paradigm, which belongs to the
+   * workspace rather than to a global switch; `fromCurrent` seeds it with the
+   * arrangement on screen instead of an empty frame.
+   */
+  createWorkspace(
+    name: string,
+    options?: { mode?: 'tiling' | 'floating'; fromCurrent?: boolean },
+  ): Promise<WorkspaceInfo>;
   listWorkspaces(): Promise<{ active: string | null; workspaces: WorkspaceInfo[] }>;
   /** Re-seed the active workflow layout from its preset (discarding tweaks). */
   resetLayout(): void;

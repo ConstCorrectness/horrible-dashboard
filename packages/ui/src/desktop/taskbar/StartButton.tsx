@@ -17,10 +17,12 @@
  *   settings, and this menu previously offered it only as one row among sixty,
  *   sorted under S.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
+  layoutStore,
   openContextMenu,
   registry,
+  useWorkspaces,
   type PaneRole,
   type PanelDecl,
   type WidgetDecl,
@@ -137,6 +139,7 @@ function StartMenu({ onClose }: { onClose: () => void }) {
               );
             })}
         {!matches.length && <p className="os-start-empty">Nothing matches “{query}”.</p>}
+        {!searching && <DesktopsGroup onClose={onClose} />}
       </div>
       {/* The footer. Settings is what people come to this corner for, and it was
           previously reachable only as one row of sixty, filed under S. */}
@@ -176,6 +179,124 @@ function StartMenu({ onClose }: { onClose: () => void }) {
           <span aria-hidden="true">◐</span> Theme
         </button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Desktops: switch between them, and manage them.
+ *
+ * This is the **home for workspace management** now that the top strip hides itself
+ * on a floating desktop. The strip was the only surface that could rename, create,
+ * reset and delete a workspace, so hiding it without moving management would have
+ * left those verbs unreachable — the constraint that kept the taskbar's pips off by
+ * default in the first place.
+ *
+ * The pips in the taskbar switch; this switches *and* manages, which is the split
+ * that made two always-visible switchers feel redundant before. Only one of them is
+ * always visible now.
+ */
+function DesktopsGroup({ onClose }: { onClose: () => void }) {
+  const { workspaces, activeId } = useWorkspaces();
+  const { frame } = useSyncExternalStore(layoutStore.subscribe, layoutStore.getSnapshot);
+  const presetIds = new Set(registry.framePresets.map((p) => p.id));
+  const run = (command: string) => {
+    void registry.runCommand(command);
+    onClose();
+  };
+  return (
+    <div className="os-start-group">
+      <h3 className="os-start-group-head">Desktops</h3>
+      {workspaces.map((w) => (
+        <button
+          key={w.id}
+          type="button"
+          role="menuitem"
+          className={`os-start-item${w.id === activeId ? ' is-active' : ''}`}
+          aria-current={w.id === activeId}
+          onClick={() => {
+            registry.switchWorkspace(w.id);
+            onClose();
+          }}
+        >
+          <span className="os-start-icon" aria-hidden="true">
+            {w.id === activeId ? (frame.mode === 'tiling' ? '▦' : '❐') : '·'}
+          </span>
+          <span className="os-start-title">{w.name}</span>
+        </button>
+      ))}
+      <button
+        type="button"
+        role="menuitem"
+        className="os-start-item"
+        onClick={() => run('workspace.new')}
+      >
+        <span className="os-start-icon" aria-hidden="true">
+          ▦
+        </span>
+        <span className="os-start-title">New tiled desktop</span>
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        className="os-start-item"
+        onClick={() => run('workspace.newFloating')}
+      >
+        <span className="os-start-icon" aria-hidden="true">
+          ❐
+        </span>
+        <span className="os-start-title">New floating desktop</span>
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        className="os-start-item"
+        onClick={() => run('workspace.saveAs')}
+      >
+        <span className="os-start-icon" aria-hidden="true">
+          ⎘
+        </span>
+        <span className="os-start-title">Save this arrangement as a desktop</span>
+      </button>
+      <button
+        type="button"
+        role="menuitem"
+        className="os-start-item"
+        onClick={() => run('workspace.rename')}
+      >
+        <span className="os-start-icon" aria-hidden="true">
+          ✎
+        </span>
+        <span className="os-start-title">Rename this desktop</span>
+      </button>
+      {/* Reset for a preset, delete for a custom one — the same either/or the tab
+          strip's menu makes, and for the same reason: a preset's tab comes straight
+          back from its manifest, so "delete" would be a lie. */}
+      {activeId && presetIds.has(activeId) ? (
+        <button
+          type="button"
+          role="menuitem"
+          className="os-start-item"
+          onClick={() => run('layout.reset')}
+        >
+          <span className="os-start-icon" aria-hidden="true">
+            ↺
+          </span>
+          <span className="os-start-title">Reset this desktop to its preset</span>
+        </button>
+      ) : (
+        <button
+          type="button"
+          role="menuitem"
+          className="os-start-item is-danger"
+          onClick={() => run('workspace.delete')}
+        >
+          <span className="os-start-icon" aria-hidden="true">
+            ✕
+          </span>
+          <span className="os-start-title">Delete this desktop</span>
+        </button>
+      )}
     </div>
   );
 }

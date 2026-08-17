@@ -11,6 +11,34 @@ import { dialogs } from '../../dialogs';
 import { toastsStore } from '../../toasts';
 import { registry, type ModuleManifest } from '../../registry';
 
+/**
+ * Create a workspace, asking only for the name.
+ *
+ * Shared by the three create commands so the prompt, the empty-controller guard and
+ * the toast cannot drift between them — the difference is only what the new desktop
+ * starts as.
+ */
+async function newWorkspace(options: {
+  mode?: 'tiling' | 'floating';
+  fromCurrent?: boolean;
+}): Promise<void> {
+  const controller = registry.layoutController;
+  if (!controller) {
+    toastsStore.add('warning', 'Open a workspace first', 'Switch to a workspace to add another.');
+    return;
+  }
+  const name = await dialogs.prompt({
+    title: options.fromCurrent ? 'Save arrangement as a new desktop' : 'New workspace',
+    placeholder: 'Workspace name',
+    defaultValue: 'Workspace',
+    confirmLabel: options.fromCurrent ? 'Save' : 'Create',
+  });
+  const trimmed = name?.trim();
+  if (!trimmed) return;
+  await controller.createWorkspace(trimmed, options);
+  toastsStore.add('success', 'Workspace created', `“${trimmed}” is ready.`);
+}
+
 export const layoutsModule: ModuleManifest = {
   id: 'layouts',
   title: 'Layouts',
@@ -192,27 +220,40 @@ export const layoutsModule: ModuleManifest = {
     },
     {
       id: 'workspace.new',
-      title: 'Workspace: New',
+      title: 'Workspace: New tiled desktop',
+      run: () => newWorkspace({ mode: 'tiling' }),
+    },
+    {
+      /**
+       * Floating and tiling are two commands rather than one command with a
+       * picker because the paradigm is now chosen **when the desktop is made**,
+       * not flipped afterwards — and there is no select dialog primitive, so a
+       * picker would mean building one to save a click.
+       */
+      id: 'workspace.newFloating',
+      title: 'Workspace: New floating desktop',
+      run: () => newWorkspace({ mode: 'floating' }),
+    },
+    {
+      id: 'workspace.saveAs',
+      title: 'Workspace: Save this arrangement as a new desktop',
+      run: () => newWorkspace({ fromCurrent: true }),
+    },
+    {
+      id: 'workspace.rename',
+      title: 'Workspace: Rename current',
       run: async () => {
         const controller = registry.layoutController;
-        if (!controller) {
-          toastsStore.add(
-            'warning',
-            'Open a workspace first',
-            'Switch to a workspace to add another.',
-          );
-          return;
-        }
+        if (!controller) return;
+        const { active, workspaces } = await controller.listWorkspaces();
+        if (!active) return;
+        const current = workspaces.find((w) => w.id === active);
         const name = await dialogs.prompt({
-          title: 'New workspace',
-          placeholder: 'Workspace name',
-          defaultValue: 'Workspace',
-          confirmLabel: 'Create',
+          title: 'Rename workspace',
+          defaultValue: current?.name ?? '',
+          confirmLabel: 'Rename',
         });
-        const trimmed = name?.trim();
-        if (!trimmed) return;
-        await controller.createWorkspace(trimmed);
-        toastsStore.add('success', 'Workspace created', `“${trimmed}” is ready.`);
+        if (name?.trim()) await controller.renameWorkspace(active, name.trim());
       },
     },
     {

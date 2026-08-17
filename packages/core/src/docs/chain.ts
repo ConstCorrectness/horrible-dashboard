@@ -20,6 +20,7 @@
  * POST. Consecutive backend sources are batched into a single request, so the
  * common case is one round trip and the worst case is two.
  */
+import { apiUrl } from '../origin';
 import { getSetting } from '../settings';
 
 export type DocSourceId = 'kernel' | 'lsp' | 'index' | 'web';
@@ -105,7 +106,7 @@ function runs(sources: DocSourceId[]): { backend: boolean; ids: DocSourceId[] }[
 }
 
 async function lookupBackend(req: DocLookupRequest, ids: DocSourceId[]): Promise<DocLookupResult> {
-  const res = await fetch('/api/docs/lookup', {
+  const res = await fetch(apiUrl('/api/docs/lookup'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
