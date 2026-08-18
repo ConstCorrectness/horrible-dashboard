@@ -34,6 +34,8 @@ import {
 import { PlazaCanvas } from './PlazaCanvas';
 import { GamesMui } from '../mui-theme';
 import { toastsStore } from '../../../toasts';
+import { mixer } from '../../audio/engine';
+import { inputConstraints } from '../../audio/store';
 
 const AVATARS = ['🙂', '😎', '🦸', '🧙', '🥷', '🤖', '👽', '🐱', '🦊', '🐼', '🐸', '🦄'];
 const QUICK_EMOTES = ['👋', '🎉', '😂', '❤️', '👍', '🤔'];
@@ -301,10 +303,11 @@ export function PlazaPanel() {
         micStreamRef.current.getTracks().forEach((track) => track.stop());
         micStreamRef.current = null;
       }
-      if (audioCtxRef.current) {
-        audioCtxRef.current.close();
-        audioCtxRef.current = null;
-      }
+      // Dropped, never closed: this is the mixer's shared context now, and
+      // closing it would silence every other sound in the app the moment
+      // somebody turned their microphone off in the Plaza.
+      audioCtxRef.current = null;
+      analyserRef.current = null;
       cancelAnimationFrame(animationRef.current);
       setSpeakingPlayers((prev) => {
         const next = { ...prev };
@@ -315,17 +318,14 @@ export function PlazaPanel() {
     } else {
       // Enable microphone
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        // Through the mixer so the microphone the user chose is the one used.
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: inputConstraints() });
         micStreamRef.current = stream;
         setMicActive(true);
 
-        // Safari only exposes the constructor under its vendor prefix, which the DOM
-        // lib doesn't declare — hence the widened window, not a cast to any.
-        const AudioContextClass =
-          window.AudioContext ??
-          (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-        if (!AudioContextClass) throw new Error('Web Audio is unavailable in this browser');
-        const audioCtx = new AudioContextClass();
+        // The mixer's shared context. This graph only drives a level meter — it
+        // plays nothing — so it takes the context without claiming a strip.
+        const audioCtx = mixer.getContext();
         audioCtxRef.current = audioCtx;
 
         const source = audioCtx.createMediaStreamSource(stream);

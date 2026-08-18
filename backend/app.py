@@ -76,6 +76,9 @@ from backend.modules.search.broadcast import push_crawl_events
 from backend.modules.search.crawl import queue_handlers as _crawl_queue_handlers  # noqa: F401 — registers the crawl task handler on import (see its docstring)
 from backend.modules.library import push_library_events
 from backend.modules.library import queue_handlers as _library_queue_handlers  # noqa: F401 — registers the ingest task handlers on import (see its docstring)
+from backend.modules.audio import register_agent_tools as register_audio_tools
+from backend.modules.audio import router as audio_router
+from backend.modules.audio import shutdown_voicemeeter
 from backend.modules.hardware import router as hardware_router
 from backend.modules.interpretability import router as interpretability_router
 from backend.modules.karaoke import register_agent_tools as register_karaoke_tools
@@ -197,6 +200,10 @@ async def lifespan(app: FastAPI):
         # mapped weights and a bound port. An orphan survives a reload and then
         # makes the next spawn fail on a port that looks free.
         llama_manager.stop()
+        # The Voicemeeter Remote API is a per-process login. An unbalanced one
+        # leaves the DLL holding a client slot for a process that is gone, and
+        # the next login returns -2 instead of connecting.
+        shutdown_voicemeeter()
         await stop_network()
 
 
@@ -244,6 +251,7 @@ app.include_router(search_router, prefix="/api")
 app.include_router(arxiv_router, prefix="/api")
 app.include_router(interpretability_router, prefix="/api")
 app.include_router(hardware_router, prefix="/api")
+app.include_router(audio_router, prefix="/api")
 app.include_router(llamacpp_router, prefix="/api")
 app.include_router(connectors_router, prefix="/api")
 app.include_router(google_connector_router, prefix="/api")
@@ -303,6 +311,11 @@ register_symdex_tools()
 # Register the karaoke agent tools (grouped under `karaoke`): the session lives on
 # the server, so these run the room with no karaoke pane open anywhere.
 register_karaoke_tools()
+
+# Register the `audio` agent tools. Grouped, and backend-side because the routing
+# is server state: "put the video through my microphone" works from the ask bar
+# with no mixer pane open anywhere.
+register_audio_tools()
 
 # Register the research module's backend agent tools (grouped under `research`):
 # page capture and PDF filing that work with no browser pane attached.

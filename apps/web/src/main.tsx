@@ -52,6 +52,7 @@ import {
   hassaultModule,
   recordsModule,
   browserModule,
+  audioModule,
   hardwareModule,
   storageModule,
   updatesModule,
@@ -153,6 +154,10 @@ async function boot(): Promise<void> {
     // Before the modules whose defaults it decides (llama.cpp's build and offload,
     // the tracer's cap, what the training surface recommends).
     registry.register(hardwareModule);
+    // Before every module that makes a sound: those register a strip on the
+    // mixer at import, and a strip declared before the mixer exists is a strip
+    // the routing matrix never shows.
+    registry.register(audioModule);
     // Beside hardware: both are readings of the machine rather than panes, and the
     // two questions ("what is this box" / "where do my files go") are asked together.
     registry.register(storageModule);

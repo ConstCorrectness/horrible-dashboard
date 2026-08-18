@@ -1,0 +1,237 @@
+/**
+ * Mixer styles.
+ *
+ * The layout is a matrix and is built as one: buses are columns, strips are
+ * rows, and the send buttons sit at the intersections. That is not decoration —
+ * a mixer drawn as a list of sources with a dropdown each cannot show that two
+ * strips share a bus, which is the fact the user is here to check.
+ */
+
+.mx {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: auto;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.mx__section {
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.mx__title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  margin: 0 0 8px;
+}
+
+/* --- the matrix --- */
+
+.mx__grid {
+  display: grid;
+  gap: 1px;
+  align-items: center;
+}
+
+.mx__head {
+  font-weight: 600;
+  padding: 4px 6px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mx__strip-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A source that has declared itself but is not currently playing. Dimmed rather
+   than hidden: its routing is still real and still editable. */
+.mx__strip-name--idle {
+  color: var(--text-dim);
+}
+
+.mx__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border);
+  flex: none;
+}
+
+.mx__dot--live {
+  background: var(--accent);
+}
+
+/* --- send cells --- */
+
+.mx__cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+}
+
+.mx__send {
+  width: 100%;
+  min-width: 34px;
+  padding: 5px 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-raised);
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    color 0.12s;
+}
+
+.mx__send:hover {
+  background: var(--bg-hover);
+}
+
+.mx__send--on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg);
+}
+
+/* A send to a virtual cable is the one that leaves the machine's speakers and
+   reaches another application, so it reads differently from an ordinary one. */
+.mx__send--on.mx__send--virtual {
+  background: var(--accent);
+  box-shadow: inset 0 0 0 2px var(--bg-raised);
+}
+
+/* --- faders --- */
+
+.mx__fader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px;
+}
+
+.mx__fader input[type='range'] {
+  flex: 1;
+  min-width: 60px;
+  accent-color: var(--accent);
+}
+
+.mx__db {
+  width: 44px;
+  text-align: right;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.mx__mute {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-raised);
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 3px 6px;
+  font-size: 10px;
+}
+
+.mx__mute--on {
+  background: var(--danger, #b4342c);
+  border-color: var(--danger, #b4342c);
+  color: #fff;
+}
+
+/* --- bus header --- */
+
+.mx__bus {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+  border-radius: 4px;
+  background: var(--bg-raised);
+}
+
+.mx__bus select {
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px;
+  font-size: 11px;
+}
+
+.mx__tag {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+/* --- notices --- */
+
+.mx__note {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  background: var(--bg-raised);
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
+.mx__note--warn {
+  border-left-color: var(--danger, #b4342c);
+}
+
+.mx__actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.mx__btn {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-raised);
+  color: var(--text);
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.mx__btn:hover {
+  background: var(--bg-hover);
+}
+
+.mx__btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.mx__empty {
+  color: var(--text-dim);
+  padding: 16px;
+  text-align: center;
+  line-height: 1.6;
+}

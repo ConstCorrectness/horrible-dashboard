@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 
 import { useAgentContext } from '../../../agent-context';
+import { useMediaStrip } from '../../audio/useMediaStrip';
 import { useSetting } from '../../../settings';
 import { toastsStore } from '../../../toasts';
 import {
@@ -61,6 +62,13 @@ export function KaraokeStagePanel() {
   const status = getKaraokeStatus();
   const entry = state.now_playing;
   const settingVolume = useSetting<number>('karaoke.volume');
+
+  // Route the stage's audio through the mixer instead of straight to the system
+  // output. This is what lets a song go to the speakers *and* to a virtual cable
+  // at the same time — the singer hears the backing track while a call, a stream
+  // or a recording gets it too. The media is served by our own backend, so the
+  // same-origin requirement in `useMediaStrip` holds.
+  useMediaStrip(videoRef, { id: 'karaoke', label: 'Karaoke', icon: '🎤' });
 
   useEffect(() => {
     connectKaraoke();

@@ -17,7 +17,13 @@
  * `AudioContext` is created lazily on the first sound and reused, because
  * constructing one per sound leaks a hardware voice each time.
  */
+import { mixer } from '../audio/engine';
+import type { StripHandle } from '../audio/types';
 import type { NoiseEvent } from './net';
+
+// Declared at import so the game has a channel on the mixer before the first
+// match — a fader you can only find while being shot at is not a fader.
+mixer.declareStrip({ id: 'hassault', label: 'HorribleAssault', icon: '🔫' });
 
 /** A noise that would be inaudible is not worth a voice. */
 const MIN_GAIN = 0.02;
@@ -81,6 +87,7 @@ function noiseBuffer(ctx: AudioContext): AudioBuffer {
 
 export class GameAudio {
   private ctx: AudioContext | null = null;
+  private strip: StripHandle | null = null;
   private master: GainNode | null = null;
   private noise: AudioBuffer | null = null;
   private voices = 0;
@@ -103,14 +110,15 @@ export class GameAudio {
   private ready(): AudioContext | null {
     if (this.volume <= 0) return null;
     if (!this.ctx) {
-      const Ctor =
-        window.AudioContext ??
-        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-      if (!Ctor) return null;
-      this.ctx = new Ctor();
+      // The mixer's context, not one of our own. Web Audio nodes cannot cross
+      // contexts, so a private `new AudioContext()` here would be a game whose
+      // sound the user cannot route anywhere — and nothing would report that.
+      const handle = mixer.connectStrip('hassault');
+      this.strip = handle;
+      this.ctx = handle.context;
       this.master = this.ctx.createGain();
       this.master.gain.value = this.volume;
-      this.master.connect(this.ctx.destination);
+      this.master.connect(handle.input);
       this.noise = noiseBuffer(this.ctx);
     }
     if (this.ctx.state === 'suspended') void this.ctx.resume();
@@ -212,7 +220,13 @@ export class GameAudio {
   }
 
   dispose(): void {
-    void this.ctx?.close();
+    // Emphatically **not** `ctx.close()` any more. The context is the mixer's
+    // and is shared by every sound in the app, so closing it here would silence
+    // karaoke, the agent's voice and every other pane the moment a match ended.
+    // Releasing the strip drops our audio and leaves the routing intact.
+    this.master?.disconnect();
+    this.strip?.release();
+    this.strip = null;
     this.ctx = null;
     this.master = null;
     this.noise = null;

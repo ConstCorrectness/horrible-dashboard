@@ -299,6 +299,7 @@ export {
 export { stubModule } from './modules/stub';
 export { databaseModule } from './modules/database';
 export { karaokeModule } from './modules/karaoke';
+export { audioModule } from './modules/audio';
 export { libraryModule } from './modules/library';
 export { recordsModule } from './modules/records';
 // Started at boot, not on pane mount: a proposal that arrives while you are looking

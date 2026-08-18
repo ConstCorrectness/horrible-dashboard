@@ -9,6 +9,12 @@
  * 5. Party / Lobby Voice mode (non-spatial stereo).
  */
 
+import { mixer } from '../audio/engine';
+import { inputConstraints } from '../audio/store';
+import type { StripHandle } from '../audio/types';
+
+mixer.declareStrip({ id: 'voice', label: 'Voice comms', icon: '🎧' });
+
 export interface PeerVoiceState {
   peerId: string;
   callsign: string;
@@ -22,6 +28,7 @@ export interface PeerVoiceState {
 
 export class SpatialVoiceEngine {
   private ctx: AudioContext | null = null;
+  private strip: StripHandle | null = null;
   private localStream: MediaStream | null = null;
   private localGain: GainNode | null = null;
   private panners: Map<string, { panner: PannerNode; gain: GainNode }> = new Map();
@@ -35,16 +42,21 @@ export class SpatialVoiceEngine {
   async init(): Promise<boolean> {
     if (this.ctx) return true;
     try {
-      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-      this.ctx = new AudioCtx();
+      // The mixer's context and fader, not a private one: peer voices are audio
+      // like any other and belong on a channel the user can route and level.
+      this.strip = mixer.connectStrip('voice');
+      this.ctx = this.strip.context;
 
       this.localStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
+        // Through `inputConstraints` so the microphone the user chose in the
+        // mixer is the one used. `{ audio: true }` would quietly take the system
+        // default and there would be nothing on screen to explain why.
+        audio: inputConstraints({
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
           channelCount: 1,
-        },
+        }),
       });
 
       const source = this.ctx.createMediaStreamSource(this.localStream);
@@ -130,7 +142,9 @@ export class SpatialVoiceEngine {
 
     source.connect(panner);
     panner.connect(gain);
-    gain.connect(this.ctx.destination);
+    // The strip, not `ctx.destination` — a peer's voice is routable like
+    // everything else, so "send comms to my headphones only" is expressible.
+    gain.connect(this.strip?.input ?? this.ctx.destination);
 
     this.panners.set(peerId, { panner, gain });
   }
@@ -138,7 +152,10 @@ export class SpatialVoiceEngine {
   setPeerVolume(peerId: string, volume: number) {
     const entry = this.panners.get(peerId);
     if (!entry || !this.ctx) return;
-    entry.gain.gain.setValueAtTime(this.deafened ? 0 : Math.max(0, Math.min(2, volume)), this.ctx.currentTime);
+    entry.gain.gain.setValueAtTime(
+      this.deafened ? 0 : Math.max(0, Math.min(2, volume)),
+      this.ctx.currentTime,
+    );
   }
 
   cleanup() {
@@ -147,10 +164,12 @@ export class SpatialVoiceEngine {
         track.stop();
       }
     }
-    if (this.ctx) {
-      void this.ctx.close();
-      this.ctx = null;
-    }
+    // Release, never close: the context is the mixer's and shared by every
+    // sound in the app. Closing it here silenced karaoke and the game the
+    // moment voice comms shut down.
+    this.strip?.release();
+    this.strip = null;
+    this.ctx = null;
     this.panners.clear();
   }
 }

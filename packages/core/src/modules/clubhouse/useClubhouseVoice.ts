@@ -4,6 +4,8 @@ import AgoraRTC from 'agora-rtc-sdk-ng';
 import PubNub from 'pubnub';
 
 import { usePaneSession } from '../../layout/use-pane-session';
+import { mixer } from '../audio/engine';
+import { inputConstraints } from '../audio/store';
 import { splitForSpeech } from './speechChunks';
 import {
   ClubhouseRoomSession,
@@ -255,11 +257,16 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       );
 
       // e. Create Audio Mixer
-      const AudioContext =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext: typeof window.AudioContext })
-          .webkitAudioContext;
-      const audioCtx = new AudioContext();
+      //
+      // The shared mixer context rather than a private one — nodes cannot cross
+      // contexts, so a `new AudioContext()` here would make this graph
+      // permanently unable to connect to anything else in the app.
+      //
+      // Deliberately `getContext()` and **not** a mixer strip: this graph's
+      // output goes to Agora (a `MediaStreamDestination` published to the room),
+      // never to a local speaker. Declaring a strip would put a fader in the
+      // mixer that controls nothing, which is worse than having no fader.
+      const audioCtx = mixer.getContext();
       session.audioCtx = audioCtx;
 
       // An AudioContext created without a user gesture starts `suspended` under every
@@ -407,7 +414,9 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         }
 
         const micStream = await Promise.race([
-          navigator.mediaDevices.getUserMedia({ audio: true }),
+          // Through the mixer so the chosen microphone is honoured; `{ audio:
+          // true }` silently took the system default whatever the user picked.
+          navigator.mediaDevices.getUserMedia({ audio: inputConstraints() }),
           new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error('Microphone permission timeout')), 3000),
           ),
@@ -901,7 +910,11 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     let sendBytes = 0;
     let recvBytes = 0;
     let bw = 0;
-    const connState = session.rtcClient ? (session.rtcClient.connectionState || 'CONNECTED') : (joined ? 'CONNECTED' : 'DISCONNECTED');
+    const connState = session.rtcClient
+      ? session.rtcClient.connectionState || 'CONNECTED'
+      : joined
+        ? 'CONNECTED'
+        : 'DISCONNECTED';
 
     if (session.rtcClient && typeof session.rtcClient.getRTCStats === 'function') {
       try {
@@ -931,7 +944,11 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       pubnubOrigin: 'pubsub.pubnub.com',
       pubnubProtocol: 'WSS (WebSocket Secure) / TLS 1.3',
       pubnubChannels: activeChannel
-        ? [`channel_users:${activeChannel}`, `channel_actions:${activeChannel}`, `channel_messages:${activeChannel}`]
+        ? [
+            `channel_users:${activeChannel}`,
+            `channel_actions:${activeChannel}`,
+            `channel_messages:${activeChannel}`,
+          ]
         : [],
       heartbeatIntervalS: 30,
       apiGateway: 'https://api.clubhouse.com/api/v2',
