@@ -125,6 +125,16 @@
   background: transparent;
   border-bottom: none;
 }
+/* The drag region must be as TALL as the strip, not as tall as its contents —
+   and its contents here are nothing at all. `align-items: center` above (which
+   centres the window controls) overrode the base strip's `stretch`, so this div
+   measured full width and **zero height**: an undecorated window whose titlebar
+   was 28px of empty space that could not be grabbed anywhere. Nothing about it
+   looked broken, which is why it survived — `data-tauri-drag-region` was present
+   and correct the whole time, on an element with no area to hit. */
+.frame-tabs--bare .frame-tabs-scroll {
+  align-self: stretch;
+}
 .detached-title {
   align-self: center;
   padding: 0 10px;

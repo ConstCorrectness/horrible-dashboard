@@ -407,6 +407,35 @@ persistence for free. A side override reorders `dockSidesOf`, so role routing
 and `openToolInDock` follow the user's placement; it never *makes* a view
 dockable — declarations still decide that.
 
+#### Where a window opens
+
+A window opens **where that view's window was last left** — its rect, and the snap
+zone if it had one (`core/layout/window-placement.ts`). Only when a view has no
+memory does it fall back to the diagonal cascade.
+
+The placement cannot live in the layout blob: a closed pane has no `WindowState` to
+hold one, and "reopen the agent where I snapped it" is precisely a question asked
+after it was closed. So it rides the settings store under `frame.windowPlacement`,
+**globally and keyed by view id** — the same call rail customization makes, for the
+same reason. Keying by pane instance would be useless: instance ids are minted per
+open, so the key could never be looked up again.
+
+Two details are load-bearing:
+
+- **The snap zone is stored alongside the rect, not derived from it.** A snapped
+  window keeps a `restoreRect` to un-snap back to and re-derives its geometry when
+  the desktop resizes. Replaying only the pixels produces a window that looks
+  identical until either of those matters — and it re-snaps to the right half of
+  *today's* desktop rather than to stale pixels from a differently sized one.
+- **Only single-pane windows are recorded.** A window holding three merged tabs has
+  one rect and three views; filing that rect under each would teach every pane in
+  the group a placement that belonged to the group.
+
+Recording is a **store subscriber**, not a hook in the reducer or the drag handler.
+A window takes its geometry from seven places (drag, resize, snap, un-snap, maximize,
+an agent tool, a mode flip), and remembering from each means the eighth silently does
+not; reading the result catches them all by construction.
+
 View types vs pane instances work as before: widgets are singleton-by-view-id,
 panels honor their `singleton` flag, and multi-instance panes get `#n` suffixes.
 A caller-supplied `instanceId` (e.g. `editor.buffer:<source>`) focuses the

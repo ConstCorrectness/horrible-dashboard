@@ -125,6 +125,14 @@ Under `chrome.workspaceTabs` the strip **is** the undecorated native window's ti
 — it carries `data-tauri-drag-region` and the min/max/close cluster. So a floating
 desktop cannot simply not render it: it renders a slim bare drag bar
 (`frame-tabs--bare`) instead, or the window becomes unmovable and unclosable.
+
+The drag region must be given the strip's **full height** explicitly
+(`.frame-tabs--bare .frame-tabs-scroll { align-self: stretch }`). The bare strip
+centres its window controls, which overrides the tabbed strip's `align-items:
+stretch`, and the drag region's only content is nothing at all — so it measured full
+width and **zero height**, leaving a 28px titlebar with no grabbable pixel anywhere.
+Nothing looks wrong when this breaks: the attribute is present and correct on an
+element with no area to hit.
 :::
 
 ### Flipping a desktop

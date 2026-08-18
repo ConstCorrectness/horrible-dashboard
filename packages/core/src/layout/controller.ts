@@ -37,6 +37,7 @@ import {
 import * as persistence from './persistence';
 import { closePaneSession, movePaneSession, paneSessionKey } from './pane-lifetime';
 import { taskbarEntries } from './taskbar';
+import { lastPlacement, rememberPlacement } from './window-placement';
 import { arrangeWindows, type ArrangeStyle } from './snap';
 import { layoutStore } from './store';
 import { NOMINAL_VIEWPORT } from './windows';
@@ -371,7 +372,18 @@ function targetAreaFor(): string | null {
 export function openPane(viewId: string, opts?: OpenPaneOptions): string | null {
   const instanceId = openPaneRouted(viewId, opts);
   if (instanceId && frame().mode === 'floating' && !windowOfInstance(frame(), instanceId)) {
-    setPaneWindowed(instanceId, true);
+    // Back where you last left it, rather than onto the cascade. A pane snapped
+    // to the right edge was put there on purpose, and a placement cannot live in
+    // the frame because a closed pane has no window to hold one — see
+    // `window-placement`. Absent a memory this falls through to the cascade
+    // exactly as before.
+    const placement = lastPlacement(viewId);
+    setPaneWindowed(instanceId, true, placement?.rect);
+    // Re-snap rather than only restoring the geometry: a snapped window keeps a
+    // `restoreRect` to un-snap back to and re-derives its rect when the desktop
+    // resizes. Replaying the pixels alone would look identical until the first
+    // time either of those mattered.
+    if (placement?.snap) snapWindow(instanceId, placement.snap);
   }
   return instanceId;
 }
@@ -1772,11 +1784,42 @@ export function resizeAreaPx(
 // LayoutController installation (the registry seam the agent relay drives)
 // ---------------------------------------------------------------------------
 
+/**
+ * Keep {@link lastPlacement} in step with where windows actually are.
+ *
+ * A subscriber rather than a hook in the reducer or the drag handler: a window
+ * gets its geometry from seven places (drag, resize, snap, un-snap, maximize, an
+ * agent tool, a desktop-mode flip), and remembering from each of them means the
+ * eighth silently does not. Reading the result catches them all by construction.
+ *
+ * Only **single-pane** windows are recorded. A window holding three merged tabs
+ * has one rect and three views, and filing that rect under each of them would
+ * teach every pane in the group a placement that belonged to the group.
+ * `rememberPlacement` no-ops when nothing changed, so this is a cheap walk.
+ */
+function installPlacementRecorder(): void {
+  if (placementRecorderBound) return;
+  placementRecorderBound = true;
+  layoutStore.subscribe(() => {
+    const f = layoutStore.getSnapshot().frame;
+    for (const win of f.windows) {
+      // A minimized window's rect is where it will come *back* to, so it stays
+      // worth recording; its `mode` is not, since reopening minimized would be a
+      // pane that answers a click by not appearing.
+      if (win.area.tabs.length !== 1) continue;
+      rememberPlacement(win.area.tabs[0].viewId, win.rect, win.snap);
+    }
+  });
+}
+
+let placementRecorderBound = false;
+
 /** Implements today's LayoutController verbs against the frame store, so the
  * agent's existing tools keep working while the engines coexist. Installed by
- * the Frame on mount; also wires the region command bus and the panel opener
- * target used by `registry.openPanel`. */
+ * the Frame on mount; also wires the region command bus, the window-placement
+ * recorder, and the panel opener target used by `registry.openPanel`. */
 export function installFrameController(): void {
+  installPlacementRecorder();
   setFrameCommandHandler({
     togglePosition: (hostViewId, position) => {
       const instance = hostInstanceOf(hostViewId);

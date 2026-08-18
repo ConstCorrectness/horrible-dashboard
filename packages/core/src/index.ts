@@ -186,6 +186,8 @@ export {
   type CloseGuard,
 } from './layout/close-guards';
 export { usePaneSection, sectionOfInstance, type PaneSections } from './layout/use-sections';
+export { lastPlacement, rememberPlacement, WINDOW_PLACEMENT_KEY } from './layout/window-placement';
+export type { WindowPlacement } from './layout/window-placement';
 export * as framePersistence from './layout/persistence';
 export {
   BOOT_WORKSPACE_KEY,
