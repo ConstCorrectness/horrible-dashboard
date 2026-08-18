@@ -170,28 +170,3 @@ function compareInstanceIds(a: string, b: string): number {
   if (Number.isFinite(na) && Number.isFinite(nb) && na !== nb) return na - nb;
   return a.localeCompare(b);
 }
-
-/**
- * The taskbar zones to render for a desktop's paradigm.
- *
- * A **floating** desktop hides the top workspace strip — a desktop does not have a
- * tab bar — so the pips become the only switcher and are inserted for you. A tiling
- * desktop keeps the strip, and a second always-visible switcher beside it is the
- * redundancy that got the pips turned off by default in the first place.
- *
- * Derived per render rather than written into the stored config, because the mode
- * belongs to the **workspace**: persisting the zone would leave a switcher behind on
- * every tiling desktop the user later visited.
- *
- * They land immediately after the start button, where a desktop switcher sits in
- * every OS that has one, and before `windows` — the open-pane list is the long
- * growing thing and should not be shoved sideways by a fixed-width control.
- */
-export function zonesForMode(zones: string[], mode: FrameState['mode']): string[] {
-  // An explicit choice stands: a user who already placed the pips has an ordering,
-  // and inserting a second copy would overrule a decision they made.
-  if (mode !== 'floating' || zones.includes('desktops')) return zones;
-  const at = zones.indexOf('start');
-  if (at < 0) return ['desktops', ...zones];
-  return [...zones.slice(0, at + 1), 'desktops', ...zones.slice(at + 1)];
-}

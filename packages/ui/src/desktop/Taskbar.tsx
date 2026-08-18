@@ -8,11 +8,10 @@
  *
  * See docs/architecture/desktop-shell.mdx.
  */
-import { useSyncExternalStore } from 'react';
-import { layoutStore, openContextMenu, useSetting, zonesForMode } from '@horrible/core';
+import { openContextMenu, useSetting } from '@horrible/core';
 
+import { AgentButton } from './taskbar/AgentButton';
 import { Clock } from './taskbar/Clock';
-import { DesktopSwitcher } from './taskbar/DesktopSwitcher';
 import { MxButton } from './taskbar/MxButton';
 import { StartButton } from './taskbar/StartButton';
 import { Tray } from './taskbar/Tray';
@@ -43,27 +42,27 @@ export interface TaskbarConfig {
  * Bump {@link ZONES_VERSION} and add the new zone to {@link ZONE_SINCE} in the
  * same change that adds it to {@link ZONES}.
  */
-export const ZONES_VERSION = 2;
+export const ZONES_VERSION = 3;
 
-const ZONE_SINCE: Record<string, number> = { mx: 2 };
+const ZONE_SINCE: Record<string, number> = { mx: 2, agent: 3 };
 
 /**
- * `desktops` is deliberately **not** in the default zones — but it is inserted
- * automatically on a floating desktop (see {@link Taskbar}).
+ * The strip as shipped: launcher, what's open, then the status end of the bar.
  *
- * The pips and the top workspace strip render the same list and run the same verb
- * (`registry.switchWorkspace`), so having both always visible meant two switchers
- * for one axis and neither could be trusted as *the* one. On a **tiling** desktop
- * the strip is still it.
+ * There is deliberately **no workspace switcher here**. A desktop is a workspace,
+ * and switching between them is a rare, deliberate act, not a thing to keep six
+ * labels on screen for — the Start menu's Desktops group both switches *and*
+ * manages (rename, create, reset, delete), which one strip of pips never could,
+ * and a tiling desktop still has the top strip. The taskbar's own width belongs
+ * to the panes you actually have open.
  *
- * A floating desktop hides the strip — a desktop does not have a tab bar — so there
- * the pips are the only switcher and are added for you. Management (rename, create,
- * reset, delete) moved to the Start menu, which is what made hiding the strip
- * possible at all: it used to be the only surface those verbs had.
+ * `agent` is last, past the clock: the orchestrator is the one thing you reach
+ * for from anywhere, so it gets the corner every OS reserves for the control you
+ * can always hit without looking.
  */
 export const DEFAULT_TASKBAR: TaskbarConfig = {
   position: 'bottom',
-  zones: ['start', 'windows', 'spacer', 'mx', 'tray', 'clock'],
+  zones: ['start', 'windows', 'spacer', 'mx', 'tray', 'clock', 'agent'],
   showLabels: true,
   autoHide: false,
   zonesVersion: ZONES_VERSION,
@@ -82,28 +81,16 @@ export const ZONES: Record<
 > = {
   start: { title: 'Start button', component: StartButton },
   windows: { title: 'Open panes', component: WindowButtons },
-  desktops: { title: 'Workspace pips', component: DesktopSwitcher },
   mx: { title: 'M-x and echo area', component: MxButton },
   tray: { title: 'Tray', component: Tray },
   clock: { title: 'Clock', component: Clock },
   spacer: { title: 'Spacer', component: () => <div className="os-taskbar-spacer" /> },
+  // Last, so `zoneRank` places it past the clock when an older config receives it.
+  agent: { title: 'Agent button', component: AgentButton },
 };
 
 export function Taskbar() {
-  const stored = useTaskbarConfig();
-  const { frame } = useSyncExternalStore(layoutStore.subscribe, layoutStore.getSnapshot);
-  /**
-   * On a floating desktop the top strip hides itself, so the pips become the only
-   * way to switch — they are inserted here rather than written into the stored
-   * config, because the mode is per **workspace**: persisting the zone would leave
-   * a second switcher on every tiling desktop, which is the redundancy that got the
-   * pips turned off by default in the first place.
-   *
-   * Respects an explicit choice: if the user has already put `desktops` in their
-   * zones, nothing is inserted and their ordering stands.
-   */
-  const zones = zonesForMode(stored.zones, frame.mode);
-  const config = zones === stored.zones ? stored : { ...stored, zones };
+  const config = useTaskbarConfig();
   return (
     <footer
       className={`os-taskbar os-taskbar--${config.position}${config.autoHide ? ' is-autohide' : ''}`}
@@ -134,9 +121,9 @@ export function Taskbar() {
 /**
  * The taskbar config, merged over the defaults.
  *
- * Merged, not replaced: a stored config written by an older build has no
- * `desktops` zone, and taking it whole would silently remove a zone the user
- * never chose to remove. Only keys actually present override.
+ * Merged, not replaced: a stored config written by an older build is missing keys
+ * that exist today, and taking it whole would silently drop them. Only keys
+ * actually present override.
  */
 export function useTaskbarConfig(): TaskbarConfig {
   const stored = useSetting<string>(TASKBAR_SETTING_KEY);
@@ -179,7 +166,14 @@ function withZonesAddedSince(zones: string[], storedVersion: number): string[] {
   // as the price of receiving one new zone.
   const out = [...zones];
   for (const zone of missing) {
-    const at = out.findIndex((z) => zoneRank(z) > zoneRank(zone));
+    // Only *known* zones can decide the insertion point. A stored config often
+    // still names a zone this build has removed (`desktops`, until recently),
+    // and `zoneRank` scores an unknown name last by definition — so ranking
+    // against it put every newly added zone immediately *before* the dead one,
+    // which is wherever the user happened to have had it. The name itself is
+    // kept: a config written by a newer build must survive a round trip through
+    // an older one, and the renderer already skips what it cannot resolve.
+    const at = out.findIndex((z) => z in ZONES && zoneRank(z) > zoneRank(zone));
     out.splice(at < 0 ? out.length : at, 0, zone);
   }
   return out;
@@ -190,8 +184,8 @@ function withZonesAddedSince(zones: string[], storedVersion: number): string[] {
  *
  * Used to place a zone that is being switched *on*, whether by the customization
  * menu or by a version bump. Ranking against `DEFAULT_TASKBAR.zones` instead
- * would send every non-default zone (the workspace pips) to the far end of the
- * strip, past the clock, which is nobody's idea of where it belongs.
+ * would send every non-default zone to the far end of the strip, past the clock,
+ * which is nobody's idea of where most of them belong.
  */
 export function zoneRank(zone: string): number {
   const keys = Object.keys(ZONES);

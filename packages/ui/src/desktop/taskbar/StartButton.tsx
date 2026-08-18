@@ -8,11 +8,14 @@
  *
  * Two things beyond a flat list:
  *
- * - **It is grouped by pane role.** Sixty-odd entries in one alphabetical run
- *   told the user nothing about the model they were choosing from; Documents /
- *   Tools / Widgets is the same distinction the frame itself makes about where a
- *   pane will land. Searching flattens the groups, because a filtered list of
- *   four things does not need headings.
+ * - **It is grouped by the module a pane belongs to.** Sixty-odd entries in one
+ *   alphabetical run told the user nothing, but the previous grouping — by
+ *   `PaneRole`, as Documents / Tools / Widgets — answered a question nobody
+ *   browsing a launcher is asking: the role decides where a pane *lands* by
+ *   default, and everything here opens and tiles either way. The feature a pane
+ *   belongs to is what someone is actually looking for, and it is the axis the
+ *   search box already matched on. Searching flattens the groups, because a
+ *   filtered list of four things does not need headings.
  * - **It has a settings footer.** The bottom-left corner is where people go for
  *   settings, and this menu previously offered it only as one row among sixty,
  *   sorted under S.
@@ -24,7 +27,6 @@ import {
   registry,
   resolveViewIcon,
   useWorkspaces,
-  type PaneRole,
   type PanelDecl,
   type WidgetDecl,
 } from '@horrible/core';
@@ -51,18 +53,35 @@ export function StartButton({ showLabels }: { showLabels: boolean }) {
 
 type View = PanelDecl | WidgetDecl;
 
+/** Where a pane with no owning module is filed. Last, and named for what it is. */
+const UNGROUPED = 'Other';
+
 /**
- * The three roles, in the order they appear, with the heading each gets.
+ * The views, bucketed by owning module and sorted for browsing.
  *
- * The wording says what the role *means to the user* rather than repeating the
- * enum: someone choosing from a launcher wants to know what the thing is, not
- * which field it declares. Order is by how often you reach for one.
+ * Headings are alphabetical and `Other` is pinned last — a module that declares
+ * no owner is a plugin gap, not a category anyone chose, so it should not sort
+ * into the middle of real feature names.
  */
-const ROLE_GROUPS: { role: PaneRole; label: string }[] = [
-  { role: 'document', label: 'Documents' },
-  { role: 'tool', label: 'Tools' },
-  { role: 'widget', label: 'Widgets' },
-];
+function groupByOwner(views: View[]): { label: string; views: View[] }[] {
+  const buckets = new Map<string, View[]>();
+  for (const v of views) {
+    const owner = registry.viewOwner(v.id) ?? UNGROUPED;
+    const bucket = buckets.get(owner);
+    if (bucket) bucket.push(v);
+    else buckets.set(owner, [v]);
+  }
+  return [...buckets.entries()]
+    .map(([label, group]) => ({
+      label,
+      views: [...group].sort((a, b) => a.title.localeCompare(b.title)),
+    }))
+    .sort((a, b) => {
+      if (a.label === UNGROUPED) return 1;
+      if (b.label === UNGROUPED) return -1;
+      return a.label.localeCompare(b.label);
+    });
+}
 
 function StartMenu({ onClose }: { onClose: () => void }) {
   const [query, setQuery] = useState('');
@@ -93,6 +112,7 @@ function StartMenu({ onClose }: { onClose: () => void }) {
         (registry.viewOwner(v.id)?.toLowerCase().includes(q) ?? false),
     );
   }, [views, query]);
+  const groups = useMemo(() => (searching ? [] : groupByOwner(matches)), [matches, searching]);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -138,18 +158,14 @@ function StartMenu({ onClose }: { onClose: () => void }) {
             than there is content. Groups are for browsing. */}
         {searching
           ? matches.map((v) => <StartItem key={v.id} view={v} onLaunch={launch} />)
-          : ROLE_GROUPS.map(({ role, label }) => {
-              const group = matches.filter((v) => v.role === role);
-              if (!group.length) return null;
-              return (
-                <div key={role} className="os-start-group">
-                  <h3 className="os-start-group-head">{label}</h3>
-                  {group.map((v) => (
-                    <StartItem key={v.id} view={v} onLaunch={launch} />
-                  ))}
-                </div>
-              );
-            })}
+          : groups.map(({ label, views: group }) => (
+              <div key={label} className="os-start-group">
+                <h3 className="os-start-group-head">{label}</h3>
+                {group.map((v) => (
+                  <StartItem key={v.id} view={v} onLaunch={launch} />
+                ))}
+              </div>
+            ))}
         {!matches.length && <p className="os-start-empty">Nothing matches “{query}”.</p>}
         {!searching && <DesktopsGroup onClose={onClose} />}
       </div>
@@ -314,11 +330,9 @@ function DesktopsGroup({ onClose }: { onClose: () => void }) {
 }
 
 function StartItem({ view, onLaunch }: { view: View; onLaunch: (id: string) => void }) {
-  // The module name, but only when it says something the title does not — the
-  // launcher's job here is to close the gap between what a pane is called and
-  // what feature it belongs to, and "Settings · Settings" closes nothing.
-  const owner = registry.viewOwner(view.id);
-  const feature = owner && owner.toLowerCase() !== view.title.toLowerCase() ? owner : null;
+  // No module suffix any more: the owning module is the heading this row sits
+  // under, and repeating it on every row is the "Settings · Settings" noise the
+  // suffix was already dodging half the time.
   const icon = resolveViewIcon(view.id, view.icon, view.title);
   return (
     <button
@@ -331,7 +345,6 @@ function StartItem({ view, onLaunch }: { view: View; onLaunch: (id: string) => v
         {icon}
       </span>
       <span className="os-start-title">{view.title}</span>
-      {feature && <span className="os-start-owner">{feature}</span>}
     </button>
   );
 }

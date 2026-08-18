@@ -20,6 +20,8 @@ import {
   getSetting,
   layoutStore,
   registry,
+  BOOT_WORKSPACE_KEY,
+  DEFAULT_BOOT_WORKSPACE,
   setBackdrop,
   setDesktopMode,
   setSetting,
@@ -175,9 +177,17 @@ export const desktopModule: ModuleManifest = {
       key: TASKBAR_SETTING_KEY,
       title: 'Taskbar',
       description:
-        'Which zones the taskbar shows and in what order, as JSON. Zones: start, windows, spacer, desktops, tray, clock. Also `position` (bottom/top), `showLabels`, `autoHide`.',
+        'Which zones the taskbar shows and in what order, as JSON. Zones: start, windows, spacer, mx, tray, clock, agent. Also `position` (bottom/top), `showLabels`, `autoHide`.',
       type: 'string',
       default: JSON.stringify(DEFAULT_TASKBAR),
+    },
+    {
+      key: BOOT_WORKSPACE_KEY,
+      title: 'Desktop to open at startup',
+      description:
+        'The id of the desktop to open when the app starts — `desktop` is the empty floating one. Use `last` to reopen whichever desktop you were on. Whatever you pick, every other desktop keeps its arrangement.',
+      type: 'string',
+      default: DEFAULT_BOOT_WORKSPACE,
     },
     {
       key: OOBE_COMPLETE_KEY,

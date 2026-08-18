@@ -75,7 +75,7 @@ export {
 } from './layout/snap';
 export { explodeToWindows, NOMINAL_VIEWPORT, tileWindows } from './layout/windows';
 export { hideRailView, moveViewToDock, railEntries, RAIL_SECTIONS } from './layout/rail';
-export { resolveViewIcon, taskbarEntries, zonesForMode } from './layout/taskbar';
+export { resolveViewIcon, taskbarEntries } from './layout/taskbar';
 export type { TaskbarEntry, TaskbarState } from './layout/taskbar';
 export type { RailEntry, RailSide, RailState } from './layout/rail';
 export { getRailPrefs, railPrefsStore, resetRailPrefs, setViewHidden } from './layout/rail-prefs';
@@ -187,6 +187,11 @@ export {
 } from './layout/close-guards';
 export { usePaneSection, sectionOfInstance, type PaneSections } from './layout/use-sections';
 export * as framePersistence from './layout/persistence';
+export {
+  BOOT_WORKSPACE_KEY,
+  BOOT_WORKSPACE_LAST,
+  DEFAULT_BOOT_WORKSPACE,
+} from './layout/persistence';
 export {
   useWorkspaces,
   workspaceStore,
@@ -378,6 +383,8 @@ export {
   socialModule,
   initSocial,
   getRoster,
+  getSocialState,
+  subscribeSocial,
   addFriend,
   linkDevice,
   type Friend,

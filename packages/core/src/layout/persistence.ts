@@ -6,6 +6,7 @@
  * a layout under the wrong id. The backend keeps storing layouts opaquely.
  */
 import { registry } from '../registry';
+import { getSetting } from '../settings';
 import {
   createWorkspace as apiCreateWorkspace,
   deleteWorkspace as apiDeleteWorkspace,
@@ -24,6 +25,20 @@ import { layoutStore } from './store';
 import type { FrameState, WindowState } from './types';
 
 const AUTOSAVE_MS = 600;
+
+/**
+ * Which desktop boot opens. See {@link resolveBootWorkspace}.
+ *
+ * Declared in the `desktop` module's manifest; named here because `hydrate` is
+ * the only thing that reads it and the two must agree on the key.
+ */
+export const BOOT_WORKSPACE_KEY = 'desktop.bootWorkspace';
+
+/** The empty floating desktop — logging in should feel like logging into a machine. */
+export const DEFAULT_BOOT_WORKSPACE = 'desktop';
+
+/** The sentinel that restores whichever desktop was open last. */
+export const BOOT_WORKSPACE_LAST = 'last';
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let lastSavedRevision = 0;
@@ -193,6 +208,26 @@ export function bindAutosave(): void {
   });
 }
 
+/**
+ * The workspace boot should open, or `null` to restore whichever was last active.
+ *
+ * A preset that has never been visited has no workspace row yet, so this can
+ * name one that must be created first — the caller does that, reusing the same
+ * seed path as the empty slate.
+ */
+function resolveBootWorkspace(workspaces: WorkspaceModel[]): string | null {
+  const want = getSetting<string>(BOOT_WORKSPACE_KEY) ?? DEFAULT_BOOT_WORKSPACE;
+  if (!want || want === BOOT_WORKSPACE_LAST) return null;
+  if (workspaces.some((w) => w.id === want)) return want;
+  // A preset id is a valid answer even with no row: `switchWorkspace` creates
+  // those lazily too, so a setting naming one should not silently fall back.
+  if (presetFor(want)) return want;
+  // Names nothing this build knows — a workspace the user deleted, or a preset
+  // from a plugin that is no longer installed. Falling back to the last-active
+  // desktop is the one behaviour that never strands someone on an empty screen.
+  return null;
+}
+
 /** Boot: fetch workspaces (seeding the default preset on an empty slate) and
  * load the active one into the store. */
 export async function hydrate(): Promise<void> {
@@ -209,7 +244,25 @@ export async function hydrate(): Promise<void> {
     });
     state = await getWorkspaces();
   }
-  const activeId = state.active ?? state.workspaces[0]?.id ?? null;
+  /**
+   * Boot goes where the setting says, not where you happened to stop.
+   *
+   * "Whatever was open last" is the right rule for a document and the wrong one
+   * for a desktop: an experiment on a tiled workspace three days ago should not
+   * decide what you log into today. Nothing is lost either way — autosave has
+   * already persisted that layout, and it is one Start-menu click away.
+   */
+  const boot = resolveBootWorkspace(state.workspaces);
+  if (boot && !state.workspaces.some((w) => w.id === boot)) {
+    const preset = presetFor(boot);
+    // Guarded by `resolveBootWorkspace`, which only returns an unknown id when it
+    // resolves to a preset.
+    if (preset) {
+      await saveWorkspace(preset.id, { name: preset.name, layout: serialize(seed(preset)) });
+      state = await getWorkspaces();
+    }
+  }
+  const activeId = boot ?? state.active ?? state.workspaces[0]?.id ?? null;
   publish(state.workspaces, activeId);
   const ws = state.workspaces.find((w) => w.id === activeId);
   if (ws) {

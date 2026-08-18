@@ -91,17 +91,34 @@ Because the mode is per workspace, the shell adapts to it:
 | | tiling desktop | floating desktop |
 | --- | --- | --- |
 | Top workspace strip | shown — it is the switcher | **hidden** (a desktop has no tab bar) |
-| Taskbar `desktops` pips | off (would be a second switcher) | **inserted** by `zonesForMode` |
 | Workspace management | strip's right-click menu, and the Start menu | Start menu |
 
-`zonesForMode` derives the zone list per render rather than writing the pips into the
-stored config: the mode belongs to the workspace, so persisting the zone would leave a
-switcher behind on every tiling desktop visited later. An explicit choice still wins —
-a user who already placed the pips keeps their ordering.
+The taskbar carries **no workspace switcher at all**, in either mode. It briefly had
+one — a `desktops` pip zone, auto-injected on a floating desktop by a `zonesForMode`
+helper, since that is the mode where the top strip hides itself. Both are now gone.
+Switching desktops is a rare, deliberate act, and it does not earn six labels of
+permanent strip width in the one place whose width belongs to the panes you actually
+have open; the pips could also only *switch*, so anything else still meant opening the
+Start menu.
 
-Hiding the strip needed management moved first: it was the only surface that could
-rename, create, reset and delete a workspace, which is exactly why the pips were off by
-default. That management now lives in the Start menu's **Desktops** group.
+That the Start menu's **Desktops** group both switches and manages (rename, create,
+reset, delete) is what made removing them possible — it was the missing half that kept
+them alive, and hiding the top strip needed it moved there first.
+
+### What boots
+
+`hydrate()` opens the desktop named by the **`desktop.bootWorkspace`** setting, which
+defaults to `desktop` — the empty floating one. Logging in should feel like logging
+into a machine, not like resuming whatever you happened to stop on: an experiment on a
+tiled workspace three days ago should not decide what you see today. Nothing is lost
+either way, since autosave has already persisted that layout and it is one Start-menu
+click away.
+
+Set it to `last` for the old behaviour (reopen the active workspace), or to any
+workspace or preset id. A preset that has never been visited has no workspace row yet,
+so boot creates it from the preset seed the same way `switchWorkspace` does. An id
+this build does not know — a deleted workspace, a preset from an uninstalled plugin —
+falls back to the last-active desktop rather than stranding you on an empty screen.
 
 :::warning The strip is also the titlebar
 Under `chrome.workspaceTabs` the strip **is** the undecorated native window's titlebar
@@ -218,8 +235,8 @@ Four rules there are load-bearing:
 
 `layout/taskbar.ts` derives the buttons, pure over `FrameState` + the registry — the
 same shape and for the same reason as `railEntries`. The strip itself is a zone
-container driven by the `desktop.taskbar` setting (`start`, `windows`, `desktops`,
-`mx`, `tray`, `clock`, `spacer`); a stored config is **merged** over the defaults so a
+container driven by the `desktop.taskbar` setting (`start`, `windows`, `mx`, `tray`,
+`clock`, `agent`, `spacer`); a stored config is **merged** over the defaults so a
 config written by an older build does not silently lose a zone the user never
 removed, and an unknown zone name is skipped rather than rendered as an error strip.
 
@@ -243,16 +260,27 @@ removed is not. Without the version the two are indistinguishable, and someone w
 customized their taskbar once would never receive another zone again. Bump the
 version and add the entry in the same change that adds the zone.
 
-The default zones are `start`, `windows`, `spacer`, `mx`, `tray`, `clock` — **`desktops` is
-registered but off**. The pips and the top workspace strip rendered the same list and
-ran the same verb (`registry.switchWorkspace`), so the shell shipped two always-visible
-switchers for one axis and neither read as *the* one. The strip won because it is the
-only one that can also name, create, reset and delete a workspace, and splitting
-"switch" from "manage" across two edges of the screen is what made the pair feel
-redundant rather than complementary. Anyone who wants the OS-conventional placement
-adds `"desktops"` back to `zones`.
+The default zones are `start`, `windows`, `spacer`, `mx`, `tray`, `clock`, `agent`.
+There is deliberately no workspace switcher among them — see [the paradigm
+section](#the-paradigm-belongs-to-the-workspace).
 
-That makes the top strip the sole switcher, which is why it must scroll: both it and
+**`agent` is last, past the clock.** `agent.chat` is a `role: 'tool'` widget, so on a
+tiling desktop it has a rail glyph and a dock — but a floating desktop renders
+neither, which left the pane you reach for constantly available only through the
+palette or the Start menu. The button **toggles** rather than reopening: an
+already-open chat goes through `activateTaskbarEntry`, the same verb a window button
+runs, so a second click hides it. Calling `openPanel` unconditionally would look like
+nothing happened.
+
+**Window buttons are a fixed width** (`--taskbar-btn-w`, 168px), not shrink-wrapped
+around their label. Width used to track the text, so the strip was a ragged run of
+boxes whose click targets moved whenever a pane retitled itself — an editor button
+resizing as you switched buffers. Shrink is still allowed, so a crowded strip tightens
+before it starts scrolling, but nothing grows to fit its text; the label ellipsises
+inside the fixed box, and with labels off (`is-iconic`) the button collapses to a
+square rather than leaving most of a text-width box empty.
+
+The strip must scroll, which is why both it and
 the taskbar's window buttons run `useHorizontalWheel`, so a plain vertical wheel moves
 them sideways. They are `overflow-x: auto` with the scrollbar hidden, so before that
 the overflow was reachable only by trackpad or shift+wheel — on a mouse, the later
@@ -378,19 +406,22 @@ The **start menu** lists `registry.panels` + `registry.widgets` minus `embedded`
 filtered exactly as the palette's openers are — an embedded view lives inside a host
 pane, and a launcher entry would present it as a second, competing home.
 
-It is **grouped by pane role** (Documents / Tools / Widgets): sixty-odd entries in one
-alphabetical run said nothing about the model the user was choosing from, and the role
-is exactly the fact that decides where the thing will land. Searching flattens the
-groups — three headings over four results is more structure than content.
+It is **grouped by the owning module** (`registry.viewOwner`) — Browser, Library,
+Games — with headings alphabetical and an `Other` bucket, for a view whose module
+declares no title, pinned last.
 
-Search matches the **owning module** as well as the view's own title
-(`registry.viewOwner`), and each row shows that module name trailing when the two
-differ. A view's title says what the pane is; the module's says what feature it
-belongs to, and those are frequently different words — the Observability module's
-pane is called *Data flow*, so a search for the feature came back empty on a pane
-that was sitting right there under Tools. Labelling it is the other half: without
-the module name on the row, a user browsing the list has no way to connect the two
-names either. This is why no module has to rename its panes to be findable.
+The grouping used to be by **`PaneRole`**: Documents / Tools / Widgets. Sixty-odd
+entries in one alphabetical run did say nothing, but the role answers a question
+nobody browsing a launcher is asking — it decides where a pane *lands* by default, and
+everything in this menu opens and tiles either way. The feature a pane belongs to is
+what someone is actually hunting for, and it was already the axis the search box
+matched on: a view's title says what the pane is, the module's says what feature it
+is part of, and those are frequently different words — the Observability module's pane
+is called *Data flow*, so a search for the feature came back empty on a pane sitting
+right there under Tools. Promoting the module from a trailing suffix on each row to
+the heading above them makes browsing and searching agree, and drops the "Settings ·
+Settings" repetition the suffix had to dodge. Searching still flattens the groups —
+three headings over four results is more structure than content.
 
 Its **footer** is Settings / Setup / Theme. The bottom-left corner is where people go
 for settings, and the menu previously offered it only as one row of sixty, filed under
@@ -665,6 +696,7 @@ Declared once, in `packages/ui/src/desktop/desktop.css`:
 | window layer   | 30      |
 | taskbar        | 40      |
 | start menu     | 45      |
+| clock panel    | 45      |
 | presented pane | 48      |
 | spotlight      | 50      |
 | toasts         | 9999    |

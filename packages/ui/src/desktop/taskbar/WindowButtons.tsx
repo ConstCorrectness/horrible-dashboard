@@ -31,7 +31,7 @@ export function WindowButtons({ showLabels }: { showLabels: boolean }) {
         <button
           key={e.instanceId}
           type="button"
-          className={`os-taskbar-btn is-${e.state}${e.attention ? ' wants-attention' : ''}`}
+          className={`os-taskbar-btn is-${e.state}${showLabels ? '' : ' is-iconic'}${e.attention ? ' wants-attention' : ''}`}
           // The accessible name always carries the title even when labels are
           // off — an icon-only taskbar is unusable to a screen reader otherwise.
           // A flashing button is invisible to a screen reader, so the state that
