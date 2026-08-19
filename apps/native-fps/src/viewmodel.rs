@@ -27,6 +27,8 @@
 //! vertices carry the light direction as their normal, which lands them at full
 //! brightness. Cheaper than a second pipeline for six triangles.
 
+use std::collections::HashMap;
+
 use glam::{Mat4, Vec3};
 
 use crate::renderer::Vertex;
@@ -60,6 +62,175 @@ const DARK: [f32; 3] = [0.22, 0.24, 0.28];
 const GRIP: [f32; 3] = [0.36, 0.30, 0.24];
 const ACCENT: [f32; 3] = [0.58, 0.61, 0.65];
 const FLASH: [f32; 3] = [1.0, 0.82, 0.48];
+
+/// The equipped skin for the weapon in your hands.
+///
+/// The same four things the browser's `WeaponSkin` carries, for the same reason:
+/// they are all a weapon made of boxes can express. The economy also has a
+/// rarity, a collection, a pattern seed and a name, and none of those change what
+/// the gun looks like.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Skin {
+    pub base_color: String,
+    pub accent_color: String,
+    /// `solid` | `camo` | `anodized` | `custom_art` | `patina` | `fade`.
+    pub pattern_type: String,
+    /// 0 Factory New ... 1 Battle-Scarred.
+    pub float_value: f32,
+}
+
+/// Where a skin's colours end up, once wear has been applied.
+struct Palette {
+    body: [f32; 3],
+    dark: [f32; 3],
+    grip: [f32; 3],
+    accent: [f32; 3],
+}
+
+/// Grime. What a Battle-Scarred rifle is mixed toward.
+const WEAR_COLOR: [f32; 3] = [0.35, 0.33, 0.31];
+const BLACK: [f32; 3] = [0.0, 0.0, 0.0];
+const WHITE: [f32; 3] = [1.0, 1.0, 1.0];
+
+/// `#rrggbb` into floats, or the fallback.
+///
+/// The catalogue is data, and a client that rendered an unparseable colour as
+/// black would show a weapon nobody designed.
+fn parse_color(value: &str, fallback: [f32; 3]) -> [f32; 3] {
+    let hex = value.trim().trim_start_matches('#');
+    if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return fallback;
+    }
+    let channel = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap_or(0) as f32 / 255.0;
+    [channel(0), channel(2), channel(4)]
+}
+
+/// The darkest a *skinned* surface is allowed to be.
+///
+/// `assault_slate`'s base colour is `#09090b`, which is a legitimate design and
+/// renders here as a gun-shaped hole: this shader has one ambient wash, no
+/// speculars and no scene lights, so a near-black surface has nothing to catch.
+/// The floor keeps the skin's hue and lifts only its brightness, which is the
+/// smallest lie that leaves the weapon readable — and it is applied **only to
+/// skins**, so a player carrying none sees exactly the palette they always did.
+const MIN_LUMA: f32 = 0.14;
+
+fn luma(c: [f32; 3]) -> f32 {
+    0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]
+}
+
+fn lift(c: [f32; 3]) -> [f32; 3] {
+    let l = luma(c);
+    if l >= MIN_LUMA {
+        return c;
+    }
+    mix(c, WHITE, (MIN_LUMA - l) / (1.0 - l).max(1e-3))
+}
+
+fn mix(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
+    let f = t.clamp(0.0, 1.0);
+    [
+        a[0] + (b[0] - a[0]) * f,
+        a[1] + (b[1] - a[1]) * f,
+        a[2] + (b[2] - a[2]) * f,
+    ]
+}
+
+/// A skin's colours, arranged for a weapon made of boxes.
+///
+/// **Wear is applied here rather than being decoration**: a float value you
+/// cannot see is a number the whole economy is built on and no player can check.
+/// Factory New is essentially untouched; Battle-Scarred is visibly dulled toward
+/// grime. A mix rather than a texture, for the same reason everything else in
+/// this module is procedural.
+///
+/// `pattern_type` cannot be a *pattern* without textures either, so it decides
+/// how the two colours are distributed across the parts instead -- enough for a
+/// Fade to read as a fade and a Camo not to read as a Slate.
+///
+/// Deliberately the same arithmetic as `viewmodel.ts`'s `paletteFor`, and
+/// duplicated for the same reason a weapon's voice is: this is presentation. A
+/// drift makes a gun the wrong colour; it does not make a shot land elsewhere.
+fn palette_for(skin: Option<&Skin>) -> Palette {
+    let Some(skin) = skin else {
+        return Palette {
+            body: METAL,
+            dark: DARK,
+            grip: GRIP,
+            accent: ACCENT,
+        };
+    };
+    let base = parse_color(&skin.base_color, METAL);
+    let accent = parse_color(&skin.accent_color, ACCENT);
+    let plain = match skin.pattern_type.as_str() {
+        // Two colours across the length of the weapon, which is what a fade is.
+        "fade" => Palette {
+            body: base,
+            dark: mix(base, accent, 0.5),
+            grip: accent,
+            accent: mix(accent, WHITE, 0.25),
+        },
+        // Blotches are not available, so the parts alternate instead.
+        "camo" => Palette {
+            body: base,
+            dark: mix(base, BLACK, 0.55),
+            grip: mix(base, accent, 0.65),
+            accent: mix(base, BLACK, 0.3),
+        },
+        // Metal dyed in one colour, with bright hardware.
+        "anodized" => Palette {
+            body: base,
+            dark: mix(base, BLACK, 0.4),
+            grip: mix(base, BLACK, 0.65),
+            accent,
+        },
+        // `solid`, `patina`, `custom_art`: the base carries the weapon and the
+        // accent picks out the barrel and the sights.
+        _ => Palette {
+            body: base,
+            dark: mix(base, BLACK, 0.5),
+            grip: mix(accent, BLACK, 0.5),
+            accent,
+        },
+    };
+    let wear = skin.float_value.clamp(0.0, 1.0) * 0.55;
+    Palette {
+        body: lift(mix(plain.body, WEAR_COLOR, wear)),
+        dark: lift(mix(plain.dark, WEAR_COLOR, wear * 0.7)),
+        grip: lift(mix(plain.grip, WEAR_COLOR, wear)),
+        accent: lift(mix(plain.accent, WEAR_COLOR, wear)),
+    }
+}
+
+/// The equipped skin for each weapon, keyed by weapon id.
+///
+/// Takes the whole inventory because that is what the node serves -- there is no
+/// "what am I wearing" route, and asking for one to save this filter would be a
+/// second source of truth for the same fact. An instance whose definition did not
+/// come with it is **skipped rather than guessed**: without a base colour there
+/// is no skin, and inventing one would put a colour on the weapon that the
+/// armoury never showed the player.
+pub fn equipped_skins(inventory: &[crate::api::SkinInstance]) -> HashMap<String, Skin> {
+    let mut out = HashMap::new();
+    for item in inventory {
+        if !item.is_equipped {
+            continue;
+        }
+        let Some(def) = &item.definition else {
+            continue;
+        };
+        out.insert(
+            def.weapon_id.clone(),
+            Skin {
+                base_color: def.base_color.clone(),
+                accent_color: def.accent_color.clone(),
+                pattern_type: def.pattern_type.clone(),
+                float_value: item.float_value,
+            },
+        );
+    }
+    out
+}
 
 /// What the animation needs to know about this frame.
 pub struct Frame {
@@ -96,6 +267,10 @@ struct Shape {
 
 pub struct WeaponViewModel {
     weapon: String,
+    /// The skin the current model was built with. The palette is baked into the
+    /// vertices, so a change of skin has to rebuild the model -- and an
+    /// unchanged one must not.
+    skin: Option<Skin>,
     shape: Option<Shape>,
     kick: f32,
     bob_phase: f32,
@@ -121,6 +296,7 @@ impl Default for WeaponViewModel {
     fn default() -> WeaponViewModel {
         WeaponViewModel {
             weapon: String::new(),
+            skin: None,
             shape: None,
             kick: 0.0,
             bob_phase: 0.0,
@@ -139,14 +315,24 @@ impl Default for WeaponViewModel {
 }
 
 impl WeaponViewModel {
-    /// Swap the model. A no-op when already holding this weapon, so the frame
-    /// loop can call it every frame with whatever the server last said.
-    pub fn set_weapon(&mut self, id: &str) {
-        if id == self.weapon {
+    /// Swap the model. A no-op when already holding this weapon in this skin, so
+    /// the frame loop can call it every frame with whatever the server last said.
+    ///
+    /// The skin is part of the identity rather than a property applied
+    /// afterwards: the colours are baked into the vertices, so equipping one
+    /// without rebuilding would leave the previous skin on the gun with nothing
+    /// anywhere to say that a change had been made.
+    pub fn set_weapon(&mut self, id: &str, skin: Option<&Skin>) {
+        if id == self.weapon && skin == self.skin.as_ref() {
             return;
         }
         self.weapon = id.to_string();
-        self.shape = if id.is_empty() { None } else { Some(build(id)) };
+        self.skin = skin.cloned();
+        self.shape = if id.is_empty() {
+            None
+        } else {
+            Some(build(id, skin))
+        };
     }
 
     pub fn weapon(&self) -> &str {
@@ -337,24 +523,26 @@ fn flash_cone() -> Vec<Vertex> {
 /// Ids are the backend's (`weapons.py`): knife, pistol, assault, shotgun,
 /// sniper. An unknown id gets the rifle rather than nothing — a new weapon
 /// should look wrong, not invisible.
-fn build(id: &str) -> Shape {
+fn build(id: &str, skin: Option<&Skin>) -> Shape {
+    let palette = palette_for(skin);
+    let (metal, dark, grip, accent) = (palette.body, palette.dark, palette.grip, palette.accent);
     let (parts, muzzle, rest): (Vec<Part>, Vec3, Vec3) = match id {
         "knife" => (
             vec![
-                part([0.14, 0.17, 0.6], [0.0, 0.0, 0.1], GRIP),
-                part([0.05, 0.05, 0.1], [0.0, 0.0, -0.24], ACCENT),
+                part([0.14, 0.17, 0.6], [0.0, 0.0, 0.1], grip),
+                part([0.05, 0.05, 0.1], [0.0, 0.0, -0.24], accent),
                 // Blade: a flat box, already tapered in its own proportions
                 // rather than by a scale on the mesh, which this builder has no
                 // node to hang.
-                part([0.045, 0.18, 1.0], [0.0, 0.03, -0.8], ACCENT),
+                part([0.045, 0.18, 1.0], [0.0, 0.03, -0.8], accent),
             ],
             Vec3::new(0.0, 0.03, -1.3),
             Vec3::new(0.06, -0.32, 0.22),
         ),
         "pistol" => (
             vec![
-                part([0.22, 0.3, 1.05], [0.0, 0.0, -0.5], METAL),
-                tube(0.05, 0.3, [0.0, 0.0, -1.12], ACCENT),
+                part([0.22, 0.3, 1.05], [0.0, 0.0, -0.5], metal),
+                tube(0.05, 0.3, [0.0, 0.0, -1.12], accent),
                 rotated(
                     [0.2, 0.62, 0.34],
                     [0.0, -0.42, -0.02],
@@ -363,19 +551,19 @@ fn build(id: &str) -> Shape {
                 ),
                 // Trigger guard, as a bar under the receiver: small, but its
                 // absence is what makes a box read as a box.
-                part([0.1, 0.06, 0.3], [0.0, -0.24, -0.35], DARK),
-                part([0.06, 0.08, 0.05], [0.0, 0.19, -0.98], ACCENT),
+                part([0.1, 0.06, 0.3], [0.0, -0.24, -0.35], dark),
+                part([0.06, 0.08, 0.05], [0.0, 0.19, -0.98], accent),
             ],
             Vec3::new(0.0, 0.0, -1.3),
             Vec3::new(0.0, -0.05, 0.0),
         ),
         "shotgun" => (
             vec![
-                tube(0.08, 2.1, [-0.09, 0.02, -1.45], METAL),
-                tube(0.08, 2.1, [0.09, 0.02, -1.45], METAL),
-                part([0.34, 0.32, 0.8], [0.0, -0.02, -0.3], DARK),
+                tube(0.08, 2.1, [-0.09, 0.02, -1.45], metal),
+                tube(0.08, 2.1, [0.09, 0.02, -1.45], metal),
+                part([0.34, 0.32, 0.8], [0.0, -0.02, -0.3], dark),
                 // Pump, forward under the barrels.
-                part([0.3, 0.2, 0.55], [0.0, -0.16, -1.15], GRIP),
+                part([0.3, 0.2, 0.55], [0.0, -0.16, -1.15], grip),
                 rotated(
                     [0.24, 0.36, 0.9],
                     [0.0, -0.16, 0.5],
@@ -388,15 +576,15 @@ fn build(id: &str) -> Shape {
         ),
         "sniper" => (
             vec![
-                tube(0.055, 2.5, [0.0, 0.02, -1.75], METAL),
-                part([0.26, 0.32, 1.1], [0.0, -0.04, -0.5], DARK),
+                tube(0.055, 2.5, [0.0, 0.02, -1.75], metal),
+                part([0.26, 0.32, 1.1], [0.0, -0.04, -0.5], dark),
                 // Scope on two mounts.
-                tube(0.12, 0.9, [0.0, 0.32, -0.85], DARK),
-                part([0.08, 0.18, 0.08], [0.0, 0.18, -0.5], METAL),
-                part([0.08, 0.18, 0.08], [0.0, 0.18, -1.2], METAL),
+                tube(0.12, 0.9, [0.0, 0.32, -0.85], dark),
+                part([0.08, 0.18, 0.08], [0.0, 0.18, -0.5], metal),
+                part([0.08, 0.18, 0.08], [0.0, 0.18, -1.2], metal),
                 // Bolt handle, out to the right where you would work it.
-                part([0.3, 0.07, 0.07], [0.18, 0.02, -0.15], ACCENT),
-                rotated([0.2, 0.5, 0.3], [0.0, -0.34, -0.35], DARK, [0.18, 0.0, 0.0]),
+                part([0.3, 0.07, 0.07], [0.18, 0.02, -0.15], accent),
+                rotated([0.2, 0.5, 0.3], [0.0, -0.34, -0.35], dark, [0.18, 0.0, 0.0]),
                 rotated(
                     [0.24, 0.4, 1.1],
                     [0.0, -0.14, 0.55],
@@ -410,11 +598,11 @@ fn build(id: &str) -> Shape {
         // Assault rifle, and the fallback for anything new.
         _ => (
             vec![
-                part([0.26, 0.36, 1.6], [0.0, 0.0, -0.8], DARK),
-                tube(0.055, 1.0, [0.0, 0.04, -2.0], METAL),
+                part([0.26, 0.36, 1.6], [0.0, 0.0, -0.8], dark),
+                tube(0.055, 1.0, [0.0, 0.04, -2.0], metal),
                 // Top rail and front sight.
-                part([0.14, 0.09, 0.9], [0.0, 0.23, -0.7], METAL),
-                part([0.07, 0.16, 0.06], [0.0, 0.28, -2.35], ACCENT),
+                part([0.14, 0.09, 0.9], [0.0, 0.23, -0.7], metal),
+                part([0.07, 0.16, 0.06], [0.0, 0.28, -2.35], accent),
                 // Magazine, raked forward the way a curved one sits.
                 rotated(
                     [0.2, 0.66, 0.32],
@@ -631,15 +819,160 @@ mod tests {
         out
     }
 
+    fn skin(base: &str, accent: &str, pattern: &str, wear: f32) -> Skin {
+        Skin {
+            base_color: base.into(),
+            accent_color: accent.into(),
+            pattern_type: pattern.into(),
+            float_value: wear,
+        }
+    }
+
+    fn colors(vm: &mut WeaponViewModel) -> Vec<[f32; 3]> {
+        let mut out = Vec::new();
+        vm.vertices(&mut out);
+        out.iter().map(|v| v.color).collect()
+    }
+
+    /// How far a palette is from grey. Wear pulls every channel together, so
+    /// this is what "duller" means as a number.
+    fn saturation(colors: &[[f32; 3]]) -> f32 {
+        colors
+            .iter()
+            .map(|c| {
+                let hi = c[0].max(c[1]).max(c[2]);
+                let lo = c[0].min(c[1]).min(c[2]);
+                hi - lo
+            })
+            .sum()
+    }
+
+    #[test]
+    fn an_equipped_skin_reaches_the_weapon() {
+        // The bug this exists for: the armoury could equip a skin and the gun in
+        // your hands stayed the colour it had always been. A weapon in its
+        // default palette looks perfectly fine, so the only symptom was somebody
+        // noticing that the thing they equipped was not there.
+        let mut plain = WeaponViewModel::default();
+        plain.set_weapon("assault", None);
+        plain.update(0.016, &frame(true));
+        let before = colors(&mut plain);
+
+        let mut skinned = WeaponViewModel::default();
+        skinned.set_weapon("assault", Some(&skin("#38bdf8", "#f43f5e", "solid", 0.03)));
+        skinned.update(0.016, &frame(true));
+        let after = colors(&mut skinned);
+
+        assert_eq!(after.len(), before.len(), "the model changed shape");
+        assert_ne!(after, before, "the skin was not applied");
+    }
+
+    #[test]
+    fn wear_is_visible_rather_than_bookkeeping() {
+        // A float value nobody can see is a number the whole economy is built on
+        // and no player can check.
+        let mut fresh = WeaponViewModel::default();
+        fresh.set_weapon("assault", Some(&skin("#38bdf8", "#f43f5e", "solid", 0.0)));
+        fresh.update(0.016, &frame(true));
+        let mut worn = WeaponViewModel::default();
+        worn.set_weapon("assault", Some(&skin("#38bdf8", "#f43f5e", "solid", 0.95)));
+        worn.update(0.016, &frame(true));
+        assert!(saturation(&colors(&mut worn)) < saturation(&colors(&mut fresh)));
+    }
+
+    #[test]
+    fn a_change_of_skin_rebuilds_and_an_unchanged_one_does_not() {
+        // The colours are baked into the vertices, so a skin swap that did not
+        // rebuild would leave the previous one on the gun with nothing to say so.
+        let mut vm = WeaponViewModel::default();
+        let first = skin("#38bdf8", "#f43f5e", "solid", 0.03);
+        vm.set_weapon("assault", Some(&first));
+        vm.update(0.016, &frame(true));
+        let before = colors(&mut vm);
+
+        vm.set_weapon("assault", Some(&first.clone()));
+        assert_eq!(colors(&mut vm), before, "an identical skin rebuilt");
+
+        vm.set_weapon("assault", Some(&skin("#eab308", "#dc2626", "fade", 0.03)));
+        vm.update(0.016, &frame(true));
+        assert_ne!(colors(&mut vm), before);
+    }
+
+    #[test]
+    fn a_near_black_skin_is_still_a_visible_weapon() {
+        // `assault_slate` is #09090b, and this shader has one ambient wash and no
+        // speculars: taken literally it draws a silhouette. The floor keeps the
+        // hue and lifts the brightness.
+        let mut vm = WeaponViewModel::default();
+        vm.set_weapon("assault", Some(&skin("#09090b", "#27272a", "solid", 0.03)));
+        vm.update(0.016, &frame(true));
+        let brightest = colors(&mut vm)
+            .iter()
+            .map(|c| c[0].max(c[1]).max(c[2]))
+            .fold(0.0f32, f32::max);
+        assert!(
+            brightest > 0.12,
+            "the whole weapon was near black: {brightest}"
+        );
+    }
+
+    #[test]
+    fn the_floor_leaves_an_unskinned_weapon_exactly_as_it_was() {
+        // A player carrying no skin must see the palette they always did, so the
+        // lift is applied to skins and to nothing else.
+        let plain = palette_for(None);
+        assert_eq!(plain.body, METAL);
+        assert_eq!(plain.dark, DARK);
+        assert_eq!(plain.grip, GRIP);
+        assert_eq!(plain.accent, ACCENT);
+    }
+
+    #[test]
+    fn an_unparseable_colour_falls_back_rather_than_rendering_black() {
+        // The catalogue is data. A client that turned a missing colour into
+        // black would show a weapon nobody designed.
+        assert_eq!(parse_color("not-a-colour", METAL), METAL);
+        assert_eq!(parse_color("", METAL), METAL);
+        assert_eq!(parse_color("#zzzzzz", METAL), METAL);
+        // And a real one is read, with or without the hash.
+        let red = parse_color("#ff0000", METAL);
+        assert!((red[0] - 1.0).abs() < 1e-6 && red[1] == 0.0 && red[2] == 0.0);
+        assert_eq!(parse_color("ff0000", METAL), red);
+    }
+
+    #[test]
+    fn only_equipped_items_with_a_definition_become_skins() {
+        use crate::api::{SkinDefinition, SkinInstance};
+        let equipped = |weapon: &str, is_equipped: bool, definition: bool| SkinInstance {
+            is_equipped,
+            float_value: 0.2,
+            definition: definition.then(|| SkinDefinition {
+                weapon_id: weapon.into(),
+                base_color: "#38bdf8".into(),
+                accent_color: "#f43f5e".into(),
+                pattern_type: "solid".into(),
+            }),
+        };
+        let map = equipped_skins(&[
+            equipped("assault", true, true),
+            equipped("sniper", false, true),
+            // No definition: skipped rather than guessed, or the weapon would
+            // wear a colour the armoury never showed.
+            equipped("pistol", true, false),
+        ]);
+        assert_eq!(map.keys().collect::<Vec<_>>(), vec!["assault"]);
+        assert!((map["assault"].float_value - 0.2).abs() < 1e-6);
+    }
+
     #[test]
     fn a_weapon_swap_replaces_the_model_and_only_on_a_change() {
         let mut vm = WeaponViewModel::default();
-        vm.set_weapon("sniper");
+        vm.set_weapon("sniper", None);
         vm.update(0.016, &frame(true));
         let sniper = drawn(&mut vm).len();
-        vm.set_weapon("sniper");
+        vm.set_weapon("sniper", None);
         assert_eq!(drawn(&mut vm).len(), sniper, "an idempotent swap rebuilt");
-        vm.set_weapon("knife");
+        vm.set_weapon("knife", None);
         vm.update(0.016, &frame(true));
         assert_ne!(drawn(&mut vm).len(), sniper);
     }
@@ -649,11 +982,11 @@ mod tests {
         // A new weapon on the server should look wrong, not invisible: an empty
         // model reads as the view model having broken.
         let mut vm = WeaponViewModel::default();
-        vm.set_weapon("railgun");
+        vm.set_weapon("railgun", None);
         vm.update(0.016, &frame(true));
         let unknown = drawn(&mut vm).len();
         let mut rifle = WeaponViewModel::default();
-        rifle.set_weapon("assault");
+        rifle.set_weapon("assault", None);
         rifle.update(0.016, &frame(true));
         assert_eq!(unknown, drawn(&mut rifle).len());
         assert!(unknown > 0);
@@ -662,7 +995,7 @@ mod tests {
     #[test]
     fn nothing_is_drawn_while_dead() {
         let mut vm = WeaponViewModel::default();
-        vm.set_weapon("assault");
+        vm.set_weapon("assault", None);
         vm.update(0.016, &frame(false));
         assert!(drawn(&mut vm).is_empty());
     }
@@ -670,7 +1003,7 @@ mod tests {
     #[test]
     fn the_muzzle_flash_is_lit_for_two_frames_and_then_gone() {
         let mut vm = WeaponViewModel::default();
-        vm.set_weapon("assault");
+        vm.set_weapon("assault", None);
         vm.update(0.016, &frame(true));
         let quiet = drawn(&mut vm).len();
         vm.fire();
@@ -685,7 +1018,7 @@ mod tests {
     #[test]
     fn recoil_kicks_the_weapon_back_and_then_settles() {
         let mut vm = WeaponViewModel::default();
-        vm.set_weapon("assault");
+        vm.set_weapon("assault", None);
         vm.update(0.016, &frame(true));
         let rest = vm.transform.w_axis.z;
         vm.fire();
@@ -707,7 +1040,7 @@ mod tests {
         // The cap is the point: an uncapped additive kick puts the gun behind
         // the player's ear after a second of automatic fire.
         let mut vm = WeaponViewModel::default();
-        vm.set_weapon("assault");
+        vm.set_weapon("assault", None);
         for _ in 0..200 {
             vm.fire();
             vm.update(0.016, &frame(true));
@@ -722,7 +1055,7 @@ mod tests {
         // nearly 2π. Taken literally that is a fling; taken the short way round it
         // is the small movement it actually was.
         let mut vm = WeaponViewModel::default();
-        vm.set_weapon("assault");
+        vm.set_weapon("assault", None);
         let tau = std::f32::consts::TAU;
         let mut f = frame(true);
         f.yaw = tau - 0.01;
@@ -735,7 +1068,7 @@ mod tests {
     #[test]
     fn reloading_dips_the_weapon_and_returns_it() {
         let mut vm = WeaponViewModel::default();
-        vm.set_weapon("assault");
+        vm.set_weapon("assault", None);
         let mut f = frame(true);
         f.reloading = true;
         for _ in 0..60 {

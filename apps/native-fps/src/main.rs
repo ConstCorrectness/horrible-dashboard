@@ -36,6 +36,7 @@ use hassault_native::api::NodeApi;
 use hassault_native::geometry;
 use hassault_native::net::{Incoming, MatchSocket};
 use hassault_native::protocol::{Command, Event};
+use hassault_native::viewmodel;
 use hassault_native::world::World;
 
 use crate::app::App;
@@ -235,6 +236,22 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    // The armoury, which is cosmetic by definition: a node that cannot answer
+    // gets a weapon in its default colours, never a refusal to play.
+    let skins = match node.skins() {
+        Ok(items) => {
+            let equipped = viewmodel::equipped_skins(&items);
+            if !equipped.is_empty() {
+                eprintln!("hassault: {} weapon skins equipped", equipped.len());
+            }
+            equipped
+        }
+        Err(e) => {
+            eprintln!("hassault: no skins ({e}); weapons in default colours");
+            Default::default()
+        }
+    };
+
     if args.check_only {
         return Ok(());
     }
@@ -252,7 +269,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             args.map
         );
         let event_loop = EventLoop::new()?;
-        let mut app = App::new(world, mesh, None, args.sensitivity, weapons);
+        let mut app = App::new(world, mesh, None, args.sensitivity, weapons, skins);
         event_loop.run_app(&mut app)?;
         return Ok(());
     }
@@ -276,7 +293,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let event_loop = EventLoop::new()?;
-    let mut app = App::new(world, mesh, Some(socket), args.sensitivity, weapons);
+    let mut app = App::new(world, mesh, Some(socket), args.sensitivity, weapons, skins);
     if args.mode == Mode::Host {
         // Queued, not sent: `add_bot` needs the room the welcome names, and it is
         // host-only on the channel — which is why the launcher only ever sends a

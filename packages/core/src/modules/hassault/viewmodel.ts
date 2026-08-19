@@ -54,6 +54,177 @@ export interface ViewModelFrame {
   visible: boolean;
 }
 
+/**
+ * The equipped skin for the weapon in your hands.
+ *
+ * Only the four things a *procedural* weapon can actually express. The skin
+ * economy also carries a rarity, a collection, a pattern seed and a name, and
+ * none of those change what a box made of boxes looks like — so none of them are
+ * here. What does change it: two colours, how they are laid out, and the wear.
+ */
+export interface WeaponSkin {
+  baseColor: string;
+  accentColor: string;
+  /** `solid` | `camo` | `anodized` | `custom_art` | `patina` | `fade`. */
+  patternType: string;
+  /** 0 Factory New … 1 Battle-Scarred. */
+  floatValue: number;
+}
+
+/**
+ * The equipped skin for each weapon, keyed by weapon id.
+ *
+ * Takes the whole inventory because that is what the node serves — there is no
+ * "what am I wearing" route, and asking for one to save this four-line filter
+ * would be a second source of truth for the same fact.
+ *
+ * An instance whose definition did not come with it is **skipped rather than
+ * guessed**: without `baseColor` there is no skin to apply, and inventing one
+ * would put a colour on the weapon that the armoury never showed the player.
+ */
+export function equippedSkins(
+  inventory: {
+    isEquipped: boolean;
+    floatValue: number;
+    definition?: { weaponId: string; baseColor: string; accentColor: string; patternType: string };
+  }[],
+): Record<string, WeaponSkin> {
+  const out: Record<string, WeaponSkin> = {};
+  for (const item of inventory) {
+    if (!item.isEquipped || !item.definition) continue;
+    out[item.definition.weaponId] = {
+      baseColor: item.definition.baseColor,
+      accentColor: item.definition.accentColor,
+      patternType: item.definition.patternType,
+      floatValue: item.floatValue,
+    };
+  }
+  return out;
+}
+
+/** The unskinned weapon: the palette every gun had before the armoury existed. */
+const DEFAULT_PALETTE = {
+  body: 0x3a4048,
+  dark: 0x1c2026,
+  grip: 0x4a3f33,
+  accent: 0x8a929c,
+};
+
+/** Where a skin's colours go, once wear has been applied. */
+interface Palette {
+  body: number;
+  dark: number;
+  grip: number;
+  accent: number;
+}
+
+/** `#rrggbb` to a three-friendly integer. Anything unparseable falls back. */
+function parseColor(value: string, fallback: number): number {
+  const hex = /^#?([0-9a-f]{6})$/i.exec(value.trim());
+  return hex ? parseInt(hex[1], 16) : fallback;
+}
+
+function mix(a: number, b: number, t: number): number {
+  const f = Math.max(0, Math.min(1, t));
+  const out = [16, 8, 0].map((shift) => {
+    const ca = (a >> shift) & 0xff;
+    const cb = (b >> shift) & 0xff;
+    return Math.round(ca + (cb - ca) * f);
+  });
+  return (out[0] << 16) | (out[1] << 8) | out[2];
+}
+
+/** Grime. What a Battle-Scarred rifle is mixed toward. */
+const WEAR_COLOR = 0x5a554e;
+
+/**
+ * The darkest a *skinned* surface is allowed to be.
+ *
+ * `assault_slate`'s base colour is `#09090b`, which is a legitimate design and
+ * draws as a gun-shaped hole: there are no speculars on these materials and the
+ * weapon sits in the darkest corner of the screen. The floor keeps the skin's hue
+ * and lifts only its brightness — the smallest lie that leaves the weapon
+ * readable — and it is applied **only to skins**, so a player carrying none sees
+ * exactly the palette they always did.
+ */
+const MIN_LUMA = 0.14;
+
+function luma(hex: number): number {
+  return (0.299 * ((hex >> 16) & 0xff) + 0.587 * ((hex >> 8) & 0xff) + 0.114 * (hex & 0xff)) / 255;
+}
+
+function lift(hex: number): number {
+  const l = luma(hex);
+  if (l >= MIN_LUMA) return hex;
+  return mix(hex, 0xffffff, (MIN_LUMA - l) / Math.max(1e-3, 1 - l));
+}
+
+/**
+ * A skin's colours, arranged for a weapon made of boxes.
+ *
+ * **Wear is applied here rather than being decoration**, because a float value
+ * you cannot see is a number the whole economy is built on and nobody can check.
+ * Factory New (0.03) is essentially untouched; Battle-Scarred (0.8) is visibly
+ * dulled toward grime. It is a mix rather than a texture for the same reason
+ * everything else in this module is procedural — there is no texture set, and
+ * shipping one would be shipping somebody else's work.
+ *
+ * `patternType` cannot be a *pattern* without textures either, so it decides how
+ * the two colours are distributed across the parts instead. That is enough for a
+ * Fade to read as a fade and a Camo not to read as a Slate.
+ */
+function paletteFor(skin: WeaponSkin | null): Palette {
+  if (!skin) return { ...DEFAULT_PALETTE };
+  const base = parseColor(skin.baseColor, DEFAULT_PALETTE.body);
+  const accent = parseColor(skin.accentColor, DEFAULT_PALETTE.accent);
+  let palette: Palette;
+  switch (skin.patternType) {
+    case 'fade':
+      // Two colours across the length of the weapon, which is what a fade is.
+      palette = {
+        body: base,
+        dark: mix(base, accent, 0.5),
+        grip: accent,
+        accent: mix(accent, 0xffffff, 0.25),
+      };
+      break;
+    case 'camo':
+      // Blotches are not available, so the parts alternate instead.
+      palette = {
+        body: base,
+        dark: mix(base, 0x000000, 0.55),
+        grip: mix(base, accent, 0.65),
+        accent: mix(base, 0x000000, 0.3),
+      };
+      break;
+    case 'anodized':
+      // Metal dyed in one colour, with bright hardware.
+      palette = {
+        body: base,
+        dark: mix(base, 0x000000, 0.4),
+        grip: mix(base, 0x000000, 0.65),
+        accent,
+      };
+      break;
+    default:
+      // `solid`, `patina`, `custom_art`: the base carries the weapon and the
+      // accent picks out the barrel and the sights.
+      palette = {
+        body: base,
+        dark: mix(base, 0x000000, 0.5),
+        grip: mix(accent, 0x000000, 0.5),
+        accent,
+      };
+  }
+  const wear = Math.max(0, Math.min(1, skin.floatValue)) * 0.55;
+  return {
+    body: lift(mix(palette.body, WEAR_COLOR, wear)),
+    dark: lift(mix(palette.dark, WEAR_COLOR, wear * 0.7)),
+    grip: lift(mix(palette.grip, WEAR_COLOR, wear)),
+    accent: lift(mix(palette.accent, WEAR_COLOR, wear)),
+  };
+}
+
 /** One weapon's geometry, as `build` hands it back. */
 interface Shape {
   group: THREE.Group;
@@ -80,6 +251,9 @@ export class WeaponViewModel {
   private readonly pivot: THREE.Group;
   private built: Built | null = null;
   private weaponId = '';
+  /** The skin the current model was built with, so a change of skin rebuilds it
+   * and an unchanged one does not. */
+  private skinKey = '';
   /** Geometries created by the build in progress, collected by `box`/`tube`. */
   private building: THREE.BufferGeometry[] = [];
 
@@ -96,12 +270,13 @@ export class WeaponViewModel {
    * to full amplitude on the frame W goes down looks like a glitch, not a stride. */
   private walk = 0;
 
-  // Shared across every model and owned by this object, so a weapon swap frees
-  // only that model's geometry and never a material something else is using.
-  private readonly metal: THREE.MeshLambertMaterial;
-  private readonly dark: THREE.MeshLambertMaterial;
-  private readonly grip: THREE.MeshLambertMaterial;
-  private readonly accent: THREE.MeshLambertMaterial;
+  // Built with the model rather than shared, because they now carry the skin:
+  // two weapons in one match are two different guns, and a material shared
+  // between them could only ever show one of them. Freed by `release`.
+  private metal!: THREE.MeshLambertMaterial;
+  private dark!: THREE.MeshLambertMaterial;
+  private grip!: THREE.MeshLambertMaterial;
+  private accent!: THREE.MeshLambertMaterial;
 
   constructor(
     private readonly three: typeof THREE,
@@ -110,10 +285,7 @@ export class WeaponViewModel {
     scene: THREE.Scene,
     private readonly camera: THREE.Camera,
   ) {
-    this.metal = new three.MeshLambertMaterial({ color: 0x3a4048 });
-    this.dark = new three.MeshLambertMaterial({ color: 0x1c2026 });
-    this.grip = new three.MeshLambertMaterial({ color: 0x4a3f33 });
-    this.accent = new three.MeshLambertMaterial({ color: 0x8a929c });
+    this.setPalette(null);
 
     this.pivot = new three.Group();
     this.pivot.position.set(HOME.x, HOME.y, HOME.z);
@@ -126,12 +298,24 @@ export class WeaponViewModel {
     if (!camera.parent) scene.add(camera);
   }
 
-  /** Swap the model. A no-op when already holding this weapon. */
-  setWeapon(id: string): void {
-    if (id === this.weaponId) return;
+  /**
+   * Swap the model. A no-op when already holding this weapon in this skin.
+   *
+   * The skin is part of the identity, not a property set afterwards: the
+   * materials are baked into the built model, so changing one without rebuilding
+   * would leave the gun in your hands wearing the previous skin with no sign
+   * that anything was applied.
+   */
+  setWeapon(id: string, skin: WeaponSkin | null = null): void {
+    const skinKey = skin
+      ? `${skin.baseColor}|${skin.accentColor}|${skin.patternType}|${skin.floatValue}`
+      : '';
+    if (id === this.weaponId && skinKey === this.skinKey) return;
     this.weaponId = id;
+    this.skinKey = skinKey;
     this.release();
     if (!id) return;
+    this.setPalette(skin);
 
     this.building = [];
     const shape = this.build(id);
@@ -241,6 +425,24 @@ export class WeaponViewModel {
     this.release();
     this.camera.remove(this.pivot);
     for (const mat of [this.metal, this.dark, this.grip, this.accent]) mat.dispose();
+  }
+
+  /**
+   * Rebuild the four materials from a skin, or from the default palette.
+   *
+   * Ownership is unchanged from before skins existed: this object owns the
+   * palette and `release` owns the geometry, so a weapon swap frees only that
+   * model. The palette is simply rebuilt when the *skin* changes rather than
+   * created once — and the old one is disposed here, since a player cycling
+   * through an inventory would otherwise leak four materials per preview.
+   */
+  private setPalette(skin: WeaponSkin | null): void {
+    for (const mat of [this.metal, this.dark, this.grip, this.accent]) mat?.dispose();
+    const palette = paletteFor(skin);
+    this.metal = new this.three.MeshLambertMaterial({ color: palette.body });
+    this.dark = new this.three.MeshLambertMaterial({ color: palette.dark });
+    this.grip = new this.three.MeshLambertMaterial({ color: palette.grip });
+    this.accent = new this.three.MeshLambertMaterial({ color: palette.accent });
   }
 
   /** Drop the current model and its resources. Swapping weapons calls this, so a

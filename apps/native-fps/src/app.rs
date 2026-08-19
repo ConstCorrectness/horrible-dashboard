@@ -24,6 +24,7 @@
 //! superseded, and spends every frame correcting a guess it made from stale
 //! ground.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -44,7 +45,7 @@ use hassault_native::physics::{self, eye_height, MoveInput, JUMP_SPEED, MOVE_SPE
 use hassault_native::prediction::Prediction;
 use hassault_native::protocol::{Command, Event, Fx, PlayerRow, SelfState};
 use hassault_native::renderer::{Renderer, Vertex};
-use hassault_native::viewmodel::{self, WeaponViewModel};
+use hassault_native::viewmodel::{self, Skin, WeaponViewModel};
 use hassault_native::world::World;
 
 /// Degrees of view rotation per unit of raw mouse movement, before the user's own
@@ -108,6 +109,10 @@ pub struct App {
     /// weapon's own cone and the view model is built from the weapon's own id,
     /// and a local copy of either is wrong only for the weapon it is wrong for.
     weapons: Vec<WeaponSpec>,
+    /// The equipped skin for each weapon, by weapon id. Fetched once at startup
+    /// like the loadout: this process is launched per match, so there is no
+    /// moment during one when the armoury could change under it.
+    skins: HashMap<String, Skin>,
     /// The private half of the last snapshot — health, ammo, the reload clock.
     /// `None` in Train, which has no server to have said any of it.
     you: Option<SelfState>,
@@ -156,6 +161,7 @@ impl App {
         socket: Option<MatchSocket>,
         sensitivity: f32,
         weapons: Vec<WeaponSpec>,
+        skins: HashMap<String, Skin>,
     ) -> App {
         let map_name = world.info.name.clone();
         let mut app = App {
@@ -182,6 +188,7 @@ impl App {
             map_name,
             local_seq: 0,
             weapons,
+            skins,
             you: None,
             hud: Hud::default(),
             viewmodel: WeaponViewModel::default(),
@@ -312,7 +319,7 @@ impl App {
         if self.you.as_ref().is_some_and(|y| !y.alive) {
             self.unscope();
         }
-        self.viewmodel.set_weapon(&weapon);
+        self.viewmodel.set_weapon(&weapon, self.skins.get(&weapon));
         // Alive unless the server says otherwise, and only while the pointer is
         // captured: a weapon hanging in a window nobody is playing reads as the
         // client having frozen.
@@ -987,7 +994,7 @@ mod tests {
     fn training_app() -> App {
         let world = training_world();
         let mesh = build_world_mesh(&world);
-        App::new(world, mesh, None, 1.0, weapons())
+        App::new(world, mesh, None, 1.0, weapons(), HashMap::new())
     }
 
     #[test]

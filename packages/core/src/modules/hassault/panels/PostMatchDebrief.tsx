@@ -6,6 +6,18 @@ export interface PostMatchDebriefProps {
   onRequeue: () => void;
 }
 
+/**
+ * Where this sits, and why it is not `fixed`.
+ *
+ * **`absolute`, inside the pane.** A `position: fixed` overlay is positioned
+ * against the viewport, not against whatever contains it, so this used to cover
+ * the entire application — the taskbar, the workspace strip, every other pane —
+ * from a card belonging to one pane's match. At `zIndex: 9999` nothing could be
+ * drawn over it either, so a debrief that failed to dismiss took the whole app
+ * with it. The pane's other overlays (`BootOverlay` at 10, `MatchCompanion` at
+ * 100) are the house pattern: absolute, and a z-index that means something
+ * relative to its siblings rather than to the world.
+ */
 export function PostMatchDebrief({ summary, onDismiss, onRequeue }: PostMatchDebriefProps) {
   const isVictory = summary.won;
   const ratingSign = summary.ratingDelta >= 0 ? '+' : '';
@@ -13,16 +25,19 @@ export function PostMatchDebrief({ summary, onDismiss, onRequeue }: PostMatchDeb
   return (
     <div
       style={{
-        position: 'fixed',
+        position: 'absolute',
         inset: 0,
         background: 'rgba(13, 17, 23, 0.88)',
         backdropFilter: 'blur(10px)',
-        zIndex: 9999,
+        // Above the boot overlay (10) and the native companion (100), and
+        // nothing else — this belongs to the pane, not to the app.
+        zIndex: 200,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
         padding: '1rem',
         color: '#ffffff',
+        overflowY: 'auto',
       }}
     >
       <div
@@ -53,7 +68,9 @@ export function PostMatchDebrief({ summary, onDismiss, onRequeue }: PostMatchDeb
           >
             {isVictory ? '🏆 VICTORY' : '💀 DEFEAT'}
           </div>
-          <div style={{ color: 'var(--text-dim, #8b949e)', fontSize: '0.85rem', marginTop: '0.2rem' }}>
+          <div
+            style={{ color: 'var(--text-dim, #8b949e)', fontSize: '0.85rem', marginTop: '0.2rem' }}
+          >
             Map: <strong>{summary.mapName}</strong> · Match Concluded
           </div>
         </div>
@@ -72,20 +89,44 @@ export function PostMatchDebrief({ summary, onDismiss, onRequeue }: PostMatchDeb
           }}
         >
           <div>
-            <div style={{ fontSize: '1.3rem', fontWeight: 800, color: '#38bdf8' }}>{summary.kills}</div>
-            <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', textTransform: 'uppercase' }}>Kills</div>
+            <div style={{ fontSize: '1.3rem', fontWeight: 800, color: '#38bdf8' }}>
+              {summary.kills}
+            </div>
+            <div
+              style={{ fontSize: '0.7rem', color: 'var(--text-dim)', textTransform: 'uppercase' }}
+            >
+              Kills
+            </div>
           </div>
           <div>
-            <div style={{ fontSize: '1.3rem', fontWeight: 800, color: '#f43f5e' }}>{summary.deaths}</div>
-            <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', textTransform: 'uppercase' }}>Deaths</div>
+            <div style={{ fontSize: '1.3rem', fontWeight: 800, color: '#f43f5e' }}>
+              {summary.deaths}
+            </div>
+            <div
+              style={{ fontSize: '0.7rem', color: 'var(--text-dim)', textTransform: 'uppercase' }}
+            >
+              Deaths
+            </div>
           </div>
           <div>
-            <div style={{ fontSize: '1.3rem', fontWeight: 800, color: '#fbbf24' }}>{summary.headshotPercent}%</div>
-            <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', textTransform: 'uppercase' }}>HS Acc</div>
+            <div style={{ fontSize: '1.3rem', fontWeight: 800, color: '#fbbf24' }}>
+              {summary.headshotPercent}%
+            </div>
+            <div
+              style={{ fontSize: '0.7rem', color: 'var(--text-dim)', textTransform: 'uppercase' }}
+            >
+              HS Acc
+            </div>
           </div>
           <div>
-            <div style={{ fontSize: '1.3rem', fontWeight: 800, color: '#a78bfa' }}>{summary.damageDealt}</div>
-            <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)', textTransform: 'uppercase' }}>Damage</div>
+            <div style={{ fontSize: '1.3rem', fontWeight: 800, color: '#a78bfa' }}>
+              {summary.damageDealt}
+            </div>
+            <div
+              style={{ fontSize: '0.7rem', color: 'var(--text-dim)', textTransform: 'uppercase' }}
+            >
+              Damage
+            </div>
           </div>
         </div>
 
@@ -119,8 +160,14 @@ export function PostMatchDebrief({ summary, onDismiss, onRequeue }: PostMatchDeb
           }}
         >
           <div>
-            <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', textTransform: 'uppercase' }}>Competitive Rank</div>
-            <div style={{ fontSize: '1.1rem', fontWeight: 800, color: '#e2e8f0' }}>{summary.ratingTier}</div>
+            <div
+              style={{ fontSize: '0.72rem', color: 'var(--text-dim)', textTransform: 'uppercase' }}
+            >
+              Competitive Rank
+            </div>
+            <div style={{ fontSize: '1.1rem', fontWeight: 800, color: '#e2e8f0' }}>
+              {summary.ratingTier}
+            </div>
           </div>
           <div style={{ textAlign: 'right' }}>
             <div
@@ -130,7 +177,8 @@ export function PostMatchDebrief({ summary, onDismiss, onRequeue }: PostMatchDeb
                 color: summary.ratingDelta >= 0 ? '#4ade80' : '#f87171',
               }}
             >
-              {ratingSign}{summary.ratingDelta}
+              {ratingSign}
+              {summary.ratingDelta}
             </div>
             <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>
               Rating: <strong>{summary.newRating}</strong>
@@ -151,7 +199,9 @@ export function PostMatchDebrief({ summary, onDismiss, onRequeue }: PostMatchDeb
           }}
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.78rem' }}>
-            <span>Level {summary.currentLevel} Progress (+{summary.xpGained} XP)</span>
+            <span>
+              Level {summary.currentLevel} Progress (+{summary.xpGained} XP)
+            </span>
             <strong>{summary.levelProgressPercent}%</strong>
           </div>
           <div style={{ height: 8, background: '#30363d', borderRadius: 4, overflow: 'hidden' }}>
@@ -169,7 +219,8 @@ export function PostMatchDebrief({ summary, onDismiss, onRequeue }: PostMatchDeb
         {summary.earnedDrop && summary.earnedDrop.definition && (
           <div
             style={{
-              background: 'linear-gradient(90deg, rgba(234, 179, 8, 0.2) 0%, rgba(220, 38, 38, 0.2) 100%)',
+              background:
+                'linear-gradient(90deg, rgba(234, 179, 8, 0.2) 0%, rgba(220, 38, 38, 0.2) 100%)',
               border: `2px solid ${summary.earnedDrop.definition.rarityColor}`,
               borderRadius: 8,
               padding: '0.8rem',
@@ -179,11 +230,19 @@ export function PostMatchDebrief({ summary, onDismiss, onRequeue }: PostMatchDeb
             }}
           >
             <div>
-              <div style={{ color: '#fbbf24', fontWeight: 800, fontSize: '0.75rem', textTransform: 'uppercase' }}>
+              <div
+                style={{
+                  color: '#fbbf24',
+                  fontWeight: 800,
+                  fontSize: '0.75rem',
+                  textTransform: 'uppercase',
+                }}
+              >
                 🎁 Level-Up Care Package Reward!
               </div>
               <div style={{ fontSize: '1rem', fontWeight: 700, marginTop: '0.2rem' }}>
-                {summary.earnedDrop.definition.name} ({summary.earnedDrop.definition.weaponId.toUpperCase()})
+                {summary.earnedDrop.definition.name} (
+                {summary.earnedDrop.definition.weaponId.toUpperCase()})
               </div>
               <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>
                 {summary.earnedDrop.wearName} · Float: <code>{summary.earnedDrop.floatValue}</code>

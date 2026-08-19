@@ -624,6 +624,75 @@ client-owned, so how the gun waves about is nobody else's business. `setWeapon`
 disposes the outgoing model's own geometry before building the next one, so
 cycling a loadout never leaks a rifle.
 
+### Wearing a skin
+
+The armoury sells skins; for a while the gun in your hands never wore one. Both
+clients now read the equipped inventory and build the weapon from it —
+`equippedSkins` in `viewmodel.ts`, `viewmodel::equipped_skins` in the native
+client, filtering the same `/skins/inventory` list the armoury renders. There is
+no "what am I wearing" route on purpose: a second endpoint to save a four-line
+filter would be a second source of truth for the same fact.
+
+A weapon made of boxes can express four things, so a skin is reduced to four: two
+colours, a `patternType`, and the float.
+
+- **The skin is part of the model's identity**, not a property set afterwards. The
+  palette is baked into the materials (and into the vertex colours natively), so
+  applying one without rebuilding leaves the previous skin on the gun with nothing
+  anywhere to say a change was made. `setWeapon` therefore takes the skin and
+  rebuilds when *either* half changes — and stays a no-op when neither does, since
+  the render loop calls it every frame.
+- **Wear is drawn, not just recorded.** The float mixes the whole palette toward
+  grime: Factory New is essentially untouched, Battle-Scarred visibly dull. A float
+  value nobody can see is a number the entire economy is built on and no player can
+  check.
+- **`patternType` decides the layout, because there are no textures.** A fade runs
+  the two colours down the length of the weapon, a camo alternates parts, an
+  anodized skin dyes the metal and keeps bright hardware. Enough that a Fade reads
+  as a fade and a Camo does not read as a Slate.
+- **A skinned surface has a brightness floor.** `assault_slate`'s base colour is
+  `#09090b` — a legitimate design that, taken literally, draws a gun-shaped hole:
+  these materials have no speculars and the weapon sits in the darkest corner of
+  the screen. The floor keeps the skin's hue and lifts only its brightness, and it
+  is applied **to skins only**, so a player carrying none sees exactly the palette
+  they always did.
+- **An instance whose definition did not arrive is skipped, never guessed.**
+  Without a base colour there is no skin, and inventing one puts a colour on the
+  weapon that the armoury never showed the player.
+
+The arithmetic is duplicated in TypeScript and Rust rather than served, for the
+same reason a weapon's voice is: this is presentation. A drift makes a gun the
+wrong colour; it does not make a shot land somewhere else.
+
+The browser reloads the inventory **on every deploy** as well as on mount. The
+armoury is a different pane, so the gap between opening it and pressing Play is
+exactly the window in which what you are carrying can change without this pane
+hearing about it. The native client fetches once at startup, which is the same
+rule: that process is launched per match.
+
+### The post-match card belongs to the pane
+
+`PostMatchDebrief` is an overlay *inside* the pane, at a z-index that means
+something relative to its siblings (`BootOverlay` at 10, `MatchCompanion` at 100,
+this at 200). It was `position: fixed` at `zIndex: 9999`, which is positioned
+against the viewport rather than against whatever contains it — so a card
+belonging to one pane's match covered the entire application, taskbar and
+workspace strip included, with nothing able to draw over it.
+
+Two rules keep it from coming back, and both matter because the poll behind it
+runs every 1.5 s:
+
+- **A dismissal sticks locally, not only on the server.** The poll's request is
+  usually already in flight when the button is pressed, so clearing the state
+  alone lets the older response put the same card straight back; and if the
+  `dismiss_summary` POST fails, or a workspace switch remounts the pane, the
+  server still has the summary and hands it over again. The pane remembers the
+  `timestamp` it closed, so the same match can never be shown twice.
+- **It never draws over live gameplay.** A summary is only ever produced when a
+  *native* match exits, but the card outlives the match that made it, and one left
+  over from an earlier game would otherwise sit on top of a browser match still
+  being played.
+
 ## Identity: sign in, enlist, play
 
 It is a game, so it has a front door. Opening the pane runs a **boot sequence** —

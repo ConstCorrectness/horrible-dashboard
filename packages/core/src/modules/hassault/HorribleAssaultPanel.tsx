@@ -12,6 +12,7 @@ import {
   getMapInfo,
   getProcessStatus,
   getSession,
+  getSkinInventory,
   launchNativeFps,
   listInvitees,
   listMaps,
@@ -79,7 +80,7 @@ import { installReveal, type Reveal } from './reveal';
 import { onJoinRequested, takePendingJoin } from './invite-notify';
 import { MatchSession, type SessionState } from './session';
 import { TrainingRange } from './training';
-import { WeaponViewModel } from './viewmodel';
+import { equippedSkins, WeaponViewModel, type WeaponSkin } from './viewmodel';
 import { World } from './world';
 
 /**
@@ -295,6 +296,57 @@ export function HorribleAssaultPanel() {
   const [nativeStatus, setNativeStatus] = useState<string | null>(null);
   const [postMatchSummary, setPostMatchSummary] = useState<PostMatchSummary | null>(null);
 
+  /**
+   * The equipped skin for each weapon, by weapon id.
+   *
+   * A ref rather than state because the render loop reads it every frame and
+   * nothing in React's tree depends on it — and it is a **ref the loop reads
+   * live**, not a value captured when the scene was built, so equipping
+   * something in the armoury and coming back applies without a remount.
+   */
+  const skinsRef = useRef<Record<string, WeaponSkin>>({});
+
+  /**
+   * Load the equipped skins.
+   *
+   * Called on mount and again on every deploy: the armoury is a different pane,
+   * so the moment a skin can *change* without this pane knowing is the moment
+   * between opening it and pressing Play.
+   */
+  const refreshSkins = useCallback(async () => {
+    try {
+      const inventory = await getSkinInventory();
+      skinsRef.current = equippedSkins(inventory);
+    } catch {
+      // A missing armoury is a weapon in its default colours, not a broken
+      // match: skins are cosmetic, and failing to play over one would not be.
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshSkins();
+  }, [refreshSkins]);
+
+  /**
+   * The `timestamp` of the last debrief this player closed.
+   *
+   * **A dismissal has to stick locally**, not only on the server. This poll runs
+   * every 1.5s and its request is usually already in flight when the button is
+   * pressed, so clearing the state alone lets the older response put the same
+   * card straight back — and if the `dismiss` POST fails, or the pane is
+   * remounted by a workspace switch, the server still has the summary and hands
+   * it over again. Every route to "the victory screen will not go away" runs
+   * through trusting the server's copy to be gone; keying on the timestamp we
+   * closed means the same match can never be shown twice.
+   */
+  const dismissedSummaryAt = useRef(0);
+
+  const closeSummary = useCallback((summary: PostMatchSummary) => {
+    dismissedSummaryAt.current = Math.max(dismissedSummaryAt.current, summary.timestamp);
+    setPostMatchSummary(null);
+    void dismissMatchSummary();
+  }, []);
+
   useEffect(() => {
     let active = true;
     const interval = setInterval(async () => {
@@ -303,7 +355,12 @@ export function HorribleAssaultPanel() {
         if (!active) return;
         setNativeRunning(proc.running);
         setNativePid(proc.pid);
-        if (sum && !proc.running) {
+        if (!sum) {
+          // Cleared server-side — by this pane, another one, or a restart.
+          setPostMatchSummary(null);
+          return;
+        }
+        if (!proc.running && sum.timestamp > dismissedSummaryAt.current) {
           setPostMatchSummary(sum);
         }
       } catch {
@@ -890,7 +947,8 @@ export function HorribleAssaultPanel() {
           // is what the camera just did (angles) and what the player just did
           // (moved, fired, reloading).
           if (fired) viewmodel.fire();
-          viewmodel.setWeapon(shots?.weapon?.id ?? '');
+          const heldWeapon = shots?.weapon?.id ?? '';
+          viewmodel.setWeapon(heldWeapon, skinsRef.current[heldWeapon] ?? null);
           viewmodel.update(dt, {
             speed: moving ? MOVE_SPEED : 0,
             onGround: player.onGround,
@@ -1302,7 +1360,10 @@ export function HorribleAssaultPanel() {
   const deploy = useCallback(() => {
     setDeployed(true);
     setMenuOpen(false);
-  }, []);
+    // The armoury is another pane; this is the last moment before the gun is in
+    // your hands, so it is the right one to ask what you are carrying.
+    void refreshSkins();
+  }, [refreshSkins]);
 
   /**
    * Enter the world alone, on the loaded map.
@@ -1945,16 +2006,17 @@ export function HorribleAssaultPanel() {
           </div>
         )}
 
-        {postMatchSummary && (
+        {/* Never over live gameplay. A summary is only ever produced when a
+            *native* match exits, so the pane behind this is a menu — but the
+            card outlives the match that made it, and one left over from an
+            earlier native game would otherwise sit on top of a browser match
+            that is still being played. */}
+        {postMatchSummary && phase !== 'playing' && (
           <PostMatchDebrief
             summary={postMatchSummary}
-            onDismiss={() => {
-              void dismissMatchSummary();
-              setPostMatchSummary(null);
-            }}
+            onDismiss={() => closeSummary(postMatchSummary)}
             onRequeue={() => {
-              void dismissMatchSummary();
-              setPostMatchSummary(null);
+              closeSummary(postMatchSummary);
               host(3);
             }}
           />

@@ -165,6 +165,40 @@ pub struct WeaponSpec {
     pub zoom_levels: Vec<f32>,
 }
 
+/// One skin definition, as `skins.py` serves it.
+///
+/// Trimmed to what a weapon made of boxes can express: two colours and a layout.
+/// The economy also carries a rarity, a collection, a pattern seed and a name,
+/// and none of those change what the gun in your hands looks like.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SkinDefinition {
+    #[serde(rename = "weaponId", default)]
+    pub weapon_id: String,
+    #[serde(rename = "baseColor", default)]
+    pub base_color: String,
+    #[serde(rename = "accentColor", default)]
+    pub accent_color: String,
+    #[serde(rename = "patternType", default)]
+    pub pattern_type: String,
+}
+
+/// One item in the player's inventory.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct SkinInstance {
+    #[serde(rename = "isEquipped", default)]
+    pub is_equipped: bool,
+    /// 0 Factory New … 1 Battle-Scarred. Visible on the model — see
+    /// `viewmodel::palette_for`.
+    #[serde(rename = "floatValue", default)]
+    pub float_value: f32,
+    /// Absent when the node could not resolve the definition, which is the one
+    /// case that must be **skipped rather than guessed**: without a base colour
+    /// there is no skin, and inventing one puts a colour on the weapon that the
+    /// armoury never showed the player.
+    #[serde(default)]
+    pub definition: Option<SkinDefinition>,
+}
+
 /// The node's HTTP origin, e.g. `http://127.0.0.1:8000`.
 pub struct NodeApi {
     base: String,
@@ -241,6 +275,17 @@ impl NodeApi {
             .into_json()
             .map_err(|e| ApiError::Decode(e.to_string()))
     }
+
+    /// The player's inventory.
+    ///
+    /// There is no "what am I wearing" route and this client does not want one:
+    /// asking for a second endpoint to save a four-line filter would be a second
+    /// source of truth for the same fact. The browser reads the same list.
+    pub fn skins(&self) -> Result<Vec<SkinInstance>, ApiError> {
+        self.get("/api/hassault/skins/inventory")?
+            .into_json()
+            .map_err(|e| ApiError::Decode(e.to_string()))
+    }
 }
 
 #[cfg(test)]
@@ -288,6 +333,25 @@ mod tests {
         assert_eq!(weapons[0].id, "sniper");
         assert_eq!(weapons[0].zoom_levels, vec![2.0, 4.0]);
         assert!((weapons[0].hipfire_spread - 0.027).abs() < 1e-6);
+    }
+
+    #[test]
+    fn an_inventory_is_read_with_the_wire_s_camel_case_and_survives_a_missing_definition() {
+        // `r##` rather than `r#`: a colour literal contains `"#`, which ends a
+        // single-hash raw string in the middle of the fixture.
+        let json = r##"[
+            {"instanceId":"a","skinId":"assault_slate","floatValue":0.0345,
+             "isEquipped":true,"wearName":"Factory New",
+             "definition":{"weaponId":"assault","baseColor":"#38bdf8",
+                           "accentColor":"#f43f5e","patternType":"solid"}},
+            {"instanceId":"b","skinId":"gone","floatValue":0.5,"isEquipped":true}
+        ]"##;
+        let items: Vec<SkinInstance> = serde_json::from_str(json).unwrap();
+        assert!(items[0].is_equipped);
+        assert_eq!(items[0].definition.as_ref().unwrap().weapon_id, "assault");
+        // A definition the node could not resolve is `None`, not a default with
+        // an empty colour that would render as black.
+        assert!(items[1].definition.is_none());
     }
 
     #[test]

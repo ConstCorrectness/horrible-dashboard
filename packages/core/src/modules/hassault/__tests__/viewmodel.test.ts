@@ -1,0 +1,179 @@
+/**
+ * The weapon in your hands, and the skin on it.
+ *
+ * Headless: `viewmodel.ts` imports three only as a *type* and takes the library
+ * as a parameter, so the model can be built and inspected with no canvas and no
+ * WebGL context — which is the only reason any of this is testable at all.
+ *
+ * What is worth pinning is the part that was silently missing: an equipped skin
+ * reaching the gun. A weapon that renders in its default colours looks perfectly
+ * fine, so "the skin is not applied" has no symptom other than someone noticing
+ * that the thing they equipped is not there.
+ */
+import * as THREE from 'three';
+import { describe, expect, it } from 'vitest';
+
+import { equippedSkins, WeaponViewModel } from '../viewmodel';
+
+function item(
+  weaponId: string,
+  overrides: {
+    isEquipped?: boolean;
+    floatValue?: number;
+    baseColor?: string;
+    accentColor?: string;
+    patternType?: string;
+    definition?: undefined;
+  } = {},
+) {
+  const { isEquipped = true, floatValue = 0.03, ...rest } = overrides;
+  return {
+    isEquipped,
+    floatValue,
+    definition:
+      'definition' in overrides
+        ? undefined
+        : {
+            weaponId,
+            baseColor: rest.baseColor ?? '#38bdf8',
+            accentColor: rest.accentColor ?? '#f43f5e',
+            patternType: rest.patternType ?? 'solid',
+          },
+  };
+}
+
+/** Every material colour the built model actually uses. */
+function colors(vm: WeaponViewModel, camera: THREE.Camera): number[] {
+  const out: number[] = [];
+  camera.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    const material = mesh.material as THREE.MeshLambertMaterial | undefined;
+    if (mesh.isMesh && material?.color) out.push(material.color.getHex());
+  });
+  void vm;
+  return out;
+}
+
+function stand(): { vm: WeaponViewModel; camera: THREE.Camera } {
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera();
+  return { vm: new WeaponViewModel(THREE, scene, camera), camera };
+}
+
+describe('equippedSkins', () => {
+  it('keys the equipped skin by its weapon', () => {
+    const map = equippedSkins([
+      item('assault'),
+      item('sniper', { isEquipped: false }),
+      item('pistol', { baseColor: '#112233' }),
+    ]);
+    expect(Object.keys(map).sort()).toEqual(['assault', 'pistol']);
+    expect(map.pistol.baseColor).toBe('#112233');
+  });
+
+  it('skips an instance whose definition did not come with it', () => {
+    // Without `baseColor` there is no skin to apply. Inventing one would put a
+    // colour on the weapon that the armoury never showed the player.
+    expect(equippedSkins([item('assault', { definition: undefined })])).toEqual({});
+  });
+
+  it('carries the float through, because wear is visible', () => {
+    expect(equippedSkins([item('assault', { floatValue: 0.82 })]).assault.floatValue).toBe(0.82);
+  });
+});
+
+describe('WeaponViewModel skins', () => {
+  it('puts an equipped skin on the weapon', () => {
+    // The bug this exists for: the armoury could equip a skin and the gun in
+    // your hands stayed the colour it had always been.
+    const plain = stand();
+    plain.vm.setWeapon('assault');
+    const before = colors(plain.vm, plain.camera);
+
+    const skinned = stand();
+    skinned.vm.setWeapon('assault', {
+      baseColor: '#38bdf8',
+      accentColor: '#f43f5e',
+      patternType: 'solid',
+      floatValue: 0.03,
+    });
+    const after = colors(skinned.vm, skinned.camera);
+
+    expect(after.length).toBe(before.length);
+    expect(after).not.toEqual(before);
+  });
+
+  it('wears a battle-scarred skin visibly duller than a factory new one', () => {
+    // A float value nobody can see is a number the whole economy is built on
+    // and no player can check.
+    const fresh = stand();
+    const worn = stand();
+    const skin = {
+      baseColor: '#38bdf8',
+      accentColor: '#f43f5e',
+      patternType: 'solid',
+    };
+    fresh.vm.setWeapon('assault', { ...skin, floatValue: 0.0 });
+    worn.vm.setWeapon('assault', { ...skin, floatValue: 0.95 });
+
+    // Saturation is what wear takes away: grime pulls every channel together.
+    const spread = (hexes: number[]) =>
+      hexes.reduce((sum, hex) => {
+        const [r, g, b] = [(hex >> 16) & 0xff, (hex >> 8) & 0xff, hex & 0xff];
+        return sum + (Math.max(r, g, b) - Math.min(r, g, b));
+      }, 0);
+    expect(spread(colors(worn.vm, worn.camera))).toBeLessThan(
+      spread(colors(fresh.vm, fresh.camera)),
+    );
+  });
+
+  it('rebuilds when the skin changes, not only when the weapon does', () => {
+    // The materials are baked into the built model, so a skin swap that did not
+    // rebuild would leave the previous skin on the gun with nothing to say so.
+    const { vm, camera } = stand();
+    vm.setWeapon('assault', {
+      baseColor: '#38bdf8',
+      accentColor: '#f43f5e',
+      patternType: 'solid',
+      floatValue: 0.03,
+    });
+    const first = colors(vm, camera);
+    vm.setWeapon('assault', {
+      baseColor: '#eab308',
+      accentColor: '#dc2626',
+      patternType: 'fade',
+      floatValue: 0.03,
+    });
+    expect(colors(vm, camera)).not.toEqual(first);
+  });
+
+  it('is still a no-op when neither the weapon nor the skin changed', () => {
+    // The render loop calls this every frame with whatever the server last said.
+    const { vm, camera } = stand();
+    const skin = {
+      baseColor: '#38bdf8',
+      accentColor: '#f43f5e',
+      patternType: 'solid',
+      floatValue: 0.03,
+    };
+    vm.setWeapon('assault', skin);
+    const before = colors(vm, camera);
+    vm.setWeapon('assault', { ...skin });
+    expect(colors(vm, camera)).toEqual(before);
+  });
+
+  it('falls back to the default palette for an unparseable colour', () => {
+    // The catalogue is data, and a client that rendered `undefined` as black
+    // would show a weapon nobody designed.
+    const { vm, camera } = stand();
+    vm.setWeapon('assault', {
+      baseColor: 'not-a-colour',
+      accentColor: '',
+      patternType: 'solid',
+      floatValue: 0,
+    });
+    const hexes = colors(vm, camera);
+    expect(hexes.length).toBeGreaterThan(0);
+    expect(hexes.every((hex) => Number.isInteger(hex) && hex >= 0)).toBe(true);
+  });
+});
