@@ -1,307 +1,374 @@
-use minifb::{Key, MouseButton, MouseMode, Window, WindowOptions};
-use std::env;
-use std::f32::consts::PI;
+//! HorribleAssault, native client — **stages B1 and B2**.
+//!
+//! What this replaced is worth remembering, because it made claims: a `minifb`
+//! software framebuffer walking a hardcoded 16×16 grid, with no map loading and
+//! no networking at all (`tungstenite` was a declared dependency nothing
+//! imported), launched by a route that passed it `--connect`, `--room` and
+//! `--raw-input`, none of which it parsed — and advertised in the game's menu as
+//! a Vulkan client with sub-tick UDP networking.
+//!
+//! **B1 — the wire and the world.** Real maps fetched from the node and meshed by
+//! a port of the browser client's `world.ts`/`geometry.ts` (`world.rs`,
+//! `geometry.rs`), and the real `hassault` protocol on the node's shared `/ws`
+//! (`protocol.rs`, `net.rs`).
+//!
+//! **B2 — the renderer.** A `wgpu` device (`renderer.rs`), a first-person camera
+//! (`camera.rs`), bodies (`bodies.rs`) and the window and input loop (`app.rs`).
+//! `wgpu` selects DX12/Vulkan on Windows, Vulkan on Linux and Metal on macOS from
+//! one backend, which is the whole cross-platform claim.
+//!
+//! **B3 — prediction.** A Rust port of the movement rules (`physics.rs`) plus
+//! rewind-and-replay reconciliation (`prediction.rs`), so input moves you on the
+//! frame you pressed it. That port is the **third** implementation of one set of
+//! rules, and it takes its seat at the shared-fixture table
+//! (`tests/conformance.rs`) alongside the server's and the browser client's.
+//!
+//! Identity needs nothing here: the node takes the player's name from its own
+//! signed-in account and ignores anything a client sends.
+
+mod app;
+
 use std::time::{Duration, Instant};
 
-const WIDTH: usize = 960;
-const HEIGHT: usize = 600;
+use winit::event_loop::EventLoop;
 
-struct Player {
-    x: f32,
-    y: f32,
-    z: f32,
-    yaw: f32,
-    pitch: f32,
-    vx: f32,
-    vy: f32,
-    vz: f32,
-    on_ground: bool,
-    health: i32,
-    ammo: i32,
-    scoped: bool,
+use hassault_native::api::NodeApi;
+use hassault_native::geometry;
+use hassault_native::net::{Incoming, MatchSocket};
+use hassault_native::protocol::{Command, Event};
+use hassault_native::world::World;
+
+use crate::app::App;
+
+/// What the launcher was asked for, which is not always what a join is.
+///
+/// The route used to send none of this, so every launch was the same launch — "a
+/// match on this map, or open one". That made **Train a lie**: `match_server.join`
+/// with no room id is join-*or*-create, so pressing Train while anyone was playing
+/// that map put you in their firefight. It also meant the bot count the menu had
+/// just collected had nowhere to go.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Mode {
+    /// One player, one map, **no socket at all** — the browser client's Train,
+    /// minus its dummy range, which lives in `training.ts` and has no port yet.
+    Train,
+    /// Open (or join) a match here and field bots in it.
+    Host,
+    /// Enter a match that exists — a room id, or any room on the map.
+    Join,
+}
+
+impl Mode {
+    fn parse(v: &str) -> Option<Mode> {
+        match v {
+            "train" => Some(Mode::Train),
+            "host" => Some(Mode::Host),
+            "join" => Some(Mode::Join),
+            _ => None,
+        }
+    }
+}
+
+struct Args {
+    server: String,
+    map: String,
+    mode: Mode,
+    room: String,
+    host: String,
+    name: String,
+    /// Bots to field, `--mode=host` only.
+    bots: u32,
+    bot_skill: String,
+    /// Multiplies the turn per unit of raw mouse movement.
+    sensitivity: f32,
+    headless: bool,
+    /// Load and mesh the map, print what it found, and exit without connecting.
+    check_only: bool,
+}
+
+impl Default for Args {
+    fn default() -> Args {
+        Args {
+            // The node on this machine. `HORRIBLE_DEV_BACKEND_PORT` moves it —
+            // Hyper-V reserves ranges on Windows that can swallow 8000 — so the
+            // launcher passes `--server` rather than anyone guessing.
+            server: "http://127.0.0.1:8000".into(),
+            map: "hd_crossing".into(),
+            // Joining is the least surprising default and the one the old
+            // argument-free launch effectively did.
+            mode: Mode::Join,
+            room: String::new(),
+            host: String::new(),
+            name: "player".into(),
+            bots: 0,
+            bot_skill: "normal".into(),
+            sensitivity: 1.0,
+            headless: false,
+            check_only: false,
+        }
+    }
+}
+
+fn parse_args() -> Args {
+    let mut args = Args::default();
+    for arg in std::env::args().skip(1) {
+        if let Some(v) = arg.strip_prefix("--server=") {
+            args.server = v.to_string();
+        } else if let Some(v) = arg.strip_prefix("--map=") {
+            args.map = v.to_string();
+        } else if let Some(v) = arg.strip_prefix("--mode=") {
+            match Mode::parse(v) {
+                Some(m) => args.mode = m,
+                // Refused rather than defaulted: a typo'd mode silently becoming
+                // "join" is how Train quietly turns back into a match.
+                None => {
+                    eprintln!("hassault: unknown --mode={v} (train, host or join)");
+                    std::process::exit(2);
+                }
+            }
+        } else if let Some(v) = arg.strip_prefix("--bots=") {
+            if let Ok(n) = v.parse::<u32>() {
+                args.bots = n;
+            }
+        } else if let Some(v) = arg.strip_prefix("--bot-skill=") {
+            args.bot_skill = v.to_string();
+        } else if let Some(v) = arg.strip_prefix("--room=") {
+            args.room = v.to_string();
+        } else if let Some(v) = arg.strip_prefix("--host=") {
+            args.host = v.to_string();
+        } else if let Some(v) = arg.strip_prefix("--name=") {
+            args.name = v.to_string();
+        } else if let Some(v) = arg.strip_prefix("--sensitivity=") {
+            if let Ok(n) = v.parse::<f32>() {
+                // A zero or negative multiplier is a view that cannot turn, which
+                // reads as broken input rather than as a setting.
+                if n.is_finite() && n > 0.0 {
+                    args.sensitivity = n;
+                }
+            }
+        } else if arg.starts_with("--max-fps=") || arg.starts_with("--raw-input=") {
+            // Accepted and ignored, for the launcher's older request shape.
+            // There is no frame cap to set — the present mode decides — and raw
+            // input is not an option, it is how the mouse is read.
+        } else if arg == "--headless" {
+            args.headless = true;
+        } else if arg == "--check" {
+            args.check_only = true;
+        } else if arg == "--help" || arg == "-h" {
+            eprintln!(
+                "hassault (native)\n\
+                 \n\
+                   --server=<origin>   the node's HTTP origin (default http://127.0.0.1:8000)\n\
+                   --map=<name>        map to load and join\n\
+                   --mode=<mode>       train (no server), host, or join (default)\n\
+                   --bots=<n>          bots to field, --mode=host only\n\
+                   --bot-skill=<s>     easy, normal or hard (default normal)\n\
+                   --room=<id>         join a specific room rather than any on the map\n\
+                   --host=<node id>    that room is on a friend's node\n\
+                   --name=<label>      wire label only; the node uses your account's username\n\
+                   --sensitivity=<n>   turn per unit of raw mouse movement (default 1)\n\
+                   --headless          no window: connect, join, and log\n\
+                   --check             load and mesh the map, print it, and exit\n"
+            );
+            std::process::exit(0);
+        }
+    }
+    args
 }
 
 fn main() {
-    let args: Vec<String> = env::args().collect();
-    let mut map_name = "hd_crossing".to_string();
-    let mut player_name = "Player".to_string();
-    let mut max_fps = 240u64;
+    let args = parse_args();
+    if let Err(e) = run(&args) {
+        // One line, naming the thing that failed. The overwhelmingly common
+        // failure is "the node is not running", and it deserves to say so rather
+        // than surfacing as a window that never appears.
+        eprintln!("hassault: {e}");
+        std::process::exit(1);
+    }
+}
 
-    for arg in &args {
-        if let Some(val) = arg.strip_prefix("--map=") {
-            map_name = val.to_string();
-        } else if let Some(val) = arg.strip_prefix("--name=") {
-            player_name = val.to_string();
-        } else if let Some(val) = arg.strip_prefix("--max-fps=") {
-            if let Ok(fps) = val.parse::<u64>() {
-                max_fps = fps;
-            }
-        }
+fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
+    let node = NodeApi::new(&args.server);
+
+    eprintln!("hassault: loading {} from {}", args.map, args.server);
+    let info = node.map_info(&args.map)?;
+    let expected = info.cubic_size * info.plane_order.len();
+    let cubes = node.map_cubes(&args.map, expected)?;
+    let ssize = info.ssize;
+    let spawn_count = info
+        .entities
+        .iter()
+        .filter(|e| e.name == "playerstart")
+        .count();
+    let world = World::new(info, &cubes)?;
+    let mesh = geometry::build_world_mesh(&world);
+
+    eprintln!(
+        "hassault: {}×{} grid, {} spawns, {} triangles",
+        ssize, ssize, spawn_count, mesh.triangles
+    );
+    if world.info.truncated {
+        // The reader fills a short cube stream with defaults rather than
+        // rejecting the map, which is right — but silently playing a map that is
+        // partly invented is not.
+        eprintln!("hassault: warning — this map's cube stream was truncated and padded");
     }
 
-    let mut buffer: Vec<u32> = vec![0; WIDTH * HEIGHT];
-    let window_opts = WindowOptions {
-        resize: false,
-        scale: minifb::Scale::X1,
-        ..WindowOptions::default()
-    };
-
-    let title = format!(
-        "HorribleAssault Native High-Performance FPS [1000Hz Raw Input | {} FPS] — {} ({})",
-        max_fps, map_name, player_name
-    );
-
-    let mut window = match Window::new(&title, WIDTH, HEIGHT, window_opts) {
-        Ok(win) => win,
-        Err(err) => {
-            eprintln!("Unable to create native window: {}", err);
-            return;
+    // The weapon numbers are *served*, never hardcoded here: the client predicts
+    // recoil from `kickback` and divides its sensitivity by the scope
+    // magnification, and a stale local copy is an aim that is wrong only while
+    // scoped. Fetched now so a missing loadout is a startup error rather than a
+    // trigger that silently does nothing — the exact failure the browser client
+    // had until it started surfacing it.
+    let weapons = match node.weapons() {
+        Ok(weapons) if !weapons.is_empty() => {
+            eprintln!("hassault: {} weapons", weapons.len());
+            weapons
+        }
+        Ok(_) => {
+            eprintln!("hassault: warning — the node served an empty loadout; nothing will fire");
+            Vec::new()
+        }
+        Err(e) => {
+            eprintln!("hassault: warning — no loadout ({e}); nothing will fire");
+            Vec::new()
         }
     };
 
-    window.limit_update_rate(Some(Duration::from_micros(1_000_000 / max_fps)));
+    if args.check_only {
+        return Ok(());
+    }
 
-    let mut player = Player {
-        x: 8.0,
-        y: 8.0,
-        z: 0.0,
-        yaw: 0.0,
-        pitch: 0.0,
-        vx: 0.0,
-        vy: 0.0,
-        vz: 0.0,
-        on_ground: true,
-        health: 100,
-        ammo: 20,
-        scoped: false,
-    };
-
-    // Simple 16x16 map grid
-    let map = [
-        "1111111111111111",
-        "1000000000000001",
-        "1011000000110001",
-        "1011000000110001",
-        "1000001100000001",
-        "1000001100000001",
-        "1000000000000001",
-        "1001100000110001",
-        "1001100000110001",
-        "1000000000000001",
-        "1011000000110001",
-        "1011000000110001",
-        "1000000000000001",
-        "1000011110000001",
-        "1000000000000001",
-        "1111111111111111",
-    ];
-
-    let mut last_instant = Instant::now();
-    let mut last_mouse_pos = window.get_mouse_pos(MouseMode::Discard).unwrap_or((0.0, 0.0));
-    let mut muzzle_flash_timer = 0.0f32;
-    let mut inspect_timer = 0.0f32;
-
-    while window.is_open() && !window.is_key_down(Key::Escape) {
-        let now = Instant::now();
-        let dt = (now - last_instant).as_secs_f32().min(0.05);
-        last_instant = now;
-
-        if muzzle_flash_timer > 0.0 {
-            muzzle_flash_timer -= dt;
+    if args.mode == Mode::Train {
+        // No socket, and that is the whole of Train. Joining a room of one would
+        // not be solitude — the server's roomless join is join-*or*-create, so it
+        // lands in whatever match is already on this map — and it would put a
+        // learner practising chained jumps in somebody's crosshair.
+        if args.headless {
+            return Err("--headless watches a match; --mode=train has none".into());
         }
+        eprintln!(
+            "hassault: training on {} — no server, no other players",
+            args.map
+        );
+        let event_loop = EventLoop::new()?;
+        let mut app = App::new(world, mesh, None, args.sensitivity, weapons);
+        event_loop.run_app(&mut app)?;
+        return Ok(());
+    }
 
-        // Mouse look (Raw Input Simulation)
-        if let Some((mx, my)) = window.get_mouse_pos(MouseMode::Discard) {
-            let dx = mx - last_mouse_pos.0;
-            let dy = my - last_mouse_pos.1;
-            last_mouse_pos = (mx, my);
+    // A host and no room is the one combination the channel refuses outright ("a
+    // remote match needs a room id"), and the refusal would land after a window
+    // had already opened. The launcher checks it too; a client that only works
+    // when launched from the menu is a client that cannot be debugged.
+    if !args.host.is_empty() && args.room.is_empty() {
+        return Err("a match on a friend's node needs --room".into());
+    }
 
-            let sens = if player.scoped { 0.0012 } else { 0.0035 };
-            player.yaw += dx * sens;
-            player.pitch = (player.pitch - dy * sens).clamp(-1.2, 1.2);
-        }
+    let mut socket = MatchSocket::connect(&node.ws_url())?;
+    eprintln!("hassault: joining…");
+    // Hosting asks for no particular room, exactly as the browser's Host does:
+    // the server opens one on this map (or seats us in one already running there).
+    socket.join(&args.map, &args.room, &args.host, &args.name)?;
 
-        // Movement input (Momentum physics)
-        let mut move_x = 0.0f32;
-        let mut move_y = 0.0f32;
+    if args.headless {
+        return run_headless(&mut socket);
+    }
 
-        if window.is_key_down(Key::W) {
-            move_x += player.yaw.cos();
-            move_y += player.yaw.sin();
-        }
-        if window.is_key_down(Key::S) {
-            move_x -= player.yaw.cos();
-            move_y -= player.yaw.sin();
-        }
-        if window.is_key_down(Key::A) {
-            move_x += player.yaw.sin();
-            move_y -= player.yaw.cos();
-        }
-        if window.is_key_down(Key::D) {
-            move_x -= player.yaw.sin();
-            move_y += player.yaw.cos();
-        }
+    let event_loop = EventLoop::new()?;
+    let mut app = App::new(world, mesh, Some(socket), args.sensitivity, weapons);
+    if args.mode == Mode::Host {
+        // Queued, not sent: `add_bot` needs the room the welcome names, and it is
+        // host-only on the channel — which is why the launcher only ever sends a
+        // count with `--mode=host`.
+        app.queue_bots(args.bots, args.bot_skill.clone());
+    }
+    event_loop.run_app(&mut app)?;
+    Ok(())
+}
 
-        let len = (move_x * move_x + move_y * move_y).sqrt();
-        if len > 0.001 {
-            let speed = 18.0 * dt;
-            player.vx += (move_x / len) * speed;
-            player.vy += (move_y / len) * speed;
-        }
-
-        // Friction
-        player.vx *= 0.85;
-        player.vy *= 0.85;
-
-        // Jump & Shoot-jump
-        if window.is_key_down(Key::Space) && player.on_ground {
-            player.vz = 8.5;
-            player.on_ground = false;
-        }
-
-        // Primary fire / Kickback
-        if window.get_mouse_down(MouseButton::Left) && player.ammo > 0 && muzzle_flash_timer <= 0.0 {
-            player.ammo -= 1;
-            muzzle_flash_timer = 0.08;
-            // Shoot-jumping kickback impulse
-            player.vx -= player.yaw.cos() * 1.5;
-            player.vy -= player.yaw.sin() * 1.5;
-            player.pitch += 0.03; // Recoil climb
-        }
-
-        if window.is_key_pressed(Key::R, minifb::KeyRepeat::No) {
-            player.ammo = 20;
-        }
-
-        // Right click scope
-        player.scoped = window.get_mouse_down(MouseButton::Right);
-
-        // Gravity
-        if !player.on_ground {
-            player.vz -= 25.0 * dt;
-            player.z += player.vz * dt;
-            if player.z <= 0.0 {
-                player.z = 0.0;
-                player.vz = 0.0;
-                player.on_ground = true;
-            }
-        }
-
-        // Update position with simple collision
-        let new_x = player.x + player.vx * dt;
-        let new_y = player.y + player.vy * dt;
-
-        let cx = new_x as usize;
-        let cy = new_y as usize;
-        if cx < 16 && cy < 16 && map[cy].as_bytes()[cx] == b'0' {
-            player.x = new_x;
-            player.y = new_y;
-        }
-
-        // 3D Raycasting & Framebuffer Render
-        let fov = if player.scoped { 0.45 } else { 1.15 };
-        let half_fov = fov / 2.0;
-
-        for x in 0..WIDTH {
-            let camera_x = 2.0 * (x as f32) / (WIDTH as f32) - 1.0;
-            let ray_angle = player.yaw + camera_x * half_fov;
-
-            let ray_dir_x = ray_angle.cos();
-            let ray_dir_y = ray_angle.sin();
-
-            let mut dist = 0.1f32;
-            let mut hit_wall = false;
-            let mut side = 0;
-
-            while !hit_wall && dist < 24.0 {
-                dist += 0.05;
-                let test_x = (player.x + ray_dir_x * dist) as usize;
-                let test_y = (player.y + ray_dir_y * dist) as usize;
-
-                if test_x >= 16 || test_y >= 16 || map[test_y].as_bytes()[test_x] == b'1' {
-                    hit_wall = true;
-                    side = if (test_x as f32 - (player.x + ray_dir_x * dist)).abs() > 0.4 { 1 } else { 0 };
+/// No window: join, watch, and report. This is the mode that proves the wire
+/// works without a renderer being involved at all.
+fn run_headless(socket: &mut MatchSocket) -> Result<(), Box<dyn std::error::Error>> {
+    let mut joined = false;
+    let started = Instant::now();
+    let mut last = Instant::now();
+    loop {
+        for item in socket.drain() {
+            match item {
+                Incoming::Event(Event::Welcome(w)) => {
+                    eprintln!(
+                        "hassault: joined room {} as {} ({} already in)",
+                        w.room,
+                        w.player_id,
+                        w.players.len()
+                    );
+                    joined = true;
                 }
-            }
-
-            // Correct fisheye
-            let corrected_dist = dist * (player.yaw - ray_angle).cos();
-            let wall_height = ((HEIGHT as f32 / corrected_dist) * 0.8) as i32;
-
-            let pitch_offset = (player.pitch * 250.0) as i32 + (player.z * 15.0) as i32;
-            let draw_start = ((HEIGHT as i32 / 2) - wall_height / 2 + pitch_offset).clamp(0, HEIGHT as i32) as usize;
-            let draw_end = ((HEIGHT as i32 / 2) + wall_height / 2 + pitch_offset).clamp(0, HEIGHT as i32) as usize;
-
-            // Sky & Floor
-            for y in 0..draw_start {
-                buffer[y * WIDTH + x] = 0x0f172a; // Deep slate sky
-            }
-
-            // Wall color with depth fog
-            let base_brightness = (255.0 / (1.0 + corrected_dist * 0.18)) as u32;
-            let shade = if side == 1 { base_brightness * 3 / 4 } else { base_brightness };
-            let wall_color = (shade << 16) | (shade << 8) | (shade + 20).min(255);
-
-            for y in draw_start..draw_end {
-                buffer[y * WIDTH + x] = wall_color;
-            }
-
-            for y in draw_end..HEIGHT {
-                buffer[y * WIDTH + x] = 0x1e293b; // Floor
-            }
-        }
-
-        // Draw Crosshair
-        let cx = WIDTH / 2;
-        let cy = HEIGHT / 2;
-        let cross_size = if player.scoped { 20 } else { 6 };
-        for i in -cross_size..=cross_size {
-            if cx as i32 + i >= 0 && (cx as i32 + i) < WIDTH as i32 {
-                buffer[cy * WIDTH + (cx as i32 + i) as usize] = 0x38bdf8;
-            }
-            if cy as i32 + i >= 0 && (cy as i32 + i) < HEIGHT as i32 {
-                buffer[((cy as i32 + i) as usize) * WIDTH + cx] = 0x38bdf8;
-            }
-        }
-
-        // Muzzle Flash
-        if muzzle_flash_timer > 0.0 {
-            for fx in (cx + 80)..(cx + 120).min(WIDTH) {
-                for fy in (cy + 60)..(cy + 100).min(HEIGHT) {
-                    buffer[fy * WIDTH + fx] = 0xfbbf24;
-                }
-            }
-        }
-
-        if window.is_key_pressed(Key::F, minifb::KeyRepeat::No) {
-            inspect_timer = 1.8f32; // 1.8s inspect flourish
-        }
-
-        if inspect_timer > 0.0 {
-            inspect_timer -= dt;
-        }
-
-        // HUD: Health, Ammo, Map Info & Inspect Status
-        let inspect_status = if inspect_timer > 0.0 { " [✨ INSPECTING SKIN: OGRE-TWITCH]" } else { "" };
-        let hud_text = format!("HP: {} | AMMO: {}/20 | {} FPS{}", player.health, player.ammo, max_fps, inspect_status);
-        window.set_title(&format!("{} — {}", title, hud_text));
-
-        // Draw Inspect Weapon Viewmodel Flourish when inspecting
-        if inspect_timer > 0.0 {
-            let flourish_phase = (1.8 - inspect_timer) * 3.5;
-            let tilt = (flourish_phase.sin() * 25.0) as i32;
-            let gun_x = (WIDTH as i32 * 3 / 4) + tilt;
-            let gun_y = HEIGHT as i32 * 3 / 4;
-
-            for gx in (gun_x - 70)..(gun_x + 70).min(WIDTH as i32) {
-                for gy in (gun_y - 25)..(gun_y + 25).min(HEIGHT as i32) {
-                    if gx >= 0 && gy >= 0 && (gx as usize) < WIDTH && (gy as usize) < HEIGHT {
-                        buffer[(gy as usize) * WIDTH + (gx as usize)] = 0x38bdf8;
+                Incoming::Event(Event::Snapshot(s)) => eprintln!(
+                    "hassault: tick {} ack {} — {} players",
+                    s.tick,
+                    s.ack,
+                    s.players.len()
+                ),
+                Incoming::Event(Event::Error(e)) => {
+                    // `not_signed_in` is the one worth explaining: the node
+                    // refuses a join from an account with no username, and the
+                    // fix is not in this client at all.
+                    if e.code == "not_signed_in" {
+                        eprintln!(
+                            "hassault: {} — sign in and choose a username in the dashboard first",
+                            e.message
+                        );
+                    } else {
+                        eprintln!("hassault: server refused: {}", e.message);
                     }
+                    return Ok(());
+                }
+                Incoming::Event(Event::Other(name)) => eprintln!("hassault: (ignored {name})"),
+                Incoming::Closed(why) => {
+                    eprintln!("hassault: connection closed: {why}");
+                    return Ok(());
                 }
             }
         }
+        if joined {
+            // Standing still, but sending: the point is that the server accepts
+            // the frames and acknowledges them, which is what `ack` reports back.
+            let dt = last.elapsed().as_secs_f32();
+            last = Instant::now();
+            let mut cmd = Command::new(0);
+            cmd.dt = dt.min(0.05);
+            socket.push_command(cmd);
+            socket.flush(None)?;
+        }
+        if started.elapsed() > Duration::from_secs(30) {
+            eprintln!("hassault: 30s elapsed, leaving");
+            let _ = socket.leave();
+            return Ok(());
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
 
-        window.update_with_buffer(&buffer, WIDTH, HEIGHT).unwrap();
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_mode_is_one_of_three_words() {
+        assert_eq!(Mode::parse("train"), Some(Mode::Train));
+        assert_eq!(Mode::parse("host"), Some(Mode::Host));
+        assert_eq!(Mode::parse("join"), Some(Mode::Join));
+    }
+
+    #[test]
+    fn an_unknown_mode_is_not_a_join() {
+        // The whole reason `parse` returns an Option and the caller exits: a
+        // typo silently becoming the default is how Train turns back into a
+        // match nobody asked to be in.
+        assert_eq!(Mode::parse("Train"), None);
+        assert_eq!(Mode::parse("practice"), None);
+        assert_eq!(Mode::parse(""), None);
     }
 }

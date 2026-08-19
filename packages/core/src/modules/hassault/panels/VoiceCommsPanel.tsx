@@ -48,13 +48,13 @@ export function VoiceCommsPanel() {
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        {/* A heading, not a pitch. The feature-list line under it described the
+            implementation to somebody who has not turned it on yet — the same
+            advertising-in-the-menu problem the rest of this screen shed. */}
         <div>
-          <h4 style={{ margin: 0, color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            🎙 3D Spatial Positional Voice Comms
+          <h4 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            Voice
           </h4>
-          <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.75rem', color: 'var(--text-dim)' }}>
-            HRTF 3D spatial panning in-game + Crystal clear stereo party chat in lobby.
-          </p>
         </div>
 
         {!initialized ? (

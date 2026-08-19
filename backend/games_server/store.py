@@ -257,7 +257,7 @@ def _m6_backfill_handles(conn: sqlite3.Connection) -> None:
         ).fetchall()
     }
     for row in rows:
-        base = _sanitize_handle(str(row["display_name"] or row["id"]))
+        base = sanitize_handle(str(row["display_name"] or row["id"]))
         candidate, n = base, 2
         while candidate in taken:
             suffix = str(n)
@@ -585,7 +585,7 @@ def set_handle(account_id: str, handle: str) -> str:
     return "ok"
 
 
-def _sanitize_handle(raw: str) -> str:
+def sanitize_handle(raw: str) -> str:
     """Fold a raw OAuth username (GitHub login / Google email local part) into the
     handle charset: lowercase, non-`[a-z0-9_-]` runs become a single `-`, trimmed,
     then padded/truncated to the 3-20 length HANDLE_RE requires."""
@@ -600,6 +600,13 @@ def _sanitize_handle(raw: str) -> str:
 def ensure_handle(account_id: str, preferred: str) -> str:
     """Lock in an auto-derived handle from the account's OAuth username.
 
+    **Only the `_m6` backfill still calls this.** It used to run on every sign-in
+    path, which is why nobody was ever asked to choose a username: the handle was
+    already claimed and locked by the time the chooser could render, and a name
+    the ladder, the killfeed and `@handle` resolution all key on was decided by a
+    string transform. Sign-in now leaves `handle` NULL and asks; this remains for
+    accounts that predate the chooser and must not lose the name they have.
+
     Idempotent and stable: if the account already has a handle, it's returned
     unchanged (handles are locked once set). Otherwise `preferred` is sanitized and
     claimed; on a collision (two providers can share a username, e.g. Google email
@@ -608,7 +615,7 @@ def ensure_handle(account_id: str, preferred: str) -> str:
     account = get_account(account_id)
     if account and account.get("handle"):
         return str(account["handle"])
-    base = _sanitize_handle(preferred)
+    base = sanitize_handle(preferred)
     candidate = base
     for n in range(2, 1000):
         if set_handle(account_id, candidate) == "ok":
@@ -704,7 +711,7 @@ def accounts_by_person(person_ids: list[str]) -> dict[str, dict[str, Any]]:
 
     A node holds a roster keyed by `person_id` and needs to know which of those
     people are on the ladder — the direction `/directory/resolve` cannot answer,
-    because it starts from a callsign the node does not yet have. Without it a node
+    because it starts from a username the node does not yet have. Without it a node
     would have to guess handles to discover that a friend it already trusts is the
     same human as an account it already sees.
 
@@ -1361,7 +1368,7 @@ def get_profile(account_id: str) -> dict[str, Any]:
 
 
 def profile_by_handle(handle: str) -> dict[str, Any] | None:
-    """Somebody *else's* profile, looked up by callsign.
+    """Somebody *else's* profile, looked up by username.
 
     The endpoint that did not exist. Without it there was no way to see another
     player's bio or artwork, which is why the Plaza's player card shipped with a
@@ -1815,7 +1822,7 @@ def _friend_row_view(conn: sqlite3.Connection, other_id: str) -> dict[str, Any]:
     """One friend, as the roster shows them.
 
     Carries `handle` and `person_id` alongside the account id because those are the
-    two names a *human* has: the callsign the ladder shows, and the fabric person the
+    two names a *human* has: the username the ladder shows, and the fabric person the
     friends roster keys on. Without them the node receives a list of `account_id`s it
     cannot match against its own `social_friends` rows, which is precisely how the
     same person came to occupy two unrelated friend lists. Both are nullable — an

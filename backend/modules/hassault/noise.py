@@ -14,9 +14,14 @@ draw it anyway would have a wall hack made of sound. Audibility is therefore
 resolved per recipient, before the send, and what goes on the wire is only what
 ears actually give you:
 
-    {kind, volume, bearing, up}
+    {kind, volume, bearing, up, weapon}
 
-A **bearing and a loudness**, never an offset. You can tell roughly where and
+A **bearing and a loudness**, never an offset. `weapon` rides along on a shot and
+is the one exception worth being explicit about: it is not a position and it is
+not a fact you could not already have — you can see what someone is holding, and
+a gunshot is the loudest thing in the game. What it buys is telling a sniper
+round from a shotgun blast two rooms away, which is a real decision (push or
+hold) made on information ears genuinely carry. You can tell roughly where and
 roughly how far, which is exactly the resolution a player should be working at, and
 it is not enough to draw a dot on a map with.
 
@@ -83,6 +88,10 @@ class Noise:
     z: float
     """Audible radius in cubes."""
     loudness: float
+    """Which weapon made it, for a shot. Empty for every other kind — a footstep
+    has no weapon, and sending `""` rather than omitting the field would make the
+    client special-case a value the wire did not need to carry."""
+    weapon: str = ""
 
 
 def shot_loudness(weapon) -> float:
@@ -163,12 +172,13 @@ def envelope(
         if heard is None:
             continue
         volume, bearing, up = heard
-        out.append(
-            {
-                "kind": noise.kind,
-                "volume": round(volume, 3),
-                "bearing": round(bearing, 3),
-                "up": up,
-            }
-        )
+        entry: dict[str, float | str | int] = {
+            "kind": noise.kind,
+            "volume": round(volume, 3),
+            "bearing": round(bearing, 3),
+            "up": up,
+        }
+        if noise.weapon:
+            entry["weapon"] = noise.weapon
+        out.append(entry)
     return out

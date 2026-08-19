@@ -19,7 +19,7 @@
  *
  * - `loading` — assembling the world; nothing is interactive.
  * - `signin`  — built, orbiting, waiting for an account.
- * - `enlist`  — signed in, but no callsign yet: sign-up's second half.
+ * - `enlist`  — signed in, but no username yet: sign-up's second half.
  * - `menu`    — the main menu: pick a map, host, browse servers, find friends.
  * - `playing` — pointer lock is live and input belongs to the game.
  *
@@ -70,7 +70,7 @@ export interface HassaultSession {
   signed_in: boolean;
   account_id?: string | null;
   display_name?: string | null;
-  callsign?: string | null;
+  username?: string | null;
   enlisted: boolean;
 }
 
@@ -128,9 +128,9 @@ export function isLoaded(progress: BootProgress): boolean {
  *
  * The order is the product: nothing is decided about the player until the world is
  * standing, because the sign-in screen is meant to sit *over* the finished map. And
- * `enlisted` is checked separately from `signed_in` — an account with no callsign
+ * `enlisted` is checked separately from `signed_in` — an account with no username
  * has no name to play under, so sign-up isn't finished, and the backend refuses the
- * join either way (see `channel._signed_in_callsign`).
+ * join either way (see `channel._signed_in_username`).
  */
 export function bootPhase(
   progress: BootProgress,

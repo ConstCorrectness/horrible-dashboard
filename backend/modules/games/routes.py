@@ -41,7 +41,7 @@ from backend.modules.games.models import (
     LocalSignupRequest,
     SampleObservationResponse,
     SaveVersionRequest,
-    SetCallsignRequest,
+    SetUsernameRequest,
     SetKeyRequest,
     TestToolRequest,
     TestToolResponse,
@@ -97,7 +97,7 @@ def status() -> GamesStatus:
         # live right up until the play socket rejects it.
         signed_in=account is not None,
         display_name=account["display_name"] if account else None,
-        callsign=account.get("handle") if account else None,
+        username=account.get("handle") if account else None,
         server_url=resolve_server_url(),
         policy=str(get_value("games.policy", "random") or "random"),
         games=_catalog(),
@@ -505,7 +505,7 @@ async def auth_providers_route() -> dict[str, Any]:
 @router.post("/auth/local/signup")
 async def local_signup_route(body: LocalSignupRequest) -> dict[str, Any]:
     """Create an email+password account on the game server and sign this node in."""
-    return await server_auth.local_signup(body.email, body.password, body.callsign)
+    return await server_auth.local_signup(body.email, body.password, body.username)
 
 
 @router.post("/auth/local/login")
@@ -514,11 +514,32 @@ async def local_login_route(body: LocalLoginRequest) -> dict[str, Any]:
     return await server_auth.local_login(body.email, body.password)
 
 
-@router.post("/auth/callsign")
-async def set_callsign_route(body: SetCallsignRequest) -> dict[str, Any]:
-    """Claim or rename the callsign — the globally unique handle the ladder and
-    HorribleAssault both play you as."""
-    return await server_auth.set_callsign(body.callsign)
+@router.post("/auth/username")
+async def set_username_route(body: SetUsernameRequest) -> dict[str, Any]:
+    """Claim or rename the username — the globally unique handle the ladder and
+    HorribleAssault both play you as.
+
+    A successful claim also **binds the username to this person key**, which is
+    what makes `@name` resolvable to a friend code — the difference between a
+    label on a scoreboard and an identity you can be reached at. It is done here,
+    server-side, rather than in each caller: the hassault enlist screen, the games
+    first-run hero and the people panel all claim through this one route, and a
+    binding driven from three clients is a binding that runs from two of them.
+
+    A failure is logged and swallowed on purpose. The username *is* claimed by
+    this point — reporting an error would tell the person their name did not take
+    when it did, and the binding is idempotent, so the next sign-in retries it.
+    """
+    result = await server_auth.set_username(body.username)
+    if result.get("ok"):
+        from backend.modules.social import handles
+
+        bound = await handles.publish_binding()
+        if bound.get("error"):
+            logger.warning(
+                "username claimed but not bound to a person: %s", bound["error"]
+            )
+    return result
 
 
 @router.post("/auth/{provider}/web/start")
@@ -549,7 +570,7 @@ def signout_route() -> dict[str, bool]:
 
 @router.post("/profiles/cards")
 async def profile_cards_route(body: dict[str, Any]) -> dict[str, Any]:
-    """Avatar, level and status for many callsigns at once — what a friends list
+    """Avatar, level and status for many usernames at once — what a friends list
     needs, in one request rather than one per row."""
     handles = body.get("handles") or []
     return await server_auth.profile_cards([str(h) for h in handles])
@@ -597,7 +618,7 @@ async def profile_comment_hide_route(comment_id: str) -> dict[str, Any]:
 
 @router.get("/profile/{handle}")
 async def profile_route(handle: str) -> dict[str, Any]:
-    """Somebody else's profile by callsign — the read that had no endpoint, which
+    """Somebody else's profile by username — the read that had no endpoint, which
     is why the Plaza card used to show a placeholder bio for every player."""
     return await server_auth.profile_get(handle)
 

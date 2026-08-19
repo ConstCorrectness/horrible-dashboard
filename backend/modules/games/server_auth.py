@@ -14,8 +14,8 @@ There is a third way in alongside the two OAuth providers: **email + password**
 server with no client ids set can still sign people up. It ends in the same place —
 one JWT, held here — and the credential is never recorded (see `_local_auth`).
 
-The account carries a **callsign**: the game server's globally unique `handle`,
-which is what HorribleAssault plays you as. `signed_in_callsign()` is the gate the
+The account carries a **username**: the game server's globally unique `handle`,
+which is what HorribleAssault plays you as. `signed_in_username()` is the gate the
 match channel consults; a client-supplied name is never identity.
 """
 
@@ -99,8 +99,8 @@ def signed_in_name() -> str | None:
     return account["display_name"] if account else None
 
 
-def signed_in_callsign() -> str | None:
-    """The account's globally unique callsign (the game server's `handle`), or None
+def signed_in_username() -> str | None:
+    """The account's globally unique username (the game server's `handle`), or None
     when signed out or not yet enlisted. This — never a client-supplied string — is
     who a player is in HorribleAssault."""
     account = signed_in_account()
@@ -351,9 +351,9 @@ async def _local_auth(action: str, payload: dict[str, Any]) -> dict[str, Any]:
     return {"error": data.get("error") or "sign-in failed"}
 
 
-async def local_signup(email: str, password: str, callsign: str = "") -> dict[str, Any]:
+async def local_signup(email: str, password: str, username: str = "") -> dict[str, Any]:
     return await _local_auth(
-        "signup", {"email": email, "password": password, "callsign": callsign}
+        "signup", {"email": email, "password": password, "username": username}
     )
 
 
@@ -361,13 +361,13 @@ async def local_login(email: str, password: str) -> dict[str, Any]:
     return await _local_auth("login", {"email": email, "password": password})
 
 
-# ---- account / callsign ------------------------------------------------------
+# ---- account / username ------------------------------------------------------
 
 
 async def fetch_account() -> dict[str, Any] | None:
     """The signed-in account, read fresh from the game server (`GET /me`).
 
-    Used to pick up a callsign this node's stored token predates, or one changed
+    Used to pick up a username this node's stored token predates, or one changed
     from another machine. Returns None when signed out or the server is
     unreachable — callers fall back to the locally cached account.
     """
@@ -398,8 +398,8 @@ def _merge_account(account: dict[str, Any]) -> None:
     _token_path().write_text(json.dumps(data), encoding="utf-8")
 
 
-async def set_callsign(handle: str) -> dict[str, Any]:
-    """Claim or rename the callsign, then cache the updated account locally."""
+async def set_username(handle: str) -> dict[str, Any]:
+    """Claim or rename the username, then cache the updated account locally."""
     import httpx
 
     if signed_in_account() is None:
@@ -416,7 +416,7 @@ async def set_callsign(handle: str) -> dict[str, Any]:
     except (httpx.ConnectError, httpx.ConnectTimeout):
         return _unreachable_error()
     except httpx.HTTPError as exc:
-        return {"error": f"Failed to set callsign: {exc}"}
+        return {"error": f"Failed to set username: {exc}"}
     if data.get("error"):
         return {"error": data["error"]}
     account = data.get("account")
@@ -511,7 +511,7 @@ async def replay_publish(replay_id: str) -> dict[str, Any]:
 
 
 async def profile_get(handle: str) -> dict[str, Any]:
-    """Somebody else's profile, by callsign. Unauthenticated at the far end."""
+    """Somebody else's profile, by username. Unauthenticated at the far end."""
     import httpx
 
     try:

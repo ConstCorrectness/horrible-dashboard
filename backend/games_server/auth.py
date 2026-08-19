@@ -46,6 +46,7 @@ from __future__ import annotations
 import functools
 import json
 import os
+import re
 import secrets
 import time
 from pathlib import Path
@@ -125,12 +126,22 @@ def resolve_token(token: str) -> dict[str, str] | None:
     return None
 
 
-def _session(account_id: str, display_name: str, handle: str | None) -> dict[str, Any]:
+def _session(
+    account_id: str,
+    display_name: str,
+    handle: str | None,
+    suggested_handle: str = "",
+) -> dict[str, Any]:
     """The payload every sign-in returns: a JWT plus the account behind it.
 
     One builder for all four flows (GitHub, Google, local signup, local login) so
     the shape can't drift between them — the node stores this verbatim and the
     browser is handed only the `account` half.
+
+    `handle` is **None for a brand-new OAuth account**, which is the whole of the
+    "choose your username" gate: the client sees no handle, `enlisted` is false,
+    and the chooser it already had renders. `suggested_handle` is what to pre-fill
+    it with — a suggestion the person overwrites, never a name assigned to them.
     """
     return {
         "token": issue_jwt(account_id, display_name),
@@ -138,6 +149,7 @@ def _session(account_id: str, display_name: str, handle: str | None) -> dict[str
             "id": account_id,
             "display_name": display_name,
             "handle": handle,
+            "suggested_handle": suggested_handle,
         },
     }
 
@@ -145,12 +157,18 @@ def _session(account_id: str, display_name: str, handle: str | None) -> dict[str
 def account_payload(account_id: str) -> dict[str, Any]:
     """The `account` half on its own, read fresh from the DB — what `GET /me`
     answers. The node uses it to learn a handle its stored token predates, and to
-    see a callsign change made from another machine."""
+    see a username change made from another machine."""
     account = store.get_account(account_id) or {}
+    display_name = str(account.get("display_name") or account_id)
     return {
         "id": account_id,
-        "display_name": str(account.get("display_name") or account_id),
+        "display_name": display_name,
         "handle": account.get("handle"),
+        # Carried here too, not only on the sign-in payload: an account that has
+        # not chosen a username yet reaches the chooser through this route on
+        # every later launch, and a blank field on the second visit would be a
+        # worse ask than on the first.
+        "suggested_handle": store.sanitize_handle(display_name),
     }
 
 
@@ -251,9 +269,9 @@ def _valid_email(email: str) -> bool:
     return bool(re.match(EMAIL_RE, email.strip())) and len(email.strip()) <= 254
 
 
-def signup_local(email: str, password: str, callsign: str = "") -> dict[str, Any]:
+def signup_local(email: str, password: str, username: str = "") -> dict[str, Any]:
     """Create an email+password account. Raises ValueError with a user-facing
-    message on bad input or a taken address/callsign.
+    message on bad input or a taken address/username.
 
     The account id is `local:<uuid4hex>` — **not** the email. People change their
     address; an id is referenced by ratings, replays and match history forever.
@@ -268,28 +286,43 @@ def signup_local(email: str, password: str, callsign: str = "") -> dict[str, Any
     if store.get_local_credentials(email) is not None:
         raise ValueError("an account already exists for that email")
 
+    # **Every check that can run before the row exists, runs before the row
+    # exists.** Claiming the username needs an `account_id`, so it necessarily
+    # happens after `upsert_account` — but its *shape* and its availability do
+    # not, and validating them late is how a rejected sign-up left an orphaned
+    # account behind: the second attempt then failed with "an account already
+    # exists for that email", blaming the address for a username problem.
+    # The claim below is still the authority (the unique index settles a race
+    # between two simultaneous sign-ups); this only stops the common case from
+    # stranding a row.
+    username = username.strip().lower()
+    if not re.match(store.HANDLE_RE, username):
+        raise ValueError("a username is 3-20 characters of a-z, 0-9, - or _")
+    if store.account_by_handle(username) is not None:
+        raise ValueError("that username is taken")
+
     account_id = store.upsert_account("local", uuid.uuid4().hex, email.split("@")[0])
     if store.set_local_credentials(account_id, email, hash_password(password)) != "ok":
         # Lost a race against a simultaneous signup for the same address.
         raise ValueError("an account already exists for that email")
 
-    # An explicit callsign is the signup form's; without one we derive a starting
-    # handle from the address, exactly as the OAuth flows derive theirs, so every
-    # account leaves sign-up with a callsign it can rename later.
-    if callsign:
-        outcome = set_account_handle(account_id, callsign)
-        if outcome != "ok":
-            raise ValueError(
-                "that callsign is taken"
-                if outcome == "taken"
-                else "a callsign is 3-20 characters of a-z, 0-9, - or _"
-            )
-        handle: str | None = callsign.strip().lower()
-    else:
-        handle = store.ensure_handle(account_id, email.split("@")[0])
+    # The username is **required**, and it is the person's choice rather than one
+    # derived from their address. Deriving used to be the fallback here (and is
+    # still what the OAuth paths did), which meant nobody was ever asked: the
+    # account arrived already holding `rob-ranieri-2`, `enlisted` was true before
+    # the chooser could render, and the name everything else keys on — the ladder,
+    # the killfeed, `@handle` resolution — was picked by a `sanitize_handle` call.
+    # A username has to be chosen to be an identity.
+    outcome = set_account_handle(account_id, username)
+    if outcome != "ok":
+        raise ValueError(
+            "that username is taken"
+            if outcome == "taken"
+            else "a username is 3-20 characters of a-z, 0-9, - or _"
+        )
+    handle = username.strip().lower()
 
-    display_name = handle or email.split("@")[0]
-    return _session(account_id, display_name, handle)
+    return _session(account_id, handle, handle)
 
 
 def login_local(email: str, password: str) -> dict[str, Any]:
@@ -312,7 +345,7 @@ def login_local(email: str, password: str) -> dict[str, Any]:
 
 
 def set_account_handle(account_id: str, handle: str) -> str:
-    """Claim or rename a callsign. Returns 'ok', 'invalid' or 'taken'.
+    """Claim or rename a username. Returns 'ok', 'invalid' or 'taken'.
 
     Unlike `store.ensure_handle` — which auto-derives one and locks it — this is
     the deliberate, user-chosen rename, so it applies whether or not a handle is
@@ -393,9 +426,19 @@ def _finish_github(profile: dict[str, Any]) -> dict[str, Any]:
     login = str(profile.get("login") or "")
     display_name = login or str(profile.get("name") or f"gh-{subject}")
     account_id = store.upsert_account("github", subject, display_name)
-    # The GitHub login *is* the handle — it's globally unique, so no collision dance.
-    handle = store.ensure_handle(account_id, login or display_name)
-    return _session(account_id, display_name, handle)
+    # Deliberately **not** `ensure_handle`. Auto-deriving here locked a username
+    # onto every account at first sign-in, so the chooser downstream was never
+    # reachable and nobody was ever asked what they wanted to be called. A
+    # returning account keeps the handle it already claimed; a new one arrives
+    # with none, and the GitHub login is offered as the pre-filled suggestion —
+    # it is globally unique, so it is usually free.
+    handle = (store.get_account(account_id) or {}).get("handle")
+    return _session(
+        account_id,
+        display_name,
+        str(handle) if handle else None,
+        store.sanitize_handle(login or display_name),
+    )
 
 
 # ---- Google OAuth (device flow) ---------------------------------------------
@@ -509,10 +552,17 @@ def _finish_google(profile: dict[str, Any]) -> dict[str, Any]:
     local_part = email.split("@")[0] if email else ""
     display_name = str(profile.get("name") or local_part or f"g-{subject}")
     account_id = store.upsert_account("google", subject, display_name)
-    # Google has no username, so the handle is the email's local part (before @);
-    # these aren't globally unique, so ensure_handle resolves collisions.
-    handle = store.ensure_handle(account_id, local_part or display_name)
-    return _session(account_id, display_name, handle)
+    # Same rule as GitHub: never auto-lock a handle. Google has no username at
+    # all, so the suggestion is the email's local part — and those are not
+    # globally unique, which is exactly why it has to be a suggestion the person
+    # can change rather than a numeric suffix bolted on behind their back.
+    handle = (store.get_account(account_id) or {}).get("handle")
+    return _session(
+        account_id,
+        display_name,
+        str(handle) if handle else None,
+        store.sanitize_handle(local_part or display_name),
+    )
 
 
 # ---- Web (authorization-code) OAuth ----------------------------------------

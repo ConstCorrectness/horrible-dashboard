@@ -542,7 +542,9 @@ class MatchRoom:
         elif not was_airborne and not state.on_ground and state.vel_z > 0:
             self._noise(player, "jump", noise.JUMP_LOUDNESS)
 
-    def _noise(self, player: MatchPlayer, kind: str, loudness: float) -> None:
+    def _noise(
+        self, player: MatchPlayer, kind: str, loudness: float, weapon: str = ""
+    ) -> None:
         if len(self.noises) >= MAX_NOISE_PER_TICK:
             return
         self.noises.append(
@@ -553,6 +555,7 @@ class MatchRoom:
                 y=player.state.y,
                 z=player.state.z,
                 loudness=loudness,
+                weapon=weapon,
             )
         )
 
@@ -738,7 +741,9 @@ class MatchRoom:
 
         # Firing is the loudest thing you can do, and it is the reason a silenced
         # approach ends the moment you take the shot.
-        self._noise(player, "shot", noise.shot_loudness(weapon))
+        # The weapon rides along so the listener hears *which* gun: a shot's
+        # loudness already comes from the weapon, and its voice does too.
+        self._noise(player, "shot", noise.shot_loudness(weapon), weapon.id)
 
         for hit in result.hits:
             victim = self.players.get(hit.victim)

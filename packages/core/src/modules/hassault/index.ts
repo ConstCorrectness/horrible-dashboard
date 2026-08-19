@@ -1,5 +1,32 @@
 import { registry, type ModuleManifest } from '../../registry';
+import { registerNotificationAction } from '../notifications';
 import { HorribleAssaultPanel } from './HorribleAssaultPanel';
+import { requestJoin } from './invite-notify';
+
+/**
+ * What the **Join** button on an invite toast does.
+ *
+ * Registered here rather than in the notifications module, because joining a
+ * match is this module's business and `notifications` importing it would invert
+ * the dependency — the notification feed initialises at boot, and it must not
+ * drag a three.js pane in with it.
+ *
+ * Opening the pane is deliberately *not* the same as joining it: the pane may not
+ * be mounted, and a `MatchSession` only exists once it is. So this opens it and
+ * parks the intent, and `HorribleAssaultPanel` acts on it when it has a session
+ * and a world. Registration is module-scope so a toast is actionable even if the
+ * pane has never been opened in this session — which is the entire case this
+ * exists for.
+ */
+registerNotificationAction('hassault.joinInvite', {
+  label: 'Join',
+  run: (item) => {
+    const invite = item.data.invite as { room?: string; map?: string; host?: string } | undefined;
+    if (!invite?.room) return;
+    registry.openPanel('hassault.play');
+    requestJoin({ room: invite.room, map: invite.map ?? '', host: invite.host ?? '' });
+  },
+});
 
 /**
  * HorribleAssault, frontend side: a WebGL first-person renderer for AssaultCube
@@ -67,6 +94,22 @@ export const hassaultModule: ModuleManifest = {
         'Off (the default) means crouch is a hold, which is what the movement rewards — you can release it the instant you need speed back. On makes it a toggle, which is easier on the hand.',
       type: 'boolean',
       default: false,
+    },
+    {
+      key: 'hassault.nativeClient',
+      title: 'Play in the native client',
+      description:
+        'Play, Train and Host open the separate native window (GPU-rendered, raw mouse input, no frame cap) instead of playing in this pane. Off by default: the native client has no HUD, no weapon model and no sound yet, so the pane is still the complete game.',
+      type: 'boolean',
+      default: false,
+    },
+    {
+      key: 'hassault.nativeBinaryPath',
+      title: 'Native client binary',
+      description:
+        'Path to the native client executable. Blank looks in the usual build outputs under apps/native-fps — build it with `cargo build --release --manifest-path apps/native-fps/Cargo.toml`.',
+      type: 'string',
+      default: '',
     },
     {
       key: 'hassault.installPath',

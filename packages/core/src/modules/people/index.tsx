@@ -16,7 +16,7 @@ import './people.css';
  * | --- | --- |
  * | `social.friends` | **Friends** |
  * | `network.chat` | **Messages** |
- * | `commons.directory` | **Discover** (under callsign search) |
+ * | `commons.directory` | **Discover** (under username search) |
  * | `commons.requests` | **Requests** |
  * | `commons.profile` | **Me** |
  * | `network.peers` | nowhere — see below |
@@ -69,14 +69,14 @@ export const peopleModule: ModuleManifest = {
     },
     {
       id: 'people.find',
-      title: 'People: Find someone by callsign',
+      title: 'People: Find someone by username',
       run: () => {
         revealSection('discover', 'people.home');
       },
     },
     {
       id: 'people.me',
-      title: 'People: My callsign and friend code',
+      title: 'People: My username and friend code',
       run: () => {
         revealSection('me', 'people.home');
       },

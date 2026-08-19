@@ -32,7 +32,7 @@ def _resolve(who: str) -> dict[str, Any] | None:
     Name matching is last and exact-ish on purpose: silently picking the closest
     fuzzy match would let the agent message the wrong person.
 
-    Sync, and therefore **no `@callsign`** — that needs a directory round trip.
+    Sync, and therefore **no `@username`** — that needs a directory round trip.
     Use `resolve_row` unless you are already on a sync path.
     """
     who = who.strip()
@@ -51,14 +51,14 @@ def _resolve(who: str) -> dict[str, Any] | None:
 
 
 async def resolve_row(who: str) -> dict[str, Any] | None:
-    """`_resolve`, plus `@callsign`.
+    """`_resolve`, plus `@username`.
 
-    The handle branch runs **first** and is exact: a callsign is globally unique
+    The handle branch runs **first** and is exact: a username is globally unique
     and the directory entry is checked against its own key fingerprint, so it is a
     stronger name than a display name and must not lose to one.
 
-    A callsign only names someone already in the roster here — this resolves *who
-    you meant*, not *who exists*. Adding a stranger by callsign is `add_friend`.
+    A username only names someone already in the roster here — this resolves *who
+    you meant*, not *who exists*. Adding a stranger by username is `add_friend`.
     """
     who = (who or "").strip()
     if handles.is_handle(who):
@@ -99,7 +99,7 @@ async def message_friend(args: dict[str, Any]) -> dict[str, Any]:
     row = await resolve_row(who)
     if row is None:
         return {
-            "error": f"no friend matching {who!r} — try their @callsign or friend code"
+            "error": f"no friend matching {who!r} — try their @username or friend code"
         }
     if row["status"] != "accepted":
         return {"error": f"{row['display_name']} is not an accepted friend yet"}
@@ -168,7 +168,7 @@ def register_social_tools() -> None:
             "who": {
                 "type": "string",
                 "description": (
-                    "Who to reach: an @callsign (best — globally unique), a friend "
+                    "Who to reach: an @username (best — globally unique), a friend "
                     "code (HD-XXXX-...), a person id, or their exact display name."
                 ),
             },
@@ -189,7 +189,7 @@ def register_social_tools() -> None:
             "who": {
                 "type": "string",
                 "description": (
-                    "Who to reach: an @callsign (best — globally unique), a friend "
+                    "Who to reach: an @username (best — globally unique), a friend "
                     "code (HD-XXXX-...), a person id, or their exact display name."
                 ),
             },

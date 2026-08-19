@@ -9,18 +9,18 @@ import { startPlacement as beginPlacement } from '../matchmaking';
 import { apiPost } from '../../../api';
 import { patchProfile } from '../profile-api';
 
-type Step = 'callsign' | 'placement' | 'done';
+type Step = 'username' | 'placement' | 'done';
 
 const COPY: Record<Step, { title: ReactNode; sub: ReactNode }> = {
-  callsign: {
+  username: {
     title: (
       <>
-        Choose your <em>Callsign</em>.
+        Choose your <em>Username</em>.
       </>
     ),
     sub: (
       <>
-        Your callsign (@handle) is how friends find you across the ladder, the peer fabric, and in
+        Your username (@handle) is how friends find you across the ladder, the peer fabric, and in
         AgentTown. Pick a unique username to register your client.
       </>
     ),
@@ -59,12 +59,14 @@ const COPY: Record<Step, { title: ReactNode; sub: ReactNode }> = {
 export function FirstRunHero() {
   const { matchSeats } = useGames();
   const { account, refresh } = useAccount();
-  const [step, setStep] = useState<Step>(account?.handle ? 'placement' : 'callsign');
+  const [step, setStep] = useState<Step>(account?.handle ? 'placement' : 'username');
   const [queued, setQueued] = useState(false);
-  const [handleInput, setHandleInput] = useState(account?.handle?.replace(/^@/, '') || '');
+  const [handleInput, setHandleInput] = useState(
+    account?.handle?.replace(/^@/, '') || account?.suggested_handle || '',
+  );
   const [displayNameInput, setDisplayNameInput] = useState(account?.display_name || '');
-  const [savingCallsign, setSavingCallsign] = useState(false);
-  const [callsignError, setCallsignError] = useState<string | null>(null);
+  const [savingUsername, setSavingUsername] = useState(false);
+  const [usernameError, setUsernameError] = useState<string | null>(null);
 
   const name = account?.display_name || account?.handle || null;
 
@@ -76,15 +78,15 @@ export function FirstRunHero() {
     }
   }, [step, queued, matchSeats]);
 
-  const handleSaveCallsign = async (e: FormEvent) => {
+  const handleSaveUsername = async (e: FormEvent) => {
     e.preventDefault();
     const raw = handleInput.trim().replace(/^@/, '').toLowerCase();
     if (raw.length < 3 || raw.length > 20 || !/^[a-z0-9_-]+$/.test(raw)) {
-      setCallsignError('Callsign must be 3–20 lowercase alphanumeric characters, dashes or underscores.');
+      setUsernameError('Username must be 3–20 lowercase alphanumeric characters, dashes or underscores.');
       return;
     }
-    setSavingCallsign(true);
-    setCallsignError(null);
+    setSavingUsername(true);
+    setUsernameError(null);
     try {
       // 1. Update display name in local social identity
       if (displayNameInput.trim()) {
@@ -103,9 +105,9 @@ export function FirstRunHero() {
       refresh();
       setStep('placement');
     } catch (err) {
-      setCallsignError(err instanceof Error ? err.message : 'Could not register callsign');
+      setUsernameError(err instanceof Error ? err.message : 'Could not register username');
     } finally {
-      setSavingCallsign(false);
+      setSavingUsername(false);
     }
   };
 
@@ -122,7 +124,7 @@ export function FirstRunHero() {
     <div className="games-hero">
       <div className="games-hero-top">
         <span className="games-eyebrow">
-          {step === 'callsign' ? '1. Identity' : step === 'placement' ? '2. Placement' : 'Ready'}
+          {step === 'username' ? '1. Identity' : step === 'placement' ? '2. Placement' : 'Ready'}
         </span>
         <button
           type="button"
@@ -141,9 +143,9 @@ export function FirstRunHero() {
         {COPY[step].sub}
       </p>
 
-      {/* Step 1: Choose Callsign & Profile */}
-      {step === 'callsign' && (
-        <form onSubmit={handleSaveCallsign} style={{ marginTop: '0.85rem', maxWidth: 420 }}>
+      {/* Step 1: Choose Username & Profile */}
+      {step === 'username' && (
+        <form onSubmit={handleSaveUsername} style={{ marginTop: '0.85rem', maxWidth: 420 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
               <span style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--accent)' }}>@</span>
@@ -180,24 +182,23 @@ export function FirstRunHero() {
                 outline: 'none',
               }}
             />
-            {callsignError && (
-              <div style={{ color: 'var(--danger, #f85149)', fontSize: 12 }}>{callsignError}</div>
+            {usernameError && (
+              <div style={{ color: 'var(--danger, #f85149)', fontSize: 12 }}>{usernameError}</div>
             )}
             <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.2rem' }}>
               <button
                 type="submit"
                 className="games-play-btn"
-                disabled={savingCallsign || !handleInput.trim()}
+                disabled={savingUsername || !handleInput.trim()}
               >
-                {savingCallsign ? 'Saving…' : 'Confirm Callsign & Continue →'}
+                {savingUsername ? 'Saving…' : 'Confirm Username & Continue →'}
               </button>
-              <button
-                type="button"
-                className="games-ghost-btn"
-                onClick={() => setStep('placement')}
-              >
-                Skip for now
-              </button>
+              {/* No "Skip for now". A username is not a preference this step is
+                  collecting — it is the identity the ladder, the killfeed, the
+                  friends roster and `@handle` resolution all key on, and skipping
+                  it produced an account that could play but could not be found or
+                  added by anyone. The step is short precisely so it can be
+                  required. */}
             </div>
           </div>
         </form>
@@ -218,9 +219,9 @@ export function FirstRunHero() {
           <button
             type="button"
             className="games-ghost-btn"
-            onClick={() => setStep('callsign')}
+            onClick={() => setStep('username')}
           >
-            Edit Callsign
+            Edit Username
           </button>
         </div>
       )}

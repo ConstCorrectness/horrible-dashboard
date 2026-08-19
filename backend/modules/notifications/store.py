@@ -14,6 +14,19 @@ per friend plus a promise to remember to undo them.
 against events rather than a clock: `kind` names the event, `subject` names who it
 is about, and `one_shot` decides whether it survives firing.
 
+**`notifications`** — the inbox, and the reason a missed toast is harmless. A toast
+is a *cache*: it shows for four seconds and then it is gone, and until this table
+existed so was the notification, because the feed behind the bell lived in a
+JavaScript array that a page reload emptied. Anything that arrived while the app
+was closed, or while you were reading something else and then refreshed, was
+simply never seen. A notification is now written here first and rendered from
+here, so every surface is a *view* of one durable row rather than the only copy.
+
+`dedupe` is what makes those surfaces agree. One invite reaches the shell toast,
+the bell, the in-game overlay and an OS notification; without a shared key,
+accepting it in one place leaves three stale copies of it elsewhere, and a
+re-sent invite stacks instead of refreshing.
+
 Nothing like either existed before: the only `mute` in the repo was a microphone,
 and there was no watch/rule/trigger table anywhere, so an instruction that outlived
 its own chat turn had nothing to be written down in.
@@ -95,6 +108,33 @@ def init_notifications_db() -> None:
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_watches_kind ON agent_watches(kind)"
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS notifications (
+                id         TEXT PRIMARY KEY,
+                category   TEXT NOT NULL,
+                kind       TEXT NOT NULL,     -- info | success | warning | error
+                title      TEXT NOT NULL,
+                body       TEXT NOT NULL,
+                person_id  TEXT,              -- who it is *about*, when that applies
+                data       TEXT NOT NULL,     -- json: the payload a surface acts on
+                dedupe     TEXT,              -- one key across every surface
+                created_at REAL NOT NULL,
+                expires_at REAL,              -- NULL = keep until read/dismissed
+                read_at    REAL,
+                cleared_at REAL
+            )
+            """
+        )
+        # Partial: a cleared row is history, and the feed never asks for it.
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_notifications_live "
+            "ON notifications(created_at DESC) WHERE cleared_at IS NULL"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_dedupe "
+            "ON notifications(dedupe) WHERE dedupe IS NOT NULL AND cleared_at IS NULL"
         )
 
 
@@ -285,3 +325,196 @@ def cancel_watch(watch_id: str) -> bool:
     with get_db_conn() as conn:
         cur = conn.execute("DELETE FROM agent_watches WHERE id = ?", (watch_id,))
         return cur.rowcount > 0
+
+
+# ---- the inbox ---------------------------------------------------------------------
+#
+# Deliberately *after* the mute check rather than before it: `service.notify`
+# filters first and writes second, so a muted notification leaves no row. A mute
+# that still filled the bell would be a mute in name only.
+
+#: How many live rows the feed hands back. A feed to glance at, not a log — and
+#: the rows themselves are kept, so raising this later shows more history rather
+#: than resurrecting nothing.
+FEED_LIMIT = 100
+
+
+def record(
+    category: str,
+    kind: str,
+    title: str,
+    body: str,
+    *,
+    person_id: str | None = None,
+    data: dict[str, Any] | None = None,
+    dedupe: str | None = None,
+    expires_at: float | None = None,
+) -> dict[str, Any]:
+    """Write one notification and return it as the wire shape.
+
+    A repeat of a `dedupe` key **replaces** the live row rather than adding one.
+    That is what makes re-inviting somebody who has not answered yet refresh their
+    invite instead of stacking a second identical card under the first.
+    """
+    now = time.time()
+    row_id = uuid.uuid4().hex[:12]
+    payload = json.dumps(data or {})
+    with get_db_conn() as conn:
+        if dedupe:
+            existing = conn.execute(
+                "SELECT id FROM notifications WHERE dedupe = ? AND cleared_at IS NULL",
+                (dedupe,),
+            ).fetchone()
+            if existing is not None:
+                row_id = str(existing["id"])
+                conn.execute(
+                    "UPDATE notifications SET category = ?, kind = ?, title = ?, "
+                    "body = ?, person_id = ?, data = ?, created_at = ?, "
+                    "expires_at = ?, read_at = NULL WHERE id = ?",
+                    (
+                        category,
+                        kind,
+                        title,
+                        body,
+                        person_id,
+                        payload,
+                        now,
+                        expires_at,
+                        row_id,
+                    ),
+                )
+                return _view(row_id, category, kind, title, body, person_id, data, dedupe, now)
+        conn.execute(
+            "INSERT INTO notifications (id, category, kind, title, body, person_id, "
+            "data, dedupe, created_at, expires_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (
+                row_id,
+                category,
+                kind,
+                title,
+                body,
+                person_id,
+                payload,
+                dedupe,
+                now,
+                expires_at,
+            ),
+        )
+    return _view(row_id, category, kind, title, body, person_id, data, dedupe, now)
+
+
+def _view(
+    row_id: str,
+    category: str,
+    kind: str,
+    title: str,
+    body: str,
+    person_id: str | None,
+    data: dict[str, Any] | None,
+    dedupe: str | None,
+    at: float,
+) -> dict[str, Any]:
+    return {
+        "id": row_id,
+        "category": category,
+        "kind": kind,
+        "title": title,
+        "body": body,
+        "person_id": person_id,
+        "dedupe": dedupe,
+        "at": at,
+        "read": False,
+        **(data or {}),
+    }
+
+
+def feed(limit: int = FEED_LIMIT) -> list[dict[str, Any]]:
+    """The live inbox, newest first — what the bell hydrates from at boot.
+
+    Expired rows are swept on read rather than on a timer, the same way
+    `fabric.live_invites` prunes: nothing needs waking up to keep a short list
+    tidy, and an expiry that only matters when somebody looks can be evaluated
+    when somebody looks.
+    """
+    now = time.time()
+    with get_db_conn() as conn:
+        conn.execute(
+            "UPDATE notifications SET cleared_at = ? "
+            "WHERE cleared_at IS NULL AND expires_at IS NOT NULL AND expires_at <= ?",
+            (now, now),
+        )
+        rows = conn.execute(
+            "SELECT * FROM notifications WHERE cleared_at IS NULL "
+            "ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            data = json.loads(row["data"])
+        except (TypeError, ValueError):
+            data = {}
+        out.append(
+            {
+                "id": row["id"],
+                "category": row["category"],
+                "kind": row["kind"],
+                "title": row["title"],
+                "body": row["body"],
+                "person_id": row["person_id"],
+                "dedupe": row["dedupe"],
+                "at": row["created_at"],
+                "read": row["read_at"] is not None,
+                **(data if isinstance(data, dict) else {}),
+            }
+        )
+    return out
+
+
+def mark_read(notification_id: str | None = None) -> None:
+    """Mark one notification read, or all of them when given nothing.
+
+    Read state lives here rather than in the browser so it is the same on every
+    surface and survives a reload — dismissing a toast on the desktop should not
+    leave the phone still showing it as new.
+    """
+    now = time.time()
+    with get_db_conn() as conn:
+        if notification_id:
+            conn.execute(
+                "UPDATE notifications SET read_at = ? WHERE id = ? AND read_at IS NULL",
+                (now, notification_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE notifications SET read_at = ? WHERE read_at IS NULL", (now,)
+            )
+
+
+def clear(notification_id: str | None = None, *, dedupe: str | None = None) -> int:
+    """Retire a notification from every surface at once.
+
+    By `dedupe` is the important form: it is how accepting an invite in the game
+    also clears the toast, the bell entry and the OS notification, rather than the
+    other three going stale while the person wonders whether they answered it.
+    """
+    now = time.time()
+    with get_db_conn() as conn:
+        if dedupe:
+            cur = conn.execute(
+                "UPDATE notifications SET cleared_at = ? "
+                "WHERE dedupe = ? AND cleared_at IS NULL",
+                (now, dedupe),
+            )
+        elif notification_id:
+            cur = conn.execute(
+                "UPDATE notifications SET cleared_at = ? "
+                "WHERE id = ? AND cleared_at IS NULL",
+                (now, notification_id),
+            )
+        else:
+            cur = conn.execute(
+                "UPDATE notifications SET cleared_at = ? WHERE cleared_at IS NULL",
+                (now,),
+            )
+        return cur.rowcount

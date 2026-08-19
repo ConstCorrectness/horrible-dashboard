@@ -11,9 +11,9 @@ export interface GamesStatus {
   account_id: string | null;
   signed_in: boolean;
   display_name: string | null;
-  /** The globally unique callsign (the account's handle); null when signed out or
+  /** The globally unique username (the account's handle); null when signed out or
    * signed in without one yet. */
-  callsign: string | null;
+  username: string | null;
   server_url: string;
   policy: string;
   games: GameCatalogEntry[];

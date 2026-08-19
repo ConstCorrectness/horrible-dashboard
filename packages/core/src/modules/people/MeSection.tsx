@@ -6,7 +6,7 @@
  * profile, and a node id in Peers. This shows both names that matter, says which
  * is which, and makes the binding between them explicit.
  *
- * **Callsign** is the convenient name (globally unique, from the game server).
+ * **Username** is the convenient name (globally unique, from the game server).
  * **Friend code** is the durable one (derived from your own key, works offline and
  * on a LAN, and cannot be forged by a directory). Neither replaces the other, so
  * the pane degrades honestly when signed out: the code is always there.
@@ -28,7 +28,7 @@ export function MeSection() {
   const [note, setNote] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
 
-  // The roster push carries the self profile, so a callsign claimed on another
+  // The roster push carries the self profile, so a username claimed on another
   // machine appears here without a refetch.
   useEffect(
     () =>
@@ -66,7 +66,7 @@ export function MeSection() {
       setNote(
         res.error
           ? res.error
-          : `Linked — people can now add you as @${res.handle ?? 'your callsign'}.`,
+          : `Linked — people can now add you as @${res.handle ?? 'your username'}.`,
       );
       await getSelfProfile()
         .then(setMe)
@@ -95,12 +95,12 @@ export function MeSection() {
 
       <div className="people-identity">
         <div className="people-identity-row">
-          <span className="people-label">Callsign</span>
+          <span className="people-label">Username</span>
           {me.handle ? (
             <>
               <code className="people-handle">@{me.handle}</code>
-              <button type="button" onClick={() => copy('callsign', `@${me.handle}`)}>
-                {copied === 'callsign' ? 'Copied' : 'Copy'}
+              <button type="button" onClick={() => copy('username', `@${me.handle}`)}>
+                {copied === 'username' ? 'Copied' : 'Copy'}
               </button>
             </>
           ) : (
@@ -117,7 +117,7 @@ export function MeSection() {
           </button>
         </div>
         <p className="people-hint">
-          Your callsign is the easy name; the friend code always works, including offline and on a
+          Your username is the easy name; the friend code always works, including offline and on a
           LAN, because it comes from your own key rather than from a directory.
         </p>
       </div>
@@ -125,17 +125,17 @@ export function MeSection() {
       {me.holds_person_key ? (
         <div className="people-field">
           <button type="button" disabled={binding} onClick={() => void claim()}>
-            {binding ? 'Linking…' : 'Link my callsign to this identity'}
+            {binding ? 'Linking…' : 'Link my username to this identity'}
           </button>
           <p className="people-hint">
-            Tells the game server that @{me.handle ?? 'yourcallsign'} and this machine&rsquo;s
-            identity are the same person, so searching your callsign finds you. Safe to press more
+            Tells the game server that @{me.handle ?? 'yourusername'} and this machine&rsquo;s
+            identity are the same person, so searching your username finds you. Safe to press more
             than once.
           </p>
         </div>
       ) : (
         <p className="people-hint">
-          This machine is linked to your identity but does not hold the key, so the callsign link
+          This machine is linked to your identity but does not hold the key, so the username link
           has to be made from your primary machine.
         </p>
       )}

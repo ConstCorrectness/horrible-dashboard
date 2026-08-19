@@ -1,5 +1,5 @@
 /**
- * HorribleAssault's front door: the loading build, the sign-in, the callsign, and
+ * HorribleAssault's front door: the loading build, the sign-in, the username, and
  * the deploy prompt — one full-pane layer over the live scene.
  *
  * It is a **DOM overlay on the game's own canvas**, not a separate view. The map
@@ -13,7 +13,7 @@
  */
 import { useState, type CSSProperties, type ReactNode } from 'react';
 
-import { setCallsign } from '../../account';
+import { setUsername } from '../../account';
 import { SignInCard } from '../../SignInCard';
 import type { SessionInfo } from './api';
 import { bootProgress, formatBytes, statusLine, type BootPhase, type BootProgress } from './boot';
@@ -239,10 +239,15 @@ function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
   );
 }
 
-// ---- enlist (claim a callsign) -----------------------------------------------
+// ---- enlist (claim a username) -----------------------------------------------
 
 function Enlist({ account, onEnlisted }: { account: SessionInfo | null; onEnlisted: () => void }) {
-  const [value, setValue] = useState('');
+  // Pre-filled with the server's suggestion (the provider login, folded into the
+  // handle charset) rather than blank. The suggestion is the *only* thing left of
+  // what sign-in used to do silently: it derived this name and claimed it, so the
+  // person never saw this screen. Now they see it, and the name is theirs to keep
+  // or replace before anything is reserved.
+  const [value, setValue] = useState(account?.suggested_username ?? '');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
 
@@ -251,7 +256,7 @@ function Enlist({ account, onEnlisted }: { account: SessionInfo | null; onEnlist
     setBusy(true);
     setErr('');
     try {
-      await setCallsign(value.trim());
+      await setUsername(value.trim());
       onEnlisted();
     } catch (e) {
       // The server owns uniqueness and the charset rule, so its message is shown
@@ -264,7 +269,7 @@ function Enlist({ account, onEnlisted }: { account: SessionInfo | null; onEnlist
 
   return (
     <div className="hd-boot" style={column}>
-      <Wordmark sub="choose your callsign" />
+      <Wordmark sub="choose your username" />
       <p
         style={{
           ...label,
@@ -277,14 +282,14 @@ function Enlist({ account, onEnlisted }: { account: SessionInfo | null; onEnlist
           margin: 0,
         }}
       >
-        Signed in as {account?.display_name ?? 'you'}. Your callsign is how everyone else sees you —
-        on the scoreboard, in the killfeed, and on the ladder.
+        Signed in as {account?.display_name ?? 'you'}. Your username is how everyone else sees you —
+        on the scoreboard, in the killfeed, on the ladder, and it is how friends add you.
       </p>
       <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
         <input
           style={{ ...field, fontFamily: MONO, letterSpacing: '0.05em' }}
-          placeholder="callsign"
-          aria-label="Callsign"
+          placeholder="username"
+          aria-label="Username"
           required
           minLength={3}
           maxLength={20}

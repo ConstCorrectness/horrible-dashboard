@@ -85,7 +85,7 @@ async def link_device(request: LinkDeviceRequest) -> LinkDeviceResult:
     return LinkDeviceResult(ok=error is None, device=device, error=error)
 
 
-# ---- callsigns (@handle) -----------------------------------------------------------
+# ---- usernames (@handle) -----------------------------------------------------------
 #
 # The bridge between the two identities a person used to have: the game server's
 # globally unique `handle` and the fabric's `person_id`. See social/handles.py.
@@ -107,7 +107,7 @@ async def bind_handle() -> BindHandleResult:
 
 @router.get("/directory/search", response_model=DirectorySearchResult)
 async def search_directory(q: str) -> DirectorySearchResult:
-    """Prefix-search callsigns — the "easier way to find people".
+    """Prefix-search usernames — the "easier way to find people".
 
     Entries whose `person_id` is not the fingerprint of their own published key are
     dropped in `handles.search`, so a compromised directory can withhold someone

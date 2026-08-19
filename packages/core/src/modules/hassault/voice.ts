@@ -17,7 +17,7 @@ mixer.declareStrip({ id: 'voice', label: 'Voice comms', icon: '🎧' });
 
 export interface PeerVoiceState {
   peerId: string;
-  callsign: string;
+  username: string;
   isSpeaking: boolean;
   isMuted: boolean;
   volume: number;

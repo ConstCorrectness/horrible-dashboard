@@ -3,13 +3,13 @@
  *
  * The complaint this answers: adding someone meant asking them to read out an
  * `HD-XXXX-XXXX-XXXX-XXXX-XXXX` friend code, which is not something people do.
- * A callsign is 3–20 characters, globally unique, and already printed next to
+ * A username is 3–20 characters, globally unique, and already printed next to
  * them on the ladder and in HorribleAssault.
  *
  * The friend code is still here and still first-class, because it is the only
  * path that works **offline and without trusting anyone**: it is derived from the
  * person's own key, so a hostile directory can withhold someone but never
- * substitute a different key for them. Callsign search is the convenience; the
+ * substitute a different key for them. Username search is the convenience; the
  * code is the guarantee. See docs/modules/social.mdx.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -69,11 +69,11 @@ export function DiscoverSection() {
   return (
     <div className="people-section">
       <label className="people-field">
-        <span className="people-label">Find someone by callsign</span>
+        <span className="people-label">Find someone by username</span>
         <input
           type="search"
           value={query}
-          placeholder="@callsign"
+          placeholder="@username"
           autoComplete="off"
           spellCheck={false}
           onChange={(e) => setQuery(e.target.value)}
@@ -85,7 +85,7 @@ export function DiscoverSection() {
       ) : null}
       {busy ? <p className="people-hint">Searching…</p> : null}
       {!busy && !short && query.trim() && results.length === 0 ? (
-        <p className="people-hint">No callsign starts with that.</p>
+        <p className="people-hint">No username starts with that.</p>
       ) : null}
       {note ? <p className="people-note">{note}</p> : null}
 

@@ -272,7 +272,7 @@ like live switches that silently did nothing.
 
 - **`network.directoryUrl`** had **zero readers repo-wide**. Finding people by name
   is the [Atlas presence directory](social.mdx#the-presence-directory-mongodb-atlas)
-  and the game server's callsign directory, neither of which is configured here.
+  and the game server's username directory, neither of which is configured here.
 - **`trustMode: 'directory'`** was never implemented, so `trust.evaluate` rejected
   every peer — selecting it made the node silently unpairable. `trust_mode()` now
   reads a stored `directory` as `manual`, so an existing config recovers rather

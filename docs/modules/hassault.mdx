@@ -212,7 +212,7 @@ which keeps them unit-testable with no WebGL context.
 | `boot.ts` | The front door's state machine and progress maths — pure, no three |
 | `reveal.ts` | The build animation, patched into the world's own material |
 | `backdrop.ts` | The grid and mote shaders the map stands in |
-| `BootOverlay.tsx` | Loading, sign-in, callsign, deploy — the DOM half |
+| `BootOverlay.tsx` | Loading, sign-in, username, deploy — the DOM half |
 | `GameMenu.tsx` | The Escape pause menu: sensitivity, server browser, rebinding |
 | `HorribleAssaultPanel.tsx` | Canvas, pointer lock, map picker, HUD, match UI |
 
@@ -433,11 +433,20 @@ give you:
 
 ```json
 { "kind": "step", "volume": 0.42, "bearing": 1.87, "up": 0 }
+{ "kind": "shot", "volume": 0.71, "bearing": -0.4, "up": 1, "weapon": "sniper" }
 ```
 
 A **bearing and a loudness, never an offset**. Roughly where and roughly how far,
 which is the resolution a player should be working at, and not enough to draw a dot
 on a map with.
+
+`weapon` rides along on a shot and nothing else, and is the one field worth being
+explicit about: it is not a position, and it is not a fact you could not already
+have — you can see what somebody is carrying, and a gunshot is the loudest thing
+in the game. What it buys is telling a sniper round from a shotgun blast two rooms
+away, which is a real decision (push, or hold) made on information ears genuinely
+carry. A footstep has no weapon and the key is **absent** rather than empty, so no
+client has to special-case a value the wire had no reason to send.
 
 The rest of the design follows from making that trade meaningful:
 
@@ -455,12 +464,47 @@ The rest of the design follows from making that trade meaningful:
 - **Your own noises are never sent back to you.** They need no round trip, the client
   synthesizes them locally the instant they happen, and a footstep that arrives 50 ms
   late does not sound like a footstep.
+- **A reload makes no noise on the wire yet.** `RELOAD_LOUDNESS` is defined and
+  unused: both clients have a reload timbre and neither ever hears somebody else's.
+  Emitting it is a one-line change and a real balance decision — hearing an enemy
+  reload is a large piece of information — so it is left as one, not smuggled in
+  with the audio.
 
-Audio is **synthesized, never sampled** (`audio.ts`) — the same licensing rule that
-keeps AC's maps and textures out of this repo. A footstep is a band-passed noise
-burst with an envelope and a sine thump under it; a shot is a brighter, louder one.
-Nothing is downloaded, so the first sound of a match is as instant as the last, and
-none of it is anybody else's copyright.
+Audio is **synthesized, never sampled** (`audio.ts` in the browser,
+`apps/native-fps/src/audio.rs` natively) — the same licensing rule that keeps AC's
+maps and textures out of this repo. A footstep is a band-passed noise burst with an
+envelope and a sine thump under it; a shot is a brighter, louder one. Nothing is
+downloaded, so the first sound of a match is as instant as the last, and none of it
+is anybody else's copyright.
+
+#### A weapon's voice is derived, not tabulated
+
+Each gun sounds like itself, and none of them has a table of its own. `weaponVoice`
+reads the numbers the weapon already carries:
+
+| Number | What it does to the ear |
+| --- | --- |
+| `rpm` | The pitch. A fast, small weapon cracks; a slow, heavy one booms — the cue that separates a rifle from a sniper at distance. |
+| `pellets` | The width of the band. More than one is a shotgun, and a wide band is a blast rather than a bang. |
+| `damage` | The body under it and how long it hangs. Weight. |
+
+Same reasoning as `shot_loudness` scaling with damage rather than getting its own
+dial: **tie the sound to the balance numbers and a balance change cannot leave the
+audio describing the previous version of the gun** — and a weapon added to
+`weapons.py` arrives with a voice and no client release. The knife is the one
+special case, told apart exactly as `shot_loudness` tells it (no kickback, almost
+no range): a short quiet swish that must *not* sound like a gun, because being able
+to hear that somebody is carrying a knife is the reason its silence is worth
+anything.
+
+An unrecognised weapon id falls back to the generic shot rather than to silence or
+to a footstep — a client older than its server must still hear a gunshot.
+
+The arithmetic is deliberately **duplicated** in TypeScript and Rust rather than
+served, which is the opposite of the rule `interval` and `zoomLevels` follow. The
+distinction is what the number is *for*: those are values the client **acts** on, so
+a stale copy is an aim that is wrong. A voice is presentation — a drift makes a gun
+sound wrong, it does not make a shot land somewhere else.
 
 Because the mechanic is information, it is also **shown**: `NoiseRing` draws a tick
 around the crosshair at the reported bearing, opacity by volume. A player on laptop
@@ -591,7 +635,7 @@ flowchart LR
   L["loading<br/>(the map builds)"] --> S{signed in?}
   S -- no --> I[signin]
   I --> S
-  S -- yes --> E{has a callsign?}
+  S -- yes --> E{has a username?}
   E -- no --> N[enlist]
   N --> E
   E -- yes --> M[menu]
@@ -618,16 +662,46 @@ one you are about to play, still orbiting. That is the whole reason the boot seq
 finishes the world *before* asking anything — the menu is a layer on a game, not a
 screen in front of one.
 
-Five sections, as a list on the left and its panel on the right, so the actions people
+Six sections, as a list on the left and its panel on the right, so the actions people
 came for stay one click deep however much settings grow:
 
 | Section | What it answers |
 | --- | --- |
-| **Play** | Map, then **Train** (alone, against dummies) or **Host** (a match here, with bots) |
+| **Play** | Map, then **Quick play**, **Train** (alone, against dummies) or **Host** (a match here, with bots) |
+| **Armor & Skins** | Float wear, drops, trade-up contracts |
 | **Servers** | What is running — here, on the LAN, and on friends' machines |
-| **Friends** | Who is about, and who has invited you |
-| **Settings** | Sensitivity, field of view, volume, crouch mode |
+| **Friends** | Who is about, who has invited you, and how to add somebody |
+| **Settings** | Sensitivity, field of view, volume, crouch mode, voice, the native prototype |
 | **Controls** | Rebind every key |
+
+### The menu is labels and state, not prose
+
+Every one of those rows used to carry a hint line under it, every start option two
+sentences of explanation, and the Play section closed with a **paragraph describing
+the momentum system**. All of it is gone, on a rule worth stating because it is easy
+to violate one row at a time:
+
+> A menu says what things *are* and what is *true right now*. It does not explain
+> how the game works.
+
+The hints were also redundant — the panel one click away is the explanation, and it
+is the accurate one, whereas a summary drifts the moment the panel changes. The
+movement description was worse than redundant: it was advertising copy, sitting in
+front of somebody who had already decided to play. It lives in
+[Movement](#movement) instead, where a reader is actually reading. Error banners and
+the loadout warning stay, because those are state.
+
+What is *not* prose and stays: slider hints (they describe a control whose effect is
+not otherwise visible until you drag it) and the footer keybinding line.
+
+**Quick play** is first and is the only accented button on the screen. It joins the
+fullest joinable match a friend or the LAN is running — fullest because a room with
+people in it is the one worth joining — and hosts one only when there is nothing to
+join, skipping any map this node cannot load rather than offering it and then failing.
+It is composed entirely from `browseServers`, `joinRoom` and `host`; there is no
+matchmaking endpoint behind it. A public queue across strangers is a deliberate
+[non-goal for now](#matchmaking-is-friends-first), and Quick play is the button it
+would route through if it lands.
 
 **Train is deliberately not a match.** It is one player on a map against static
 dummies that do not shoot back, which is what learning the movement wants: the
@@ -635,8 +709,21 @@ chained-jump timing and the shoot-jump are exactly the sort of thing to practise
 before somebody is aiming at you. The gun works there — see
 [the training range](#the-training-range) — because the shoot-jump cannot be
 practised without one.
-The Play section also carries a short description of the movement rules, because a
-mechanic nobody is told about is a mechanic nobody uses.
+
+### The native client
+
+`apps/native-fps` sat in the Play section advertising a "native C++ / Vulkan client
+with 1,000Hz+ Raw Input and sub-tick UDP networking directly to this match server".
+None of that was true: it was ~300 lines of Rust on `minifb` — a CPU framebuffer, not
+Vulkan — walking a hardcoded 16×16 raycast grid. It loaded no map, and `tungstenite`
+was declared in its `Cargo.toml` and never imported, so there was no networking at
+all. The backend passed it `--connect=127.0.0.1:4000`, `--room` and `--raw-input`,
+and it parsed none of them.
+
+It is being built for real, in stages, and it lives in **Settings** until it is one.
+A prototype behind a settings row is fine; a prototype wearing the finished thing's
+label sends people to file bugs against a game they were never running. See
+[the native client](#the-native-client-rust--wgpu) for where it is now.
 
 **Local network** is a row in the Servers panel that toggles
 `network.enableLanDiscovery`. LAN is a *fabric transport* owned by the network module,
@@ -715,12 +802,49 @@ recorder — so `/api/games/auth/local` and `/auth/local` are in
 are dropped. See [observability](observability.mdx#the-one-exception-password-bodies).
 :::
 
-### The callsign is the identity
+### The username is the identity
 
-Your **callsign** is the game server's globally unique `handle` — the same one the
+Your **username** is the game server's globally unique `handle` — the same one the
 ladder shows. "Enlisted" is *derived* from having one rather than stored
-separately, so there is nothing to keep in sync, and the callsign follows you to
+separately, so there is nothing to keep in sync, and the username follows you to
 another machine because the account does.
+
+It is called **username** everywhere now. It used to be "callsign" here, in the
+games module, in social and in people, while the wire, the DB column and the routes
+all said `handle` — one identity under two names, which is exactly the confusion a
+single identity is supposed to remove. The game server's `handle` column and
+`/account/handle` are unchanged (already neutral); the node-local surfaces moved
+with the copy: `SessionInfo.username`, `POST /api/games/auth/username`.
+
+#### It has to be *chosen*, and that was the bug
+
+The chooser (`BootOverlay`'s enlist screen) has always existed and has always been
+unskippable — but nobody ever saw it. `store.ensure_handle` ran on **every** sign-in
+path, deriving a handle from the OAuth login or the email local part and locking it,
+so `enlisted` was already true by the time `bootPhase` could ask. Everyone arrived
+holding a name like `rob-ranieri-2` that they had never agreed to, and the name the
+ladder, the killfeed and `@handle` resolution all key on was decided by a string
+transform.
+
+So sign-in no longer claims one. A fresh account arrives with `handle IS NULL` and
+lands on the enlist screen; local signup requires a username in the form.
+`ensure_handle` survives for the `_m6` backfill only, so accounts that predate the
+chooser keep the name they have.
+
+What is left of the old behaviour is a **suggestion**: `suggested_handle` rides
+along on the sign-in payload and on `GET /me`, pre-filling the field with the
+provider login. A suggestion may collide — two `sam@` addresses are both offered
+`sam` — and that is the honest version of what `ensure_handle` did by silently
+handing the second person `sam2`. The *claim* is what has to be unique, and a
+refused claim comes back with a reason they can act on.
+
+A successful claim also calls `handles.publish_binding()`, from the route rather
+than from each caller: three clients claim through
+`POST /api/games/auth/username`, and a binding driven from three places is a
+binding that runs from two of them. That binding — `handle` → `person_id` on the
+game server — is what makes `@name` resolvable to a friend code, which is the
+difference between a label on a scoreboard and an identity somebody can reach you
+at. See [social](social.mdx).
 
 The join handler takes the name from the account and **ignores `data["name"]`
 entirely**. There is deliberately no name field in the pane any more: offering one
@@ -975,16 +1099,151 @@ Invite a person, not a machine: the pane resolves a name or friend code through
 the social roster and sends `hassault_invite` to **every device they have
 online**, because you invite a human and they pick which box to answer on.
 
-The invite carries the room and the map. The node id it came from is authenticated
-by the fabric; the `hostName` alongside it is only a label and never decides
-anything.
-
 The pane's invite list comes from `GET /api/hassault/invitees`, which the hassault
 backend assembles from the social roster. That join is deliberately backend-side:
 the pane must not import across a module boundary, so it only ever calls
 `/api/hassault`. Friends whose node did not advertise the `hassault` capability
 during the handshake are shown greyed out rather than hidden, since "your friend
 needs to update" is more useful than an absence.
+
+Inviting no longer requires that you already be hosting. "Invite Rob" is a
+complete intent; making somebody infer the missing precondition, go and satisfy
+it, and come back is why the Friends panel read as broken to anyone who opened it
+first. `inviteFriend` hosts on the selected map when there is nothing to invite
+into — with **zero bots**, because you are inviting a human and filling the room
+on their behalf is a decision nobody made.
+
+#### An invite names a person, and the two authorities it has to cross
+
+The payload used to carry `node_identity.node_name()`, so an invitation from a
+friend read **"horribleComputer invited you"**. Nothing errored — a machine name
+was simply the only noun in scope where the payload was assembled.
+
+Two identity authorities meet at this seam, and neither knows the other's answer:
+
+- the **fabric** knows a node id and a person key, and labels things with a
+  *device* name;
+- the **game server** is the authority for the username (`accounts.handle`), which
+  is what the ladder, the killfeed and `@handle` resolution all key on.
+
+The invite is built on the fabric side, so the username has to be carried across
+deliberately or it is not there at all. The **sender stamps its own** — it knows it
+without asking anyone, from the signed-in account. Resolving it on the receiving
+side would mean a game-server directory round-trip per invite, for an answer that
+is *also* only a claim.
+
+The receiver then picks a display name in this order (`fabric._invite_display_name`),
+which is the same precedence `browse_peers` already applies to `node_name`:
+
+1. **The roster's** `handle` for the person that node belongs to — the only one
+   that is more than a claim, because we resolved it ourselves, and it costs no
+   lookup (`social_friends.handle` is already stored).
+2. The sender's **stamped** username. A claim, but from an authenticated friend.
+3. The device name, then a generic.
+
+Preferring the stamp over the roster would let an authenticated friend render under
+somebody else's username in your invite list. The device name survives as a
+secondary line — *"on horribleComputer"* — which is genuinely useful, since an
+invite fans out to every machine they have online and knowing which one answered
+tells you something.
+
+The authenticated node id remains the authority for everything that is a
+*decision*. All of the above is a label.
+
+#### Delivery: a toast is a cache, the inbox is the truth
+
+The invite was broadcast on the **`hassault`** `/ws` channel — and only there. That
+channel has exactly one subscriber, the game pane, and panes unmount on a workspace
+switch and when their tab is inactive. So for most of the day an invite arrived,
+updated a dict, and was seen by nobody. No error, no dropped message: no audience.
+
+`handle_invite` now also calls `notifications.service.notify()`, which is one call
+rather than a new subsystem because that door already fans out to the shell toast,
+the notification feed and the OS notification, with mute rules enforced at the
+producer. Four surfaces, from most to least ambient:
+
+| Surface | When it is the one you see |
+| --- | --- |
+| **Shell toast**, with a **Join** button | The app is open and you are looking at it |
+| **Notification feed** (the bell) | You were not looking; it is still there later |
+| **In-game card** over the canvas | Pointer lock is held, so the shell's chrome is not on screen at all |
+| **OS notification** | The window is not focused |
+
+The in-game card is the same idea as Steam's overlay notification, and it shows
+"Esc to answer" rather than buttons while `phase === 'playing'`: the pointer is
+captured, so a button there would be unreachable.
+
+The **durable inbox** is what makes a missed toast harmless. `notify()` writes a
+row to a `notifications` table in `app.db` **before** it broadcasts, and the
+frontend hydrates from `GET /api/notifications/feed` at boot — the feed used to be
+a JavaScript array that a reload emptied. Read and cleared state are server-side
+too, so answering on one surface is answering on all of them.
+
+That is what `dedupe` is for: one key, `hassault-invite:<node>:<room>`, built in
+exactly one place on each side (`invite-notify.ts` and `fabric._notify_invite`).
+It does two jobs — a repeated invite **replaces** the live row instead of stacking
+a second identical card, and `service.retract()` on accept or decline clears every
+surface at once. Two spellings of that key would be a bug that looks like nothing:
+everything still works, notifications just never clear.
+
+:::note This path needs no Tauri permission
+The OS notification goes through the **Web Notification API**, gated on the
+`notifications.system` capability — not the Tauri notification plugin. The rule
+that a Tauri command needs an ACL entry *and* a `PERMISSION_FILES` line is real,
+and it does not apply here.
+:::
+
+#### An offline friend is queued on the *sender*
+
+`peer_hub.send_to` is a direct node-to-node send. There is no relay in the path, so
+an offline target does not mean a queued invite somewhere — it means nothing was
+sent at all, and the receiver cannot store what never arrived. Steam can queue on
+its connection-manager servers because they *are* in the path; here nothing is.
+
+So the sender holds it (`fabric.queue_invite`) and flushes on the `peer_update`
+event that `_on_peer_event` already receives. Deliberately **not persisted**, and
+expiring with `INVITE_TTL` (five minutes): a room does not outlive the process
+hosting it, so an invite that survived a restart would point at a match that no
+longer exists — the same reason a Steam lobby invite dies with the lobby.
+
+One consequence worth stating plainly: **an invite is not retracted when the host
+tears the room down.** The room is retired on the *host's* node and the notification
+lives on the *invitee's*, so clearing it would need a second peer message. It
+expires on its own instead, and joining a dead room fails with an error that clears
+it. That is a limitation, not a design.
+
+### Matchmaking is friends-first
+
+There is no public queue and no stranger matchmaking, which follows from the fabric
+rather than being a separate decision: a stranger's match is not discoverable
+because it is also not joinable. What "good matchmaking" means here is therefore
+about friends, and the gaps were all in the same direction — the game could show
+you a roster but not let you do anything to it:
+
+- **Add somebody without leaving the game.** The Friends panel used to say "the
+  roster lives in the Social panel" and stop. That made an empty friends list a dead
+  end: the one screen where you have just discovered you have nobody to play with
+  was the one screen that could not do anything about it. It now carries an
+  `@username` search built on `searchDirectory` + `addFriend` from the social
+  module's own client — the same pair [people](people.mdx)'s Discover section uses,
+  so it is a second *view*, not a second implementation, with no new route behind
+  it. The request is sent as `@username` rather than the person id already in hand,
+  because the browser is not a trusted source of person ids and the backend
+  re-resolves and re-checks the key fingerprint itself.
+- **Show the username.** `/invitees` returned `display_name` and never the handle,
+  so the game named people differently from everything else in the app. Both
+  `Invitee` and `BrowsePlayer` now carry `username`, filled from the roster's stored
+  `handle`. It can be legitimately **empty** — a friend added by friend code before
+  either of you signed in to the game server has no account bound to their person
+  key yet — which is why it is served *alongside* `name` rather than replacing it.
+- **Presence beyond a dot.** `/invitees` already read `fabric.hosted_rooms()` and
+  threw the answer away; a row now says *"playing hd_crossing"* rather than only
+  that somebody is online.
+- **One roster, not two.** The Servers panel rendered the same friends a second
+  time, with its own Invite buttons, and the two copies had already drifted — that
+  one disabled Invite for anyone already in a match, the Friends copy did not.
+  Servers answers *what is running*; Friends answers *who is about*. The duplicate
+  is gone and Servers now lists only who is in your match.
 
 ### The server browser
 
@@ -1010,12 +1269,12 @@ any of those rooms; there is nothing to withhold from someone who could ask to
 join instead. An untrusted peer gets silence, not an error: the roster is not a
 thing to confirm the shape of to a stranger.
 
-The **players** half of the browser is the same roster `/invitees` already
-builds, plus `fabric.hosted_rooms()` — a node id → room id map built from
-`_hosted`, the same dict that holds every `PeerPlayerConn` this node is proxying
-for. It is the only place "which of my rooms is this friend's device standing
-in" can be answered from: a remote player has no browser socket of its own, only
-the fact that some peer node is proxying for one.
+`fabric.hosted_rooms()` — a node id → room id map built from `_hosted`, the same
+dict that holds every `PeerPlayerConn` this node is proxying for — is the only
+place "which of my rooms is this friend's device standing in" can be answered
+from: a remote player has no browser socket of its own, only the fact that some
+peer node is proxying for one. `/browse` and `/invitees` both read it, and the
+Friends panel is where it is *rendered*, as "playing `<map>`".
 
 ### One socket is one player
 
@@ -1359,6 +1618,440 @@ Add them from the toolbar (`+ Bot`, with a skill selector), or ask the agent:
 — a guest's socket is bound to a remote match, and there is no fabric message for
 reshaping the roster of a match you are only visiting.
 
+## The native client (Rust + `wgpu`)
+
+The browser client is the game. This is a second one, native, for the half of a
+shooter a browser cannot give you: raw mouse input rather than accumulated cursor
+deltas, an uncapped present mode, and no compositor between the frame and the
+screen. It is worth being precise about what that buys — **input latency and frame
+pacing, not fidelity**. Visual quality here is bounded by the licensing rule that
+runs through the whole module: no textures, no models, no sampled audio that
+belongs to somebody else. A native client renders the same untextured architecture
+the browser one does, faster and with a tighter mouse.
+
+It is being built in **four stages**, each of which ships something and leaves the
+previous one working.
+
+| Stage | What it adds | State |
+| --- | --- | --- |
+| **B1** | The wire and the world: real maps, real protocol | **done** |
+| **B2** | The `wgpu` renderer, camera, bodies, raw input | **done** |
+| **B3** | Physics and client-side prediction | **done** |
+| **B4** | Play/Train/Host route through it | not started |
+
+It plays: it loads any map the node serves, joins a real match, renders it, and
+predicts your movement locally. What it does not yet do is *replace* the browser
+client as the way in — Play, Train and Host still open the pane, and the native
+client is launched from a Settings row. That is B4, and it is deliberately last:
+routing people into it before the prediction was trustworthy would have meant
+shipping the rubber-banding as the default experience.
+
+### B1: the wire and the world
+
+Two ports and a socket, and deliberately **no new renderer**. Putting a software
+rasteriser in between would be a week of work that B2 deletes.
+
+- `world.rs` — a port of `world.ts`. The nine byte planes, and the height rules.
+- `geometry.rs` — a port of `geometry.ts`. The same mesher, the same colours.
+- `api.rs` — `GET /maps/{name}`, `/maps/{name}/cubes`, `/weapons`.
+- `protocol.rs` / `net.rs` — the `hassault` channel on the node's shared `/ws`.
+
+It talks to **the node on this machine**, not to a match server. That is not a
+shortcut: identity, the map catalogue and the peer fabric all live there, and
+`channel.py` takes the player's name from the backend's signed-in account and
+ignores anything a client sends. Pointing at the node means the native client
+inherits the session for free and there is no second sign-in to build. A join from
+an account with no username comes back as `not_signed_in`, and the client says so
+in those words rather than reporting a network failure.
+
+The reader thread owns the socket's read half and nothing else touches it; the
+game loop drains a channel and writes through a mutex. Blocking `tungstenite` and
+threads rather than an async runtime, because there is one socket and three HTTP
+calls made once at startup.
+
+B1 shipped with no renderer at all — a top-down debug view, replaced by B2's.
+`--headless` is what remains of that idea and is still the most useful diagnostic
+in the client: it skips the window entirely and logs the join and the incoming
+ticks, which proves the wire with no GPU involved.
+
+```bash
+cargo build --release --manifest-path apps/native-fps/Cargo.toml
+./apps/native-fps/target/release/hassault-native --server=http://127.0.0.1:8000 --map=hd_pit --check
+```
+
+`--check` loads and meshes a map and exits, which is the fastest way to see
+whether a map the browser renders is one this client agrees about.
+
+### B2: the renderer
+
+One pipeline, two vertex buffers, a depth buffer. The world is uploaded **once**
+(a map is 13k–113k triangles and never changes) and the bodies are rewritten each
+frame into a **pre-allocated** buffer — allocating on the GPU per frame is how a
+renderer develops a stutter that profiles as "driver".
+
+Three details carry the whole cross-platform claim and the whole latency claim:
+
+- **`wgpu` picks the backend.** DX12 or Vulkan on Windows, Vulkan on Linux, Metal
+  on macOS. Writing to Vulkan directly would ship nothing for macOS.
+- **Raw mouse input.** `winit`'s `DeviceEvent::MouseMotion` is the mouse's own
+  delta, before pointer acceleration, before quantisation to a pixel grid, and
+  before a screen edge can clamp it. A browser gives you `movementX`, which is a
+  *cursor* delta — already accelerated, already integral. That difference is the
+  whole of "the aim feels different", and it cannot be recovered browser-side at
+  any frame rate.
+- **Present mode, lowest latency first.** `Immediate` (tears, no waiting) →
+  `Mailbox` (tear-free, still no blocking) → `Fifo` (vsync, always supported,
+  and up to a frame of lag). Plus `desired_maximum_frame_latency: 1`, because
+  every queued frame is a frame of input latency.
+
+There are **no textures and no light sources**, because the module ships neither.
+The shader does one directional wash and distance fog over the mesher's
+per-texture-id colours — enough that two perpendicular walls of the same texture
+id do not merge into one shape when you stand in a corner. Bodies are boxes sized
+from `PLAYER_RADIUS` and the player's own crouch fraction, because a body drawn
+larger than its hitbox teaches you to miss.
+
+:::note wgpu clip space is `directx`, not `vulkan`
+In glam 0.33's vocabulary, wgpu's NDC — **Y-up, z in 0..1** — is the `directx`
+convention. `vulkan` is also 0..1 but *Y-down*, and renders the world upside down
+while compiling perfectly; `opengl` is Y-up but -1..1, which renders right way up
+and quietly throws away half the depth buffer. `camera.rs` pins the near plane's
+NDC depth in a test for exactly this reason.
+:::
+
+#### The bug that made the renderer look slow
+
+The first version put the socket behind a `Mutex`: the reader thread locked it,
+called `read()`, and the render loop locked it to write. The comment justifying
+that said a write "waits at most one inbound frame, and at 20Hz snapshots that is
+a fraction of a frame". **That is exactly backwards** — one inbound frame at 20 Hz
+is 50 ms, and `read()` blocks *while holding the lock*, so every frame's input
+send waited up to a full snapshot interval.
+
+Measured: **36 fps** on an RTX 4080 drawing 13,000 triangles. A renderer built for
+latency, throttled by its own network lock, with the frame time going nowhere near
+the GPU.
+
+The fix is not a better lock, it is **no lock**: one thread owns the socket and
+does both jobs, reading with a short timeout and draining an outbound queue
+between reads. The game loop never blocks on I/O and never takes a lock. Same
+machine, same map: **1660 fps**. `ac_depot`, at 113,118 triangles, runs at ~1600.
+
+:::warning A timed-out read on Windows is raw OS error 997
+`SO_RCVTIMEO` expiry here produces `ERROR_IO_PENDING`, which Rust maps to **no
+named `ErrorKind` at all** — not `WouldBlock`, not `TimedOut`. A classifier that
+checks only the two obvious kinds treats an ordinary timeout as a dead socket, and
+the symptom is precise and misleading: the client connects, joins a match, renders
+one frame, then reports *"connection closed: Overlapped I/O operation is in
+progress"* — on a loopback connection to a healthy server on the same machine.
+Pinned by `net.rs`'s `windows_reports_a_timed_out_read_as_error_997`.
+:::
+
+### B3: physics and prediction
+
+`physics.rs` is the Rust port of the movement rules, and `prediction.rs` is
+rewind-and-replay reconciliation on top of it. The mechanism is three rules:
+
+1. **Simulate locally, immediately** — every command is applied the instant it is
+   produced, so pressing W moves you on that frame rather than a round trip later.
+2. **Keep the commands**, each with its sequence number, until acknowledged.
+3. **On a snapshot, rewind and replay** — take the server's authoritative state,
+   drop everything at or below `ack`, and re-run the rest.
+
+Rule 3 is the one that is easy to skip and impossible to fake. Without the replay,
+every snapshot yanks you back to where you were a round trip ago and you move
+forward again — the rubber-banding that reads as "lag" on a perfect connection.
+`ack` is what makes it possible, which is why the server sends it **per recipient**
+rather than in the shared rows.
+
+**What is predicted and what is not.** Movement is, because it is deterministic
+given the same inputs and the same world — which is exactly what
+`physics-vectors.json` pins. Health, ammo, hits and deaths are **not**: they depend
+on other players, and a client that guessed would show you kills you did not get.
+
+Corrections under two cubes are **eased** away over a few frames and never seen.
+Over that, something happened the client could not have predicted — a respawn, a
+teleport, an explosion's shove — and easing across it would drag the camera
+smoothly through a wall, so it is taken as a hard cut. A respawn is detected
+explicitly (`was_dead && you.alive`) and resets rather than reconciles.
+
+The title bar reports commands **in flight**, which is a direct read on the round
+trip the prediction is covering for: at ~1500 fps against 20 Hz snapshots it sits
+between roughly 25 and 100, draining each time a snapshot lands.
+
+### The rules that are easy to get backwards, again
+
+Both traps from [the renderer](#the-heightfield-rule-which-is-easy-to-get-backwards)
+are now implemented three times, so both are pinned again here:
+
+- the **base height comes from the cell** while the **delta comes from the
+  corner-vertex cell** — taking both from the vertex cell tears heightfields apart
+  at every seam, silently;
+- the **divisors differ on purpose**: `vdelta/4` per render vertex,
+  `(sum of four)/16` for the height a body stands on. Reusing `/4` sinks the
+  player into every slope.
+
+And one that is specific to a mesher: an **overhang uses `utex`, not `wtex`**.
+
+### The HUD and the weapon in your hands
+
+Everything the snapshot already carried and the client threw away. `you` in a
+snapshot is per-recipient precisely so a client can show the player their own
+health, magazine, reload clock and respawn clock — and until this stage all of it
+arrived and was discarded, which made the native client playable only by someone
+who already knew the game.
+
+**The HUD is drawn, not composited** (`hud.rs`). There is no DOM here and no text
+renderer, so a frame's state becomes triangles in one pass and
+`Renderer::set_overlay` draws them last, alpha-blended, with no depth attachment
+at all — the HUD is not in the world and has nothing to be behind.
+
+Four decisions in it are load-bearing:
+
+- **The font is synthesized, like the sounds and the maps.** A 5×7 bitmap written
+  as binary literals, so every glyph is drawn in the source that defines it —
+  which is the only review a hand-made font gets. Shipping a TTF would mean
+  shipping someone else's licence for the sake of four numbers on a screen.
+  Uppercase only: a 5×7 cell has no room for descenders, and a HUD has no prose.
+- **Layout is in pixels and converted to clip space once.** A HUD laid out in
+  normalized coordinates stretches with the window, and a crosshair whose arms
+  differ in length by aspect ratio is a crosshair that lies about the spread it is
+  drawing. One HUD unit is derived from the window height, so the same layout is
+  legible on a 720p laptop and on a 4K monitor.
+- **Every edge-anchored block is laid out *upwards* from its margin.** The block's
+  height depends on the HUD unit, so anchoring its top puts the last line off the
+  bottom of the screen on a small window — where it is not clipped with a warning,
+  it is simply absent. The first cut did exactly that.
+- **Nothing on it invents a fact.** The hitmarker comes from `you.hits`, which the
+  server drains as it builds that envelope, so each landed hit arrives exactly
+  once; the damage flash fires on a *drop* in health, and a respawn explicitly
+  clears the last-seen value so 12 → 100 is not read as healing. A marker driven
+  by the fire key would light up on shots that hit a wall — the same class of lie
+  as drawing footstep positions.
+
+**The weapon view model** (`viewmodel.rs`) is a port of the browser's
+`viewmodel.ts`, deliberately a port rather than a second design: the constants —
+`HOME`, the kick decay, the bob and sway rates — are the TypeScript ones
+unchanged, because a weapon that sat somewhere else or kicked differently would
+make switching clients feel like switching games. Same procedural boxes and
+cylinders, for the same licensing reason as everything else here.
+
+Three things differ, and all three are forced by this renderer rather than chosen:
+
+- **There is no scene graph to parent to.** three.js makes the view model a child
+  of the camera; here its transform is applied on the CPU and the result is drawn
+  *in camera space*, with the view matrix left as the identity. A few hundred
+  matrix multiplies a frame, and no second uniform.
+- **It gets its own pass, with the depth buffer cleared.** A rifle is two and a
+  half cubes long and lives inside the player's own collision radius, so drawn
+  against the world's depth it is sawn in half by every wall you stand against.
+  In three that was a `renderOrder`; here it is a second render pass. It keeps its
+  *own* depth sorting, so the barrel still occludes the magazine behind it.
+- **The projection uses the camera's own field of view.** Many shooters give a
+  view model a narrower one; this is a port, and three draws the browser's weapon
+  through the single scene camera — a different angle would put the same weapon at
+  the same `HOME` at a different size on screen. Only the depth range differs, and
+  only because a weapon 1.4 cubes from the eye has no use for a far plane at 2000.
+
+The muzzle flash is fired from the server's own `shot` effect, not from the fire
+key. The browser can drive its flash locally because it has a trigger *controller*
+that knows the fire interval, the magazine and whether you are alive; this client
+has none, so the key would flash on every shot the server refused. It is lit by
+**cheating the normal**: the shader has one fixed directional wash and no unlit
+material, so the flare's vertices carry the light direction as their normal and
+land at full brightness — cheaper than a second pipeline for six triangles.
+
+:::warning `zoomLevels` and `hipfireSpread` are camelCase on the wire
+`WeaponSpec` read them as `zoom_levels` and `hipfire_spread` with no
+`serde(rename)`, so both deserialized to empty/zero on **every** weapon while the
+request succeeded and every other field arrived. The symptom is not an error: it
+is a game in which no weapon has a scope and the crosshair never opens. Pinned by
+`a_weapon_is_read_with_the_wire_s_own_spelling`.
+:::
+
+Train has no server and therefore no `you`: no health, no ammo, no respawn clock.
+The HUD draws the crosshair and the movement readout there and **nothing else**,
+because a hundred hit points in a mode with no damage model is a number the client
+made up. It does hold a weapon — the rifle, as the browser's Train does — since an
+empty hand reads as the view model having failed rather than as the mode it is.
+
+### Reading the wire, not guessing it
+
+Three things are **served** and never duplicated in Rust, for the same reason:
+a hardcoded copy is a divergence that produces no error.
+
+- `plane_order` decides how the nine cube planes are sliced. `World::new` slices
+  by the order the server reported and **refuses a plane it does not know**,
+  rather than reading the bytes after it as some other field.
+- `floor` and `ceil` are **signed**. Read unsigned, every below-zero floor becomes
+  a value around 250 and those cells launch into orbit.
+- The weapon table (`interval`, `kickback`, `zoom_levels`) is fetched. A stale
+  local copy is an aim that is wrong only while scoped.
+
+One thing only a real server teaches: **`#[serde(default)]` does not cover an
+explicit `null`.** `default` applies when a key is *absent*; a `null` is a present
+key of the wrong type, and serde rejects it. The node sends `"yaw": null` on every
+`light` entity, so a client without a null-tolerant deserializer fails to parse
+**every real map** while passing every hand-written fixture.
+
+### The launch route
+
+`POST /api/hassault/launch_native` used to pass fiction — `--connect=127.0.0.1:4000`
+(nothing has ever listened there), `--room`, `--raw-input` — to a binary that
+parsed none of it. It now passes the one thing the client needs: **the node's own
+HTTP origin**, from which the client derives everything else including the `/ws`
+address (two addresses that must agree is two addresses that can disagree).
+
+The origin is read off `request.base_url` rather than assembled from a host and a
+port, because the port is not knowable from inside the route:
+`HORRIBLE_DEV_BACKEND_PORT` moves it, Windows' Hyper-V reserved ranges force that
+regularly, and a packaged build binds somewhere else again. The request arrived at
+the right address by definition.
+
+### The launch path: an address is not an intent
+
+The origin was half the fix. The other half is **what was pressed**, and until it
+travelled every launch was the same launch — `join` with no room, which the match
+server reads as *join-or-create*. Three things followed from that, none of them
+visible as an error:
+
+- **Train was not solitary.** Pressing Train while anybody was playing that map
+  seated you in their firefight, which is the opposite of the mode's whole point:
+  it exists so the chained jump and the shoot-jump can be practised before someone
+  is aiming at you.
+- **The bot count went nowhere.** The menu collected it, and the launcher had no
+  field to put it in.
+- **A remote room could not be launched into at all.** The client was never told
+  whose node the room was on.
+
+So the request carries `mode` (`train` / `host` / `join`), the room, the host node
+id, and the bot count, and the route turns them into flags:
+
+```
+--server=http://127.0.0.1:8100 --map=hd_pit --mode=host --max-fps=240 --bots=3 --bot-skill=hard
+```
+
+Four rules in that translation are load-bearing:
+
+- **Train is answered off the wire entirely** — no socket, no room, no server. A
+  "solo room" is not expressible: the roomless join is join-*or*-create, so
+  solitude cannot be requested, only stumbled into. `App::new` with `socket: None`
+  places the player with the same `physics::spawn_at` the conformance fixture pins
+  and steps `physics::step` directly each frame. It is Train minus the dummy range
+  (`training.ts`), which has no Rust port yet.
+- **A bot count only travels with `host`.** `add_bot` is host-only on the channel,
+  so a count on a join is an instruction the server would refuse — and it is
+  *absent* rather than `0`, because a zero is a request the client would act on.
+  The count is clamped against `MAX_PLAYERS` on the way out: it arrives from a
+  browser.
+- **Bots are queued, not sent with the join.** They need the room the `welcome`
+  names, exactly as the browser client's `pendingBotsRef` does.
+- **A host with no room is refused in the route**, where a browser is still
+  listening. The channel refuses it too ("a remote match needs a room id"), but
+  that refusal would arrive inside a window that had already opened. The client
+  checks it a third time, because a client that only works when launched from the
+  menu is a client that cannot be debugged.
+
+An unknown `--mode` **exits rather than defaulting**. A typo silently becoming
+`join` is precisely how Train turns back into a match nobody asked to be in.
+
+### Playing in the native client
+
+`hassault.nativeClient` routes **Play, Train and Host** to the native window
+instead of this pane; `hassault.nativeBinaryPath` says where the binary is when it
+is not in the usual build output. Off by default, and the Play section says so
+while it is on — the two clients do not look alike (the native one has no
+sound and no scope), so a button that quietly opened a different window would
+read as the game having broken.
+
+Quick Play does not branch twice: it either launches a `join` at the match it
+found, or calls `host`, which decides for itself what hosting means.
+
+### The scope and the sound, natively
+
+The last two things the native client did not have, and the two that make it a
+different game rather than a different window.
+
+**The scope** is the browser's, rule for rule (`combat.ts`'s `cycleScope`): right
+mouse steps none → 2× → 4× → none, a cycle rather than a hold because the levels
+are discrete and holding for one while a second gesture reaches the other is two
+controls for one axis. A weapon with no `zoomLevels` **ignores the click** rather
+than consuming it, so the button stays free to mean something else later.
+
+Three things about it are easy to half-implement, and all three are pinned:
+
+- **The magnification divides the mouse as well as the field of view.** A zoom is
+  a narrower view, not an enlargement, so a hand movement that swept 10° unscoped
+  must sweep 2.5° at 4×. Zooming without dividing the sensitivity is an aim that
+  is wrong *only while scoped* — which is the one situation the scope exists for.
+- **It drops on a weapon swap, on death, and on releasing the pointer.** The step
+  is an index into *this* weapon's levels, so carrying it across a swap is a
+  magnification the gun in your hands does not have; and coming back to the window
+  at 4× with no memory of having scoped reads as the mouse having broken.
+- **The crosshair reads the cone the next shot will actually use** — `spread` while
+  scoped, `hipfireSpread` otherwise, and those differ by 27× on the sniper.
+  Drawing `spread` unconditionally would hide the hip-fire penalty, which is
+  precisely what an unscoped sniper *is*.
+
+The sight itself is drawn, like everything else on the HUD: two rings, two
+hairlines with a gap at the centre, a dot, and the magnification underneath. The
+blacked-out surround is the **mechanical** half and not decoration — it is what the
+zoom costs, and a magnified view with clear peripheral vision would be a free
+upgrade rather than the trade the weapon is built around. The rings are sized in
+pixels on both axes so the sight stays circular in a window of any shape.
+
+**The sound** is `audio.rs`, the Rust half of `audio.ts`: the same timbres, the
+same envelope, the same equal-power pan on `sin(bearing − listenerYaw)`, and the
+same rule that your own noises are made locally rather than waited for. cpal rather
+than rodio, because rodio's job is decoding and mixing *files* and there are no
+files here.
+
+Two decisions carry it:
+
+- **The audio thread owns every voice.** The game thread sends a voice down a
+  bounded `mpsc` channel and the callback drains it before mixing. A
+  `Mutex<Vec<Voice>>` is shorter and is the classic way to get a dropout: the
+  callback runs on a real-time thread, and blocking it on a lock the game thread
+  holds is a glitch, not a delay. A full queue **drops the sound** rather than
+  blocking the frame loop.
+- **The filter's stability condition is a relationship, not a bound.** The
+  band-pass is a Chamberlin state-variable filter, stable while `f < 2 − q` — so a
+  bright centre frequency and a wide band are only unstable *together*. The first
+  version clamped each independently, and the failure is not quiet distortion: it
+  is full-scale noise, at the exact moment a shotgun goes off. Pinned by
+  `the_filter_stays_stable_at_the_brightest_timbre`.
+
+A machine with no output device gets a client that **says so and plays on**. This
+is a game; refusing to start because a speaker is missing would be the wrong trade.
+
+### Testing a third implementation
+
+`physics-vectors.json` is now replayed by **three** suites — the server's
+(`backend/tests/test_hassault_physics.py`), the browser client's
+(`conformance.test.ts`), and this one (`apps/native-fps/tests/conformance.rs`).
+The fixture pins *agreement*; each side's own unit tests pin correctness. A third
+implementation without a seat at that table is a third implementation that drifts,
+and the drift has no symptom except shots that miss things you are looking at.
+
+```bash
+cargo test --manifest-path apps/native-fps/Cargo.toml
+```
+
+Two things about that test are deliberate:
+
+- **The crate has a library target purely so the test can exist.** Rust
+  integration tests link a library, not a binary, and a test that cannot be
+  written is a test that does not exist.
+- **The tolerance is loosened to 1e-3**, from the fixture's 1e-9. That is a
+  *double's* tolerance and this implementation is `f32` — matching the wire and
+  the renderer — so it cannot meet it. Loosening the fixture itself would loosen
+  it for the two implementations that can. 1e-3 is about six significant figures
+  at these magnitudes: far tighter than any drift that could affect play.
+
+The mesher has no shared fixture, so its cross-check is coarser but real: triangle
+counts match the browser client's HUD on every map tried (`hd_atrium` 31,944 →
+"32k", `hd_crossing` 30,552 → "31k", `hd_pit` 13,360 → "13k").
+
 ## Contributions to the layout shell
 
 - **Panels:** `hassault.play` (HorribleAssault, role `document`, singleton,
@@ -1377,6 +2070,11 @@ reshaping the roster of a match you are only visiting.
   pause menu. The control map (`hassault.controls`) rides the same setting
   storage but is not a declared `SettingDecl` row — see
   [Controls](#controls-and-why-they-are-not-keymap-bindings).
+  `hassault.nativeClient` — whether Play, Train and Host open the native window
+  instead of playing in the pane, and `hassault.nativeBinaryPath` — where that
+  binary is, when it is not in the usual build output. Both are declared rows: the
+  path was read by the launch route and named in its own error message long before
+  it was editable anywhere.
 - **Agent tools** (group `hassault`): `list_maps`, `list_matches`, `host`,
   `invite`, `status`, `surroundings`, `add_bot`, `remove_bot`.
 
@@ -1430,7 +2128,7 @@ Escape (Chromium, in document fullscreen). Elsewhere a single press releases and
 the on-screen badge says so, rather than promising a gesture that silently does
 nothing. See [the Escape ladder](../architecture/keybindings.mdx#the-escape-ladder).
 
-The toolbar carries the match controls: your callsign (shown, not typed — the
+The toolbar carries the match controls: your username (shown, not typed — the
 backend refuses any name the client supplies), Join/Leave, bot add/remove with a
 skill selector, and — once in — the team scores, the head count and your
 round-trip time. Changing map while in a match leaves it rather than silently
@@ -1447,7 +2145,7 @@ it into an X rather than fading a second element in and out.
 
 | Route | Purpose |
 | --- | --- |
-| `GET /api/hassault/session` | Who this node plays as: `{signed_in, callsign, enlisted}`. `?refresh=true` re-reads it from the game server, which is how a callsign claimed on another machine appears |
+| `GET /api/hassault/session` | Who this node plays as: `{signed_in, username, enlisted}`. `?refresh=true` re-reads it from the game server, which is how a username claimed on another machine appears |
 | `GET /api/hassault/status` | What is playable: `map_count` (bundled + installed), `bundled_count`, and whether an AssaultCube install was found. `found: false` is **not** a gate — the bundled maps play without one |
 | `GET /api/hassault/maps` | Every playable map, bundled first, each tagged with its `source` |
 | `GET /api/hassault/maps/{name}` | Header, entities, spawn counts (JSON) |
@@ -1469,7 +2167,7 @@ invitee could click it.
 
 | Direction | Event | Purpose |
 | --- | --- | --- |
-| → | `join` | `{ map, room?, host? }`; `host` makes it a friend's match. Refused with `{code: "not_signed_in"}` unless this node holds an account **with a callsign** — and any `name` in the payload is ignored, because identity comes from the account |
+| → | `join` | `{ map, room?, host? }`; `host` makes it a friend's match. Refused with `{code: "not_signed_in"}` unless this node holds an account **with a username** — and any `name` in the payload is ignored, because identity comes from the account |
 | → | `input` | `{ commands: [...], rtt }` — batched, sequence-numbered |
 | → | `respawn` | The server owns spawn points, so respawning is asked for |
 | → | `invite` | `{ who, room }` — `who` is a person, not a node id |
@@ -1487,7 +2185,8 @@ One command, with the combat fields it may carry:
 ```json
 { "seq": 412, "forward": 1, "strafe": 0, "jump": false, "crouch": true,
   "yaw": 1.57, "pitch": -0.02, "dt": 0.0166,
-  "fire": true, "reload": false, "weapon": -1, "viewT": 1743102934812 }
+  "fire": true, "reload": false, "weapon": -1, "scoped": 2,
+  "viewT": 1743102934812 }
 ```
 
 `weapon` is `-1` for "no change", so an absent or nonsensical slot leaves the
@@ -1574,6 +2273,13 @@ never touches the filesystem.
 
 ## Known limitations
 
+- **The native client is not yet a way *in*.** It renders, joins and predicts, but
+  Play/Train/Host still open the browser pane; the native client is launched from
+  a Settings row. That is stage B4 — see
+  [the native client](#the-native-client-rust--wgpu).
+- **The native client has no `NoiseRing`.** It plays what it hears, but the
+  browser also *draws* the bearings around the crosshair so headphones are not a
+  competitive advantage — and natively they still are.
 - **No textures yet.** Texture slots are mapped to image files by map config
   files (`.cfg`), which are not parsed yet; surfaces are tinted by texture id
   instead. For the bundled maps the answer will be **procedural** rather than a
@@ -1599,10 +2305,10 @@ never touches the filesystem.
   sidearm is bottomless and the rest are not, and dying refills you. Pickups are
   the real answer and are their own slice.
 - **Sound is synthesized, and deliberately crude.** Every noise is a band-passed
-  noise burst with an envelope (`audio.ts`), because a shipped sample set is either
-  somebody else's copyright or a large pile of files. It is enough to tell a footstep
-  from a shot from a reload — which is all the mechanic needs — and it does not
-  pretend to be a weapon sound. Per-weapon voices are the next slice.
+  noise burst with an envelope, because a shipped sample set is either somebody
+  else's copyright or a large pile of files. It is enough to tell a footstep from a
+  shot from a reload, and to tell a sniper round from a shotgun blast — which is
+  all the mechanic needs — and it does not pretend to be a recording.
 - **Noise has no vertical axis.** The wire carries an `up` flag (-1/0/1) and the synth
   turns it into a filter tilt, because WebAudio's stereo panner has no elevation. On a
   map with real verticality "above me" is a guess.
@@ -1619,14 +2325,14 @@ never touches the filesystem.
   a map declares is neither drawn nor swum in.
 - **A remote player's account is not verified, only their node.** In a cross-node
   match the host authenticates the guest's *machine* (Ed25519 node id, plus
-  friendship), and the callsign that arrives with them is a display label tagged
+  friendship), and the username that arrives with them is a display label tagged
   with that node id — never looked up, never trusted. Verifying the account itself
   would mean forwarding the guest's game-server JWT for the host to
   `resolve_token`, which puts the central server in the path of every join and
   breaks matches on an offline LAN. The practical effect: a friend's *node* can
   show a misleading nameplate, and a stranger's cannot get in at all.
-- **A callsign is claimed per account, not reserved per person.** Two people who
-  share an account share a callsign; the uniqueness index is the only arbiter.
+- **A username is claimed per account, not reserved per person.** Two people who
+  share an account share a username; the uniqueness index is the only arbiter.
 - **No password reset.** An email+password account whose password is lost has no
   recovery path — there is no mail sender in this app, and adding one for a game
   login is not worth it. Sign in with GitHub or Google instead.

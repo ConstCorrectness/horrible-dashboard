@@ -395,7 +395,7 @@ async def resolve_target(who: str) -> tuple[str | None, str | None]:
 
     Accepts, in order of how exact each one is:
 
-    1. **`@callsign`** — resolved through the game server's directory. Async, and
+    1. **`@username`** — resolved through the game server's directory. Async, and
        the only form that needs the network, which is why this function exists
        alongside `friendcode.resolve_person_id` rather than replacing it.
     2. a **friend code** (`HD-XXXX-…`) or a bare 16-character **person id** —
@@ -410,11 +410,11 @@ async def resolve_target(who: str) -> tuple[str | None, str | None]:
     """
     who = (who or "").strip()
     if not who:
-        return None, "enter a callsign or friend code"
+        return None, "enter a username or friend code"
     if handles.is_handle(who):
         entry = await handles.resolve(who)
         if entry is None:
-            return None, f"no such callsign: {who}"
+            return None, f"no such username: {who}"
         # First sighting of this person — record the name the directory gave, so the
         # roster row is not just a 16-character id while the request is pending.
         return str(entry["person_id"]), None
@@ -456,7 +456,7 @@ async def _dial(person_id: str, address: str | None) -> str | None:
 async def add_friend(
     code: str, address: str | None = None, note: str | None = None
 ) -> tuple[Friend | None, str | None]:
-    """Send a friend request to whoever owns `code` — a `@callsign` or a friend
+    """Send a friend request to whoever owns `code` — a `@username` or a friend
     code. Returns (friend, error)."""
     person_id, error = await resolve_target(code)
     if person_id is None:
@@ -590,7 +590,7 @@ def register(hub: PeerHub) -> None:
     # Link any roster rows that predate the ladder bridge (or whose person signed up
     # since we last looked). Detached and best-effort: `register` runs inside network
     # startup, and a slow or absent game server must not hold up the fabric — an
-    # unreconciled roster renders fine, just without callsigns.
+    # unreconciled roster renders fine, just without usernames.
     from backend.modules.social import ladder
 
     _detach(ladder.reconcile())

@@ -19,7 +19,7 @@ of a turn before this — no watch table, no rule engine, no cron.
    cost every turn in the app.
 
 `_resolve` from the social module does the name→person work — it already accepts a
-callsign, friend code or display name and refuses an ambiguous one rather than
+username, friend code or display name and refuses an ambiguous one rather than
 guessing, which is exactly the behaviour "when Andrew logs in" needs.
 """
 
@@ -199,7 +199,7 @@ def register_notification_tools() -> None:
             parameters={
                 "who": {
                     "type": "string",
-                    "description": "@callsign, friend code, or display name.",
+                    "description": "@username, friend code, or display name.",
                 },
                 "online": {
                     "type": "boolean",

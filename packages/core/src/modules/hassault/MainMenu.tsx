@@ -36,13 +36,21 @@ import type { MatchPeer } from './session';
 
 export type MenuSection = 'play' | 'armory' | 'servers' | 'friends' | 'settings' | 'controls';
 
-const SECTIONS: { id: MenuSection; label: string; hint: string }[] = [
-  { id: 'play', label: 'Play', hint: 'Pick a map and start' },
-  { id: 'armory', label: 'Armory & Skins', hint: 'CS-style float wear, rare drops & trade-up contracts' },
-  { id: 'servers', label: 'Servers', hint: 'Matches here, on the LAN, and on friends’ machines' },
-  { id: 'friends', label: 'Friends', hint: 'Who is about, and who invited you' },
-  { id: 'settings', label: 'Settings', hint: 'Sensitivity, view, sound' },
-  { id: 'controls', label: 'Controls', hint: 'Rebind every key' },
+/**
+ * Labels only — deliberately no descriptions.
+ *
+ * A hint under every item is explanation where the reader came for an action, and
+ * it is also redundant: the panel one click away *is* the explanation, and it is
+ * the accurate one. `GameMenu`'s `TABS` never had hints, so this is the two menus
+ * converging rather than a style choice made twice.
+ */
+const SECTIONS: { id: MenuSection; label: string }[] = [
+  { id: 'play', label: 'Play' },
+  { id: 'armory', label: 'Armor & Skins' },
+  { id: 'servers', label: 'Servers' },
+  { id: 'friends', label: 'Friends' },
+  { id: 'settings', label: 'Settings' },
+  { id: 'controls', label: 'Controls' },
 ];
 
 export interface MainMenuProps {
@@ -67,6 +75,8 @@ export interface MainMenuProps {
   onTrain: () => void;
   /** Host a match on `mapName` and enter it, optionally with bots already in. */
   onHost: (bots: number) => void;
+  /** Join the best match anyone is running, or host one when there is none. */
+  onQuickPlay: (bots: number) => void;
   /** Join a match wherever it is running, and enter the world. */
   onJoin: (room: string, map: string, host: string) => void;
   onInvite: (friendCode: string) => void;
@@ -84,6 +94,16 @@ export interface MainMenuProps {
    * practising the movement without a gun is still practising the movement.
    */
   loadoutError: string;
+  /**
+   * Whether Play, Train and Host open the native window instead of playing here.
+   *
+   * Shown rather than silent: the two clients do not look alike — the native one
+   * has no HUD, no weapon model and no sound — so a button that quietly opened a
+   * different window would read as the game having broken.
+   */
+  nativeClient: boolean;
+  /** What the last native launch said, success or reason. */
+  nativeStatus: string | null;
 }
 
 export function MainMenu(props: MainMenuProps) {
@@ -97,7 +117,7 @@ export function MainMenu(props: MainMenuProps) {
             Horrible<span style={{ color: 'var(--accent, #6ea8fe)' }}>Assault</span>
           </div>
           <div style={{ ...panel.dim, fontFamily: MONO, letterSpacing: '0.12em' }}>
-            {props.account?.callsign ?? '—'}
+            {props.account?.username ?? '—'}
             {props.online && <span style={panel.badge}>in a match</span>}
           </div>
         </div>
@@ -112,7 +132,6 @@ export function MainMenu(props: MainMenuProps) {
               style={{ ...navItem, ...(section === entry.id ? navItemActive : null) }}
             >
               <span style={{ fontSize: '0.9rem' }}>{entry.label}</span>
-              <span style={{ ...panel.dim, fontSize: '0.68rem' }}>{entry.hint}</span>
             </button>
           ))}
         </nav>
@@ -147,7 +166,12 @@ export function MainMenu(props: MainMenuProps) {
               onDismiss={props.onDismissInvite}
             />
           )}
-          {section === 'settings' && <SettingsPanel />}
+          {section === 'settings' && (
+            <>
+              <SettingsPanel />
+              <NativeClientRow {...props} />
+            </>
+          )}
           {section === 'controls' && (
             <ControlsPanel bindings={props.controls} onChange={props.onControls} />
           )}
@@ -159,29 +183,121 @@ export function MainMenu(props: MainMenuProps) {
   );
 }
 
+// ---- the native client ------------------------------------------------------
+
+/**
+ * The experimental native client, and an honest description of it.
+ *
+ * It used to sit in **Play**, next to Train and Host, advertising "native C++ /
+ * Vulkan, 1,000Hz+ raw input, sub-tick UDP networking directly to this match
+ * server", while being a software framebuffer walking a hardcoded 16×16 grid with
+ * no map loading and no networking at all.
+ *
+ * It is now real as far as it goes, and this copy tracks exactly how far: same
+ * maps, same matches, a `wgpu` renderer, raw mouse input and client-side
+ * prediction — and no HUD, no weapon view model and no sound. A row that
+ * overstated it once has to keep understating it: somebody who launches this
+ * expecting the finished client files a bug against the game, not the stage.
+ *
+ * See docs/modules/hassault.mdx.
+ */
+function NativeClientRow(props: MainMenuProps) {
+  const [launching, setLaunching] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+
+  return (
+    <div style={{ marginTop: '1rem' }}>
+      <h4 style={panel.heading}>Native client (experimental)</h4>
+      <div style={panel.row}>
+        <div style={panel.rowMain}>
+          <span>Launch the native client</span>
+          <span style={panel.dim}>
+            A separate window: same maps, same match, rendered on the GPU with raw mouse input and
+            no frame cap. It has no HUD, no weapon model and no sound yet, so this pane is still
+            the complete game.
+          </span>
+          {status && (
+            <span
+              style={{
+                fontSize: '0.72rem',
+                // A pid is the one unambiguous signal it really started; anything
+                // else the route returns is a reason it didn't.
+                color: status.includes('PID')
+                  ? 'var(--success, #4ade80)'
+                  : 'var(--danger, #f87171)',
+                marginTop: '0.2rem',
+              }}
+            >
+              {status}
+            </span>
+          )}
+        </div>
+        <button
+          onClick={async () => {
+            setLaunching(true);
+            setStatus(null);
+            try {
+              const res = await launchNativeFps({
+                // The room we are actually in, or none — the client asks the node
+                // for a match on this map. `'session_host'` used to go here, which
+                // named no room that has ever existed.
+                // Explicitly a join, because this row is "open it once and see",
+                // not "change how I play". Train and Host reach the same route
+                // with their own mode when the setting above is on.
+                mode: 'join',
+                room_id: props.room,
+                map_name: props.mapName,
+                username: props.account?.username || undefined,
+                max_fps: 240,
+              });
+              setStatus(res.message || (res.launched ? 'Launched' : 'Binary not found'));
+            } catch (err) {
+              setStatus(err instanceof Error ? err.message : 'Launch failed');
+            } finally {
+              setLaunching(false);
+            }
+          }}
+          disabled={launching}
+        >
+          {launching ? 'Launching…' : 'Launch'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ---- play -------------------------------------------------------------------
 
 /** Bot counts offered. Not a number input: nobody wants to type "3". */
 const BOT_COUNTS = [0, 1, 3, 5, 7];
 
 /**
- * The two things people came here to do, and the map they will do them on.
+ * The things people came here to do, and the map they will do them on.
  *
- * **Train** is deliberately first and deliberately not a match: it is one player on
- * a map with nothing to shoot, which is what learning the movement wants. The
- * chained-jump timing and the shoot-jump are the sort of thing you practise alone
- * before you try them with somebody aiming at you.
+ * **Train** is deliberately not a match: it is one player on a map with static
+ * dummies, which is what learning the movement wants. The chained-jump timing and
+ * the shoot-jump are the sort of thing you practise alone.
+ *
+ * Every row here is a label and its controls, with **no prose underneath**. What a
+ * row does is either obvious from its verb or discovered by pressing it, and a
+ * paragraph explaining the momentum system to somebody standing at the door is
+ * advertising copy in the wrong building. It is not lost — it lives in
+ * docs/modules/hassault.mdx, where a reader is actually reading.
  */
 function PlaySection(props: MainMenuProps) {
   const [bots, setBots] = useState(3);
-  const [launchingNative, setLaunchingNative] = useState(false);
-  const [nativeStatus, setNativeStatus] = useState<string | null>(null);
   const bundled = props.maps.filter((m) => m.source === 'bundled');
   const installed = props.maps.filter((m) => m.source !== 'bundled');
   const chosen = props.maps.find((m) => m.name === props.mapName);
 
   return (
     <div>
+      {props.nativeClient && (
+        <div style={panel.notice}>
+          Playing in the <strong>native client</strong> — Play, Train and Host open a separate
+          window. No HUD, no weapon model and no sound yet. Turn it off in Settings.
+        </div>
+      )}
       <h4 style={panel.heading}>Map</h4>
       <select
         value={props.mapName}
@@ -222,15 +338,30 @@ function PlaySection(props: MainMenuProps) {
       )}
 
       <h4 style={panel.heading}>Start</h4>
+      {/* First, and the only one with an accent, because it is the answer to the
+          question most people arrive with. Everything below it is a way of being
+          specific about something this decides for you. */}
+      <div style={panel.row}>
+        <div style={panel.rowMain}>
+          <span>Quick play</span>
+        </div>
+        <button
+          onClick={() => props.onQuickPlay(bots)}
+          disabled={!props.ready || props.loadoutError !== ''}
+          title={props.loadoutError ? 'No loadout — nothing would be able to fire' : undefined}
+          style={primary}
+        >
+          Play
+        </button>
+      </div>
+
       <div style={panel.row}>
         <div style={panel.rowMain}>
           <span>Train</span>
-          <span style={panel.dim}>
-            Alone on the map, nothing shooting back. Where you learn the chained jump and the
-            shoot-jump before anyone is watching.
-          </span>
         </div>
-        <button onClick={props.onTrain} disabled={!props.ready} style={primary}>
+        {/* Plain, not accented: exactly one thing on this screen should look
+            like the thing to press, and Quick play is it. */}
+        <button onClick={props.onTrain} disabled={!props.ready}>
           Enter
         </button>
       </div>
@@ -238,10 +369,6 @@ function PlaySection(props: MainMenuProps) {
       <div style={panel.row}>
         <div style={panel.rowMain}>
           <span>Host a match</span>
-          <span style={panel.dim}>
-            Runs on this machine. Friends see it in their own server browser and you can invite them
-            from the Friends section.
-          </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
           <select
@@ -271,68 +398,27 @@ function PlaySection(props: MainMenuProps) {
             onClick={() => props.onHost(bots)}
             disabled={!props.ready || props.loadoutError !== ''}
             title={props.loadoutError ? 'No loadout — nothing would be able to fire' : undefined}
-            style={primary}
           >
             Host
           </button>
         </div>
       </div>
 
-      <div style={panel.row}>
-        <div style={panel.rowMain}>
-          <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#38bdf8', fontWeight: 700 }}>
-            ⚡ Native High-Performance Client
-          </span>
-          <span style={panel.dim}>
-            Launch the native C++ / Vulkan client with 1,000Hz+ Raw Input (`WM_INPUT`), 240+ FPS, and sub-tick UDP networking directly to this match server.
-          </span>
-          {nativeStatus && (
-            <span style={{ fontSize: '0.72rem', color: nativeStatus.includes('PID') ? '#4ade80' : '#f87171', marginTop: '0.2rem' }}>
-              {nativeStatus}
-            </span>
-          )}
-        </div>
-        <button
-          onClick={async () => {
-            setLaunchingNative(true);
-            setNativeStatus(null);
-            try {
-              const res = await launchNativeFps({
-                room_id: props.room || 'session_host',
-                map_name: props.mapName,
-                callsign: props.account?.callsign || undefined,
-                raw_input: true,
-                max_fps: 240,
-              });
-              setNativeStatus(res.message || (res.launched ? 'Launched!' : 'Binary not found'));
-            } catch (err) {
-              setNativeStatus(err instanceof Error ? err.message : 'Launch failed');
-            } finally {
-              setLaunchingNative(false);
-            }
+      {props.nativeStatus && (
+        <div
+          style={{
+            ...panel.dim,
+            marginTop: '0.5rem',
+            // A pid is the one unambiguous signal it really started; everything
+            // else the route returns is a reason it did not.
+            color: props.nativeStatus.includes('PID')
+              ? 'var(--success, #4ade80)'
+              : 'var(--danger, #f87171)',
           }}
-          disabled={!props.ready || launchingNative}
-          style={{ ...primary, background: '#0284c7', borderColor: '#38bdf8' }}
         >
-          {launchingNative ? 'Launching…' : '⚡ Launch Native FPS'}
-        </button>
-      </div>
-
-      <h4 style={panel.heading}>Tactical Equipment</h4>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.4rem', marginBottom: '0.6rem' }}>
-        <div style={{ background: 'var(--bg-tertiary, #161b22)', padding: '0.4rem 0.6rem', borderRadius: 4, border: '1px solid var(--border-dim, #30363d)' }}>
-          <div style={{ fontWeight: 700, fontSize: '0.78rem' }}>💨 Smoke Grenade</div>
-          <div style={{ fontSize: '0.68rem', color: 'var(--text-dim)' }}>6.5c radius · 16s duration</div>
+          {props.nativeStatus}
         </div>
-        <div style={{ background: 'var(--bg-tertiary, #161b22)', padding: '0.4rem 0.6rem', borderRadius: 4, border: '1px solid var(--border-dim, #30363d)' }}>
-          <div style={{ fontWeight: 700, fontSize: '0.78rem' }}>⚡ Flashbang</div>
-          <div style={{ fontSize: '0.68rem', color: 'var(--text-dim)' }}>24c radius · 4.5s blind</div>
-        </div>
-        <div style={{ background: 'var(--bg-tertiary, #161b22)', padding: '0.4rem 0.6rem', borderRadius: 4, border: '1px solid var(--border-dim, #30363d)' }}>
-          <div style={{ fontWeight: 700, fontSize: '0.78rem' }}>💣 HE Frag Grenade</div>
-          <div style={{ fontSize: '0.68rem', color: 'var(--text-dim)' }}>8.5c radius · 105 max dmg</div>
-        </div>
-      </div>
+      )}
 
       {props.invites.length > 0 && (
         <>
@@ -354,16 +440,6 @@ function PlaySection(props: MainMenuProps) {
           ))}
         </>
       )}
-
-      <h4 style={panel.heading}>The movement</h4>
-      <div style={panel.dim}>
-        Momentum decides where a jump lands, not the keys — air control is deliberately weak. Land
-        and jump again inside a quarter second <em>while strafing</em> and you keep 25% more speed,
-        capped at 125%; miss the timing and you keep none of it. Crouching is silent and steadies a
-        shot for 40% of your speed, and crouching once already airborne costs nothing at all. Firing
-        shoves you opposite your aim, so a shotgun at the floor is a second jump — and a long drop
-        costs health on the way down.
-      </div>
     </div>
   );
 }
@@ -420,11 +496,9 @@ const nav: CSSProperties = {
 
 const navItem: CSSProperties = {
   display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'flex-start',
-  gap: 1,
+  alignItems: 'center',
   textAlign: 'left',
-  padding: '0.45rem 0.55rem',
+  padding: '0.5rem 0.55rem',
   borderRadius: 6,
   border: '1px solid transparent',
   background: 'transparent',

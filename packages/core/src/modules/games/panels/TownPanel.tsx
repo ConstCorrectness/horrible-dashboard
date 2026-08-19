@@ -185,7 +185,7 @@ export function TownPanel() {
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Agent callsign"
+              placeholder="Agent username"
               style={{ width: '8.5rem' }}
             />
             <button type="submit">Spawn in Town</button>

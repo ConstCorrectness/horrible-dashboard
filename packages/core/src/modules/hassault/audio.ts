@@ -19,6 +19,7 @@
  */
 import { mixer } from '../audio/engine';
 import type { StripHandle } from '../audio/types';
+import type { WeaponSpec } from './api';
 import type { NoiseEvent } from './net';
 
 // Declared at import so the game has a channel on the mixer before the first
@@ -69,6 +70,45 @@ const TIMBRES: Record<string, Timbre> = {
 };
 
 const FALLBACK: Timbre = TIMBRES.step;
+
+/**
+ * A weapon's own voice, **derived from its balance numbers** rather than given a
+ * table of its own.
+ *
+ * The same reasoning as `shot_loudness` scaling with damage: tie the sound to the
+ * numbers the weapon already has and a balance change cannot silently leave the
+ * audio describing the previous version of the gun. It also means a weapon added
+ * to `weapons.py` arrives with a voice and no client release.
+ *
+ * What each number is doing to the ear:
+ *
+ * - **`rpm` picks the pitch.** A fast, small weapon cracks; a slow, heavy one
+ *   booms. This is the cue that separates a rifle from a sniper at distance.
+ * - **`pellets` widens the band.** More than one pellet is a shotgun, and a wide
+ *   band is a blast rather than a bang.
+ * - **`damage` sets the body and the decay.** Weight and how long it hangs.
+ *
+ * The knife is the one special case, told apart exactly as `shot_loudness` tells
+ * it: no kickback and almost no range. A swing is a short quiet swish, and it has
+ * to *not* sound like a gun, because being able to hear that somebody is holding
+ * a knife is the reason its silence is worth anything.
+ */
+export function weaponVoice(weapon: WeaponSpec | undefined): Timbre {
+  if (!weapon) return TIMBRES.shot;
+  if (weapon.kickback <= 0 && weapon.range <= 6) {
+    return { frequency: 2600, q: 2.2, decay: 0.12, gain: 0.45, body: 0 };
+  }
+  const fast = Math.min(1, weapon.rpm / 700);
+  const spread = weapon.pellets > 1;
+  const heft = Math.min(1, weapon.damage / 90);
+  return {
+    frequency: 900 + fast * 1100,
+    q: spread ? 0.35 : 0.75,
+    decay: 0.16 + heft * 0.2,
+    gain: 1,
+    body: 95 - heft * 42,
+  };
+}
 
 /**
  * A short burst of white noise, generated once and reused as the source for every
@@ -132,13 +172,23 @@ export class GameAudio {
    * what makes the pan mean anything: a sound to your left has to move to your
    * right when you turn around.
    */
-  play(kind: string, volume: number, bearing: number, listenerYaw: number, up = 0): void {
+  play(
+    kind: string,
+    volume: number,
+    bearing: number,
+    listenerYaw: number,
+    up = 0,
+    // The weapon that made it, for a shot. A voice, not a *kind*: a shot is a
+    // shot however it sounds, and keying the timbre table by `shot:sniper` would
+    // make an unknown weapon fall all the way back to a footstep.
+    voice?: Timbre,
+  ): void {
     if (volume < MIN_GAIN) return;
     if (this.voices >= MAX_VOICES) return;
     const ctx = this.ready();
     if (!ctx || !this.master || !this.noise) return;
 
-    const timbre = TIMBRES[kind] ?? FALLBACK;
+    const timbre = voice ?? TIMBRES[kind] ?? FALLBACK;
     const now = ctx.currentTime;
     const gain = volume * timbre.gain;
 
@@ -204,9 +254,20 @@ export class GameAudio {
     }
   }
 
-  /** Play a noise the server sent us. */
-  heard(event: NoiseEvent, listenerYaw: number): void {
-    this.play(event.kind, event.volume, event.bearing, listenerYaw, event.up);
+  /**
+   * Play a noise the server sent us.
+   *
+   * `weapons` is the served loadout, so a shot's `weapon` id can be turned into
+   * that gun's voice. Without it the shot still plays, in the generic voice —
+   * an unrecognised weapon must be audible, since the alternative is a gunshot
+   * you cannot hear because the client is out of date.
+   */
+  heard(event: NoiseEvent, listenerYaw: number, weapons: WeaponSpec[] = []): void {
+    const voice =
+      event.kind === 'shot' && event.weapon
+        ? weaponVoice(weapons.find((w) => w.id === event.weapon))
+        : undefined;
+    this.play(event.kind, event.volume, event.bearing, listenerYaw, event.up, voice);
   }
 
   /**
@@ -215,8 +276,8 @@ export class GameAudio {
    * The server deliberately does not send these back: they need no round trip, and
    * a footstep that arrives 50 ms after the step does not sound like a footstep.
    */
-  own(kind: string, volume = 1): void {
-    this.play(kind, volume, 0, 0, 0);
+  own(kind: string, volume = 1, weapon?: WeaponSpec): void {
+    this.play(kind, volume, 0, 0, 0, weapon ? weaponVoice(weapon) : undefined);
   }
 
   dispose(): void {

@@ -1,9 +1,9 @@
 /**
- * A cache of profile cards (face, level, status) keyed by callsign.
+ * A cache of profile cards (face, level, status) keyed by username.
  *
  * The roster is local and always renders; a card is decoration fetched from the
  * game server, so **every consumer must work without one**. A friend with no
- * callsign, a signed-out node and an unreachable game server are all the same case
+ * username, a signed-out node and an unreachable game server are all the same case
  * here — no card, render the name and the presence dot, carry on. That is why this
  * is a separate store rather than fields on `Friend`: the roster must never
  * acquire a network dependency to draw.

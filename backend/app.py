@@ -128,6 +128,7 @@ from backend.modules.repl import ReplManager
 from backend.modules.settings import router as settings_router
 from backend.modules.secrets import router as secrets_router
 from backend.modules.telemetry import push_telemetry
+from backend.modules.notifications.routes import router as notifications_router
 from backend.modules.telemetry import router as telemetry_router
 from backend.modules.telemetry.instrument import record_ws_frame, telemetry_middleware
 from backend.modules.terminal import TerminalManager
@@ -265,6 +266,7 @@ app.include_router(docs_router, prefix="/api")
 app.include_router(notes_router, prefix="/api")
 app.include_router(clubhouse_router, prefix="/api")
 app.include_router(clubhouse_voice_router, prefix="/api")
+app.include_router(notifications_router, prefix="/api")
 app.include_router(telemetry_router, prefix="/api")
 app.include_router(plugins_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")

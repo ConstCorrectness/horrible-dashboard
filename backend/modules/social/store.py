@@ -96,7 +96,7 @@ def init_social_db() -> None:
         #
         # Nullable on purpose, and a null is not an error: a friend who has never
         # signed in to the game server is still a perfectly good fabric friend, and
-        # the roster renders them without a callsign rather than hiding them. The
+        # the roster renders them without a username rather than hiding them. The
         # cache exists so the Friends list can name people with the game server
         # unreachable — the roster is local and must not acquire a network
         # dependency to render.
@@ -128,7 +128,7 @@ def upsert_friend(
     The ladder cache (`handle` / `account_id`) is deliberately *not* settable here —
     it is written only by `set_ladder_identity`, which is the one caller that has
     verified the binding. Folding it into the general-purpose upsert would let any
-    caller assert a callsign for a person.
+    caller assert a username for a person.
     """
     now = time.time()
     with get_db_conn() as conn:
@@ -177,7 +177,7 @@ def set_ladder_identity(
     Only ever called with an entry whose `person_id` was checked against the
     fingerprint of the key it arrived with (`handles.resolve` / `ladder.resolve_person`),
     so a hostile directory can withhold a binding but not invent one. No-ops when
-    the person isn't on the roster: learning a stranger's callsign is not a reason
+    the person isn't on the roster: learning a stranger's username is not a reason
     to create a friend row.
     """
     with get_db_conn() as conn:
@@ -189,7 +189,7 @@ def set_ladder_identity(
 
 
 def friends_missing_ladder_identity() -> list[dict[str, Any]]:
-    """Roster rows with no cached callsign yet — the reconciliation worklist."""
+    """Roster rows with no cached username yet — the reconciliation worklist."""
     with get_db_conn() as conn:
         rows = conn.execute(
             "SELECT * FROM social_friends WHERE account_id IS NULL AND is_self = 0"

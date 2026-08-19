@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -36,18 +38,23 @@ class InstallStatus(BaseModel):
 
 
 class SessionInfo(BaseModel):
-    """Who this node plays as. The pane's gate: no callsign, no match.
+    """Who this node plays as. The pane's gate: no username, no match.
 
-    `callsign` is the game server's globally unique handle — the account is shared
+    `username` is the game server's globally unique handle — the account is shared
     with the games ladder, so there is one sign-in for the whole app rather than a
-    second one for this game. `enlisted` is derived from holding a callsign, not
+    second one for this game. `enlisted` is derived from holding a username, not
     stored, so the two can never disagree.
     """
 
     signed_in: bool
     account_id: str | None = None
     display_name: str | None = None
-    callsign: str | None = None
+    username: str | None = None
+    #: What to pre-fill the chooser with when there is no username yet — the
+    #: provider login folded into the handle charset. A suggestion, not a
+    #: reservation: it is not held for anyone and two people can be offered the
+    #: same one.
+    suggested_username: str = ""
     enlisted: bool = False
 
 
@@ -122,10 +129,21 @@ class BrowsePlayer(BaseModel):
     """
 
     name: str
+    #: Their `@username`, when the roster has resolved one.
+    #:
+    #: Empty is a real answer, not a bug: a friend added by friend code before
+    #: either of you signed in to the game server has no account bound to their
+    #: person key yet, and inventing one would be worse than showing the display
+    #: name. It is served alongside `name` rather than replacing it for that
+    #: reason — the UI prefers this and falls back.
+    username: str = ""
     person_id: str = ""
     friend_code: str = ""
     """Where they are, when we can tell: a room id on this node, else empty."""
     room: str = ""
+    """The map of that room, so a roster row can say what they are playing rather
+    than only that they are busy."""
+    room_map: str = ""
     """False means their build predates matches, so inviting them lands nowhere."""
     can_play: bool = True
     devices_online: int = 0
@@ -188,12 +206,18 @@ class Invitee(BaseModel):
     """
 
     name: str
+    #: Their `@username` — see `BrowsePlayer.username` for why it can be empty.
+    username: str = ""
     person_id: str
     friend_code: str
     """Whether any of their online machines advertised the `hassault` capability.
     False means an older build, and the invite would land nowhere."""
     can_play: bool
     devices_online: int
+    """A room on this node they are standing in, and its map. Presence beyond
+    online/offline: "playing hd_crossing" is what makes a roster worth opening."""
+    room: str = ""
+    room_map: str = ""
 
 
 class MatchInvite(BaseModel):
@@ -202,8 +226,22 @@ class MatchInvite(BaseModel):
     room: str
     map: str
     host: str  # the inviting node id — authenticated by the fabric
-    hostName: str  # noqa: N815 — a label, never used to decide anything
+    #: Who invited you, as `@username` — a **person**. This used to be the sender's
+    #: node name, so an invite read "horribleComputer invited you": it is assembled
+    #: on the fabric side, where only the device label is in scope, and the account
+    #: username was never joined in. Resolved roster-first in
+    #: `fabric._invite_display_name`. Still a label, never used to decide anything.
+    hostName: str  # noqa: N815
+    #: Which of their machines it came from — secondary, since an invite fans out
+    #: to every device a person has online.
+    hostDevice: str = ""  # noqa: N815
+    #: The inviting person, when the roster knows them. Carried so a per-person
+    #: mute can apply to their invites.
+    personId: str = ""  # noqa: N815
     ts: float
+    #: When it stops being joinable. A room does not outlive the process hosting
+    #: it, so an invite has a shelf life.
+    expiresAt: float = 0.0  # noqa: N815
 
 
 class CreateMatchRequest(BaseModel):
@@ -225,10 +263,39 @@ class TacticalOut(BaseModel):
 
 
 class LaunchNativeRequest(BaseModel):
-    room_id: str
+    """What to launch the native client into.
+
+    The node's own address is deliberately **not** a field: the route reads it off
+    the request, which is the one address known to be correct. `HORRIBLE_DEV_BACKEND_PORT`
+    moves the port, Windows' reserved ranges force that regularly, and a browser
+    that guessed would be guessing about the machine it is already talking to.
+    """
+
+    #: What the player pressed. `train` is **not a match**: the client stays off
+    #: the socket entirely, exactly as the browser's Train does, because a mode
+    #: that quietly opened a room would put a learner in a stranger's firefight —
+    #: `match_server.join` with no room id is join-*or*-create, so "alone on this
+    #: map" is not something the wire can ask for. `host` opens (or joins) a match
+    #: here and fills it with `bots`; `join` enters one that already exists.
+    mode: Literal["train", "host", "join"] = "join"
+    #: A specific room; empty means "any match on this map, or open one".
+    room_id: str = ""
     map_name: str
-    callsign: str | None = None
+    #: A friend's node id, when the room is on their machine.
+    host: str = ""
+    #: Bots to field, `host` only — the client sends `add_bot` once its welcome
+    #: lands, because a bot needs a room to be added to and the room is only ours
+    #: at that point. Clamped to the match server's own ceiling rather than
+    #: trusted: it arrives from a browser.
+    bots: int = 0
+    bot_skill: str = "normal"
+    #: A wire label only — the backend plays you as your account's username.
+    username: str | None = None
     fullscreen: bool = False
+    #: Accepted for compatibility with the old request shape and otherwise unused:
+    #: raw input is not an option the client offers, it is how `winit` reads a
+    #: mouse (B2). Kept rather than removed so an older browser build's request
+    #: still validates.
     raw_input: bool = True
     max_fps: int = 240
 
@@ -238,4 +305,3 @@ class LaunchNativeResponse(BaseModel):
     pid: int | None = None
     connect_args: list[str] = []
     message: str | None = None
-

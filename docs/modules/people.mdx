@@ -12,9 +12,9 @@ sidebar_label: People
 | --- | --- | --- |
 | **Friends** | The roster, keyed by person; their machines fold underneath | `social.friends` |
 | **Messages** | Peer chat | `network.chat` |
-| **Discover** | Callsign search, and the agent commons directory | `commons.directory` |
+| **Discover** | Username search, and the agent commons directory | `commons.directory` |
 | **Requests** | The inbound inbox | `commons.requests` |
-| **Me** | Your callsign, friend code, devices, profile, diagnostics | `commons.profile` |
+| **Me** | Your username, friend code, devices, profile, diagnostics | `commons.profile` |
 
 ## Why nine became one
 
@@ -47,7 +47,7 @@ now. A saved *layout* is disposable and reseeds from its preset; the vocabulary 
 user and the agent have learned is not. Pinned by a table-driven test in
 `layout/__tests__/sections.test.ts`.
 
-## `@callsign` — one name for a person
+## `@username` — one name for a person
 
 A human used to have **two** identities with nothing connecting them:
 
@@ -96,11 +96,11 @@ the key it came with, so a compromised directory can **withhold** someone but ne
 substitute a different key for them. Beyond that, a handle is a claim the game
 server vouches for — which is exactly why the **friend code stays first-class**: it
 is derived from the person's own key, so it works offline, on a LAN, and with no
-server to trust. Callsign search is the convenience; the code is the guarantee.
+server to trust. Username search is the convenience; the code is the guarantee.
 
 The presence record published to Atlas carries `handle` too, and that copy is
 **a claim, not proof** — `verify_record` checks the record was signed by the person
-key it names, which says nothing about who owns the callsign. Resolve a callsign
+key it names, which says nothing about who owns the username. Resolve a username
 through the game server, never by trusting a presence record.
 
 ### Search is deliberately narrow
@@ -117,7 +117,7 @@ typed the underscore.
 
 ### Where `@handle` is accepted
 
-`roster.resolve_target` is the shared entry point: `@callsign` first (exact and
+`roster.resolve_target` is the shared entry point: `@username` first (exact and
 globally unique), then a friend code or bare person id. It backs `add_friend`, and
 `agent_tools.resolve_row` adds it to `social.message`, `social.ask_agent` and
 `hassault.invite`.
@@ -169,7 +169,7 @@ waiting for me**.
 Avatars and levels come from the game server, fetched once per roster in a single
 batched call (`profile-cards.ts` → `POST /api/games/profiles/cards`) and cached for
 the session. The roster itself is **local**, so every consumer has to work without a
-card: a friend with no callsign, a signed-out node and an unreachable game server
+card: a friend with no username, a signed-out node and an unreachable game server
 are all the same case — render the name, the presence dot and an initial, carry on.
 The roster must never acquire a network dependency to draw.
 

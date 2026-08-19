@@ -206,7 +206,7 @@ async def google_poll(body: _DevicePoll) -> dict[str, Any]:
 class _LocalSignup(BaseModel):
     email: str
     password: str
-    callsign: str = ""
+    username: str = ""
 
 
 class _LocalLogin(BaseModel):
@@ -229,7 +229,7 @@ async def local_signup(body: _LocalSignup) -> dict[str, Any]:
     """Create an email+password account. `{token, account}` on success, `{error}`
     with a user-facing message otherwise."""
     try:
-        return auth.signup_local(body.email, body.password, body.callsign)
+        return auth.signup_local(body.email, body.password, body.username)
     except ValueError as exc:
         return {"error": str(exc)}
 
@@ -248,7 +248,7 @@ async def local_login(body: _LocalLogin) -> dict[str, Any]:
 @app.get("/me")
 async def me(authorization: str | None = Header(default=None)) -> dict[str, Any]:
     """The bearer's account, read fresh. The node calls this to learn a handle its
-    stored token predates, and to pick up a callsign changed on another machine."""
+    stored token predates, and to pick up a username changed on another machine."""
     viewer = _viewer(authorization)
     if viewer is None:
         return {"error": "sign in required"}
@@ -259,16 +259,16 @@ async def me(authorization: str | None = Header(default=None)) -> dict[str, Any]
 async def set_handle_route(
     body: _SetHandle, authorization: str | None = Header(default=None)
 ) -> dict[str, Any]:
-    """Claim or rename the caller's callsign — the globally unique `handle` the
+    """Claim or rename the caller's username — the globally unique `handle` the
     ladder and HorribleAssault both display."""
     viewer = _viewer(authorization)
     if viewer is None:
         return {"error": "sign in required"}
     outcome = auth.set_account_handle(viewer, body.handle)
     if outcome == "taken":
-        return {"error": "that callsign is taken"}
+        return {"error": "that username is taken"}
     if outcome == "invalid":
-        return {"error": "a callsign is 3-20 characters of a-z, 0-9, - or _"}
+        return {"error": "a username is 3-20 characters of a-z, 0-9, - or _"}
     return {"ok": True, "account": auth.account_payload(viewer)}
 
 
@@ -313,12 +313,12 @@ async def directory_resolve(handle: str) -> dict[str, Any]:
     who has not signed in yet — which is exactly the person trying to add you.
     """
     entry = store.account_by_handle(handle)
-    return {"entry": entry} if entry else {"error": "no such callsign"}
+    return {"entry": entry} if entry else {"error": "no such username"}
 
 
 @app.get("/directory/search")
 async def directory_search(q: str, limit: int = 10) -> dict[str, Any]:
-    """Prefix-search callsigns. Short queries return nothing rather than everyone."""
+    """Prefix-search usernames. Short queries return nothing rather than everyone."""
     return {
         "results": store.search_handles(q, limit),
         "min_prefix": store.MIN_SEARCH_PREFIX,
@@ -377,7 +377,7 @@ async def profile_cards_route(body: _CardLookup) -> dict[str, Any]:
 
 @app.get("/profile/{handle}")
 async def get_profile_route(handle: str) -> dict[str, Any]:
-    """Somebody else's profile, by callsign. Unauthenticated — a profile is public,
+    """Somebody else's profile, by username. Unauthenticated — a profile is public,
     the same way the ladder that shows their rating is."""
     profile = store.profile_by_handle(handle)
     if profile is None:

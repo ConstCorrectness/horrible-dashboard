@@ -126,11 +126,24 @@ export interface WeaponSpec {
  */
 export interface Invitee {
   name: string;
+  /**
+   * Their `@username`, when the roster has resolved one.
+   *
+   * Empty is a real answer, not a bug: a friend added by friend code before
+   * either of you signed in to the game server has no account bound to their
+   * person key yet. Served alongside `name` for exactly that reason — prefer this
+   * and fall back, rather than rendering an empty row.
+   */
+  username: string;
   person_id: string;
   friend_code: string;
   /** False means their build predates matches, so an invite would land nowhere. */
   can_play: boolean;
   devices_online: number;
+  /** A room on this node they are standing in, and its map — presence beyond
+   * online/offline. Empty when they are online but not playing. */
+  room: string;
+  room_map: string;
 }
 
 export interface MatchInvite {
@@ -138,8 +151,25 @@ export interface MatchInvite {
   map: string;
   /** The inviting node id — authenticated by the fabric, unlike `hostName`. */
   host: string;
+  /**
+   * Who invited you, as `@username` — a **person**, not a machine.
+   *
+   * This used to be the sender's node name, so an invite from a friend read
+   * "horribleComputer invited you": the invite is assembled on the fabric side,
+   * where only the device label is in scope, and the account username the rest of
+   * the app keys on was never joined in. The backend resolves it against the
+   * roster first and the sender's stamp second (`fabric._invite_display_name`).
+   */
   hostName: string;
+  /** Which of their machines it came from — a secondary detail, since an invite
+   * fans out to every device a person has online. */
+  hostDevice?: string;
+  /** The inviting person, when the roster knows them. Used for per-person mutes. */
+  personId?: string;
   ts: number;
+  /** When it stops being joinable. A room does not outlive the process hosting
+   * it, so an invite has a shelf life rather than sitting there forever. */
+  expiresAt?: number;
 }
 
 /**
@@ -189,12 +219,26 @@ export interface TacticalSpec {
 }
 
 export interface LaunchNativeOptions {
-  room_id: string;
+  /**
+   * What was pressed. `train` is not a match at all — the client stays off the
+   * socket, because the server's roomless join is join-*or*-create and would seat
+   * a learner in whatever firefight is already on that map. `host` opens one and
+   * fields `bots`; `join` enters one that exists.
+   */
+  mode?: 'train' | 'host' | 'join';
+  /** A specific room; empty means "any match on this map, or open one". */
+  room_id?: string;
   map_name: string;
-  callsign?: string;
+  /** A friend's node id, when the room is on their machine. */
+  host?: string;
+  /** A wire label only — the node plays you as your account's username. */
+  username?: string;
   fullscreen?: boolean;
   raw_input?: boolean;
   max_fps?: number;
+  /** Bots to field. `host` only — `add_bot` is host-only on the channel. */
+  bots?: number;
+  bot_skill?: string;
 }
 
 export interface LaunchNativeResult {
@@ -357,17 +401,19 @@ export async function getMapCubes(name: string, onProgress?: ProgressFn): Promis
 
 // ---- identity ----------------------------------------------------------------
 
-/** Who this node plays as. `enlisted` is having a callsign — the backend refuses a
+/** Who this node plays as. `enlisted` is having a username — the backend refuses a
  * join without one, so the pane must too. Mirrors `models.SessionInfo`. */
 export interface SessionInfo {
   signed_in: boolean;
   account_id: string | null;
   display_name: string | null;
-  callsign: string | null;
+  username: string | null;
+  /** Pre-fill for the chooser when `username` is null. A suggestion, not a hold. */
+  suggested_username: string;
   enlisted: boolean;
 }
 
-/** `refresh` re-reads the account from the game server, which is how a callsign
+/** `refresh` re-reads the account from the game server, which is how a username
  * claimed on another machine shows up here. Slower, so it's opt-in. */
 export function getSession(refresh = false): Promise<SessionInfo> {
   return apiGet<SessionInfo>(`/hassault/session${refresh ? '?refresh=true' : ''}`);

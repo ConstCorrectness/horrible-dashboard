@@ -35,7 +35,7 @@ const ENLISTED: HassaultSession = {
   signed_in: true,
   account_id: 'local:1',
   display_name: 'ada',
-  callsign: 'ada-prime',
+  username: 'ada-prime',
   enlisted: true,
 };
 
@@ -100,16 +100,16 @@ describe('phases', () => {
     expect(bootPhase(EMPTY_PROGRESS, ENLISTED, true)).toBe('loading');
   });
 
-  it('asks for an account, then a callsign', () => {
+  it('asks for an account, then a username', () => {
     expect(bootPhase(DONE, SIGNED_OUT, false)).toBe('signin');
-    // Signed in but no callsign: sign-up is not finished, and the backend refuses
-    // the join too (channel._signed_in_callsign).
-    const noCallsign: HassaultSession = {
+    // Signed in but no username: sign-up is not finished, and the backend refuses
+    // the join too (channel._signed_in_username).
+    const noUsername: HassaultSession = {
       signed_in: true,
-      callsign: null,
+      username: null,
       enlisted: false,
     };
-    expect(bootPhase(DONE, noCallsign, false)).toBe('enlist');
+    expect(bootPhase(DONE, noUsername, false)).toBe('enlist');
     expect(bootPhase(DONE, ENLISTED, false)).toBe('menu');
     expect(bootPhase(DONE, ENLISTED, true)).toBe('playing');
   });

@@ -11,7 +11,7 @@ mapping lives there (`accounts.person_id`, unique both ways) and this module is 
 node's client for it:
 
 - `publish_binding()` proves to the game server that this person owns this account,
-- `resolve('@rob')` turns a callsign into something `roster.add_friend` can dial,
+- `resolve('@rob')` turns a username into something `roster.add_friend` can dial,
 - `search('ro')` is the "easier way to find people".
 
 **What a handle is and isn't.** It is a *directory* name: proof that some account
@@ -44,7 +44,7 @@ _TIMEOUT = 8.0
 
 
 def is_handle(value: str) -> bool:
-    """Whether `value` looks like `@callsign`.
+    """Whether `value` looks like `@username`.
 
     The `@` is **required**. Without it a bare `rob` would be ambiguous against a
     display name, and guessing between them is how an agent messages the wrong
@@ -122,7 +122,7 @@ async def publish_binding() -> dict[str, Any]:
 async def resolve(handle: str) -> dict[str, Any] | None:
     """`@rob` → `{handle, display_name, person_id, person_public_key}`, or None.
 
-    Unauthenticated: a callsign is already public, and needing an account to look
+    Unauthenticated: a username is already public, and needing an account to look
     one up would lock out exactly the person trying to find you.
     """
     name = normalize(handle)
@@ -141,7 +141,7 @@ async def resolve(handle: str) -> dict[str, Any] | None:
     if not isinstance(entry, dict) or not entry.get("person_id"):
         return None
     # Never trust the directory's arithmetic: the person id must actually be the
-    # fingerprint of the key it came with, or the server could point a callsign at
+    # fingerprint of the key it came with, or the server could point a username at
     # a key that isn't theirs. This check is what keeps a handle lookup no weaker
     # than a friend code.
     if person_identity.fingerprint(str(entry["person_public_key"])) != str(
@@ -153,7 +153,7 @@ async def resolve(handle: str) -> dict[str, Any] | None:
 
 
 async def search(query: str, limit: int = 10) -> list[dict[str, Any]]:
-    """Prefix-search callsigns. Short queries return nothing, by server policy."""
+    """Prefix-search usernames. Short queries return nothing, by server policy."""
     q = query.strip().lstrip("@").lower()
     if len(q) < 3:
         return []

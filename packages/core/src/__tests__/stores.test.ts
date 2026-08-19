@@ -41,7 +41,7 @@ describe('accountStore', () => {
       signed_in: true,
       account_id: 'acc-1',
       display_name: 'octocat',
-      callsign: 'OCTO',
+      username: 'OCTO',
       server_url: 'wss://games.example',
     });
 

@@ -33,7 +33,7 @@ def signed_in(monkeypatch):
     """A player with an account. Joining is gated on one (see
     test_hassault_channel.py); these tests are about the wire path past that gate,
     so they stand an account up rather than exercise the refusal."""
-    monkeypatch.setattr(channel, "_signed_in_callsign", lambda: "alice")
+    monkeypatch.setattr(channel, "_signed_in_username", lambda: "alice")
 
 
 class FakeConn:

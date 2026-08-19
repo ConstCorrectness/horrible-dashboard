@@ -183,10 +183,10 @@ class GamesStatus(BaseModel):
     account_id: str | None = None
     signed_in: bool = False  # holds a server-issued JWT (vs the dev token)
     display_name: str | None = None
-    # The globally unique callsign (the game server's `handle`). None means signed
+    # The globally unique username (the game server's `handle`). None means signed
     # out *or* signed in without one yet — HorribleAssault treats the latter as
     # "not enlisted" and asks for one before letting you play.
-    callsign: str | None = None
+    username: str | None = None
     server_url: str
     policy: str
     games: list[GameInfo] = []
@@ -201,7 +201,7 @@ class LocalSignupRequest(BaseModel):
 
     email: str
     password: str
-    callsign: str = ""
+    username: str = ""
 
 
 class LocalLoginRequest(BaseModel):
@@ -209,8 +209,8 @@ class LocalLoginRequest(BaseModel):
     password: str
 
 
-class SetCallsignRequest(BaseModel):
-    callsign: str
+class SetUsernameRequest(BaseModel):
+    username: str
 
 
 # ---- the RL environment (Train section) --------------------------------------

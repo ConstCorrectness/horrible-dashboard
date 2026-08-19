@@ -402,10 +402,13 @@ export {
   unreadCount,
   markAllRead,
   dismissNotification,
+  retractNotification,
+  registerNotificationAction,
   canNotifyDesktop,
   desktopPermission,
   ensureDesktopPermission,
   showDesktopNotification,
+  type NotificationAction,
   type NotificationItem,
   type PermissionState,
 } from './modules/notifications';

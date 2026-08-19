@@ -47,7 +47,7 @@ export function SignInCard({
   const [mode, setMode] = useState<'in' | 'up'>('in');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [callsign, setCallsign] = useState('');
+  const [username, setUsername] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState('');
   const [prompt, setPrompt] = useState<SignInPrompt | null>(null);
@@ -97,7 +97,7 @@ export function SignInCard({
     setBusy('local');
     setErr('');
     try {
-      if (mode === 'up') await signUpWithPassword(email, password, callsign.trim());
+      if (mode === 'up') await signUpWithPassword(email, password, username.trim());
       else await signInWithPassword(email, password);
       await finish();
     } catch (e) {
@@ -224,13 +224,24 @@ export function SignInCard({
           value={password}
           onChange={(e) => setPassword(e.target.value)}
         />
+        {/* Required, not optional. Left blank this used to derive a username from
+            the email address, which is how everyone ended up with a name they had
+            never agreed to and no screen ever asked. The charset and length are
+            the server's (`store.HANDLE_RE`); it still has the final word on both,
+            and on whether the name is free. */}
         {mode === 'up' && (
           <input
-            placeholder="Callsign (optional)"
-            aria-label="Callsign"
+            required
+            minLength={3}
             maxLength={20}
-            value={callsign}
-            onChange={(e) => setCallsign(e.target.value)}
+            pattern="[A-Za-z0-9_-]{3,20}"
+            placeholder="Username"
+            aria-label="Username"
+            title="3–20 characters: a–z, 0–9, - or _"
+            autoComplete="username"
+            spellCheck={false}
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
           />
         )}
         <button className="signin-submit" type="submit" disabled={busy != null}>

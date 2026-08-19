@@ -48,19 +48,22 @@ def test_dev_auth_can_be_disabled_but_jwt_still_works(monkeypatch) -> None:
 
 def test_finish_github_creates_account_and_signs_jwt() -> None:
     out = auth._finish_github({"id": 99, "login": "octocat"})
-    # `handle` rides along on every sign-in payload so the node learns the callsign
-    # without a second round-trip (see auth._session).
+    # `handle` rides along on every sign-in payload so the node learns the username
+    # without a second round-trip (see auth._session). It is **None** for a new
+    # account: OAuth no longer picks a username on the person's behalf, so the
+    # client sees no handle, `enlisted` is false, and the chooser renders.
     assert out["account"] == {
         "id": "github:99",
         "display_name": "octocat",
-        "handle": "octocat",
+        "handle": None,
+        "suggested_handle": "octocat",
     }
     claims = auth.verify_jwt(out["token"])
     assert claims["sub"] == "github:99"
     # The account is now persisted for the leaderboard.
     assert store.get_account("github:99")["display_name"] == "octocat"
-    # The handle is auto-derived and locked from the GitHub login.
-    assert store.get_account("github:99")["handle"] == "octocat"
+    # Nothing was claimed on their behalf.
+    assert store.get_account("github:99")["handle"] is None
 
 
 def test_finish_google_creates_account_and_signs_jwt() -> None:
@@ -70,13 +73,14 @@ def test_finish_google_creates_account_and_signs_jwt() -> None:
     assert out["account"] == {
         "id": "google:108",
         "display_name": "Mildred",
-        "handle": "mildred-bakes",
+        "handle": None,
+        # The suggestion comes from the email's local part, not the display name.
+        "suggested_handle": "mildred-bakes",
     }
     claims = auth.verify_jwt(out["token"])
     assert claims["sub"] == "google:108"
     assert store.get_account("google:108")["display_name"] == "Mildred"
-    # Handle comes from the email's local part, not the display name.
-    assert store.get_account("google:108")["handle"] == "mildred-bakes"
+    assert store.get_account("google:108")["handle"] is None
 
 
 def test_finish_google_falls_back_to_email_local_part() -> None:
@@ -105,7 +109,7 @@ def test_verify_password_rejects_garbage_instead_of_raising() -> None:
         assert auth.verify_password("anything", bad) is False
 
 
-def test_signup_local_creates_account_with_chosen_callsign() -> None:
+def test_signup_local_creates_account_with_chosen_username() -> None:
     out = auth.signup_local("Ada@Example.com", "hunter2hunter2", "ada")
     account_id = out["account"]["id"]
     # The id is a uuid, never the email — people change addresses, ids are forever.
@@ -122,20 +126,41 @@ def test_signup_local_creates_account_with_chosen_callsign() -> None:
     )
 
 
-def test_signup_local_derives_a_callsign_when_none_is_chosen() -> None:
-    out = auth.signup_local("bosun@example.com", "longenoughpw")
+def test_signup_local_requires_a_chosen_username() -> None:
+    """The username is the person's choice, not a transform of their address.
+
+    This used to derive one silently, which is what made the chooser unreachable
+    everywhere downstream: the account arrived already holding a name nobody had
+    agreed to, and every screen that asks "have you chosen one yet?" said yes.
+    """
+    for bad in ["", "no"]:
+        try:
+            auth.signup_local("bosun@example.com", "longenoughpw", bad)
+            raise AssertionError(f"{bad!r} should have been rejected")
+        except ValueError as exc:
+            assert "3-20 characters" in str(exc)
+    out = auth.signup_local("bosun@example.com", "longenoughpw", "bosun")
     assert out["account"]["handle"] == "bosun"
 
 
+def test_signup_local_rejects_a_taken_username() -> None:
+    auth.signup_local("first@example.com", "longenoughpw", "duplicate")
+    try:
+        auth.signup_local("second@example.com", "longenoughpw", "duplicate")
+        raise AssertionError("a taken username should have been rejected")
+    except ValueError as exc:
+        assert "taken" in str(exc)
+
+
 def test_signup_local_rejects_bad_input_and_duplicates() -> None:
-    auth.signup_local("taken@example.com", "longenoughpw")
+    auth.signup_local("taken@example.com", "longenoughpw", "taken-user")
     for email, password, expected in [
         ("TAKEN@example.com", "longenoughpw", "already exists"),
         ("notanemail", "longenoughpw", "email address"),
         ("fresh@example.com", "short", "at least 8"),
     ]:
         try:
-            auth.signup_local(email, password)
+            auth.signup_local(email, password, "somebody")
             raise AssertionError(f"{email} should have been rejected")
         except ValueError as exc:
             assert expected in str(exc)
@@ -152,7 +177,7 @@ def test_login_local_cannot_be_used_to_enumerate_accounts() -> None:
     """A wrong password and an unknown address are indistinguishable — same message,
     and both spend the scrypt time (see auth._dummy_hash), so neither the response
     nor its latency confirms whether an address has an account here."""
-    auth.signup_local("known@example.com", "longenoughpw")
+    auth.signup_local("known@example.com", "longenoughpw", "known-user")
     messages = set()
     for email, password in [
         ("known@example.com", "wrongpassword"),
@@ -190,13 +215,13 @@ def test_set_account_handle_renames_and_enforces_uniqueness() -> None:
     assert auth.account_payload(b)["handle"] == "bravo"
 
 
-def test_local_signup_rejects_a_taken_callsign_without_stranding_the_account() -> None:
+def test_local_signup_rejects_a_taken_username_without_stranding_the_account() -> None:
     auth.signup_local("first@example.com", "longenoughpw", "wanted")
     try:
         auth.signup_local("second@example.com", "longenoughpw", "wanted")
-        raise AssertionError("the callsign was already taken")
+        raise AssertionError("the username was already taken")
     except ValueError as exc:
-        assert "callsign is taken" in str(exc)
+        assert "username is taken" in str(exc)
 
 
 def test_local_signup_and_login_over_http(monkeypatch) -> None:
@@ -214,7 +239,7 @@ def test_local_signup_and_login_over_http(monkeypatch) -> None:
         json={
             "email": "http@example.com",
             "password": "longenoughpw",
-            "callsign": "httpuser",
+            "username": "httpuser",
         },
     ).json()
     assert created["account"]["handle"] == "httpuser"
@@ -232,7 +257,7 @@ def test_local_signup_and_login_over_http(monkeypatch) -> None:
     ).json()
     assert "token" not in wrong and wrong["error"]
 
-    # /me and the callsign rename, both bearer-authenticated.
+    # /me and the username rename, both bearer-authenticated.
     headers = {"Authorization": f"Bearer {created['token']}"}
     assert client.get("/me", headers=headers).json()["account"]["handle"] == "httpuser"
     renamed = client.post(
@@ -246,22 +271,32 @@ def test_local_signup_and_login_over_http(monkeypatch) -> None:
     assert client.post("/account/handle", json={"handle": "x"}).json()["error"]
 
 
-def test_ensure_handle_is_locked_after_first_sign_in() -> None:
-    # A GitHub user renaming their login doesn't rewrite an already-locked handle.
+def test_a_claimed_username_survives_a_provider_rename() -> None:
+    # A GitHub user renaming their login doesn't rewrite a username they chose.
     auth._finish_github({"id": 500, "login": "first_name"})
-    auth._finish_github({"id": 500, "login": "renamed"})
-    assert store.get_account("github:500")["handle"] == "first_name"
+    auth.set_account_handle("github:500", "first-name")
+    out = auth._finish_github({"id": 500, "login": "renamed"})
+    assert store.get_account("github:500")["handle"] == "first-name"
+    # And the returning session reports it, so they are not asked a second time.
+    assert out["account"]["handle"] == "first-name"
 
 
-def test_ensure_handle_resolves_collisions() -> None:
-    # Two Google accounts with the same email local part get distinct handles.
-    auth._finish_google({"id": "600", "email": "sam@gmail.com"})
-    auth._finish_google({"id": "601", "email": "sam@example.com"})
-    handles = {
-        store.get_account("google:600")["handle"],
-        store.get_account("google:601")["handle"],
-    }
-    assert handles == {"sam", "sam2"}
+def test_colliding_suggestions_are_offered_not_claimed() -> None:
+    """Two Google accounts sharing an email local part are both *suggested* `sam`,
+    and neither is claimed.
+
+    The deliberate difference from `ensure_handle`, which resolved the collision by
+    silently handing the second person `sam2`. A suggestion may collide; the claim
+    is what has to be unique, and a refused claim comes with a reason they can act
+    on rather than a number appended behind their back.
+    """
+    a = auth._finish_google({"id": "600", "email": "sam@gmail.com"})
+    b = auth._finish_google({"id": "601", "email": "sam@example.com"})
+    assert a["account"]["suggested_handle"] == b["account"]["suggested_handle"] == "sam"
+    assert store.get_account("google:600")["handle"] is None
+    assert store.get_account("google:601")["handle"] is None
+    assert auth.set_account_handle("google:600", "sam") == "ok"
+    assert auth.set_account_handle("google:601", "sam") == "taken"
 
 
 def test_web_signin_flow_end_to_end(monkeypatch) -> None:

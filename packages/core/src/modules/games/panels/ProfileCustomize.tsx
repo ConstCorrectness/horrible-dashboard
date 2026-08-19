@@ -75,7 +75,7 @@ export function ProfileCustomize({ profile, showcaseOptions, onChanged }: Profil
 
   return (
     <div className="profile-editor">
-      <label className="people-label">Status & Callsign Tagline</label>
+      <label className="people-label">Status & Username Tagline</label>
       <form
         style={{ display: 'flex', gap: '0.4rem' }}
         onSubmit={(e) => {

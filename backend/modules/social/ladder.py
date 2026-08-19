@@ -29,7 +29,7 @@ that lets a remote agent reach yours and shared panes flow.
 
 So the fabric side keeps its own gate exactly as before: trust is granted in
 `roster.respond` / `roster.handle_friend_response`, after a device certificate has
-verified. What this module adds is the *other* half — the profile, the callsign, the
+verified. What this module adds is the *other* half — the profile, the username, the
 ladder friendship — none of which is an authority over anything.
 
 The direction that is safe is the one implemented: fabric acceptance opens a ladder
@@ -66,7 +66,7 @@ async def resolve_people(person_ids: list[str]) -> dict[str, dict[str, Any]]:
     """`person_id` → `{handle, display_name, account_id, person_public_key}`.
 
     Every entry is re-checked against the fingerprint invariant before it is
-    returned, exactly as `handles.resolve` does for a single callsign: the person id
+    returned, exactly as `handles.resolve` does for a single username: the person id
     must be the fingerprint of the key it arrived with. Without that check the
     directory could point a person id at a key that isn't theirs, and the cache
     would launder a server's claim into something the roster displays as fact.

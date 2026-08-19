@@ -4,11 +4,25 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-minifb = "0.27"
+# Blocking WebSocket. Blocking on purpose: one reader thread owns the socket and
+# the game loop drains a channel, which needs no async runtime at all.
 tungstenite = { version = "0.21", features = ["handshake"] }
-url = "2.5"
+# Blocking HTTP for the three reads that stand a world up (map info, cubes,
+# weapons). ureq rather than reqwest because reqwest would pull tokio in for
+# three requests made once at startup.
+ureq = { version = "2.10", features = ["json"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+wgpu = "30.0.0"
+winit = "0.30.13"
+glam = "0.33.4"
+bytemuck = "1.25.2"
+pollster = "1.0.1"
+# Audio output, and only output: every sound this client makes is synthesized in
+# `audio.rs`. cpal rather than rodio because rodio's job is decoding and mixing
+# *files*, and there are no files here — AssaultCube's sounds are its copyright,
+# so the game generates its own, exactly as it paints its maps from JSON brushes.
+cpal = "0.18.2"
 
 [profile.release]
 opt-level = 3

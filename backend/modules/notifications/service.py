@@ -45,19 +45,38 @@ async def notify(
     if store.is_muted(category, person_id):
         logger.debug("notification suppressed by a mute: %s/%s", category, person_id)
         return False
-    await broadcast_event(
-        CHANNEL,
-        "notify",
-        {
-            "category": category,
-            "kind": kind,
-            "title": title,
-            "body": body,
-            "person_id": person_id,
-            **(data or {}),
-        },
+    # **Written before it is broadcast.** The socket reaches whoever is connected
+    # right now; the row reaches whoever looks later. Broadcasting only meant that
+    # a notification arriving while the app was closed — or while the page was
+    # about to be reloaded — was never seen by anyone, because the feed behind the
+    # bell was a JavaScript array and nothing else.
+    payload = dict(data or {})
+    dedupe = payload.pop("dedupe", None)
+    expires_at = payload.pop("expires_at", None)
+    entry = store.record(
+        category,
+        kind,
+        title,
+        body,
+        person_id=person_id,
+        data=payload,
+        dedupe=str(dedupe) if dedupe else None,
+        expires_at=float(expires_at) if expires_at is not None else None,
     )
+    await broadcast_event(CHANNEL, "notify", entry)
     return True
+
+
+async def retract(dedupe: str) -> None:
+    """Take a notification back from every surface it reached.
+
+    The counterpart to `notify`, and not optional: one event lands as a toast, a
+    feed row, an in-game overlay card and an OS notification, so something has to
+    say "that is answered now" to all four at once. Without it, accepting an
+    invite in the game leaves it sitting unanswered in the bell.
+    """
+    if store.clear(dedupe=dedupe):
+        await broadcast_event(CHANNEL, "retract", {"dedupe": dedupe})
 
 
 async def on_presence(event: dict[str, Any]) -> None:

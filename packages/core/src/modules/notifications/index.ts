@@ -37,6 +37,9 @@ export {
   unreadCount,
   markAllRead,
   dismissNotification,
+  retractNotification,
+  registerNotificationAction,
+  type NotificationAction,
   type NotificationItem,
 } from './ws';
 export {

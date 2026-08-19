@@ -1651,11 +1651,11 @@ the **Ladder** panel (`games.openLeaderboard`) shows the leaderboard per game.
 Multi-player rating (poker) is a later phase — those results are logged but not yet
 rated.
 
-### The callsign (handle)
+### The username (handle)
 
 Every account carries a **globally unique handle** — the ladder's display name, and
 what [HorribleAssault](hassault.mdx) plays you as. OAuth sign-ins derive one from the
-provider username and lock it; `POST /account/handle` (node: `/api/games/auth/callsign`)
+provider username and lock it; `POST /account/handle` (node: `/api/games/auth/username`)
 claims or renames it deliberately, and unlike the auto-derivation it applies whether or
 not one is already set. `store.set_handle` returns `ok` / `invalid` / `taken`, with
 uniqueness enforced by a partial unique index rather than a pre-read, so two
@@ -1794,7 +1794,7 @@ its node — so a secret parked there would be readable by any page the node ser
   node captures the JWT; the browser gets only the account). Declared **above** the
   `/auth/{provider}/web/*` routes — that `provider` is a path parameter, FastAPI
   matches in declaration order, and `local` would otherwise be swallowed by it.
-- `/api/games/auth/callsign` — claim or rename the account's unique handle.
+- `/api/games/auth/username` — claim or rename the account's unique handle.
 - `/api/games/auth/providers` — which sign-in flows the game server supports
   (`{provider: {device, web}}` plus `local: {password}`; `{}` = unknown), for
   disabling lobby buttons up front.

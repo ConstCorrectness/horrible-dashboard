@@ -33,7 +33,7 @@ export function GamesSignIn() {
         </h1>
         <p className="games-hero-sub">
           Matches, ratings, replays and tables all live on the game server, so an account
-          isn&rsquo;t optional here — it&rsquo;s the seat you play from. Your callsign is derived
+          isn&rsquo;t optional here — it&rsquo;s the seat you play from. Your username is derived
           automatically; you can rename it later.
         </p>
 

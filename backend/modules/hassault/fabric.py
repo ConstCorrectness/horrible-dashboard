@@ -60,6 +60,18 @@ CAPABILITY = "hassault"
 _invites: dict[str, dict[str, Any]] = {}
 INVITE_TTL = 300.0
 
+#: Invites we could not deliver because the target's machine was not connected,
+#: keyed by node id. `peer_hub.send_to` is a *direct* node-to-node send — there is
+#: no relay in the path — so an offline friend does not mean a queued invite
+#: somewhere, it means nothing was sent at all and nobody ever finds out. This is
+#: the sender holding it instead, which is the only place that can: the receiver
+#: cannot store what never arrived.
+#:
+#: Deliberately not persisted. It expires with `INVITE_TTL` and a room does not
+#: outlive the process hosting it, so an invite that survived a restart would
+#: point at a match that no longer exists.
+_pending: dict[str, list[dict[str, Any]]] = {}
+
 
 # ---------------------------------------------------------------------------
 # Host side: a peer's player, wearing a browser socket's clothes
@@ -128,7 +140,7 @@ async def handle_join(hub: PeerHub, session: PeerSession, env: PeerEnvelope) -> 
     if not client:
         return
 
-    # The peer's *claimed* callsign is only a label — the same rule `handle_invite`
+    # The peer's *claimed* username is only a label — the same rule `handle_invite`
     # states below. Identity here is the node id, which the fabric authenticated;
     # `name` is whatever the guest's backend put on the wire, so a trusted friend
     # could otherwise send a nameplate reading as somebody else's account. It is
@@ -139,7 +151,7 @@ async def handle_join(hub: PeerHub, session: PeerSession, env: PeerEnvelope) -> 
     # server into every join and breaks matches on an offline LAN. Deliberately not
     # done — see the limitation noted in docs/modules/hassault.mdx.
     label = str(data.get("name") or "guest")[:24]
-    # Tagged so a nameplate can never be mistaken for a local account's callsign.
+    # Tagged so a nameplate can never be mistaken for a local account's username.
     name = f"{label}@{session.info.node_id[:6]}"[:24]
 
     room = match_server.get(room_id)
@@ -469,6 +481,48 @@ def live_invites() -> list[dict[str, Any]]:
     return sorted(_invites.values(), key=lambda i: i["ts"], reverse=True)
 
 
+def _invite_display_name(session: PeerSession, claimed_username: str) -> tuple[str, str]:
+    """What to call whoever sent an invite: `(name, person_id)`.
+
+    The old answer was `node_identity.node_name()` off the wire, which is a
+    **machine** name — so an invite from a friend read "horribleComputer invited
+    you", naming a box rather than a person. Two identity authorities meet here:
+    the fabric knows a node and a person key, and the game server is the authority
+    for the username. The invite is assembled on the fabric side, so the username
+    had to be carried across deliberately or it is simply not in scope.
+
+    Precedence, most trustworthy first:
+
+    1. **The roster's** username for the person this node belongs to. We already
+       stored it (`social_friends.handle`), we resolved it ourselves, and it costs
+       no lookup. This is the only one that is more than a claim.
+    2. The **sender's stamped** username. A claim — but a claim from an
+       authenticated friend, and cheap. Resolving it against the game-server
+       directory instead would mean a network round-trip per invite for an answer
+       that is *also* only a claim (the directory vouches, it does not prove).
+    3. The device name, then a generic. Last, because it names the wrong thing.
+
+    Same shape as the precedence `browse_peers` already applies to `node_name`,
+    and it leaves the existing rule untouched: the authenticated node id is the
+    authority, everything here is a label.
+    """
+    from backend.modules.social import store
+
+    person_id = ""
+    try:
+        person_id = store.person_for_node(session.info.node_id) or ""
+        if person_id:
+            row = store.get_friend_row(person_id) or {}
+            if row.get("handle"):
+                return f"@{row['handle']}", person_id
+    except Exception:  # pragma: no cover - roster is best-effort here
+        logger.debug("could not resolve an inviting peer against the roster", exc_info=True)
+
+    if claimed_username:
+        return f"@{claimed_username}", person_id
+    return (session.info.node_name or "a friend"), person_id
+
+
 async def handle_invite(hub: PeerHub, session: PeerSession, env: PeerEnvelope) -> None:
     """A friend asking us to join their match."""
     if not session.info.trusted:
@@ -477,30 +531,132 @@ async def handle_invite(hub: PeerHub, session: PeerSession, env: PeerEnvelope) -
     room = str(data.get("room") or "")
     if not room:
         return
+
+    claimed = str(data.get("fromUsername") or "")[:20]
+    name, person_id = _invite_display_name(session, claimed)
+    device = str(data.get("fromDeviceName") or session.info.node_name or "")[:32]
+    now = time.time()
     invite = {
         "room": room,
         "map": str(data.get("map") or ""),
         "host": session.info.node_id,
         # The peer's *claimed* name is only a label. Identity is the node id,
         # which the fabric authenticated; this is never used to make a decision.
-        "hostName": str(data.get("hostName") or session.info.node_name or "a friend"),
-        "ts": time.time(),
+        "hostName": name,
+        # Which of their machines it came from. Secondary information, not the
+        # headline — but worth keeping, because an invite fans out to every device
+        # a person has online and knowing which one answered is useful.
+        "hostDevice": device,
+        "personId": person_id,
+        "ts": now,
+        "expiresAt": now + INVITE_TTL,
     }
     _invites[room] = invite
     from backend.modules.ws import broadcast_event
 
     await broadcast_event(CHANNEL, "invite", invite)
+    await _notify_invite(invite)
+
+
+async def _notify_invite(invite: dict[str, Any]) -> None:
+    """Put the invite in front of the person, wherever they happen to be.
+
+    The `hassault` broadcast above reaches the game pane — and **only** the game
+    pane, because that is the one thing subscribed to that channel. A pane
+    unmounts on a workspace switch and when its tab is inactive, so for most of
+    the day an invite arrived, updated a dict, and was seen by nobody. That is the
+    bug; this is the fix, and it is one call rather than a new subsystem because
+    `notify()` already fans out to the shell toast, the notification feed and the
+    OS notification, with mute rules enforced at the producer.
+
+    `dedupe` ties all of those surfaces to one invite so accepting on any of them
+    clears the rest instead of leaving three stale copies.
+    """
+    from backend.modules.notifications import service
+
+    await service.notify(
+        "invite",
+        f"{invite['hostName']} invited you to a match",
+        (
+            f"{invite['map']} · HorribleAssault"
+            + (f" · on {invite['hostDevice']}" if invite["hostDevice"] else "")
+        ),
+        person_id=invite["personId"] or None,
+        kind="info",
+        data={
+            "dedupe": f"hassault-invite:{invite['host']}:{invite['room']}",
+            "action": "hassault.joinInvite",
+            "invite": invite,
+            "expires_at": invite["expiresAt"],
+        },
+    )
+
+
+def _invite_payload(room: str, map_name: str) -> dict[str, Any]:
+    """What we put on the wire, stamped with **our username** rather than only our
+    machine name.
+
+    The sender is the one place that knows its own username without asking anyone:
+    it is in the signed-in account already. Leaving the receiver to resolve it
+    would mean a game-server directory lookup per invite, on the receiving path,
+    for an answer that is no more authoritative than this stamp.
+    """
+    from backend.modules.games import server_auth
+    from backend.modules.network import identity as node_identity
+
+    return {
+        "room": room,
+        "map": map_name,
+        "fromUsername": server_auth.signed_in_username() or "",
+        "fromDeviceName": node_identity.node_name(),
+        # Kept for nodes running an older build, which read this as the display
+        # name. Dropping it would make an invite from a new node render as
+        # "a friend" over there rather than as anything.
+        "hostName": server_auth.signed_in_username() or node_identity.node_name(),
+    }
 
 
 async def send_invite(node_id: str, room: str, map_name: str) -> None:
-    from backend.modules.network import identity as node_identity
+    """Invite one machine. Raises `KeyError` when that node is not connected."""
     from backend.modules.network.hub import peer_hub
 
-    await peer_hub.send_to(
-        node_id,
-        HASSAULT_INVITE,
-        {"room": room, "map": map_name, "hostName": node_identity.node_name()},
-    )
+    await peer_hub.send_to(node_id, HASSAULT_INVITE, _invite_payload(room, map_name))
+
+
+def queue_invite(node_id: str, room: str, map_name: str) -> None:
+    """Hold an invite for a machine that is not connected, to send when it is.
+
+    Not a durable queue and not meant to be one: it lives as long as the process
+    and expires with `INVITE_TTL`, because the thing being invited to is a room in
+    this process's memory. Delivering a two-hour-old invite to a match that ended
+    an hour ago would be worse than not delivering it.
+    """
+    now = time.time()
+    pending = [
+        item for item in _pending.get(node_id, []) if now - item["ts"] <= INVITE_TTL
+    ]
+    # Keyed by room, so inviting the same person to the same match twice while
+    # they are offline queues one invite, not two.
+    pending = [item for item in pending if item["room"] != room]
+    pending.append({"room": room, "map": map_name, "ts": now})
+    _pending[node_id] = pending
+
+
+async def flush_pending(node_id: str) -> None:
+    """Send whatever we were holding for a node that just came online."""
+    now = time.time()
+    pending = _pending.pop(node_id, [])
+    for item in pending:
+        if now - item["ts"] > INVITE_TTL:
+            continue
+        try:
+            await send_invite(node_id, item["room"], item["map"])
+        except KeyError:
+            # Gone again between the event and this send. Put it back rather than
+            # dropping it — it has not expired yet.
+            queue_invite(node_id, item["room"], item["map"])
+        except Exception:
+            logger.exception("could not flush a queued invite to %s", node_id)
 
 
 def _on_peer_event(event: str, data: dict[str, Any]) -> None:
@@ -512,10 +668,14 @@ def _on_peer_event(event: str, data: dict[str, Any]) -> None:
     if event != "peer_update":
         return
     peer = data.get("peer") or {}
+    node_id = str(peer.get("node_id") or "")
+    if not node_id:
+        return
     if peer.get("status") == "disconnected":
-        node_id = str(peer.get("node_id") or "")
-        if node_id:
-            asyncio.ensure_future(drop_peer(node_id))
+        asyncio.ensure_future(drop_peer(node_id))
+    elif _pending.get(node_id):
+        # They were offline when somebody invited them and they are here now.
+        asyncio.ensure_future(flush_pending(node_id))
 
 
 def register(hub: PeerHub) -> None:

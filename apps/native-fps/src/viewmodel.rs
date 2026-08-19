@@ -1,0 +1,781 @@
+//! The gun in your hands, natively.
+//!
+//! A port of the browser client's `viewmodel.ts`, and deliberately a *port*
+//! rather than a second design: the two clients are the same game, and a weapon
+//! that sat somewhere else, kicked differently, or bobbed at another rate would
+//! make switching between them feel like switching games. The constants here are
+//! the TypeScript ones, unchanged — `HOME`, the kick decay, the bob rates.
+//!
+//! **Procedural, like everything else in this module.** AssaultCube's weapon
+//! models are its copyright and are never bundled, so these are boxes and
+//! cylinders in the shape of a gun. A shotgun reads as a shotgun and a sniper
+//! reads as a sniper, which is the whole job.
+//!
+//! Two things differ from the browser and both are forced by this renderer:
+//!
+//! - **There is no scene graph to parent to.** three.js lets a view model be a
+//!   child of the camera and does the arithmetic; here the transform is applied
+//!   on the CPU and the result is drawn *in camera space*, with the view matrix
+//!   left as the identity (`renderer::VIEWMODEL_PASS`). Same idea, done by hand:
+//!   a view model has no world position, it has a position in front of your eyes.
+//! - **It is drawn in its own pass with the depth buffer cleared**, which is what
+//!   stops a 2.5-cube rifle from being sawn in half by a wall you are standing
+//!   against. In three that was a `renderOrder`; here it is a second pass.
+//!
+//! The muzzle flash is lit by *cheating the normal*: the shader applies one fixed
+//! directional wash and has no notion of an unlit material, so the flash's
+//! vertices carry the light direction as their normal, which lands them at full
+//! brightness. Cheaper than a second pipeline for six triangles.
+
+use glam::{Mat4, Vec3};
+
+use crate::renderer::Vertex;
+
+/// Where the weapon rests, in camera space: right hand, below the sight line.
+///
+/// The sizes below are in cube units, which are worth a sanity check: the eye
+/// sits 4.5 cubes up and eyes are about 1.6 m off the ground, so a cube is
+/// roughly 36 cm and a 90 cm rifle is about two and a half cubes long.
+const HOME: Vec3 = Vec3::new(0.92, -0.86, -1.35);
+
+/// How long the muzzle flash stays lit. Two frames at 60 fps.
+const FLASH_LIFE: f32 = 0.055;
+
+/// Recoil decay and reload-dip rates, per second.
+const KICK_DECAY: f32 = 11.0;
+const RELOAD_RATE: f32 = 6.0;
+
+/// The shader's own light direction, used as the flash's normal so it comes out
+/// at full brightness. Kept in step with `shader.wgsl`'s `LIGHT_DIR` — a drift
+/// here dims the flash, which is a cosmetic failure and not worth a uniform.
+const LIGHT_DIR: [f32; 3] = [0.35, 0.9, 0.2];
+
+/// The palette, a notch brighter than the browser's.
+///
+/// The TS models are lit by the scene's lights; this renderer has one ambient
+/// floor and a single directional wash, so the browser's `0x1c2026` receiver
+/// lands at about 6% grey — a gun-shaped hole rather than a gun.
+const METAL: [f32; 3] = [0.30, 0.33, 0.37];
+const DARK: [f32; 3] = [0.22, 0.24, 0.28];
+const GRIP: [f32; 3] = [0.36, 0.30, 0.24];
+const ACCENT: [f32; 3] = [0.58, 0.61, 0.65];
+const FLASH: [f32; 3] = [1.0, 0.82, 0.48];
+
+/// What the animation needs to know about this frame.
+pub struct Frame {
+    /// Horizontal speed in cubes per second, for the walk cycle.
+    pub speed: f32,
+    pub on_ground: bool,
+    pub reloading: bool,
+    /// View angles in **radians**, so the weapon can lag a turn slightly instead
+    /// of being welded to the screen.
+    pub yaw: f32,
+    pub pitch: f32,
+    /// False while dead, or before the pointer has been captured.
+    pub visible: bool,
+    /// The run speed the walk cycle is measured against.
+    pub move_speed: f32,
+}
+
+/// One part of a weapon, in the model's own space.
+struct Part {
+    size: [f32; 3],
+    at: [f32; 3],
+    rot: [f32; 3],
+    color: [f32; 3],
+    /// A cylinder rather than a box: `size` is then `[radius, radius, length]`.
+    round: bool,
+}
+
+/// A built weapon: its geometry, where its muzzle is, and how it is held.
+struct Shape {
+    verts: Vec<Vertex>,
+    muzzle: Vec3,
+    rest: Vec3,
+}
+
+pub struct WeaponViewModel {
+    weapon: String,
+    shape: Option<Shape>,
+    kick: f32,
+    bob_phase: f32,
+    reload_t: f32,
+    last_yaw: Option<f32>,
+    last_pitch: f32,
+    sway_x: f32,
+    sway_y: f32,
+    /// Smoothed walk factor. The *input* is a step function, and a bob that snaps
+    /// to full amplitude on the frame W goes down looks like a glitch, not a
+    /// stride.
+    walk: f32,
+    flash_age: f32,
+    /// The pivot's transform for this frame, rebuilt by `update`.
+    transform: Mat4,
+    visible: bool,
+    /// A flash that is a different size every frame it is lit reads better than
+    /// a fade, and needs no crate: two shots never look identical.
+    rng: u32,
+}
+
+impl Default for WeaponViewModel {
+    fn default() -> WeaponViewModel {
+        WeaponViewModel {
+            weapon: String::new(),
+            shape: None,
+            kick: 0.0,
+            bob_phase: 0.0,
+            reload_t: 0.0,
+            last_yaw: None,
+            last_pitch: 0.0,
+            sway_x: 0.0,
+            sway_y: 0.0,
+            walk: 0.0,
+            flash_age: FLASH_LIFE,
+            transform: Mat4::IDENTITY,
+            visible: false,
+            rng: 0x9e37_79b9,
+        }
+    }
+}
+
+impl WeaponViewModel {
+    /// Swap the model. A no-op when already holding this weapon, so the frame
+    /// loop can call it every frame with whatever the server last said.
+    pub fn set_weapon(&mut self, id: &str) {
+        if id == self.weapon {
+            return;
+        }
+        self.weapon = id.to_string();
+        self.shape = if id.is_empty() { None } else { Some(build(id)) };
+    }
+
+    pub fn weapon(&self) -> &str {
+        &self.weapon
+    }
+
+    /// A shot left the barrel: kick the model and light the muzzle.
+    ///
+    /// Called from the server's own `shot` effect rather than from the fire key.
+    /// The browser client can drive this off its local trigger because it has a
+    /// trigger *controller* that knows about the fire interval, the magazine and
+    /// being dead; this client does not, so the key would flash on shots the
+    /// server refused.
+    pub fn fire(&mut self) {
+        // Additive but capped: holding an assault rifle should climb to a steady
+        // shake, not to a weapon behind the player's ear.
+        self.kick = (self.kick + 0.8).min(1.0);
+        self.flash_age = 0.0;
+    }
+
+    /// Advance the animation.
+    ///
+    /// Everything here is a *local* effect — nothing the server knows or cares
+    /// about, the same concession client-side recoil makes.
+    pub fn update(&mut self, dt: f32, frame: &Frame) {
+        self.visible = frame.visible && self.shape.is_some();
+        if !self.visible {
+            // Reset the walk cycle rather than freezing it: coming back from
+            // death mid-stride would otherwise resume with the gun wherever it
+            // happened to be.
+            self.bob_phase = 0.0;
+            self.last_yaw = None;
+            self.walk = 0.0;
+            return;
+        }
+
+        let target = (frame.speed / frame.move_speed.max(0.001)).clamp(0.0, 1.0);
+        self.walk += (target - self.walk) * (dt * 8.0).min(1.0);
+        let walk = self.walk;
+        self.bob_phase += dt * (4.5 + walk * 7.5);
+        // Airborne, the weapon settles: bobbing in mid-air reads as a bug.
+        let bob_amount = if frame.on_ground { walk } else { walk * 0.15 };
+
+        // Turning drags the weapon behind the view for a fraction of a second,
+        // which is the difference between a held object and a decal on the
+        // screen. The yaw delta is taken the short way round: this client wraps
+        // yaw at 360°, so a turn across the seam would otherwise fling the gun.
+        let yaw_delta = match self.last_yaw {
+            None => 0.0,
+            Some(prev) => wrap_angle(frame.yaw - prev),
+        };
+        let pitch_delta = frame.pitch - self.last_pitch;
+        self.last_yaw = Some(frame.yaw);
+        self.last_pitch = frame.pitch;
+        let settle = (dt * 9.0).min(1.0);
+        self.sway_x += ((-yaw_delta * 2.2).clamp(-0.22, 0.22) - self.sway_x) * settle;
+        self.sway_y += ((-pitch_delta * 1.6).clamp(-0.18, 0.18) - self.sway_y) * settle;
+
+        self.kick -= self.kick * (dt * KICK_DECAY).min(1.0);
+        let reload_target = if frame.reloading { 1.0 } else { 0.0 };
+        self.reload_t += (reload_target - self.reload_t) * (dt * RELOAD_RATE).min(1.0);
+
+        let bob_x = (self.bob_phase * 0.5).cos() * 0.05 * bob_amount;
+        let bob_y = (self.bob_phase).sin().abs() * -0.055 * bob_amount;
+
+        let position = Vec3::new(
+            HOME.x + bob_x + self.sway_x,
+            HOME.y + bob_y + self.sway_y - self.reload_t * 0.55,
+            // Recoil is mostly backwards: a gun that only rotates looks hinged.
+            HOME.z + self.kick * 0.28,
+        );
+        let rotation = Vec3::new(
+            self.kick * -0.16 + self.reload_t * 0.7 + bob_y * 0.4,
+            self.sway_x * 0.7 + self.reload_t * 0.25,
+            self.sway_x * 0.5 + bob_x * 0.6,
+        );
+        self.transform = Mat4::from_translation(position)
+            * Mat4::from_euler(glam::EulerRot::XYZ, rotation.x, rotation.y, rotation.z);
+        self.flash_age += dt;
+    }
+
+    /// This frame's vertices, in camera space, ready for the view-model pass.
+    ///
+    /// Rebuilt per frame rather than transformed on the GPU: a weapon is a few
+    /// hundred vertices and this is one matrix multiply each, which costs less
+    /// than the second uniform and bind group the alternative needs.
+    pub fn vertices(&mut self, out: &mut Vec<Vertex>) {
+        out.clear();
+        if !self.visible {
+            return;
+        }
+        // Copied out before the borrow of `self.shape`: the flare's random scale
+        // needs `&mut self`, and holding a reference into the shape across it
+        // borrows `self` twice.
+        let Some((muzzle, rest)) = self.shape.as_ref().map(|s| (s.muzzle, s.rest)) else {
+            return;
+        };
+        let flare = self.flash_age < FLASH_LIFE;
+        let scale = if flare {
+            0.85 + self.next_random() * 0.5
+        } else {
+            1.0
+        };
+        let Some(shape) = &self.shape else { return };
+        let model = self.transform * Mat4::from_euler(glam::EulerRot::XYZ, rest.x, rest.y, rest.z);
+        for v in &shape.verts {
+            out.push(transform_vertex(&model, v));
+        }
+        if flare {
+            // Squeezed in x/y only, exactly as the browser scales it, so the
+            // flare's length stays put and only its girth varies.
+            let flash = model
+                * Mat4::from_translation(muzzle - Vec3::new(0.0, 0.0, 0.2))
+                * Mat4::from_scale(Vec3::new(scale, scale, 1.0));
+            for v in flash_cone() {
+                out.push(transform_vertex(&flash, &v));
+            }
+        }
+    }
+
+    /// A cheap xorshift. Not for anything that matters — see `vertices`.
+    fn next_random(&mut self) -> f32 {
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 17;
+        self.rng ^= self.rng << 5;
+        (self.rng >> 8) as f32 / (1u32 << 24) as f32
+    }
+}
+
+/// The short way round, in radians. Yaw wraps at 2π and a turn across the seam
+/// is a small movement, not a full revolution.
+fn wrap_angle(a: f32) -> f32 {
+    let tau = std::f32::consts::TAU;
+    let mut d = a % tau;
+    if d > std::f32::consts::PI {
+        d -= tau;
+    }
+    if d < -std::f32::consts::PI {
+        d += tau;
+    }
+    d
+}
+
+fn transform_vertex(m: &Mat4, v: &Vertex) -> Vertex {
+    let p = m.transform_point3(Vec3::from(v.position));
+    // The direction, not the point: a normal carries no translation, and running
+    // it through `transform_point3` would push every face's shading around with
+    // the weapon's position. There is no non-uniform scale here, so the rotation
+    // part is enough — no inverse transpose needed.
+    let n = m
+        .transform_vector3(Vec3::from(v.normal))
+        .normalize_or_zero();
+    Vertex {
+        position: p.to_array(),
+        normal: n.to_array(),
+        color: v.color,
+    }
+}
+
+/// The muzzle flare: a five-sided cone lying along -Z, pointing away.
+fn flash_cone() -> Vec<Vertex> {
+    let sides = 5;
+    let radius = 0.16;
+    let length = 0.42;
+    let mut out = Vec::with_capacity(sides * 3);
+    for i in 0..sides {
+        let a0 = (i as f32 / sides as f32) * std::f32::consts::TAU;
+        let a1 = ((i + 1) as f32 / sides as f32) * std::f32::consts::TAU;
+        let p0 = [a0.cos() * radius, a0.sin() * radius, 0.0];
+        let p1 = [a1.cos() * radius, a1.sin() * radius, 0.0];
+        let apex = [0.0, 0.0, -length];
+        // Wound so the outward side faces the viewer standing behind the gun.
+        for p in [p1, p0, apex] {
+            out.push(Vertex {
+                position: p,
+                // See the module header: the shader's own light direction, so the
+                // flare lands at full brightness without a second pipeline.
+                normal: LIGHT_DIR,
+                color: FLASH,
+            });
+        }
+    }
+    out
+}
+
+/// The weapon, by id.
+///
+/// Ids are the backend's (`weapons.py`): knife, pistol, assault, shotgun,
+/// sniper. An unknown id gets the rifle rather than nothing — a new weapon
+/// should look wrong, not invisible.
+fn build(id: &str) -> Shape {
+    let (parts, muzzle, rest): (Vec<Part>, Vec3, Vec3) = match id {
+        "knife" => (
+            vec![
+                part([0.14, 0.17, 0.6], [0.0, 0.0, 0.1], GRIP),
+                part([0.05, 0.05, 0.1], [0.0, 0.0, -0.24], ACCENT),
+                // Blade: a flat box, already tapered in its own proportions
+                // rather than by a scale on the mesh, which this builder has no
+                // node to hang.
+                part([0.045, 0.18, 1.0], [0.0, 0.03, -0.8], ACCENT),
+            ],
+            Vec3::new(0.0, 0.03, -1.3),
+            Vec3::new(0.06, -0.32, 0.22),
+        ),
+        "pistol" => (
+            vec![
+                part([0.22, 0.3, 1.05], [0.0, 0.0, -0.5], METAL),
+                tube(0.05, 0.3, [0.0, 0.0, -1.12], ACCENT),
+                rotated(
+                    [0.2, 0.62, 0.34],
+                    [0.0, -0.42, -0.02],
+                    DARK,
+                    [0.3, 0.0, 0.0],
+                ),
+                // Trigger guard, as a bar under the receiver: small, but its
+                // absence is what makes a box read as a box.
+                part([0.1, 0.06, 0.3], [0.0, -0.24, -0.35], DARK),
+                part([0.06, 0.08, 0.05], [0.0, 0.19, -0.98], ACCENT),
+            ],
+            Vec3::new(0.0, 0.0, -1.3),
+            Vec3::new(0.0, -0.05, 0.0),
+        ),
+        "shotgun" => (
+            vec![
+                tube(0.08, 2.1, [-0.09, 0.02, -1.45], METAL),
+                tube(0.08, 2.1, [0.09, 0.02, -1.45], METAL),
+                part([0.34, 0.32, 0.8], [0.0, -0.02, -0.3], DARK),
+                // Pump, forward under the barrels.
+                part([0.3, 0.2, 0.55], [0.0, -0.16, -1.15], GRIP),
+                rotated(
+                    [0.24, 0.36, 0.9],
+                    [0.0, -0.16, 0.5],
+                    GRIP,
+                    [-0.08, 0.0, 0.0],
+                ),
+            ],
+            Vec3::new(0.0, 0.02, -2.5),
+            Vec3::new(0.0, -0.04, 0.0),
+        ),
+        "sniper" => (
+            vec![
+                tube(0.055, 2.5, [0.0, 0.02, -1.75], METAL),
+                part([0.26, 0.32, 1.1], [0.0, -0.04, -0.5], DARK),
+                // Scope on two mounts.
+                tube(0.12, 0.9, [0.0, 0.32, -0.85], DARK),
+                part([0.08, 0.18, 0.08], [0.0, 0.18, -0.5], METAL),
+                part([0.08, 0.18, 0.08], [0.0, 0.18, -1.2], METAL),
+                // Bolt handle, out to the right where you would work it.
+                part([0.3, 0.07, 0.07], [0.18, 0.02, -0.15], ACCENT),
+                rotated([0.2, 0.5, 0.3], [0.0, -0.34, -0.35], DARK, [0.18, 0.0, 0.0]),
+                rotated(
+                    [0.24, 0.4, 1.1],
+                    [0.0, -0.14, 0.55],
+                    GRIP,
+                    [-0.06, 0.0, 0.0],
+                ),
+            ],
+            Vec3::new(0.0, 0.02, -3.0),
+            Vec3::new(0.0, -0.03, 0.0),
+        ),
+        // Assault rifle, and the fallback for anything new.
+        _ => (
+            vec![
+                part([0.26, 0.36, 1.6], [0.0, 0.0, -0.8], DARK),
+                tube(0.055, 1.0, [0.0, 0.04, -2.0], METAL),
+                // Top rail and front sight.
+                part([0.14, 0.09, 0.9], [0.0, 0.23, -0.7], METAL),
+                part([0.07, 0.16, 0.06], [0.0, 0.28, -2.35], ACCENT),
+                // Magazine, raked forward the way a curved one sits.
+                rotated(
+                    [0.2, 0.66, 0.32],
+                    [0.0, -0.46, -0.85],
+                    METAL,
+                    [-0.14, 0.0, 0.0],
+                ),
+                rotated(
+                    [0.18, 0.46, 0.3],
+                    [0.0, -0.32, -0.2],
+                    DARK,
+                    [0.34, 0.0, 0.0],
+                ),
+                rotated(
+                    [0.22, 0.32, 0.75],
+                    [0.0, -0.02, 0.35],
+                    DARK,
+                    [-0.04, 0.0, 0.0],
+                ),
+            ],
+            Vec3::new(0.0, 0.04, -2.5),
+            Vec3::new(0.0, -0.04, 0.0),
+        ),
+    };
+
+    let mut verts = Vec::new();
+    for p in &parts {
+        let m = Mat4::from_translation(Vec3::from(p.at))
+            * Mat4::from_euler(glam::EulerRot::XYZ, p.rot[0], p.rot[1], p.rot[2]);
+        let local = if p.round {
+            cylinder(p.size[0], p.size[2], p.color)
+        } else {
+            box_verts(p.size, p.color)
+        };
+        for v in &local {
+            verts.push(transform_vertex(&m, v));
+        }
+    }
+    Shape {
+        verts,
+        muzzle,
+        rest,
+    }
+}
+
+fn part(size: [f32; 3], at: [f32; 3], color: [f32; 3]) -> Part {
+    rotated(size, at, color, [0.0, 0.0, 0.0])
+}
+
+fn rotated(size: [f32; 3], at: [f32; 3], color: [f32; 3], rot: [f32; 3]) -> Part {
+    Part {
+        size,
+        at,
+        rot,
+        color,
+        round: false,
+    }
+}
+
+/// A cylinder lying along -Z, which is the direction every barrel points.
+fn tube(radius: f32, length: f32, at: [f32; 3], color: [f32; 3]) -> Part {
+    Part {
+        size: [radius, radius, length],
+        at,
+        rot: [0.0, 0.0, 0.0],
+        color,
+        round: true,
+    }
+}
+
+/// A box centred on the origin, wound counter-clockwise seen from outside.
+///
+/// The winding matters as much as it does for a body: the pipeline culls back
+/// faces, so a face wound the wrong way is simply not there — and on a closed
+/// box that reads as seeing *through* the gun rather than as a missing triangle.
+fn box_verts(size: [f32; 3], color: [f32; 3]) -> Vec<Vertex> {
+    let (hx, hy, hz) = (size[0] / 2.0, size[1] / 2.0, size[2] / 2.0);
+    let faces: [([f32; 3], [[f32; 3]; 4]); 6] = [
+        (
+            [1.0, 0.0, 0.0],
+            [[hx, -hy, hz], [hx, -hy, -hz], [hx, hy, -hz], [hx, hy, hz]],
+        ),
+        (
+            [-1.0, 0.0, 0.0],
+            [
+                [-hx, -hy, -hz],
+                [-hx, -hy, hz],
+                [-hx, hy, hz],
+                [-hx, hy, -hz],
+            ],
+        ),
+        (
+            [0.0, 1.0, 0.0],
+            [[-hx, hy, hz], [hx, hy, hz], [hx, hy, -hz], [-hx, hy, -hz]],
+        ),
+        (
+            [0.0, -1.0, 0.0],
+            [
+                [-hx, -hy, -hz],
+                [hx, -hy, -hz],
+                [hx, -hy, hz],
+                [-hx, -hy, hz],
+            ],
+        ),
+        (
+            [0.0, 0.0, 1.0],
+            [[-hx, -hy, hz], [hx, -hy, hz], [hx, hy, hz], [-hx, hy, hz]],
+        ),
+        (
+            [0.0, 0.0, -1.0],
+            [
+                [hx, -hy, -hz],
+                [-hx, -hy, -hz],
+                [-hx, hy, -hz],
+                [hx, hy, -hz],
+            ],
+        ),
+    ];
+    let mut out = Vec::with_capacity(36);
+    for (normal, corners) in faces {
+        for idx in [0usize, 1, 2, 0, 2, 3] {
+            out.push(Vertex {
+                position: corners[idx],
+                normal,
+                color,
+            });
+        }
+    }
+    out
+}
+
+/// A capped cylinder along Z, centred on the origin. Ten sides, like the
+/// browser's — enough that a barrel is round and not so many that a gun costs
+/// more vertices than a player.
+fn cylinder(radius: f32, length: f32, color: [f32; 3]) -> Vec<Vertex> {
+    let sides = 10;
+    let hz = length / 2.0;
+    let mut out = Vec::with_capacity(sides * 12);
+    let at = |i: usize| {
+        let a = (i as f32 / sides as f32) * std::f32::consts::TAU;
+        (a.cos() * radius, a.sin() * radius, a.cos(), a.sin())
+    };
+    for i in 0..sides {
+        let (x0, y0, nx0, ny0) = at(i);
+        let (x1, y1, nx1, ny1) = at(i + 1);
+        let quad = [
+            ([x0, y0, -hz], [nx0, ny0, 0.0]),
+            ([x1, y1, -hz], [nx1, ny1, 0.0]),
+            ([x1, y1, hz], [nx1, ny1, 0.0]),
+            ([x0, y0, hz], [nx0, ny0, 0.0]),
+        ];
+        for idx in [0usize, 1, 2, 0, 2, 3] {
+            out.push(Vertex {
+                position: quad[idx].0,
+                normal: quad[idx].1,
+                color,
+            });
+        }
+        // Caps. The far one is what you see down the barrel of a weapon lying
+        // across the screen, so neither is optional.
+        out.push(Vertex {
+            position: [0.0, 0.0, hz],
+            normal: [0.0, 0.0, 1.0],
+            color,
+        });
+        out.push(Vertex {
+            position: [x0, y0, hz],
+            normal: [0.0, 0.0, 1.0],
+            color,
+        });
+        out.push(Vertex {
+            position: [x1, y1, hz],
+            normal: [0.0, 0.0, 1.0],
+            color,
+        });
+        out.push(Vertex {
+            position: [0.0, 0.0, -hz],
+            normal: [0.0, 0.0, -1.0],
+            color,
+        });
+        out.push(Vertex {
+            position: [x1, y1, -hz],
+            normal: [0.0, 0.0, -1.0],
+            color,
+        });
+        out.push(Vertex {
+            position: [x0, y0, -hz],
+            normal: [0.0, 0.0, -1.0],
+            color,
+        });
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame(visible: bool) -> Frame {
+        Frame {
+            speed: 0.0,
+            on_ground: true,
+            reloading: false,
+            yaw: 0.0,
+            pitch: 0.0,
+            visible,
+            move_speed: 22.0,
+        }
+    }
+
+    fn drawn(vm: &mut WeaponViewModel) -> Vec<Vertex> {
+        let mut out = Vec::new();
+        vm.vertices(&mut out);
+        out
+    }
+
+    #[test]
+    fn a_weapon_swap_replaces_the_model_and_only_on_a_change() {
+        let mut vm = WeaponViewModel::default();
+        vm.set_weapon("sniper");
+        vm.update(0.016, &frame(true));
+        let sniper = drawn(&mut vm).len();
+        vm.set_weapon("sniper");
+        assert_eq!(drawn(&mut vm).len(), sniper, "an idempotent swap rebuilt");
+        vm.set_weapon("knife");
+        vm.update(0.016, &frame(true));
+        assert_ne!(drawn(&mut vm).len(), sniper);
+    }
+
+    #[test]
+    fn an_unknown_weapon_is_a_rifle_rather_than_nothing() {
+        // A new weapon on the server should look wrong, not invisible: an empty
+        // model reads as the view model having broken.
+        let mut vm = WeaponViewModel::default();
+        vm.set_weapon("railgun");
+        vm.update(0.016, &frame(true));
+        let unknown = drawn(&mut vm).len();
+        let mut rifle = WeaponViewModel::default();
+        rifle.set_weapon("assault");
+        rifle.update(0.016, &frame(true));
+        assert_eq!(unknown, drawn(&mut rifle).len());
+        assert!(unknown > 0);
+    }
+
+    #[test]
+    fn nothing_is_drawn_while_dead() {
+        let mut vm = WeaponViewModel::default();
+        vm.set_weapon("assault");
+        vm.update(0.016, &frame(false));
+        assert!(drawn(&mut vm).is_empty());
+    }
+
+    #[test]
+    fn the_muzzle_flash_is_lit_for_two_frames_and_then_gone() {
+        let mut vm = WeaponViewModel::default();
+        vm.set_weapon("assault");
+        vm.update(0.016, &frame(true));
+        let quiet = drawn(&mut vm).len();
+        vm.fire();
+        vm.update(0.016, &frame(true));
+        assert!(drawn(&mut vm).len() > quiet, "no flare after firing");
+        // Past FLASH_LIFE it is gone rather than fading, which is what the
+        // browser does too.
+        vm.update(0.1, &frame(true));
+        assert_eq!(drawn(&mut vm).len(), quiet);
+    }
+
+    #[test]
+    fn recoil_kicks_the_weapon_back_and_then_settles() {
+        let mut vm = WeaponViewModel::default();
+        vm.set_weapon("assault");
+        vm.update(0.016, &frame(true));
+        let rest = vm.transform.w_axis.z;
+        vm.fire();
+        vm.update(0.016, &frame(true));
+        let kicked = vm.transform.w_axis.z;
+        // Camera space looks down -Z, so a weapon pushed back moves toward zero.
+        assert!(kicked > rest, "{kicked} was not behind {rest}");
+        for _ in 0..120 {
+            vm.update(0.016, &frame(true));
+        }
+        assert!(
+            (vm.transform.w_axis.z - rest).abs() < 1e-3,
+            "recoil never decayed"
+        );
+    }
+
+    #[test]
+    fn holding_the_trigger_does_not_walk_the_weapon_off_the_screen() {
+        // The cap is the point: an uncapped additive kick puts the gun behind
+        // the player's ear after a second of automatic fire.
+        let mut vm = WeaponViewModel::default();
+        vm.set_weapon("assault");
+        for _ in 0..200 {
+            vm.fire();
+            vm.update(0.016, &frame(true));
+        }
+        assert!(vm.kick <= 1.0 + 1e-6, "kick ran away to {}", vm.kick);
+        assert!(vm.transform.w_axis.z < HOME.z + 0.29);
+    }
+
+    #[test]
+    fn turning_across_the_yaw_seam_does_not_fling_the_weapon() {
+        // This client wraps yaw at 360°, so a small turn can arrive as a delta of
+        // nearly 2π. Taken literally that is a fling; taken the short way round it
+        // is the small movement it actually was.
+        let mut vm = WeaponViewModel::default();
+        vm.set_weapon("assault");
+        let tau = std::f32::consts::TAU;
+        let mut f = frame(true);
+        f.yaw = tau - 0.01;
+        vm.update(0.016, &f);
+        f.yaw = 0.01;
+        vm.update(0.016, &f);
+        assert!(vm.sway_x.abs() < 0.05, "sway flung to {}", vm.sway_x);
+    }
+
+    #[test]
+    fn reloading_dips_the_weapon_and_returns_it() {
+        let mut vm = WeaponViewModel::default();
+        vm.set_weapon("assault");
+        let mut f = frame(true);
+        f.reloading = true;
+        for _ in 0..60 {
+            vm.update(0.016, &f);
+        }
+        assert!(vm.transform.w_axis.y < HOME.y - 0.2, "the gun never dipped");
+        f.reloading = false;
+        for _ in 0..120 {
+            vm.update(0.016, &f);
+        }
+        assert!((vm.transform.w_axis.y - HOME.y).abs() < 1e-2);
+    }
+
+    #[test]
+    fn a_box_is_wound_outward_on_all_six_faces() {
+        let verts = box_verts([1.0, 2.0, 3.0], METAL);
+        assert_eq!(verts.len(), 36);
+        let normals: std::collections::HashSet<[i32; 3]> = verts
+            .iter()
+            .map(|v| [v.normal[0] as i32, v.normal[1] as i32, v.normal[2] as i32])
+            .collect();
+        assert_eq!(normals.len(), 6);
+        // Half-extents, not extents: a box built at full size would make every
+        // weapon twice the length it is described as.
+        assert!(verts.iter().all(|v| v.position[2].abs() <= 1.5 + 1e-6));
+    }
+
+    #[test]
+    fn a_normal_is_rotated_but_never_translated() {
+        // Running a normal through the point transform drags the shading around
+        // with the weapon's position — which shows up as a gun that changes
+        // brightness when you walk, and nowhere near the cause.
+        let m = Mat4::from_translation(Vec3::new(10.0, -5.0, 3.0));
+        let v = Vertex {
+            position: [0.0, 0.0, 0.0],
+            normal: [0.0, 1.0, 0.0],
+            color: METAL,
+        };
+        let out = transform_vertex(&m, &v);
+        assert_eq!(out.normal, [0.0, 1.0, 0.0]);
+        assert_eq!(out.position, [10.0, -5.0, 3.0]);
+    }
+}

@@ -55,7 +55,7 @@ class Friend(BaseModel):
     #:
     #: None means "we have not linked them to a ladder account", which is a normal
     #: state and not a failure — a friend who has never signed in to the game server
-    #: has no callsign to show. The roster renders them by display name and friend
+    #: has no username to show. The roster renders them by display name and friend
     #: code, exactly as before. What `handle` unlocks is the *profile*: with it the
     #: UI can fetch their avatar, level and comment wall.
     handle: str | None = None
@@ -72,7 +72,7 @@ class SelfProfile(BaseModel):
     # False on a machine linked by another device: it can act as this person but
     # cannot mint device certificates or accept new link requests.
     holds_person_key: bool = True
-    #: The game-server callsign this machine is signed in as, when it is. The one
+    #: The game-server username this machine is signed in as, when it is. The one
     #: name a person has everywhere — the ladder, HorribleAssault, and the roster.
     #: None when signed out, which is why the friend code stays first-class.
     handle: str | None = None
@@ -111,7 +111,7 @@ class BindHandleResult(BaseModel):
 
 
 class AddFriendRequest(BaseModel):
-    """Add by callsign (`@rob`), friend code, or a raw person id. `address`
+    """Add by username (`@rob`), friend code, or a raw person id. `address`
     short-circuits discovery when you already know how to reach them — a LAN box,
     say."""
 

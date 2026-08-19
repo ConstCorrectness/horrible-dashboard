@@ -133,7 +133,7 @@ resolves to `watch.create` + `notify.mute` in **one turn**.
 | `notify.status`                 | what is currently silenced, and for how much longer      |
 
 Names resolve through `social/agent_tools._resolve`, which already accepts a
-callsign, friend code or display name and **refuses an ambiguous name rather than
+username, friend code or display name and **refuses an ambiguous name rather than
 guessing** — exactly the behaviour "when Andrew logs in" needs.
 
 :::warning Two conventions here fail silently
@@ -164,6 +164,60 @@ It is called at boot in `apps/web/src/main.tsx`, next to `initSocial()`, which w
 itself only ever called from the Friends tab's mount. A notification you receive
 only once the right pane is open is not a notification.
 
+## The inbox: a toast is a cache, the row is the truth
+
+A toast shows for four seconds and then it is gone, and until there was a table
+behind it, so was the notification: the feed behind the bell was a JavaScript array,
+so a page reload emptied it, and anything that arrived while the app was closed was
+never seen by anyone.
+
+`notify()` now writes a **`notifications` row in `app.db` before it broadcasts**,
+and the frontend hydrates from `GET /api/notifications/feed` at boot. Every surface
+is a *view* of one durable row rather than the only copy of it.
+
+Written **after** the mute check, deliberately: a suppressed notification leaves no
+row, because a mute that still filled the bell would be a mute in name only.
+
+Read and cleared state are server-side (`POST /notifications/read`,
+`POST /notifications/clear`) rather than per-browser, so dismissing something on the
+desktop does not leave another surface still showing it as new.
+
+### `dedupe`, and why every answerable notification needs one
+
+One event can land as a toast, a feed row, an in-game overlay card and an OS
+notification. `dedupe` is the single key tying those together, and it does two jobs:
+
+- a repeat **replaces** the live row (partial unique index on
+  `dedupe WHERE cleared_at IS NULL`) instead of stacking a second identical card —
+  so re-inviting somebody who has not answered refreshes their invite;
+- `service.retract(dedupe)` clears the row **and broadcasts a `retract` event**, so
+  answering on one surface retires it from the rest.
+
+Without it you get the classic four-copies-of-one-invite problem. The key is built
+in exactly one place on each side — for match invites that is
+`hassault/invite-notify.ts` and `fabric._notify_invite`, both spelling
+`hassault-invite:<node>:<room>`. Two spellings would be a bug that looks like
+nothing: everything still works, notifications just never clear.
+
+### Actionable toasts
+
+`Toast` permits **exactly one** action, and that constraint is kept: the click *is*
+the answer, and anything with a second choice belongs in the inbox. A notification
+names its action by string (`data.action`), and the module that produces it
+registers the handler with `registerNotificationAction`.
+
+A registry rather than a `switch` here, because the handler belongs to the producing
+module — joining a match is HorribleAssault's business, and `notifications`
+importing it would invert the dependency and drag a three.js pane into the boot path
+of the notification feed. See
+[hassault's invite delivery](hassault.mdx#delivery-a-toast-is-a-cache-the-inbox-is-the-truth).
+
+:::note The bell is desktop-only today
+The feed's UI lives in `packages/ui/src/desktop/taskbar/ClockPanel.tsx`. The browser
+layout has no surface for it, so on that layout a missed toast is still missed even
+though the row is now durable. The data is there; the view is not.
+:::
+
 ### OS notifications
 
 `notifyDesktop` has always checked `Notification.permission === 'granted'`, and
@@ -188,6 +242,14 @@ no boolean on a settings page could hold, and it is enforced at the producer —
 which is server-side, where a setting read in the browser could not reach.
 
 ## Tests
+
+`backend/tests/test_hassault_invites.py` pins the delivery ladder end to end from a
+real producer: that an invite reaches the `notifications` channel and not only the
+game pane's own, that it survives in `app.db`, that a repeat refreshes rather than
+stacks, and that a retraction clears it. Note its fixture patches
+`broadcast_event` in **two** places — `fabric` imports it inside the function, while
+`notifications.service` imports it at module scope, which binds the name at import
+time and makes it immune to patching the source module.
 
 `backend/tests/test_notifications.py` pins the three things that fail silently:
 the producer-side mute check, the `except_person` inversion, and that every tool

@@ -127,6 +127,21 @@ def test_the_envelope_carries_a_bearing_and_never_a_position():
     assert set(out[0]) == {"kind", "volume", "bearing", "up"}
 
 
+def test_a_shot_says_which_weapon_and_a_footstep_does_not():
+    """The listener hears *which* gun, which is what makes a sniper round two
+    rooms away a decision rather than a noise. A footstep has no weapon, and
+    sending an empty string rather than omitting the key would make every client
+    special-case a value the wire had no reason to carry."""
+    world = flat_world(64, floor=0, ceil=16)
+    shot = Noise(
+        kind="shot", source="them", x=24.0, y=20.0, z=0.0, loudness=90.0, weapon="sniper"
+    )
+    step = Noise(kind="step", source="them", x=24.0, y=20.0, z=0.0, loudness=60.0)
+    out = noise.envelope(world, (20.0, 20.0, 4.5), "me", [shot, step])
+    assert out[0]["weapon"] == "sniper"
+    assert "weapon" not in out[1]
+
+
 def test_your_own_noises_are_not_sent_back_to_you():
     """They need no round trip — the client makes them locally — and a footstep
     that arrives 50 ms late does not sound like a footstep."""

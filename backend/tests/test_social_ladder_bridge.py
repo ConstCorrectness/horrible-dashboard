@@ -4,13 +4,13 @@ Two friend systems used to describe the same human with no way to tell — the
 fabric roster keyed by `person_id`, the ladder keyed by `account_id`. This is the
 join, and the thing it must not do is as important as the thing it must:
 
-- the **directory lookup** may learn a person's callsign, and
+- the **directory lookup** may learn a person's username, and
 - it must **refuse an entry whose person id is not the fingerprint of the key it
   arrived with** — otherwise a hostile game server could point a person you already
   trust at a key that isn't theirs, and the roster would render the lie as fact.
 
 The second is why `resolve_people` re-checks every entry rather than trusting the
-server's arithmetic, exactly as `handles.resolve` does for one callsign.
+server's arithmetic, exactly as `handles.resolve` does for one username.
 """
 
 from __future__ import annotations
@@ -78,7 +78,7 @@ def test_accounts_by_person_omits_unbound_people(gdb: None) -> None:
 
 def test_accounts_by_person_omits_accounts_with_no_handle(gdb: None) -> None:
     """`_directory_row` returns None without a handle, and a None must not become
-    an entry — the reconciler would cache a callsign of `None` as if it were one."""
+    an entry — the reconciler would cache a username of `None` as if it were one."""
     person = _account("a1", handle=None)
     assert gstore.accounts_by_person([person]) == {}
 
@@ -179,7 +179,7 @@ def test_resolve_people_rejects_a_mismatched_fingerprint(monkeypatch) -> None:
 
 
 def test_resolve_people_survives_a_malformed_answer(monkeypatch) -> None:
-    """Reconciliation is advisory — a broken directory degrades to "no callsigns",
+    """Reconciliation is advisory — a broken directory degrades to "no usernames",
     never to a failed roster."""
     for payload in ({}, {"people": None}, {"people": {"p": "not-a-dict"}}):
         _patch_directory(monkeypatch, payload)
@@ -209,7 +209,7 @@ def test_ladder_identity_round_trips(node_db: None) -> None:
 
 
 def test_ladder_identity_does_not_create_rows(node_db: None) -> None:
-    """Learning a stranger's callsign is not a reason to put them in your roster."""
+    """Learning a stranger's username is not a reason to put them in your roster."""
     sstore.set_ladder_identity("stranger00000000", handle="nope", account_id="a9")
     assert sstore.get_friend_row("stranger00000000") is None
 

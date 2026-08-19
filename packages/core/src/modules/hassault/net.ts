@@ -154,6 +154,10 @@ export interface NoiseEvent {
   bearing: number;
   /** -1 below, 0 level, 1 above. */
   up: number;
+  /** Which weapon made it — shots only, absent on every other kind. Enough to
+   * tell a sniper round from a shotgun blast two rooms away, which is a real
+   * decision; not enough to locate either. */
+  weapon?: string;
 }
 
 /** The half of our own state nobody else is sent. */

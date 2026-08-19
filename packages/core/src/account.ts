@@ -19,7 +19,7 @@
  *
  * **The token never reaches this code.** The node holds the JWT server-side and
  * hands back only the account; everything here deals in display names and
- * callsigns. Password bodies are additionally kept out of the I/O ring buffer —
+ * usernames. Password bodies are additionally kept out of the I/O ring buffer —
  * see `REDACT_BODY_PREFIXES` in api.ts.
  */
 import { apiGet, apiPost } from './api';
@@ -58,8 +58,25 @@ export interface AuthProviders {
 export interface Account {
   id: string;
   display_name: string;
-  /** The globally unique callsign (the game server's `handle`). */
+  /**
+   * The globally unique username (the game server's `handle`).
+   *
+   * **Null means it has not been chosen yet**, which is a real state a signed-in
+   * account can be in: OAuth sign-in deliberately no longer picks one on the
+   * person's behalf. Every screen that gates on "is this account finished?" reads
+   * this, not `id`.
+   */
   handle?: string | null;
+  /**
+   * What to pre-fill the username field with — the provider login or email local
+   * part, folded into the handle charset.
+   *
+   * A *suggestion*, never a claim: it is not reserved, and two people can be shown
+   * the same one (two `sam@`s are both suggested `sam`). The first to claim it
+   * gets it and the second is told so, which is the honest version of what
+   * `ensure_handle` used to do by silently appending a `2`.
+   */
+  suggested_handle?: string | null;
 }
 
 export async function fetchAuthProviders(): Promise<AuthProviders> {
@@ -269,15 +286,22 @@ function unwrap(result: LocalAuthResult): Account {
   return result.account;
 }
 
-/** Create an account. `callsign` is optional — omitted, one is derived from the
- * email and can be renamed later. */
+/**
+ * Create an account. `username` is **required** — the server rejects a signup
+ * without one.
+ *
+ * It used to be optional, with a handle derived from the email address when it
+ * was left out. That is why nobody was ever asked what they wanted to be called:
+ * the account arrived already holding one, and every downstream chooser saw a
+ * finished account.
+ */
 export async function signUpWithPassword(
   email: string,
   password: string,
-  callsign = '',
+  username: string,
 ): Promise<Account> {
   return unwrap(
-    await apiPost<LocalAuthResult>('/games/auth/local/signup', { email, password, callsign }),
+    await apiPost<LocalAuthResult>('/games/auth/local/signup', { email, password, username }),
   );
 }
 
@@ -285,15 +309,15 @@ export async function signInWithPassword(email: string, password: string): Promi
   return unwrap(await apiPost<LocalAuthResult>('/games/auth/local/login', { email, password }));
 }
 
-/** Claim or rename the callsign. Throws with the server's reason ('that callsign is
+/** Claim or rename the username. Throws with the server's reason ('that username is
  * taken', or the charset rule) so a form can show it verbatim. */
-export async function setCallsign(callsign: string): Promise<Account> {
+export async function setUsername(username: string): Promise<Account> {
   const result = await apiPost<{ ok?: boolean; account?: Account; error?: string }>(
-    '/games/auth/callsign',
-    { callsign },
+    '/games/auth/username',
+    { username },
   );
   if (result.error) throw new Error(result.error);
-  if (!result.account) throw new Error('could not set callsign');
+  if (!result.account) throw new Error('could not set username');
   return result.account;
 }
 

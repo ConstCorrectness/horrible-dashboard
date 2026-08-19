@@ -7,7 +7,7 @@ friend's node. The remote branch returns before `match_server.join` is ever
 reached, so a check placed next to that call would gate nothing for cross-node
 play; that asymmetry is the whole reason this file exists.
 
-The other rule pinned here: the callsign comes from the account, and `data["name"]`
+The other rule pinned here: the username comes from the account, and `data["name"]`
 from the client is ignored entirely. A name anyone can type is not an identity.
 """
 
@@ -56,12 +56,12 @@ def clean_state():
 
 @pytest.fixture
 def signed_out(monkeypatch):
-    monkeypatch.setattr(channel, "_signed_in_callsign", lambda: None)
+    monkeypatch.setattr(channel, "_signed_in_username", lambda: None)
 
 
 @pytest.fixture
 def signed_in(monkeypatch):
-    monkeypatch.setattr(channel, "_signed_in_callsign", lambda: "ada-prime")
+    monkeypatch.setattr(channel, "_signed_in_username", lambda: "ada-prime")
 
 
 def make_room(room_id: str = "r1") -> MatchRoom:
@@ -117,18 +117,18 @@ def test_a_refused_join_does_not_evict_an_existing_player(signed_in, monkeypatch
     join(conn, map="testmap", room="r1")
     assert len(match_server.rooms["r1"].players) == 1
 
-    monkeypatch.setattr(channel, "_signed_in_callsign", lambda: None)
+    monkeypatch.setattr(channel, "_signed_in_username", lambda: None)
     join(conn, map="testmap", room="r1")
 
     assert len(match_server.rooms["r1"].players) == 1
 
 
 # ---------------------------------------------------------------------------
-# Signed in: the account's callsign is the identity
+# Signed in: the account's username is the identity
 # ---------------------------------------------------------------------------
 
 
-def test_join_uses_the_account_callsign_not_the_client_supplied_name(signed_in):
+def test_join_uses_the_account_username_not_the_client_supplied_name(signed_in):
     make_room()
     conn = FakeConn()
     join(conn, map="testmap", name="i-am-somebody-else", room="r1")
@@ -139,7 +139,7 @@ def test_join_uses_the_account_callsign_not_the_client_supplied_name(signed_in):
     assert player.name == "ada-prime"
 
 
-def test_remote_join_forwards_the_account_callsign(signed_in, monkeypatch):
+def test_remote_join_forwards_the_account_username(signed_in, monkeypatch):
     forwarded: list[str] = []
     monkeypatch.setattr(fabric, "bind_remote", lambda *a, **k: "binding")
 
@@ -154,8 +154,8 @@ def test_remote_join_forwards_the_account_callsign(signed_in, monkeypatch):
     assert forwarded == ["ada-prime"]
 
 
-def test_signed_in_without_a_callsign_is_still_refused(monkeypatch):
-    """Enlistment is the second half of signing up: an account with no callsign has
+def test_signed_in_without_a_username_is_still_refused(monkeypatch):
+    """Enlistment is the second half of signing up: an account with no username has
     no name to play under, so it is not yet allowed in."""
     from backend.modules.games import server_auth
 

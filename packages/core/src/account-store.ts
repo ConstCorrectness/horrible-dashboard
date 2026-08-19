@@ -23,7 +23,7 @@ interface StatusResponse {
   signed_in?: boolean;
   account_id?: string | null;
   display_name?: string | null;
-  callsign?: string | null;
+  username?: string | null;
   server_url?: string;
 }
 
@@ -58,7 +58,7 @@ function emit(next: AccountState): void {
 
 /**
  * Re-read the account from the node and publish it to every subscriber. Safe to
- * call from anywhere after a sign-in, a sign-out, or a callsign change.
+ * call from anywhere after a sign-in, a sign-out, or a username change.
  */
 export function refreshAccount(): Promise<AccountState> {
   if (inFlight) return inFlight;
@@ -71,7 +71,7 @@ export function refreshAccount(): Promise<AccountState> {
           ? {
               id: raw.account_id ?? '',
               display_name: raw.display_name ?? 'signed in',
-              handle: raw.callsign ?? null,
+              handle: raw.username ?? null,
             }
           : null,
         server: raw.server_url ?? '',

@@ -6,6 +6,7 @@
  * at import time, which is exactly what breaks a node test run.
  */
 import type { MatchInvite } from './api';
+import { clearInviteNotification } from './invite-notify';
 import { subscribeChannel, sendChannel } from '../../ws';
 import {
   PingTracker,
@@ -177,7 +178,9 @@ export class MatchSession {
   }
 
   dismissInvite(room: string): void {
+    const invite = this.state.invites.find((i) => i.room === room);
     this.state.invites = this.state.invites.filter((i) => i.room !== room);
+    if (invite) clearInviteNotification(invite.host, invite.room);
     this.emit();
   }
 
@@ -245,7 +248,12 @@ export class MatchSession {
         this.state.peers = this.peersFrom(data.players);
         this.state.scores = Array.isArray(data.scores) ? (data.scores as number[]) : [0, 0];
         // The invitation has been taken up; leaving it on screen would invite
-        // the same room twice.
+        // the same room twice. It is cleared from the notification surfaces too —
+        // the toast, the bell and any OS notification are showing the same
+        // invite, and joining is an answer to all of them.
+        for (const taken of this.state.invites.filter((i) => i.room === this.state.room)) {
+          clearInviteNotification(taken.host, taken.room);
+        }
         this.state.invites = this.state.invites.filter((i) => i.room !== this.state.room);
         this.emit();
         break;

@@ -7,14 +7,18 @@ import {
   dismissMatchSummary,
   getInstallStatus,
   getLatestMatchSummary,
+  browseServers,
   getMapCubes,
   getMapInfo,
   getProcessStatus,
   getSession,
+  launchNativeFps,
   listInvitees,
   listMaps,
   listWeapons,
+  type BrowseMatch,
   type InstallStatus,
+  type LaunchNativeOptions,
   type Invitee,
   type MapInfo,
   type MapSummary,
@@ -54,6 +58,7 @@ import {
   CONTROLS_KEY,
   CROUCH_TOGGLE_KEY,
   FOV_KEY,
+  NATIVE_CLIENT_KEY,
   SENSITIVITY_KEY,
   VOLUME_KEY,
 } from './menu-panels';
@@ -71,6 +76,7 @@ import {
   type PlayerState,
 } from './player';
 import { installReveal, type Reveal } from './reveal';
+import { onJoinRequested, takePendingJoin } from './invite-notify';
 import { MatchSession, type SessionState } from './session';
 import { TrainingRange } from './training';
 import { WeaponViewModel } from './viewmodel';
@@ -109,7 +115,8 @@ const SIGNED_OUT_ACCOUNT: SessionInfo = {
   signed_in: false,
   account_id: null,
   display_name: null,
-  callsign: null,
+  username: null,
+  suggested_username: '',
   enlisted: false,
 };
 
@@ -216,10 +223,10 @@ export function HorribleAssaultPanel() {
   const [deployed, setDeployed] = useState(false);
 
   const phase = bootPhase(progress, account ?? SIGNED_OUT, deployed);
-  // Identity is the account's callsign. There is deliberately no name input any
+  // Identity is the account's username. There is deliberately no name input any
   // more: the backend ignores a client-supplied name outright (see
-  // `channel._signed_in_callsign`), so offering one would only be a lie.
-  const playerName = account?.callsign ?? '';
+  // `channel._signed_in_username`), so offering one would only be a lie.
+  const playerName = account?.username ?? '';
   const [hud, setHud] = useState<Hud>({
     fps: 0,
     triangles: 0,
@@ -273,6 +280,8 @@ export function HorribleAssaultPanel() {
   const fov = useSetting<number>(FOV_KEY) ?? 75;
   const volume = useSetting<number>(VOLUME_KEY) ?? 0.7;
   const crouchToggle = useSetting<boolean>(CROUCH_TOGGLE_KEY) ?? false;
+  /** Whether Play, Train and Host open the native window rather than this pane. */
+  const nativeClient = useSetting<boolean>(NATIVE_CLIENT_KEY) ?? false;
   const storedControls = useSetting<string>(CONTROLS_KEY);
   const controls = useMemo(() => parseControls(storedControls), [storedControls]);
   const codes = useMemo(() => codeMap(controls), [controls]);
@@ -282,6 +291,8 @@ export function HorribleAssaultPanel() {
   // ---- Native process lifecycle bridge ---------------------------------------
   const [nativeRunning, setNativeRunning] = useState(false);
   const [nativePid, setNativePid] = useState<number | undefined>();
+  /** What the last native launch said, shown in the menu next to the buttons. */
+  const [nativeStatus, setNativeStatus] = useState<string | null>(null);
   const [postMatchSummary, setPostMatchSummary] = useState<PostMatchSummary | null>(null);
 
   useEffect(() => {
@@ -803,7 +814,9 @@ export function HorribleAssaultPanel() {
               // fall-damage rule: you hear that a drop was expensive.
               audio.own('land', Math.min(1, 0.35 + player.fallSpeed / (JUMP_SPEED * 2)));
             }
-            if (fired) audio.own('shot', 0.55);
+            // Your own gun, in its own voice — and locally, because a shot that
+            // waited for the server to describe it would arrive after the recoil.
+            if (fired) audio.own('shot', 0.55, shotsRef.current?.weapon);
           }
         }
 
@@ -842,7 +855,10 @@ export function HorribleAssaultPanel() {
           if (session.pendingNoise.length > 0) {
             const audio = audioRef.current;
             const listenerYaw = playerRef.current.yaw;
-            for (const event of session.pendingNoise) audio?.heard(event, listenerYaw);
+            const loadout = shotsRef.current?.weapons ?? [];
+            for (const event of session.pendingNoise) {
+              audio?.heard(event, listenerYaw, loadout);
+            }
             // Also shown, not only played: a bearing is exactly what the direction
             // ring draws, and a player on headphones and a player on laptop
             // speakers should not be playing different games.
@@ -1298,7 +1314,42 @@ export function HorribleAssaultPanel() {
    * exists (`training.ts`). The dummies stand on the map's own spawn points and
    * do not shoot back.
    */
+  /**
+   * Hand the press to the native client instead of playing it in here.
+   *
+   * The mode travels with it, which is the whole of B4: without one, every launch
+   * was "a match on this map, or open one", so Train dropped a learner into
+   * whatever firefight was already running and the bot count the menu had just
+   * collected went nowhere.
+   *
+   * The pane does not go dark waiting for the 1.5s process poll to notice — the
+   * route has already spawned the process and returned its pid by the time this
+   * resolves, and a menu that sits there for a second and a half after a
+   * successful launch reads as a button that did nothing.
+   */
+  const launchNative = useCallback(
+    async (opts: Omit<LaunchNativeOptions, 'map_name'> & { map_name?: string }) => {
+      sessionRef.current?.leave();
+      setNativeStatus('Starting the native client…');
+      try {
+        const res = await launchNativeFps({ map_name: mapName, max_fps: 240, ...opts });
+        setNativeStatus(res.message ?? (res.launched ? 'Launched' : 'It did not start'));
+        if (res.launched) {
+          setNativeRunning(true);
+          setNativePid(res.pid);
+        }
+      } catch (err) {
+        setNativeStatus(err instanceof Error ? err.message : 'Could not reach this node');
+      }
+    },
+    [mapName],
+  );
+
   const train = useCallback(() => {
+    if (nativeClient) {
+      void launchNative({ mode: 'train' });
+      return;
+    }
     sessionRef.current?.leave();
     shotsRef.current?.reset();
     const range = rangeRef.current;
@@ -1312,15 +1363,22 @@ export function HorribleAssaultPanel() {
       if (world) range.place(world, playerRef.current.x, playerRef.current.y);
     }
     deploy();
-  }, [deploy, weapons]);
+  }, [deploy, weapons, nativeClient, launchNative]);
 
   /** Host a match here on the loaded map and enter it, with bots if asked. */
   const host = useCallback(
     (bots: number) => {
+      if (nativeClient) {
+        // `bot_skill` rides along rather than being read from the setting on the
+        // backend: the menu's skill select is the live value, and the setting is
+        // only where it happens to be stored.
+        void launchNative({ mode: 'host', bots, bot_skill: botSkill });
+        return;
+      }
       const session = sessionRef.current;
       if (!session || !mapName) return;
       shotsRef.current?.reset();
-      // The name is sent for the wire's sake; the backend takes the callsign from
+      // The name is sent for the wire's sake; the backend takes the username from
       // the account and ignores this entirely.
       session.join(mapName, playerName);
       // Queued behind the join rather than sent with it: `add_bot` needs a room to
@@ -1329,7 +1387,37 @@ export function HorribleAssaultPanel() {
       if (bots > 0) pendingBotsRef.current = { count: bots, skill: botSkill };
       deploy();
     },
-    [mapName, playerName, botSkill, deploy],
+    [mapName, playerName, botSkill, deploy, nativeClient, launchNative],
+  );
+
+  /**
+   * Invite somebody, starting a match first if there isn't one.
+   *
+   * The Invite button used to be disabled unless you were already hosting, with a
+   * tooltip explaining that an invite is to a room you are running. True, and
+   * beside the point: "invite Rob" is a complete intent, and making the person
+   * infer the missing precondition, go and satisfy it, then come back is why the
+   * Friends panel read as broken to anyone who opened it first.
+   *
+   * The bots count is deliberately zero here. You are inviting a human; filling
+   * the room with three bots on their behalf is a decision nobody made.
+   */
+  const inviteFriend = useCallback(
+    (friendCode: string) => {
+      const session = sessionRef.current;
+      if (!session) return;
+      // "Hosting" is: in a match, and it is ours rather than one we joined on
+      // somebody else's node — inviting people to *their* room is not ours to do.
+      // Read off `net` directly because the `online` binding is declared further
+      // down, with the render.
+      const hosting = net.status === 'joined' && !net.host;
+      if (!hosting) host(0);
+      // Sent after the join is requested rather than awaited on the welcome:
+      // `invite` reads `this.state.room`, which the welcome fills in, so the
+      // session queues this the same way `add_bot` is queued.
+      session.invite(friendCode);
+    },
+    [net.status, net.host, host],
   );
 
   /**
@@ -1352,6 +1440,78 @@ export function HorribleAssaultPanel() {
     },
     [playerName, deploy],
   );
+
+  /**
+   * Start playing with the least ceremony possible.
+   *
+   * Joins the fullest joinable match a friend or the LAN is running — fullest
+   * because a match with people in it is the one worth joining, and an empty room
+   * somebody left open is not — and hosts one only when there is nothing to join.
+   * A map this node cannot load is skipped rather than offered and then failed on.
+   *
+   * Composed entirely from things that already exist: it is `browseServers`,
+   * `joinRoom` and `host` in a sensible order, with no new endpoint behind it.
+   */
+  const quickPlay = useCallback(
+    async (bots: number) => {
+      let best: BrowseMatch | null = null;
+      try {
+        const data = await browseServers();
+        const known = new Set(maps.map((m) => m.name));
+        for (const m of data.matches) {
+          if (!known.has(m.map) || m.players >= m.maxPlayers) continue;
+          if (m.host === '' && m.id === net.room) continue;
+          if (best === null || m.players > best.players) best = m;
+        }
+      } catch {
+        /* No browse, no candidates — hosting is still a perfectly good answer. */
+      }
+      if (best) {
+        if (nativeClient) {
+          void launchNative({
+            mode: 'join',
+            room_id: best.id,
+            map_name: best.map,
+            host: best.host,
+          });
+        } else {
+          joinRoom(best.id, best.map, best.host);
+        }
+      } else {
+        // `host` branches on `nativeClient` itself, so quick play does not need
+        // to: one place decides what hosting means.
+        host(bots);
+      }
+    },
+    [maps, net.room, joinRoom, host, nativeClient, launchNative],
+  );
+
+  /**
+   * Act on an invite accepted from *outside* the game.
+   *
+   * The Join button on a shell toast can be pressed with this pane closed, which
+   * is the whole point of putting invites on the shell's notification channel —
+   * the pane not being mounted was exactly what made them invisible. The action
+   * opens the pane and parks the intent; this consumes it once there is a session
+   * and a world to join into.
+   *
+   * Gated on `info` rather than run on mount: joining before the map is loaded
+   * would render another world's snapshots against no geometry. The subscription
+   * covers the other order — pane already open, toast pressed — where nothing new
+   * mounts and only the listener fires.
+   */
+  useEffect(() => {
+    if (info == null) return;
+    const act = (join: { room: string; map: string; host: string }) => {
+      joinRoom(join.room, join.map, join.host);
+    };
+    const parked = takePendingJoin();
+    if (parked) act(parked);
+    return onJoinRequested((join) => {
+      takePendingJoin();
+      act(join);
+    });
+  }, [info, joinRoom]);
 
   /**
    * Leave the world and go back to the main menu.
@@ -1471,11 +1631,11 @@ export function HorribleAssaultPanel() {
         <button onClick={exitToMenu} disabled={phase !== 'playing'} title="Back to the main menu">
           ☰ Menu
         </button>
-        {/* The callsign, shown not typed: it comes from the account, and the
+        {/* The username, shown not typed: it comes from the account, and the
             backend refuses any name the client supplies. Renaming happens on the
             enlist screen, which owns the uniqueness check. */}
         <span
-          title="Your callsign — change it from the sign-in screen"
+          title="Your username — change it from the sign-in screen"
           style={{
             fontFamily: 'var(--font-mono, monospace)',
             color: 'var(--accent, #6ea8fe)',
@@ -1536,6 +1696,14 @@ export function HorribleAssaultPanel() {
           />
         )}
 
+        {/* Invites, drawn **over the canvas**.
+            Not a duplicate of the shell toast: while pointer lock is held the
+            shell's chrome is not on screen at all, so the toast that would
+            normally carry this is invisible — the same reason Steam draws its
+            overlay notification inside the game rather than on the desktop.
+            The pointer is captured too, so the buttons here are only reachable
+            once Escape gives it back; that is what the hint says, rather than
+            offering a button the mouse cannot reach. */}
         {net.invites.length > 0 && (
           <div
             style={{
@@ -1565,11 +1733,22 @@ export function HorribleAssaultPanel() {
               >
                 <span>
                   <strong>{invite.hostName}</strong> invited you to <code>{invite.map}</code>
+                  {invite.hostDevice && (
+                    <span style={{ color: 'var(--text-dim)' }}> · on {invite.hostDevice}</span>
+                  )}
                 </span>
-                <button onClick={() => joinRoom(invite.room, invite.map, invite.host)}>Join</button>
-                <button onClick={() => sessionRef.current?.dismissInvite(invite.room)}>
-                  Dismiss
-                </button>
+                {phase === 'playing' ? (
+                  <span style={{ color: 'var(--text-dim)' }}>Esc to answer</span>
+                ) : (
+                  <>
+                    <button onClick={() => joinRoom(invite.room, invite.map, invite.host)}>
+                      Join
+                    </button>
+                    <button onClick={() => sessionRef.current?.dismissInvite(invite.room)}>
+                      Dismiss
+                    </button>
+                  </>
+                )}
               </div>
             ))}
           </div>
@@ -1748,7 +1927,7 @@ export function HorribleAssaultPanel() {
               resumeGame();
             }}
             onLeave={() => sessionRef.current?.leave()}
-            onInvite={(friendCode) => sessionRef.current?.invite(friendCode)}
+            onInvite={inviteFriend}
             onDismissInvite={(room) => sessionRef.current?.dismissInvite(room)}
             onResume={resumeGame}
             onExitToMenu={exitToMenu}
@@ -1809,12 +1988,15 @@ export function HorribleAssaultPanel() {
                 onBotSkill={setBotSkill}
                 onTrain={train}
                 onHost={host}
+                onQuickPlay={quickPlay}
                 onJoin={joinRoom}
-                onInvite={(friendCode) => sessionRef.current?.invite(friendCode)}
+                onInvite={inviteFriend}
                 onDismissInvite={(room) => sessionRef.current?.dismissInvite(room)}
                 ready={info != null}
                 error={error}
                 loadoutError={loadoutError}
+                nativeClient={nativeClient}
+                nativeStatus={nativeStatus}
               />
             }
           />

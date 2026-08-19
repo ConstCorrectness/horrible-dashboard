@@ -157,7 +157,7 @@ There used to be two friend systems that did not know about each other:
 
 |       | Fabric roster                            | Ladder (game server)          |
 | ----- | ---------------------------------------- | ----------------------------- |
-| Key   | `person_id` (`HD-XXXX-…`)                | `account_id` + `@callsign`    |
+| Key   | `person_id` (`HD-XXXX-…`)                | `account_id` + `@username`    |
 | Where | local `app.db`, per node                 | the hosted game server        |
 | Has   | presence, device certs, **fabric trust** | avatar, bio, xp, level        |
 | Lacks | **any profile data at all**              | any trust or transport        |
@@ -379,7 +379,7 @@ identity and networking lives on the backend.
   unconfigured, supply their `ws://…/peer-ws` address once; known devices are
   redialed from their stored address automatically after that.
 - **Profiles need the game server.** Avatars, levels and comment walls come from
-  the ladder, so a friend with no callsign renders with an initial and no level,
+  the ladder, so a friend with no username renders with an initial and no level,
   and every face falls back to an initial when that server is unreachable. The
   roster itself is local and always renders — that separation is deliberate.
 - The person key is stored unencrypted at `$HORRIBLE_DATA_DIR/social-person.key`

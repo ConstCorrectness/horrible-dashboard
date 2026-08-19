@@ -34,7 +34,7 @@ export interface Friend {
    * This person's game-server identity, cached on the node from the directory.
    *
    * `null` is a normal state, not a failure: a friend who has never signed in to
-   * the game server has no callsign, and the roster shows them by name and friend
+   * the game server has no username, and the roster shows them by name and friend
    * code exactly as it always did. What a non-null `handle` unlocks is their
    * *profile* — avatar, level, comment wall — which lives on the game server.
    */
@@ -63,7 +63,7 @@ export interface BindHandleResult {
 }
 
 export interface SelfProfile {
-  /** The game-server callsign this machine is signed in as; null when signed out. */
+  /** The game-server username this machine is signed in as; null when signed out. */
   handle?: string | null;
   person_id: string;
   friend_code: string;
@@ -128,13 +128,13 @@ export function linkDevice(invite: string, label?: string): Promise<LinkDeviceRe
 
 /**
  * Bind this machine's person identity to the signed-in game-server account, so
- * `@callsign` resolves to it. Idempotent — safe to fire on every sign-in.
+ * `@username` resolves to it. Idempotent — safe to fire on every sign-in.
  */
 export function bindHandle(): Promise<BindHandleResult> {
   return apiPost<BindHandleResult>('/social/handle/bind', {});
 }
 
-/** Prefix-search callsigns. Short queries come back empty, by server policy. */
+/** Prefix-search usernames. Short queries come back empty, by server policy. */
 export function searchDirectory(q: string): Promise<DirectorySearchResult> {
   return apiGet<DirectorySearchResult>(`/social/directory/search?q=${encodeURIComponent(q)}`);
 }

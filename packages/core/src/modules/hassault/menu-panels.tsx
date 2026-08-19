@@ -16,7 +16,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { setSetting, useSetting } from '../../settings';
-import { browseServers, type BrowseMatch, type BrowsePlayer, type MapSummary } from './api';
+import { addFriend, searchDirectory, type DirectoryEntry } from '../social/api';
+import { browseServers, type BrowseMatch, type MapSummary } from './api';
 import {
   ACTIONS,
   SLOTS,
@@ -50,6 +51,17 @@ export const CONTROLS_KEY = 'hassault.controls';
 export const VOLUME_KEY = 'hassault.volume';
 export const FOV_KEY = 'hassault.fov';
 export const CROUCH_TOGGLE_KEY = 'hassault.crouchToggle';
+
+/**
+ * Whether Play, Train and Host open the native window instead of playing here.
+ *
+ * A setting rather than a per-press choice: which client you play in is a
+ * standing preference, and putting it on every button would put a decision in
+ * front of somebody who wanted to press Play. Off by default — the native client
+ * has no HUD, no weapon model and no sound, so the pane is still the complete
+ * game and the honest default.
+ */
+export const NATIVE_CLIENT_KEY = 'hassault.nativeClient';
 
 // ---- settings ---------------------------------------------------------------
 
@@ -121,12 +133,13 @@ export function SettingsPanel() {
   const fov = useSetting<number>(FOV_KEY) ?? 75;
   const volume = useSetting<number>(VOLUME_KEY) ?? 0.7;
   const crouchToggle = useSetting<boolean>(CROUCH_TOGGLE_KEY) ?? false;
+  const nativeClient = useSetting<boolean>(NATIVE_CLIENT_KEY) ?? false;
 
   return (
     <div style={styles.rows}>
       <Slider
         label="Mouse sensitivity"
-        hint="Multiplies the turn per pixel of mouse movement. This game only."
+        hint="Turn per pixel of mouse movement, this game only."
         value={sensitivity}
         min={SENS_MIN}
         max={SENS_MAX}
@@ -137,7 +150,7 @@ export function SettingsPanel() {
       />
       <Slider
         label="Field of view"
-        hint="Wider sees more and makes movement feel faster. Applies immediately."
+        hint="Applies immediately, mid-match included."
         value={fov}
         min={FOV_MIN}
         max={FOV_MAX}
@@ -148,7 +161,7 @@ export function SettingsPanel() {
       />
       <Slider
         label="Volume"
-        hint="Footsteps, shots and landings — all synthesized, so there is nothing to download."
+        hint="Footsteps, shots and landings."
         value={volume}
         min={0}
         max={1}
@@ -160,10 +173,7 @@ export function SettingsPanel() {
       <div style={styles.row}>
         <div style={styles.rowMain}>
           <span>Crouch</span>
-          <span style={styles.dim}>
-            Hold is what the movement rewards — a crouch you can release the instant you need speed.
-            Toggle is easier on the hand.
-          </span>
+          <span style={styles.dim}>Hold releases the instant you need speed back.</span>
         </div>
         <div style={{ display: 'flex', gap: '0.25rem' }}>
           {[
@@ -176,6 +186,34 @@ export function SettingsPanel() {
               style={{
                 ...styles.choice,
                 ...(crouchToggle === option.on ? styles.choiceActive : null),
+              }}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={styles.row}>
+        <div style={styles.rowMain}>
+          <span>Client</span>
+          <span style={styles.dim}>
+            The native client renders on the GPU with raw mouse input and no frame cap, in its own
+            window. It has no HUD, no weapon model and no sound yet, so this pane is still the
+            complete game — and it has to be built first (`cargo build --release`).
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: '0.25rem' }}>
+          {[
+            { on: false, label: 'This pane' },
+            { on: true, label: 'Native' },
+          ].map((option) => (
+            <button
+              key={option.label}
+              onClick={() => void setSetting(NATIVE_CLIENT_KEY, option.on)}
+              style={{
+                ...styles.choice,
+                ...(nativeClient === option.on ? styles.choiceActive : null),
               }}
             >
               {option.label}
@@ -208,7 +246,6 @@ export interface ServerBrowserProps {
 export function ServerBrowserPanel(props: ServerBrowserProps) {
   const [filter, setFilter] = useState('');
   const [matches, setMatches] = useState<BrowseMatch[]>([]);
-  const [players, setPlayers] = useState<BrowsePlayer[]>([]);
   const [partial, setPartial] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -218,7 +255,6 @@ export function ServerBrowserPanel(props: ServerBrowserProps) {
     try {
       const data = await browseServers();
       setMatches(data.matches);
-      setPlayers(data.players);
       setPartial(data.peers_answered < data.peers_asked);
       setError('');
     } catch (e) {
@@ -245,8 +281,6 @@ export function ServerBrowserPanel(props: ServerBrowserProps) {
       m.hostName.toLowerCase().includes(q) ||
       m.id.toLowerCase().includes(q),
   );
-  const visiblePlayers = players.filter((p) => q === '' || p.name.toLowerCase().includes(q));
-
   return (
     <div>
       <div style={styles.toolbar}>
@@ -266,11 +300,7 @@ export function ServerBrowserPanel(props: ServerBrowserProps) {
       <div style={styles.row}>
         <div style={styles.rowMain}>
           <span>Local network</span>
-          <span style={styles.dim}>
-            {lan
-              ? 'This machine answers LAN discovery — matches on your network appear below without a friend request.'
-              : 'Off. Turn it on to find people on the same network without adding them as friends first.'}
-          </span>
+          <span style={styles.dim}>{lan ? 'On' : 'Off'}</span>
         </div>
         <button onClick={() => void setSetting(LAN_KEY, !lan)}>
           {lan ? 'Turn off' : 'Turn on'}
@@ -327,49 +357,27 @@ export function ServerBrowserPanel(props: ServerBrowserProps) {
         );
       })}
 
-      <h4 style={styles.heading}>Players ({visiblePlayers.length + props.peers.length})</h4>
+      {/* The roster used to be rendered a second time here, as a "Players"
+          list with its own Invite buttons — the same people, the same actions,
+          two implementations that had already drifted (this copy disabled Invite
+          for anyone already in a match; the Friends copy did not). Servers
+          answers "what is running"; Friends answers "who is about". They are
+          different questions, which is what this panel's own doc comment says,
+          and one of them belongs in one place. */}
+      <h4 style={styles.heading}>In your match ({props.peers.length})</h4>
+      {props.peers.length === 0 && <div style={styles.dim}>Nobody yet.</div>}
       {props.peers.map((p) => (
         <div key={p.id} style={styles.row}>
           <div style={styles.rowMain}>
             <span>
               {p.name}
               {p.id === props.playerId ? ' (you)' : ''}
-              <span style={styles.badge}>in your match</span>
             </span>
             <span style={styles.dim}>
               {p.bot ? 'bot' : `${Math.round(p.rtt)} ms`} · {p.kills}/{p.deaths}
               {p.alive ? '' : ' · down'}
             </span>
           </div>
-        </div>
-      ))}
-      {visiblePlayers.length === 0 && props.peers.length === 0 && (
-        <div style={styles.dim}>
-          No friends online. The roster lives in the Social panel — accepting a friend there is what
-          makes their matches visible here.
-        </div>
-      )}
-      {visiblePlayers.map((p) => (
-        <div key={p.person_id} style={styles.row}>
-          <div style={styles.rowMain}>
-            <span>{p.name}</span>
-            <span style={styles.dim}>
-              {p.devices_online} device{p.devices_online === 1 ? '' : 's'} online
-              {p.room ? ` · in your match` : ''}
-              {p.can_play ? '' : ' · no match support on their build'}
-            </span>
-          </div>
-          <button
-            onClick={() => props.onInvite(p.friend_code)}
-            disabled={!props.hosting || !p.can_play || p.room !== ''}
-            title={
-              props.hosting
-                ? undefined
-                : 'Host a match first — an invite is to a room you are running.'
-            }
-          >
-            Invite
-          </button>
         </div>
       ))}
     </div>
@@ -382,9 +390,99 @@ export interface FriendsProps {
   invitees: Invitee[];
   invites: MatchInvite[];
   hosting: boolean;
+  /**
+   * Invite somebody. **Not** conditional on already hosting any more — see
+   * `FriendsPanel`. The caller starts a match first when there isn't one.
+   */
   onInvite: (friendCode: string) => void;
   onAccept: (invite: MatchInvite) => void;
   onDismiss: (room: string) => void;
+}
+
+/** Debounce on the directory search, same as `people/DiscoverSection`. */
+const SEARCH_DEBOUNCE_MS = 250;
+
+/**
+ * Find somebody by `@username` and send them a friend request, without leaving
+ * the game.
+ *
+ * The panel used to say "the roster lives in the Social panel" and stop there,
+ * which made an empty friends list a dead end: the one screen where you have just
+ * discovered you have nobody to play with was the one screen that could not do
+ * anything about it.
+ *
+ * `searchDirectory` and `addFriend` are the social module's own client — the same
+ * pair `people/DiscoverSection` uses — so this is a second *view*, not a second
+ * implementation, and there is no new backend route behind it. The request is sent
+ * as `@username` rather than the person id already in hand, deliberately: the
+ * backend re-resolves and re-checks the key fingerprint itself, because the
+ * browser is not a trusted source of person ids.
+ */
+function AddFriend() {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<DirectoryEntry[]>([]);
+  const [minPrefix, setMinPrefix] = useState(3);
+  const [note, setNote] = useState('');
+  // Which query the in-flight response belongs to: a slow request for "ro" can
+  // otherwise land after a fast one for "robert" and repopulate the list with
+  // stale, broader results.
+  const latest = useRef('');
+
+  useEffect(() => {
+    const q = query.trim().replace(/^@/, '');
+    latest.current = q;
+    if (q.length < minPrefix) {
+      setResults([]);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void searchDirectory(q)
+        .then((res) => {
+          if (latest.current !== q) return;
+          setResults(res.results ?? []);
+          if (typeof res.min_prefix === 'number') setMinPrefix(res.min_prefix);
+        })
+        .catch(() => {
+          if (latest.current === q) setResults([]);
+        });
+    }, SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [query, minPrefix]);
+
+  const add = async (entry: DirectoryEntry) => {
+    const res = await addFriend(`@${entry.handle}`);
+    setNote(res.error ? res.error : `Friend request sent to @${entry.handle}.`);
+    setQuery('');
+  };
+
+  return (
+    <div>
+      <div style={styles.toolbar}>
+        <input
+          type="search"
+          placeholder="Add someone by @username…"
+          aria-label="Find someone by username"
+          autoComplete="off"
+          spellCheck={false}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          style={{ flex: 1 }}
+        />
+      </div>
+      {note && <div style={styles.dim}>{note}</div>}
+      {results.map((entry) => (
+        <div key={entry.person_id} style={styles.row}>
+          <div style={styles.rowMain}>
+            <span>@{entry.handle}</span>
+            {entry.display_name && entry.display_name !== entry.handle && (
+              <span style={styles.dim}>{entry.display_name}</span>
+            )}
+          </div>
+          <button onClick={() => void add(entry)}>Add</button>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 /**
@@ -398,16 +496,20 @@ export function FriendsPanel(props: FriendsProps) {
   return (
     <div>
       <h4 style={styles.heading}>Invitations ({props.invites.length})</h4>
-      {props.invites.length === 0 && (
-        <div style={styles.dim}>Nothing waiting. An invite from a friend appears here.</div>
-      )}
+      {props.invites.length === 0 && <div style={styles.dim}>Nothing waiting.</div>}
       {props.invites.map((invite) => (
         <div key={invite.room} style={styles.row}>
           <div style={styles.rowMain}>
             <span>
+              {/* A person, not a machine. `hostName` is now their `@username`,
+                  resolved roster-first by the backend; the device they sent it
+                  from is the secondary line, which is worth keeping because an
+                  invite fans out to every machine they have online. */}
               <strong>{invite.hostName}</strong> invited you to <code>{invite.map}</code>
             </span>
-            <span style={styles.dim}>on {invite.host.slice(0, 8)}</span>
+            <span style={styles.dim}>
+              {invite.hostDevice || invite.host.slice(0, 8)}
+            </span>
           </div>
           <button onClick={() => props.onAccept(invite)}>Join</button>
           <button onClick={() => props.onDismiss(invite.room)}>Dismiss</button>
@@ -415,30 +517,34 @@ export function FriendsPanel(props: FriendsProps) {
       ))}
 
       <h4 style={styles.heading}>Friends ({props.invitees.length})</h4>
-      {props.invitees.length === 0 && (
-        <div style={styles.dim}>
-          Nobody online. The roster lives in the Social panel — accepting a friend there is what
-          makes them reachable here, on every machine they own.
-        </div>
-      )}
+      <AddFriend />
+      {props.invitees.length === 0 && <div style={styles.dim}>Nobody online.</div>}
       {props.invitees.map((f) => (
         <div key={f.person_id} style={styles.row}>
           <div style={styles.rowMain}>
-            <span>{f.name}</span>
+            <span>{f.username ? `@${f.username}` : f.name}</span>
             <span style={styles.dim}>
-              {f.devices_online} device{f.devices_online === 1 ? '' : 's'} online
+              {/* Presence beyond a dot: what they are actually doing. The backend
+                  already knew this (`/invitees` reads `fabric.hosted_rooms`) and
+                  was throwing it away. */}
+              {f.room
+                ? `playing ${f.room_map || 'a match'}`
+                : `${f.devices_online} device${f.devices_online === 1 ? '' : 's'} online`}
               {f.can_play ? '' : ' · no match support on their build'}
             </span>
           </div>
           <button
             onClick={() => props.onInvite(f.friend_code)}
-            disabled={!props.hosting || !f.can_play}
+            disabled={!f.can_play}
+            // No longer gated on already hosting. "Invite" is a complete intent,
+            // and making somebody guess that it needs a match to exist first —
+            // then go and start one, then come back — is why this panel read as
+            // broken. The caller hosts on the selected map when there is nothing
+            // to invite them to.
             title={
               props.hosting
-                ? // An invite goes to every machine they have online: you invite a
-                  // person and they choose which box to answer on.
-                  'Invites every machine they have online'
-                : 'Host a match first — an invite is to a room you are running.'
+                ? 'Invites every machine they have online'
+                : 'Starts a match on the selected map, then invites them'
             }
           >
             Invite
@@ -611,6 +717,15 @@ export const styles: Record<string, React.CSSProperties> = {
     color: 'var(--text-dim)',
   },
   toolbar: { display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem' },
+  /** A standing condition the section is under — an accent edge, not a glowing box. */
+  notice: {
+    borderLeft: '2px solid var(--accent, #6ea8fe)',
+    background: 'rgba(110,168,254,0.08)',
+    padding: '0.4rem 0.6rem',
+    fontSize: '0.74rem',
+    lineHeight: 1.45,
+    color: 'var(--text-dim)',
+  },
   error: { color: '#f85149', padding: '0.3rem 0' },
   badge: {
     marginLeft: '0.4rem',

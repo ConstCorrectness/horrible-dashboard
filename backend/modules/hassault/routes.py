@@ -9,7 +9,7 @@ planes** the browser adopts directly as typed arrays — one copy, no parsing.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 
 from backend.modules.hassault import assets, fabric, mapsource, weapons
 from backend.modules.hassault.cgz import PLANE_ORDER, CgzError, write_cgz
@@ -88,9 +88,9 @@ async def get_session(refresh: bool = False) -> SessionInfo:
     signs you in there and vice versa; the join done backend-side here is the same
     pattern as `/invitees`, keeping the pane clear of a cross-module import.
 
-    `enlisted` is *derived* from having a callsign rather than stored separately,
+    `enlisted` is *derived* from having a username rather than stored separately,
     so there is one source of truth and nothing to keep in sync. `refresh=true`
-    re-reads it from the game server, which is how a callsign claimed on another
+    re-reads it from the game server, which is how a username claimed on another
     machine — or one this node's token predates — shows up here.
     """
     from backend.modules.games import server_auth
@@ -100,13 +100,14 @@ async def get_session(refresh: bool = False) -> SessionInfo:
     account = server_auth.signed_in_account()
     if account is None:
         return SessionInfo(signed_in=False)
-    callsign = account.get("handle")
+    username = account.get("handle")
     return SessionInfo(
         signed_in=True,
         account_id=account["id"],
         display_name=account["display_name"],
-        callsign=str(callsign) if callsign else None,
-        enlisted=bool(callsign),
+        username=str(username) if username else None,
+        suggested_username=str(account.get("suggested_handle") or ""),
+        enlisted=bool(username),
     )
 
 
@@ -218,6 +219,10 @@ async def get_invitees() -> list[Invitee]:
         for p in peer_hub.list_peers()
         if fabric.CAPABILITY in (p.capabilities or [])
     }
+    # Which of our rooms each friend's device is standing in — the only place that
+    # can be known, since a remote player is a `PeerPlayerConn` and its node id is
+    # all that ties a body in a room to a person on the roster.
+    rooms_by_node = fabric.hosted_rooms()
     out: list[Invitee] = []
     for friend in store.list_friends(online):
         if friend.status != "accepted" or friend.is_self:
@@ -225,13 +230,22 @@ async def get_invitees() -> list[Invitee]:
         nodes = [d.node_id for d in friend.devices if d.online]
         if not nodes:
             continue
+        room = next((rooms_by_node[n] for n in nodes if n in rooms_by_node), "")
+        live = match_server.get(room) if room else None
         out.append(
             Invitee(
                 name=friend.display_name,
+                # Served alongside the display name, not instead of it: a friend
+                # added by code before either of you signed in to the game server
+                # has no username bound yet, and the UI needs something to fall
+                # back to rather than an empty row.
+                username=friend.handle or "",
                 person_id=friend.person_id,
                 friend_code=friend.friend_code,
                 can_play=any(n in capable for n in nodes),
                 devices_online=len(nodes),
+                room=room,
+                room_map=live.map_name if live is not None else "",
             )
         )
     return out
@@ -284,12 +298,16 @@ async def get_browse() -> ServerBrowse:
         nodes = [d.node_id for d in friend.devices if d.online]
         if not nodes:
             continue
+        room = next((rooms_by_node[n] for n in nodes if n in rooms_by_node), "")
+        live = match_server.get(room) if room else None
         players.append(
             BrowsePlayer(
                 name=friend.display_name,
+                username=friend.handle or "",
                 person_id=friend.person_id,
                 friend_code=friend.friend_code,
-                room=next((rooms_by_node[n] for n in nodes if n in rooms_by_node), ""),
+                room=room,
+                room_map=live.map_name if live is not None else "",
                 can_play=any(n in capable for n in nodes),
                 devices_online=len(nodes),
             )
@@ -404,8 +422,36 @@ def _watchdog_game_process(account_id: str, map_name: str, proc: Any) -> None:
 
 
 @router.post("/launch_native", response_model=LaunchNativeResponse)
-async def launch_native_client(req: LaunchNativeRequest) -> LaunchNativeResponse:
-    """Prepare and launch the native high-performance FPS client with sub-tick UDP flags."""
+async def launch_native_client(
+    req: LaunchNativeRequest, request: Request
+) -> LaunchNativeResponse:
+    """Start the native client and point it back at this node.
+
+    The arguments used to be fiction. It was handed `--connect=127.0.0.1:4000`
+    (nothing has ever listened there), `--room`, and `--raw-input`, and the binary
+    parsed **none** of them — it was a self-contained demo with no networking at
+    all, so the flags were decoration on a launch that could not have used them.
+
+    What the client actually needs is one thing: **the node's own HTTP origin**.
+    Everything else follows from it — the map catalogue, the cube planes, the
+    weapon table, and the `/ws` socket, whose address the client derives rather
+    than being told separately (two addresses that must agree is two addresses
+    that can disagree).
+
+    The origin is read off *this request* rather than assembled from a host and a
+    port, because the port is not knowable from in here: `HORRIBLE_DEV_BACKEND_PORT`
+    moves it, Hyper-V's reserved ranges on Windows force that regularly, and a
+    packaged build binds somewhere else again. The request arrived at the right
+    address by definition.
+
+    The other half is **the intent**: which of Train, Host and Join was pressed,
+    and how many bots. Without it every launch was the same launch — "a match on
+    this map, or open one" — so Train dropped a learner into whatever firefight was
+    already running on that map, and the bot count the menu had just collected went
+    nowhere. Train is answered off the wire entirely rather than by a room of one,
+    because `match_server.join` with no room id is join-*or*-create and there is no
+    way to ask it for solitude.
+    """
     import os
     import shutil
     import subprocess
@@ -416,13 +462,28 @@ async def launch_native_client(req: LaunchNativeRequest) -> LaunchNativeResponse
     custom_bin = str(get_value("hassault.nativeBinaryPath", "") or "").strip()
     candidate_bins = [
         custom_bin,
+        str(
+            repo_root
+            / "apps"
+            / "native-fps"
+            / "target"
+            / "release"
+            / "hassault-native.exe"
+        ),
+        str(
+            repo_root / "apps" / "native-fps" / "target" / "release" / "hassault-native"
+        ),
+        str(
+            repo_root
+            / "apps"
+            / "native-fps"
+            / "target"
+            / "debug"
+            / "hassault-native.exe"
+        ),
+        str(repo_root / "apps" / "native-fps" / "target" / "debug" / "hassault-native"),
         str(repo_root / "apps" / "native-fps" / "bin" / "hassault.exe"),
         str(repo_root / "apps" / "native-fps" / "bin" / "hassault"),
-        "apps/native-fps/bin/hassault.exe",
-        "apps/native-fps/bin/hassault",
-        "bin/assaultcube.exe",
-        "assaultcube.exe",
-        "assaultcube",
     ]
 
     bin_path: str | None = None
@@ -431,24 +492,55 @@ async def launch_native_client(req: LaunchNativeRequest) -> LaunchNativeResponse
             bin_path = cand
             break
 
+    # A remote room is the one combination that cannot work: the channel refuses a
+    # join carrying a host and no room ("a remote match needs a room id"), and the
+    # refusal would arrive inside a window that had already opened. Caught here,
+    # where there is still a browser listening to say it to.
+    if req.host and not req.room_id:
+        return LaunchNativeResponse(
+            launched=False,
+            connect_args=[],
+            message="A match on a friend's node needs a room id.",
+        )
+
+    # `request.base_url` is this node as the caller reached it, which is the only
+    # address known to be right.
+    origin = str(request.base_url).rstrip("/")
     connect_args = [
-        f"--connect=127.0.0.1:4000",
-        f"--room={req.room_id}",
+        f"--server={origin}",
         f"--map={req.map_name}",
-        f"--name={req.callsign or 'Player'}",
-        f"--raw-input={'1' if req.raw_input else '0'}",
+        f"--mode={req.mode}",
         f"--max-fps={req.max_fps}",
     ]
-    if req.fullscreen:
-        connect_args.append("--fullscreen")
+    # Absent, not empty: an empty `--room` would be a request to join a room whose
+    # id is the empty string. Same for `--host`, which the client forwards as "this
+    # match is on a friend's node".
+    if req.room_id:
+        connect_args.append(f"--room={req.room_id}")
+    if req.host:
+        connect_args.append(f"--host={req.host}")
+    if req.mode == "host" and req.bots > 0:
+        # Clamped against the match server's own ceiling, and only sent for the one
+        # mode that can act on it — `add_bot` is host-only on the channel, so a bot
+        # count on a join is an instruction the server would refuse.
+        count = max(0, min(int(req.bots), MAX_PLAYERS - 1))
+        if count:
+            connect_args.append(f"--bots={count}")
+            connect_args.append(f"--bot-skill={req.bot_skill}")
+    if req.username:
+        # A wire label only. The backend takes the real name from the signed-in
+        # account and ignores this, which is why it is not worth defaulting to
+        # "Player" — a placeholder that never reaches anything is just noise.
+        connect_args.append(f"--name={req.username}")
 
     if not bin_path:
         return LaunchNativeResponse(
             launched=False,
             connect_args=connect_args,
             message=(
-                "Native high-performance FPS client binary not found. Set "
-                "'hassault.nativeBinaryPath' in Settings or compile apps/native-fps."
+                "The native client is not built. Run "
+                "`cargo build --release --manifest-path apps/native-fps/Cargo.toml`, "
+                "or set 'hassault.nativeBinaryPath' in Settings."
             ),
         )
 
@@ -457,7 +549,9 @@ async def launch_native_client(req: LaunchNativeRequest) -> LaunchNativeResponse
         from backend.modules.games import server_auth
 
         account = server_auth.signed_in_account()
-        account_id = account.get("account_id", "local_player") if account else "local_player"
+        account_id = (
+            account.get("account_id", "local_player") if account else "local_player"
+        )
 
         proc = subprocess.Popen([bin_path, *connect_args])
         ACTIVE_GAME_PROCESSES[account_id] = proc
@@ -489,7 +583,9 @@ async def get_process_status() -> dict[str, Any]:
     from backend.modules.games import server_auth
 
     account = server_auth.signed_in_account()
-    account_id = account.get("account_id", "local_player") if account else "local_player"
+    account_id = (
+        account.get("account_id", "local_player") if account else "local_player"
+    )
 
     proc = ACTIVE_GAME_PROCESSES.get(account_id)
     running = proc is not None and proc.poll() is None
@@ -502,7 +598,9 @@ async def get_latest_match_summary() -> dict[str, Any] | None:
     from backend.modules.games import server_auth
 
     account = server_auth.signed_in_account()
-    account_id = account.get("account_id", "local_player") if account else "local_player"
+    account_id = (
+        account.get("account_id", "local_player") if account else "local_player"
+    )
 
     return LATEST_MATCH_SUMMARIES.get(account_id)
 
@@ -513,11 +611,12 @@ async def dismiss_match_summary() -> dict[str, bool]:
     from backend.modules.games import server_auth
 
     account = server_auth.signed_in_account()
-    account_id = account.get("account_id", "local_player") if account else "local_player"
+    account_id = (
+        account.get("account_id", "local_player") if account else "local_player"
+    )
 
     LATEST_MATCH_SUMMARIES.pop(account_id, None)
     return {"ok": True}
-
 
 
 @router.get("/skins/catalog")
@@ -535,7 +634,9 @@ async def get_skin_inventory() -> list[dict[str, Any]]:
     from backend.modules.hassault.skins import SKIN_DICT, skin_manager
 
     account = server_auth.signed_in_account()
-    account_id = account.get("account_id", "local_player") if account else "local_player"
+    account_id = (
+        account.get("account_id", "local_player") if account else "local_player"
+    )
 
     await skin_manager.load_from_atlas(account_id)
     items = skin_manager.get_inventory(account_id)
@@ -549,7 +650,9 @@ async def equip_skin(instance_id: str) -> dict[str, bool]:
     from backend.modules.hassault.skins import skin_manager
 
     account = server_auth.signed_in_account()
-    account_id = account.get("account_id", "local_player") if account else "local_player"
+    account_id = (
+        account.get("account_id", "local_player") if account else "local_player"
+    )
 
     ok = skin_manager.equip_skin(account_id, instance_id)
     if ok:
@@ -564,7 +667,9 @@ async def claim_level_up_drop() -> dict[str, Any]:
     from backend.modules.hassault.skins import SKIN_DICT, skin_manager
 
     account = server_auth.signed_in_account()
-    account_id = account.get("account_id", "local_player") if account else "local_player"
+    account_id = (
+        account.get("account_id", "local_player") if account else "local_player"
+    )
 
     drop = skin_manager.roll_drop(account_id)
     await skin_manager.sync_to_atlas(account_id)
@@ -578,7 +683,9 @@ async def execute_trade_up(instance_ids: list[str]) -> dict[str, Any]:
     from backend.modules.hassault.skins import SKIN_DICT, skin_manager
 
     account = server_auth.signed_in_account()
-    account_id = account.get("account_id", "local_player") if account else "local_player"
+    account_id = (
+        account.get("account_id", "local_player") if account else "local_player"
+    )
 
     result = skin_manager.trade_up_contract(account_id, instance_ids)
     if not result:
@@ -588,5 +695,3 @@ async def execute_trade_up(instance_ids: list[str]) -> dict[str, Any]:
         )
     await skin_manager.sync_to_atlas(account_id)
     return result.to_dict(SKIN_DICT.get(result.skin_id))
-
-
