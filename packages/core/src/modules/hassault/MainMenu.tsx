@@ -213,8 +213,8 @@ function NativeClientRow(props: MainMenuProps) {
           <span>Launch the native client</span>
           <span style={panel.dim}>
             A separate window: same maps, same match, rendered on the GPU with raw mouse input and
-            no frame cap. It has no HUD, no weapon model and no sound yet, so this pane is still
-            the complete game.
+            no frame cap. It has no HUD, no weapon model and no sound yet, so this pane is still the
+            complete game.
           </span>
           {status && (
             <span
@@ -292,10 +292,10 @@ function PlaySection(props: MainMenuProps) {
 
   return (
     <div>
-      {props.nativeClient && (
+      {!props.nativeClient && (
         <div style={panel.notice}>
-          Playing in the <strong>native client</strong> — Play, Train and Host open a separate
-          window. No HUD, no weapon model and no sound yet. Turn it off in Settings.
+          Playing <strong>in this pane</strong> — the fallback client. The native window is where
+          the game is played; switch back in Settings once it is built.
         </div>
       )}
       <h4 style={panel.heading}>Map</h4>

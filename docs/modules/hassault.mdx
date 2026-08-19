@@ -1706,14 +1706,13 @@ previous one working.
 | **B1** | The wire and the world: real maps, real protocol | **done** |
 | **B2** | The `wgpu` renderer, camera, bodies, raw input | **done** |
 | **B3** | Physics and client-side prediction | **done** |
-| **B4** | Play/Train/Host route through it | not started |
+| **B4** | Play/Train/Host route through it, and the HUD, weapon, scope and sound that make it playable | **done** |
 
-It plays: it loads any map the node serves, joins a real match, renders it, and
-predicts your movement locally. What it does not yet do is *replace* the browser
-client as the way in — Play, Train and Host still open the pane, and the native
-client is launched from a Settings row. That is B4, and it is deliberately last:
-routing people into it before the prediction was trustworthy would have meant
-shipping the rubber-banding as the default experience.
+It plays, and it is now **the way in**: Play, Train and Host open it by default.
+It loads any map the node serves, joins a real match, predicts your movement,
+draws its own HUD and weapon, scopes, and makes its own noise. Routing was
+deliberately last — sending people into it before the prediction was trustworthy
+would have shipped the rubber-banding as the default experience.
 
 ### B1: the wire and the world
 
@@ -1944,6 +1943,12 @@ because a hundred hit points in a mode with no damage model is a number the clie
 made up. It does hold a weapon — the rifle, as the browser's Train does — since an
 empty hand reads as the view model having failed rather than as the mode it is.
 
+Both are drawn from the moment you are **in the world**, not from the moment the
+pointer is captured. The first cut gated them on pointer lock, reasoning that a
+released pointer means a menu; it does not here — the world is still drawn behind
+it, and a world with no weapon and no HUD in it reads exactly like a client that
+half-loaded. Which is how the missing view model was first reported.
+
 ### Reading the wire, not guessing it
 
 Three things are **served** and never duplicated in Rust, for the same reason:
@@ -2026,15 +2031,44 @@ An unknown `--mode` **exits rather than defaulting**. A typo silently becoming
 
 ### Playing in the native client
 
-`hassault.nativeClient` routes **Play, Train and Host** to the native window
-instead of this pane; `hassault.nativeBinaryPath` says where the binary is when it
-is not in the usual build output. Off by default, and the Play section says so
-while it is on — the two clients do not look alike (the native one has no
-sound and no scope), so a button that quietly opened a different window would
-read as the game having broken.
+**The native client is where the game is played.** `hassault.nativeClient` is on
+by default and routes **Play, Train and Host** to the native window — Train
+included, since a learner wants the same mouse and the same frame pacing as a
+match. The pane keeps everything that is not being in the world: sign-in, the map
+picker, the server browser, friends and invites, settings and controls, the
+post-match card, and watching.
+
+Turning the setting off plays in the pane instead. That path is kept rather than
+deleted for two reasons: it is the fallback while the native client has not been
+built (`cargo build --release`), and the pane is one of the **three
+implementations of the movement rules** that `physics-vectors.json` pins — a
+client nobody can run is a client that drifts.
+
+`hassault.nativeBinaryPath` says where the binary is when it is not in the usual
+build output.
 
 Quick Play does not branch twice: it either launches a `join` at the match it
 found, or calls `host`, which decides for itself what hosting means.
+
+:::warning The newest build wins, not `release` before `debug`
+The candidates used to be tried in order, so a `target/release` binary built
+before your last change was silently preferred over a `target/debug` one built
+from the current source. The symptom is a game **missing whatever was just
+added** — and nothing anywhere says an old binary was run. That is exactly how a
+native client with no weapon view model in it kept starting after the view model
+had been written and tested. `pick_binary` now takes the most recently modified
+candidate; a named `hassault.nativeBinaryPath` still wins outright, because that
+is somebody naming the binary they mean.
+:::
+
+### The pane stops rendering while the native client plays
+
+The pane's three.js loop used to run the whole time the native window was up: a
+full WebGL render, in a compositing webview, on the same GPU the game is trying to
+have to itself — and invisible, because the companion overlay covers it. The frame
+callback now returns early while a native process is running, keeping the loop
+alive (so the map is back the instant the window exits) rather than cancelling it,
+and updating `last` first so the first frame back is not a two-minute `dt`.
 
 ### The scope and the sound, natively
 
@@ -2140,10 +2174,10 @@ counts match the browser client's HUD on every map tried (`hd_atrium` 31,944 →
   storage but is not a declared `SettingDecl` row — see
   [Controls](#controls-and-why-they-are-not-keymap-bindings).
   `hassault.nativeClient` — whether Play, Train and Host open the native window
-  instead of playing in the pane, and `hassault.nativeBinaryPath` — where that
-  binary is, when it is not in the usual build output. Both are declared rows: the
-  path was read by the launch route and named in its own error message long before
-  it was editable anywhere.
+  instead of playing in the pane, **on by default**, and
+  `hassault.nativeBinaryPath` — where that binary is, when it is not in the usual
+  build output. Both are declared rows: the path was read by the launch route and
+  named in its own error message long before it was editable anywhere.
 - **Agent tools** (group `hassault`): `list_maps`, `list_matches`, `host`,
   `invite`, `status`, `surroundings`, `add_bot`, `remove_bot`.
 
@@ -2342,10 +2376,10 @@ never touches the filesystem.
 
 ## Known limitations
 
-- **The native client is not yet a way *in*.** It renders, joins and predicts, but
-  Play/Train/Host still open the browser pane; the native client is launched from
-  a Settings row. That is stage B4 — see
-  [the native client](#the-native-client-rust--wgpu).
+- **Training in the native client has no dummy range.** `training.ts` — the
+  ammo, the reloads and the static dummies that make Train a place to practise
+  the shoot-jump — has no Rust port, so native Train is a map, a body and a
+  weapon that does not fire. The pane's Train is still the complete one.
 - **The native client has no `NoiseRing`.** It plays what it hears, but the
   browser also *draws* the bearings around the crosshair so headphones are not a
   competitive advantage — and natively they still are.

@@ -369,6 +369,32 @@ async def list_tacticals() -> list[TacticalOut]:
     return [TacticalOut(**t.to_dict()) for t in weapons.TACTICALS]
 
 
+def pick_binary(custom: str, candidates: list[str]) -> str | None:
+    """Which native binary to launch.
+
+    **The newest build wins, not the first one on the list.** The candidates used
+    to be tried in order — `target/release`, then `target/debug` — which is the
+    wrong order the moment anybody edits the client: a release binary from before
+    the change is silently launched over a debug one built from the current
+    source. The symptom is a game missing whatever was just added, with nothing
+    anywhere saying an old binary was run. That is how a native client with no
+    weapon view model in it kept starting after the view model was written.
+
+    An explicit `hassault.nativeBinaryPath` still wins outright, because that is
+    somebody naming the binary they mean.
+    """
+    import os
+    import shutil
+
+    if custom and (os.path.isfile(custom) or shutil.which(custom)):
+        return custom
+    on_disk = [c for c in candidates if c and os.path.isfile(c)]
+    if on_disk:
+        return max(on_disk, key=os.path.getmtime)
+    # Not a path we can stat: something on PATH.
+    return next((c for c in candidates if c and shutil.which(c)), None)
+
+
 LATEST_MATCH_SUMMARIES: dict[str, dict[str, Any]] = {}
 ACTIVE_GAME_PROCESSES: dict[str, Any] = {}
 
@@ -452,10 +478,9 @@ async def launch_native_client(
     because `match_server.join` with no room id is join-*or*-create and there is no
     way to ask it for solitude.
     """
-    import os
-    import shutil
     import subprocess
     from pathlib import Path
+
     from backend.modules.settings.routes import get_value
 
     repo_root = Path(__file__).resolve().parents[3]
@@ -486,11 +511,7 @@ async def launch_native_client(
         str(repo_root / "apps" / "native-fps" / "bin" / "hassault"),
     ]
 
-    bin_path: str | None = None
-    for cand in candidate_bins:
-        if cand and (os.path.isfile(cand) or shutil.which(cand)):
-            bin_path = cand
-            break
+    bin_path = pick_binary(custom_bin, candidate_bins[1:])
 
     # A remote room is the one combination that cannot work: the channel refuses a
     # join carrying a host and no room ("a remote match needs a room id"), and the

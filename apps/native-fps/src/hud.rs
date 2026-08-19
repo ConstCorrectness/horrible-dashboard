@@ -102,7 +102,10 @@ pub struct HudView<'a> {
     pub move_speed: f32,
     pub on_ground: bool,
     pub crouching: bool,
-    /// Whether the pointer is captured. Released, the HUD steps out of the way.
+    /// Whether there is a body in the world to report on — deployed and not
+    /// still connecting. Deliberately **not** "the pointer is captured":
+    /// releasing the pointer is not a menu here, and a world drawn with no HUD
+    /// in it reads as a client that half-loaded.
     pub playing: bool,
 }
 
@@ -243,9 +246,8 @@ impl Hud {
         self.paint_feed(&mut p, u);
 
         if !view.playing {
-            // Pointer released: the crosshair and the numbers belong to a player
-            // who is looking at the game, and leaving them up over a window
-            // somebody is dragging reads as the client having hung.
+            // Not in the world yet: connecting, or between matches. The kill feed
+            // above is the one thing that still makes sense there.
             return;
         }
 
@@ -857,7 +859,7 @@ mod tests {
     }
 
     #[test]
-    fn a_hud_is_geometry_and_a_released_pointer_leaves_only_the_feed() {
+    fn a_hud_is_geometry_and_only_the_feed_survives_leaving_the_world() {
         let hud = Hud::default();
         let you = alive();
         let mut out = Vec::new();

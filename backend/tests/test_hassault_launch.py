@@ -62,6 +62,56 @@ def args_for(client: TestClient, **body) -> list[str]:
     return res.json()["connect_args"]
 
 
+def test_the_newest_build_is_launched_not_the_first_one_found(tmp_path) -> None:
+    """The trap this closes: a release binary older than the source.
+
+    The candidates were tried in order, release before debug, so a stale release
+    build was silently preferred over a debug one compiled from the current
+    checkout — and the symptom is a game missing whatever was just added, with
+    nothing saying an old binary was run.
+    """
+    import os
+
+    from backend.modules.hassault.routes import pick_binary
+
+    old = tmp_path / "release" / "hassault-native.exe"
+    new = tmp_path / "debug" / "hassault-native.exe"
+    for path in (old, new):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("")
+    os.utime(old, (1_000_000, 1_000_000))
+    os.utime(new, (2_000_000, 2_000_000))
+
+    assert pick_binary("", [str(old), str(new)]) == str(new)
+    # Order on the list decides nothing; the timestamp does.
+    assert pick_binary("", [str(new), str(old)]) == str(new)
+
+
+def test_a_named_binary_wins_over_any_build(tmp_path) -> None:
+    """Somebody naming a path means that path, however old it is."""
+    import os
+
+    from backend.modules.hassault.routes import pick_binary
+
+    named = tmp_path / "mine.exe"
+    built = tmp_path / "hassault-native.exe"
+    for path in (named, built):
+        path.write_text("")
+    os.utime(named, (1_000_000, 1_000_000))
+    os.utime(built, (2_000_000, 2_000_000))
+
+    assert pick_binary(str(named), [str(built)]) == str(named)
+    # A named path that does not exist falls through to the builds rather than
+    # failing, so a stale setting is not a client that cannot start.
+    assert pick_binary(str(tmp_path / "gone.exe"), [str(built)]) == str(built)
+
+
+def test_no_build_anywhere_is_none_rather_than_a_guess(tmp_path) -> None:
+    from backend.modules.hassault.routes import pick_binary
+
+    assert pick_binary("", [str(tmp_path / "nope.exe"), ""]) is None
+
+
 def test_the_origin_is_the_one_the_caller_reached(client: TestClient) -> None:
     """Read off the request, never assembled from a host and a port.
 

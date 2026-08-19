@@ -133,7 +133,7 @@ export function SettingsPanel() {
   const fov = useSetting<number>(FOV_KEY) ?? 75;
   const volume = useSetting<number>(VOLUME_KEY) ?? 0.7;
   const crouchToggle = useSetting<boolean>(CROUCH_TOGGLE_KEY) ?? false;
-  const nativeClient = useSetting<boolean>(NATIVE_CLIENT_KEY) ?? false;
+  const nativeClient = useSetting<boolean>(NATIVE_CLIENT_KEY) ?? true;
 
   return (
     <div style={styles.rows}>
@@ -198,9 +198,10 @@ export function SettingsPanel() {
         <div style={styles.rowMain}>
           <span>Client</span>
           <span style={styles.dim}>
-            The native client renders on the GPU with raw mouse input and no frame cap, in its own
-            window. It has no HUD, no weapon model and no sound yet, so this pane is still the
-            complete game — and it has to be built first (`cargo build --release`).
+            The native client is where the game is played: its own window, raw mouse input, no frame
+            cap. This pane is then setup and spectating. It has to be built first (`cargo build
+            --release --manifest-path apps/native-fps/Cargo.toml`); playing in the pane is the
+            fallback while it is not.
           </span>
         </div>
         <div style={{ display: 'flex', gap: '0.25rem' }}>
@@ -507,9 +508,7 @@ export function FriendsPanel(props: FriendsProps) {
                   invite fans out to every machine they have online. */}
               <strong>{invite.hostName}</strong> invited you to <code>{invite.map}</code>
             </span>
-            <span style={styles.dim}>
-              {invite.hostDevice || invite.host.slice(0, 8)}
-            </span>
+            <span style={styles.dim}>{invite.hostDevice || invite.host.slice(0, 8)}</span>
           </div>
           <button onClick={() => props.onAccept(invite)}>Join</button>
           <button onClick={() => props.onDismiss(invite.room)}>Dismiss</button>

@@ -320,9 +320,11 @@ impl App {
             self.unscope();
         }
         self.viewmodel.set_weapon(&weapon, self.skins.get(&weapon));
-        // Alive unless the server says otherwise, and only while the pointer is
-        // captured: a weapon hanging in a window nobody is playing reads as the
-        // client having frozen.
+        // Alive unless the server says otherwise. **Not** gated on the pointer
+        // being captured: releasing it here is not a menu, it is a mouse you can
+        // move — the world is still drawn behind it, so a world with no weapon
+        // and no HUD in it reads as the client having half-loaded. The browser
+        // client draws its weapon on `alive` alone for the same reason.
         let alive = self.you.as_ref().map(|y| y.alive).unwrap_or(true);
         let frame = viewmodel::Frame {
             speed: self.ground_speed(),
@@ -330,7 +332,7 @@ impl App {
             reloading: self.you.as_ref().is_some_and(|y| y.reloading),
             yaw: self.camera.yaw.to_radians(),
             pitch: self.camera.pitch.to_radians(),
-            visible: self.focused && self.joined && alive,
+            visible: self.joined && alive,
             move_speed: MOVE_SPEED,
         };
         self.viewmodel.update(dt, &frame);
@@ -351,7 +353,7 @@ impl App {
         let speed = self.ground_speed();
         let fall_speed = state.fall_speed;
         let rising = state.vel_z > 0.0;
-        let audible = self.focused && self.joined;
+        let audible = self.joined;
 
         if grounded && !crouched {
             self.stride += speed * dt;
@@ -838,7 +840,7 @@ impl ApplicationHandler for App {
                     move_speed: MOVE_SPEED,
                     on_ground: self.prediction.state.on_ground,
                     crouching: self.prediction.state.crouch > 0.5,
-                    playing: self.focused && self.joined,
+                    playing: self.joined,
                 };
                 self.hud.build(&view, &mut overlay);
                 self.overlay = overlay;
@@ -1092,19 +1094,28 @@ mod tests {
     }
 
     #[test]
-    fn the_weapon_is_holstered_until_the_pointer_is_captured() {
+    fn the_weapon_is_in_your_hands_whenever_you_are_in_the_world() {
+        // Not gated on the pointer being captured. Releasing it here is not a
+        // menu — the world is still drawn behind it — so a world with no weapon
+        // in it reads as a client that half-loaded, which is exactly how the
+        // missing view model was first reported.
         let mut app = training_app();
         app.animate(0.016);
         let mut verts = Vec::new();
         app.viewmodel.vertices(&mut verts);
-        assert!(
-            verts.is_empty(),
-            "a weapon was drawn over a released pointer"
-        );
-        app.focused = true;
+        assert!(!verts.is_empty(), "no weapon while the pointer was free");
+    }
+
+    #[test]
+    fn nothing_is_held_before_there_is_a_body() {
+        // `joined` is the line, not focus: before the world places you there is
+        // no player to be holding anything.
+        let mut app = training_app();
+        app.joined = false;
         app.animate(0.016);
+        let mut verts = Vec::new();
         app.viewmodel.vertices(&mut verts);
-        assert!(!verts.is_empty());
+        assert!(verts.is_empty());
     }
 
     #[test]

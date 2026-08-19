@@ -282,7 +282,7 @@ export function HorribleAssaultPanel() {
   const volume = useSetting<number>(VOLUME_KEY) ?? 0.7;
   const crouchToggle = useSetting<boolean>(CROUCH_TOGGLE_KEY) ?? false;
   /** Whether Play, Train and Host open the native window rather than this pane. */
-  const nativeClient = useSetting<boolean>(NATIVE_CLIENT_KEY) ?? false;
+  const nativeClient = useSetting<boolean>(NATIVE_CLIENT_KEY) ?? true;
   const storedControls = useSetting<string>(CONTROLS_KEY);
   const controls = useMemo(() => parseControls(storedControls), [storedControls]);
   const codes = useMemo(() => codeMap(controls), [controls]);
@@ -291,6 +291,9 @@ export function HorribleAssaultPanel() {
 
   // ---- Native process lifecycle bridge ---------------------------------------
   const [nativeRunning, setNativeRunning] = useState(false);
+  /** The render loop's copy: it runs outside React and cannot read state. */
+  const nativeRunningRef = useRef(false);
+  nativeRunningRef.current = nativeRunning;
   const [nativePid, setNativePid] = useState<number | undefined>();
   /** What the last native launch said, shown in the menu next to the buttons. */
   const [nativeStatus, setNativeStatus] = useState<string | null>(null);
@@ -714,6 +717,15 @@ export function HorribleAssaultPanel() {
         raf = requestAnimationFrame(frame);
         const dt = Math.max(0, (now - last) / 1000);
         last = now;
+
+        // **Nothing is drawn while the native client is playing.** The pane is
+        // covered by the companion overlay, so this scene is invisible — and it
+        // is a full WebGL render, in a compositing webview, on the same GPU the
+        // game is trying to have to itself. The loop is kept alive rather than
+        // cancelled so the map is back the instant the native window exits, and
+        // `last` is updated above so the first frame back is not a two-minute
+        // `dt`.
+        if (nativeRunningRef.current) return;
 
         const world = worldRef.current;
         const player = playerRef.current;

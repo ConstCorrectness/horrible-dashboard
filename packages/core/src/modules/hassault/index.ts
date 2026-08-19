@@ -99,9 +99,9 @@ export const hassaultModule: ModuleManifest = {
       key: 'hassault.nativeClient',
       title: 'Play in the native client',
       description:
-        'Play, Train and Host open the separate native window (GPU-rendered, raw mouse input, no frame cap) instead of playing in this pane. Off by default: the native client has no HUD, no weapon model and no sound yet, so the pane is still the complete game.',
+        'On by default, and the way in: Play, Train and Host open the native window — GPU-rendered, raw mouse input, no frame cap, its own HUD, weapon and sound. This pane is then setup and spectating. Turning it off plays in the pane instead, which is the same game and a slower one; it is kept because the pane is also the third implementation the physics conformance fixture pins.',
       type: 'boolean',
-      default: false,
+      default: true,
     },
     {
       key: 'hassault.nativeBinaryPath',
