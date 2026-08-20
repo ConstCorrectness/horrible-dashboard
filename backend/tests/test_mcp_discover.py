@@ -178,13 +178,37 @@ def test_parse_entry_caps_third_party_text():
 
 
 def test_the_shipped_overlay_is_all_runnable():
+    """Every install we ship can actually be started.
+
+    **What "runnable" means depends on the kind**, and it used to not: the
+    assertion read `installs[0].command`, which is right for a package and
+    meaningless for a remote. A hosted server has a URL and no command by nature,
+    so the first entry to offer one (`ai.wandb/mcp-server`, which lists its hosted
+    endpoint ahead of its uvx package) failed a check that was really asking
+    "is this a package?". Every option is checked now, each against the thing its
+    own kind needs.
+    """
     entries = catalog.curated_entries()
     assert entries, "the curated catalog should not be empty"
     for entry in entries:
         assert entry.installs, entry.name
-        assert entry.installs[0].command, entry.name
-        assert not entry.installs[0].unsupported, entry.name
         assert cfg.validate_id(entry.suggested_id) is None, entry.name
+        for option in entry.installs:
+            label = f"{entry.name} / {option.label}"
+            assert not option.unsupported, label
+            if option.kind == "remote":
+                assert option.url, label
+                assert not option.command, f"{label}: a remote install runs nothing"
+            else:
+                assert option.command, label
+
+
+def test_every_curated_entry_offers_something_we_can_run_locally():
+    """A hosted endpoint is somebody else's uptime and, usually, somebody else's
+    view of your data. The overlay is a *curated* list, so every entry on it also
+    carries a package this node can run itself."""
+    for entry in catalog.curated_entries():
+        assert any(o.kind != "remote" for o in entry.installs), entry.name
 
 
 def test_merge_keeps_the_curated_description_over_the_registrys():

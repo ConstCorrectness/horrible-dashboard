@@ -77,6 +77,12 @@ export interface MainMenuProps {
   onHost: (bots: number) => void;
   /** Join the best match anyone is running, or host one when there is none. */
   onQuickPlay: (bots: number) => void;
+  /** Play a match the **game server** adjudicates. */
+  onRanked: () => void;
+  /** Maps a rated match can use — bundled only, because a map on one player's
+   * disk cannot be judged by anybody else. Empty while it is being fetched, or
+   * when the server could not be reached. */
+  rankedMaps: string[];
   /** Join a match wherever it is running, and enter the world. */
   onJoin: (room: string, map: string, host: string) => void;
   onInvite: (friendCode: string) => void;
@@ -287,6 +293,11 @@ const BOT_COUNTS = [0, 1, 3, 5, 7];
 function PlaySection(props: MainMenuProps) {
   const [bots, setBots] = useState(3);
   const bundled = props.maps.filter((m) => m.source === 'bundled');
+  // A rated match needs a map the *server* has. Checked against the server's own
+  // list rather than against `source === 'bundled'` locally: the two agree today
+  // and the server's answer is the one that decides, so asking it means a map
+  // added on either side never needs a matching change on the other.
+  const rankedPlayable = props.rankedMaps.includes(props.mapName);
   const installed = props.maps.filter((m) => m.source !== 'bundled');
   const chosen = props.maps.find((m) => m.name === props.mapName);
 
@@ -352,6 +363,33 @@ function PlaySection(props: MainMenuProps) {
           style={primary}
         >
           Play
+        </button>
+      </div>
+
+      {/* Ranked sits directly under Quick play, and says what it is in the
+          subtitle rather than in a badge: the difference between the two is not
+          "harder", it is *who kept the score*. A player who does not care can
+          ignore the row entirely; one who does needs to know before they play,
+          not after. */}
+      <div style={panel.row}>
+        <div style={panel.rowMain}>
+          <span>Ranked</span>
+          <span style={panel.dim}>
+            {rankedPlayable
+              ? 'Played on the game server, which keeps the score. Bundled maps only.'
+              : 'Needs a bundled map and a signed-in account — the server has to know who you are to record a result.'}
+          </span>
+        </div>
+        <button
+          onClick={props.onRanked}
+          disabled={!props.ready || props.loadoutError !== '' || !rankedPlayable}
+          title={
+            rankedPlayable
+              ? undefined
+              : 'Ranked matches run on the game server, which only has the bundled maps'
+          }
+        >
+          Ranked
         </button>
       </div>
 

@@ -202,15 +202,16 @@ async def handle_input(hub: PeerHub, session: PeerSession, env: PeerEnvelope) ->
     commands = data.get("commands")
     if not isinstance(commands, list):
         return
-    # Reuses the browser channel's parser rather than a second one: two
-    # validators for one wire format is how a gap appears in the stricter half.
-    from backend.modules.hassault.channel import (
-        MAX_COMMANDS_PER_MESSAGE,
-        _parse_command,
-    )
+    # Reuses the one validator rather than a second one: two implementations of
+    # one wire format is how a gap appears in the stricter half. It lives in
+    # `match` — next to the `Command` it produces — precisely because it has
+    # three callers now (this, the browser channel, and the game server's rated
+    # rooms) and none of them may be the lax one.
+    from backend.modules.hassault.channel import MAX_COMMANDS_PER_MESSAGE
+    from backend.modules.hassault.match import parse_command
 
     for raw in commands[:MAX_COMMANDS_PER_MESSAGE]:
-        command = _parse_command(raw)
+        command = parse_command(raw)
         if command is not None:
             room.enqueue(player, command)
     rtt = data.get("rtt")
@@ -481,7 +482,9 @@ def live_invites() -> list[dict[str, Any]]:
     return sorted(_invites.values(), key=lambda i: i["ts"], reverse=True)
 
 
-def _invite_display_name(session: PeerSession, claimed_username: str) -> tuple[str, str]:
+def _invite_display_name(
+    session: PeerSession, claimed_username: str
+) -> tuple[str, str]:
     """What to call whoever sent an invite: `(name, person_id)`.
 
     The old answer was `node_identity.node_name()` off the wire, which is a
@@ -516,7 +519,9 @@ def _invite_display_name(session: PeerSession, claimed_username: str) -> tuple[s
             if row.get("handle"):
                 return f"@{row['handle']}", person_id
     except Exception:  # pragma: no cover - roster is best-effort here
-        logger.debug("could not resolve an inviting peer against the roster", exc_info=True)
+        logger.debug(
+            "could not resolve an inviting peer against the roster", exc_info=True
+        )
 
     if claimed_username:
         return f"@{claimed_username}", person_id

@@ -67,6 +67,11 @@ pub struct JoinRequest {
     /// account's username. Kept because the browser sends it and a wire with two
     /// dialects is a wire nobody can debug.
     pub name: String,
+    /// Ask for a **rated** match: the room is opened on the game server and this
+    /// node proxies for us. Omitted when false, like `room` and `host`, because
+    /// the server reads a present flag as the request itself.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub ranked: bool,
 }
 
 /// One input frame.

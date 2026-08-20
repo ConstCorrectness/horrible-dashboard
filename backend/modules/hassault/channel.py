@@ -21,15 +21,16 @@ import time
 import uuid
 from typing import Any
 
-from backend.modules.hassault import bots, fabric
+from backend.modules.hassault import bots, fabric, ranked
 from backend.modules.hassault.cgz import CgzError
 from backend.modules.hassault.match import (
+    _clamp,
+    _num,
+    parse_command,
     CHANNEL,
     MAX_PLAYERS,
-    Command,
     match_server,
 )
-from backend.modules.hassault.weapons import WEAPONS
 from backend.modules.ws import WsConnection
 
 logger = logging.getLogger(__name__)
@@ -42,60 +43,6 @@ MAX_COMMANDS_PER_MESSAGE = 64
 
 def _evt(event: str, data: dict[str, Any]) -> dict[str, Any]:
     return {"channel": CHANNEL, "event": event, "data": data}
-
-
-def _num(value: Any, default: float = 0.0) -> float:
-    try:
-        out = float(value)
-    except (TypeError, ValueError):
-        return default
-    # NaN and infinities survive JSON and poison every downstream comparison, so
-    # they are rejected here rather than at the first surprising position.
-    return out if out == out and abs(out) != float("inf") else default
-
-
-def _clamp(value: float, low: float, high: float) -> float:
-    return max(low, min(high, value))
-
-
-def _parse_command(raw: Any) -> Command | None:
-    if not isinstance(raw, dict):
-        return None
-    seq = raw.get("seq")
-    if not isinstance(seq, int) or seq <= 0:
-        return None
-    weapon = raw.get("weapon")
-    view_t = raw.get("viewT")
-    return Command(
-        seq=seq,
-        # Clamped rather than trusted: the analogue axes are the obvious place to
-        # ask for a value of 50 and move fifty times as fast.
-        forward=_clamp(_num(raw.get("forward")), -1.0, 1.0),
-        strafe=_clamp(_num(raw.get("strafe")), -1.0, 1.0),
-        jump=bool(raw.get("jump")),
-        crouch=bool(raw.get("crouch")),
-        yaw=_num(raw.get("yaw")),
-        pitch=_clamp(_num(raw.get("pitch")), -1.5708, 1.5708),
-        dt=_clamp(_num(raw.get("dt")), 0.0, 0.25),
-        fire=bool(raw.get("fire")),
-        reload=bool(raw.get("reload")),
-        # `-1` means "no change", so an absent or nonsensical slot leaves the
-        # weapon alone rather than silently arming the knife.
-        weapon=(
-            int(_clamp(_num(weapon, -1.0), -1.0, float(len(WEAPONS) - 1)))
-            if isinstance(weapon, (int, float))
-            else -1
-        ),
-        # Left as `None` when absent: the shot is then judged live, which is the
-        # right answer for a client that did not say what it was looking at.
-        # Range-checking is `PositionHistory.clamp`'s job — it is the only place
-        # that knows the current time, and it is the security boundary.
-        view_t=_num(view_t) if isinstance(view_t, (int, float)) else None,
-        # Floored to a non-negative step. The upper bound is *not* applied here:
-        # it depends on the weapon this command turns out to be applied to, which
-        # only the simulation knows — see `weapons.clamp_zoom`.
-        scoped=max(0, int(_num(raw.get("scoped")))),
-    )
 
 
 async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
@@ -133,6 +80,18 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
         # the browser's point of view, local or remote.
         await _leave_any(conn)
 
+        if bool(data.get("ranked")):
+            # **A rated match, simulated by the game server.** The room is not on
+            # this node at all — see `ranked.py` for why the node proxies rather
+            # than handing the client its token. The welcome arrives later, from
+            # the server, over the same relay.
+            #
+            # Checked before `host`: a join cannot be both, and "ranked on a
+            # friend's node" is not a thing — a friend's node has no more
+            # authority over a result than this one does.
+            await ranked.join(conn, map_name)
+            return
+
         if host:
             # A match on a friend's node: our backend proxies for this browser.
             # The welcome arrives later, over the fabric.
@@ -165,6 +124,12 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
         await conn.send_json(_evt("left_ok", {}))
 
     elif event == "input":
+        if ranked.session_for(conn) is not None:
+            # Forwarded untouched, like the fabric's: the *server* validates,
+            # because the server is the one being lied to. A second check here
+            # would be a copy of the rules with no authority behind it.
+            await ranked.relay_input(conn, data if isinstance(data, dict) else {})
+            return
         binding = fabric.remote_for(conn)
         if binding is not None:
             # Forwarded verbatim: the host validates, because the host is the one
@@ -184,7 +149,7 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
         if not isinstance(commands, list):
             return
         for raw in commands[:MAX_COMMANDS_PER_MESSAGE]:
-            command = _parse_command(raw)
+            command = parse_command(raw)
             if command is not None:
                 room.enqueue(player, command)
         rtt = data.get("rtt")
@@ -192,6 +157,9 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
             player.rtt_ms = _clamp(_num(rtt), 0.0, 60_000.0)
 
     elif event == "respawn":
+        if ranked.session_for(conn) is not None:
+            await ranked.relay_respawn(conn)
+            return
         binding = fabric.remote_for(conn)
         if binding is not None:
             await fabric.send_remote_input(binding, [], None, respawn=True)
@@ -206,7 +174,10 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
         # not to a local room, and there is no fabric message for "change the
         # roster of someone else's match" — adding one would mean a friend could
         # reshape a match you are hosting from a pane you cannot see.
-        if fabric.remote_for(conn) is not None:
+        if fabric.remote_for(conn) is not None or ranked.session_for(conn) is not None:
+            # A ranked room has no host to ask, which is the point of it: a match
+            # whose roster a player could reshape is not one their result should
+            # count for.
             await conn.send_json(
                 _evt("error", {"message": "only the host can add or remove bots"})
             )
@@ -278,11 +249,44 @@ def _signed_in_username() -> str | None:
 
 
 async def _leave_any(conn: WsConnection) -> None:
-    """Leave whichever kind of match this socket is in, local or remote."""
+    """Leave whichever kind of match this socket is in, local or remote.
+
+    **This is where a match becomes history.** Leaving is the only moment the
+    per-player counters are complete and still reachable, so the result is
+    written here — from the simulation's own numbers, not from the client's word
+    for them, and not (as it was) invented by a watchdog with `random.randint`
+    once the process exited.
+    """
+    if ranked.session_for(conn) is not None:
+        # The server writes this one down and tells us; `ranked` records it under
+        # `authority="server"`. Nothing local to file.
+        await ranked.leave(conn)
+        return
     binding = fabric.unbind_remote(conn)
     if binding is not None:
         await fabric.send_remote_leave(binding)
-    await match_server.leave(conn)
+    result = await match_server.leave(conn)
+    if result is not None:
+        _record_result(result)
+
+
+def _record_result(result: dict[str, Any]) -> None:
+    """File a finished match under the signed-in account.
+
+    A node is one account, so there is nothing to disambiguate — and if it is
+    signed into none, there is nobody to file it under. Swallowing the failure is
+    deliberate: a disconnect handler that raised on a database write would leave
+    the room holding a player who is not there.
+    """
+    from backend.modules.games import server_auth
+    from backend.modules.hassault import results
+
+    account = server_auth.signed_in_account()
+    account_id = str((account or {}).get("account_id") or "local_player")
+    try:
+        results.record(account_id, result)
+    except Exception:
+        logger.exception("hassault: could not record the match result")
 
 
 async def invite_friend(who: str, room_id: str) -> dict[str, Any]:

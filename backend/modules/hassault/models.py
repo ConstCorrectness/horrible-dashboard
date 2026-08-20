@@ -277,7 +277,7 @@ class LaunchNativeRequest(BaseModel):
     #: `match_server.join` with no room id is join-*or*-create, so "alone on this
     #: map" is not something the wire can ask for. `host` opens (or joins) a match
     #: here and fills it with `bots`; `join` enters one that already exists.
-    mode: Literal["train", "host", "join"] = "join"
+    mode: Literal["train", "host", "join", "ranked"] = "join"
     #: A specific room; empty means "any match on this map, or open one".
     room_id: str = ""
     map_name: str

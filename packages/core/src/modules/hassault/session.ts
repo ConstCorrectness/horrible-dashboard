@@ -69,6 +69,10 @@ export interface SessionState {
    * `welcome` and `snapshot` frames it would produce locally.
    */
   host: string;
+  /** Whether this match is being adjudicated by the game server. A rated result
+   * is the only kind anything comparative may ever be built on — see
+   * `backend/games_server/hassault_rooms.py`. */
+  ranked: boolean;
   /** Invitations from friends, newest first. */
   invites: MatchInvite[];
 }
@@ -97,6 +101,7 @@ export class MatchSession {
     scores: [0, 0],
     killfeed: [],
     host: '',
+    ranked: false,
     invites: [],
   };
 
@@ -149,10 +154,15 @@ export class MatchSession {
   }
 
   /**
-   * Join a match. With `host` set, it is a friend's match on their node and our
-   * backend proxies for us; everything after this point is identical either way.
+   * Join a match.
+   *
+   * Three destinations, one call. With `host` set it is a friend's match on
+   * their node; with `ranked` it is a **rated** match simulated by the game
+   * server. Both are proxied by our backend, and everything after this point is
+   * identical either way — which is the point: the client speaks one protocol
+   * and the node decides where the room is.
    */
-  join(map: string, name: string, room?: string, host?: string): void {
+  join(map: string, name: string, room?: string, host?: string, ranked?: boolean): void {
     this.connect();
     const invites = this.state.invites;
     this.reset('joining');
@@ -161,8 +171,9 @@ export class MatchSession {
     this.state.invites = invites;
     this.state.map = map;
     this.state.host = host ?? '';
+    this.state.ranked = ranked ?? false;
     this.emit();
-    sendChannel('hassault', 'join', { map, name, room, host });
+    sendChannel('hassault', 'join', { map, name, room, host, ranked });
   }
 
   /** Invite a friend to the match we are hosting. */
@@ -462,6 +473,7 @@ export class MatchSession {
       scores: [0, 0],
       killfeed: [],
       host: '',
+      ranked: false,
       invites: this.state.invites,
     };
     this.predictor.reset();

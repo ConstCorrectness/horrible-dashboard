@@ -67,6 +67,14 @@ export const observabilityModule: ModuleManifest = {
       default: 5,
     },
     {
+      key: 'observability.mutedSources',
+      title: 'Muted I/O sources',
+      description:
+        'Comma-separated sources to hide from the data-flow list — for example `ws` to stop websocket frames burying everything else. Muting hides rows; nothing stops being captured, so unmuting brings the history back rather than starting a new one. Edited by the toggles in the panel itself.',
+      type: 'string',
+      default: '',
+    },
+    {
       key: 'observability.maxBodyChars',
       title: 'Captured body size (characters)',
       description:

@@ -3,7 +3,7 @@ import { useState, useSyncExternalStore } from 'react';
 import type { AgentContextSnapshot } from '@horribledashboard/sdk';
 
 import { useAgentContext } from '../../agent-context';
-import { useSetting } from '../../settings';
+import { setSetting, useSetting } from '../../settings';
 import { telemetryStore, type IoEvent, type IoSource } from '../../telemetry';
 import {
   fmtBytes,
@@ -48,21 +48,49 @@ function fmtTime(ts: number): string {
   return new Date(ts * 1000).toLocaleTimeString();
 }
 
-/** Active row filter for the panel: a text query, a source, and an errors toggle. */
+/** Active row filter for the panel: a text query, muted sources, an errors toggle. */
 interface IoFilter {
   query: string;
-  source: IoSource | 'all';
+  /**
+   * Sources to **hide**, rather than the one source to show.
+   *
+   * It used to be `source: IoSource | 'all'` — a dropdown that could show
+   * everything or exactly one thing, and therefore could not express the one
+   * thing anybody actually wants here: *everything except `ws`*. A busy
+   * websocket produces frames faster than anything else in the app, so the
+   * choice was between a list buried in them and a list with nothing else in it.
+   */
+  muted: ReadonlySet<IoSource>;
   errorsOnly: boolean;
 }
 
-const EMPTY_FILTER: IoFilter = { query: '', source: 'all', errorsOnly: false };
 const SOURCES: readonly IoSource[] = ['client', 'inbound', 'outbound', 'ws', 'browser'];
 
-/** Apply a filter to the event list (method/target/body substring, source, errors). */
-function applyFilter(events: IoEvent[], f: IoFilter): IoEvent[] {
+/** Parse the stored setting: a comma-separated list of source names. */
+export function parseMuted(raw: string | undefined): ReadonlySet<IoSource> {
+  if (!raw) return new Set();
+  const known = new Set<string>(SOURCES);
+  return new Set(
+    raw
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      // An unknown name is dropped rather than kept: the setting is editable by
+      // hand, and a typo that silently muted nothing is better than one that
+      // sits in the list looking like it did something.
+      .filter((s): s is IoSource => known.has(s)),
+  );
+}
+
+/** Serialize back, in the declared order so the value is stable to diff. */
+export function formatMuted(muted: ReadonlySet<IoSource>): string {
+  return SOURCES.filter((s) => muted.has(s)).join(',');
+}
+
+/** Apply a filter to the event list (method/target/body substring, mutes, errors). */
+export function applyFilter(events: IoEvent[], f: IoFilter): IoEvent[] {
   const q = f.query.trim().toLowerCase();
   return events.filter((e) => {
-    if (f.source !== 'all' && e.source !== f.source) return false;
+    if (f.muted.has(e.source)) return false;
     if (f.errorsOnly && !isIoError(e)) return false;
     if (q) {
       const hay = `${e.method} ${e.target} ${e.request_body ?? ''} ${e.response_body ?? ''}`;
@@ -93,11 +121,24 @@ function useExpanded(): [(e: IoEvent) => boolean, (e: IoEvent) => void] {
 export function ObservabilityPanel() {
   const events = useIoEvents();
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [filter, setFilter] = useState<IoFilter>(EMPTY_FILTER);
+  const [query, setQuery] = useState('');
+  const [errorsOnly, setErrorsOnly] = useState(false);
+  // Persisted, not component state: muting `ws` is a standing preference about a
+  // source that never stops being noisy, and a mute that reset every time the
+  // pane was reopened would have to be redone every time.
+  const muted = parseMuted(useSetting<string>('observability.mutedSources'));
+  const filter: IoFilter = { query, muted, errorsOnly };
   useAgentContext(() => ioSnapshot(events));
   const filtered = applyFilter(events, filter);
   const rows = [...filtered].reverse(); // newest first
-  const filtering = filter.query !== '' || filter.source !== 'all' || filter.errorsOnly;
+  const filtering = query !== '' || muted.size > 0 || errorsOnly;
+
+  const toggleSource = (source: IoSource) => {
+    const next = new Set(muted);
+    if (next.has(source)) next.delete(source);
+    else next.add(source);
+    void setSetting('observability.mutedSources', formatMuted(next));
+  };
   const selected = events.find((e) => ioEventKey(e) === selectedKey) ?? null;
 
   return (
@@ -107,28 +148,39 @@ export function ObservabilityPanel() {
           className="obs-filter-query"
           type="search"
           placeholder="Filter method, target, or body…"
-          value={filter.query}
-          onChange={(e) => setFilter((f) => ({ ...f, query: e.target.value }))}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
         />
-        <select
-          className="obs-filter-source"
-          value={filter.source}
-          onChange={(e) =>
-            setFilter((f) => ({ ...f, source: e.target.value as IoFilter['source'] }))
-          }
-        >
-          <option value="all">All sources</option>
-          {SOURCES.map((s) => (
-            <option key={s} value={s}>
-              {s}
-            </option>
-          ))}
-        </select>
+        {/* One toggle per source, each showing what it would hide. A row of
+            chips rather than a dropdown because muting is not picking: the
+            useful state is "all of them except that one", which a select cannot
+            hold. */}
+        <div className="obs-filter-sources" role="group" aria-label="Sources">
+          {SOURCES.map((s) => {
+            const count = events.filter((e) => e.source === s).length;
+            const off = muted.has(s);
+            return (
+              <button
+                key={s}
+                type="button"
+                className={`io-badge io-${s} obs-source-toggle${off ? ' is-muted' : ''}`}
+                aria-pressed={!off}
+                title={
+                  off ? `${s}: hidden — click to show` : `${s}: ${count} events — click to hide`
+                }
+                onClick={() => toggleSource(s)}
+              >
+                {s}
+                {count > 0 && <span className="obs-source-count">{count}</span>}
+              </button>
+            );
+          })}
+        </div>
         <label className="obs-filter-errors">
           <input
             type="checkbox"
-            checked={filter.errorsOnly}
-            onChange={(e) => setFilter((f) => ({ ...f, errorsOnly: e.target.checked }))}
+            checked={errorsOnly}
+            onChange={(e) => setErrorsOnly(e.target.checked)}
           />
           Errors only
         </label>
@@ -196,14 +248,21 @@ export function ObservabilityWidget() {
   const events = useIoEvents();
   const [isExpanded, toggle] = useExpanded();
   const recentCount = useSetting<number>('observability.recentCount') ?? 5;
+  // The widget shows five rows. If `ws` is muted in the panel it has to be muted
+  // here too, or the mute achieves nothing on the surface with the least room.
+  const muted = parseMuted(useSetting<string>('observability.mutedSources'));
+  const visible = events.filter((e) => !muted.has(e.source));
   useAgentContext(() => ioSnapshot(events, recentCount));
-  const errors = events.filter(isIoError).length;
-  const recent = [...events].slice(-recentCount).reverse();
+  const errors = visible.filter(isIoError).length;
+  const recent = [...visible].slice(-recentCount).reverse();
 
   return (
     <div className="obs-widget">
       <div className="obs-summary">
-        <strong>{events.length}</strong> calls
+        <strong>{visible.length}</strong> calls
+        {muted.size > 0 && (
+          <span className="dashboard-hint"> · {events.length - visible.length} hidden</span>
+        )}
         {errors > 0 && <span className="io-status-bad"> · {errors} errors</span>}
       </div>
       <ul className="obs-recent">

@@ -225,7 +225,8 @@ export interface LaunchNativeOptions {
    * a learner in whatever firefight is already on that map. `host` opens one and
    * fields `bots`; `join` enters one that exists.
    */
-  mode?: 'train' | 'host' | 'join';
+  /** `ranked` opens a match the game server adjudicates; the rest are local. */
+  mode?: 'train' | 'host' | 'join' | 'ranked';
   /** A specific room; empty means "any match on this map, or open one". */
   room_id?: string;
   map_name: string;
@@ -266,6 +267,20 @@ export function listTacticals(): Promise<TacticalSpec[]> {
   return apiGet<TacticalSpec[]>('/hassault/tacticals');
 }
 
+/**
+ * Maps a **rated** match can be played on.
+ *
+ * The game server's own answer, proxied by this node — not a local filter on
+ * `source === 'bundled'`. The two agree today, and the server's is the one that
+ * decides: a map added on either side then needs no matching change on the other.
+ * An empty list means the server could not be reached, which is a reason to grey
+ * Ranked out rather than to let a join fail at the socket.
+ */
+export async function getRankedMaps(): Promise<string[]> {
+  const res = await apiGet<{ maps: string[] }>('/hassault/ranked/maps');
+  return res.maps ?? [];
+}
+
 export function launchNativeFps(opts: LaunchNativeOptions): Promise<LaunchNativeResult> {
   return apiPost<LaunchNativeResult>('/hassault/launch_native', opts);
 }
@@ -274,7 +289,14 @@ export interface SkinDefinition {
   id: string;
   name: string;
   weaponId: string;
-  rarity: 'consumer' | 'industrial' | 'mil_spec' | 'restricted' | 'classified' | 'covert' | 'special';
+  rarity:
+    | 'consumer'
+    | 'industrial'
+    | 'mil_spec'
+    | 'restricted'
+    | 'classified'
+    | 'covert'
+    | 'special';
   rarityColor: string;
   collection: string;
   baseColor: string;
@@ -305,7 +327,10 @@ export function getSkinInventory(): Promise<SkinInstance[]> {
 }
 
 export function equipSkin(instanceId: string): Promise<{ ok: boolean }> {
-  return apiPost<{ ok: boolean }>(`/hassault/skins/equip?instance_id=${encodeURIComponent(instanceId)}`, {});
+  return apiPost<{ ok: boolean }>(
+    `/hassault/skins/equip?instance_id=${encodeURIComponent(instanceId)}`,
+    {},
+  );
 }
 
 export function claimLevelUpDrop(): Promise<SkinInstance> {
@@ -428,14 +453,18 @@ export interface PostMatchSummary {
   headshotPercent: number;
   damageDealt: number;
   isMvp: boolean;
+  /** How many other players were in the room — bots included. Zero is a solo
+   * warm-up, and the card says so rather than calling it a victory. */
+  opponents: number;
   xpGained: number;
   currentLevel: number;
   levelProgressPercent: number;
-  ratingDelta: number;
-  newRating: number;
-  ratingTier: string;
+  /** Career XP, summed from the match rows rather than counted separately. */
+  totalXp: number;
   earnedDrop: SkinInstance | null;
   timestamp: number;
+  /** The row this came from, in `hassault_matches`. */
+  matchId: string;
 }
 
 export function getProcessStatus(): Promise<{ running: boolean; pid?: number }> {

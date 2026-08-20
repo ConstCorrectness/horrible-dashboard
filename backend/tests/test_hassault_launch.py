@@ -176,3 +176,19 @@ def test_an_older_browser_build_still_validates(client: TestClient) -> None:
     """
     args = args_for(client, room_id="", username="rob", raw_input=True, max_fps=240)
     assert "--mode=join" in args
+
+
+def test_ranked_travels_as_its_own_mode(client: TestClient) -> None:
+    """The native client's only difference for a rated match is this flag: it
+    joins through the node exactly as it does for a casual one, and the node opens
+    the room somewhere else."""
+    args = args_for(client, mode="ranked")
+    assert "--mode=ranked" in args
+
+
+def test_a_ranked_launch_carries_no_bots(client: TestClient) -> None:
+    """Bots are host-only, and a rated room has no host to ask — which is the
+    point of it. A count sent with a ranked launch would be an instruction the
+    server refuses, arriving inside a window that had already opened."""
+    args = args_for(client, mode="ranked", bots=4)
+    assert not any(a.startswith("--bots=") for a in args)

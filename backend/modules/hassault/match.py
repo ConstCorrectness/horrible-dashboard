@@ -179,6 +179,16 @@ class MatchPlayer:
     reserve: dict[int, int] = field(default_factory=dict)
     kills: int = 0
     deaths: int = 0
+    #: Damage this player has actually landed, in hit points. **Applied** damage,
+    #: not rolled: a 90-damage sniper round into a body with 20 left counts 20.
+    #: Overkill would make the number a description of the weapon rather than of
+    #: the match, and it is the one stat a player can check against the health
+    #: bars they watched go down.
+    damage_dealt: float = 0.0
+    #: Kills whose final hit landed in the head band. **Kills, not hits**, because
+    #: the debrief divides this by `kills` to show a percentage, and counting hits
+    #: there would print numbers over 100%.
+    head_kills: int = 0
     # Simulated seconds this player has been advanced by. Fire rate and reloads
     # are measured on this clock, not the wall clock: commands arrive in batches,
     # and gating on real time would silently halve a fast weapon's rate. It is
@@ -385,6 +395,42 @@ class MatchRoom:
         if not player.is_bot:
             self.empty_since = None
         return player
+
+    def result_for(self, player_id: str) -> dict[str, Any] | None:
+        """How one player did, as the debrief needs it.
+
+        Read from the simulation's own counters, which is the whole point: every
+        number here was produced by a shot that was actually resolved against
+        this world. The route used to invent all of them with `random.randint`,
+        which made the card a screensaver.
+
+        `won` and `mvp` are **relative to the room** rather than to a team score,
+        because the only mode is deathmatch: you won if nobody outscored you, and
+        you are the MVP if nobody equalled you either. Bots count — losing to one
+        is losing, and a card that quietly excluded them would be flattering
+        rather than true.
+        """
+        player = self.players.get(player_id)
+        if player is None:
+            return None
+        others = [p for p in self.players.values() if p.id != player_id]
+        best = max((p.kills for p in others), default=-1)
+        return {
+            "map": self.map_name,
+            "room": self.id,
+            "name": player.name,
+            "kills": player.kills,
+            "deaths": player.deaths,
+            "headKills": player.head_kills,
+            "damageDealt": round(player.damage_dealt),
+            "won": player.kills >= best,
+            "mvp": player.kills > best,
+            "opponents": len(others),
+            # Wall clock, so a summary can be told from a stale one. The room's
+            # own clock starts when it opens, which is not when this player
+            # joined it.
+            "playedAt": time.time(),
+        }
 
     def remove(self, player_id: str) -> MatchPlayer | None:
         gone = self.players.pop(player_id, None)
@@ -771,6 +817,10 @@ class MatchRoom:
         weapon: weapons.Weapon,
         now: float,
     ) -> None:
+        # Before the subtraction: what actually landed is capped by what was
+        # left, and reading it afterwards would count the overkill too.
+        landed = min(amount, max(0.0, victim.health))
+        attacker.damage_dealt += landed
         victim.health -= amount
         killed = victim.health <= 0
         if len(attacker.pending_hits) < MAX_PENDING_HITS:
@@ -791,6 +841,8 @@ class MatchRoom:
         victim.respawn_at = now + RESPAWN_DELAY
         victim.queue.clear()
         attacker.kills += 1
+        if head:
+            attacker.head_kills += 1
         if 0 <= attacker.team < len(self.scores):
             self.scores[attacker.team] += 1
         self._emit(
@@ -1021,18 +1073,27 @@ class MatchServer:
         )
         return room, player
 
-    async def leave(self, conn: WsConnection) -> None:
+    async def leave(self, conn: WsConnection) -> dict[str, Any] | None:
+        """Take this socket out of its room, returning how its player did.
+
+        The result is read **before** the removal, which is the only order that
+        works: `remove` drops the `MatchPlayer` and with it every counter the
+        debrief is made of. Returned rather than recorded here because this layer
+        has no idea who the account is — the channel does, and it is the caller.
+        """
         entry = self.membership.pop(id(conn), None)
         if entry is None:
-            return
+            return None
         room_id, player_id = entry
         room = self.rooms.get(room_id)
         if room is None:
-            return
+            return None
+        result = room.result_for(player_id)
         room.remove(player_id)
         await self.broadcast_event(
             room, "left", {"room": room.id, "playerId": player_id}
         )
+        return result
 
     def player_for(self, conn: WsConnection) -> tuple[MatchRoom, MatchPlayer] | None:
         entry = self.membership.get(id(conn))
@@ -1060,3 +1121,69 @@ def map_error(exc: Exception) -> str:
     if isinstance(exc, CgzError):
         return f"that map cannot be read: {exc}"
     return str(exc)
+
+
+# ---------------------------------------------------------------------------
+# Wire validation
+#
+# **One validator, used by every caller.** This lived in `channel.py`, which made
+# it reachable only by a browser on this node — and the moment a second entry
+# point appeared (a peer over the fabric, then the game server hosting a rated
+# match) the temptation was a second copy. A laxer second implementation of these
+# clamps is precisely where a gap appears, and it appears in the one place nobody
+# is looking: the path that is not the common one.
+# ---------------------------------------------------------------------------
+
+
+def _num(value: Any, default: float = 0.0) -> float:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return default
+    # NaN and infinities survive JSON and poison every downstream comparison, so
+    # they are rejected here rather than at the first surprising position.
+    return out if out == out and abs(out) != float("inf") else default
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
+
+
+def parse_command(raw: Any) -> Command | None:
+    if not isinstance(raw, dict):
+        return None
+    seq = raw.get("seq")
+    if not isinstance(seq, int) or seq <= 0:
+        return None
+    weapon = raw.get("weapon")
+    view_t = raw.get("viewT")
+    return Command(
+        seq=seq,
+        # Clamped rather than trusted: the analogue axes are the obvious place to
+        # ask for a value of 50 and move fifty times as fast.
+        forward=_clamp(_num(raw.get("forward")), -1.0, 1.0),
+        strafe=_clamp(_num(raw.get("strafe")), -1.0, 1.0),
+        jump=bool(raw.get("jump")),
+        crouch=bool(raw.get("crouch")),
+        yaw=_num(raw.get("yaw")),
+        pitch=_clamp(_num(raw.get("pitch")), -1.5708, 1.5708),
+        dt=_clamp(_num(raw.get("dt")), 0.0, 0.25),
+        fire=bool(raw.get("fire")),
+        reload=bool(raw.get("reload")),
+        # `-1` means "no change", so an absent or nonsensical slot leaves the
+        # weapon alone rather than silently arming the knife.
+        weapon=(
+            int(_clamp(_num(weapon, -1.0), -1.0, float(len(weapons.WEAPONS) - 1)))
+            if isinstance(weapon, (int, float))
+            else -1
+        ),
+        # Left as `None` when absent: the shot is then judged live, which is the
+        # right answer for a client that did not say what it was looking at.
+        # Range-checking is `PositionHistory.clamp`'s job — it is the only place
+        # that knows the current time, and it is the security boundary.
+        view_t=_num(view_t) if isinstance(view_t, (int, float)) else None,
+        # Floored to a non-negative step. The upper bound is *not* applied here:
+        # it depends on the weapon this command turns out to be applied to, which
+        # only the simulation knows — see `weapons.clamp_zoom`.
+        scoped=max(0, int(_num(raw.get("scoped")))),
+    )

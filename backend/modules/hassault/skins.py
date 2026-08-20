@@ -16,7 +16,7 @@ from __future__ import annotations
 import random
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
@@ -86,7 +86,9 @@ class SkinDefinition:
     collection: str
     base_color: str
     accent_color: str
-    pattern_type: str  # "solid" | "camo" | "anodized" | "custom_art" | "patina" | "fade"
+    pattern_type: (
+        str  # "solid" | "camo" | "anodized" | "custom_art" | "patina" | "fade"
+    )
     description: str
 
     def to_dict(self) -> dict[str, Any]:
@@ -174,7 +176,6 @@ SKIN_CATALOG: list[SkinDefinition] = [
         pattern_type="custom_art",
         description="Painted using a red base coat with black spiderweb patterns.",
     ),
-
     # Covert (Red - Ancient)
     SkinDefinition(
         id="sniper_dragonfire",
@@ -209,7 +210,6 @@ SKIN_CATALOG: list[SkinDefinition] = [
         pattern_type="anodized",
         description="Monochrome finish with pearlescent accents and digital optical tracking marks.",
     ),
-
     # Classified (Pink - Legendary)
     SkinDefinition(
         id="sniper_hyperbeast",
@@ -244,7 +244,6 @@ SKIN_CATALOG: list[SkinDefinition] = [
         pattern_type="custom_art",
         description="Painted with a fiery skull shattered by an accelerating projectile.",
     ),
-
     # Restricted (Purple - Mythical)
     SkinDefinition(
         id="assault_redline",
@@ -279,7 +278,6 @@ SKIN_CATALOG: list[SkinDefinition] = [
         pattern_type="patina",
         description="Color case-hardened through wood charcoal heating. Pattern seed determines blue percentage.",
     ),
-
     # Mil-Spec (Blue - Rare)
     SkinDefinition(
         id="assault_slate",
@@ -314,7 +312,6 @@ SKIN_CATALOG: list[SkinDefinition] = [
         pattern_type="custom_art",
         description="Painted with a flowing water elemental sprite over crimson metal.",
     ),
-
     # Industrial (Light Blue - Uncommon)
     SkinDefinition(
         id="shotgun_sand_dune",
@@ -338,7 +335,6 @@ SKIN_CATALOG: list[SkinDefinition] = [
         pattern_type="camo",
         description="Spray-painted using mesh wire fencing as a stencil.",
     ),
-
     # Consumer (White - Common)
     SkinDefinition(
         id="pistol_groundwater",
@@ -360,8 +356,128 @@ class SkinInventoryManager:
     """Manages player inventories, random drops, trade-up contracts, and AtlasDB sync."""
 
     def __init__(self) -> None:
-        # account_id -> list[SkinInstance]
+        #: account_id -> list[SkinInstance]. A **cache** now, not the store:
+        #: `app.db` is where an inventory lives (see `_load` / `_save`). It was
+        #: this dict alone, which meant every skin anybody earned was gone the
+        #: next time the backend restarted — including the drop the post-match
+        #: card had just congratulated them on.
         self._inventories: dict[str, list[SkinInstance]] = {}
+
+    # -- persistence --------------------------------------------------------
+
+    @staticmethod
+    def _conn():
+        import sqlite3
+
+        from backend.modules.database.app_db import ensure_app_db_dir
+
+        conn = sqlite3.connect(str(ensure_app_db_dir()))
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS hassault_skins (
+                instance_id  TEXT PRIMARY KEY,
+                account_id   TEXT NOT NULL,
+                skin_id      TEXT NOT NULL,
+                float_value  REAL NOT NULL,
+                pattern_seed INTEGER NOT NULL,
+                acquired_at  REAL NOT NULL,
+                is_equipped  INTEGER NOT NULL DEFAULT 0,
+                stat_kills   INTEGER
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_hassault_skins_account "
+            "ON hassault_skins(account_id)"
+        )
+        return conn
+
+    def _load(self, account_id: str) -> list[SkinInstance] | None:
+        """This account's inventory from the database, or `None` if it has never
+        had one — which is what tells a new player from one who has traded
+        everything away."""
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM hassault_skins WHERE account_id = ? ORDER BY acquired_at",
+                (account_id,),
+            ).fetchall()
+        if not rows:
+            return None
+        return [
+            SkinInstance(
+                instance_id=str(r["instance_id"]),
+                skin_id=str(r["skin_id"]),
+                float_value=float(r["float_value"]),
+                pattern_seed=int(r["pattern_seed"]),
+                acquired_at=float(r["acquired_at"]),
+                is_equipped=bool(r["is_equipped"]),
+                stat_tracker_kills=(
+                    None if r["stat_kills"] is None else int(r["stat_kills"])
+                ),
+            )
+            for r in rows
+        ]
+
+    def _save(self, account_id: str) -> None:
+        """Write this account's inventory back.
+
+        A delete-and-reinsert of one account's rows rather than a diff: an
+        inventory is at most a few dozen items, a trade-up burns ten of them in
+        one operation, and a diff is where "the ten went and the one never
+        arrived" comes from.
+        """
+        items = self._inventories.get(account_id, [])
+        with self._conn() as conn:
+            conn.execute(
+                "DELETE FROM hassault_skins WHERE account_id = ?", (account_id,)
+            )
+            conn.executemany(
+                """
+                INSERT INTO hassault_skins
+                    (instance_id, account_id, skin_id, float_value, pattern_seed,
+                     acquired_at, is_equipped, stat_kills)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        item.instance_id,
+                        account_id,
+                        item.skin_id,
+                        item.float_value,
+                        item.pattern_seed,
+                        item.acquired_at,
+                        1 if item.is_equipped else 0,
+                        item.stat_tracker_kills,
+                    )
+                    for item in items
+                ],
+            )
+            conn.commit()
+
+    def has_local(self, account_id: str) -> bool:
+        """Whether this node already holds this account's inventory.
+
+        The question a caller needs before reaching for Atlas: the cluster is a
+        **sync between machines**, not the read path. Asking it on every
+        inventory poll is a round trip per poll for a document that only changes
+        when this node changes it.
+        """
+        if account_id in self._inventories:
+            return True
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM hassault_skins WHERE account_id = ? LIMIT 1",
+                (account_id,),
+            ).fetchone()
+        return row is not None
+
+    def find_instance(self, account_id: str, instance_id: str) -> SkinInstance | None:
+        """One item by id, for a card that knows only which drop it was given."""
+        return next(
+            (i for i in self.get_inventory(account_id) if i.instance_id == instance_id),
+            None,
+        )
 
     async def sync_to_atlas(self, account_id: str) -> None:
         """Asynchronously sync inventory to Atlas MongoDB collection if configured."""
@@ -374,7 +490,13 @@ class SkinInventoryManager:
                 data = [item.to_dict() for item in inv]
                 await col.update_one(
                     {"account_id": account_id},
-                    {"$set": {"account_id": account_id, "inventory": data, "updated_at": time.time()}},
+                    {
+                        "$set": {
+                            "account_id": account_id,
+                            "inventory": data,
+                            "updated_at": time.time(),
+                        }
+                    },
                     upsert=True,
                 )
         except Exception:
@@ -405,12 +527,22 @@ class SkinInventoryManager:
                         )
                     if items:
                         self._inventories[account_id] = items
+                        # Adopted locally, so this is the *last* time Atlas is
+                        # asked for this account on this machine. The cluster is
+                        # a sync between machines, not the read path.
+                        self._save(account_id)
         except Exception:
             pass
 
     def get_inventory(self, account_id: str) -> list[SkinInstance]:
         if account_id not in self._inventories:
-            # Seed starter inventory for new account
+            stored = self._load(account_id)
+            if stored is not None:
+                self._inventories[account_id] = stored
+                return stored
+            # Never played before: seed the starter inventory, and **save it**,
+            # so the two weapons somebody starts with keep their float values and
+            # pattern seeds instead of being re-rolled on every restart.
             self._inventories[account_id] = [
                 SkinInstance(
                     instance_id=str(uuid.uuid4()),
@@ -429,6 +561,7 @@ class SkinInventoryManager:
                     is_equipped=True,
                 ),
             ]
+            self._save(account_id)
         return self._inventories[account_id]
 
     def equip_skin(self, account_id: str, instance_id: str) -> bool:
@@ -448,6 +581,7 @@ class SkinInventoryManager:
                 item.is_equipped = False
 
         target.is_equipped = True
+        self._save(account_id)
         return True
 
     def roll_drop(self, account_id: str) -> SkinInstance:
@@ -480,6 +614,7 @@ class SkinInventoryManager:
 
         inv = self.get_inventory(account_id)
         inv.append(instance)
+        self._save(account_id)
         return instance
 
     def trade_up_contract(
@@ -538,6 +673,10 @@ class SkinInventoryManager:
         )
 
         self._inventories[account_id].append(result_instance)
+        # Ten burned and one made, written in **one** transaction by `_save`:
+        # a contract that persisted the burn and not the reward would be the
+        # worst possible thing to get half-right.
+        self._save(account_id)
         return result_instance
 
 

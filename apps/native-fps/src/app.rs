@@ -40,11 +40,15 @@ use hassault_native::bodies;
 use hassault_native::camera::Camera;
 use hassault_native::geometry::MeshData;
 use hassault_native::hud::{Hud, HudView, OverlayVertex};
+use hassault_native::menu::{self, Action, Menu, Page};
 use hassault_native::net::{Incoming, MatchSocket};
 use hassault_native::physics::{self, eye_height, MoveInput, JUMP_SPEED, MOVE_SPEED};
 use hassault_native::prediction::Prediction;
 use hassault_native::protocol::{Command, Event, Fx, PlayerRow, SelfState};
 use hassault_native::renderer::{Renderer, Vertex};
+use hassault_native::settings::{Settings, SettingsWriter};
+use hassault_native::trace::kick_vector;
+use hassault_native::training::TrainingRange;
 use hassault_native::viewmodel::{self, Skin, WeaponViewModel};
 use hassault_native::world::World;
 
@@ -136,6 +140,31 @@ pub struct App {
     /// The unscoped field of view, so stepping the scope divides *this* rather
     /// than compounding on whatever the last magnification left behind.
     base_fov: f32,
+    /// Everything the pause menu edits, live. The authority for this session:
+    /// the node is where it is *stored*, not where it is read from per frame.
+    settings: Settings,
+    /// Persists changes off the frame thread. See `settings::SettingsWriter`.
+    writer: SettingsWriter,
+    menu: Menu,
+    /// Whether the window is currently fullscreen, so the menu's toggle can tell
+    /// what it is toggling without asking the compositor.
+    fullscreen: bool,
+    /// The training range: the server's part, played locally, when there is no
+    /// server. Empty and untouched in a match.
+    range: TrainingRange,
+    /// Seconds since this client started, for the range's fire rate. A local
+    /// clock rather than `Instant::now()` at the call site, so the rate limit is
+    /// testable without sleeping.
+    local_clock: f32,
+    /// When the range last fired, on that clock.
+    last_fire: f32,
+    /// Semi-automatic weapons need the trigger released between shots.
+    trigger_used: bool,
+    /// A weapon switch to ask for on the next command, or `-1`. In a match the
+    /// server owns the slot, so this is a request and not a change.
+    want_weapon: i32,
+    /// A reload to ask for on the next command. Cleared as it is sent.
+    want_reload: bool,
     /// Rebuilt each frame into buffers that are kept, so the render path does
     /// not allocate. The same reasoning as the renderer's own body buffer.
     overlay: Vec<OverlayVertex>,
@@ -159,7 +188,8 @@ impl App {
         world: World,
         mesh: MeshData,
         socket: Option<MatchSocket>,
-        sensitivity: f32,
+        settings: Settings,
+        writer: SettingsWriter,
         weapons: Vec<WeaponSpec>,
         skins: HashMap<String, Skin>,
     ) -> App {
@@ -174,7 +204,7 @@ impl App {
             prediction: Prediction::default(),
             camera: Camera::default(),
             keys: Keys::default(),
-            sensitivity,
+            sensitivity: settings.sensitivity,
             focused: false,
             players: Vec::new(),
             self_id: String::new(),
@@ -192,6 +222,16 @@ impl App {
             you: None,
             hud: Hud::default(),
             viewmodel: WeaponViewModel::default(),
+            settings,
+            writer,
+            menu: Menu::default(),
+            fullscreen: false,
+            range: TrainingRange::default(),
+            local_clock: 0.0,
+            last_fire: -999.0,
+            trigger_used: false,
+            want_weapon: -1,
+            want_reload: false,
             overlay: Vec::new(),
             weapon_verts: Vec::new(),
             audio: GameAudio::open(),
@@ -429,6 +469,26 @@ impl App {
         );
         self.joined = true;
         self.follow_prediction();
+
+        // Stand the range up around wherever we landed. The rifle rather than
+        // slot 0 (the knife), matching the browser's Train: the mode is for
+        // learning the movement and the shoot-jump, and neither is reachable
+        // with a blade.
+        let slot = self
+            .weapons
+            .iter()
+            .position(|w| w.id == "assault")
+            .unwrap_or(0);
+        let weapons = self.weapons.clone();
+        self.range.set_weapons(&weapons, slot);
+        self.range.place(&self.world, placed.x, placed.y);
+        if !self.range.populated() {
+            // One spawn point on the map, and we are standing on it. Not fatal —
+            // the movement is still the point — but silence here would read as
+            // the dummies having failed to load.
+            eprintln!("hassault: no room for training dummies on this map");
+        }
+        self.you = Some(self.range.self_state());
     }
 
     /// Move the camera to wherever the prediction currently believes we are.
@@ -601,6 +661,10 @@ impl App {
             self.prediction.state.yaw = self.camera.yaw.to_radians();
             self.prediction.state.pitch = self.camera.pitch.to_radians();
             physics::step(&self.world, &mut self.prediction.state, &input, dt);
+            // The range plays the server's part, and it has to run *after* the
+            // step: a shot leaves from where the body is this frame, and firing
+            // before moving aims from where it was on the previous one.
+            self.train(dt);
             self.follow_prediction();
             return;
         }
@@ -617,6 +681,11 @@ impl App {
         // Which cone the server should use for it. Clamped there against the
         // weapon this command lands on — the wire parser cannot know that.
         cmd.scoped = self.scoped;
+        // `-1` is "no change", so this is naturally absent on every frame that
+        // did not ask for one; taken rather than left set, or every command for
+        // the rest of the match repeats a switch that already happened.
+        cmd.weapon = std::mem::replace(&mut self.want_weapon, -1);
+        cmd.reload = std::mem::take(&mut self.want_reload);
         cmd.yaw = self.camera.yaw;
         cmd.pitch = self.camera.pitch;
 
@@ -645,6 +714,253 @@ impl App {
                 eprintln!("hassault: {e}");
             }
         }
+    }
+
+    /// The training range's frame: ammo, reloads, dummies, and the trigger.
+    ///
+    /// Everything here is what a match server would otherwise be doing, which is
+    /// why it produces a `SelfState` and hands it to exactly the consumers a
+    /// snapshot feeds. The HUD, the view model and the hitmarkers have no idea
+    /// which half of the game they are drawing.
+    fn train(&mut self, dt: f32) {
+        self.local_clock += dt;
+        self.range.update(dt);
+        if self.keys.fire {
+            self.try_fire();
+        } else {
+            // Released, so the next press is a fresh pull. A semi-automatic
+            // weapon that did not track this would fire at the frame rate.
+            self.trigger_used = false;
+        }
+
+        // Drained and forwarded exactly as a snapshot's would be — `self_state`
+        // takes the hitmarkers with it, so this must happen once per frame and
+        // the result must be the one everything downstream reads.
+        let you = self.range.self_state();
+        self.hud.on_self(&you);
+        self.hud.on_hits(&you.hits);
+        self.you = Some(you);
+    }
+
+    /// One trigger pull on the range, rate-limited the way the server would.
+    ///
+    /// The limit is not decoration: without it a 62 rpm sniper fires once per
+    /// frame, which at this client's frame rate is roughly two thousand rounds a
+    /// second and makes the mode useless for learning anything about timing.
+    fn try_fire(&mut self) {
+        let Some(weapon) = self.held().cloned() else {
+            return;
+        };
+        let interval = if weapon.interval > 0.0 {
+            weapon.interval
+        } else {
+            0.1
+        };
+        if self.local_clock - self.last_fire < interval {
+            return;
+        }
+        // Semi-automatic weapons need the button released between shots. `auto`
+        // is served, so this cannot disagree with the server about which weapons
+        // hold down.
+        if !weapon.auto && self.trigger_used {
+            return;
+        }
+        if !self.range.can_fire() {
+            // Out of rounds, or mid-reload. The click is spent either way, so a
+            // semi-automatic does not fire the instant a reload finishes with the
+            // button still held.
+            self.trigger_used = true;
+            return;
+        }
+
+        let state = &self.prediction.state;
+        let (x, y, z) = (state.x, state.y, state.z);
+        let eye = physics::eye_offset(state);
+        let crouching = state.crouch > 0.5;
+        let (yaw, pitch) = (self.camera.yaw.to_radians(), self.camera.pitch.to_radians());
+        let scoped = self.scoped;
+        let Some(shot) = self
+            .range
+            .fire(&self.world, x, y, z, eye, yaw, pitch, scoped)
+        else {
+            return;
+        };
+        self.last_fire = self.local_clock;
+        self.trigger_used = true;
+
+        // **The kick.** In a match the server applies this and reconciliation
+        // hands it back; on the range there is nobody to do it, and without it
+        // the shoot-jump — the whole reason a training mode exists — silently
+        // does nothing. Computed from the served `kickback`, so it is the same
+        // shove a match would give.
+        let kick = kick_vector(&weapon, yaw, pitch, crouching);
+        physics::apply_impulse(&mut self.prediction.state, kick[0], kick[1], kick[2]);
+
+        self.viewmodel.fire();
+        self.play_own("shot", 0.55, true);
+        let _ = shot;
+    }
+
+    /// Reload, in whichever half of the game is running.
+    fn reload(&mut self) {
+        if self.socket.is_some() {
+            // A flag on the next command, like firing: the server owns the
+            // magazine, and a reload it did not agree to is a client counting
+            // rounds it does not have.
+            self.want_reload = true;
+            return;
+        }
+        if self.range.request_reload_started() {
+            self.play_own("reload", 0.5, false);
+        }
+    }
+
+    /// Switch weapons. Offline the range owns the slot; in a match the *server*
+    /// does, so this is a request on the next command rather than a local change
+    /// — setting it locally would show a weapon the server has not given us.
+    fn select_weapon(&mut self, slot: usize) {
+        if slot >= self.weapons.len() {
+            return;
+        }
+        if self.socket.is_some() {
+            self.want_weapon = slot as i32;
+            return;
+        }
+        self.range.select(slot);
+    }
+
+    /// Open or close the pause menu.
+    ///
+    /// The pointer follows it: a menu you cannot click is a menu with a second
+    /// and worse set of controls, and the game underneath keeps running either
+    /// way — **this is not a pause**. It cannot be: in a match the server is
+    /// still simulating, and a client that stopped reading its socket to show a
+    /// settings page would come back to a body that had been shot at for a
+    /// minute. Train runs on for the same reason rather than growing a second
+    /// rule nobody could see.
+    fn toggle_menu(&mut self) {
+        self.menu.toggle();
+        let open = self.menu.open;
+        self.set_grab(!open);
+        if open {
+            // Whatever was held when the menu opened stays held otherwise, and
+            // you return to the game already walking.
+            self.keys = Keys::default();
+            self.trigger_used = true;
+        }
+    }
+
+    fn window_size(&self) -> (f32, f32) {
+        self.renderer
+            .as_ref()
+            .map(|r| {
+                let (w, h) = r.size();
+                (w as f32, h as f32)
+            })
+            .unwrap_or((1280.0, 800.0))
+    }
+
+    fn menu_rows(&self) -> usize {
+        self.menu.rows(&self.settings, self.socket.is_some()).len()
+    }
+
+    fn menu_key(&mut self, code: KeyCode, event_loop: &ActiveEventLoop) {
+        let count = self.menu_rows();
+        match code {
+            KeyCode::Escape => {
+                if self.menu.escape() {
+                    self.set_grab(true);
+                }
+            }
+            KeyCode::ArrowUp | KeyCode::KeyW => self.menu.move_cursor(-1, count),
+            KeyCode::ArrowDown | KeyCode::KeyS => self.menu.move_cursor(1, count),
+            KeyCode::ArrowLeft | KeyCode::KeyA => {
+                self.menu_activate(self.menu.cursor(), -1, event_loop)
+            }
+            KeyCode::ArrowRight | KeyCode::KeyD => {
+                self.menu_activate(self.menu.cursor(), 1, event_loop)
+            }
+            KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space => {
+                self.menu_activate(self.menu.cursor(), 1, event_loop)
+            }
+            _ => {}
+        }
+    }
+
+    /// Act on one row. `step` is which way a value moves; a click is +1, which is
+    /// what makes one control serve both the mouse and the keyboard.
+    fn menu_activate(&mut self, index: usize, step: i32, event_loop: &ActiveEventLoop) {
+        let rows = self.menu.rows(&self.settings, self.socket.is_some());
+        let Some(row) = rows.get(index) else { return };
+        match row.action {
+            Action::Resume => {
+                self.menu.close();
+                self.set_grab(true);
+            }
+            Action::Open(page) => {
+                self.menu.page = page;
+                self.menu.move_cursor(-(self.menu.cursor() as i32), 1);
+            }
+            Action::Back => {
+                self.menu.page = Page::Root;
+                self.menu.move_cursor(-(self.menu.cursor() as i32), 1);
+            }
+            Action::Quit => {
+                // Leaving says goodbye first: without it the room holds a player
+                // who is not there until the socket times out.
+                if let Some(socket) = &self.socket {
+                    let _ = socket.leave();
+                }
+                event_loop.exit();
+            }
+            action => {
+                let Some(key) = menu::apply(action, step, &mut self.settings) else {
+                    return;
+                };
+                // Applied to the live client *before* it is saved: the point of
+                // an in-game menu is seeing the change on the frame you make it,
+                // and the write is a round trip on another thread.
+                self.apply_settings(action);
+                if let Some(value) = self.settings.value_for(key) {
+                    self.writer.save(key, value);
+                }
+            }
+        }
+    }
+
+    /// Push a changed setting into whatever owns it.
+    ///
+    /// Only the ones that live somewhere else need this — the crosshair is read
+    /// straight off `self.settings` when the HUD is built, so it needs nothing.
+    fn apply_settings(&mut self, action: Action) {
+        match action {
+            Action::Sensitivity => self.sensitivity = self.settings.sensitivity,
+            Action::Fullscreen => self.set_fullscreen(self.settings.video.fullscreen),
+            Action::RenderScale | Action::Quality | Action::Vsync => {
+                if let Some(renderer) = &mut self.renderer {
+                    renderer.set_video(self.settings.video);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Borderless rather than exclusive fullscreen.
+    ///
+    /// Exclusive takes the display mode, which is a mode switch on the way in and
+    /// another on the way out, a black screen at each end, and every other window
+    /// on that monitor rearranged when the game exits. Borderless costs a
+    /// compositor pass that this client's present mode already avoids the worst
+    /// of, and alt-tab is instant — which matters for a game launched from a
+    /// dashboard you are going back to.
+    fn set_fullscreen(&mut self, on: bool) {
+        let Some(window) = &self.window else { return };
+        window.set_fullscreen(if on {
+            Some(winit::window::Fullscreen::Borderless(None))
+        } else {
+            None
+        });
+        self.fullscreen = on;
     }
 
     fn set_grab(&mut self, grab: bool) {
@@ -690,13 +1006,30 @@ impl App {
             Some(_) => format!("{} in flight", self.pending),
             None => "train".to_string(),
         };
+        // The rendered resolution, but only when it is not the window's: a
+        // render scale is invisible in a screenshot, and somebody who left it at
+        // 50% would otherwise have no way to notice.
+        let scale = self
+            .renderer
+            .as_ref()
+            .map(|r| {
+                let (sw, sh) = r.scene_size();
+                let (ww, _) = r.size();
+                if sw == ww {
+                    String::new()
+                } else {
+                    format!(" · {sw}×{sh}")
+                }
+            })
+            .unwrap_or_default();
         window.set_title(&format!(
-            "HorribleAssault — {} — {:.0} fps · {} · {} · {} tris · {}{}",
+            "HorribleAssault — {} — {:.0} fps · {} · {} · {} tris{} · {}{}",
             self.map_name,
             self.fps,
             backend,
             gpu,
             self.mesh.triangles,
+            scale,
             link,
             if self.focused {
                 ""
@@ -716,8 +1049,22 @@ impl ApplicationHandler for App {
         if self.window.is_some() {
             return;
         }
+        // **Fullscreen from the first frame, not applied after one.** Creating
+        // a window and then toggling it means a visible flash of a 1280×800
+        // window on a 4K monitor, and on some compositors a resize the renderer
+        // has to service before anything has been drawn.
+        //
+        // Borderless rather than exclusive: see `set_fullscreen`.
+        let fullscreen = self
+            .settings
+            .video
+            .fullscreen
+            .then_some(winit::window::Fullscreen::Borderless(None));
         let attrs = Window::default_attributes()
             .with_title("HorribleAssault")
+            .with_fullscreen(fullscreen)
+            // The size a windowed session opens at, and what fullscreen returns
+            // to when it is turned off in the menu.
             .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 800.0));
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
@@ -727,7 +1074,12 @@ impl ApplicationHandler for App {
                 return;
             }
         };
-        match pollster::block_on(Renderer::new(window.clone(), &self.mesh)) {
+        self.fullscreen = self.settings.video.fullscreen;
+        match pollster::block_on(Renderer::new(
+            window.clone(),
+            &self.mesh,
+            self.settings.video,
+        )) {
             Ok(renderer) => {
                 eprintln!(
                     "hassault: {} on {} — {} triangles",
@@ -762,6 +1114,26 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::Focused(false) => self.set_grab(false),
+            WindowEvent::CursorMoved { position, .. } => {
+                // Only meaningful while the menu is up: in play the pointer is
+                // locked and the look comes from `DeviceEvent`, which is a raw
+                // delta and not a position. See the module docs.
+                if self.menu.open {
+                    let (w, h) = self.window_size();
+                    let count = self.menu_rows();
+                    self.menu
+                        .hover(position.x as f32, position.y as f32, count, w, h);
+                }
+            }
+            WindowEvent::MouseInput { state, button, .. } if self.menu.open => {
+                if button == MouseButton::Left && state == ElementState::Pressed {
+                    let (w, h) = self.window_size();
+                    let count = self.menu_rows();
+                    if let Some(index) = self.menu.hit(count, w, h) {
+                        self.menu_activate(index, 1, event_loop);
+                    }
+                }
+            }
             WindowEvent::MouseInput { state, button, .. } => {
                 if button == MouseButton::Right && self.focused {
                     if state == ElementState::Pressed {
@@ -782,6 +1154,16 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { event, .. } => {
                 let down = event.state == ElementState::Pressed;
                 if let PhysicalKey::Code(code) = event.physical_key {
+                    // The menu takes the keyboard whole while it is up. Letting
+                    // movement keys through would leave you walking into a wall
+                    // while reading a settings page, and the key that closes the
+                    // menu would also be a key that does something in the game.
+                    if self.menu.open {
+                        if down {
+                            self.menu_key(code, event_loop);
+                        }
+                        return;
+                    }
                     match code {
                         KeyCode::KeyW => self.keys.forward = down,
                         KeyCode::KeyS => self.keys.back = down,
@@ -789,11 +1171,22 @@ impl ApplicationHandler for App {
                         KeyCode::KeyD => self.keys.right = down,
                         KeyCode::Space => self.keys.jump = down,
                         KeyCode::ShiftLeft => self.keys.crouch = down,
-                        // Escape releases the pointer rather than quitting: the
-                        // reflex it has to serve is "give me my mouse back", and
-                        // a client that exits the match instead is one nobody
-                        // presses Escape in twice.
-                        KeyCode::Escape if down => self.set_grab(false),
+                        KeyCode::KeyR if down => self.reload(),
+                        // The number row picks a weapon. `Digit1` is the knife,
+                        // matching the server's slot order — which is the order
+                        // `GET /api/hassault/weapons` serves them in, so the two
+                        // cannot drift.
+                        KeyCode::Digit1 if down => self.select_weapon(0),
+                        KeyCode::Digit2 if down => self.select_weapon(1),
+                        KeyCode::Digit3 if down => self.select_weapon(2),
+                        KeyCode::Digit4 if down => self.select_weapon(3),
+                        KeyCode::Digit5 if down => self.select_weapon(4),
+                        // Escape opens the menu — and releases the pointer on
+                        // the way, because the reflex it has to serve first is
+                        // still "give me my mouse back". A client that exited
+                        // the match instead is one nobody presses Escape in
+                        // twice.
+                        KeyCode::Escape if down => self.toggle_menu(),
                         _ => {}
                     }
                 }
@@ -802,7 +1195,19 @@ impl ApplicationHandler for App {
                 // Built before the renderer is borrowed: `self.hud.build` and
                 // `self.viewmodel.vertices` both read the rest of `self`, and
                 // holding `&mut self.renderer` across them borrows it twice.
-                let verts = bodies::build(&self.players, &self.self_id);
+                // The dummies are bodies like any other — which is exactly why
+                // the range hands them back as `PlayerRow`s. Offline
+                // `self.players` is empty (nobody is sending snapshots), so a
+                // build that only read it would draw an empty range and make the
+                // whole mode look broken.
+                let dummies;
+                let rows: &[PlayerRow] = if self.socket.is_none() {
+                    dummies = self.range.rows();
+                    &dummies
+                } else {
+                    &self.players
+                };
+                let verts = bodies::build(rows, &self.self_id);
                 self.viewmodel.vertices(&mut self.weapon_verts);
                 let (width, height) = self.renderer.as_ref().map(|r| r.size()).unwrap_or((1, 1));
                 // The name and the cone are copied out rather than borrowed:
@@ -826,6 +1231,7 @@ impl ApplicationHandler for App {
                 let magnification = self.magnification();
                 let mut overlay = std::mem::take(&mut self.overlay);
                 let view = HudView {
+                    crosshair: self.settings.crosshair,
                     width,
                     height,
                     you: self.you.as_ref(),
@@ -843,6 +1249,17 @@ impl ApplicationHandler for App {
                     playing: self.joined,
                 };
                 self.hud.build(&view, &mut overlay);
+                // After the HUD, so the scrim covers it: the menu is *over* the
+                // game, and a crosshair drawn on top of a settings panel reads as
+                // the panel being transparent rather than the game being behind
+                // it.
+                self.menu.build(
+                    &self.settings,
+                    self.socket.is_some(),
+                    view.width as f32,
+                    view.height as f32,
+                    &mut overlay,
+                );
                 self.overlay = overlay;
 
                 let Some(renderer) = &mut self.renderer else {
@@ -996,7 +1413,17 @@ mod tests {
     fn training_app() -> App {
         let world = training_world();
         let mesh = build_world_mesh(&world);
-        App::new(world, mesh, None, 1.0, weapons(), HashMap::new())
+        App::new(
+            world,
+            mesh,
+            None,
+            Settings::default(),
+            // Nothing to write to: a test must not depend on a node being up,
+            // and a settings write is fire-and-forget by design.
+            SettingsWriter::disabled(),
+            weapons(),
+            HashMap::new(),
+        )
     }
 
     #[test]

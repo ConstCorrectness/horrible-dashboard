@@ -13,6 +13,12 @@
 
 struct Camera {
     view_proj: mat4x4<f32>,
+    // x: where the fog ends, in cubes. y: shading detail — 0 flat, 1 the
+    // directional wash, 2 the wash plus a rim. Packed into one vec4 rather than
+    // given their own uniform because a uniform buffer's minimum binding size is
+    // 16 bytes anyway, so two floats and two of padding is what a second one
+    // would cost.
+    params: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> camera: Camera;
@@ -57,18 +63,67 @@ const AMBIENT: f32 = 0.55;
 // 512 cubes across and a corridor of identically tinted walls has no other cue
 // for how far away its far end is.
 const FOG_START: f32 = 40.0;
-const FOG_END: f32 = 260.0;
 const FOG_COLOR: vec3<f32> = vec3<f32>(0.02, 0.024, 0.035);
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
+    let fog_end = camera.params.x;
+    let detail = camera.params.y;
+
     let n = normalize(in.normal);
     let l = normalize(LIGHT_DIR);
     let lambert = max(dot(n, l), 0.0);
-    let lit = in.color * (AMBIENT + (1.0 - AMBIENT) * lambert);
 
-    let fog = clamp((in.view_depth - FOG_START) / (FOG_END - FOG_START), 0.0, 1.0);
+    // Flat at detail 0. Not a cheaper approximation of the wash — it is the
+    // wash *off*, which is what makes the lowest quality level visibly a choice
+    // rather than a placebo. A face still reads apart from its neighbour,
+    // because the mesher bakes a per-face shade into the vertex colour.
+    var lit = in.color;
+    if (detail >= 1.0) {
+        lit = in.color * (AMBIENT + (1.0 - AMBIENT) * lambert);
+    }
+    if (detail >= 2.0) {
+        // A rim on faces turned away from the light, which is what stops a
+        // corridor of one texture id reading as a single surface at distance.
+        // Cheap, and the only thing High does that Medium does not.
+        let rim = pow(1.0 - lambert, 3.0) * 0.12;
+        lit = lit + vec3<f32>(rim, rim, rim * 1.15);
+    }
+
+    let fog = clamp((in.view_depth - FOG_START) / (fog_end - FOG_START), 0.0, 1.0);
     return vec4<f32>(mix(lit, FOG_COLOR, fog), 1.0);
+}
+
+// ---------------------------------------------------------------------------
+// The blit: the world, rendered at whatever resolution the player chose, scaled
+// into the window.
+//
+// A fullscreen triangle rather than a quad — two triangles meet on a diagonal
+// seam that some drivers shade twice — and no vertex buffer at all: three
+// vertices are cheaper to compute from the index than to bind a buffer for.
+
+struct BlitOut {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_blit(@builtin(vertex_index) index: u32) -> BlitOut {
+    var out: BlitOut;
+    let x = f32(i32(index) / 2) * 4.0 - 1.0;
+    let y = f32(i32(index) & 1) * 4.0 - 1.0;
+    out.clip_position = vec4<f32>(x, y, 0.0, 1.0);
+    // Texture space is y-down and clip space is y-up, so this is not a typo.
+    out.uv = vec2<f32>((x + 1.0) * 0.5, 1.0 - (y + 1.0) * 0.5);
+    return out;
+}
+
+@group(0) @binding(0) var scene_texture: texture_2d<f32>;
+@group(0) @binding(1) var scene_sampler: sampler;
+
+@fragment
+fn fs_blit(in: BlitOut) -> @location(0) vec4<f32> {
+    return textureSample(scene_texture, scene_sampler, in.uv);
 }
 
 // ---------------------------------------------------------------------------

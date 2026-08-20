@@ -129,8 +129,21 @@ impl MatchSocket {
             .map_err(|_| NetError::Send("the connection is closed".into()))
     }
 
-    /// Ask to join. `room`/`host` empty means "a match on this node, on this map".
-    pub fn join(&self, map: &str, room: &str, host: &str, name: &str) -> Result<(), NetError> {
+    /// Ask to join.
+    ///
+    /// `room`/`host` empty means "a match on this node, on this map"; `ranked`
+    /// means "not on this node at all" — the game server opens it and the node
+    /// proxies, because a room inside a player's own backend cannot adjudicate
+    /// that player. Everything after the join is the same wire either way, which
+    /// is why this is one method with a flag rather than a second client.
+    pub fn join(
+        &self,
+        map: &str,
+        room: &str,
+        host: &str,
+        name: &str,
+        ranked: bool,
+    ) -> Result<(), NetError> {
         self.send(&Outbound::new(
             "join",
             JoinRequest {
@@ -138,6 +151,7 @@ impl MatchSocket {
                 room: room.to_string(),
                 host: host.to_string(),
                 name: name.to_string(),
+                ranked,
             },
         ))
     }

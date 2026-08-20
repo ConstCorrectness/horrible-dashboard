@@ -32,6 +32,7 @@ use winit::window::Window;
 use crate::camera::Camera;
 use crate::geometry::MeshData;
 use crate::hud::OverlayVertex;
+use crate::settings::Video;
 
 /// One vertex, laid out exactly as the shader declares it.
 ///
@@ -77,6 +78,20 @@ impl OverlayVertex {
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 struct CameraUniform {
     view_proj: [[f32; 4]; 4],
+    /// `[fog_end, detail, 0, 0]` — the quality level, as the shader reads it.
+    /// Packed into the camera's own buffer rather than given a second binding:
+    /// a uniform buffer's minimum size is 16 bytes, so two floats and two of
+    /// padding is exactly what a separate one would have cost.
+    params: [f32; 4],
+}
+
+impl CameraUniform {
+    fn new(view_proj: glam::Mat4, video: Video) -> CameraUniform {
+        CameraUniform {
+            view_proj: view_proj.to_cols_array_2d(),
+            params: [video.quality.fog_end(), video.quality.detail(), 0.0, 0.0],
+        }
+    }
 }
 
 /// How many body vertices the dynamic buffer can hold.
@@ -118,7 +133,6 @@ pub struct Renderer {
     pipeline: wgpu::RenderPipeline,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
-    depth_view: wgpu::TextureView,
     world_buffer: wgpu::Buffer,
     world_verts: u32,
     body_buffer: wgpu::Buffer,
@@ -134,6 +148,49 @@ pub struct Renderer {
     overlay_verts: u32,
     pub backend: String,
     pub adapter_name: String,
+    /// Kept for one reason: switching vsync re-reads the surface's present
+    /// modes, and `get_capabilities` needs the adapter that opened it.
+    adapter: wgpu::Adapter,
+    /// Kept so the pipelines can be rebuilt when the sample count changes.
+    shader: wgpu::ShaderModule,
+    camera_layout: wgpu::BindGroupLayout,
+    video: Video,
+    /// Where the world is drawn: a texture at `render_scale` of the window, and
+    /// multisampled at the quality level's count. The swapchain never sees the
+    /// world directly any more — only this, scaled up by the blit.
+    scene: SceneTargets,
+    blit_pipeline: wgpu::RenderPipeline,
+    blit_layout: wgpu::BindGroupLayout,
+    blit_bind_group: wgpu::BindGroup,
+    sampler: wgpu::Sampler,
+}
+
+/// The offscreen target the world is rendered into.
+///
+/// It exists for two settings that both need one: **render scale** (draw fewer
+/// pixels than the window has) and **MSAA** (draw more samples than the window
+/// has). The HUD is deliberately *not* drawn here — it goes onto the swapchain
+/// after the blit, at native resolution, because 5×7 text upscaled from 50% is
+/// unreadable and the HUD costs nothing to draw at full size.
+struct SceneTargets {
+    /// What the passes attach to: multisampled when the count is above 1.
+    color: wgpu::TextureView,
+    /// Where a multisampled pass resolves to. `None` at 1×, where `color` is
+    /// already single-sampled and is what the blit samples.
+    resolve: Option<wgpu::TextureView>,
+    depth: wgpu::TextureView,
+    width: u32,
+    height: u32,
+}
+
+impl SceneTargets {
+    /// The view the blit reads: the resolve target when there is one, otherwise
+    /// the colour target itself. Sampling a multisampled texture directly is a
+    /// different shader binding type — getting this wrong is a validation error,
+    /// not a wrong-looking frame.
+    fn sampled(&self) -> &wgpu::TextureView {
+        self.resolve.as_ref().unwrap_or(&self.color)
+    }
 }
 
 impl Renderer {
@@ -142,7 +199,11 @@ impl Renderer {
     /// Async because `wgpu`'s adapter and device requests are; the caller blocks
     /// on it once at startup with `pollster`. Bringing a whole async runtime in
     /// for two awaits that happen once would be the tail wagging the dog.
-    pub async fn new(window: Arc<Window>, mesh: &MeshData) -> Result<Renderer, String> {
+    pub async fn new(
+        window: Arc<Window>,
+        mesh: &MeshData,
+        video: Video,
+    ) -> Result<Renderer, String> {
         let size = window.inner_size();
         // `new_without_display_handle` rather than a `Default`, which wgpu 30
         // does not provide: the display handle is only required on GLES/Wayland,
@@ -202,7 +263,7 @@ impl Renderer {
             // it adds up to a frame of input lag, which is exactly what this
             // client exists to avoid — but it is always supported, so it is the
             // guaranteed floor.
-            present_mode: pick_present_mode(&caps.present_modes),
+            present_mode: pick_present_mode(&caps.present_modes, video.vsync),
             alpha_mode: caps.alpha_modes[0],
             view_formats: vec![],
             // One frame in flight. The default is two, which is the right answer
@@ -220,9 +281,7 @@ impl Renderer {
 
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("camera"),
-            contents: bytemuck::cast_slice(&[CameraUniform {
-                view_proj: glam::Mat4::IDENTITY.to_cols_array_2d(),
-            }]),
+            contents: bytemuck::cast_slice(&[CameraUniform::new(glam::Mat4::IDENTITY, video)]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
@@ -230,7 +289,11 @@ impl Renderer {
             label: Some("camera-layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                // **Both stages.** The matrix is the vertex shader's and the
+                // quality parameters are the fragment shader's, and they share a
+                // buffer. A `VERTEX`-only visibility here is a validation error
+                // at pipeline creation, not a wrong-looking frame.
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -257,49 +320,13 @@ impl Renderer {
             immediate_size: 0,
         });
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("hassault-pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[Some(Vertex::layout())],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                // The mesher winds every quad counter-clockwise as seen from the
-                // open side, which is precisely what makes back-face culling free
-                // here: every surface exists once and faces the space you can
-                // stand in, so there is nothing to draw on the far side.
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipeline = world_pipeline(
+            &device,
+            &pipeline_layout,
+            &shader,
+            format,
+            video.quality.samples(),
+        );
 
         let vertices = mesh_vertices(mesh);
         let world_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -325,9 +352,7 @@ impl Renderer {
         let viewmodel_camera_buffer =
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("viewmodel-camera"),
-                contents: bytemuck::cast_slice(&[CameraUniform {
-                    view_proj: glam::Mat4::IDENTITY.to_cols_array_2d(),
-                }]),
+                contents: bytemuck::cast_slice(&[CameraUniform::new(glam::Mat4::IDENTITY, video)]),
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             });
 
@@ -395,7 +420,77 @@ impl Renderer {
             mapped_at_creation: false,
         });
 
-        let depth_view = create_depth_view(&device, &config);
+        let scene = create_scene(
+            &device,
+            &config,
+            video.render_scale,
+            video.quality.samples(),
+        );
+
+        // Linear, so a scaled-up frame is smoothed rather than blocky — nearest
+        // at 50% looks like a rendering fault rather than a setting.
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("scene-sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let blit_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("blit-layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let blit_bind_group =
+            create_blit_bind_group(&device, &blit_layout, scene.sampled(), &sampler);
+        let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("blit-pipeline"),
+            layout: Some(
+                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("blit-pipeline-layout"),
+                    bind_group_layouts: &[Some(&blit_layout)],
+                    immediate_size: 0,
+                }),
+            ),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_blit"),
+                // No vertex buffer at all: three vertices computed from the
+                // index are cheaper than binding one.
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_blit"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
 
         Ok(Renderer {
             surface,
@@ -405,7 +500,6 @@ impl Renderer {
             pipeline,
             camera_buffer,
             camera_bind_group,
-            depth_view,
             world_buffer,
             world_verts: vertices.len() as u32,
             body_buffer,
@@ -418,7 +512,16 @@ impl Renderer {
             overlay_buffer,
             overlay_verts: 0,
             backend: format!("{:?}", info.backend),
-            adapter_name: info.name,
+            adapter_name: info.name.clone(),
+            adapter,
+            shader,
+            camera_layout,
+            video,
+            scene,
+            blit_pipeline,
+            blit_layout,
+            blit_bind_group,
+            sampler,
         })
     }
 
@@ -432,9 +535,9 @@ impl Renderer {
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
-        // The depth texture is sized to the surface, so it has to be rebuilt
-        // with it — a stale one is a validation error on the next pass.
-        self.depth_view = create_depth_view(&self.device, &self.config);
+        // The scene is sized *from* the surface, so it has to be rebuilt with
+        // it — a stale attachment is a validation error on the next pass.
+        self.rebuild_scene();
     }
 
     pub fn size(&self) -> (u32, u32) {
@@ -499,9 +602,7 @@ impl Renderer {
         self.queue.write_buffer(
             &self.camera_buffer,
             0,
-            bytemuck::cast_slice(&[CameraUniform {
-                view_proj: vp.to_cols_array_2d(),
-            }]),
+            bytemuck::cast_slice(&[CameraUniform::new(vp, self.video)]),
         );
 
         // The view model's projection, rebuilt with the window: its view matrix
@@ -510,10 +611,10 @@ impl Renderer {
         self.queue.write_buffer(
             &self.viewmodel_camera_buffer,
             0,
-            bytemuck::cast_slice(&[CameraUniform {
-                view_proj: viewmodel_projection(camera.fov, self.config.width, self.config.height)
-                    .to_cols_array_2d(),
-            }]),
+            bytemuck::cast_slice(&[CameraUniform::new(
+                viewmodel_projection(camera.fov, self.config.width, self.config.height),
+                self.video,
+            )]),
         );
 
         use wgpu::CurrentSurfaceTexture as Cst;
@@ -547,9 +648,18 @@ impl Renderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("main"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: &self.scene.color,
                     depth_slice: None,
-                    resolve_target: None,
+                    // Resolving here rather than in the view-model pass would
+                    // resolve a frame that is not finished; resolving in *both*
+                    // would resolve twice. It belongs on the last pass that
+                    // touches the scene, which is the view model's when there is
+                    // one — see below.
+                    resolve_target: if self.viewmodel_verts > 0 {
+                        None
+                    } else {
+                        self.scene.resolve.as_ref()
+                    },
                     ops: wgpu::Operations {
                         // The fog colour, so geometry fading into the distance
                         // meets a matching background rather than a hard edge
@@ -564,7 +674,7 @@ impl Renderer {
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_view,
+                    view: &self.scene.depth,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Store,
@@ -595,16 +705,18 @@ impl Renderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("viewmodel"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: &self.scene.color,
                     depth_slice: None,
-                    resolve_target: None,
+                    // The last pass into the scene, so this is where a
+                    // multisampled target resolves.
+                    resolve_target: self.scene.resolve.as_ref(),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_view,
+                    view: &self.scene.depth,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Store,
@@ -621,9 +733,41 @@ impl Renderer {
             pass.draw(0..self.viewmodel_verts, 0..1);
         }
 
+        {
+            // The scene, scaled into the window. Always drawn, even at 100%:
+            // branching on "the scale happens to be 1" would give the common
+            // case its own untested code path, and a full-screen textured
+            // triangle is nothing next to the world it is copying.
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("blit"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        // Cleared rather than loaded: this covers every pixel,
+                        // and a load would be reading a surface nothing wrote.
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.blit_pipeline);
+            pass.set_bind_group(0, &self.blit_bind_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+
         if self.overlay_verts > 0 {
             // Last, over everything, with no depth attachment at all: the HUD is
             // not in the world and has nothing to be behind.
+            //
+            // **On the swapchain, not the scene**: the HUD is drawn at native
+            // resolution whatever the render scale is. 5×7 glyphs upscaled from
+            // 50% are unreadable, and the HUD costs nothing to draw at full size.
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("overlay"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -653,17 +797,245 @@ impl Renderer {
 
     fn reconfigure(&mut self) {
         self.surface.configure(&self.device, &self.config);
-        self.depth_view = create_depth_view(&self.device, &self.config);
+        self.rebuild_scene();
+    }
+
+    fn rebuild_scene(&mut self) {
+        self.scene = create_scene(
+            &self.device,
+            &self.config,
+            self.video.render_scale,
+            self.video.quality.samples(),
+        );
+        // The bind group holds a *view*, so it is stale the moment the texture
+        // behind it is replaced. Forgetting this draws the previous frame's
+        // scene, or a texture that has been freed.
+        self.blit_bind_group = create_blit_bind_group(
+            &self.device,
+            &self.blit_layout,
+            self.scene.sampled(),
+            &self.sampler,
+        );
+    }
+
+    /// Apply a change from the pause menu.
+    ///
+    /// Each knob rebuilds only what it invalidates: vsync is a surface
+    /// reconfigure, the sample count is a pipeline rebuild *and* a scene
+    /// rebuild, and the render scale is a scene rebuild alone. Quality also
+    /// carries the shader's fog and detail, which need nothing rebuilt at all —
+    /// they are uniform data, written next frame.
+    pub fn set_video(&mut self, video: Video) {
+        let samples_changed = video.quality.samples() != self.video.quality.samples();
+        let scale_changed = (video.render_scale - self.video.render_scale).abs() > 1e-4;
+        let vsync_changed = video.vsync != self.video.vsync;
+        self.video = video;
+
+        if samples_changed {
+            let layout = self
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("hassault-layout"),
+                    bind_group_layouts: &[Some(&self.camera_layout)],
+                    immediate_size: 0,
+                });
+            self.pipeline = world_pipeline(
+                &self.device,
+                &layout,
+                &self.shader,
+                self.config.format,
+                video.quality.samples(),
+            );
+        }
+        if vsync_changed {
+            let caps = self.surface.get_capabilities(&self.adapter);
+            self.config.present_mode = pick_present_mode(&caps.present_modes, video.vsync);
+            self.surface.configure(&self.device, &self.config);
+        }
+        if samples_changed || scale_changed {
+            self.rebuild_scene();
+        }
+    }
+
+    pub fn video(&self) -> Video {
+        self.video
+    }
+
+    /// The resolution the world is actually drawn at, for the title bar. Worth
+    /// reporting: a render scale is invisible in a screenshot and the number is
+    /// the whole point of the setting.
+    pub fn scene_size(&self) -> (u32, u32) {
+        (self.scene.width, self.scene.height)
     }
 }
 
-/// Lowest latency first. See the `present_mode` comment above.
-fn pick_present_mode(available: &[wgpu::PresentMode]) -> wgpu::PresentMode {
-    for wanted in [
-        wgpu::PresentMode::Immediate,
-        wgpu::PresentMode::Mailbox,
-        wgpu::PresentMode::Fifo,
-    ] {
+/// The world/bodies/view-model pipeline.
+///
+/// A function rather than an inline block because the **sample count is a
+/// setting**: changing quality rebuilds this, and a pipeline whose multisample
+/// state disagrees with the attachment it draws into is a validation error, not
+/// a wrong-looking frame.
+fn world_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    format: wgpu::TextureFormat,
+    samples: u32,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("hassault-pipeline"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            buffers: &[Some(Vertex::layout())],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_main"),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            // The mesher winds every quad counter-clockwise as seen from the
+            // open side, which is precisely what makes back-face culling free
+            // here: every surface exists once and faces the space you can stand
+            // in, so there is nothing to draw on the far side.
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: Some(wgpu::Face::Back),
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::Less),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState {
+            count: samples,
+            ..Default::default()
+        },
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// Allocate the offscreen scene at `scale` of the surface, with `samples`.
+fn create_scene(
+    device: &wgpu::Device,
+    config: &wgpu::SurfaceConfiguration,
+    scale: f32,
+    samples: u32,
+) -> SceneTargets {
+    // At least one pixel each way: a window dragged to nothing, times a 50%
+    // scale, is a zero-sized texture and a validation error.
+    let width = ((config.width as f32 * scale).round() as u32).max(1);
+    let height = ((config.height as f32 * scale).round() as u32).max(1);
+    let size = wgpu::Extent3d {
+        width,
+        height,
+        depth_or_array_layers: 1,
+    };
+    let color = device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some("scene-color"),
+            size,
+            mip_level_count: 1,
+            sample_count: samples,
+            dimension: wgpu::TextureDimension::D2,
+            format: config.format,
+            // `TEXTURE_BINDING` even when multisampled: it costs nothing, and a
+            // usage flag missing at 4× only shows up when somebody selects High.
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default());
+    let resolve = (samples > 1).then(|| {
+        device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("scene-resolve"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: config.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default())
+    });
+    let depth = device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some("depth"),
+            size,
+            mip_level_count: 1,
+            // The depth attachment's count must match the colour's, always.
+            sample_count: samples,
+            dimension: wgpu::TextureDimension::D2,
+            format: DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default());
+    SceneTargets {
+        color,
+        resolve,
+        depth,
+        width,
+        height,
+    }
+}
+
+fn create_blit_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    view: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("blit-bind-group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+        ],
+    })
+}
+
+/// Lowest latency first, unless vsync was asked for. See the `present_mode`
+/// comment above.
+///
+/// `Fifo` is the *only* mode the spec guarantees, which is why it is the tail of
+/// both lists rather than only the vsync one: a surface that supports neither
+/// `Immediate` nor `Mailbox` still has to present something.
+fn pick_present_mode(available: &[wgpu::PresentMode], vsync: bool) -> wgpu::PresentMode {
+    let wanted: &[wgpu::PresentMode] = if vsync {
+        &[wgpu::PresentMode::Fifo]
+    } else {
+        &[
+            wgpu::PresentMode::Immediate,
+            wgpu::PresentMode::Mailbox,
+            wgpu::PresentMode::Fifo,
+        ]
+    };
+    for wanted in wanted.iter().copied() {
         if available.contains(&wanted) {
             return wanted;
         }
@@ -694,27 +1066,6 @@ fn viewmodel_projection(fov_degrees: f32, width: u32, height: u32) -> glam::Mat4
         VIEWMODEL_NEAR,
         VIEWMODEL_FAR,
     )
-}
-
-fn create_depth_view(
-    device: &wgpu::Device,
-    config: &wgpu::SurfaceConfiguration,
-) -> wgpu::TextureView {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("depth"),
-        size: wgpu::Extent3d {
-            width: config.width.max(1),
-            height: config.height.max(1),
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: DEPTH_FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        view_formats: &[],
-    });
-    texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
 
 /// Interleave the mesher's parallel arrays into what the GPU wants.
@@ -754,11 +1105,26 @@ mod tests {
     #[test]
     fn present_modes_are_chosen_lowest_latency_first() {
         use wgpu::PresentMode::*;
-        assert_eq!(pick_present_mode(&[Fifo, Mailbox, Immediate]), Immediate);
-        assert_eq!(pick_present_mode(&[Fifo, Mailbox]), Mailbox);
+        assert_eq!(
+            pick_present_mode(&[Fifo, Mailbox, Immediate], false),
+            Immediate
+        );
+        assert_eq!(pick_present_mode(&[Fifo, Mailbox], false), Mailbox);
         // Vsync last, but always available — the guaranteed floor.
-        assert_eq!(pick_present_mode(&[Fifo]), Fifo);
-        assert_eq!(pick_present_mode(&[]), Fifo);
+        assert_eq!(pick_present_mode(&[Fifo], false), Fifo);
+        assert_eq!(pick_present_mode(&[], false), Fifo);
+    }
+
+    #[test]
+    fn asking_for_vsync_gets_vsync_even_where_something_faster_exists() {
+        use wgpu::PresentMode::*;
+        // The whole point of the setting: somebody who can see tearing asked for
+        // it to stop, and a "lowest latency first" list that ignored them would
+        // make the toggle do nothing on exactly the hardware that has the
+        // faster modes.
+        assert_eq!(pick_present_mode(&[Fifo, Mailbox, Immediate], true), Fifo);
+        // And a surface with no Fifo at all still presents something.
+        assert_eq!(pick_present_mode(&[Immediate], true), Fifo);
     }
 
     #[test]

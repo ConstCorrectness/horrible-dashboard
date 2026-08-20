@@ -32,6 +32,7 @@
 use std::collections::VecDeque;
 
 use crate::protocol::{Fx, HitMarker, SelfState};
+use crate::settings::{Crosshair, CrosshairStyle};
 
 /// One overlay vertex: a position already in clip space, and a colour with an
 /// alpha the blend state actually uses.
@@ -107,6 +108,12 @@ pub struct HudView<'a> {
     /// releasing the pointer is not a menu here, and a world drawn with no HUD
     /// in it reads as a client that half-loaded.
     pub playing: bool,
+    /// The player's own reticle. Every number here is theirs, and the one thing
+    /// that is *not* is the opening with spread — the gap setting is the floor
+    /// the cone opens from, never a cap on it. A crosshair that could be
+    /// configured not to show the hip-fire penalty would be a setting that wins
+    /// gunfights.
+    pub crosshair: Crosshair,
 }
 
 /// The HUD's own memory: things that persist across frames because they are
@@ -256,10 +263,9 @@ impl Hud {
             p.scope(u, hit, self.hit_killed, view.magnification);
         } else if !dead {
             // The browser's `crosshairSpread`, in its units, scaled to this
-            // window's. Same curve, so the two clients' crosshairs open by the
-            // same amount for the same weapon.
-            let gap = (4.0 + view.spread * 260.0) * u * 0.5;
-            p.crosshair(gap.max(2.0), u, hit, self.hit_killed);
+            // window's — with the player's own gap as the floor it opens from.
+            let gap = (view.crosshair.gap + view.spread * 260.0) * u * 0.5;
+            p.crosshair(gap.max(2.0), u, hit, self.hit_killed, &view.crosshair);
         }
 
         self.paint_health(&mut p, view, u);
@@ -445,19 +451,28 @@ fn advance(age: f32, dt: f32) -> f32 {
 }
 
 /// Turns pixel-space rectangles and text into clip-space triangles.
-struct Painter<'a> {
+pub struct Painter<'a> {
     out: &'a mut Vec<OverlayVertex>,
     width: f32,
     height: f32,
 }
 
-impl Painter<'_> {
+impl<'a> Painter<'a> {
+    /// Borrow a vertex sink and draw into it in **pixels**.
+    ///
+    /// Public so `menu.rs` can share it: a menu that laid itself out in
+    /// normalized coordinates would stretch with the window, and a second
+    /// painter would be a second set of rounding rules for the same font.
+    pub fn new(out: &'a mut Vec<OverlayVertex>, width: f32, height: f32) -> Painter<'a> {
+        Painter { out, width, height }
+    }
+
     /// Pixels (top-left origin, y down) to clip space (centre origin, y up).
     fn ndc(&self, x: f32, y: f32) -> [f32; 2] {
         [x / self.width * 2.0 - 1.0, 1.0 - y / self.height * 2.0]
     }
 
-    fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: [f32; 4]) {
+    pub fn rect(&mut self, x: f32, y: f32, w: f32, h: f32, color: [f32; 4]) {
         if w <= 0.0 || h <= 0.0 || color[3] <= 0.0 {
             return;
         }
@@ -503,18 +518,26 @@ impl Painter<'_> {
     /// The marker rotates the ticks into an X rather than adding a second
     /// element, which reads instantly and needs nothing to fade in and out —
     /// the browser client does exactly the same with a CSS transform.
-    fn crosshair(&mut self, gap: f32, u: f32, hit: bool, killed: bool) {
+    /// The crosshair, the hitmarker that replaces it, and the shapes people
+    /// actually play with.
+    ///
+    /// The marker rotates the ticks into an X rather than adding a second
+    /// element, which reads instantly and needs nothing to fade in and out —
+    /// the browser client does exactly the same with a CSS transform. It
+    /// overrides the chosen style on purpose: a hit is the one thing the reticle
+    /// has to say louder than a preference.
+    fn crosshair(&mut self, gap: f32, u: f32, hit: bool, killed: bool, style: &Crosshair) {
         let color = if killed {
             RED
         } else if hit {
             AMBER
         } else {
-            WHITE
+            style.color.rgba()
         };
         let (cx, cy) = (self.width / 2.0, self.height / 2.0);
-        let arm = u * 3.0;
-        let thick = (u * 0.6).max(1.0);
-        self.rect(cx - thick, cy - thick, thick * 2.0, thick * 2.0, color);
+        let arm = u * style.size;
+        let thick = (u * style.thickness).max(1.0);
+
         if hit {
             for (sx, sy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
                 let d = std::f32::consts::FRAC_1_SQRT_2;
@@ -529,10 +552,44 @@ impl Painter<'_> {
             }
             return;
         }
-        self.rect(cx - gap - arm, cy - thick, arm, thick * 2.0, color);
-        self.rect(cx + gap, cy - thick, arm, thick * 2.0, color);
-        self.rect(cx - thick, cy - gap - arm, thick * 2.0, arm, color);
-        self.rect(cx - thick, cy + gap, thick * 2.0, arm, color);
+
+        let dot = |p: &mut Self| {
+            p.rect(cx - thick, cy - thick, thick * 2.0, thick * 2.0, color);
+        };
+        let arms = |p: &mut Self| {
+            p.rect(cx - gap - arm, cy - thick, arm, thick * 2.0, color);
+            p.rect(cx + gap, cy - thick, arm, thick * 2.0, color);
+            p.rect(cx - thick, cy - gap - arm, thick * 2.0, arm, color);
+            p.rect(cx - thick, cy + gap, thick * 2.0, arm, color);
+        };
+        match style.style {
+            // The default keeps the centre dot the original always drew: it is
+            // where the shot goes, and the four arms are where it might go.
+            CrosshairStyle::Cross => {
+                dot(self);
+                arms(self);
+            }
+            CrosshairStyle::CrossDot => {
+                dot(self);
+                arms(self);
+                // A second, larger pip so the centre survives a busy background,
+                // which is the whole reason to pick this over the plain cross.
+                self.rect(
+                    cx - thick * 2.0,
+                    cy - thick * 2.0,
+                    thick * 4.0,
+                    thick * 4.0,
+                    [color[0], color[1], color[2], color[3] * 0.45],
+                );
+            }
+            CrosshairStyle::Dot => dot(self),
+            // The honest picture of a cone: a ring *at* the spread radius, so it
+            // grows with the weapon exactly as the arms' gap does.
+            CrosshairStyle::Circle => {
+                self.ring(cx, cy, gap, gap + thick.max(1.0), color);
+                dot(self);
+            }
+        }
     }
 
     /// A filled annulus, as a fan of quads.
@@ -608,7 +665,7 @@ impl Painter<'_> {
         self.text(x, cy + sight * 0.72, scale, DIM, &label);
     }
 
-    fn text(&mut self, x: f32, y: f32, scale: f32, color: [f32; 4], s: &str) {
+    pub fn text(&mut self, x: f32, y: f32, scale: f32, color: [f32; 4], s: &str) {
         let mut cx = x;
         for ch in s.chars() {
             let glyph = glyph(ch);
@@ -632,7 +689,7 @@ impl Painter<'_> {
         }
     }
 
-    fn text_right(&mut self, right: f32, y: f32, scale: f32, color: [f32; 4], s: &str) {
+    pub fn text_right(&mut self, right: f32, y: f32, scale: f32, color: [f32; 4], s: &str) {
         self.text(right - text_width(s, scale), y, scale, color, s);
     }
 
@@ -658,58 +715,175 @@ fn text_width(s: &str, scale: f32) -> f32 {
 /// Written as binary literals so every glyph is drawn in the source it is
 /// defined in — which is the only review a hand-made font can get.
 #[rustfmt::skip]
+/// Whether the font can draw this character.
+///
+/// Exposed so a test can assert that every string the UI produces is actually
+/// renderable: a missing glyph draws **nothing** — no box, no question mark — so
+/// a `›` in a menu label is simply an invisible column, and the first person to
+/// notice is the one wondering why a row has no chevron.
+pub fn has_glyph(ch: char) -> bool {
+    ch == ' ' || glyph(ch.to_ascii_uppercase()) != [0u8; 7]
+}
+
 fn glyph(ch: char) -> [u8; 7] {
     match ch.to_ascii_uppercase() {
-        'A' => [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
-        'B' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110],
-        'C' => [0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110],
-        'D' => [0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110],
-        'E' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111],
-        'F' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000],
-        'G' => [0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111],
-        'H' => [0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
-        'I' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111],
-        'J' => [0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100],
-        'K' => [0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001],
-        'L' => [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
-        'M' => [0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001],
-        'N' => [0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001],
-        'O' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
-        'P' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000],
-        'Q' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101],
-        'R' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001],
-        'S' => [0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110],
-        'T' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100],
-        'U' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
-        'V' => [0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100],
-        'W' => [0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001],
-        'X' => [0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001],
-        'Y' => [0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100],
-        'Z' => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111],
-        '0' => [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110],
-        '1' => [0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
-        '2' => [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111],
-        '3' => [0b11111, 0b00010, 0b00100, 0b00010, 0b00001, 0b10001, 0b01110],
-        '4' => [0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010],
-        '5' => [0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110],
-        '6' => [0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110],
-        '7' => [0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000],
-        '8' => [0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110],
-        '9' => [0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100],
-        '.' => [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b01100],
-        ':' => [0b00000, 0b01100, 0b01100, 0b00000, 0b01100, 0b01100, 0b00000],
-        '/' => [0b00001, 0b00010, 0b00010, 0b00100, 0b01000, 0b01000, 0b10000],
-        '-' => [0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000],
-        '+' => [0b00000, 0b00100, 0b00100, 0b11111, 0b00100, 0b00100, 0b00000],
-        '>' => [0b01000, 0b00100, 0b00010, 0b00001, 0b00010, 0b00100, 0b01000],
-        '<' => [0b00010, 0b00100, 0b01000, 0b10000, 0b01000, 0b00100, 0b00010],
-        '%' => [0b11001, 0b11010, 0b00010, 0b00100, 0b01000, 0b01011, 0b10011],
-        '!' => [0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00000, 0b00100],
-        '?' => [0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b00000, 0b00100],
-        '_' => [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b11111],
+        'A' => [
+            0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ],
+        'B' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10001, 0b10001, 0b11110,
+        ],
+        'C' => [
+            0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110,
+        ],
+        'D' => [
+            0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110,
+        ],
+        'E' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111,
+        ],
+        'F' => [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b10000,
+        ],
+        'G' => [
+            0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01111,
+        ],
+        'H' => [
+            0b10001, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+        ],
+        'I' => [
+            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111,
+        ],
+        'J' => [
+            0b00111, 0b00010, 0b00010, 0b00010, 0b00010, 0b10010, 0b01100,
+        ],
+        'K' => [
+            0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001,
+        ],
+        'L' => [
+            0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111,
+        ],
+        'M' => [
+            0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001,
+        ],
+        'N' => [
+            0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001,
+        ],
+        'O' => [
+            0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        'P' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000,
+        ],
+        'Q' => [
+            0b01110, 0b10001, 0b10001, 0b10001, 0b10101, 0b10010, 0b01101,
+        ],
+        'R' => [
+            0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001,
+        ],
+        'S' => [
+            0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110,
+        ],
+        'T' => [
+            0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100,
+        ],
+        'U' => [
+            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        'V' => [
+            0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01010, 0b00100,
+        ],
+        'W' => [
+            0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001,
+        ],
+        'X' => [
+            0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001,
+        ],
+        'Y' => [
+            0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100,
+        ],
+        'Z' => [
+            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b11111,
+        ],
+        '0' => [
+            0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110,
+        ],
+        '1' => [
+            0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+        ],
+        '2' => [
+            0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111,
+        ],
+        '3' => [
+            0b11111, 0b00010, 0b00100, 0b00010, 0b00001, 0b10001, 0b01110,
+        ],
+        '4' => [
+            0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010,
+        ],
+        '5' => [
+            0b11111, 0b10000, 0b11110, 0b00001, 0b00001, 0b10001, 0b01110,
+        ],
+        '6' => [
+            0b00110, 0b01000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110,
+        ],
+        '7' => [
+            0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000,
+        ],
+        '8' => [
+            0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110,
+        ],
+        '9' => [
+            0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00010, 0b01100,
+        ],
+        '.' => [
+            0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b01100,
+        ],
+        ':' => [
+            0b00000, 0b01100, 0b01100, 0b00000, 0b01100, 0b01100, 0b00000,
+        ],
+        '/' => [
+            0b00001, 0b00010, 0b00010, 0b00100, 0b01000, 0b01000, 0b10000,
+        ],
+        '-' => [
+            0b00000, 0b00000, 0b00000, 0b11111, 0b00000, 0b00000, 0b00000,
+        ],
+        '+' => [
+            0b00000, 0b00100, 0b00100, 0b11111, 0b00100, 0b00100, 0b00000,
+        ],
+        '>' => [
+            0b01000, 0b00100, 0b00010, 0b00001, 0b00010, 0b00100, 0b01000,
+        ],
+        '<' => [
+            0b00010, 0b00100, 0b01000, 0b10000, 0b01000, 0b00100, 0b00010,
+        ],
+        // A comma and an apostrophe, added when a test started asserting that
+        // every string the UI produces is renderable: both are ordinary in a
+        // sentence, and a missing glyph draws nothing at all rather than a box.
+        // The comma's tail drops below the baseline, which is what tells it from
+        // a full stop at this size.
+        ',' => [
+            0b00000, 0b00000, 0b00000, 0b00000, 0b00110, 0b00100, 0b01000,
+        ],
+        '\'' => [
+            0b00100, 0b00100, 0b01000, 0b00000, 0b00000, 0b00000, 0b00000,
+        ],
+        '%' => [
+            0b11001, 0b11010, 0b00010, 0b00100, 0b01000, 0b01011, 0b10011,
+        ],
+        '!' => [
+            0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00000, 0b00100,
+        ],
+        '?' => [
+            0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b00000, 0b00100,
+        ],
+        '_' => [
+            0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b11111,
+        ],
         // Bottomless reserve. The browser writes ∞ and so does this, rather than
         // a large number that looks like a count.
-        '∞' => [0b00000, 0b00000, 0b01010, 0b10101, 0b10101, 0b01010, 0b00000],
+        '∞' => [
+            0b00000, 0b00000, 0b01010, 0b10101, 0b10101, 0b01010, 0b00000,
+        ],
         // Anything the font has no shape for, space included, is blank. A
         // missing glyph should be a hole in a word, never a box that reads as a
         // deliberate character.
@@ -734,6 +908,7 @@ mod tests {
 
     fn view<'a>(you: Option<&'a SelfState>) -> HudView<'a> {
         HudView {
+            crosshair: crate::settings::Crosshair::default(),
             width: 1280,
             height: 800,
             you,

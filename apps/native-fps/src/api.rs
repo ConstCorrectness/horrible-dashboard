@@ -133,6 +133,25 @@ pub struct WeaponSpec {
     pub interval: f32,
     #[serde(default)]
     pub mag: i32,
+    /// Rounds held outside the magazine. **`-1` is unlimited** (the sidearm), and
+    /// stays unlimited — a reload that decrements it turns bottomless into four
+    /// billion, which is a bug only visible on the second reload.
+    #[serde(default)]
+    pub reserve: i32,
+    /// Seconds a reload takes. `camelCase` on the wire, like `hipfireSpread`:
+    /// named `reload_time` without the rename it silently reads as zero, and an
+    /// instant reload is not an error anywhere.
+    #[serde(rename = "reloadTime", default)]
+    pub reload_time: f32,
+    /// Damage multiplier for a hit in the head band. Served rather than assumed
+    /// to be 2× — the knife's is not.
+    #[serde(rename = "headMultiplier", default)]
+    pub head_multiplier: f32,
+    /// Whether holding the trigger keeps firing. Served, so the client cannot
+    /// disagree with the server about which weapons are automatic — a local
+    /// guess shows a rifle refusing to hold down, or a sniper that does.
+    #[serde(default)]
+    pub auto: bool,
     /// The three numbers a weapon's **voice** is derived from — see
     /// `audio::weapon_voice`. Read rather than tabulated so a balance change to
     /// the gun moves the sound with it.
@@ -268,6 +287,31 @@ impl NodeApi {
             .read_to_end(&mut buf)
             .map_err(|e| ApiError::Http(e.to_string()))?;
         Ok(buf)
+    }
+
+    /// The node's settings bag. `{"values": {...}}` — the same document the
+    /// browser reads, so the two surfaces cannot hold different preferences.
+    pub fn settings(&self) -> Result<serde_json::Value, ApiError> {
+        let res = self.get("/api/settings")?;
+        let doc: serde_json::Value = res
+            .into_json()
+            .map_err(|e| ApiError::Decode(e.to_string()))?;
+        Ok(doc.get("values").cloned().unwrap_or(doc))
+    }
+
+    /// Persist one setting. Called from the settings writer thread only — it
+    /// blocks, and a frame must never wait on it.
+    pub fn put_setting(&self, key: &str, value: &serde_json::Value) -> Result<(), ApiError> {
+        let url = format!("{}/api/settings/{}", self.base, key);
+        match self
+            .agent
+            .put(&url)
+            .send_json(ureq::json!({ "value": value }))
+        {
+            Ok(_) => Ok(()),
+            Err(ureq::Error::Status(code, _)) => Err(ApiError::Status(code, key.to_string())),
+            Err(e) => Err(ApiError::Http(e.to_string())),
+        }
     }
 
     pub fn weapons(&self) -> Result<Vec<WeaponSpec>, ApiError> {

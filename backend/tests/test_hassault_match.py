@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from backend.modules.hassault import channel
+from backend.modules.hassault import channel, match
 from backend.modules.hassault.match import (
     BUDGET_CEILING,
     EMPTY_GRACE,
@@ -232,16 +232,14 @@ def test_each_player_gets_their_own_ack():
 
 def test_command_axes_are_clamped():
     """The obvious cheat is asking to move fifty times as fast."""
-    parsed = channel._parse_command(
-        {"seq": 1, "forward": 50, "strafe": -50, "dt": 1 / 60}
-    )
+    parsed = match.parse_command({"seq": 1, "forward": 50, "strafe": -50, "dt": 1 / 60})
     assert parsed is not None
     assert parsed.forward == 1.0
     assert parsed.strafe == -1.0
 
 
 def test_command_dt_is_clamped():
-    parsed = channel._parse_command({"seq": 1, "forward": 1, "dt": 99})
+    parsed = match.parse_command({"seq": 1, "forward": 1, "dt": 99})
     assert parsed is not None
     assert parsed.dt == 0.25
 
@@ -249,7 +247,7 @@ def test_command_dt_is_clamped():
 def test_nan_and_infinity_are_rejected():
     """Both survive JSON and poison every comparison downstream, so they are
     caught here rather than at the first surprising position."""
-    parsed = channel._parse_command(
+    parsed = match.parse_command(
         {"seq": 1, "forward": float("nan"), "dt": float("inf")}
     )
     assert parsed is not None
@@ -258,9 +256,9 @@ def test_nan_and_infinity_are_rejected():
 
 
 def test_a_command_without_a_sequence_number_is_dropped():
-    assert channel._parse_command({"forward": 1, "dt": 0.016}) is None
-    assert channel._parse_command({"seq": 0, "dt": 0.016}) is None
-    assert channel._parse_command("not a dict") is None
+    assert match.parse_command({"forward": 1, "dt": 0.016}) is None
+    assert match.parse_command({"seq": 0, "dt": 0.016}) is None
+    assert match.parse_command("not a dict") is None
 
 
 def test_join_and_input_round_trip_over_the_channel(signed_in):

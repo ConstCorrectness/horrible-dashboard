@@ -19,7 +19,7 @@ import time
 
 import pytest
 
-from backend.modules.hassault import weapons
+from backend.modules.hassault import weapons, match
 from backend.modules.hassault.match import BUDGET_CEILING, Command, MatchRoom
 from backend.modules.hassault.physics import PLAYER_EYE_HEIGHT, flat_world
 from backend.modules.hassault.weapons import (
@@ -658,15 +658,15 @@ def test_a_hip_fired_sniper_actually_scatters_and_a_scoped_one_does_not():
 def test_the_wire_floors_a_zoom_claim_but_leaves_the_ceiling_to_the_weapon():
     """Mirrors the `view_t` split: the parser clamps what it can judge without
     knowing the simulation, and no more."""
-    from backend.modules.hassault.channel import _parse_command
+    from backend.modules.hassault.match import parse_command as _parse_command
 
     base = {"seq": 1, "forward": 0, "strafe": 0, "yaw": 0, "pitch": 0, "dt": 0.016}
-    assert _parse_command({**base, "scoped": 2}).scoped == 2
-    assert _parse_command({**base, "scoped": -5}).scoped == 0
-    assert _parse_command(base).scoped == 0
+    assert match.parse_command({**base, "scoped": 2}).scoped == 2
+    assert match.parse_command({**base, "scoped": -5}).scoped == 0
+    assert match.parse_command(base).scoped == 0
     # Not rejected here — `clamp_zoom` owns the ceiling, because only the
     # simulation knows which weapon this command lands on.
-    assert _parse_command({**base, "scoped": 999}).scoped == 999
+    assert match.parse_command({**base, "scoped": 999}).scoped == 999
 
 
 def test_the_route_actually_publishes_the_scope_not_just_the_dataclass():

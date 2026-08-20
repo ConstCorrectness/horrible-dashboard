@@ -657,6 +657,110 @@ async def web_poll(provider: str, body: _WebPoll) -> dict[str, Any]:
     return {"error": "sign-in session not found or expired"}
 
 
+@app.get("/hassault/maps")
+def hassault_maps() -> dict[str, Any]:
+    """Maps a rated match can be played on.
+
+    Bundled only, and that is the point rather than a shortfall: a map that exists
+    on one player's disk cannot be adjudicated by anybody else.
+    """
+    from backend.games_server import hassault_rooms
+
+    return {"maps": hassault_rooms.referee.maps()}
+
+
+@app.websocket("/hassault-ws")
+async def hassault_ws(websocket: WebSocket) -> None:
+    """A rated HorribleAssault match, simulated **here**.
+
+    The same `MatchServer` the node runs, on a machine no player controls — which
+    is what makes the result worth recording. See `hassault_rooms` for why this is
+    the trust boundary and storage never was.
+
+    The wire is the node's own `hassault` channel envelope
+    (`{channel, event, data}`), so a client speaks one protocol whether the room
+    is on its own node or here. **Identity is not on it**: the account comes from
+    the token in the query string, exactly as `/game-ws` takes it, and a `name`
+    in the join payload is ignored the same way `channel.py` ignores it.
+    """
+    from backend.games_server import hassault_rooms
+
+    token = websocket.query_params.get("token", "")
+    session = auth.resolve_token(token)
+    if session is None:
+        # Closed before `accept` where possible: an unauthenticated socket should
+        # never reach the room registry, and a 1008 is a reason rather than a
+        # silent drop.
+        await websocket.close(code=1008, reason="sign in to play a rated match")
+        return
+
+    await websocket.accept()
+    conn = hassault_rooms.SeatConn(
+        websocket, session["account_id"], session["display_name"]
+    )
+    referee = hassault_rooms.referee
+    try:
+        while True:
+            raw = await websocket.receive_text()
+            try:
+                msg = json.loads(raw)
+            except ValueError:
+                continue
+            if not isinstance(msg, dict) or msg.get("channel") != "hassault":
+                continue
+            event = str(msg.get("event") or "")
+            data = msg.get("data") if isinstance(msg.get("data"), dict) else {}
+            if event == "join":
+                try:
+                    welcome = await referee.join(
+                        conn,
+                        str(data.get("map") or ""),
+                        str(data.get("room") or "") or None,
+                    )
+                except (ValueError, LookupError) as exc:
+                    await conn.send_json(
+                        {
+                            "channel": "hassault",
+                            "event": "error",
+                            "data": {"message": str(exc), "code": "join_refused"},
+                        }
+                    )
+                    continue
+                await conn.send_json(
+                    {"channel": "hassault", "event": "welcome", "data": welcome}
+                )
+            elif event == "input":
+                referee.apply_input(conn, data)
+            elif event == "respawn":
+                entry = referee.server.player_for(conn)
+                if entry is not None:
+                    room, player = entry
+                    # The *room* decides — it holds the respawn clock. A client
+                    # asking is a request, exactly as it is on a node.
+                    room.respawn(player)
+            elif event == "leave":
+                result = await referee.leave(conn)
+                if result is not None:
+                    # Sent back before the socket goes: this is how the player's
+                    # node learns what happened, and it is the *server's* account
+                    # of it — the node records it under `authority="server"`
+                    # because it was told, not because it worked anything out.
+                    await conn.send_json(
+                        {"channel": "hassault", "event": "result", "data": result}
+                    )
+    except WebSocketDisconnect:
+        pass
+    finally:
+        conn.closed = True
+        # Recorded here too: a player who closed the game is a player whose
+        # session ended, and the common case is a disconnect rather than a
+        # polite `leave`.
+        try:
+            await referee.leave(conn)
+        except Exception:
+            logger.exception("hassault: leaving on disconnect failed")
+
+
 @app.websocket("/game-ws")
 async def game_ws(websocket: WebSocket) -> None:
     await websocket.accept()

@@ -28,7 +28,8 @@ use std::path::PathBuf;
 
 use hassault_native::api::MapInfo;
 use hassault_native::physics::{apply_impulse, spawn_at, step, MoveInput, PlayerState, Spawn};
-use hassault_native::world::{World, SOLID, SPACE};
+use hassault_native::trace::{aim_vector, ray_hits_body_sized, raycast_world, BODY_HEIGHT};
+use hassault_native::world::{World, PLAYER_RADIUS, SOLID, SPACE};
 use serde_json::Value;
 
 const PLANES: [&str; 9] = [
@@ -231,4 +232,75 @@ fn spawn_placement_matches() {
 /// could affect play and far looser than f64 noise.
 fn tolerance(fixture: f32) -> f32 {
     fixture.max(1e-3)
+}
+
+/// The shot geometry, replayed from the same fixture.
+///
+/// Added when the training range was ported: `trace.rs` is a fourth copy of
+/// arithmetic that already exists in `weapons.py`, `trace.ts` and this crate's
+/// own physics, and the fixture carried `traces`/`bodies` for a year with only
+/// two of the three implementations reading them. A copy with no seat at this
+/// table is a copy that drifts, and the drift has no symptom except shots that
+/// miss things you are looking at.
+#[test]
+fn shot_geometry_matches_the_server_and_the_browser_client() {
+    let vectors = vectors();
+    let worlds = &vectors["worlds"];
+    let tol = f(&vectors, "tolerance", 1e-9);
+
+    let cases = vectors["traces"].as_array().expect("traces");
+    assert!(!cases.is_empty(), "the fixture lost its trace cases");
+    for case in cases {
+        let name = case["name"].as_str().unwrap_or("unnamed");
+        let world = build_world(&worlds[case["world"].as_str().expect("world")]);
+        let origin = vec3(&case["origin"]);
+        let direction = aim_vector(f(case, "yaw", 0.0), f(case, "pitch", 0.0));
+        let got = raycast_world(&world, origin, direction, f(case, "max_distance", 100.0));
+        let want = f(case, "expect", 0.0);
+        assert!(
+            (got - want).abs() <= tolerance(tol),
+            "{name}: stopped at {got}, the other two clients say {want}"
+        );
+    }
+
+    let bodies = vectors["bodies"].as_array().expect("bodies");
+    assert!(!bodies.is_empty(), "the fixture lost its body cases");
+    for case in bodies {
+        let name = case["name"].as_str().unwrap_or("unnamed");
+        let origin = vec3(&case["origin"]);
+        let direction = aim_vector(f(case, "yaw", 0.0), f(case, "pitch", 0.0));
+        // A case may name a shorter body: crouching is a real height change,
+        // and the case that pins it ("the same shot sails over it") is exactly
+        // the one a replay that assumed the standing height would pass wrongly.
+        let got = ray_hits_body_sized(
+            origin,
+            direction,
+            vec3(&case["feet"]),
+            f(case, "radius", PLAYER_RADIUS),
+            f(case, "height", BODY_HEIGHT),
+        );
+        match case["expect"].as_f64() {
+            // A miss is a distinct answer, not a large distance: the fixture
+            // spells it `null` and reading that as 0.0 would turn every miss in
+            // the table into a point-blank hit.
+            None => assert!(got.is_none(), "{name}: hit at {got:?}, expected a miss"),
+            Some(want) => {
+                let want = want as f32;
+                let got = got.unwrap_or_else(|| panic!("{name}: missed, expected {want}"));
+                assert!(
+                    (got - want).abs() <= tolerance(tol),
+                    "{name}: entered at {got}, the other two clients say {want}"
+                );
+            }
+        }
+    }
+}
+
+fn vec3(v: &Value) -> [f32; 3] {
+    let a = v.as_array().expect("a three-component point");
+    [
+        a[0].as_f64().unwrap() as f32,
+        a[1].as_f64().unwrap() as f32,
+        a[2].as_f64().unwrap() as f32,
+    ]
 }

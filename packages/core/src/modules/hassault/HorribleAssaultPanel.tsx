@@ -7,6 +7,7 @@ import {
   dismissMatchSummary,
   getInstallStatus,
   getLatestMatchSummary,
+  getRankedMaps,
   browseServers,
   getMapCubes,
   getMapInfo,
@@ -165,6 +166,7 @@ const TEAM_COLORS = [0xd9a441, 0x4c8fd4];
 const EMPTY_SESSION: SessionState = {
   status: 'idle',
   room: '',
+  ranked: false,
   map: '',
   playerId: '',
   peers: [],
@@ -290,13 +292,20 @@ export function HorribleAssaultPanel() {
   const [heard, setHeard] = useState<{ id: number; at: number; event: NoiseEvent }[]>([]);
 
   // ---- Native process lifecycle bridge ---------------------------------------
+  /** Maps the game server will adjudicate. Empty until fetched, or if it is down. */
+  const [rankedMaps, setRankedMaps] = useState<string[]>([]);
   const [nativeRunning, setNativeRunning] = useState(false);
   /** The render loop's copy: it runs outside React and cannot read state. */
   const nativeRunningRef = useRef(false);
   nativeRunningRef.current = nativeRunning;
   const [nativePid, setNativePid] = useState<number | undefined>();
-  /** What the last native launch said, shown in the menu next to the buttons. */
+  /** What the last native launch said, shown in the menu next to the buttons.
+   * Cleared when that process exits — see the status poll below. */
   const [nativeStatus, setNativeStatus] = useState<string | null>(null);
+  /** Whether the previous poll saw a live process, so the exit can be told from
+   * the steady state of there never having been one. Without it a failed
+   * launch's error message would be wiped by the very next poll. */
+  const wasRunning = useRef(false);
   const [postMatchSummary, setPostMatchSummary] = useState<PostMatchSummary | null>(null);
 
   /**
@@ -352,10 +361,36 @@ export function HorribleAssaultPanel() {
 
   useEffect(() => {
     let active = true;
+    // Once, not on a poll: the server's bundled map list changes on a deploy, and
+    // a menu that re-asked every few seconds would be spending a round trip to
+    // hear the same three names.
+    void getRankedMaps()
+      .then((names) => {
+        if (active) setRankedMaps(names);
+      })
+      .catch(() => {
+        // Unreachable: Ranked greys out, which is the honest signal — better than
+        // a button that fails at the socket after the map has loaded.
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
     const interval = setInterval(async () => {
       try {
         const [proc, sum] = await Promise.all([getProcessStatus(), getLatestMatchSummary()]);
         if (!active) return;
+        // **The launch message belongs to a process that is running.** It used to
+        // be set once and never cleared, so "Launched native FPS client (PID:
+        // 55508)" sat under the Play buttons for the rest of the session — long
+        // after that pid had exited, in green, next to buttons that would launch
+        // a different one. The poll already knows the process is gone; this is
+        // it acting on that.
+        if (wasRunning.current && !proc.running) setNativeStatus(null);
+        wasRunning.current = proc.running;
         setNativeRunning(proc.running);
         setNativePid(proc.pid);
         if (!sum) {
@@ -1410,6 +1445,10 @@ export function HorribleAssaultPanel() {
         if (res.launched) {
           setNativeRunning(true);
           setNativePid(res.pid);
+          // Armed here rather than waiting for the poll to notice: a client that
+          // exits within the poll interval would otherwise never be seen running
+          // at all, and its launch message would stay up for the session.
+          wasRunning.current = true;
         }
       } catch (err) {
         setNativeStatus(err instanceof Error ? err.message : 'Could not reach this node');
@@ -1437,6 +1476,27 @@ export function HorribleAssaultPanel() {
     }
     deploy();
   }, [deploy, weapons, nativeClient, launchNative]);
+
+  /**
+   * Play a match the **game server** adjudicates.
+   *
+   * The only difference from `host` is the flag: the node opens the room
+   * somewhere else and proxies for us, and every event after the join is the
+   * wire this pane already reads. No bots — a match whose roster a player can
+   * reshape is not one their result should count for, and the server refuses
+   * them anyway.
+   */
+  const ranked = useCallback(() => {
+    if (nativeClient) {
+      void launchNative({ mode: 'ranked' });
+      return;
+    }
+    const session = sessionRef.current;
+    if (!session || !mapName) return;
+    shotsRef.current?.reset();
+    session.join(mapName, playerName, undefined, undefined, true);
+    deploy();
+  }, [mapName, playerName, deploy, nativeClient, launchNative]);
 
   /** Host a match here on the loaded map and enter it, with bots if asked. */
   const host = useCallback(
@@ -2063,6 +2123,8 @@ export function HorribleAssaultPanel() {
                 onTrain={train}
                 onHost={host}
                 onQuickPlay={quickPlay}
+                onRanked={ranked}
+                rankedMaps={rankedMaps}
                 onJoin={joinRoom}
                 onInvite={inviteFriend}
                 onDismissInvite={(room) => sessionRef.current?.dismissInvite(room)}

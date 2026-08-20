@@ -9,6 +9,10 @@ planes** the browser adopts directly as typed arrays — one copy, no parsing.
 
 from __future__ import annotations
 
+import logging
+import time
+from typing import Any
+
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from backend.modules.hassault import assets, fabric, mapsource, weapons
@@ -32,6 +36,8 @@ from backend.modules.hassault.models import (
     LaunchNativeRequest,
     LaunchNativeResponse,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/hassault", tags=["hassault"])
 
@@ -395,56 +401,78 @@ def pick_binary(custom: str, candidates: list[str]) -> str | None:
     return next((c for c in candidates if c and shutil.which(c)), None)
 
 
-LATEST_MATCH_SUMMARIES: dict[str, dict[str, Any]] = {}
+def _account_id() -> str:
+    """The signed-in account, or the local stand-in.
+
+    One spelling of it: this expression appeared verbatim in five endpoints, and
+    a match filed under one id and read back under another is a debrief that
+    never appears — with nothing anywhere reporting a failure.
+    """
+    from backend.modules.games import server_auth
+
+    account = server_auth.signed_in_account()
+    return str((account or {}).get("account_id") or "local_player")
+
+
 ACTIVE_GAME_PROCESSES: dict[str, Any] = {}
+
+#: How long the watchdog waits for the match result to land after the client
+#: exits. The process dying and its websocket closing are two different events on
+#: two different paths, and the socket is usually a beat behind — long enough
+#: that reading the database the instant `wait()` returns finds the *previous*
+#: match, or nothing.
+RESULT_GRACE_SECONDS = 5.0
 
 
 def _watchdog_game_process(account_id: str, map_name: str, proc: Any) -> None:
-    """Watchdog thread that tracks native game process lifecycle and computes post-match rewards."""
-    import random
+    """Wait for the native client to exit, then hand its match a skin drop.
+
+    **This no longer decides what happened.** It used to invent the entire card —
+    kills, deaths, headshots, damage, XP, rating, tier, level, all
+    `random.randint` — and file it in a dict that a restart emptied. The match
+    itself now records the result when the player leaves
+    (`channel._record_result`), from the simulation's own counters, into
+    `app.db`. What is left for a watchdog is the one thing that genuinely belongs
+    to *finishing*: rolling the drop, and attaching it to the row.
+
+    Train produces no result at all, which is correct: there is no match, nobody
+    to play against, and nothing to be MVP of. A card for it would be a card
+    about a room that did not exist.
+    """
     import time
+    from backend.modules.hassault import results
     from backend.modules.hassault.skins import SKIN_DICT, skin_manager
 
     proc.wait()
 
-    kills = random.randint(12, 28)
-    deaths = random.randint(4, 14)
-    headshots = random.randint(5, kills)
-    damage = kills * 95 + random.randint(100, 400)
-    mvp = kills >= 18
-    won = kills > deaths
+    deadline = time.monotonic() + RESULT_GRACE_SECONDS
+    summary: dict[str, Any] | None = None
+    while time.monotonic() < deadline:
+        summary = results.latest(account_id)
+        # Only a result from *this* session: an older undismissed card is not
+        # evidence that the match just played produced one.
+        if summary and summary["timestamp"] >= _LAUNCHED_AT.get(account_id, 0.0):
+            break
+        summary = None
+        time.sleep(0.2)
 
-    xp_gained = 450 + kills * 35 + (300 if won else 100)
-    rating_delta = random.randint(18, 32) if won else -random.randint(10, 22)
-    old_rating = 1520
-    new_rating = max(1000, old_rating + rating_delta)
+    if summary is None:
+        return
 
-    # 40% chance of level-up care package skin drop upon match completion
-    earned_drop = None
-    if random.random() < 0.40:
-        drop_instance = skin_manager.roll_drop(account_id)
-        earned_drop = drop_instance.to_dict(SKIN_DICT.get(drop_instance.skin_id))
+    # The drop is the reward for finishing, so it is rolled here rather than in
+    # the leave path — and **persisted**, which the old one was not: it went into
+    # a dict on the skin manager and was gone on the next restart.
+    try:
+        drop = skin_manager.roll_drop(account_id)
+        results.attach_drop(summary["matchId"], drop.instance_id)
+        _ = SKIN_DICT.get(drop.skin_id)
+    except Exception:
+        logger.exception("hassault: could not roll a drop for the finished match")
 
-    summary = {
-        "mapName": map_name,
-        "won": won,
-        "kills": kills,
-        "deaths": deaths,
-        "headshots": headshots,
-        "headshotPercent": round((headshots / max(1, kills)) * 100, 1),
-        "damageDealt": damage,
-        "isMvp": mvp,
-        "xpGained": xp_gained,
-        "currentLevel": 4,
-        "levelProgressPercent": 68,
-        "ratingDelta": rating_delta,
-        "newRating": new_rating,
-        "ratingTier": "Gold II" if new_rating >= 1500 else "Silver III",
-        "earnedDrop": earned_drop,
-        "timestamp": time.time(),
-    }
 
-    LATEST_MATCH_SUMMARIES[account_id] = summary
+#: When each account's client was launched, so a stale undismissed card is not
+#: mistaken for the match that just ended.
+_LAUNCHED_AT: dict[str, float] = {}
 
 
 @router.post("/launch_native", response_model=LaunchNativeResponse)
@@ -567,15 +595,12 @@ async def launch_native_client(
 
     try:
         import threading
-        from backend.modules.games import server_auth
 
-        account = server_auth.signed_in_account()
-        account_id = (
-            account.get("account_id", "local_player") if account else "local_player"
-        )
+        account_id = _account_id()
 
         proc = subprocess.Popen([bin_path, *connect_args])
         ACTIVE_GAME_PROCESSES[account_id] = proc
+        _LAUNCHED_AT[account_id] = time.time()
 
         t = threading.Thread(
             target=_watchdog_game_process,
@@ -601,43 +626,85 @@ async def launch_native_client(
 @router.get("/match/process_status")
 async def get_process_status() -> dict[str, Any]:
     """Check if the native game client is currently running."""
-    from backend.modules.games import server_auth
-
-    account = server_auth.signed_in_account()
-    account_id = (
-        account.get("account_id", "local_player") if account else "local_player"
-    )
-
-    proc = ACTIVE_GAME_PROCESSES.get(account_id)
+    proc = ACTIVE_GAME_PROCESSES.get(_account_id())
     running = proc is not None and proc.poll() is None
     return {"running": running, "pid": proc.pid if running and proc else None}
 
 
 @router.get("/match/latest_summary")
 async def get_latest_match_summary() -> dict[str, Any] | None:
-    """Retrieve the post-match report card with K/D/A, XP gained, rating changes, and dropped skins."""
-    from backend.modules.games import server_auth
+    """The most recent match this account has not dismissed, or `null`.
 
-    account = server_auth.signed_in_account()
-    account_id = (
-        account.get("account_id", "local_player") if account else "local_player"
-    )
+    Read from `app.db` rather than from a process-global dict, which is what
+    makes a debrief survive the backend restarting under it — and what makes a
+    match history a thing that exists at all.
+    """
+    from backend.modules.hassault import results
+    from backend.modules.hassault.skins import SKIN_DICT, skin_manager
 
-    return LATEST_MATCH_SUMMARIES.get(account_id)
+    summary = results.latest(_account_id())
+    if summary is None:
+        return None
+    # The drop is stored as an id and resolved here: the card wants the
+    # definition (name, rarity colour, wear), and duplicating that into the match
+    # row would mean a renamed skin showing its old name forever.
+    drop_id = summary.pop("dropId", None)
+    if drop_id:
+        instance = skin_manager.find_instance(_account_id(), str(drop_id))
+        if instance is not None:
+            summary["earnedDrop"] = instance.to_dict(SKIN_DICT.get(instance.skin_id))
+    return summary
 
 
 @router.post("/match/dismiss_summary")
 async def dismiss_match_summary() -> dict[str, bool]:
-    """Clear the latest summary to return to idle lobby."""
-    from backend.modules.games import server_auth
+    """Mark the outstanding debrief as seen.
 
-    account = server_auth.signed_in_account()
-    account_id = (
-        account.get("account_id", "local_player") if account else "local_player"
-    )
+    A column on the row, not a delete: the row *is* the match history, and
+    closing a card is not a claim that the match did not happen.
+    """
+    from backend.modules.hassault import results
 
-    LATEST_MATCH_SUMMARIES.pop(account_id, None)
+    results.dismiss(_account_id())
     return {"ok": True}
+
+
+@router.get("/ranked/maps")
+async def get_ranked_maps() -> dict[str, list[str]]:
+    """Maps the game server will adjudicate, asked of the game server.
+
+    Proxied rather than derived locally from `source == "bundled"`. The two agree
+    today and the server's answer is the one that decides — so a map added on
+    either side needs no matching change on the other, and a server that is down
+    greys the button out instead of failing at the socket after a map has loaded.
+    """
+    import httpx
+
+    from backend.modules.games.client import resolve_server_url
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            res = await client.get(f"{resolve_server_url().rstrip('/')}/hassault/maps")
+            res.raise_for_status()
+            maps = res.json().get("maps") or []
+    except Exception as exc:
+        # Not an error to the caller: "no ranked maps" is exactly what an
+        # unreachable server means to a menu.
+        logger.info("hassault: could not read the ranked map list: %s", exc)
+        return {"maps": []}
+    return {"maps": [str(m) for m in maps]}
+
+
+@router.get("/match/history")
+async def get_match_history(limit: int = 20) -> list[dict[str, Any]]:
+    """Recent matches, newest first — the debrief card shows one, this is the rest.
+
+    Worth existing the moment results became rows: a history that only the card
+    could read would be a table nothing queries.
+    """
+    from backend.modules.hassault import results
+
+    return results.history(_account_id(), limit)
 
 
 @router.get("/skins/catalog")
@@ -651,15 +718,16 @@ async def get_skin_catalog() -> list[dict[str, Any]]:
 @router.get("/skins/inventory")
 async def get_skin_inventory() -> list[dict[str, Any]]:
     """Get the active player's skin inventory with float values, pattern seeds and wear."""
-    from backend.modules.games import server_auth
     from backend.modules.hassault.skins import SKIN_DICT, skin_manager
 
-    account = server_auth.signed_in_account()
-    account_id = (
-        account.get("account_id", "local_player") if account else "local_player"
-    )
+    account_id = _account_id()
 
-    await skin_manager.load_from_atlas(account_id)
+    # Atlas is consulted **only when this node has never seen this account** —
+    # picking up an inventory earned on another machine. It used to run on every
+    # read, which is a Mongo round trip per poll for a document that changes only
+    # when this node changes it (and every mutation below syncs back).
+    if not skin_manager.has_local(account_id):
+        await skin_manager.load_from_atlas(account_id)
     items = skin_manager.get_inventory(account_id)
     return [item.to_dict(SKIN_DICT.get(item.skin_id)) for item in items]
 
@@ -667,13 +735,9 @@ async def get_skin_inventory() -> list[dict[str, Any]]:
 @router.post("/skins/equip")
 async def equip_skin(instance_id: str) -> dict[str, bool]:
     """Equip an item instance to its weapon loadout slot."""
-    from backend.modules.games import server_auth
     from backend.modules.hassault.skins import skin_manager
 
-    account = server_auth.signed_in_account()
-    account_id = (
-        account.get("account_id", "local_player") if account else "local_player"
-    )
+    account_id = _account_id()
 
     ok = skin_manager.equip_skin(account_id, instance_id)
     if ok:
@@ -684,13 +748,9 @@ async def equip_skin(instance_id: str) -> dict[str, bool]:
 @router.post("/skins/claim_drop")
 async def claim_level_up_drop() -> dict[str, Any]:
     """Claim a weighted-RNG skin drop from a level-up or care package."""
-    from backend.modules.games import server_auth
     from backend.modules.hassault.skins import SKIN_DICT, skin_manager
 
-    account = server_auth.signed_in_account()
-    account_id = (
-        account.get("account_id", "local_player") if account else "local_player"
-    )
+    account_id = _account_id()
 
     drop = skin_manager.roll_drop(account_id)
     await skin_manager.sync_to_atlas(account_id)
@@ -700,13 +760,9 @@ async def claim_level_up_drop() -> dict[str, Any]:
 @router.post("/skins/tradeup")
 async def execute_trade_up(instance_ids: list[str]) -> dict[str, Any]:
     """Trade in 10 skins of rarity Tier N to forge 1 skin of Tier N+1."""
-    from backend.modules.games import server_auth
     from backend.modules.hassault.skins import SKIN_DICT, skin_manager
 
-    account = server_auth.signed_in_account()
-    account_id = (
-        account.get("account_id", "local_player") if account else "local_player"
-    )
+    account_id = _account_id()
 
     result = skin_manager.trade_up_contract(account_id, instance_ids)
     if not result:

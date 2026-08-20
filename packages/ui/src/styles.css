@@ -1582,6 +1582,43 @@ body {
   min-width: 6rem;
 }
 
+/* The per-source mute toggles.
+
+   Each is the same badge the rows carry, so what you are muting is recognisable
+   as the thing you saw too much of — and a muted one keeps its shape while
+   losing its colour, which reads as "off" rather than as "missing". */
+.obs-filter-sources {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.obs-source-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.1rem 0.4rem;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.68rem;
+}
+
+.obs-source-toggle.is-muted {
+  background: transparent;
+  color: var(--text-dim);
+  border-color: var(--border);
+  /* Struck through, because "hidden" is a stronger statement than dimmed and
+     this row of chips is small enough that dimming alone is ambiguous. */
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+.obs-source-count {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
 .obs-filter-errors {
   display: flex;
   align-items: center;

@@ -2127,6 +2127,110 @@ Two decisions carry it:
 A machine with no output device gets a client that **says so and plays on**. This
 is a game; refusing to start because a speaker is missing would be the wrong trade.
 
+### Training, natively
+
+`training.rs` is a port of `training.ts`, and it exists for the same reason that
+file does: the shoot-jump is the thing Train is *for*, and it cannot be practised
+without a trigger. Offline there is no server to send a `SelfState`, so the range
+plays that part — ammo, reloads, six dummies on the map's own spawn points, and
+the hitscan against them.
+
+The shape that makes it worth having is `self_state()`: it returns **the same
+`SelfState` a snapshot would have**, so the HUD, the view model and the trigger
+have no offline branch at all. Native Train now counts a magazine down, reloads,
+and lights a hitmarker through exactly the code a match does.
+
+Three rules are inherited from the TS original and are bugs if forgotten: a
+`-1` reserve is **unlimited and stays unlimited** (decrementing it turns the
+sidearm bottomless into four billion rounds on the first reload); a weapon switch
+**cancels a reload** rather than letting the timer fill a gun you walked away
+from; and hitmarkers **drain on read**, so each is shown once.
+
+One thing the range must do that the browser's does not: **apply the kick
+itself**. In a match the server applies `kickback` and reconciliation hands it
+back, so a client that never applies it is still correct. Offline there is nobody
+to do it, and without `trace::kick_vector` the shoot-jump silently does nothing —
+in the one mode built to teach it.
+
+Porting the range also brought the shot geometry (`trace.rs`), which is a fourth
+copy of arithmetic that already exists in `weapons.py`, `trace.ts` and this
+crate's physics. The fixture's `traces` and `bodies` cases had been sitting there
+read by only two of the three clients; `tests/conformance.rs` now replays them
+too. The body cases carry an optional `height`, and honouring it is what the
+crouched-target case is *for* — a replay that assumed the standing height passes
+it wrongly.
+
+One consequence of getting this right, worth knowing before it looks like a bug:
+**a level shot at somebody standing on your own floor is a headshot.** The eye
+sits at 4.5, a body is 5.2 tall, and the head band is its top cube — 4.2 to 5.2.
+The server agrees, so a rifle kills a dummy in one shot, not two.
+
+### The pause menu
+
+Escape used to release the pointer and nothing else. It now opens a menu, which
+does that too — the pointer is released whenever the menu is up, because a menu
+you cannot click is a menu with a second and worse set of controls.
+
+**It is not a pause, and cannot be.** In a match the server keeps simulating; a
+client that stopped reading its socket to show a settings page would come back to
+a body that had been shot at for a minute. Train runs on for the same reason
+rather than growing a second rule nobody could see. What the menu does do is drop
+every held key on the way in, so you do not return to the game already walking.
+
+Every row is one of three things — an action, a choice that cycles, or a number
+that steps — driven by the same four keys and the same click. `rows_at` produces
+the on-screen rectangle for every row and **both the painter and the mouse read
+it**, which is what stops a click landing on the row above the one it is drawn
+over.
+
+| Page | What is on it |
+| --- | --- |
+| Root | Resume, the three sub-pages, and Quit — labelled **Leave match** in a match, because a button that ends something you were winning should say so |
+| Crosshair | Style (cross / cross+dot / dot / circle), size, gap, thickness, colour |
+| Video | Display (fullscreen / windowed), resolution scale, quality, vsync |
+| Controls | Sensitivity |
+
+The settings live in **the node's settings bag**, not a file beside the binary:
+they are declared in the module manifest, so the pane's Settings page edits the
+same rows. Writes go through a worker thread — an HTTP round trip on the frame
+somebody nudges a slider is a visible hitch, and a slider produces one per frame
+— and the in-memory value is authoritative for the session either way, so a node
+that is down costs a preference and never a frame.
+
+The crosshair's `gap` is the floor its arms open *from*, never a cap: it still
+widens with the weapon's cone. A reticle that could be configured to hide the
+hip-fire penalty would be a setting that wins gunfights.
+
+### Fullscreen, resolution and quality
+
+The client **opens fullscreen** (borderless, from the first frame rather than
+toggled after one — the alternative is a visible flash of a 1280×800 window on a
+4K monitor). Borderless rather than exclusive: exclusive takes the display mode,
+which is a mode switch at each end, a black screen with it, and every other window
+on that monitor rearranged when the game exits.
+
+"Resolution" is a **render scale**, not a mode switch. The world is drawn into an
+offscreen target at 50–100% of the window and blitted up; the HUD is drawn onto
+the swapchain *after* that blit, at native resolution, because 5×7 glyphs
+upscaled from half resolution are unreadable and the HUD costs nothing to draw at
+full size. The title bar reports the rendered size whenever it is not the
+window's, since a render scale is otherwise invisible in a screenshot.
+
+Quality moves three things: the shading (flat, the directional wash, the wash plus
+a rim), how far the fog reaches, and the sample count.
+
+:::warning 2× MSAA is not a supported sample count
+Only **1 and 4** are guaranteed by the spec. The machine this was written on
+reports `[1, 2, 4, 8]` — but only behind `TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES`,
+a feature this client deliberately does not request, because asking for more than
+the scene needs is how a client refuses to start on a perfectly capable integrated
+GPU. A pipeline built with 2× is a **validation error on the first frame**, not a
+slower one, and that is exactly how the first build of the quality setting
+crashed. Low and Medium therefore share a sample count and differ in shading and
+fog, which is the more visible difference anyway. The support list is not the
+guarantee.
+:::
+
 ### Testing a third implementation
 
 `physics-vectors.json` is now replayed by **three** suites — the server's
@@ -2155,6 +2259,196 @@ The mesher has no shared fixture, so its cross-check is coarser but real: triang
 counts match the browser client's HUD on every map tried (`hd_atrium` 31,944 →
 "32k", `hd_crossing` 30,552 → "31k", `hd_pit` 13,360 → "13k").
 
+## After the match
+
+A finished match produces a **row**, and the debrief card reads it.
+
+That is worth stating plainly because it was not true. `_watchdog_game_process`
+waited for the native client to exit and then invented the entire card —
+`random.randint` for kills, deaths, headshots and damage, a level, an XP figure,
+a rating delta against a hardcoded `1520`, and a tier name to match — and filed
+it in a module-level dict that a backend restart emptied. The numbers had no
+relationship to the match that had just been played.
+
+The simulation already knew all of it. `MatchPlayer` now also counts
+`damage_dealt` and `head_kills` alongside the kills and deaths it always had, and
+`MatchRoom.result_for` reports them.
+
+Three rules in that path:
+
+- **The result is read before the player is removed.** `remove` drops the
+  `MatchPlayer` and every counter with it, so reading afterwards files a match of
+  zeroes. `MatchServer.leave` returns the result; `channel._leave_any` records it.
+- **Damage is what landed, not what was rolled.** A 90-damage sniper round into a
+  body with 20 left counts 20. Overkill would make the stat a description of the
+  weapon rather than of the match, and it is the one number a player can check
+  against the health bars they watched go down.
+- **`head_kills` counts kills, not hits**, because the card divides it by `kills`
+  to show a percentage. Counting hits there prints numbers over 100%.
+
+`won` and `mvp` are relative to the room rather than to a team score, since the
+only mode is deathmatch: you won if nobody outscored you, and you are MVP if
+nobody equalled you either. **Bots count** — losing to one is losing, and a card
+that quietly excluded them would be flattering rather than true.
+
+### Where it is written
+
+`hassault_matches` in `app.db` — the same database the library catalog, browser
+history and karaoke queue use, so a match history survives a restart and the
+database pane can query it like anything else:
+
+```sql
+SELECT map_name, kills, deaths, head_kills, damage_dealt, xp FROM hassault_matches
+ORDER BY played_at DESC;
+```
+
+`GET /api/hassault/match/latest_summary` reads the most recent undismissed row;
+`/match/history` reads the rest; `/match/dismiss_summary` sets `dismissed_at`
+rather than deleting, because the row *is* the history and closing a card is not a
+claim that the match did not happen.
+
+**Progression is derived, never stored twice.** Level and career XP are a
+`SUM(xp)` over the table rather than a counter someone remembers to bump: a
+running total in its own column is a number that can disagree with the matches it
+claims to summarise, and there is no way to tell which one is wrong.
+
+Skin drops are persisted too, in `hassault_skins`. They were an in-memory dict on
+the skin manager with an optional Atlas sync that nothing awaited — so every skin
+anybody earned, including the drop the card had just congratulated them on, was
+gone the next time the backend restarted.
+
+:::note What the card deliberately does not show any more
+**Rating and tier.** The old card printed `1520 + random.randint(18, 32)` under
+the heading "Competitive Rank", which looked exactly like a ladder standing and
+was not one. Rating returns with rated matches — see below — where a referee
+rather than a player's machine decides what happened.
+:::
+
+### Who adjudicated it
+
+**Storage is not the trust boundary; simulation is.** A local SQLite file can be
+edited by whoever owns it — but so can the backend that fills it, which is Python
+source on the same disk. Pushing rows to a central database would not fix either:
+it would file a **self-reported** number somewhere more official-looking, and a
+central leaderboard reads as authoritative in a way a personal history does not.
+
+So every match records who adjudicated it, and the column exists *before* it is
+needed:
+
+| `authority` | Where the room ran | What it may be used for |
+| --- | --- | --- |
+| `local` | This node — Host, Train's neighbours, or a friend's node over the fabric | A personal record. Nothing comparative, ever. |
+| `server` | The game server's referee | Rated. The only kind a ladder may count. |
+
+The migration matters: `CREATE TABLE IF NOT EXISTS` never adds a column to a table
+that already exists, so `init_results_db` also runs an `ALTER TABLE` for installs
+that recorded a match before the column existed. Those rows backfill to `local`,
+which is the honest answer — they *were* adjudicated by the node that wrote them.
+
+## Rated matches: the game server as referee
+
+`backend/games_server/hassault_rooms.py` runs the same `MatchServer` a node runs,
+on a machine nobody playing controls, and writes the result itself — exactly the
+shape every other game on that server already has (`hub.py` calls
+`store.record_result` on `game_over`; **no client ever posts a result**).
+
+It owns no physics. It holds a `MatchServer` and feeds it connections, which is
+the same trick `fabric.py` uses to make a remote peer look like a browser: a
+`MatchRoom` never learns what is on the other end of `send_json`. A second
+implementation of the simulation on the server is the one thing guaranteed to make
+the server and the clients disagree.
+
+Three properties are load-bearing:
+
+- **Bundled maps only.** `assets.load_map` also resolves an AssaultCube install's
+  maps, and the server has no install — which is the right answer rather than a
+  gap to close. A map that exists on one player's disk cannot be adjudicated by
+  anybody else. The refusal is explicit (`referee.playable`) so the reason is
+  legible instead of arriving as a `LookupError`.
+- **One validator.** Input goes through `match.parse_command` — the same function
+  the browser channel and the peer fabric use. It moved out of `channel.py` when
+  this landed: it had three callers and a second, laxer copy on whichever path
+  happens to be rated is exactly where a gap appears, in the one place nobody
+  looks.
+- **Identity is the token, never the wire.** The account comes from
+  `auth.resolve_token` on the query string; a `name` in the join payload is
+  ignored the same way `channel.py` ignores it. The `SeatConn` holds the mapping,
+  which is what stops a player naming themselves into somebody else's row.
+
+The wire is the node's own `hassault` envelope (`{channel, event, data}`), so a
+client speaks one protocol whether the room is on its own node or on the server.
+
+```
+GET  /hassault/maps      → maps a rated match can use
+WS   /hassault-ws?token= → join / input / leave, same events as the node channel
+```
+
+:::warning Rated does not yet mean ELO
+`store.record_result` applies ELO to **two seats facing each other**, and a
+free-for-all people come and go from is not that shape. A finished session is
+logged and its XP granted — both by the server, both real — with `rated=False`,
+rather than inventing a rating, which is the very thing this module exists to
+stop. ELO belongs to a 1v1 duel mode, where the shape fits.
+:::
+
+### Getting in: the node proxies
+
+Clients reach the referee through **their own node**, not directly:
+
+```
+client --/ws--> node (ranked.py) --wss--> game server (MatchRoom, referee)
+```
+
+Two reasons, and both would be wrong the other way round:
+
+- **The token stays on the node.** The game-server JWT lives in `server_auth`,
+  the same one sign-in and `/game-ws` use. A client opening its own socket would
+  need a copy of it, spreading the node's credential to every surface that wants
+  to play.
+- **One protocol.** The join carries `ranked: true` and nothing else changes —
+  snapshots, inputs and the welcome are the wire the client already reads. A
+  second client-side transport is a second place for the two to drift.
+
+It is the same shape `fabric.py` uses for a friend's match, and the channel now
+has three destinations for one `join`: local, a friend's node (`host`), and the
+game server (`ranked`). Ranked is checked first: a join cannot be both, and
+"ranked on a friend's node" is not a thing — a friend's node has no more authority
+over a result than yours does.
+
+Three things the relay does **not** do:
+
+- **It does not validate input.** Commands are forwarded untouched, because the
+  server validates and the server is the one being lied to. A second check on the
+  way out would be a copy of the rules with no authority behind it — the same
+  reasoning the fabric gives for forwarding a guest's input verbatim.
+- **It does not record anything itself.** The result arrives *from the server* as
+  a `result` event, and `ranked._record` files it with `authority="server"`
+  because it was told, never because the node knew it was in a ranked room.
+  Leaving a ranked seat files no local row: a second `local` copy of the same
+  match would be a self-reported row sitting beside the real one.
+- **It does not offer bots.** `add_bot` is refused for a ranked seat. A match
+  whose roster a player can reshape is not one their result should count for.
+
+`leave` waits briefly (`RESULT_WAIT`) for that parting result before closing —
+cancelling the pump immediately is how a player's last match silently never gets
+a card.
+
+### Where the button is
+
+| Surface | How |
+| --- | --- |
+| Pane | **Ranked**, directly under Quick play. Greyed out unless the chosen map is one the *server* lists. |
+| Native client | `--mode=ranked`, which the launch route passes through; the flag rides on the join. |
+
+The map guard asks `GET /api/hassault/ranked/maps`, which proxies the server's own
+list rather than filtering locally for `source == "bundled"`. The two agree today
+and the server's answer is the one that decides, so a map added on either side
+needs no matching change on the other — and a server that is down greys the button
+out instead of failing at the socket after a map has loaded.
+
+Train produces no card at all, which is correct: there is no match, nobody to play
+against, and nothing to be MVP of.
+
 ## Contributions to the layout shell
 
 - **Panels:** `hassault.play` (HorribleAssault, role `document`, singleton,
@@ -2173,6 +2467,13 @@ counts match the browser client's HUD on every map tried (`hd_atrium` 31,944 →
   pause menu. The control map (`hassault.controls`) rides the same setting
   storage but is not a declared `SettingDecl` row — see
   [Controls](#controls-and-why-they-are-not-keymap-bindings).
+  Ranked play needs no setting: the entry point is a button, and the server it
+  talks to is the one `games.serverUrl` already names for sign-in.
+  `hassault.video.fullscreen` / `.renderScale` / `.quality` / `.vsync` and
+  `hassault.crosshair.style` / `.size` / `.gap` / `.thickness` / `.color` — what
+  the native client's pause menu edits. Declared rows rather than a file beside
+  the binary, so the pane's Settings page and the in-game menu write the same
+  values.
   `hassault.nativeClient` — whether Play, Train and Host open the native window
   instead of playing in the pane, **on by default**, and
   `hassault.nativeBinaryPath` — where that binary is, when it is not in the usual
@@ -2376,10 +2677,14 @@ never touches the filesystem.
 
 ## Known limitations
 
-- **Training in the native client has no dummy range.** `training.ts` — the
-  ammo, the reloads and the static dummies that make Train a place to practise
-  the shoot-jump — has no Rust port, so native Train is a map, a body and a
-  weapon that does not fire. The pane's Train is still the complete one.
+- **Ranked is XP and a logged result, not a rating.** ELO applies to two seats
+  facing each other, and a free-for-all people come and go from is not that
+  shape; a 1v1 duel mode is where a hassault rating belongs. Until then the
+  ladder is untouched and the debrief shows no rank.
+- **Nothing binds keys yet.** The native client's controls are fixed (WASD,
+  space, shift, R, 1–5, right mouse to scope, Escape for the menu); the pane's
+  rebindable `hassault.controls` map is not read. The menu has a Controls page
+  with sensitivity on it and nothing else, which is where rebinding will land.
 - **The native client has no `NoiseRing`.** It plays what it hears, but the
   browser also *draws* the bearings around the crosshair so headphones are not a
   competitive advantage — and natively they still are.

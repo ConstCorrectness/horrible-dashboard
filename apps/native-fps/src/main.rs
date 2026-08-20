@@ -36,6 +36,7 @@ use hassault_native::api::NodeApi;
 use hassault_native::geometry;
 use hassault_native::net::{Incoming, MatchSocket};
 use hassault_native::protocol::{Command, Event};
+use hassault_native::settings::{Settings, SettingsWriter};
 use hassault_native::viewmodel;
 use hassault_native::world::World;
 
@@ -57,6 +58,10 @@ enum Mode {
     Host,
     /// Enter a match that exists — a room id, or any room on the map.
     Join,
+    /// A **rated** match, simulated by the game server rather than by any node.
+    /// The client's only difference is a flag on the join: this node proxies, and
+    /// every frame after it is the wire this client already speaks.
+    Ranked,
 }
 
 impl Mode {
@@ -65,6 +70,7 @@ impl Mode {
             "train" => Some(Mode::Train),
             "host" => Some(Mode::Host),
             "join" => Some(Mode::Join),
+            "ranked" => Some(Mode::Ranked),
             _ => None,
         }
     }
@@ -81,7 +87,9 @@ struct Args {
     bots: u32,
     bot_skill: String,
     /// Multiplies the turn per unit of raw mouse movement.
-    sensitivity: f32,
+    /// `None` unless the launcher passed one, in which case it outranks the
+    /// stored setting — it *is* the stored setting, as the pane last saw it.
+    sensitivity: Option<f32>,
     headless: bool,
     /// Load and mesh the map, print what it found, and exit without connecting.
     check_only: bool,
@@ -103,7 +111,7 @@ impl Default for Args {
             name: "player".into(),
             bots: 0,
             bot_skill: "normal".into(),
-            sensitivity: 1.0,
+            sensitivity: None,
             headless: false,
             check_only: false,
         }
@@ -123,7 +131,7 @@ fn parse_args() -> Args {
                 // Refused rather than defaulted: a typo'd mode silently becoming
                 // "join" is how Train quietly turns back into a match.
                 None => {
-                    eprintln!("hassault: unknown --mode={v} (train, host or join)");
+                    eprintln!("hassault: unknown --mode={v} (train, host, join or ranked)");
                     std::process::exit(2);
                 }
             }
@@ -144,7 +152,7 @@ fn parse_args() -> Args {
                 // A zero or negative multiplier is a view that cannot turn, which
                 // reads as broken input rather than as a setting.
                 if n.is_finite() && n > 0.0 {
-                    args.sensitivity = n;
+                    args.sensitivity = Some(n);
                 }
             }
         } else if arg.starts_with("--max-fps=") || arg.starts_with("--raw-input=") {
@@ -161,7 +169,8 @@ fn parse_args() -> Args {
                  \n\
                    --server=<origin>   the node's HTTP origin (default http://127.0.0.1:8000)\n\
                    --map=<name>        map to load and join\n\
-                   --mode=<mode>       train (no server), host, or join (default)\n\
+                   --mode=<mode>       train (no server), host, join (default), or\n\
+                   \x20                   ranked (the game server adjudicates)\n\
                    --bots=<n>          bots to field, --mode=host only\n\
                    --bot-skill=<s>     easy, normal or hard (default normal)\n\
                    --room=<id>         join a specific room rather than any on the map\n\
@@ -221,6 +230,24 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     // scoped. Fetched now so a missing loadout is a startup error rather than a
     // trigger that silently does nothing — the exact failure the browser client
     // had until it started surfacing it.
+    // What the pause menu edits, read from the node so the pane and the game
+    // hold one set of preferences rather than two. A node that only served the
+    // map still gets a playable client — the defaults are the game's, not an
+    // error state — so this warns and carries on.
+    let mut settings = match node.settings() {
+        Ok(values) => Settings::from_values(&values),
+        Err(e) => {
+            eprintln!("hassault: warning — no saved settings ({e}); using defaults");
+            Settings::default()
+        }
+    };
+    // An explicit `--sensitivity` outranks the stored one: it is the launcher
+    // passing what the pane's own slider says, and the two are the same setting.
+    if let Some(sensitivity) = args.sensitivity {
+        settings.sensitivity = sensitivity;
+    }
+    let writer = SettingsWriter::new(&args.server);
+
     let weapons = match node.weapons() {
         Ok(weapons) if !weapons.is_empty() => {
             eprintln!("hassault: {} weapons", weapons.len());
@@ -269,7 +296,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             args.map
         );
         let event_loop = EventLoop::new()?;
-        let mut app = App::new(world, mesh, None, args.sensitivity, weapons, skins);
+        let mut app = App::new(world, mesh, None, settings, writer, weapons, skins);
         event_loop.run_app(&mut app)?;
         return Ok(());
     }
@@ -286,14 +313,20 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("hassault: joining…");
     // Hosting asks for no particular room, exactly as the browser's Host does:
     // the server opens one on this map (or seats us in one already running there).
-    socket.join(&args.map, &args.room, &args.host, &args.name)?;
+    socket.join(
+        &args.map,
+        &args.room,
+        &args.host,
+        &args.name,
+        matches!(args.mode, Mode::Ranked),
+    )?;
 
     if args.headless {
         return run_headless(&mut socket);
     }
 
     let event_loop = EventLoop::new()?;
-    let mut app = App::new(world, mesh, Some(socket), args.sensitivity, weapons, skins);
+    let mut app = App::new(world, mesh, Some(socket), settings, writer, weapons, skins);
     if args.mode == Mode::Host {
         // Queued, not sent: `add_bot` needs the room the welcome names, and it is
         // host-only on the channel — which is why the launcher only ever sends a

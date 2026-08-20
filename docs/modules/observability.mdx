@@ -122,6 +122,29 @@ The frontend store (`telemetry.ts`) merges `client` events with the streamed
 so an amended event (a filled-in streaming body, re-emitted under the same id)
 replaces its row in place rather than duplicating it.
 
+## Muting a source
+
+The toolbar's source control is a row of **toggles, one per source**, not a
+dropdown. It used to be a single select — "All sources", or exactly one — which
+could not express the state anybody actually wants: *everything except `ws`*. A
+busy websocket produces frames faster than anything else in the app, so the choice
+was between a list buried in them and a list with nothing else in it.
+
+Each chip is the same badge the rows carry, so what you are muting is
+recognisable as the thing you saw too much of. Muting **hides rows; nothing stops
+being captured** — unmuting brings the history back rather than starting a new
+one.
+
+The mute is stored in `observability.mutedSources` (comma-separated, editable by
+hand in Settings) rather than in component state, for two reasons: muting `ws` is
+a standing preference about a source that never stops being noisy, and the
+**dashboard widget reads the same setting**. A mute that applied only to the panel
+would leave the surface with the least room — five rows — still full of frames.
+
+An unknown name in that setting is dropped rather than kept: a typo that mutes
+nothing is better than one that sits in the list looking as though it did
+something.
+
 ## Contributions to the layout shell
 
 - **Regions:** `observability.io` hosts `observability.logs` as its bottom
@@ -150,6 +173,9 @@ replaces its row in place rather than duplicating it.
 - **Commands:** `observability.open` (opens the Data flow widget — the primary).
 - **Settings:** `observability.recentCount` (number, default 5) — how many recent
   calls the Data flow widget lists; read live via `useSetting`.
+  `observability.mutedSources` (string, default empty) — comma-separated sources
+  hidden from both the panel and the widget, written by the panel's own source
+  toggles; and
   `observability.maxBodyChars` (number, default 16384) — how many characters of
   each captured request/response body (and `ws` frame) to keep for the inspector.
   Unlike `recentCount`, this one is consumed on the **backend** (the truncation

@@ -20,7 +20,6 @@ export interface PostMatchDebriefProps {
  */
 export function PostMatchDebrief({ summary, onDismiss, onRequeue }: PostMatchDebriefProps) {
   const isVictory = summary.won;
-  const ratingSign = summary.ratingDelta >= 0 ? '+' : '';
 
   return (
     <div
@@ -147,7 +146,16 @@ export function PostMatchDebrief({ summary, onDismiss, onRequeue }: PostMatchDeb
           </div>
         )}
 
-        {/* Rank & Rating Progression */}
+        {/* Who else was in the room.
+
+            This replaced a "Competitive Rank" block showing a tier and a rating
+            delta, both of which were invented on the spot — `1520 +
+            random.randint(18, 32)` and a tier name to match. It looked exactly
+            like a ladder standing and was not one: the real ratings live on the
+            game server (`games_server/store.py`), per account and per game, and
+            this node has no authority over them. Hassault gets a rating when it
+            has a seat at that table; until then the card shows what this node
+            can actually stand behind. */}
         <div
           style={{
             background: 'var(--bg-tertiary, #161b22)',
@@ -163,25 +171,20 @@ export function PostMatchDebrief({ summary, onDismiss, onRequeue }: PostMatchDeb
             <div
               style={{ fontSize: '0.72rem', color: 'var(--text-dim)', textTransform: 'uppercase' }}
             >
-              Competitive Rank
+              Result
             </div>
             <div style={{ fontSize: '1.1rem', fontWeight: 800, color: '#e2e8f0' }}>
-              {summary.ratingTier}
+              {summary.opponents === 0
+                ? 'Solo'
+                : `${isVictory ? 'Top' : 'Beaten'} of ${summary.opponents + 1}`}
             </div>
           </div>
           <div style={{ textAlign: 'right' }}>
-            <div
-              style={{
-                fontSize: '1.2rem',
-                fontWeight: 800,
-                color: summary.ratingDelta >= 0 ? '#4ade80' : '#f87171',
-              }}
-            >
-              {ratingSign}
-              {summary.ratingDelta}
+            <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#e2e8f0' }}>
+              {summary.kills}&thinsp;/&thinsp;{summary.deaths}
             </div>
             <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>
-              Rating: <strong>{summary.newRating}</strong>
+              K/D: <strong>{(summary.kills / Math.max(1, summary.deaths)).toFixed(2)}</strong>
             </div>
           </div>
         </div>

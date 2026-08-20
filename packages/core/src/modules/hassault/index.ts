@@ -104,6 +104,77 @@ export const hassaultModule: ModuleManifest = {
       default: true,
     },
     {
+      key: 'hassault.video.fullscreen',
+      title: 'Native client: fullscreen',
+      description:
+        'Whether the native client opens fullscreen (borderless). On by default — a shooter that opens in a window with a title bar is one you have to configure before it feels like a game. Editable from the in-game menu on Escape, which is what writes this row.',
+      type: 'boolean',
+      default: true,
+    },
+    {
+      key: 'hassault.video.renderScale',
+      title: 'Native client: resolution scale',
+      description:
+        'Fraction of the window the world is rendered at, 0.5–1. The HUD is never scaled with it, so text stays crisp at any setting. Lower it if the frame rate is short on an integrated GPU; on a discrete card it makes no measurable difference.',
+      type: 'number',
+      default: 1,
+    },
+    {
+      key: 'hassault.video.quality',
+      title: 'Native client: graphics quality',
+      description:
+        'low, medium or high. Moves the shading (flat, a directional wash, the wash plus a rim), how far the fog reaches, and the multisample count — 1× below high, 4× at it, because those are the only counts every GPU is required to support.',
+      type: 'string',
+      default: 'medium',
+    },
+    {
+      key: 'hassault.video.vsync',
+      title: 'Native client: vsync',
+      description:
+        'Off by default. A frame of queued latency is precisely what the native client exists to avoid — but tearing is real, and somebody who can see it should be able to say so.',
+      type: 'boolean',
+      default: false,
+    },
+    {
+      key: 'hassault.crosshair.style',
+      title: 'Crosshair style',
+      description:
+        'cross, crossDot, dot or circle. The circle draws a ring at the spread radius, which is the honest picture of a cone. Every style still opens with the weapon — a reticle that could be configured to hide the hip-fire penalty would be a setting that wins gunfights.',
+      type: 'string',
+      default: 'cross',
+    },
+    {
+      key: 'hassault.crosshair.size',
+      title: 'Crosshair size',
+      description:
+        'Arm length, 1–12. Scaled with the window, so it means the same on every monitor.',
+      type: 'number',
+      default: 3,
+    },
+    {
+      key: 'hassault.crosshair.gap',
+      title: 'Crosshair gap',
+      description:
+        "Distance from the centre to the inside of each arm, 0–20. The floor the crosshair opens from as the weapon's cone widens, never a cap on it.",
+      type: 'number',
+      default: 4,
+    },
+    {
+      key: 'hassault.crosshair.thickness',
+      title: 'Crosshair thickness',
+      description: 'Line thickness, 0.2–3.',
+      type: 'number',
+      default: 0.6,
+    },
+    {
+      key: 'hassault.crosshair.color',
+      title: 'Crosshair colour',
+      description:
+        'white, green, cyan, amber, magenta or red. Named rather than a hex field: the reason to change it is contrast against a particular map, and all six are bright — a dark crosshair on a dark map is the one choice that would make the game worse.',
+      type: 'string',
+      default: 'white',
+    },
+    {
       key: 'hassault.nativeBinaryPath',
       title: 'Native client binary',
       description:
