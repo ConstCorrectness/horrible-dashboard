@@ -175,3 +175,58 @@ def _store() -> Path:
 Resolution is pure and re-read per call, so a test that monkeypatches
 `HORRIBLE_DATA_DIR` between calls is answered honestly. Nothing in `paths` creates
 directories — the caller `mkdir(parents=True, exist_ok=True)`s what it writes.
+
+## Writing a JSON store
+
+`paths` says *where* a store lives; **`backend/jsonstore.py`** says how to write it.
+Roughly half the backend's state is a file that is read, changed in memory and
+written back whole — `settings.json`, `workspaces.json`, `notes.json`, `flows.json`,
+`chat-sessions.json`, `connections.json`, the plugin registry, the peer and invite
+tables. Every one of those is a **read-modify-write of the entire document**, and
+the routes that perform it are sync `def`, which FastAPI runs on the threadpool. Two
+overlapping requests therefore run at the same time, each reads the pre-change
+document, and the second writes it back missing the first one's change. Nothing
+fails: both answer 200 and one edit never happened.
+
+So a store needs **two** things, and neither substitutes for the other:
+
+```python
+from backend import jsonstore
+
+def _state_path() -> Path:
+    return paths.data_dir() / "my-module.json"
+
+def _read() -> State:
+    text = jsonstore.read_text(_state_path())      # None if genuinely absent
+    return State.model_validate_json(text) if text else State()
+
+def _write(state: State) -> None:
+    jsonstore.write_text(_state_path(), state.model_dump_json())   # atomic
+
+@router.post("")
+@jsonstore.serialized(_state_path)                 # the read is inside the lock
+def create_thing(...): ...
+```
+
+- **`serialized` / `locked`** order this process's writers. Take it across the read
+  *and* the write — a lock around the write alone guards nothing, because the stale
+  read already happened. It is re-entrant, so a helper that takes it may be called
+  from a route already holding it, and it is keyed by resolved path, so one file has
+  exactly one lock. The decorator takes a *callable*, not a path, because the data
+  directory is resolved per call.
+- **`write_text`** (`backend/atomic_write.py` underneath) means no reader ever sees
+  a partial file. A plain `write_text` truncates first, so a reader landing mid-write
+  — or a crash — leaves a document that fails to parse, and the usual
+  `except ValueError: return {}` turns that into *every setting the user ever chose,
+  gone*. The Windows half matters too: `os.replace` fails with `PermissionError`
+  while a reader holds the destination open, so both the replace and the read retry
+  past it.
+
+A store whose in-memory state is the source of truth and which rewrites the whole of
+it (the commons directory, the Clubhouse people memory) needs the atomic write but
+**not** the lock — a concurrent save cannot lose an edit, because neither writer read
+the file to begin with. Say so in a comment when you skip it; the default is both.
+
+The lock is process-local. It orders this backend's threads; two *processes* sharing
+a data directory (a stray second uvicorn) are outside what it can promise, and there
+the atomic write keeps the failure to a lost update rather than a corrupt file.

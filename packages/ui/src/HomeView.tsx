@@ -8,7 +8,7 @@ import {
   type AgentStatus,
 } from '@horrible/core';
 
-import { NAME_KEY, SETUP_DISMISSED_KEY } from './home/constants';
+import { NAME_SETTING_KEY, getUserName, SETUP_DISMISSED_KEY } from './home/constants';
 import { IntegrationRow } from './home/IntegrationRow';
 import { SetupCard } from './home/SetupCard';
 
@@ -19,7 +19,10 @@ export function HomeView() {
   const [reasoning, setReasoning] = useState('');
   const [actions, setActions] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const name = localStorage.getItem(NAME_KEY);
+  // Subscribed, not read once: the name is a setting now, so typing it in
+  // first-run setup (or in settings) has to reach the greeting without a reload.
+  useSetting<string>(NAME_SETTING_KEY);
+  const name = getUserName();
   const setupDismissed = useSetting<boolean>(SETUP_DISMISSED_KEY) === true;
 
   const refresh = () =>

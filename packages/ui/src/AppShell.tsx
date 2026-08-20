@@ -25,7 +25,7 @@ import {
 } from '@horrible/core';
 
 import { ApprovalPrompts } from './ApprovalPrompts';
-import { SETUP_DISMISSED_KEY } from './home/constants';
+import { NAME_SETTING_KEY, SETUP_DISMISSED_KEY } from './home/constants';
 import { CaptureHud } from './CaptureHud';
 import { Spotlight } from './Spotlight';
 import { ContextMenuLayer } from './overlay/ContextMenu';
@@ -234,6 +234,18 @@ export function AppShell({
         ...(nativeFullscreenKey ? [{ key: 'f11', command: 'shell.toggleFullscreen' }] : []),
       ],
       settings: [
+        {
+          // Declared here so the name first-run setup asks for is an ordinary
+          // setting: editable afterwards, and resettable to blank like any
+          // other override. It used to be localStorage, which is why the
+          // wizard asked again on every fresh browser profile.
+          key: NAME_SETTING_KEY,
+          title: 'What the app calls you',
+          description:
+            'Used in the greeting on the desktop backdrop. Leave it blank for no name.',
+          type: 'string',
+          default: '',
+        },
         {
           key: SETUP_DISMISSED_KEY,
           title: 'Hide setup on the home page',

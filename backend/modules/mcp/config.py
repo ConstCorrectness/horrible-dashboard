@@ -24,7 +24,7 @@ import json
 import re
 from pathlib import Path
 from typing import Any, Literal
-from backend import paths
+from backend import jsonstore, paths
 
 # The prefix every MCP-contributed tool group carries. Keeping it in one place means
 # the bridge, the routes, and the tests can't drift on it.
@@ -113,20 +113,18 @@ def validate(config: dict[str, Any]) -> str | None:
 
 
 def _read() -> list[dict[str, Any]]:
-    path = _store_path()
-    if not path.is_file():
+    text = jsonstore.read_text(_store_path())
+    if text is None:
         return []
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(text)
     except ValueError:
         return []
     return [c for c in data if isinstance(c, dict)] if isinstance(data, list) else []
 
 
 def _write(rows: list[dict[str, Any]]) -> None:
-    path = _store_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+    jsonstore.write_text(_store_path(), json.dumps(rows, indent=2))
 
 
 def _clean(config: dict[str, Any]) -> dict[str, Any]:
@@ -153,6 +151,7 @@ def get_server(server_id: str) -> dict[str, Any] | None:
     return next((c for c in _read() if c.get("id") == server_id), None)
 
 
+@jsonstore.serialized(_store_path)
 def save_server(config: dict[str, Any]) -> dict[str, Any]:
     """Insert or replace a server config (by id). Returns the stored form."""
     cleaned = _clean(config)
@@ -162,6 +161,7 @@ def save_server(config: dict[str, Any]) -> dict[str, Any]:
     return cleaned
 
 
+@jsonstore.serialized(_store_path)
 def delete_server(server_id: str) -> bool:
     """Forget a server and its stored token. True if it existed."""
     rows = _read()

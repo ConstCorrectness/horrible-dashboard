@@ -26,7 +26,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Any
-from backend import paths
+from backend import jsonstore, paths
 
 logger = logging.getLogger(__name__)
 
@@ -62,9 +62,7 @@ def read_meta() -> dict[str, Any]:
 
 
 def write_meta(meta: dict[str, Any]) -> None:
-    path = _meta_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(meta))
+    jsonstore.write_text(_meta_path(), json.dumps(meta))
 
 
 def is_fallback(method: str) -> bool:
@@ -87,6 +85,7 @@ def index_model() -> str:
     return str(read_meta().get("embed_model") or "")
 
 
+@jsonstore.serialized(_meta_path)
 def note_build(embed_model: str, dim: int, docs: int) -> None:
     """Record what the collection now holds, after a successful write."""
     meta = read_meta()

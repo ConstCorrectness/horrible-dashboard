@@ -489,6 +489,18 @@ thing to keep in step with reality. Every step is skippable, and "Skip setup" le
 the whole wizard rather than advancing one screen — a setup flow you cannot leave is
 one people close the app to escape.
 
+The name the first step asks for is a **setting** (`shell.userName`), not
+localStorage. It used to be the latter, "a per-browser nicety" — but the greeting is
+a fact about the node, so a fresh browser profile, or a cleared origin, meant the
+wizard introduced itself to someone it had already met. As an ordinary declared
+setting it is also editable and resettable on the settings page afterwards, which is
+where a first-run answer belongs once first run is over. It is committed on leaving
+the step rather than per keystroke, and `Finish`/`Skip setup` **await** both it and
+`desktop.oobeComplete` before dismissing the wizard, warning by toast if the backend
+refused — firing the write and navigating away is how a failed save became a wizard
+that silently reappeared. (The bug underneath it was in the backend's settings bag —
+see [the settings module](../modules/settings.mdx#backend-surface).)
+
 The wizard is a **view, not a modal**. It owns the screen until it is finished or
 skipped; a dismissible overlay over a half-configured desktop is exactly the "did I
 finish that?" state it exists to avoid.

@@ -13,7 +13,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter
 from fastapi import Path as PathParam
 
-from backend import paths
+from backend import jsonstore, paths
 from backend.modules.settings.models import (
     SETTING_KEY_PATTERN,
     SettingsValues,
@@ -30,37 +30,50 @@ def _settings_path() -> Path:
     return paths.data_dir() / "settings.json"
 
 
+#: Serializes the read-modify-write around the whole bag — see `backend.jsonstore`
+#: for why every one of these stores needs it. The bug it fixed here: first-run
+#: setup writes the name, the theme and `desktop.oobeComplete` from one click, the
+#: overlapping PUTs each read the pre-change bag, and the last writer dropped the
+#: completion flag — 200 on every request, and a finished setup wizard that came
+#: back on the next launch.
+def _lock():
+    return jsonstore.locked(_settings_path())
+
+
 def _read() -> dict:
-    path = _settings_path()
-    if not path.is_file():
+    text = jsonstore.read_text(_settings_path())
+    if text is None:
         return {}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(text)
     except ValueError:
         return {}
     return data if isinstance(data, dict) else {}
 
 
 def _write(data: dict) -> None:
-    path = _settings_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data), encoding="utf-8")
+    """Write the bag atomically. A direct `write_text` truncates first, so a reader
+    arriving mid-write (or a crash) sees a half-written file and `_read` falls back
+    to `{}` — i.e. every setting the user ever chose, gone."""
+    jsonstore.write_text(_settings_path(), json.dumps(data))
 
 
 def get_value(key: str, default: Any) -> Any:
     """Effective value for a setting key: the user override if set, else the
     caller's default. Backend consumers pass their own default because schemas and
     defaults are declared on the frontend (see docs/modules/settings.md)."""
-    return _read().get(key, default)
+    with _lock():
+        return _read().get(key, default)
 
 
 def set_value(key: str, value: Any) -> None:
     """Persist a setting value server-side. For backend consumers that write a
     setting directly (e.g. the agent persisting an 'always allow' permission rule),
     mirroring the frontend's PUT /settings/{key}."""
-    data = _read()
-    data[key] = value
-    _write(data)
+    with _lock():
+        data = _read()
+        data[key] = value
+        _write(data)
 
 
 def _served(data: dict) -> SettingsValues:
@@ -80,22 +93,25 @@ def _served(data: dict) -> SettingsValues:
 
 @router.get("", response_model=SettingsValues)
 def get_settings() -> SettingsValues:
-    return _served(_read())
+    with _lock():
+        return _served(_read())
 
 
 @router.put("/{key}", response_model=SettingValue)
 def put_setting(key: SettingKey, body: SettingValue) -> SettingValue:
-    data = _read()
-    data[key] = body.value
-    _write(data)
+    with _lock():
+        data = _read()
+        data[key] = body.value
+        _write(data)
     return body
 
 
 @router.delete("/{key}", response_model=SettingsValues)
 def delete_setting(key: SettingKey) -> SettingsValues:
     """Clear an override so the key falls back to its frontend default."""
-    data = _read()
-    if key in data:
-        del data[key]
-        _write(data)
-    return _served(data)
+    with _lock():
+        data = _read()
+        if key in data:
+            del data[key]
+            _write(data)
+        return _served(data)

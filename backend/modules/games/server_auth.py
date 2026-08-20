@@ -28,7 +28,7 @@ from typing import Any
 
 from backend.modules.games.client import resolve_server_url
 from backend.modules.settings.routes import get_value
-from backend import paths
+from backend import jsonstore, paths
 
 
 def _token_path() -> Path:
@@ -192,9 +192,7 @@ async def _auth_poll(provider: str, device_code: str) -> dict[str, Any]:
     except httpx.HTTPError as exc:
         return {"error": f"Failed to communicate with game server: {exc}"}
     if data.get("token"):
-        path = _token_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data), encoding="utf-8")
+        jsonstore.write_text(_token_path(), json.dumps(data))
         return {"signed_in": True, "account": data.get("account")}
     return data  # {pending: true} or {error: ...}
 
@@ -297,9 +295,7 @@ async def web_login_poll(provider: str) -> dict[str, Any]:
     if data.get("pending"):
         return {"pending": True}
     if data.get("token"):
-        path = _token_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data), encoding="utf-8")
+        jsonstore.write_text(_token_path(), json.dumps(data))
         _pending_web.pop(provider, None)
         return {"signed_in": True, "account": data.get("account")}
     _pending_web.pop(provider, None)
@@ -344,9 +340,7 @@ async def _local_auth(action: str, payload: dict[str, Any]) -> dict[str, Any]:
     except httpx.HTTPError as exc:
         return {"error": f"Failed to communicate with game server: {exc}"}
     if data.get("token"):
-        path = _token_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(data), encoding="utf-8")
+        jsonstore.write_text(_token_path(), json.dumps(data))
         return {"signed_in": True, "account": data.get("account")}
     return {"error": data.get("error") or "sign-in failed"}
 
@@ -389,13 +383,18 @@ async def fetch_account() -> dict[str, Any] | None:
     return account
 
 
+@jsonstore.serialized(_token_path)
 def _merge_account(account: dict[str, Any]) -> None:
-    """Write a refreshed account back into the token file, keeping the token."""
+    """Write a refreshed account back into the token file, keeping the token.
+
+    Serialized because it is a read-modify-write: overlapping with a sign-in
+    that replaces the whole document, the loser's *token* is the field that
+    goes missing."""
     data = _read()
     if not data:
         return
     data["account"] = account
-    _token_path().write_text(json.dumps(data), encoding="utf-8")
+    jsonstore.write_text(_token_path(), json.dumps(data))
 
 
 async def set_username(handle: str) -> dict[str, Any]:

@@ -13,7 +13,7 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException
 from fastapi import Path as PathParam
 
-from backend import paths
+from backend import jsonstore, paths
 from backend.modules.flow.models import (
     FLOW_ID_PATTERN,
     ActiveRequest,
@@ -33,19 +33,17 @@ def _state_path() -> Path:
 
 
 def _read() -> FlowsState:
-    path = _state_path()
-    if not path.is_file():
+    text = jsonstore.read_text(_state_path())
+    if text is None:
         return FlowsState()
     try:
-        return FlowsState.model_validate_json(path.read_text())
+        return FlowsState.model_validate_json(text)
     except ValueError:
         return FlowsState()
 
 
 def _write(state: FlowsState) -> None:
-    path = _state_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(state.model_dump_json())
+    jsonstore.write_text(_state_path(), state.model_dump_json())
 
 
 def _find(state: FlowsState, flow_id: str) -> Flow | None:
@@ -63,6 +61,7 @@ def list_flows() -> FlowsState:
 
 
 @router.post("", response_model=Flow)
+@jsonstore.serialized(_state_path)
 def create_flow(body: CreateFlow) -> Flow:
     state = _read()
     flow = Flow(id=uuid.uuid4().hex[:8], name=body.name, nodes=[], edges=[])
@@ -73,6 +72,7 @@ def create_flow(body: CreateFlow) -> Flow:
 
 
 @router.put("/active", response_model=FlowsState)
+@jsonstore.serialized(_state_path)
 def set_active(body: ActiveRequest) -> FlowsState:
     state = _read()
     if _find(state, body.id) is None:
@@ -91,6 +91,7 @@ def get_flow(flow_id: FlowId) -> Flow:
 
 
 @router.put("/{flow_id}", response_model=Flow)
+@jsonstore.serialized(_state_path)
 def upsert_flow(flow_id: FlowId, body: UpsertFlow) -> Flow:
     state = _read()
     existing = _find(state, flow_id)
@@ -118,6 +119,7 @@ def upsert_flow(flow_id: FlowId, body: UpsertFlow) -> Flow:
 
 
 @router.delete("/{flow_id}", response_model=FlowsState)
+@jsonstore.serialized(_state_path)
 def delete_flow(flow_id: FlowId) -> FlowsState:
     state = _read()
     state.flows = [f for f in state.flows if f.id != flow_id]

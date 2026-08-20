@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel
-from backend import paths
+from backend import jsonstore, paths
 
 Provider = Literal["anthropic", "openai", "ollama"]
 
@@ -84,19 +84,19 @@ def _read_keys() -> dict[str, str]:
         return {}
 
 
+@jsonstore.serialized(_keys_path)
 def set_key(name: str, value: str) -> None:
     keys = _read_keys()
     keys[name] = value
-    path = _keys_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(keys, indent=2), encoding="utf-8")
+    jsonstore.write_text(_keys_path(), json.dumps(keys, indent=2))
 
 
+@jsonstore.serialized(_keys_path)
 def delete_key(name: str) -> None:
     keys = _read_keys()
     if name in keys:
         del keys[name]
-        _keys_path().write_text(json.dumps(keys, indent=2), encoding="utf-8")
+        jsonstore.write_text(_keys_path(), json.dumps(keys, indent=2))
 
 
 def list_key_names() -> list[str]:

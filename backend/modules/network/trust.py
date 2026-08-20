@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.modules.settings.routes import get_value
-from backend import paths
+from backend import jsonstore, paths
 
 logger = logging.getLogger(__name__)
 
@@ -49,22 +49,21 @@ def _invites_path() -> Path:
 
 
 def _load_invites() -> dict[str, dict[str, Any]]:
-    path = _invites_path()
-    if not path.is_file():
+    text = jsonstore.read_text(_invites_path())
+    if text is None:
         return {}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(text)
     except ValueError:
         return {}
     return data if isinstance(data, dict) else {}
 
 
 def _save_invites(data: dict[str, dict[str, Any]]) -> None:
-    path = _invites_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data), encoding="utf-8")
+    jsonstore.write_text(_invites_path(), json.dumps(data))
 
 
+@jsonstore.serialized(_invites_path)
 def make_invite(address: str, node_id: str) -> tuple[str, str, float]:
     """Mint a single-use pairing token and pack it (with how to reach this node)
     into an opaque invite string. Returns (invite, token, expires)."""
@@ -84,9 +83,17 @@ def parse_invite(invite: str) -> tuple[str, str]:
     return str(bundle["address"]), str(bundle["token"])
 
 
+@jsonstore.serialized(_invites_path)
 def redeem_token(token: str, node_id: str) -> bool:
     """Consume a pairing token for `node_id`. Returns True if the token was valid and
-    unredeemed (or already redeemed by this same node)."""
+    unredeemed (or already redeemed by this same node).
+
+    Serialized because this one is not merely a lost update: the token is
+    **single-use**, and check-then-write over a shared file means two nodes
+    redeeming the same invite at the same time both read `redeemed_by: None`, both
+    write themselves in, and both are told yes. An invite you handed to one person
+    would have paired two.
+    """
     invites = _load_invites()
     rec = invites.get(token)
     if rec is None or rec.get("expires", 0) < time.time():
@@ -99,22 +106,21 @@ def redeem_token(token: str, node_id: str) -> bool:
 
 
 def load_known_peers() -> dict[str, dict[str, Any]]:
-    path = _peers_path()
-    if not path.is_file():
+    text = jsonstore.read_text(_peers_path())
+    if text is None:
         return {}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(text)
     except ValueError:
         return {}
     return data if isinstance(data, dict) else {}
 
 
+@jsonstore.serialized(_peers_path)
 def save_known_peer(node_id: str, record: dict[str, Any]) -> None:
     peers = load_known_peers()
     peers[node_id] = {**peers.get(node_id, {}), **record}
-    path = _peers_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(peers), encoding="utf-8")
+    jsonstore.write_text(_peers_path(), json.dumps(peers))
 
 
 def is_blocked(node_id: str) -> bool:

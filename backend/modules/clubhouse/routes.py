@@ -40,7 +40,7 @@ from backend.modules.clubhouse.models import (
     ChatSettingsRequest,
 )
 from backend.modules.telemetry.instrument import instrumented_client
-from backend import paths
+from backend import jsonstore, paths
 
 router = APIRouter(prefix="/clubhouse", tags=["clubhouse"])
 logger = logging.getLogger(__name__)
@@ -332,9 +332,7 @@ async def complete_auth(body: CompleteAuthRequest) -> ClubhouseStatus:
         "name": profile.get("name"),
         "photo_url": profile.get("photo_url"),
     }
-    path = _auth_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(record))
+    jsonstore.write_text(_auth_path(), json.dumps(record))
     return status()
 
 
@@ -353,9 +351,7 @@ async def connect_with_token(body: TokenConnectRequest) -> ClubhouseStatus:
         "name": profile.get("name"),
         "photo_url": profile.get("photo_url"),
     }
-    path = _auth_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(record))
+    jsonstore.write_text(_auth_path(), json.dumps(record))
     return status()
 
 

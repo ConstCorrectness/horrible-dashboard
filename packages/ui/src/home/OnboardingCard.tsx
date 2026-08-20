@@ -10,7 +10,7 @@ import {
   type DetectedProvider,
 } from '@horrible/core';
 
-import { NAME_KEY } from './constants';
+import { getUserName, setUserName } from './constants';
 
 /** First-run setup for the local model: pick a provider, get a model, name yourself.
  * Shown on home until the agent is both configured and reachable. */
@@ -32,7 +32,7 @@ export function OnboardingCard({
   );
 
   const [model, setModel] = useState(status.model ?? DEFAULT_AGENT_MODEL);
-  const [name, setName] = useState(localStorage.getItem(NAME_KEY) ?? '');
+  const [name, setName] = useState(getUserName);
   const [pullState, setPullState] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -74,7 +74,7 @@ export function OnboardingCard({
     setSaving(true);
     setError(null);
     try {
-      if (name.trim()) localStorage.setItem(NAME_KEY, name.trim());
+      if (name.trim()) await setUserName(name);
       await saveAgentConfig(model, provider.kind, provider.endpoint);
       onChanged();
     } catch (e) {

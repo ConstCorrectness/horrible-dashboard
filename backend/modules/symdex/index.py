@@ -37,7 +37,7 @@ from backend.modules.symdex.extract_packages import extract_packages
 from backend.modules.symdex.extract_schema import extract_schemas
 from backend.modules.symdex.extract_stdlib import STDLIB_EMBED, extract_stdlib
 from backend.modules.symdex.models import KIND_PREFIXES
-from backend import paths
+from backend import jsonstore, paths
 
 logger = logging.getLogger(__name__)
 
@@ -63,9 +63,7 @@ def _read_meta() -> dict[str, Any]:
 
 
 def _write_meta(meta: dict[str, Any]) -> None:
-    path = _meta_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(meta))
+    jsonstore.write_text(_meta_path(), json.dumps(meta))
 
 
 def _is_fallback(method: str) -> bool:

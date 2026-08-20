@@ -86,3 +86,28 @@ def test_put_rejects_bad_key(client: TestClient) -> None:
 def test_put_rejects_missing_value(client: TestClient) -> None:
     res = client.put("/api/settings/observability.recentCount", json={})
     assert res.status_code == 422
+
+
+def test_concurrent_writes_do_not_clobber_each_other(client: TestClient) -> None:
+    """Two overlapping PUTs must both survive.
+
+    Each write is a read-modify-write of the whole bag, and the routes are sync
+    `def`, so FastAPI runs them on the threadpool: without a lock both requests
+    read the pre-change bag and the second one writes it back missing the first
+    one's key — 200 on both, one setting silently gone. First-run setup writes
+    the name, the theme and `desktop.oobeComplete` from one click, which is how a
+    completed wizard came back on the next launch.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    keys = [f"race.key{i}" for i in range(24)]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(
+            pool.map(
+                lambda k: client.put(f"/api/settings/{k}", json={"value": k}), keys
+            )
+        )
+    assert all(r.status_code == 200 for r in results)
+
+    values = client.get("/api/settings").json()["values"]
+    assert values == {k: k for k in keys}

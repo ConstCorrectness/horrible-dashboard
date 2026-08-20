@@ -17,7 +17,7 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException
 from fastapi import Path as PathParam
 
-from backend import paths
+from backend import jsonstore, paths
 from backend.modules.notes.models import (
     NOTE_ID_PATTERN,
     CreateNote,
@@ -39,19 +39,17 @@ def _state_path() -> Path:
 
 
 def _read() -> NotesState:
-    path = _state_path()
-    if not path.is_file():
+    text = jsonstore.read_text(_state_path())
+    if text is None:
         return NotesState()
     try:
-        return NotesState.model_validate_json(path.read_text(encoding="utf-8"))
+        return NotesState.model_validate_json(text)
     except ValueError:
         return NotesState()
 
 
 def _write(state: NotesState) -> None:
-    path = _state_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(state.model_dump_json(), encoding="utf-8")
+    jsonstore.write_text(_state_path(), state.model_dump_json())
 
 
 def _find(state: NotesState, note_id: str) -> Note | None:
@@ -92,6 +90,7 @@ def search_notes(q: str) -> list[NoteMeta]:
 
 
 @router.post("", response_model=Note)
+@jsonstore.serialized(_state_path)
 def create_note(body: CreateNote) -> Note:
     note = Note(
         id=uuid.uuid4().hex[:12],
@@ -115,6 +114,7 @@ def get_note(note_id: NoteId) -> Note:
 
 
 @router.put("/{note_id}", response_model=Note)
+@jsonstore.serialized(_state_path)
 def update_note(note_id: NoteId, body: UpdateNote) -> Note:
     state = _read()
     note = _find(state, note_id)
@@ -137,6 +137,7 @@ def update_note(note_id: NoteId, body: UpdateNote) -> Note:
 
 
 @router.delete("/{note_id}", response_model=NotesState)
+@jsonstore.serialized(_state_path)
 def delete_note(note_id: NoteId) -> NotesState:
     state = _read()
     state.notes = [n for n in state.notes if n.id != note_id]

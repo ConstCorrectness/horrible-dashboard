@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.modules.database.app_db import get_app_db_path
-from backend import paths
+from backend import jsonstore, paths
 
 
 # Connection config keys whose values must never be returned to the client. `uri` is
@@ -49,20 +49,18 @@ def _store_path() -> Path:
 
 
 def _read() -> list[dict[str, Any]]:
-    path = _store_path()
-    if not path.is_file():
+    text = jsonstore.read_text(_store_path())
+    if text is None:
         return []
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(text)
     except ValueError:
         return []
     return [c for c in data if isinstance(c, dict)] if isinstance(data, list) else []
 
 
 def _write(rows: list[dict[str, Any]]) -> None:
-    path = _store_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(rows), encoding="utf-8")
+    jsonstore.write_text(_store_path(), json.dumps(rows))
 
 
 def _builtin_app() -> dict[str, Any]:
@@ -171,6 +169,7 @@ def redact(conn: dict[str, Any]) -> dict[str, Any]:
     return {**conn, "config": safe_config}
 
 
+@jsonstore.serialized(_store_path)
 def add_connection(name: str, provider: str, config: dict[str, Any]) -> dict[str, Any]:
     rows = _read()
     record = {
@@ -185,6 +184,7 @@ def add_connection(name: str, provider: str, config: dict[str, Any]) -> dict[str
     return record
 
 
+@jsonstore.serialized(_store_path)
 def update_connection(
     conn_id: str, name: str, provider: str, config: dict[str, Any]
 ) -> dict[str, Any] | None:
@@ -202,6 +202,7 @@ def update_connection(
     return None
 
 
+@jsonstore.serialized(_store_path)
 def delete_connection(conn_id: str) -> bool:
     rows = _read()
     remaining = [c for c in rows if c["id"] != conn_id]

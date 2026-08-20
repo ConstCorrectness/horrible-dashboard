@@ -14,7 +14,7 @@ import logging
 import time
 from pathlib import Path
 from typing import Any
-from backend import paths
+from backend import jsonstore, paths
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +26,11 @@ def _log_path() -> Path:
 
 
 def _read() -> list[dict[str, Any]]:
-    path = _log_path()
-    if not path.is_file():
+    text = jsonstore.read_text(_log_path())
+    if text is None:
         return []
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(text)
         return data if isinstance(data, list) else []
     except ValueError:
         logger.warning("games match log is corrupt; starting empty")
@@ -38,11 +38,10 @@ def _read() -> list[dict[str, Any]]:
 
 
 def _write(entries: list[dict[str, Any]]) -> None:
-    path = _log_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(entries[-MAX_ENTRIES:], indent=2), encoding="utf-8")
+    jsonstore.write_text(_log_path(), json.dumps(entries[-MAX_ENTRIES:], indent=2))
 
 
+@jsonstore.serialized(_log_path)
 def append_entry(
     *,
     game_id: str,
@@ -73,6 +72,7 @@ def append_entry(
     _write(entries)
 
 
+@jsonstore.serialized(_log_path)
 def attach_rating(game_id: str, delta: float, rating: float, tier: str | None) -> None:
     """Stamp the newest un-stamped entry for `game_id` with its rating movement."""
     entries = _read()

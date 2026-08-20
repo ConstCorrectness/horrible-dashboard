@@ -39,7 +39,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
-from backend import paths
+from backend import jsonstore, paths
 
 logger = logging.getLogger(__name__)
 
@@ -263,20 +263,18 @@ def _store_path() -> Path:
 
 
 def _read_all() -> dict[str, Any]:
-    path = _store_path()
-    if not path.is_file():
+    text = jsonstore.read_text(_store_path())
+    if text is None:
         return {}
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(text)
     except ValueError:
         logger.warning("games loadouts file is corrupt; starting empty")
         return {}
 
 
 def _write_all(data: dict[str, Any]) -> None:
-    path = _store_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    jsonstore.write_text(_store_path(), json.dumps(data, indent=2))
 
 
 # ---- versioning --------------------------------------------------------------
@@ -469,10 +467,12 @@ def active_version_id(game_id: str, kind: str | None = None) -> str | None:
 # ---- writing a harness --------------------------------------------------------
 
 
+@jsonstore.serialized(_store_path)
 def _mutate(game_id: str, kind: str, fn: Callable[[dict[str, Any]], Any]) -> Any:
     """Run `fn` over one kind's `{active, versions}` block and persist the result.
     Every write goes through here, so the v1/v2 → v3 upgrade happens exactly once
-    per game and only the touched side is rewritten."""
+    per game and only the touched side is rewritten — and, being the single write
+    path, it is also the one place the store's lock has to be taken."""
     data = _read_all()
     entry = _as_v3(data.get(game_id, {}), game_id)
     side = entry.setdefault(kind, {"active": "", "versions": {}})

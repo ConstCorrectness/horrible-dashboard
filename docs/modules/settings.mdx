@@ -224,6 +224,20 @@ ones blanked, plus `secretKeys`),
 (clear an override → revert to the frontend default). Persists to
 `$HORRIBLE_DATA_DIR/settings.json`.
 
+Every write is a read-modify-write of the **whole bag**, so all three routes take a
+process-wide lock and the file is replaced atomically (temp file + rename) rather
+than truncated in place — both via `backend/jsonstore.py`, which every other
+whole-file JSON store now goes through as well (see
+[../architecture/data-directories.mdx](../architecture/data-directories.mdx)). Both halves are load-bearing and fail *silently* without
+it: the routes are sync `def`, so FastAPI runs them on the threadpool, and two PUTs
+that overlap each read the pre-change bag — the second writes it back without the
+first one's key, and **both answer 200**. That is not a theoretical race; first-run
+setup writes the name, the theme and `desktop.oobeComplete` from a single click,
+which is how a completed setup wizard came back on the next launch. The atomic
+rename covers the other direction: a reader (or a crash) catching a truncated file
+parses nothing, and `_read` falls back to `{}` — i.e. every setting the user ever
+chose, gone.
+
 ## Browser vs desktop
 
 Identical. Settings are stored by the backend wherever it runs (local or remote);

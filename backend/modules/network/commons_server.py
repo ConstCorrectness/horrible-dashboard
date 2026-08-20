@@ -46,7 +46,7 @@ from backend.modules.database.vectorstore import (
     upsert_document,
 )
 from backend.modules.database.embeddings import get_embedding
-from backend import paths
+from backend import jsonstore, paths
 
 logger = logging.getLogger(__name__)
 
@@ -140,10 +140,14 @@ def verify_profile(profile: CommonsProfile) -> bool:
 
 
 def save_profiles() -> None:
-    path = _profiles_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    """Mirror the in-memory registry to disk.
+
+    No lock: the registry in memory is the source of truth and this rewrites
+    the whole of it, so a concurrent save cannot lose an edit the way a
+    read-modify-write store can — but it still must not leave a half-written
+    file behind for the next `load_profiles()`."""
     payload = [e.profile.model_dump() for e in _profiles.values()]
-    path.write_text(json.dumps(payload), encoding="utf-8")
+    jsonstore.write_text(_profiles_path(), json.dumps(payload))
 
 
 def load_profiles() -> None:
@@ -414,9 +418,7 @@ def _vouches_path() -> Path:
 
 
 def save_vouches() -> None:
-    path = _vouches_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(_vouches), encoding="utf-8")
+    jsonstore.write_text(_vouches_path(), json.dumps(_vouches))
 
 
 def load_vouches() -> None:

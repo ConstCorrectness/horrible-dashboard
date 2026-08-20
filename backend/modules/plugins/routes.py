@@ -21,7 +21,7 @@ from fastapi import Path as PathParam
 from fastapi.responses import FileResponse
 from pydantic import ValidationError
 
-from backend import paths
+from backend import jsonstore, paths
 from backend.modules.plugins.models import (
     MANIFEST_FILENAME,
     PLUGIN_ID_PATTERN,
@@ -85,20 +85,20 @@ def _read_manifest(package_dir: Path, expected_id: str) -> PluginManifest | None
 
 
 def _read_enabled(plugin_id: str) -> bool:
-    state_path = _plugins_root() / plugin_id / "state.json"
-    if not state_path.is_file():
+    text = jsonstore.read_text(_plugins_root() / plugin_id / "state.json")
+    if text is None:
         return True
     try:
-        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state = json.loads(text)
     except ValueError:
         return True
     return bool(state.get("enabled", True))
 
 
 def _write_enabled(plugin_id: str, enabled: bool) -> None:
-    state_path = _plugins_root() / plugin_id / "state.json"
-    state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps({"enabled": enabled}), encoding="utf-8")
+    jsonstore.write_text(
+        _plugins_root() / plugin_id / "state.json", json.dumps({"enabled": enabled})
+    )
 
 
 def _storage_path(plugin_id: str) -> Path:
@@ -106,20 +106,18 @@ def _storage_path(plugin_id: str) -> Path:
 
 
 def _read_storage(plugin_id: str) -> dict:
-    path = _storage_path(plugin_id)
-    if not path.is_file():
+    text = jsonstore.read_text(_storage_path(plugin_id))
+    if text is None:
         return {}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(text)
     except ValueError:
         return {}
     return data if isinstance(data, dict) else {}
 
 
 def _write_storage(plugin_id: str, data: dict) -> None:
-    path = _storage_path(plugin_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data), encoding="utf-8")
+    jsonstore.write_text(_storage_path(plugin_id), json.dumps(data))
 
 
 def _require_installed(plugin_id: str) -> PluginManifest:
@@ -228,16 +226,23 @@ def storage_put(
     plugin_id: PluginId, key: StorageKey, body: StorageValue
 ) -> StorageEntry:
     _require_installed(plugin_id)
-    data = _read_storage(plugin_id)
-    data[key] = body.value
-    _write_storage(plugin_id, data)
+    # One plugin writing two keys at once must not lose one: the store is a whole
+    # JSON document per plugin, so both writers would read the same dict and the
+    # second would write it back without the first key. Locked per plugin file,
+    # inline rather than via `jsonstore.serialized`, because the path depends on
+    # an argument.
+    with jsonstore.locked(_storage_path(plugin_id)):
+        data = _read_storage(plugin_id)
+        data[key] = body.value
+        _write_storage(plugin_id, data)
     return StorageEntry(key=key, value=body.value)
 
 
 @router.delete("/{plugin_id}/storage/{key}", response_model=OkResponse)
 def storage_delete(plugin_id: PluginId, key: StorageKey) -> OkResponse:
-    data = _read_storage(plugin_id)
-    if key in data:
-        del data[key]
-        _write_storage(plugin_id, data)
+    with jsonstore.locked(_storage_path(plugin_id)):
+        data = _read_storage(plugin_id)
+        if key in data:
+            del data[key]
+            _write_storage(plugin_id, data)
     return OkResponse()

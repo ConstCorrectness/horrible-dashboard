@@ -17,13 +17,14 @@ import {
   registry,
   setBackdrop,
   setSetting,
+  toastsStore,
   THEMES,
   THEME_SETTING_KEY,
   useThemeId,
   type AgentStatus,
 } from '@horrible/core';
 
-import { NAME_KEY } from '../home/constants';
+import { getUserName, setUserName } from '../home/constants';
 import { SetupCard } from '../home/SetupCard';
 import { OOBE_COMPLETE_KEY } from './constants';
 
@@ -32,13 +33,36 @@ const ORDER: Step[] = ['welcome', 'look', 'setup'];
 
 export function Oobe({ onDone }: { onDone: () => void }) {
   const [step, setStep] = useState<Step>('welcome');
+  const [name, setName] = useState(getUserName);
   const index = ORDER.indexOf(step);
 
+  // The name is committed on the way out of the wizard rather than per keystroke:
+  // it is a persisted setting now, and a PUT per character would be absurd.
+  const commit = () => setUserName(name);
+
+  // Awaited, and only *then* is the wizard dismissed. Firing the write and
+  // navigating away is how "I already did this" became a wizard that reappeared
+  // on the next launch: nothing surfaced a failed or unsent PUT, and the flag it
+  // was supposed to set is the only thing standing between the user and a second
+  // run of setup. A backend that refuses still lets the user through — the app
+  // works offline — but it says so instead of silently forgetting.
   const finish = () => {
-    void setSetting(OOBE_COMPLETE_KEY, true);
-    onDone();
+    void Promise.all([commit(), setSetting(OOBE_COMPLETE_KEY, true)])
+      .catch((err) => {
+        toastsStore.add(
+          'warning',
+          "Couldn't save your setup",
+          `The backend didn't accept it, so first-run setup may appear again. ${String(err)}`,
+          0,
+        );
+      })
+      .finally(onDone);
   };
-  const next = () => (index >= ORDER.length - 1 ? finish() : setStep(ORDER[index + 1]));
+  const next = () => {
+    if (index >= ORDER.length - 1) return finish();
+    void commit();
+    setStep(ORDER[index + 1]);
+  };
 
   return (
     <div className="os-oobe">
@@ -49,7 +73,7 @@ export function Oobe({ onDone }: { onDone: () => void }) {
           ))}
         </ol>
 
-        {step === 'welcome' && <Welcome />}
+        {step === 'welcome' && <Welcome name={name} onName={setName} />}
         {step === 'look' && <Look />}
         {step === 'setup' && <SetupStep />}
 
@@ -61,7 +85,13 @@ export function Oobe({ onDone }: { onDone: () => void }) {
             Skip setup
           </button>
           {index > 0 && (
-            <button type="button" onClick={() => setStep(ORDER[index - 1])}>
+            <button
+              type="button"
+              onClick={() => {
+                void commit();
+                setStep(ORDER[index - 1]);
+              }}
+            >
               Back
             </button>
           )}
@@ -74,8 +104,7 @@ export function Oobe({ onDone }: { onDone: () => void }) {
   );
 }
 
-function Welcome() {
-  const [name, setName] = useState(() => localStorage.getItem(NAME_KEY) ?? '');
+function Welcome({ name, onName }: { name: string; onName: (name: string) => void }) {
   return (
     <section className="os-oobe-step">
       <h1>Welcome</h1>
@@ -89,12 +118,7 @@ function Welcome() {
           value={name}
           autoFocus
           placeholder="Optional"
-          onChange={(e) => {
-            setName(e.target.value);
-            // localStorage, matching where the greeting has always been read
-            // from — it is a per-browser nicety, not a node-wide setting.
-            localStorage.setItem(NAME_KEY, e.target.value);
-          }}
+          onChange={(e) => onName(e.target.value)}
         />
       </label>
     </section>

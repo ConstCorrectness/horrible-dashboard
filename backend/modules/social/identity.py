@@ -43,7 +43,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from backend.modules.network import identity as node_identity
 from backend.modules.social.friendcode import format_friend_code
-from backend import paths
+from backend import jsonstore, paths
 
 # A person id is the same shape as a node id, and for the same reason: it is the
 # fingerprint of a public key, so it cannot be claimed by anyone else.
@@ -180,11 +180,10 @@ def load_profile() -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+@jsonstore.serialized(_profile_path)
 def save_profile(**fields: Any) -> dict[str, Any]:
     profile = {**load_profile(), **{k: v for k, v in fields.items() if v is not None}}
-    path = _profile_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(profile), encoding="utf-8")
+    jsonstore.write_text(_profile_path(), json.dumps(profile))
     return profile
 
 

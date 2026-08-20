@@ -14,7 +14,7 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException
 from fastapi import Path as PathParam
 
-from backend import paths
+from backend import jsonstore, paths
 from backend.modules.chat.models import (
     CHAT_ID_PATTERN,
     ActiveRequest,
@@ -36,19 +36,17 @@ def _state_path() -> Path:
 
 
 def _read() -> ChatSessionsState:
-    path = _state_path()
-    if not path.is_file():
+    text = jsonstore.read_text(_state_path())
+    if text is None:
         return ChatSessionsState()
     try:
-        return ChatSessionsState.model_validate_json(path.read_text())
+        return ChatSessionsState.model_validate_json(text)
     except ValueError:
         return ChatSessionsState()
 
 
 def _write(state: ChatSessionsState) -> None:
-    path = _state_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(state.model_dump_json())
+    jsonstore.write_text(_state_path(), state.model_dump_json())
 
 
 def _find(state: ChatSessionsState, sid: str) -> ChatSession | None:
@@ -90,6 +88,7 @@ def list_sessions(agent: str | None = None) -> ChatSessionsList:
 
 
 @router.post("/sessions", response_model=ChatSession)
+@jsonstore.serialized(_state_path)
 def create_session(body: CreateSession) -> ChatSession:
     state = _read()
     now = time.time()
@@ -108,6 +107,7 @@ def create_session(body: CreateSession) -> ChatSession:
 
 
 @router.put("/sessions/active", response_model=ChatSessionsList)
+@jsonstore.serialized(_state_path)
 def set_active(body: ActiveRequest) -> ChatSessionsList:
     state = _read()
     session = _find(state, body.id)
@@ -127,6 +127,7 @@ def get_session(sid: SessionId) -> ChatSession:
 
 
 @router.put("/sessions/{sid}", response_model=ChatSession)
+@jsonstore.serialized(_state_path)
 def upsert_session(sid: SessionId, body: UpsertSession) -> ChatSession:
     state = _read()
     existing = _find(state, sid)
@@ -157,6 +158,7 @@ def upsert_session(sid: SessionId, body: UpsertSession) -> ChatSession:
 
 
 @router.delete("/sessions/{sid}", response_model=ChatSessionsList)
+@jsonstore.serialized(_state_path)
 def delete_session(sid: SessionId) -> ChatSessionsList:
     state = _read()
     deleted = _find(state, sid)

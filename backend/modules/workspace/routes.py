@@ -13,7 +13,7 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException
 from fastapi import Path as PathParam
 
-from backend import paths
+from backend import jsonstore, paths
 from backend.modules.workspace.models import (
     WORKSPACE_ID_PATTERN,
     ActiveRequest,
@@ -33,19 +33,17 @@ def _state_path() -> Path:
 
 
 def _read() -> WorkspacesState:
-    path = _state_path()
-    if not path.is_file():
+    text = jsonstore.read_text(_state_path())
+    if text is None:
         return WorkspacesState()
     try:
-        return WorkspacesState.model_validate_json(path.read_text())
+        return WorkspacesState.model_validate_json(text)
     except ValueError:
         return WorkspacesState()
 
 
 def _write(state: WorkspacesState) -> None:
-    path = _state_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(state.model_dump_json())
+    jsonstore.write_text(_state_path(), state.model_dump_json())
 
 
 def _find(state: WorkspacesState, ws_id: str) -> Workspace | None:
@@ -58,6 +56,7 @@ def list_workspaces() -> WorkspacesState:
 
 
 @router.post("", response_model=Workspace)
+@jsonstore.serialized(_state_path)
 def create_workspace(body: CreateWorkspace) -> Workspace:
     state = _read()
     ws = Workspace(id=uuid.uuid4().hex[:8], name=body.name, layout=None)
@@ -69,6 +68,7 @@ def create_workspace(body: CreateWorkspace) -> Workspace:
 
 
 @router.put("/active", response_model=WorkspacesState)
+@jsonstore.serialized(_state_path)
 def set_active(body: ActiveRequest) -> WorkspacesState:
     state = _read()
     if _find(state, body.id) is None:
@@ -79,6 +79,7 @@ def set_active(body: ActiveRequest) -> WorkspacesState:
 
 
 @router.put("/{ws_id}", response_model=Workspace)
+@jsonstore.serialized(_state_path)
 def upsert_workspace(ws_id: WorkspaceId, body: UpsertWorkspace) -> Workspace:
     state = _read()
     existing = _find(state, ws_id)
@@ -99,6 +100,7 @@ def upsert_workspace(ws_id: WorkspaceId, body: UpsertWorkspace) -> Workspace:
 
 
 @router.delete("/{ws_id}", response_model=WorkspacesState)
+@jsonstore.serialized(_state_path)
 def delete_workspace(ws_id: WorkspaceId) -> WorkspacesState:
     state = _read()
     state.workspaces = [w for w in state.workspaces if w.id != ws_id]

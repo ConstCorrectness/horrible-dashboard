@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from backend import paths
+from backend import jsonstore, paths
 
 logger = logging.getLogger(__name__)
 
@@ -82,15 +82,17 @@ class PeopleMemoryStore:
                 if person.user_id > 0:
                     self._people[person.user_id] = person
         except Exception as e:
-            logger.warning("Failed to load clubhouse people memory from %s: %s", self._path, e)
+            logger.warning(
+                "Failed to load clubhouse people memory from %s: %s", self._path, e
+            )
 
     def _save(self) -> None:
         try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
             data = [p.to_dict() for p in self._people.values()]
-            tmp_path = self._path.with_suffix(".tmp")
-            tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-            tmp_path.replace(self._path)
+            # `Path.replace` is `MoveFileEx` on Windows and raises PermissionError
+            # while a reader holds the destination open — the hand-rolled temp-file
+            # dance here had the right idea and the wrong last line.
+            jsonstore.write_text(self._path, json.dumps(data, indent=2))
         except Exception as e:
             logger.error("Failed to save clubhouse people memory: %s", e)
 
@@ -120,7 +122,9 @@ class PeopleMemoryStore:
     def list_all(self, limit: int = 100) -> list[PersonMemory]:
         self._ensure_loaded()
         # Sort by last seen descending
-        return sorted(self._people.values(), key=lambda p: p.last_seen_ts, reverse=True)[:limit]
+        return sorted(
+            self._people.values(), key=lambda p: p.last_seen_ts, reverse=True
+        )[:limit]
 
     def search(self, query: str) -> list[PersonMemory]:
         self._ensure_loaded()
@@ -212,7 +216,9 @@ class PeopleMemoryStore:
             self._save()
         return person
 
-    def remove_note(self, user_id_or_name: int | str, note_idx: int) -> PersonMemory | None:
+    def remove_note(
+        self, user_id_or_name: int | str, note_idx: int
+    ) -> PersonMemory | None:
         self._ensure_loaded()
         person = (
             self.get(user_id_or_name)
