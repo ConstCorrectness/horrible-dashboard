@@ -1,5 +1,21 @@
 {
-  "_comment": "Cross-language physics conformance vectors. Read by BOTH backend/tests/test_hassault_physics.py and packages/core/src/modules/hassault/__tests__/conformance.test.ts. These pin that the two implementations agree, not that either is correct in the abstract - correctness is what each side's own unit tests are for. Regenerate only when a rule genuinely changes, and make both suites pass before committing.",
+  "_comment": "Cross-language physics conformance vectors. Read by BOTH backend/tests/test_hassault_physics.py and packages/core/src/modules/hassault/__tests__/conformance.test.ts. These pin that the two implementations agree, not that either is correct in the abstract - correctness is what each side's own unit tests are for. Regenerate only when a rule genuinely changes, and make both suites pass before committing. 'hitboxSpecId' is the content hash of the body these vectors were generated against (backend/modules/hassault/hitbox.py). It is checked by the Python suite: change a hit-deciding dimension and this file is stale, which is the one failure mode a hand-maintained revision number would let you forget.",
+  "hitboxSpecId": "86d9f2779917",
+  "hitbox": {
+    "specId": "86d9f2779917",
+    "shape": "cylinder",
+    "radius": 1.1,
+    "eyeHeight": 4.5,
+    "aboveEye": 0.7,
+    "standingHeight": 5.2,
+    "crouchEyeScale": 0.75,
+    "crouchEyeHeight": 3.375,
+    "crouchHeight": 4.075,
+    "crouchScale": 0.7836538461538461,
+    "headBand": 1.0,
+    "fitTolerance": 0.35,
+    "eyeTolerance": 0.15
+  },
   "tolerance": 1e-09,
   "worlds": {
     "room": {

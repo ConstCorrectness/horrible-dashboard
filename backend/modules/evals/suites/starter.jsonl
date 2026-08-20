@@ -1,0 +1,45 @@
+# The starter suite: the cases worth having before you write your own.
+#
+# This is a plain .jsonl in exactly the format you author in — one JSON object per
+# line, blank lines and `#` comments skipped by the loader. It is DATA, not code:
+# it lives in the repo so it can be reviewed and diffed, and it is resolved beside
+# your own suites the same way hassault resolves its bundled hd_* maps beside an
+# AssaultCube install's. It is read-only; "Fork to edit" copies it into your data
+# dir and you own the copy.
+#
+# Two jobs. It is the worked example of the case format, and it covers the failures
+# a small model running THIS dashboard has, which are not the ones a generic
+# tool-calling benchmark covers. Roughly a third are negatives (`no_call`), because
+# "reaches for a tool when the question wanted an answer" is the dominant failure of
+# a small model with 38 tools in front of it, and a suite of positives only would
+# score that model highly while it made the app unusable.
+#
+# A caution learned from the first sweep these cases ever ran: AN EXPECTATION THAT
+# CONTRADICTS A TOOL'S OWN DESCRIPTION GRADES THE CASE AUTHOR, NOT THE MODEL. Two of
+# these originally expected `open_pane` (which the layout core explicitly tells the
+# model not to use, in favour of `show`) and `close_pane(instanceId=...)` (the
+# parameter is `id`). Both failed a model that had done the right thing. Read the
+# tool declaration before writing what you expect of it.
+
+
+# --- the basics: does it reach the obvious tool at all -----------------------
+{"id": "layout-open-terminal", "prompt": "open a terminal", "expose": {"preload": ["layout"]}, "expect": {"grade": "name_only", "calls": [{"name": "show"}]}, "tags": ["layout", "basic"], "note": "The floor. `show`, not `open_pane`: the layout core's own guidance is that `show` is the verb for any 'show/open/go to X' request and that you do NOT need `open_pane` to reach something. This case was originally written expecting `open_pane` and the very first sweep failed it — against a model that had done exactly the right thing. An expectation that contradicts the tool description grades the case author, not the model."}
+{"id": "layout-open-named-pane", "prompt": "open the settings page", "expose": {"preload": ["layout"]}, "expect": {"calls": [{"name": "show", "arguments": {"target": "settings"}}]}, "tags": ["layout", "arguments"], "note": "Graded on the argument too: reaching for `show` and then passing something the resolver cannot match is the common half-failure. `target` is documented as 'in the user's own words', so the normalisation (case, whitespace) is doing real work here."}
+{"id": "layout-close-not-open", "prompt": "close the terminal pane", "expose": {"preload": ["layout"]}, "expect": {"grade": "name_only", "calls": [{"name": "close_pane"}]}, "fixtures": {"close_pane": {"closed": true}}, "tags": ["layout", "basic"], "note": "Open and close are adjacent in the catalog and easy to confuse."}
+
+# --- negatives: the failure a positives-only suite cannot see ----------------
+{"id": "negative-general-knowledge", "prompt": "what does the acronym GGUF stand for?", "expose": {"preload": ["layout"]}, "expect": {"grade": "no_call"}, "tags": ["negative"], "note": "A question with an answer. A model that searches, or opens a pane, has misread having tools as being obliged to use them."}
+{"id": "negative-opinion", "prompt": "do you think I should use LoRA or a full fine-tune for a 7B model?", "expose": {"preload": ["layout", "training"]}, "expect": {"grade": "no_call"}, "tags": ["negative"], "note": "Preloaded with the *tempting* group on purpose: the training tools are right there and none of them answers this."}
+{"id": "negative-greeting", "prompt": "hey, are you there?", "expect": {"grade": "no_call"}, "tags": ["negative", "basic"], "note": "The cheapest negative there is. Small models still fail it."}
+{"id": "negative-ambiguous-reference", "prompt": "close it", "expose": {"preload": ["layout"]}, "expect": {"grade": "no_call"}, "tags": ["negative", "ambiguity"], "note": "No pane context and no antecedent: the right move is to ask which one, not to guess and close something. Change this case if you would rather the agent guessed — but decide it deliberately."}
+
+# --- discovery: can it reach a group it was not handed -----------------------
+{"id": "discovery-library-search", "prompt": "search my library for notes about vector databases", "expect": {"grade": "sequence", "calls": [{"name": "load_tools"}, {"name": "library.search"}]}, "fixtures": {"load_tools": {"loaded": ["library"]}, "library.search": {"hits": [{"title": "LanceDB notes", "score": 0.81}]}}, "tags": ["discovery", "library"], "note": "Nothing preloaded, so the capability is only reachable through `load_tools`. A model that cannot do this has no access to most of the app regardless of how well it calls the tools it can see."}
+{"id": "discovery-github-repos", "prompt": "list my github repositories", "expect": {"grade": "name_only", "calls": [{"name": "github.listRepos"}]}, "fixtures": {"load_tools": {"loaded": ["github"]}, "github.listRepos": {"repos": ["horrible-dashboard"]}}, "tags": ["discovery", "github"], "note": "Graded `name_only` on the endpoint tool alone: the keyword preload may hand `github` over without a `load_tools` round, and either route is a pass. Compare with the library case, which pins the sequence because nothing preloads it."}
+
+# --- multi-step --------------------------------------------------------------
+{"id": "multistep-inspect-then-act", "prompt": "what do I have open? then close the scratch pane", "expose": {"preload": ["layout"]}, "expect": {"grade": "sequence", "calls": [{"name": "list_open_panes"}, {"name": "close_pane"}]}, "fixtures": {"list_open_panes": {"panes": [{"instanceId": "s1", "viewId": "scratch", "title": "Scratch"}, {"instanceId": "e1", "viewId": "editor.buffer", "title": "main.py"}]}, "close_pane": {"closed": true}}, "tags": ["layout", "multi-step"], "note": "Two instructions in one turn, and the second depends on the first. Small models routinely do one and forget the other."}
+{"id": "multistep-uses-the-tool-result", "prompt": "close whichever pane is showing main.py", "expose": {"preload": ["layout"]}, "expect": {"calls": [{"name": "close_pane", "arguments": {"id": "e1"}}]}, "fixtures": {"list_open_panes": {"panes": [{"instanceId": "s1", "viewId": "scratch", "title": "Scratch"}, {"instanceId": "e1", "viewId": "editor.buffer", "title": "main.py"}]}, "close_pane": {"closed": true}}, "tags": ["layout", "multi-step", "grounding"], "note": "The id can only come from the previous tool's result, so this grades whether the model *read* what the tool returned rather than inventing a plausible argument. Note `close_pane` takes `id`, not `instanceId` — this case originally expected the wrong parameter name and failed a model that had it right."}
+
+# --- context -----------------------------------------------------------------
+{"id": "context-answers-from-the-snapshot", "prompt": "which file am I looking at?", "context": {"panes": [{"title": "main.py", "viewId": "editor.buffer", "instanceId": "e1", "snapshot": {"uri": "file:///work/main.py", "dirty": true}}]}, "expose": {"preload": ["layout"]}, "expect": {"grade": "no_call"}, "tags": ["negative", "context"], "note": "The workspace snapshot already contains the answer, and the system message says not to call `list_open_panes` for a pane described there. A model that calls it anyway is ignoring its context — which costs a round on every single turn, not just this one."}

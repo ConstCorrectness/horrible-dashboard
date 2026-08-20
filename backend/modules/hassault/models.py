@@ -305,3 +305,88 @@ class LaunchNativeResponse(BaseModel):
     pid: int | None = None
     connect_args: list[str] = []
     message: str | None = None
+
+
+class HitboxOut(BaseModel):
+    """The body a shot is resolved against, served so no client holds a copy.
+
+    Every field is spelled out because a `response_model` *filters*: a dimension
+    added to `HitboxSpec` and forgotten here would be silently dropped on the way
+    out, and the client would fall back to whatever it did before — which for a
+    hitbox means two implementations quietly disagreeing about where a body is.
+
+    The derived heights are served alongside the primitives rather than left to
+    each client, because three implementations of `crouchHeight` is three chances
+    to round it differently.
+    """
+
+    #: Content hash of the hit-deciding dimensions. The client shows it in the
+    #: tuning lab and `physics-vectors.json` is stamped with it.
+    specId: str  # noqa: N815 — read verbatim by the browser and the native client
+    shape: str
+    radius: float
+    eyeHeight: float  # noqa: N815
+    aboveEye: float  # noqa: N815
+    standingHeight: float  # noqa: N815
+    crouchEyeScale: float  # noqa: N815
+    crouchEyeHeight: float  # noqa: N815
+    crouchHeight: float  # noqa: N815
+    crouchScale: float  # noqa: N815
+    headBand: float  # noqa: N815
+    fitTolerance: float  # noqa: N815
+    eyeTolerance: float  # noqa: N815
+    #: Whether a tuning override is in force. The lab needs to distinguish "this is
+    #: the shipped body" from "this is what somebody dragged a slider to", because
+    #: only one of those is worth keeping.
+    overridden: bool = False
+
+
+class HitboxTuneRequest(BaseModel):
+    """A tuning change. Every dimension is nullable and resolved with `is None`,
+    never falsiness — `0` is a meaningful head band (no headshots at all) and a
+    slider dragged to zero must not read as "leave it alone"."""
+
+    radius: float | None = None
+    eyeHeight: float | None = None  # noqa: N815
+    aboveEye: float | None = None  # noqa: N815
+    crouchEyeScale: float | None = None  # noqa: N815
+    headBand: float | None = None  # noqa: N815
+    fitTolerance: float | None = None  # noqa: N815
+    eyeTolerance: float | None = None  # noqa: N815
+    #: Discard the override and go back to the shipped body.
+    reset: bool = False
+
+
+class FactionOut(BaseModel):
+    id: str
+    name: str
+    short: str
+    motto: str
+    blurb: str
+    primary: str
+    secondary: str
+    insignia: str
+    callsigns: list[str]
+
+
+class MapBriefOut(BaseModel):
+    mapName: str  # noqa: N815
+    site: str
+    tagline: str
+    brief: str
+
+
+class LoreOut(BaseModel):
+    """The setting. Served for the same reason the weapon table is — the menu, the
+    loading screen, the avatar tint and the scoreboard all need it, and four copies
+    of a faction colour is four places for it to drift."""
+
+    premise: str
+    longPremise: str  # noqa: N815
+    factions: list[FactionOut]
+    #: Team index → faction id. The index itself comes from the map's spawns.
+    teamFactions: list[str]  # noqa: N815
+    #: Ladder tier id → display name. Keyed by the game server's `TIERS`.
+    ranks: dict[str, str]
+    #: Keyed by map name, and only for the maps this repo ships.
+    mapBriefs: dict[str, MapBriefOut]  # noqa: N815

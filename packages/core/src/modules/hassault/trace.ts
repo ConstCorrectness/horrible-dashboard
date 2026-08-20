@@ -16,7 +16,8 @@
  * Free of three and of React, like the rest of the game's logic files.
  */
 import type { WeaponSpec } from './api';
-import { PLAYER_ABOVE_EYE, PLAYER_EYE_HEIGHT, PLAYER_RADIUS, type World } from './world';
+import { currentHitbox } from './hitbox';
+import { PLAYER_ABOVE_EYE, PLAYER_EYE_HEIGHT, type World } from './world';
 
 /** Total body height — what the collision code reserves and the avatar is drawn to. */
 export const BODY_HEIGHT = PLAYER_EYE_HEIGHT + PLAYER_ABOVE_EYE;
@@ -117,9 +118,15 @@ export function rayHitsBody(
   origin: Vec,
   direction: Vec,
   feet: Vec,
-  radius = PLAYER_RADIUS,
-  height = BODY_HEIGHT,
+  radiusArg?: number,
+  heightArg?: number,
 ): number | null {
+  // Optional rather than defaulted to the module constants: those bind at load, so
+  // a tuned body would reach the renderer and the prediction but not the code that
+  // decides whether a training shot hit — the one place it would be invisible.
+  const spec = currentHitbox();
+  const radius = radiusArg ?? spec.radius;
+  const height = heightArg ?? spec.standingHeight;
   const [ox, oy, oz] = origin;
   const [dx, dy, dz] = direction;
   const [fx, fy, fz] = feet;

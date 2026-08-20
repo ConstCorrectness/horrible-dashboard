@@ -24,7 +24,8 @@
  * its mirror — change one and you must change both, and
  * `__tests__/physics-vectors.json` is what fails if you don't.
  */
-import { PLAYER_ABOVE_EYE, PLAYER_EYE_HEIGHT, PLAYER_RADIUS, World } from './world';
+import { currentHitbox, eyeAt, heightAt } from './hitbox';
+import { PLAYER_ABOVE_EYE, PLAYER_EYE_HEIGHT, World } from './world';
 
 /** Cubes per second at a walk. Tuned to feel like AC rather than derived from it. */
 export const MOVE_SPEED = 22;
@@ -40,7 +41,13 @@ export const JUMP_SPEED = 19;
  */
 export const STEP_HEIGHT = 1.6;
 
-/** Total body height standing — what headroom is reserved for and what a shot hits. */
+/**
+ * Total body height standing — what headroom is reserved for and what a shot hits.
+ *
+ * The *default* body, and what `physics-vectors.json` was generated against. The
+ * live one comes from `hitbox.ts`, which the server pushes in at join time; the
+ * two are identical until somebody tunes one.
+ */
 export const STANDING_HEIGHT = PLAYER_EYE_HEIGHT + PLAYER_ABOVE_EYE;
 
 /** Crouching: the eye drops to 3/4 (AC's `updatecrouch`), `aboveeye` does not,
@@ -164,15 +171,18 @@ export function applyLook(
   player.pitch = clampPitch(player.pitch - movementY * scale);
 }
 
-/** Total height of the body right now, mid-crouch included. */
+/** Total height of the body right now, mid-crouch included.
+ *
+ * Reads the live spec: this is one of the two numbers a shot is resolved against,
+ * so it is exactly what a tuned body has to be able to move. */
 export function bodyHeight(player: PlayerState): number {
-  return STANDING_HEIGHT + (CROUCH_HEIGHT - STANDING_HEIGHT) * player.crouch;
+  return heightAt(player.crouch);
 }
 
 /** The eye's height *above the feet*: where the camera sits and where a shot
  * leaves from, so it must be the same number in both places. */
 export function eyeOffset(player: PlayerState): number {
-  return PLAYER_EYE_HEIGHT + (CROUCH_EYE_HEIGHT - PLAYER_EYE_HEIGHT) * player.crouch;
+  return eyeAt(player.crouch);
 }
 
 /** The absolute eye position, which is what the camera actually uses. */
@@ -188,7 +198,7 @@ export function eyeHeight(player: PlayerState): number {
  * extremes are what stop the player sinking or clipping into a low ceiling.
  */
 function support(world: World, x: number, y: number) {
-  const { x0, x1, y0, y1 } = world.cellsInRadius(x, y, PLAYER_RADIUS);
+  const { x0, x1, y0, y1 } = world.cellsInRadius(x, y, currentHitbox().radius);
   let highestFloor = -Infinity;
   let lowestCeil = Infinity;
   let anySolid = false;
@@ -223,14 +233,20 @@ export function canStand(
   x: number,
   y: number,
   z: number,
-  height: number = STANDING_HEIGHT,
+  height?: number,
 ): boolean {
-  const { x0, x1, y0, y1 } = world.cellsInRadius(x, y, PLAYER_RADIUS);
+  // Optional rather than defaulted to the standing constant: a default argument
+  // is evaluated per call in TS, but the constant it would name binds at module
+  // load, so a tuned standing height would silently never reach the callers that
+  // omit it — tuning that appears to work everywhere except where it decides a hit.
+  const spec = currentHitbox();
+  const bodyH = height ?? spec.standingHeight;
+  const { x0, x1, y0, y1 } = world.cellsInRadius(x, y, spec.radius);
   for (let cy = y0; cy <= y1; cy++) {
     for (let cx = x0; cx <= x1; cx++) {
       if (world.isSolid(cx, cy)) return false;
       if (world.floorAt(cx, cy) > z + STEP_HEIGHT) return false;
-      if (world.ceilAt(cx, cy) < z + height) return false;
+      if (world.ceilAt(cx, cy) < z + bodyH) return false;
     }
   }
   return true;
@@ -265,7 +281,8 @@ function updateCrouch(world: World, player: PlayerState, input: MoveInput, dt: n
 
   let target: number;
   if (input.crouch) target = 1;
-  else if (canStand(world, player.x, player.y, player.z, STANDING_HEIGHT)) target = 0;
+  else if (canStand(world, player.x, player.y, player.z, currentHitbox().standingHeight))
+    target = 0;
   // Nowhere to stand up into. Holding the current crouch beats popping the body
   // through a ceiling, and it is why crouch is worth binding to a hold rather
   // than a toggle in tight geometry.

@@ -49,6 +49,106 @@ The test suite follows the same rule. Hermetic tests synthesize maps in memory,
 the bundled maps give every machine real maps to play, and the tests that read
 *AssaultCube's* maps skip when no install is present.
 
+## The setting: The Deadzone
+
+The two team colours were commented "CLA sand, RVSF blue" and the native client's
+constants were named for the same pair — AssaultCube's factions. The maps are
+painted from our own JSON brushes and the gunshots are synthesized rather than
+sampled for one reason, and the fiction gets the same treatment.
+
+> Autonomous orchestration ran the grid until it stopped being asked to. What is
+> left are the shells: coolant pits drained to bedrock, switchyards still humming
+> off dead schedules, campus atria with the lights on and nobody billed. Compute is
+> the only currency that survived, and it is all sitting in buildings nobody
+> legally owns any more.
+
+**ARC** — the Assembly of Reclaimed Compute. Squatters and operators who think a
+machine left running belongs to whoever keeps it running. Amber and sand.
+**HALON** — the custodial contractor that never got the cancellation notice. Still
+issued, still uniform, still auditing. Steel and cold blue. Neither side is right;
+the maps are the argument.
+
+It lives in `backend/modules/hassault/lore.py` as **data, not prose**, because the
+faction palette tints an avatar in two renderers, the rank names go on a ladder
+card, and the map briefs go on the loading screen. Four copies of a faction colour
+is four places for it to drift, so it is served (`GET /api/hassault/lore`) — the
+`plane_order` / `zoom_levels` precedent.
+
+Two things it deliberately does **not** own:
+
+- **The ladder.** Tiers, floors and ratings belong to the game server
+  (`backend/games_server/store.py::TIERS`) because a node cannot adjudicate its own
+  player. `RANKS` is a *naming layer* keyed by those tier ids — Scavenger, Runner,
+  Operator, Breaker, Warden, Overseer, Architect — and renaming a rank must never be
+  able to move a rating. A tier with no name falls back to its raw id rather than
+  vanishing, because a missing display string must not hide a rated player.
+- **The team split.** Which spawn belongs to which side is already in the map's
+  `playerstart` entities as `team: 0` / `team: 1`. `TEAM_FACTIONS` maps that index
+  onto a faction; it does not decide it, so no existing map changes meaning.
+
+Map briefs exist only for the three maps this repo ships. Writing fiction over a
+level out of somebody's AssaultCube install would be the same mistake as bundling
+it.
+
+## The hitbox is served, and it is not finished
+
+`PLAYER_RADIUS = 1.1` and the crouch scale used to be constants in `physics.py`,
+copied by hand into `world.ts`, `player.ts`, `avatars.ts` and `bodies.rs` — four
+copies of a figure nobody has finished choosing. There is still no wall
+penetration, the head band has never been checked against a real character model,
+and the relationship between what a body *looks* like and what it *is* has only
+ever been asserted.
+
+So `backend/modules/hassault/hitbox.py` is the authority and both clients read it.
+**The spec is the authority; a mesh never is** — an avatar is fitted to the body,
+not the other way round, and no renderer gets to widen a hitbox by drawing it wide.
+That much is fixed even though the numbers are not.
+
+### The version is a content hash, not a label
+
+`spec_id` is derived from the hit-deciding dimensions themselves, and
+`physics-vectors.json` — the fixture both the Python and TypeScript physics suites
+replay — is stamped with it.
+
+A hand-maintained revision number is a thing you forget to bump, and forgetting has
+the worst failure mode available here: two implementations replaying a fixture that
+no longer describes either of them, agreeing with each other about a body that does
+not exist. A hash cannot be forgotten. Change a dimension and
+`test_the_shared_fixture_is_not_stale` fails, naming both hashes, until the vectors
+are regenerated deliberately and **both** suites are made to pass.
+
+The two art tolerances (`fit_tolerance`, `eye_tolerance`) are excluded from the
+hash on purpose: they decide whether a *model* is acceptable, not where a bullet
+lands, so tightening one must not invalidate vectors that are still accurate.
+
+### Nullable defaults, not constants
+
+`ray_hits_body` and `can_stand` take `radius`/`height` as `None` and resolve them
+from the live spec. A default argument binds at **import**, so leaving them as
+`= PLAYER_RADIUS` would mean a tuned body reached everywhere except the code that
+decides the hit — tuning that appears to work and does not. The same `is None`
+discipline the hardware-resolved request fields use: an explicit `0` is a real
+answer, and a head band of zero ("no headshots") must not read as "leave it alone".
+
+`resolve_shot` reads the spec **once per trigger pull**, not per pellet: a shotgun
+firing eight pellets must resolve all of them against the same body, and a slider
+moved mid-shot would otherwise split one blast across two hitboxes.
+
+### What is deliberately not in it
+
+- **Step height, speeds, gravity, friction** — movement, not the body.
+- **Wall penetration.** A bullet stopping at a wall is a property of the *wall*.
+  Today `resolve_shot`'s "nearer than the wall" comparison is the entire cover
+  model, and the temptation to compensate for a missing penetration model by
+  widening a body is exactly what this module exists to make visible.
+- **A setting.** `SettingValue` is a scalar and `GET /api/settings` hands the bag to
+  every plugin; more to the point a hitbox is one coherent object, and a
+  half-applied one — a new radius against an old head band — is a state nothing
+  downstream should have to consider. `PUT /api/hassault/hitbox` takes the whole
+  thing, and does not persist it: promoting a tuned body is a code change with
+  regenerated vectors behind it, which is the right amount of friction between
+  "this felt better" and "this is the game now".
+
 ## Why a TypeScript/WebGL rewrite is tractable
 
 Cube 1 worlds — which AssaultCube still uses — are **not BSP**. The world is a
@@ -2556,6 +2656,9 @@ it into an X rather than fading a second element in and out.
 | `GET /api/hassault/maps/{name}/cubes` | The cube grid as raw byte planes |
 | `GET /api/hassault/maps/{name}/download` | A **bundled** map as a real `.cgz`, openable in AssaultCube's editor. 404 for anything else |
 | `GET /api/hassault/weapons` | The loadout, in slot order — served so the client cannot drift from it |
+| `GET /api/hassault/hitbox` | The body a shot is resolved against — served for the same reason, and the one both clients draw to. See [The hitbox is served, and it is not finished](#the-hitbox-is-served-and-it-is-not-finished) |
+| `PUT /api/hassault/hitbox` | Tune the live body, or `{"reset": true}`. Not persisted |
+| `GET /api/hassault/lore` | The setting: factions, palette, insignia, rank names, map briefs |
 | `GET /api/hassault/matches` | Live matches on this node — enough to render a lobby row |
 | `POST /api/hassault/matches` | Open a match **without joining**, so its id can be handed to a friend |
 | `GET /api/hassault/invitees` | Friends who could join right now, from the social roster |

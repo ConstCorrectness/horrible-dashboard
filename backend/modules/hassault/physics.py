@@ -63,21 +63,29 @@ import math
 from dataclasses import dataclass
 
 from backend.modules.hassault.cgz import CHF, FHF, SEMISOLID, SOLID, SPACE, CgzMap
+from backend.modules.hassault import hitbox
 
-# Player dimensions, from AssaultCube's `entity.h` defaults.
-PLAYER_RADIUS = 1.1
-PLAYER_EYE_HEIGHT = 4.5
-PLAYER_ABOVE_EYE = 0.7
+# Player dimensions. The numbers themselves live in `hitbox.py`, which is the one
+# authority both clients read, and these names survive as aliases for the *default*
+# body — they are what the movement vectors were generated against and what every
+# call site that does not decide a hit still reads.
+#
+# Anything that decides where a bullet lands, or how tall a body is right now, goes
+# through `hitbox.current()` instead, so a spec tuned in the lab takes effect
+# without a restart. The two are the same until somebody tunes one.
+PLAYER_RADIUS = hitbox.DEFAULT.radius
+PLAYER_EYE_HEIGHT = hitbox.DEFAULT.eye_height
+PLAYER_ABOVE_EYE = hitbox.DEFAULT.above_eye
 # Total body height standing: what the collision code reserves headroom for, what
 # the avatar capsule is drawn to, and what a shot is tested against.
-STANDING_HEIGHT = PLAYER_EYE_HEIGHT + PLAYER_ABOVE_EYE
+STANDING_HEIGHT = hitbox.DEFAULT.standing_height
 
 # Crouching. The eye drops to three quarters of its height — `maxeyeheight*3/4`
 # in AC's `updatecrouch` — while `aboveeye` is unchanged, so a crouched body is
 # ~1.1 cubes shorter and fits under a gap a standing one does not.
-CROUCH_EYE_SCALE = 0.75
-CROUCH_EYE_HEIGHT = PLAYER_EYE_HEIGHT * CROUCH_EYE_SCALE
-CROUCH_HEIGHT = CROUCH_EYE_HEIGHT + PLAYER_ABOVE_EYE
+CROUCH_EYE_SCALE = hitbox.DEFAULT.crouch_eye_scale
+CROUCH_EYE_HEIGHT = hitbox.DEFAULT.crouch_eye_height
+CROUCH_HEIGHT = hitbox.DEFAULT.crouch_height
 # AC's `chspeed`. Slow enough to be a real cost, which is what makes silent
 # movement (see `noise.py`) a trade rather than a free upgrade.
 CROUCH_SPEED_SCALE = 0.4
@@ -274,18 +282,22 @@ class MoveInput:
 
 
 def body_height(player: PlayerState) -> float:
-    """Total height of the body right now, mid-crouch included."""
-    return STANDING_HEIGHT + (CROUCH_HEIGHT - STANDING_HEIGHT) * player.crouch
+    """Total height of the body right now, mid-crouch included.
+
+    Reads the live spec rather than the module constants: this is one of the two
+    numbers a shot is resolved against, so it is exactly what tuning has to be able
+    to move."""
+    return hitbox.current().height_at(player.crouch)
 
 
 def eye_height(player: PlayerState) -> float:
     """Height of the eye above the feet — where the camera sits and where a shot
     leaves from, so it has to be the same number in both places."""
-    return PLAYER_EYE_HEIGHT + (CROUCH_EYE_HEIGHT - PLAYER_EYE_HEIGHT) * player.crouch
+    return hitbox.current().eye_at(player.crouch)
 
 
 def can_stand(
-    world: World, x: float, y: float, z: float, height: float = STANDING_HEIGHT
+    world: World, x: float, y: float, z: float, height: float | None = None
 ) -> bool:
     """Whether a body of `height` fits at `(x, y)` with its feet at `z`.
 
@@ -293,8 +305,16 @@ def can_stand(
     above the feet, or a ceiling too low. `height` is a parameter rather than the
     standing constant because that is exactly what crouching changes — and it is
     also how "you cannot stand up in here" is decided.
+
+    `height` is nullable rather than defaulted to the standing constant: a default
+    argument binds at import, so a tuned standing height would silently never reach
+    the callers that omit it — the same `is None` discipline the hardware-resolved
+    request fields use, where an explicit `0` is a real answer.
     """
-    x0, x1, y0, y1 = world.cells_in_radius(x, y, PLAYER_RADIUS)
+    spec = hitbox.current()
+    if height is None:
+        height = spec.standing_height
+    x0, x1, y0, y1 = world.cells_in_radius(x, y, spec.radius)
     for cy in range(y0, y1 + 1):
         for cx in range(x0, x1 + 1):
             if world.is_solid(cx, cy):
@@ -308,7 +328,7 @@ def can_stand(
 
 def _support(world: World, x: float, y: float) -> tuple[float, float, bool]:
     """Highest floor under the body and lowest ceiling over it, plus `enclosed`."""
-    x0, x1, y0, y1 = world.cells_in_radius(x, y, PLAYER_RADIUS)
+    x0, x1, y0, y1 = world.cells_in_radius(x, y, hitbox.current().radius)
     highest_floor = -math.inf
     lowest_ceil = math.inf
     for cy in range(y0, y1 + 1):
@@ -353,7 +373,9 @@ def _update_crouch(
 
     if move.crouch:
         target = 1.0
-    elif can_stand(world, player.x, player.y, player.z, STANDING_HEIGHT):
+    elif can_stand(
+        world, player.x, player.y, player.z, hitbox.current().standing_height
+    ):
         target = 0.0
     else:
         # Nowhere to stand up into. Holding the current crouch beats popping the

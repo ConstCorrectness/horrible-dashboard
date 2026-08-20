@@ -133,6 +133,16 @@ class ToolCall:
     arg_error: str | None = None
 
 
+class ProviderStreamError(RuntimeError):
+    """The provider reported an error inside an already-200 stream.
+
+    Distinct from an HTTP error because `raise_for_status` cannot see it: the
+    status line said 200 long before the engine gave up. Raised so a caller can
+    tell "the provider failed" from "the model had nothing to say", which are the
+    same thing on the wire and very different things to a user.
+    """
+
+
 @dataclass(frozen=True)
 class ChatResult:
     """One assistant turn, normalized across dialects."""
@@ -614,7 +624,27 @@ async def _openai_chat_stream(
             data = line[len("data:") :].strip()
             if data == "[DONE]":
                 break
-            choice = (json.loads(data).get("choices") or [{}])[0]
+            frame = json.loads(data)
+            # An error can arrive *inside* a 200 stream, as an SSE `event: error`
+            # followed by a data frame carrying `error` instead of `choices`.
+            # `raise_for_status` has already passed by then, so nothing else will
+            # catch it — and the old code fed that frame through the normal path,
+            # where `.get("choices") or [{}]` turned it into an empty choice and
+            # the turn returned a blank answer with no tool calls.
+            #
+            # That is the worst shape a failure can take here: it is indis-
+            # tinguishable from a model that chose to say nothing. It was found
+            # via the evals module, where LM Studio's constrained-decoding grammar
+            # rejected a tool call ("output that does not match the expected
+            # peg-native format") and every affected case was scored as the model
+            # declining to act.
+            if isinstance(frame, dict) and frame.get("error"):
+                detail = frame["error"]
+                message = (
+                    detail.get("message") if isinstance(detail, dict) else str(detail)
+                ) or "the provider reported an error mid-stream"
+                raise ProviderStreamError(message)
+            choice = (frame.get("choices") or [{}])[0]
             delta = choice.get("delta") or {}
             # DeepSeek/vLLM reasoning parsers use `reasoning_content`; some use `reasoning`.
             reasoning = delta.get("reasoning_content") or delta.get("reasoning")

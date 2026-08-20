@@ -16,6 +16,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import type { MapInfo } from '../api';
+import { DEFAULT_HITBOX } from '../hitbox';
 import { applyImpulse, createPlayer, spawnAt, step, type PlayerState } from '../player';
 import { aimVector, BODY_HEIGHT, raycastWorld, rayHitsBody, type Vec } from '../trace';
 import { PLAYER_RADIUS, SOLID, SPACE, World } from '../world';
@@ -40,6 +41,8 @@ interface WorldSpec {
 
 interface Vectors {
   tolerance: number;
+  hitboxSpecId: string;
+  hitbox: Record<string, string | number>;
   worlds: Record<string, WorldSpec>;
   cases: {
     name: string;
@@ -153,6 +156,22 @@ function buildWorld(spec: WorldSpec): World {
   };
   return new World(info, buf);
 }
+
+describe('the client body matches the server body', () => {
+  // The fixture is stamped by the Python side, which is the authority. This is the
+  // other half of the guard `test_the_shared_fixture_is_not_stale` provides: that
+  // one catches a fixture gone stale against the server, this one catches the
+  // TypeScript default having drifted from the server's — a body the prediction
+  // uses and the hit resolution does not, which shows up as shots that "should
+  // have hit" rather than as anything that looks like a bug.
+  it('has the same dimensions the server serves', () => {
+    expect(DEFAULT_HITBOX).toEqual(vectors.hitbox);
+  });
+
+  it('agrees on the spec id, so a tuned body cannot masquerade as the shipped one', () => {
+    expect(DEFAULT_HITBOX.specId).toBe(vectors.hitboxSpecId);
+  });
+});
 
 describe('cross-language physics conformance', () => {
   it('has vectors to check', () => {

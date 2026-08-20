@@ -454,3 +454,24 @@ once_; `plan` hard-denies with no prompt; `autonomous` relays with no prompt;
 `acceptEdits` still prompts (the tool isn't edit-safe) and _deny_ blocks the
 relay; and _always allow_ persists a rule (broadenable to `stub.setValue(*)`) that
 the next call honors without prompting. New real modules can copy its shape.
+
+## `load_tools` reads whatever the model spelled
+
+An *array* parameter comes back from small models as a string more often than not.
+Measured against llama-3.2-3b: `{"groups": "[\"github\"]"}` and
+`{"groups": "['files', 'editor']"}`, the second not valid JSON at all.
+
+The dispatcher used to do `if isinstance(requested, str): requested = [requested]`,
+which turned `'["github"]'` into a group named `["github"]`, matched nothing, and
+answered `loaded: []`. The model had asked for exactly the right group; the
+capability simply never arrived, and it read as a model that could not work
+progressive disclosure.
+
+`_coerce_group_list` accepts a real list, a JSON array in a string, a Python-style
+list, a bracketed comma list, or a bare name — and deliberately does **not** run a
+bare name through a list parser, because `github` is a group name and must stay one.
+
+`_coerce_args` handles the same class of problem one level up, for the arguments
+payload as a whole. This one slipped past it because the payload was valid JSON; it
+just had a string where the schema said array.
+

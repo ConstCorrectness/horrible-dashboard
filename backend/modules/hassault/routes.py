@@ -15,7 +15,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
-from backend.modules.hassault import assets, fabric, mapsource, weapons
+from backend.modules.hassault import assets, fabric, hitbox, lore, mapsource, weapons
 from backend.modules.hassault.cgz import PLANE_ORDER, CgzError, write_cgz
 from backend.modules.hassault.match import MAX_PLAYERS, match_server
 from backend.modules.hassault.models import (
@@ -23,8 +23,11 @@ from backend.modules.hassault.models import (
     BrowsePlayer,
     CreateMatchRequest,
     EntityOut,
+    HitboxOut,
+    HitboxTuneRequest,
     InstallStatus,
     Invitee,
+    LoreOut,
     MapInfo,
     MapSummary,
     MatchInvite,
@@ -206,6 +209,73 @@ async def get_weapons() -> list[WeaponOut]:
     tune the rifle.
     """
     return [WeaponOut(**w.to_dict()) for w in weapons.WEAPONS]
+
+
+@router.get("/hitbox", response_model=HitboxOut)
+async def get_hitbox() -> HitboxOut:
+    """The body a shot is resolved against.
+
+    Both clients read this instead of holding their own copy of the dimensions.
+    That is not tidiness: the browser draws an avatar to these numbers, the native
+    client draws a box to them, and the server decides hits with them — three
+    copies of a figure that is still being tuned is three chances to teach somebody
+    to miss.
+    """
+    spec = hitbox.current()
+    return HitboxOut(**spec.to_dict(), overridden=spec != hitbox.DEFAULT)
+
+
+@router.put("/hitbox", response_model=HitboxOut)
+async def tune_hitbox(req: HitboxTuneRequest) -> HitboxOut:
+    """Tune the live body, or reset it.
+
+    Deliberately a whole-object PUT rather than a setting per dimension. A hitbox
+    is one coherent thing and a half-applied one — a new radius against an old head
+    band — is a state no code downstream should ever have to consider. It is also
+    why this is not in the settings bag: `SettingValue` is a scalar.
+
+    Not persisted. A tuning session is a session; the shipped body is what
+    `hitbox.DEFAULT` says it is, and promoting a tuned one is a code change with a
+    regenerated `physics-vectors.json` behind it — which is exactly the friction
+    that should stand between "this felt better" and "this is the game now".
+    """
+    if req.reset:
+        spec = hitbox.reset()
+        return HitboxOut(**spec.to_dict(), overridden=False)
+
+    # `is None`, never falsiness: a head band of 0 means "no headshots", which is a
+    # legitimate thing to try and would otherwise read as "leave it alone".
+    changes = {
+        name: value
+        for name, value in (
+            ("radius", req.radius),
+            ("eye_height", req.eyeHeight),
+            ("above_eye", req.aboveEye),
+            ("crouch_eye_scale", req.crouchEyeScale),
+            ("head_band", req.headBand),
+            ("fit_tolerance", req.fitTolerance),
+            ("eye_tolerance", req.eyeTolerance),
+        )
+        if value is not None
+    }
+    if not changes:
+        spec = hitbox.current()
+        return HitboxOut(**spec.to_dict(), overridden=spec != hitbox.DEFAULT)
+
+    spec = hitbox.tune(**changes)
+    return HitboxOut(**spec.to_dict(), overridden=spec != hitbox.DEFAULT)
+
+
+@router.get("/lore", response_model=LoreOut)
+async def get_lore() -> LoreOut:
+    """The setting: factions, their palette and insignia, rank names, map briefs.
+
+    Served rather than written into the frontend because the same faction colour
+    tints an avatar in two renderers and a nameplate in a third surface. The rank
+    names are a *display layer* over the game server's ladder tiers — this endpoint
+    cannot move a rating.
+    """
+    return LoreOut(**lore.to_dict())
 
 
 @router.get("/invitees", response_model=list[Invitee])

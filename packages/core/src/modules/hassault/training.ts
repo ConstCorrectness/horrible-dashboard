@@ -20,13 +20,12 @@
  */
 import type { WeaponSpec } from './api';
 import type { PlayerRow, SelfState } from './net';
+import { currentHitbox } from './hitbox';
 import { spawnAt } from './player';
 import {
   aimVector,
-  BODY_HEIGHT,
   damageAt,
   eyePosition,
-  HEAD_BAND,
   rayHitsBody,
   raycastWorld,
   spreadVector,
@@ -260,7 +259,11 @@ export class TrainingRange {
         origin[2] + pdz * distance,
       ];
       // Relative to the top of the body, so the head is where the head is.
-      const head = point[2] >= target.z + (BODY_HEIGHT - HEAD_BAND);
+      // The live spec, so a head band tuned in the lab moves where a headshot
+      // starts in Train too — practising against a different body than the one
+      // the match server resolves against is worse than not practising.
+      const spec = currentHitbox();
+      const head = point[2] >= target.z + (spec.standingHeight - spec.headBand);
       const amount =
         damageAt(weapon, distance, falloffStart(weapon)) * (head ? weapon.headMultiplier : 1);
       target.hp -= amount;

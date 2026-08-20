@@ -42,16 +42,19 @@ import random
 from dataclasses import dataclass, field
 from typing import Any
 
+from backend.modules.hassault import hitbox
 from backend.modules.hassault.physics import (
-    PLAYER_ABOVE_EYE,
     PLAYER_EYE_HEIGHT,
-    PLAYER_RADIUS,
     World,
 )
 
 # Total body height. The same figure the collision code reserves headroom for and
 # the same one the avatar capsule is built to, so what you see is what you hit.
-BODY_HEIGHT = PLAYER_EYE_HEIGHT + PLAYER_ABOVE_EYE
+#
+# These three are the *default* body, kept as names because the tests and the
+# fixtures were written against them. Shot resolution reads `hitbox.current()`
+# instead, so a spec tuned in the lab moves the hitbox without a restart.
+BODY_HEIGHT = hitbox.DEFAULT.standing_height
 
 # The top band of the body that counts as a head. Roughly the top of the capsule
 # rather than a separate sphere: a second collision volume would have to be
@@ -61,7 +64,7 @@ BODY_HEIGHT = PLAYER_EYE_HEIGHT + PLAYER_ABOVE_EYE
 # a head band pinned to a standing figure would sit above a crouched player
 # entirely — making them unheadshottable, which is not a crouch bonus anyone asked
 # for. `HEAD_Z` is kept as the standing case for the tests that name it.
-HEAD_BAND = 1.0
+HEAD_BAND = hitbox.DEFAULT.head_band
 HEAD_Z = BODY_HEIGHT - HEAD_BAND
 
 # How far back a shot may be judged. Generous enough for a guest playing across
@@ -538,8 +541,8 @@ def ray_hits_body(
     origin: tuple[float, float, float],
     direction: tuple[float, float, float],
     feet: tuple[float, float, float],
-    radius: float = PLAYER_RADIUS,
-    height: float = BODY_HEIGHT,
+    radius: float | None = None,
+    height: float | None = None,
 ) -> float | None:
     """Distance at which the ray enters a player's cylinder, or `None`.
 
@@ -547,7 +550,17 @@ def ray_hits_body(
     keeps clear and the same height the avatar capsule is drawn to. Solved as the
     intersection of two intervals (inside the infinite cylinder, inside the
     height slab) so a shot straight up or down is not a special case.
+
+    Both dimensions are nullable rather than defaulted to the module constants: a
+    default argument binds at import, so a tuned body would never reach a caller
+    that omitted them — the tuning would appear to work everywhere except the one
+    place that decides the hit.
     """
+    spec = hitbox.current()
+    if radius is None:
+        radius = spec.radius
+    if height is None:
+        height = spec.standing_height
     ox, oy, oz = origin
     dx, dy, dz = direction
     fx, fy, fz = feet
@@ -767,6 +780,13 @@ def resolve_shot(
     function: the caller decides whether the shooter was scoped, because that is
     a fact about the *player* and this is pure geometry aimed at a body.
     """
+    # Read the live spec once per trigger pull rather than per pellet: a shotgun
+    # firing 20 pellets must resolve every one of them against the *same* body, and
+    # a tuning slider moved mid-shot would otherwise split one blast across two
+    # different hitboxes.
+    _spec = hitbox.current()
+    _standing = _spec.standing_height
+
     endpoints: list[tuple[float, float, float]] = []
     hits: list[PelletHit] = []
     ox, oy, oz = origin
@@ -778,7 +798,7 @@ def resolve_shot(
 
         best: tuple[float, str] | None = None
         for pid, feet in targets.items():
-            tall = BODY_HEIGHT if heights is None else heights.get(pid, BODY_HEIGHT)
+            tall = _standing if heights is None else heights.get(pid, _standing)
             distance = ray_hits_body((ox, oy, oz), (pdx, pdy, pdz), feet, height=tall)
             # A body behind a wall is not a target; the wall is nearer, and the
             # `<` is what makes cover work.
@@ -793,10 +813,10 @@ def resolve_shot(
 
         distance, pid = best
         point = (ox + pdx * distance, oy + pdy * distance, oz + pdz * distance)
-        tall = BODY_HEIGHT if heights is None else heights.get(pid, BODY_HEIGHT)
+        tall = _standing if heights is None else heights.get(pid, _standing)
         # Relative to the top of the body, so a crouched head is where the
         # crouched head actually is.
-        head = point[2] >= targets[pid][2] + (tall - HEAD_BAND)
+        head = point[2] >= targets[pid][2] + (tall - _spec.head_band)
         amount = damage_at(weapon, distance) * (weapon.head_multiplier if head else 1.0)
         hits.append(
             PelletHit(

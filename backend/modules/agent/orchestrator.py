@@ -763,6 +763,11 @@ TOOL_BUDGET = 38
 
 # Human-readable blurbs for known groups; unknown groups get a generic fallback.
 _GROUP_DESCRIPTIONS: dict[str, str] = {
+    "evals": (
+        "Measure how well a model uses this app's tools: list evaluation suites, "
+        "start a sweep of a suite against a model, and read which cases failed and "
+        "why. Read-mostly — it does not author cases."
+    ),
     "layout": (
         "Arrange the app shell: open/close/focus panes, split and resize areas, "
         "move panes between docks and regions, create and switch workspaces. "
@@ -1682,6 +1687,61 @@ async def _run_backend_tool(conn: WsConnection, turn_id: str, call: Any) -> Any:
     return {"error": f"unknown backend tool {call.name}"}
 
 
+def _coerce_group_list(raw: Any) -> list[str]:
+    """The `groups` argument of `load_tools`, however the model spelled it.
+
+    Small models routinely hand an *array* parameter back as a string: measured
+    against llama-3.2-3b through LM Studio, `groups` arrived as `'["github"]'` and
+    as `"['files', 'editor']"` — the second not even valid JSON. The old code did
+    `if isinstance(requested, str): requested = [requested]`, which turned
+    `'["github"]'` into the single group name `["github"]`, matched nothing, and
+    returned `loaded: []` with the whole thing under `unknown`.
+
+    That failure is close to invisible and expensive: the model asked for the right
+    group, was told it loaded nothing, and the capability it needed never appeared.
+    It reads as "this model cannot use progressive disclosure" when what actually
+    happened is that we did not read its answer. Found through the evals module,
+    where every `discovery-*` case failed this way.
+
+    `_coerce_args` does the same job one level up, for the arguments payload as a
+    whole; this is the nested equivalent, and the reason the outer one did not catch
+    it is that the payload itself was valid JSON — it just had a string where an
+    array belonged.
+    """
+    import ast
+
+    if isinstance(raw, list):
+        return [str(g).strip() for g in raw if str(g).strip()]
+    if not isinstance(raw, str):
+        return []
+
+    text = raw.strip()
+    if not text:
+        return []
+    # Only try list parsing when it looks like a list. A bare `github` is a group
+    # name and must not go near a parser that might read it as something else.
+    if text.startswith("[") and text.endswith("]"):
+        for parse in (json.loads, ast.literal_eval):
+            try:
+                value = parse(text)
+            except (ValueError, SyntaxError):
+                continue
+            if isinstance(value, list):
+                return [str(g).strip() for g in value if str(g).strip()]
+        # Neither parser could read it — fall back to splitting on commas and
+        # stripping the punctuation, which recovers `[files, editor]` and other
+        # not-quite-JSON shapes rather than failing the whole call over quoting.
+        return [
+            part.strip().strip("\"'")
+            for part in text[1:-1].split(",")
+            if part.strip().strip("\"'")
+        ]
+    # A comma-separated string with no brackets: `files, editor`.
+    if "," in text:
+        return [part.strip().strip("\"'") for part in text.split(",") if part.strip()]
+    return [text]
+
+
 async def _dispatch_call(
     conn: WsConnection,
     turn_id: str,
@@ -1715,10 +1775,7 @@ async def _dispatch_call(
             "loaded": sorted(active_groups),
         }
     if name == "load_tools":
-        requested = call.arguments.get("groups")
-        if isinstance(requested, str):
-            requested = [requested]
-        requested = requested if isinstance(requested, list) else []
+        requested = _coerce_group_list(call.arguments.get("groups"))
         available = {g["name"] for g in _group_catalog(conn, allowed, spec)}
         loaded = [g for g in requested if g in available]
         active_groups.update(loaded)
