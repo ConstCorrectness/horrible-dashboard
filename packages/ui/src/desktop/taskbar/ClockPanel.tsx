@@ -15,7 +15,7 @@ import {
   getNotifications,
   getSocialState,
   markAllRead,
-  registry,
+  requestConnect,
   revealSection,
   subscribeNotifications,
   subscribeSocial,
@@ -211,13 +211,14 @@ function IntegrationsSection({ onClose }: { onClose: () => void }) {
             title={
               c.connected ? `${c.label} — ${c.account?.label ?? 'connected'}` : `Connect ${c.label}`
             }
-            // Deliberately not a connect flow of its own. `IntegrationRow` owns
-            // the app's only connector popover and answers `onConnectRequested`,
-            // but it is mounted on the home/setup surface, which a floating
-            // desktop need not have on screen — so this opens that surface
-            // rather than forking a second popover here.
+            // Still not a connect flow of its own — `ConnectorPopover` is the only
+            // one — but it no longer navigates to find it. This used to run
+            // `shell.setup`, which switched the backdrop to the splash/home surface
+            // and dropped the connector id, so you arrived at the greeting with
+            // nothing open. `requestConnect` opens that same popover in the shell
+            // dialog, over whatever desktop you were already on.
             onClick={() => {
-              void registry.runCommand('shell.setup');
+              requestConnect(c.id);
               onClose();
             }}
           >

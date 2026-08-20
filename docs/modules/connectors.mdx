@@ -443,7 +443,9 @@ the page.
   and a second would be noise.
 
 Clicking a tile opens a popover (outside-click + `Escape` to close) showing the
-granted scopes and a Disconnect, or the connect flow when unconnected.
+granted scopes and a Disconnect, or the connect flow when unconnected. Here it is
+anchored under the tile that opened it; reached from anywhere else it is the same
+component centred in a shell dialog — see below.
 
 The row appears twice: standalone above the ask bar, and as **step 3 of the setup
 flow** while nothing is connected — see [Onboarding](onboarding.mdx), which also
@@ -455,8 +457,19 @@ this component. Two consequences worth knowing:
 - Any pane can ask `useConnector('github')` instead of calling the backend and
   rendering whatever a 409 says, and can wrap itself in `ConnectionGate` to offer
   the connect flow rather than a dead end.
-- This row is also the **only** connect UI. `requestConnect(id)` from anywhere
-  opens the popover here, so a pane never grows a second copy of the flow.
+- `ConnectorPopover` is the **only** connect UI, but the row is not the only place
+  it appears. `requestConnect(id)` from anywhere is answered by `ConnectorDialog`
+  (`packages/ui/src/home/ConnectorDialog.tsx`), mounted at the shell next to
+  `Dialogs`, which renders the same component as a centred modal
+  (`variant="modal"`). So a pane never grows a second copy of the flow **and**
+  never has to navigate to find it.
+
+  It works this way because the alternative was tried: the taskbar clock flyout's
+  integration tiles used to run `shell.setup`, which switched the desktop backdrop
+  to the splash surface — where the row is mounted — and reset the setup card,
+  dropping the connector id on the way. Clicking "Experiment trackers" from the
+  clock landed you on the greeting with nothing open and the tile to find again.
+  A connect request should never be a navigation.
 
 The popover checks whether the consent page actually opened. A blocked window used
 to leave it reading "Finish signing in on the tab that opened" — a claim about a

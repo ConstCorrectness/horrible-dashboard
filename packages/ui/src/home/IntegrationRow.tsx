@@ -11,21 +11,22 @@ import { MobilePairingDialog } from './MobilePairingDialog';
  * Renders nothing at all when the backend is down — home already shows one
  * backend-down message and a second would just be noise.
  *
- * State lives in the shared connectors store rather than here, and this component
- * also answers `requestConnect` from anywhere in the app: it owns the only connect
- * UI, so a pane that needs GitHub asks for it and this opens the real popover.
+ * State lives in the shared connectors store rather than here. A `requestConnect` from
+ * elsewhere in the app is answered by `ConnectorDialog` at the shell level, not here —
+ * this row is only mounted on the home surface, and making callers navigate to it was
+ * the whole bug. Clicking a tile still opens the popover anchored under that tile.
  */
 export function IntegrationRow() {
   const { connectors, phase } = useConnectors();
   const [open, setOpen] = useState<string | null>(null);
   const [showMobile, setShowMobile] = useState(false);
 
-  // A pane somewhere asked for a connector. Open its popover — the same one the
-  // tile opens, so there is one connect flow and not one per caller.
+  // A connect request is served by the shell dialog. All this row does is get out of
+  // the way, so a tile popover and the dialog are never both open over each other.
   useEffect(
     () =>
-      onConnectRequested((id) => {
-        setOpen(id);
+      onConnectRequested(() => {
+        setOpen(null);
         setShowMobile(false);
       }),
     [],

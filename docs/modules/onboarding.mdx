@@ -31,6 +31,11 @@ doesn't reflow underneath you and you can see what you already have. It hides
 itself entirely once all three are done, and `home.setupDismissed` hides it early;
 the **Show setup** command (`shell.setup`) brings it back.
 
+`shell.setup` clears `home.setupDismissed` and forces the desktop to the `splash`
+backdrop, so it is only ever wired to a control that *means* "show me setup" — the
+Start menu and app-menu entries. It is deliberately **not** how any other surface
+reaches a connector; see [Connectors](connectors.mdx).
+
 ## Identity and connectors are two steps, on purpose
 
 They look like the same thing — both say "GitHub", both open a consent page — and
@@ -153,8 +158,10 @@ What a pane renders instead of dead-ending on the backend's 409:
 ```
 
 It never builds a connect UI of its own — it calls `requestConnect(id)`, an event
-the home tile row answers by opening the real popover. One connect flow, reachable
-from anywhere. The reference case is the GitHub repo viewer
+`ConnectorDialog` answers at the shell level by opening the real popover as a modal
+over whatever you were looking at. One connect flow, reachable from anywhere, and
+reaching it is never a navigation: nothing about connecting a connector sends you
+to the splash surface or re-opens this card. The reference case is the GitHub repo viewer
 (`packages/core/src/modules/github/RepoViewer.tsx`).
 
 ## Which game server sign-in talks to

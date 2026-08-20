@@ -22,10 +22,18 @@ export function ConnectorPopover({
   connector,
   onClose,
   onChanged,
+  variant = 'anchored',
 }: {
   connector: Connector;
   onClose: () => void;
   onChanged: () => void;
+  /**
+   * Where this is being shown. `anchored` hangs it off a tile in the home row;
+   * `modal` is the shell-level dialog, which is how every other surface reaches
+   * the connect flow without navigating to home first. Presentation only — the
+   * flow itself is identical, which is the point of having one component.
+   */
+  variant?: 'anchored' | 'modal';
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [step, setStep] = useState<ConnectStep | null>(null);
@@ -157,7 +165,7 @@ export function ConnectorPopover({
 
   return (
     <div
-      className="integration-popover"
+      className={`integration-popover${variant === 'modal' ? ' is-modal' : ''}`}
       role="dialog"
       aria-label={connector.label}
       tabIndex={-1}

@@ -2871,6 +2871,14 @@ body {
   transform: translateX(-50%);
 }
 
+/* In the shell dialog the popover IS the card, not a tooltip hanging off a tile:
+   the overlay centres it, so the tile-relative offset has to come back off. */
+.integration-popover.is-modal {
+  position: static;
+  width: min(24rem, 92vw);
+  transform: none;
+}
+
 .integration-popover-head {
   display: flex;
   align-items: baseline;

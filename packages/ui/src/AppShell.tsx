@@ -25,6 +25,7 @@ import {
 } from '@horrible/core';
 
 import { ApprovalPrompts } from './ApprovalPrompts';
+import { ConnectorDialog } from './home/ConnectorDialog';
 import { NAME_SETTING_KEY, SETUP_DISMISSED_KEY } from './home/constants';
 import { CaptureHud } from './CaptureHud';
 import { Spotlight } from './Spotlight';
@@ -355,6 +356,10 @@ export function AppShell({
       <ApprovalPrompts />
       <Toasts />
       <Dialogs />
+      {/* The connect flow, reachable from any surface. Mounted at the shell so a
+          `requestConnect` from a pane, the clock flyout or a Start-menu entry never
+          has to navigate to the home tile row to find the UI. */}
+      <ConnectorDialog />
       {/* Last, so the menu paints over every other layer; it renders into a portal
           on document.body anyway, but source order settles ties at equal z-index. */}
       <ContextMenuLayer />
