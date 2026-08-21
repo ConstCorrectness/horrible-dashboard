@@ -110,6 +110,9 @@ geoip = [
 # than wheels, so installing it builds llama.cpp and needs cmake plus a C++ compiler.
 llamacpp = ["llama-cpp-python==0.3.34"]
 
+[tool.uv.sources]
+horrible-trajectories = { path = "sdk/horrible-trajectories", editable = true }
+
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]
 # A hung test (stuck subprocess/kernel/socket) must fail with a stack dump rather
@@ -122,6 +125,12 @@ timeout_method = "thread"
 [dependency-groups]
 dev = [
     "basedpyright>=1.39.9",
+    # The trajectory client SDK, which is its own distributable package
+    # (`sdk/horrible-trajectories`) rather than a backend module: it is meant to
+    # be installed into somebody else's agent, so it must not be able to import
+    # anything from `backend.*`. Editable and dev-only — the backend does not
+    # depend on it, only the tests that prove it works against the real routes.
+    "horrible-trajectories",
     "httpx>=0.28.1",
     "ipykernel>=6",
     "pygame>=2.6.1",

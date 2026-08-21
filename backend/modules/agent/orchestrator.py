@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 import uuid
 import weakref
 from collections.abc import Awaitable, Callable
@@ -1855,6 +1856,22 @@ async def _capture_context(conn: WsConnection, **fields: Any) -> None:
         logger.debug("interpretability capture skipped", exc_info=True)
 
 
+def _begin_trajectory(**fields: Any) -> Any:
+    """Open a trajectory recording for this turn, or return None.
+
+    Lazily imported and fully swallowed, exactly like `_capture_context`: this is
+    the second observer on the loop and an observer that can break the thing it
+    observes is a bug. Returns None whenever capture is off, which is the default.
+    """
+    try:
+        from backend.modules.trajectories import recorder as traj_recorder
+
+        return traj_recorder.begin(**fields)
+    except Exception:
+        logger.debug("trajectory capture skipped", exc_info=True)
+        return None
+
+
 async def _capture_peer_ask(conn: WsConnection, **fields: Any) -> None:
     """Record an `agent.ask_peer` handoff for the interpretability tree. Same lazy
     import and same swallow-everything contract as `_capture_context`."""
@@ -1919,64 +1936,59 @@ async def run_agent_loop(
     progressive = active_groups is not None
     forced_retry_used = False
     agent_id = spec.id if spec else "main"
-    async with instrumented_client(timeout=120) as client:
-        for round_no in range(MAX_ROUNDS):
-            # Under progressive disclosure, inject the groups loaded last round.
-            tool_stats: dict[str, Any] = {}
-            if progressive:
-                tools = _select_tools(conn, active_groups, spec, tool_stats)
-            # Snapshot the exact context this round before it goes out, for the
-            # interpretability pane. Read-only and self-swallowing — a failed
-            # capture must never cost the user their turn (see recorder.py).
-            await _capture_context(
-                conn,
-                turn_id=turn_id,
-                agent_id=agent_id,
-                model=model,
-                provider=str(getattr(info, "kind", "")),
-                messages=messages,
-                tools=tools,
-                round_no=round_no,
-                tools_selected=int(tool_stats.get("selected", len(tools))),
-                active_groups=active_groups,
-                context_size=context_size,
-                temperature=temperature,
-                top_p=top_p,
-                max_tokens=max_tokens,
-                parent_turn_id=parent_turn_id,
-                agent_name=spec.name if spec else "",
-                tool_groups=spec.tool_groups if spec else None,
-                permission_mode=mode_override.value if mode_override else None,
-            )
-            result = await P.chat_stream(
-                client,
-                info,
-                endpoint,
-                model,
-                messages,
-                tools,
-                emit,
-                temperature=temperature,
-                context_size=context_size,
-                max_tokens=max_tokens,
-                top_p=top_p,
-            )
-            messages.append(result.assistant_message)
-
-            # Weak models sometimes narrate an action without emitting the call, so
-            # retry once with an explicit nudge. This deliberately runs on EVERY
-            # dialect: it used to be gated on `openai`, which meant the repair never
-            # fired for Ollama — the default local provider, and the one whose small
-            # models need it most. `tool_choice` is simply the extra leverage OpenAI
-            # offers; where it doesn't exist the re-ask alone still recovers many
-            # turns, and `chat_stream` ignores a None.
-            if (
-                not result.tool_calls
-                and not forced_retry_used
-                and _looks_like_unemitted_tool_call(result.content, tools)
-            ):
-                forced_retry_used = True
-                messages.append({"role": "system", "content": _FORCE_TOOL_NUDGE})
+    # Record what the agent *does*, beside the `_capture_context` call that records
+    # what it was *shown*. Both are keyed by `turn_id`; both are self-swallowing.
+    # `None` whenever trajectory capture is off, which is the default.
+    rec = _begin_trajectory(
+        conn=conn,
+        turn_id=turn_id,
+        parent_turn_id=parent_turn_id,
+        agent_id=agent_id,
+        agent_name=spec.name if spec else "",
+        model=model,
+        provider=str(getattr(info, "kind", "")),
+        messages=messages,
+        tools=tools,
+        params={
+            "temperature": temperature,
+            "top_p": top_p,
+            "max_tokens": max_tokens,
+            "context_size": context_size,
+            "progressive": progressive,
+            "mode": mode_override.value if mode_override else None,
+        },
+    )
+    answer = "(stopped after too many steps)"
+    try:
+        async with instrumented_client(timeout=120) as client:
+            for round_no in range(MAX_ROUNDS):
+                # Under progressive disclosure, inject the groups loaded last round.
+                tool_stats: dict[str, Any] = {}
+                if progressive:
+                    tools = _select_tools(conn, active_groups, spec, tool_stats)
+                # Snapshot the exact context this round before it goes out, for the
+                # interpretability pane. Read-only and self-swallowing — a failed
+                # capture must never cost the user their turn (see recorder.py).
+                await _capture_context(
+                    conn,
+                    turn_id=turn_id,
+                    agent_id=agent_id,
+                    model=model,
+                    provider=str(getattr(info, "kind", "")),
+                    messages=messages,
+                    tools=tools,
+                    round_no=round_no,
+                    tools_selected=int(tool_stats.get("selected", len(tools))),
+                    active_groups=active_groups,
+                    context_size=context_size,
+                    temperature=temperature,
+                    top_p=top_p,
+                    max_tokens=max_tokens,
+                    parent_turn_id=parent_turn_id,
+                    agent_name=spec.name if spec else "",
+                    tool_groups=spec.tool_groups if spec else None,
+                    permission_mode=mode_override.value if mode_override else None,
+                )
                 result = await P.chat_stream(
                     client,
                     info,
@@ -1986,31 +1998,81 @@ async def run_agent_loop(
                     tools,
                     emit,
                     temperature=temperature,
-                    tool_choice="required" if info.dialect == "openai" else None,
                     context_size=context_size,
                     max_tokens=max_tokens,
                     top_p=top_p,
                 )
                 messages.append(result.assistant_message)
 
-            if not result.tool_calls:
-                return result.content
-            for call in result.tool_calls:
-                if progressive:
-                    tool_result = await _dispatch_call(
-                        conn, turn_id, call, active_groups, spec, mode_override
+                # Weak models sometimes narrate an action without emitting the call, so
+                # retry once with an explicit nudge. This deliberately runs on EVERY
+                # dialect: it used to be gated on `openai`, which meant the repair never
+                # fired for Ollama — the default local provider, and the one whose small
+                # models need it most. `tool_choice` is simply the extra leverage OpenAI
+                # offers; where it doesn't exist the re-ask alone still recovers many
+                # turns, and `chat_stream` ignores a None.
+                if (
+                    not result.tool_calls
+                    and not forced_retry_used
+                    and _looks_like_unemitted_tool_call(result.content, tools)
+                ):
+                    forced_retry_used = True
+                    messages.append({"role": "system", "content": _FORCE_TOOL_NUDGE})
+                    result = await P.chat_stream(
+                        client,
+                        info,
+                        endpoint,
+                        model,
+                        messages,
+                        tools,
+                        emit,
+                        temperature=temperature,
+                        tool_choice="required" if info.dialect == "openai" else None,
+                        context_size=context_size,
+                        max_tokens=max_tokens,
+                        top_p=top_p,
                     )
-                elif not await _gate(conn, turn_id, call, mode_override):
-                    tool_result = {"error": "denied by permission policy"}
-                elif call.name in BACKEND_TOOL_NAMES:
-                    # Resolved in the backend (peer fabric), not relayed to the UI.
-                    tool_result = await _run_backend_tool(conn, turn_id, call)
-                else:
-                    tool_result = await _call_frontend_tool(
-                        conn, turn_id, call.name, call.arguments
-                    )
-                messages.append(P.tool_result_message(info, call, tool_result))
-    return "(stopped after too many steps)"
+                    messages.append(result.assistant_message)
+
+                if rec:
+                    rec.rounds = round_no + 1
+                if not result.tool_calls:
+                    answer = result.content
+                    return answer
+                for call in result.tool_calls:
+                    started = time.monotonic()
+                    if progressive:
+                        tool_result = await _dispatch_call(
+                            conn, turn_id, call, active_groups, spec, mode_override
+                        )
+                    elif not await _gate(conn, turn_id, call, mode_override):
+                        tool_result = {"error": "denied by permission policy"}
+                    elif call.name in BACKEND_TOOL_NAMES:
+                        # Resolved in the backend (peer fabric), not relayed to the UI.
+                        tool_result = await _run_backend_tool(conn, turn_id, call)
+                    else:
+                        tool_result = await _call_frontend_tool(
+                            conn, turn_id, call.name, call.arguments
+                        )
+                    if rec:
+                        # The call and its result as ONE step — pairing them later by
+                        # name and ordinal breaks the moment a round calls one twice.
+                        rec.action(
+                            round_no,
+                            call.name,
+                            call.arguments,
+                            tool_result,
+                            duration_ms=int((time.monotonic() - started) * 1000),
+                        )
+                    messages.append(P.tool_result_message(info, call, tool_result))
+        return answer
+    except BaseException as exc:
+        if rec:
+            rec.fail(exc)
+        raise
+    finally:
+        if rec:
+            rec.finish(answer)
 
 
 async def run_agent_turn(

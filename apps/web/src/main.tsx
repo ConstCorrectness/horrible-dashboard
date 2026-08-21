@@ -58,6 +58,7 @@ import {
   updatesModule,
   interpretabilityModule,
   evalsModule,
+  trajectoriesModule,
   labModule,
   llamacppModule,
   observabilityModule,
@@ -168,6 +169,9 @@ async function boot(): Promise<void> {
     // Lab frame composes its panes more heavily than any other module's.
     registry.register(labModule);
     registry.register(evalsModule);
+    // After evals: an eval case runs through the same orchestrator loop, so a
+    // trajectory is what an eval result is a grade *of*.
+    registry.register(trajectoriesModule);
     // The Lab is where you look at a model; this is where the node runs one.
     registry.register(llamacppModule);
     registry.register(observabilityModule);

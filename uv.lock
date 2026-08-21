@@ -1473,6 +1473,7 @@ webrtc = [
 [package.dev-dependencies]
 dev = [
     { name = "basedpyright" },
+    { name = "horrible-trajectories" },
     { name = "httpx" },
     { name = "ipykernel" },
     { name = "pygame" },
@@ -1541,6 +1542,7 @@ provides-extras = ["webrtc", "games-native", "browser-engine", "clip", "oracle",
 [package.metadata.requires-dev]
 dev = [
     { name = "basedpyright", specifier = ">=1.39.9" },
+    { name = "horrible-trajectories", editable = "sdk/horrible-trajectories" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "ipykernel", specifier = ">=6" },
     { name = "pygame", specifier = ">=2.6.1" },
@@ -1548,6 +1550,17 @@ dev = [
     { name = "pytest-timeout", specifier = ">=2.4.0" },
     { name = "ruff", specifier = ">=0.15.16" },
 ]
+
+[[package]]
+name = "horrible-trajectories"
+version = "0.1.0"
+source = { editable = "sdk/horrible-trajectories" }
+dependencies = [
+    { name = "httpx" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "httpx", specifier = ">=0.27" }]
 
 [[package]]
 name = "hpack"

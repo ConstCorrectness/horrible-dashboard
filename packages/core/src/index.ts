@@ -375,6 +375,7 @@ export {
 } from './modules/updates';
 export { interpretabilityModule } from './modules/interpretability';
 export { evalsModule } from './modules/evals';
+export { trajectoriesModule } from './modules/trajectories';
 export { labModule } from './modules/lab';
 export { llamacppModule } from './modules/llamacpp';
 export { observabilityModule } from './modules/observability';

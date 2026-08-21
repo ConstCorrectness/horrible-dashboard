@@ -1,0 +1,28 @@
+[project]
+name = "horrible-trajectories"
+version = "0.1.0"
+description = "Record agent trajectories into a horrible-dashboard node"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["agents", "trajectories", "observability", "llm"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries",
+]
+# Deliberately one dependency. This package is meant to drop into somebody
+# else's agent without dragging a stack in behind it; anything more than httpx
+# would make "just add the recorder" a dependency negotiation.
+dependencies = ["httpx>=0.27"]
+
+[project.urls]
+Homepage = "https://github.com/horriblecpp/horrible-dashboard"
+Documentation = "https://github.com/horriblecpp/horrible-dashboard/blob/main/docs/modules/trajectories.mdx"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/horrible_trajectories"]

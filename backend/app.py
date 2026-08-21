@@ -83,6 +83,11 @@ from backend.modules.hardware import router as hardware_router
 from backend.modules.interpretability import router as interpretability_router
 from backend.modules.evals import register_agent_tools as register_evals_tools
 from backend.modules.evals import router as evals_router
+from backend.modules.trajectories import init_trajectories_db
+from backend.modules.trajectories import (
+    register_agent_tools as register_trajectories_tools,
+)
+from backend.modules.trajectories import router as trajectories_router
 from backend.modules.karaoke import register_agent_tools as register_karaoke_tools
 from backend.modules.karaoke import router as karaoke_router
 from backend.modules.library import router as library_router
@@ -176,6 +181,10 @@ async def lifespan(app: FastAPI):
     # Records catalog + proposal queue (the per-schema data tables are created on
     # demand, when a schema is defined).
     init_records_db()
+    # Trajectory tables. Created eagerly rather than on first use so `traj_*`
+    # shows up in the database console's built-in `app` connection on a fresh
+    # install, before anyone has opened the pane that would create them lazily.
+    init_trajectories_db()
     # Deep-research runner: resumes any run that was in flight when the process
     # last died (steps stuck `running` reset to `pending`), then works the queue.
     research_runner.start()
@@ -248,6 +257,7 @@ app.include_router(database_router, prefix="/api")
 app.include_router(library_router, prefix="/api")
 app.include_router(karaoke_router, prefix="/api")
 app.include_router(evals_router, prefix="/api")
+app.include_router(trajectories_router, prefix="/api")
 app.include_router(records_router, prefix="/api")
 app.include_router(artifacts_router, prefix="/api")
 app.include_router(research_router, prefix="/api")
@@ -320,6 +330,10 @@ register_karaoke_tools()
 # Register the evals agent tools (grouped under `evals`): sweeps run detached on
 # the backend, so these read the scoreboard with no evals pane open.
 register_evals_tools()
+# Trajectory tools (grouped under `trajectories`, so progressively disclosed and
+# free when unloaded). `search` is the continual-learning read path: the agent
+# looks up how a similar task went before.
+register_trajectories_tools()
 
 # Register the `audio` agent tools. Grouped, and backend-side because the routing
 # is server state: "put the video through my microphone" works from the ask bar
