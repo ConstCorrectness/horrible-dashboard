@@ -38,7 +38,7 @@ sequenceDiagram
     P->>D: auth {echo, token}
     D->>D: trust.evaluate → redeem token
     D-->>P: auth_result {ok:true}
-    Note over P,D: peer registered; remote_command + agent_request flow both ways
+    Note over P,D: peer registered · remote_command + agent_request flow both ways
 ```
 
 The QR is rendered by `MobilePairingDialog.tsx` from the home page's integration
