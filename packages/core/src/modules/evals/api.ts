@@ -126,6 +126,12 @@ export interface EvalRun {
   finished_at: string;
   error: string;
   localtrack_run_id: string;
+  /** Content hash of the tool catalog this run saw — enabled skills plus connected
+   *  MCP servers. Empty on runs recorded before it existed, which reads as "cannot
+   *  tell", never as agreement. */
+  harness_hash: string;
+  /** The harness itself, so a differing hash can say what differed. */
+  harness_json: string;
 }
 
 export interface SuggestedTarget {
@@ -194,6 +200,24 @@ export const startRun = (body: {
   case_ids?: string[];
   localtrack_project?: string;
 }) => apiPost<StartRunResult>('/evals/runs', body);
+
+/** A sweep running on the node right now. */
+export interface ActiveSweep {
+  key: string;
+  suiteId: string;
+  /** The target labels it is working through. */
+  targets: string[];
+  startedAt: string;
+}
+
+/** What is running, asked of the node rather than remembered by the pane — a sweep
+ *  outlives the pane that started it. */
+export const listSweeps = () =>
+  apiGet<{ sweeps: ActiveSweep[] }>('/evals/sweeps').then((r) => r.sweeps);
+
+/** Stop a sweep. Targets it already finished keep their results. */
+export const cancelSweep = (key: string) =>
+  apiDelete<{ cancelled: boolean }>(`/evals/sweeps/${encodeURIComponent(key)}`);
 
 
 // --- authoring a benchmark block --------------------------------------------
@@ -309,6 +333,19 @@ export interface RunDiff {
   stillFailing: string[];
   /** Neither run recorded case hashes, so an edit cannot be ruled out. */
   hashesUnknown: boolean;
+  /** Whether both runs saw the same tool catalog. A skill toggled or an MCP server
+   *  started between two runs rewrites what there was to call, so a diff across one
+   *  is not a diff of models. */
+  harness: {
+    /** Either run has no recorded harness. Not a weaker `differs` — nobody claimed
+     *  they agree. */
+    unknown: boolean;
+    differs: boolean;
+    base: string;
+    other: string;
+    /** Plain lines naming what changed. Empty unless `differs`. */
+    changes: string[];
+  };
 }
 
 export const getLeaderboard = (suiteId: string, limit = 8) =>

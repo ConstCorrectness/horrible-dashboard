@@ -5,7 +5,24 @@ sidebar_label: LocalTrack
 
 # Module: localtrack
 
-**LocalTrack** is a lightweight, open-source local experiment tracking system inspired by Weights & Biases (W&B) and MLflow. It provides customizable drag-and-drop metric panels, multi-run comparison with synchronized color-coded overlays, real-time Exponential Moving Average (EMA) smoothing, high-throughput metric ingestion, and native Hugging Face / PyTorch logging integration.
+**LocalTrack** is the node's local experiment tracker — W&B/MLflow-shaped, but the
+data never leaves the machine. Runs, parameters, metric time-series and artifacts
+live in SQLite (`$HORRIBLE_DATA_DIR/localtrack.db`, WAL); the pane is a
+multi-run chart workspace with server-side LTTB downsampling and live EMA smoothing.
+
+It is the **watching** half of the fine-tune loop, and it has two producers:
+
+- **Training runs.** Every metric a run emits through `ht.callback()` is stored here,
+  under a localtrack project named for the training project. Those keys are Hugging
+  Face `Trainer`'s own (`train/loss`, `eval/loss`, `eval/accuracy`,
+  `train/learning_rate`) — which is to say they are exactly the four **default panels**
+  below, and until this producer existed nothing had ever written them. See
+  [training](training.mdx) for why the hook sits in `metrics.record_event` rather than
+  in the helper or in `report_to`.
+- **Eval sweeps.** One run per sweep, carrying per-case pass/duration/rounds.
+
+Both go through `localtrack.mirror.RunMirror`, which is best-effort by construction: a
+tracking failure must never cost a training run or a sweep the results it already has.
 
 ---
 
@@ -15,15 +32,112 @@ LocalTrack is designed for zero-configuration, privacy-preserving local ML workf
 
 ### Key Features
 
-- **W&B-Style Workspace**: Draggable, resizable grid of line charts, scalar metric cards, and comparative bar charts with project-keyed layout persistence in `localStorage`.
-- **Custom Vector Icon**: Custom designed SVG icon (`LocalTrackIcon`) representing loss and accuracy metric curves.
-- **Multi-Run Comparison**: Collapsible left sidebar with eye visibility toggles (`👁`) to overlay multiple runs simultaneously with vibrant, distinguishable color palettes.
-- **High-Density Charting**: Powered by `uPlot` and server-side **LTTB (Largest Triangle Three Buckets)** downsampling to visualize 100,000+ metric points at 60fps without lag.
-- **Noise Smoothing**: Live Exponential Moving Average (EMA) slider (`0.00` to `0.99`) for readable loss and reward curves.
-- **Regex Metric Filtering**: Instant panel search and filtering above the grid (e.g. `loss`, `eval/.*`).
-- **Run Details Modal**: Tabbed view displaying single-run charts, hyperparameter configurations, hardware info, and artifact file downloads (`config.json`, `trainer_state.json`).
-- **Python Client SDK & Hugging Face Callback**: `BaseLocalTrackLogger` abstract base class, asynchronous batching client, and `LocalTrackHFCallback(TrainerCallback)`.
-- **Orchestrator Agent Tools**: Native `localtrack.*` tool group for multi-turn conversational experiment queries, run comparisons, and project management.
+- **Multi-run overlay.** A collapsible run list with a per-run colour that matches
+  that run's line in every chart. Selecting a run is a real checkbox — see
+  [The controls are controls](#the-controls-are-controls).
+- **Live.** A `localtrack` `/ws` channel means a run in flight moves the charts with
+  no refresh. See [Liveness](#liveness).
+- **High-density charting.** `uPlot` plus server-side **LTTB** downsampling renders
+  100k+ points without lag; EMA smoothing (0.00–0.99) is applied server-side too.
+- **Regex panel filter**, falling back to substring while the expression is
+  incomplete — a half-typed `eval/[` is a normal intermediate state, not an error.
+- **Panel layouts persist server-side**, per project. See
+  [Layouts are server-side](#layouts-are-server-side).
+- **Python client SDK and HF callback**: `BaseLocalTrackLogger`, a batching
+  `LocalTrackClient`, and `LocalTrackHFCallback(TrainerCallback)`.
+- **Agent tools** (`localtrack.*`) for conversational run comparison.
+
+### Liveness
+
+There was none: no channel, no polling, no interval. A sweep or a training run could
+write for ten minutes while the pane sat still, and the only way to see anything was
+to hit refresh. For a module whose whole job is watching a run happen, that was the
+defect.
+
+`backend/modules/localtrack/stream.py` publishes on the `localtrack` channel:
+
+| Event | When | Payload |
+| --- | --- | --- |
+| `run_created` | a run is created | `runId`, `projectId`, `name` |
+| `run_updated` | status/summary change | `runId`, `projectId`, `status` |
+| `run_deleted` | a run is deleted | `runId` |
+| `metrics` | new points ingested | `runId`, `keys` |
+
+Four things there are decisions rather than plumbing.
+
+**Publishing happens after the commit, never before.** A pane that refetches on the
+event would otherwise race the writer and read the pre-write state — which looks
+exactly like a dropped point.
+
+**`metrics` carries keys, not values.** The pane applies its own downsample budget
+and smoothing, so it must fetch its own series anyway; shipping values here would
+put a second, un-downsampled copy of the data on the wire for no benefit.
+
+**Coalescing unions its keys.** A tight loop emits far faster than a chart can
+drink, so bursts collapse to `MAX_EVENTS_PER_S` (20), latest-wins, with a timer
+flushing the tail so a run's final point always lands. But the coalesced payload
+**merges** keys rather than replacing: overwrite and every key but the last in a
+burst is silently never announced, leaving one panel frozen while its neighbour
+updates. Measured: 30 writes in 0.25s → 6 events, all three metrics still present.
+
+**Revisions are per metric key.** The store keeps `metricRevisions[key]`, not one
+counter, and each panel watches only its own key. A single global counter made every
+`train/loss` point refetch the accuracy and learning-rate panels too — measured at
+172 refetches for 40 ingested points across three panels. Scoped, the same workload
+costs 43 refetches on the metric that actually changed and 3 on each idle panel.
+
+Nothing in `stream.py` can raise into a caller. A tracker that fails a training run
+by failing to draw a chart is worse than one that draws nothing.
+
+### Layouts are server-side
+
+The panel arrangement was in `localStorage`, which is per-browser-origin: a layout
+built in the browser layout was invisible in the desktop shell and vice versa, and
+clearing site data reset it silently. It is now `lt_layouts` in the module's own DB,
+behind `GET|PUT /api/localtrack/projects/{id}/layout`, stored as an **opaque blob**
+the backend never interprets (the `/api/flows` precedent — a new panel type needs no
+migration).
+
+It is per *project*, not per workspace, which is why it is not in the workspace
+store.
+
+`null` and `[]` are **different answers** and the API keeps them apart: `null` means
+"never saved one" and yields the four defaults, `[]` means the user removed every
+panel. The old code tested `parsed.length > 0`, so a deliberately cleared workspace
+sprang back to four charts on every reload.
+
+### The controls are controls
+
+Run visibility was an emoji (`👁` / `👁‍🗨`) on a `<button>`. Two problems, not one:
+it breaks the house rule against native emoji as iconography, and it was not a
+checkbox — nothing announced it as one and the space bar did nothing. It is now a
+real `<input type="checkbox">`, visually hidden behind the run's colour swatch,
+carrying an `aria-label` naming the run (a wrapping label's `title` does **not**
+become the input's accessible name).
+
+The hand-rolled fixed-position "new project" modal is gone too; `dialogs.prompt` is
+themed, focus-managed and stacks correctly with everything else. Deletion of runs
+and projects is wired for the first time — `removeRun`/`removeProject` existed in
+the store, were exported by the hook, and were attached to no control at all.
+
+### Failures are visible
+
+`state.error` was set in six places and rendered by nothing, so a failed fetch was
+indistinguishable from an empty project; `state.loading` was tracked and unused.
+Both now render — the error as a dismissible banner (a failed save is still true a
+minute later, so a toast that has already faded cannot be re-read), the loading as
+a 2px scan bar that leaves the previous values readable underneath.
+
+The two declared settings — `localtrack.defaultProject` and
+`localtrack.defaultSmoothing` — are read for the first time as well; the store used
+to hardcode `'default'` and `0.0`, so changing either did nothing.
+
+### Routes are namespaced
+
+Every route used to be registered **twice**: once under `/api/localtrack/…` and once
+at a bare `/api/projects`, `/api/runs`, `/api/metrics/…`. Nothing consumed the bare
+form (the Python client has always used the prefixed one) and it claimed three very
+generic paths for one module. The aliases are gone.
 
 ---
 
@@ -190,3 +304,10 @@ LocalTrack also integrates with external Weights & Biases (W&B) endpoints:
 - `POST /api/localtrack/runs/{id}/artifacts`: Upload artifact files (`config.json`, `trainer_state.json`).
 - `GET /api/localtrack/runs/{id}/artifacts`: List run artifacts.
 - `GET /api/localtrack/runs/{id}/artifacts/{artifact_id}/download`: Download an artifact.
+- `GET /api/localtrack/projects/{id}/layout`: The saved panel arrangement, or
+  `panels: null` when the project has never saved one.
+- `PUT /api/localtrack/projects/{id}/layout`: Replace it. `400` if `panels` is not
+  a list.
+
+Note there is no bare-path alias for any of these — see
+[Routes are namespaced](#routes-are-namespaced).

@@ -141,6 +141,70 @@ property quietly inherits, so those call sites were styled by accident. Defining
 the aliases fixes them and brings them under the switcher in one move; they are
 kept as aliases rather than renamed across 40 files, which is a separate change.
 
+## The scale: space, type, elevation, motion
+
+Colour was tokenised from the start. Space, type, elevation and motion were not —
+`themes.css` held a palette, a radius scale and two shadows, and nothing else. With
+no scale to reach for, all **1,987** inline `style={{}}` objects in the app picked
+their own `fontSize: 11`, `gap: 6`, `padding: '6px 0'`. Two panes docked side by
+side in one frame could not line up: not by accident, by construction. That is what
+reads as unfinished even when each pane in isolation is carefully made.
+
+| Group | Tokens | Notes |
+| --- | --- | --- |
+| Spacing | `--space-0` … `--space-8` | 2px base opening up: 0, 2, 4, 6, 8, 12, 16, 24, 32. `--space-4` is the default gutter inside a row |
+| Type | `--fs-micro` `--fs-meta` `--fs-label` `--fs-body` `--fs-lead` `--fs-display` | Named for the **job**, not the size — a row's identity is `--fs-label`, its figures `--fs-meta` |
+| Tracking | `--tracking-display` (0.14em), `--tracking-badge` (0.1em) | The only two non-zero values the house style uses |
+| Weight | `--fw-regular` `--fw-medium` `--fw-bold` | |
+| Elevation | `--elev-0` `--elev-1` `--elev-2` | Aliases of `--shadow-card` / `--shadow-overlay` |
+| Motion | `--dur-fast` `--dur-base` `--dur-slow`, `--ease-standard` `--ease-entrance`, `--stagger-step` | |
+
+None of these values is invented: they are the ones `datalist.css` had already
+settled on, promoted so everything else can use them. Sizes that look oddly precise
+(`10.5px`, `12.5px`) are measured — rounding them would silently reflow every row.
+
+Unlike colour, the scale is **theme-independent**. A theme changes how the app
+looks, not how far apart things sit. `--radius-*` is the deliberate exception and
+stays per-theme, because a radius genuinely is part of a theme's character:
+midnight's 4px against studio's 6px is most of the difference between a hairline
+look and a soft one.
+
+### Elevation has three steps, not five
+
+`--elev-1` and `--elev-2` alias the two shadows each theme already declares, rather
+than introducing a middle step. A ramp with a rung no theme designed is a ramp that
+looks wrong in five of the six themes.
+
+## The guard
+
+`packages/core/src/__tests__/design-tokens.test.ts` fails the build on **any
+`var(--token)` that resolves to nothing**, and asserts the scale groups above still
+exist.
+
+It exists because the alias problem described in the previous section happened
+again, unnoticed, at a larger scale: a later audit found **16 undefined tokens
+across 25 files**. `--border-dim` and `--text-primary` alone accounted for 14 files
+each. Every one of those declarations was invalid at computed-value time and fell
+through to its hardcoded hex fallback, so LocalTrack, Trajectories and parts of
+games and hassault rendered a fixed GitHub-dark palette in **all six themes** while
+appearing, in the source, to be fully themed.
+
+That is the failure mode worth naming: a missing token does not look like a bug. It
+looks like a theme nobody likes. Nothing throws, nothing warns, the pane just
+quietly ignores the switcher — and the fallback makes it *look* deliberate.
+
+The test collects declarations from three spellings, because all three are in use
+and missing one turns a legitimate local variable into a false failure:
+
+```
+--x: 1px                     /* CSS */
+'--x': value                 /* inline style */
+['--x' as string]: value     /* the cast form React/TS needs */
+```
+
+When it fails, the fix is usually to add the name to the alias block — most
+offenders are another spelling of a token that already exists.
+
 ## Controls
 
 A theme is not only a palette — it is also the shape of the things you click, so

@@ -159,9 +159,11 @@ def grade_case(case: EvalCase, actual: list[ToolCall], answer: str) -> tuple[boo
         return True, "answered without calling a tool, as expected"
 
     if grade == "judge":
-        # Decided elsewhere: the judge needs a provider, and this module is pure.
-        # Reaching here means the runner did not route it, which is a bug in the
-        # runner rather than a failing case — say so instead of scoring it.
+        # Unreachable from an authored case — `Expect.grade` rejects it, because a
+        # grade nothing routes fails every run and reads as the model being wrong.
+        # Kept as the backstop under that validator: the judge needs a provider and
+        # this module is pure, so if one ever arrives here it must say so rather
+        # than score a zero that looks like a verdict.
         return False, "judge grading was not run for this case"
 
     if not expected:

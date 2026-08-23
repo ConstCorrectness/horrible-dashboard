@@ -95,6 +95,7 @@ from backend.modules.karaoke import register_agent_tools as register_karaoke_too
 from backend.modules.karaoke import router as karaoke_router
 from backend.modules.library import router as library_router
 from backend.modules.llamacpp import router as llamacpp_router
+from backend.modules.llamacpp.agent_tools import register_llamacpp_tools
 from backend.modules.llamacpp.server import llama_manager
 from backend.modules.records import (
     init_records_db,
@@ -155,6 +156,7 @@ from backend.modules.training.kernels import (
 from backend.modules.localtrack import (
     register_agent_tools as register_localtrack_tools,
     router as localtrack_router,
+    stream as localtrack_stream,
 )
 from backend.modules.desktop import router as desktop_router
 from backend.modules.workspace import router as workspace_router
@@ -188,6 +190,10 @@ async def lifespan(app: FastAPI):
     # shows up in the database console's built-in `app` connection on a fresh
     # install, before anyone has opened the pane that would create them lazily.
     init_trajectories_db()
+    # LocalTrack's live channel needs the loop captured before the first writer
+    # runs, and the first writer is very likely a worker thread (the training
+    # metrics pump), which has no running loop of its own to discover.
+    localtrack_stream.init_loop()
     # Deep-research runner: resumes any run that was in flight when the process
     # last died (steps stuck `running` reset to `pending`), then works the queue.
     research_runner.start()
@@ -201,6 +207,12 @@ async def lifespan(app: FastAPI):
         async with mcp_export.session_lifespan():
             yield
     finally:
+        # Close any training run still mirroring into localtrack, so a run that was
+        # in flight at shutdown is recorded as finished rather than left `running`
+        # forever.
+        from backend.modules.training.metrics import finish_all as _finish_training
+
+        _finish_training()
         research_runner.stop()
         queue.stop()
         # MCP servers are child processes (stdio transport); leaving them behind on
@@ -313,6 +325,10 @@ register_training_tools()
 
 # Register the LocalTrack experiment tracking agent tools (grouped under `localtrack`)
 register_localtrack_tools()
+
+# The `llamacpp` group: list the node's GGUFs, serve one, stop it. Without these
+# the fine-tuning agent could convert a checkpoint and then had no way to serve it.
+register_llamacpp_tools()
 
 # Register the model designer's agent tools (grouped under `model`): read a saved
 # design, fork the inspected model into one, retune its hyperparameters, emit its

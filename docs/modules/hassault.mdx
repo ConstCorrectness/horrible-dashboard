@@ -2912,7 +2912,8 @@ against, and nothing to be MVP of.
   build output. Both are declared rows: the path was read by the launch route and
   named in its own error message long before it was editable anywhere.
 - **Agent tools** (group `hassault`): `list_maps`, `list_matches`, `host`,
-  `invite`, `status`, `surroundings`, `add_bot`, `remove_bot`.
+  `invite`, `status`, `surroundings`, `add_bot`, `remove_bot`, `console_exec`,
+  `run_macro`.
 
 Escape opens the in-game pause menu (`GameMenu.tsx`) rather than any shell
 surface — it releases pointer lock and keyboard capture the same way leaving a
@@ -2922,9 +2923,12 @@ reads; nothing about it touches `packages/core/src/keymap`.
 
 ## Agent tools
 
-These run the *social* side of a game — "start a match on ac_desert and invite
-Rob", "who's in the match?", "what's around me?" — which is the tedious part for a
-human mid-session and the easy part for an agent.
+Most of these run the *social* side of a game — "start a match on ac_desert and
+invite Rob", "who's in the match?", "what's around me?" — which is the tedious part
+for a human mid-session and the easy part for an agent. The last two,
+`console_exec` and `run_macro`, are the [developer console](#the-developer-console-and-macro-system)
+reached from a tool call instead of the console pane, which is a different job:
+changing the state of a running match rather than describing it.
 
 | Tool | Does |
 | --- | --- |
@@ -2936,6 +2940,8 @@ human mid-session and the easy part for an agent.
 | `hassault.surroundings` | Walls in each compass direction, and who is nearby |
 | `hassault.add_bot` | Field bots: a count, a skill, an optional team |
 | `hassault.remove_bot` | Take them back out, by name, by count, or all of them |
+| `hassault.console_exec` | Run a developer-console command, CVar or Python script |
+| `hassault.run_macro` | Run a named console macro (`warmup`, `bot_1v5`) |
 
 `surroundings` casts its rays through the same `World` the simulation uses, so it
 reports what the server believes rather than a guess from a map file, and it
@@ -2950,6 +2956,14 @@ would be a bot controller wearing a tool's clothes. The agent can *field* bots �
 tick-rate brain on the server, not a tool call. What is here is everything needed
 to *set up* and *talk about* a match, including acting as a spotter for whoever is
 actually playing.
+
+The console tools are the edge of that line rather than an exception to it.
+`console_exec` can hand a player a weapon or slow time to 0.5x, but it acts once
+per call on the match's *state* — it is not a channel for per-frame input, and no
+sequence of these calls adds up to steering a player. Like every other tool here
+that changes something (`host`, `invite`, `add_bot`, `remove_bot`) they are
+`side_effect=True` and pass the permission gate; only the four that just *describe*
+a match — `list_maps`, `list_matches`, `status`, `surroundings` — are ungated.
 
 Controls: click to lock the pointer, WASD to move, mouse to look, Space to jump,
 left mouse to fire, 1–5 or the wheel to change weapon, R to reload, Tab for the

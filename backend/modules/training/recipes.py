@@ -651,6 +651,37 @@ def _kwargs(recipe: Recipe, target: str, intro: Introspection) -> list[str]:
     return lines
 
 
+def _dataset_call(recipe: Recipe) -> str:
+    """The `load_dataset(...)` line, which is not one shape but two.
+
+    `load_dataset("tatsu-lab/alpaca", split="train")` loads a Hub dataset by id.
+    A **local file** needs an entirely different call —
+    `load_dataset("json", data_files=..., split=...)` — where the first argument is
+    the *loader name* and the path moves into `data_files`. Passing a path as the
+    first argument does not fail cleanly; it goes looking for a Hub repo of that
+    name.
+
+    That distinction is what made `evals.export` a dead end. It writes a
+    training-ready SFT `.jsonl` into `$HORRIBLE_DATA_DIR/evals/exports/`, the whole
+    point of which is to fine-tune on what a model got wrong — and no recipe could
+    load it, so the last spoke of the flywheel was "hand-edit the generated cell".
+
+    Detected by shape rather than by a flag on the recipe: a dataset field is either
+    a Hub id (`owner/name`, never a path) or a path, and asking the user to also
+    tick a box saying which is asking them to restate what they just typed.
+    """
+    ref = recipe.dataset
+    split = _literal(recipe.dataset_split)
+    lowered = ref.lower()
+    if lowered.endswith((".jsonl", ".json")):
+        return f"dataset = load_dataset('json', data_files={_literal(ref)}, split={split})"
+    if lowered.endswith(".csv"):
+        return f"dataset = load_dataset('csv', data_files={_literal(ref)}, split={split})"
+    if lowered.endswith(".parquet"):
+        return f"dataset = load_dataset('parquet', data_files={_literal(ref)}, split={split})"
+    return f"dataset = load_dataset({_literal(ref)}, split={split})"
+
+
 def materialize(recipe: Recipe, intro: Introspection) -> list[dict[str, str]]:
     """The recipe as notebook cells.
 
@@ -696,7 +727,7 @@ def materialize(recipe: Recipe, intro: Introspection) -> list[dict[str, str]]:
         imports.append("from peft import LoraConfig")
     imports += [
         "",
-        f"dataset = load_dataset({_literal(recipe.dataset)}, split={_literal(recipe.dataset_split)})",
+        _dataset_call(recipe),
         "dataset",
     ]
     cells.append({"cell_type": "code", "source": "\n".join(imports)})

@@ -12,7 +12,7 @@ export function ChartPanel({
   panel: PanelConfig;
   onRemove?: () => void;
 }) {
-  const { runs, selectedRunIds, globalSmoothing } = useLocalTrackStore();
+  const { metricRevisions, runs, selectedRunIds, globalSmoothing } = useLocalTrackStore();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const plotRef = useRef<uPlot | null>(null);
 
@@ -51,7 +51,17 @@ export function ChartPanel({
     return () => {
       isMounted = false;
     };
-  }, [selectedRunArray, panel.metricKey, panel.smoothing, globalSmoothing]);
+    // The live signal, scoped to THIS panel's metric: the backend said a selected
+    // run has new points for this key, so the series is refetched. Reading the
+    // whole revisions object here instead would refetch every panel on every
+    // point of every metric.
+  }, [
+    selectedRunArray,
+    panel.metricKey,
+    panel.smoothing,
+    globalSmoothing,
+    metricRevisions[panel.metricKey],
+  ]);
 
   // Build aligned uPlot 2D data array [xs, ys_1, ys_2, ...]
   useEffect(() => {
@@ -76,7 +86,10 @@ export function ChartPanel({
     if (alignedSteps.length === 0) return;
 
     // 2. Build series y-arrays aligned with alignedSteps
-    const uplotData: uPlot.AlignedData = [alignedSteps];
+    // `AlignedData` is a readonly tuple type, so it has no `push`. The series are
+    // accumulated as a plain array of the same element type and handed over once,
+    // which is what the old `as any` was papering over.
+    const uplotData: (number | null)[][] = [alignedSteps];
     const uplotSeries: uPlot.Series[] = [
       {
         label: 'Step',
@@ -96,7 +109,7 @@ export function ChartPanel({
 
       // Align points (null for missing steps)
       const alignedYs = alignedSteps.map((st) => stepToVal.get(st) ?? null);
-      uplotData.push(alignedYs as any);
+      uplotData.push(alignedYs);
 
       uplotSeries.push({
         label: runName,
@@ -144,7 +157,7 @@ export function ChartPanel({
       plotRef.current.destroy();
     }
 
-    plotRef.current = new uPlot(opts, uplotData, host);
+    plotRef.current = new uPlot(opts, uplotData as unknown as uPlot.AlignedData, host);
 
     // Responsive resize handler
     const ro = new ResizeObserver((entries) => {

@@ -1,6 +1,77 @@
+/**
+ * The run list: which runs are overlaid on the charts.
+ *
+ * Three things this used to get wrong, all now fixed here:
+ *
+ * - **The visibility control was an emoji** (`👁` / `👁‍🗨`) on a `<button>`. Two
+ *   problems, not one: it breaks the house rule against native emoji as icons
+ *   (a third-party font's opinion about colour and size), and it was not a
+ *   checkbox, so nothing announced it as one and the space bar did nothing. It is
+ *   a real `<input type="checkbox">` now, visually hidden behind the run's own
+ *   colour swatch — which is more useful anyway, because that swatch is the same
+ *   colour as the run's line in every chart.
+ * - **The "first 5" cap was silent.** A project with 200 runs showed 200 rows with
+ *   five ticked and no explanation. The count line says so now.
+ * - **A hand-rolled fixed-position modal** for "new project", complete with its own
+ *   backdrop and z-index. `dialogs.prompt` already exists, is themed, is focus-
+ *   managed and stacks properly with everything else — 80 lines deleted.
+ *
+ * Deletion is wired for the first time: `removeRun` and `removeProject` existed in
+ * the store, were exported by the hook, and were attached to no control at all.
+ */
 import { useState } from 'react';
-import { getRunColor, useLocalTrackStore } from '../store';
+
+import { Button, Chip } from '../../../Primitives';
+import { dialogs } from '../../../dialogs';
+import { DEFAULT_SELECTION, getRunColor, useLocalTrackStore } from '../store';
+import type { Run, RunStatus } from '../types';
 import { LocalTrackIcon } from './LocalTrackIcon';
+
+/** Vector glyphs. `currentColor` throughout — the container decides the colour. */
+const stroke = {
+  fill: 'none',
+  stroke: 'currentColor',
+  strokeWidth: 1.6,
+  strokeLinecap: 'round' as const,
+  strokeLinejoin: 'round' as const,
+};
+
+function IconRefresh() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" {...stroke} aria-hidden>
+      <path d="M10 6a4 4 0 1 1-1.2-2.8" />
+      <path d="M10.5 1.5V4H8" />
+    </svg>
+  );
+}
+
+function IconCollapse() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" {...stroke} aria-hidden>
+      <path d="M7.5 2.5 4 6l3.5 3.5" />
+    </svg>
+  );
+}
+
+function IconTrash() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" {...stroke} aria-hidden>
+      <path d="M2.5 3.5h7M5 3.5V2.5h2v1M3.5 3.5l.5 6h4l.5-6" />
+    </svg>
+  );
+}
+
+/**
+ * A run's status as a verdict.
+ *
+ * `running` is `info`, never `ok`: a run that has not finished has not succeeded,
+ * and drawing it green is how a sweep at step 3 of 5000 comes to look done.
+ */
+function statusKind(status: RunStatus) {
+  if (status === 'running') return 'info' as const;
+  if (status === 'finished') return 'ok' as const;
+  return 'fail' as const;
+}
 
 export function RunsSidebar({
   collapsed,
@@ -14,30 +85,59 @@ export function RunsSidebar({
     activeProjectId,
     setActiveProject,
     createNewProject,
+    removeProject,
     runs,
     selectedRunIds,
     toggleRunSelection,
     selectAllRuns,
     deselectAllRuns,
+    removeRun,
     openRunDetails,
     loadRuns,
   } = useLocalTrackStore();
 
   const [search, setSearch] = useState('');
-  const [showNewProjModal, setShowNewProjModal] = useState(false);
-  const [newProjName, setNewProjName] = useState('');
 
-  const filteredRuns = runs.filter((r) =>
-    r.name.toLowerCase().includes(search.toLowerCase()) ||
-    r.tags.some((t) => t.toLowerCase().includes(search.toLowerCase()))
-  );
+  const needle = search.trim().toLowerCase();
+  const filteredRuns = needle
+    ? runs.filter(
+        (r) =>
+          r.name.toLowerCase().includes(needle) ||
+          r.tags.some((t) => t.toLowerCase().includes(needle)),
+      )
+    : runs;
 
-  const handleCreateProj = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newProjName.trim()) return;
-    await createNewProject(newProjName.trim());
-    setNewProjName('');
-    setShowNewProjModal(false);
+  const newProject = async () => {
+    const name = await dialogs.prompt({
+      title: 'New project',
+      placeholder: 'llama3-lora-sft',
+      confirmLabel: 'Create',
+    });
+    if (name?.trim()) await createNewProject(name.trim());
+  };
+
+  const deleteProject = async () => {
+    const project = projects.find((p) => p.id === activeProjectId);
+    if (!project) return;
+    const ok = await dialogs.confirm({
+      title: `Delete “${project.name}”?`,
+      // Name the blast radius. A project delete cascades to every run and every
+      // metric point under it, which the button alone does not convey.
+      message: `Its ${project.run_count} run${project.run_count === 1 ? '' : 's'} and all their metrics are deleted too. This cannot be undone.`,
+      confirmLabel: 'Delete project',
+      danger: true,
+    });
+    if (ok) await removeProject(project.id);
+  };
+
+  const deleteRun = async (run: Run) => {
+    const ok = await dialogs.confirm({
+      title: `Delete “${run.name}”?`,
+      message: 'Its metrics and artifacts go with it. This cannot be undone.',
+      confirmLabel: 'Delete run',
+      danger: true,
+    });
+    if (ok) await removeRun(run.id);
   };
 
   if (collapsed) {
@@ -45,211 +145,200 @@ export function RunsSidebar({
       <div
         style={{
           width: 44,
-          borderRight: '1px solid var(--border-dim, #30363d)',
+          borderRight: '1px solid var(--border)',
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
-          padding: '12px 4px',
-          gap: 12,
-          background: 'var(--bg-secondary, #161b22)',
+          padding: 'var(--space-5) var(--space-2)',
+          gap: 'var(--space-5)',
+          background: 'var(--bg-raised)',
         }}
       >
-        <button
-          onClick={onToggleCollapse}
-          title="Expand Runs Sidebar"
+        <Button intent="ghost" size="sm" onClick={onToggleCollapse} title="Expand runs">
+          <LocalTrackIcon size={16} />
+        </Button>
+        <div
           style={{
-            background: 'none',
-            border: 'none',
-            color: 'var(--text-secondary, #8b949e)',
-            cursor: 'pointer',
-            padding: 6,
-            borderRadius: 4,
+            writingMode: 'vertical-lr',
+            fontSize: 'var(--fs-meta)',
+            fontFamily: 'var(--font-mono)',
+            color: 'var(--text-dim)',
+            letterSpacing: 'var(--tracking-badge)',
           }}
         >
-          <LocalTrackIcon size={16} />
-        </button>
-        <div style={{ writingMode: 'vertical-lr', fontSize: 11, color: 'var(--text-dim, #8b949e)', letterSpacing: 1 }}>
           RUNS ({runs.length})
         </div>
       </div>
     );
   }
 
+  const activeProject = projects.find((p) => p.id === activeProjectId);
+  // The cap is only worth explaining while it is actually hiding something.
+  const capApplies = runs.length > DEFAULT_SELECTION && selectedRunIds.size === DEFAULT_SELECTION;
+
   return (
     <aside
       style={{
         width: 280,
         minWidth: 280,
-        borderRight: '1px solid var(--border-dim, #30363d)',
-        background: 'var(--bg-secondary, #161b22)',
+        borderRight: '1px solid var(--border)',
+        background: 'var(--bg-raised)',
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
         userSelect: 'none',
       }}
     >
-      {/* Sidebar Header: Project Switcher */}
       <div
         style={{
-          padding: '12px 14px',
-          borderBottom: '1px solid var(--border-dim, #30363d)',
+          padding: 'var(--space-5)',
+          borderBottom: '1px solid var(--border)',
           display: 'flex',
           flexDirection: 'column',
-          gap: 8,
+          gap: 'var(--space-4)',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <LocalTrackIcon size={16} />
-            <span style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text-dim, #8b949e)' }}>
-              Project
-            </span>
-          </div>
-          <div style={{ display: 'flex', gap: 6 }}>
-            <button
-              onClick={() => setShowNewProjModal(true)}
-              title="New Project"
-              style={{
-                background: 'rgba(255,255,255,0.06)',
-                border: '1px solid var(--border-dim, #30363d)',
-                color: 'var(--text-primary, #c9d1d9)',
-                borderRadius: 4,
-                padding: '2px 6px',
-                fontSize: 11,
-                cursor: 'pointer',
-              }}
-            >
-              + New
-            </button>
-            <button
-              onClick={onToggleCollapse}
-              title="Collapse Sidebar"
-              style={{
-                background: 'none',
-                border: 'none',
-                color: 'var(--text-secondary, #8b949e)',
-                cursor: 'pointer',
-                padding: '2px 4px',
-                fontSize: 11,
-              }}
-            >
-              ◀
-            </button>
-          </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
+          <LocalTrackIcon size={16} />
+          <span
+            style={{
+              flex: 1,
+              fontSize: 'var(--fs-label)',
+              fontWeight: 'var(--fw-bold)',
+              textTransform: 'uppercase',
+              letterSpacing: 'var(--tracking-display)',
+              color: 'var(--text-dim)',
+            }}
+          >
+            Project
+          </span>
+          <Button size="sm" onClick={newProject}>
+            New
+          </Button>
+          <Button
+            intent="ghost"
+            size="sm"
+            onClick={onToggleCollapse}
+            title="Collapse"
+            icon={<IconCollapse />}
+          />
         </div>
 
-        <select
-          value={activeProjectId}
-          onChange={(e) => setActiveProject(e.target.value)}
-          style={{
-            background: 'var(--bg-tertiary, #0d1117)',
-            color: 'var(--text-primary, #c9d1d9)',
-            border: '1px solid var(--border-dim, #30363d)',
-            borderRadius: 6,
-            padding: '6px 8px',
-            fontSize: 13,
-            fontWeight: 500,
-            outline: 'none',
-            cursor: 'pointer',
-          }}
-        >
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name} ({p.run_count})
-            </option>
-          ))}
-        </select>
+        <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+          <select
+            value={activeProjectId}
+            onChange={(e) => setActiveProject(e.target.value)}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              background: 'var(--bg-inset)',
+              color: 'var(--text)',
+              border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-sm)',
+              padding: 'var(--space-2) var(--space-3)',
+              fontSize: 'var(--fs-body)',
+            }}
+          >
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name} ({p.run_count})
+              </option>
+            ))}
+          </select>
+          <Button
+            intent="danger"
+            size="sm"
+            onClick={deleteProject}
+            disabled={!activeProject}
+            title="Delete this project"
+            icon={<IconTrash />}
+          />
+        </div>
       </div>
 
-      {/* Runs Controls */}
       <div
         style={{
-          padding: '10px 14px',
-          borderBottom: '1px solid var(--border-dim, #30363d)',
+          padding: 'var(--space-4) var(--space-5)',
+          borderBottom: '1px solid var(--border)',
           display: 'flex',
           flexDirection: 'column',
-          gap: 8,
+          gap: 'var(--space-3)',
         }}
       >
         <input
-          type="text"
-          placeholder="Filter runs by name/tag..."
+          type="search"
+          placeholder="Filter by name or tag"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           style={{
-            background: 'var(--bg-tertiary, #0d1117)',
-            color: 'var(--text-primary, #c9d1d9)',
-            border: '1px solid var(--border-dim, #30363d)',
-            borderRadius: 4,
-            padding: '4px 8px',
-            fontSize: 12,
-            outline: 'none',
+            background: 'var(--bg-inset)',
+            color: 'var(--text)',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius-sm)',
+            padding: 'var(--space-2) var(--space-3)',
+            fontSize: 'var(--fs-meta)',
           }}
         />
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontSize: 11, color: 'var(--text-dim, #8b949e)' }}>
-            {selectedRunIds.size} of {runs.length} selected
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 'var(--space-2)',
+          }}
+        >
+          <span
+            style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: 'var(--fs-meta)',
+              color: 'var(--text-dim)',
+            }}
+          >
+            {selectedRunIds.size} / {runs.length} charted
           </span>
-          <div style={{ display: 'flex', gap: 6 }}>
-            <button
-              onClick={selectAllRuns}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: 'var(--accent, #58a6ff)',
-                fontSize: 11,
-                cursor: 'pointer',
-                padding: 0,
-              }}
-            >
+          <div style={{ display: 'flex', gap: 'var(--space-1)' }}>
+            <Button intent="ghost" size="sm" onClick={selectAllRuns}>
               All
-            </button>
-            <span style={{ color: 'var(--border-dim, #30363d)' }}>|</span>
-            <button
-              onClick={deselectAllRuns}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: 'var(--text-dim, #8b949e)',
-                fontSize: 11,
-                cursor: 'pointer',
-                padding: 0,
-              }}
-            >
+            </Button>
+            <Button intent="ghost" size="sm" onClick={deselectAllRuns}>
               None
-            </button>
-            <span style={{ color: 'var(--border-dim, #30363d)' }}>|</span>
-            <button
+            </Button>
+            <Button
+              intent="ghost"
+              size="sm"
               onClick={() => loadRuns()}
-              title="Refresh Runs"
-              style={{
-                background: 'none',
-                border: 'none',
-                color: 'var(--text-dim, #8b949e)',
-                fontSize: 11,
-                cursor: 'pointer',
-                padding: 0,
-              }}
-            >
-              ⟳
-            </button>
+              title="Refresh"
+              icon={<IconRefresh />}
+            />
           </div>
         </div>
+
+        {capApplies && (
+          <span style={{ fontSize: 'var(--fs-meta)', color: 'var(--text-faint)' }}>
+            Showing the newest {DEFAULT_SELECTION} by default — tick any run to add it.
+          </span>
+        )}
       </div>
 
-      {/* Runs List */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0' }}>
+      <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-2) 0' }}>
         {filteredRuns.length === 0 ? (
-          <div style={{ padding: '24px 14px', textAlign: 'center', color: 'var(--text-dim, #8b949e)', fontSize: 12 }}>
-            No runs found in this project.
+          <div
+            style={{
+              padding: 'var(--space-7) var(--space-5)',
+              textAlign: 'center',
+              color: 'var(--text-dim)',
+              fontSize: 'var(--fs-meta)',
+            }}
+          >
+            {runs.length === 0
+              ? 'No runs yet. Start a training run or an eval sweep and they appear here.'
+              : 'No run matches that filter.'}
           </div>
         ) : (
           filteredRuns.map((run, idx) => {
             const isSelected = selectedRunIds.has(run.id);
             const color = getRunColor(run.id, idx);
-            const isRunning = run.status === 'running';
-            const isFailed = run.status === 'failed';
 
             return (
               <div
@@ -257,188 +346,109 @@ export function RunsSidebar({
                 style={{
                   display: 'flex',
                   alignItems: 'center',
-                  padding: '6px 12px',
-                  gap: 8,
-                  fontSize: 12,
-                  cursor: 'pointer',
-                  background: isSelected ? 'rgba(56, 139, 253, 0.08)' : 'transparent',
-                  borderLeft: `3px solid ${isSelected ? color : 'transparent'}`,
-                  transition: 'background 0.15s ease',
-                }}
-                onMouseEnter={(e) => {
-                  if (!isSelected) e.currentTarget.style.background = 'rgba(255,255,255,0.03)';
-                }}
-                onMouseLeave={(e) => {
-                  if (!isSelected) e.currentTarget.style.background = 'transparent';
+                  padding: 'var(--space-3) var(--space-5)',
+                  gap: 'var(--space-3)',
+                  fontSize: 'var(--fs-meta)',
+                  background: isSelected ? 'var(--accent-dim)' : 'transparent',
+                  borderLeft: `2px solid ${isSelected ? color : 'transparent'}`,
                 }}
               >
-                {/* Eye toggle button */}
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleRunSelection(run.id);
-                  }}
+                {/* The real control. Hidden but present, so it keeps the keyboard,
+                    the focus ring and the announcement; the swatch beside it is
+                    what you actually see, tinted with the run's own line colour. */}
+                <label
                   title={isSelected ? 'Hide from charts' : 'Show in charts'}
                   style={{
-                    background: 'none',
-                    border: 'none',
-                    color: isSelected ? color : 'var(--text-dim, #484f58)',
+                    display: 'grid',
+                    placeItems: 'center',
+                    width: 14,
+                    height: 14,
+                    flex: 'none',
                     cursor: 'pointer',
-                    fontSize: 14,
-                    padding: 0,
-                    width: 18,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
+                    borderRadius: 3,
+                    border: `1px solid ${isSelected ? color : 'var(--border-strong)'}`,
+                    background: isSelected ? color : 'transparent',
                   }}
                 >
-                  {isSelected ? '👁' : '👁‍🗨'}
-                </button>
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => toggleRunSelection(run.id)}
+                    /* The wrapping label has no text (it draws a swatch), and a
+                       `title` on a label does not become the input's accessible
+                       name — so without this the control announces as an unnamed
+                       checkbox. Names the run, since a screen reader hears these
+                       one after another. */
+                    aria-label={`Chart ${run.name}`}
+                    style={{
+                      position: 'absolute',
+                      width: 1,
+                      height: 1,
+                      opacity: 0,
+                      margin: 0,
+                    }}
+                  />
+                </label>
 
-                {/* Color Dot & Run Name */}
-                <div
+                <button
+                  type="button"
                   onClick={() => openRunDetails(run)}
                   style={{
                     flex: 1,
+                    minWidth: 0,
                     display: 'flex',
                     flexDirection: 'column',
-                    overflow: 'hidden',
+                    alignItems: 'flex-start',
+                    gap: 'var(--space-1)',
+                    background: 'none',
+                    border: 'none',
+                    padding: 0,
                     cursor: 'pointer',
+                    textAlign: 'left',
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span
-                      style={{
-                        width: 8,
-                        height: 8,
-                        borderRadius: '50%',
-                        background: color,
-                        flexShrink: 0,
-                      }}
-                    />
-                    <span
-                      style={{
-                        fontWeight: 500,
-                        color: 'var(--text-primary, #c9d1d9)',
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                      }}
-                    >
-                      {run.name}
-                    </span>
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2, fontSize: 10, color: 'var(--text-dim, #8b949e)' }}>
-                    <span
-                      style={{
-                        padding: '1px 4px',
-                        borderRadius: 3,
-                        fontSize: 9,
-                        fontWeight: 600,
-                        textTransform: 'uppercase',
-                        background: isRunning
-                          ? 'rgba(46, 204, 113, 0.2)'
-                          : isFailed
-                          ? 'rgba(231, 76, 60, 0.2)'
-                          : 'rgba(52, 152, 219, 0.2)',
-                        color: isRunning ? '#2ecc71' : isFailed ? '#e74c3c' : '#3498db',
-                      }}
-                    >
+                  <span
+                    style={{
+                      maxWidth: '100%',
+                      fontWeight: 'var(--fw-medium)',
+                      fontSize: 'var(--fs-body)',
+                      color: 'var(--text)',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {run.name}
+                  </span>
+                  <span
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 'var(--space-2)',
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: 'var(--fs-micro)',
+                      color: 'var(--text-dim)',
+                    }}
+                  >
+                    <Chip kind={statusKind(run.status)} dot>
                       {run.status}
-                    </span>
-                    {run.duration_seconds > 0 && (
-                      <span>{Math.round(run.duration_seconds)}s</span>
-                    )}
-                  </div>
-                </div>
+                    </Chip>
+                    {run.duration_seconds > 0 && <span>{Math.round(run.duration_seconds)}s</span>}
+                  </span>
+                </button>
+
+                <Button
+                  intent="ghost"
+                  size="sm"
+                  onClick={() => deleteRun(run)}
+                  title={`Delete ${run.name}`}
+                  icon={<IconTrash />}
+                />
               </div>
             );
           })
         )}
       </div>
-
-      {/* New Project Modal */}
-      {showNewProjModal && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,0.6)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 9999,
-          }}
-        >
-          <form
-            onSubmit={handleCreateProj}
-            style={{
-              background: 'var(--bg-primary, #0d1117)',
-              border: '1px solid var(--border-dim, #30363d)',
-              borderRadius: 8,
-              padding: 20,
-              width: 340,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 14,
-              boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
-            }}
-          >
-            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text-primary, #c9d1d9)' }}>
-              Create New Project
-            </div>
-            <input
-              type="text"
-              placeholder="Project Name (e.g. llama3-lora-sft)"
-              value={newProjName}
-              onChange={(e) => setNewProjName(e.target.value)}
-              autoFocus
-              style={{
-                background: 'var(--bg-secondary, #161b22)',
-                border: '1px solid var(--border-dim, #30363d)',
-                borderRadius: 4,
-                padding: '8px 10px',
-                color: 'var(--text-primary, #c9d1d9)',
-                fontSize: 13,
-                outline: 'none',
-              }}
-            />
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <button
-                type="button"
-                onClick={() => setShowNewProjModal(false)}
-                style={{
-                  background: 'none',
-                  border: '1px solid var(--border-dim, #30363d)',
-                  color: 'var(--text-secondary, #8b949e)',
-                  borderRadius: 4,
-                  padding: '6px 12px',
-                  fontSize: 12,
-                  cursor: 'pointer',
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                type="submit"
-                style={{
-                  background: 'var(--accent, #1f6feb)',
-                  border: 'none',
-                  color: '#fff',
-                  borderRadius: 4,
-                  padding: '6px 14px',
-                  fontSize: 12,
-                  fontWeight: 500,
-                  cursor: 'pointer',
-                }}
-              >
-                Create
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
     </aside>
   );
 }

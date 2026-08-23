@@ -409,10 +409,107 @@
   --warning: var(--warn);
   --error: var(--danger);
 
+  /* A second wave of legacy spellings, found by the token guard
+     (`design-tokens.test.ts`). Same situation and same remedy as the block above:
+     25 files referenced these, none was ever defined, so every one of those
+     declarations was invalid at computed-value time and fell through to its
+     hardcoded hex fallback — which is why LocalTrack, Trajectories and parts of
+     games/hassault rendered a fixed dark palette in all six themes and ignored
+     the switcher entirely.
+
+     Aliased rather than renamed across 25 files, for the reason the block above
+     gives: a theming change should not rewrite two dozen unrelated modules. The
+     guard now stops any NEW one appearing. */
+  --bg-primary: var(--bg);
+  --bg-secondary: var(--bg-raised);
+  --bg-tertiary: var(--bg-elevated);
+  --border-dim: var(--border);
+  --text-primary: var(--text);
+  --text-secondary: var(--text-dim);
+  --text-muted: var(--text-dim);
+  --surface-1: var(--bg-raised);
+  --shadow-lg: var(--shadow-overlay);
+  --shadow-panel: var(--shadow-card);
+  --taskbar-btn-radius: var(--radius-sm);
+
+  /* Achievement gold — medals, graded results, the games ceremony type.
+     Declared once here rather than per theme, unlike the status colours: it is a
+     fixed brand accent (a medal is the same colour in every room) and no theme
+     has ever wanted its own. A component must still not hardcode `#f5b942`. */
+  --gold: #f5b942;
+
   /* A second accent, for the two-tone surfaces (the aurora backdrop, gradients).
      Defaults to the primary so a theme that has no opinion still renders one
      coherent hue rather than a stray fallback colour. */
   --accent-2: var(--accent);
+
+  /* ------------------------------------------------- scale (space/type/motion) --
+   *
+   * The non-colour half of the design system, and the half that was missing.
+   *
+   * There were ~1,987 inline `style={{}}` objects in the app and NO spacing, type,
+   * elevation or motion tokens, so every one of them picked its own `fontSize: 11`,
+   * `gap: 6`, `padding: '6px 0'`. Two panes docked side by side in one frame could
+   * not line up — not by accident, by construction. That is what reads as amateur
+   * even when each pane in isolation is carefully made.
+   *
+   * These values are not invented: they are the ones `datalist.css` already uses,
+   * promoted so everything else can reach for them. Deliberately theme-independent
+   * — a theme changes how the app looks, not how far apart things sit. (`--radius-*`
+   * is the exception and stays per-theme, because a radius IS part of a theme's
+   * character: midnight's 4px vs studio's 6px is the whole difference between a
+   * hairline look and a soft one.)
+   */
+
+  /* Spacing. A 2px base that opens up — the ramp the panes had already converged
+     on. `--space-4` (8px) is the default gutter inside a row. */
+  --space-0: 0;
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 12px;
+  --space-6: 16px;
+  --space-7: 24px;
+  --space-8: 32px;
+
+  /* Type. Named for the JOB, not the size, because the job is what a caller
+     knows: a row's identity is `--fs-label`, its figures are `--fs-meta`. Sizes
+     that look oddly precise (10.5, 12.5) are the measured values from
+     `datalist.css` — rounding them here would silently reflow every row. */
+  --fs-micro: 9.5px;
+  --fs-meta: 10.5px;
+  --fs-label: 11px;
+  --fs-body: 12.5px;
+  --fs-lead: 15px;
+  --fs-display: 19px;
+
+  /* Tracking. Only two non-zero values exist in the house style and both are
+     load-bearing: display type is uppercase with heavy tracking, badges slightly
+     less. Anything else should use `normal`. */
+  --tracking-display: 0.14em;
+  --tracking-badge: 0.1em;
+
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-bold: 700;
+
+  /* Elevation. Three steps, aliasing what each theme declares rather than
+     inventing a middle shadow per theme — a ramp with a step no theme designed
+     is a ramp that looks wrong in five of six themes. */
+  --elev-0: none;
+  --elev-1: var(--shadow-card);
+  --elev-2: var(--shadow-overlay);
+
+  /* Motion. `--dur-fast` is the hover/state transition, `--dur-base` the entrance.
+     `--stagger-step` is per-item and must stay small: the delay is linear in list
+     length, which is why `DataList` also caps the index (`STAGGER_CAP`). */
+  --dur-fast: 120ms;
+  --dur-base: 220ms;
+  --dur-slow: 320ms;
+  --ease-standard: ease;
+  --ease-entrance: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --stagger-step: 26ms;
 
   /* -------------------------------------------------- OS chrome (--win-*) --
    *

@@ -13,6 +13,41 @@ agent talks to.
 **Status: implemented** — backend in `backend/modules/llamacpp/`, frontend in
 `packages/core/src/modules/llamacpp/`, tests in `backend/tests/test_llamacpp.py`.
 
+
+## Agent tools
+
+This module had **none** until now, which made the fine-tuning agent's own prompt a
+description of a loop it could not run: it could convert a checkpoint and then had no
+way to serve the result — the step immediately before the eval it is told to run.
+
+| Tool | Does |
+| --- | --- |
+| `llamacpp.status` | Whether a local GGUF is being served, and which |
+| `llamacpp.list_models` | Every servable GGUF — the managed directory plus whatever Ollama and LM Studio already have — with its base model where this node trained it |
+| `llamacpp.serve` | Load a GGUF into the local server |
+| `llamacpp.stop` | Stop it, freeing the memory |
+
+`llamacpp.serve` **refuses rather than replacing** a server that is already running a
+different model. `llama-server` holds one model at a time, so serving a second means
+stopping the first — and the first may be the model the user is chatting with, which is
+not a decision a tool call should take on their behalf. Asking for the model already
+loaded is neither an error nor a reload; it reports `alreadyServing`.
+
+`wait_ready` returning False (rather than raising) when a model is too large to load is
+the trap on this path: reporting success there is how a caller comes to score a model
+that never came up and read the zero as the model's fault. `serve` turns it into an
+error.
+
+Deliberately **not** exposed: installing or removing a build, and deleting a model.
+Fetching a multi-gigabyte binary or erasing weights belongs to a person looking at a
+disk-budget readout, not to a turn that inferred it would be helpful.
+
+Note this inverts a rule recorded in two places. `roster.py` and
+[training](training.mdx) both said `llamacpp` must never appear in an agent's
+`tool_groups`, because a group is a tool name's prefix and that namespace held only
+*settings* keys — true until these tools existed, wrong after. Both comments are
+updated.
+
 ## Why this is not just another provider entry
 
 Every other local provider answers "which model are you running?" with a *name*. It

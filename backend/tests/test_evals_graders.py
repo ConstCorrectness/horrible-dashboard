@@ -7,6 +7,7 @@ is pure input and expected verdict.
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from backend.modules.evals.graders import grade_case
 from backend.modules.evals.models import EvalCase, Expect, ToolCall
@@ -167,10 +168,29 @@ def test_a_case_expecting_nothing_is_a_broken_case_not_a_pass():
     assert "no_call" in detail
 
 
-def test_judge_grading_reports_that_it_was_not_run():
-    """`judge` needs a provider, and the grader is pure. Reaching it here is a
-    runner bug, so it says so rather than silently scoring a zero."""
-    passed, detail = grade_case(case("judge", [], rubric="is it polite"), [], "hi")
+def test_a_case_cannot_select_judge_grading():
+    """`judge` is declared but nothing routes it — the judge needs a provider and
+    this module is deliberately pure — so a case asking for it fails every time it
+    runs, and the failure reads as the *model* getting it wrong. Rejected at the
+    case, where the mistake costs nothing, rather than twenty minutes into a sweep.
+    """
+    with pytest.raises(ValidationError):
+        case("judge", [], rubric="is it polite")
+
+
+def test_the_grader_still_refuses_judge_if_one_reaches_it():
+    """The validator closes the authoring paths; this is the backstop under it.
+
+    A suite file written before the validator existed still parses through the same
+    model — but a row could reach the grader by some route nobody has thought of,
+    and scoring it silently is the failure mode worth keeping a branch for.
+    """
+    unchecked = EvalCase(
+        id="c",
+        prompt="p",
+        expect=Expect.model_construct(grade="judge", calls=[], rubric="is it polite"),
+    )
+    passed, detail = grade_case(unchecked, [], "hi")
     assert not passed
     assert "judge" in detail
 

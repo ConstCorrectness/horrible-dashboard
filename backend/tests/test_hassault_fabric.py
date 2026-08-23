@@ -802,11 +802,32 @@ def test_the_browse_handler_is_registered():
 
 def test_tools_are_registered_under_the_module_prefix():
     """The orchestrator groups tools by name prefix, so the prefix has to match
-    the module id — `AgentTool.group` does not name the group."""
+    the module id — `AgentTool.group` does not name the group.
+
+    Asserted as a **set of names**, not a count. This assertion used to read
+    `len(names) == 8` and went red when the developer console added two tools; a
+    bare count tells you that something moved but not what, so the failure looks
+    identical whether a tool was added, renamed, or silently lost its prefix — and
+    losing the prefix is the actual bug this test exists to catch, since a tool
+    named outside `hassault.` lands in a group of its own and quietly stops being
+    loadable with the rest.
+    """
     from backend.sdk.registry import registry
 
     agent_tools.register_hassault_tools()
-    names = [n for n in registry.agent_tools if n.startswith("hassault.")]
-    assert len(names) == 8
+    names = {n for n in registry.agent_tools if n.startswith("hassault.")}
+    assert names == {
+        "hassault.list_maps",
+        "hassault.list_matches",
+        "hassault.host",
+        "hassault.invite",
+        "hassault.status",
+        "hassault.surroundings",
+        "hassault.add_bot",
+        "hassault.remove_bot",
+        # The developer console (see docs/modules/hassault.mdx).
+        "hassault.console_exec",
+        "hassault.run_macro",
+    }
     for name in names:
         assert registry.agent_tools[name].group == "hassault"

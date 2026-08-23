@@ -25,19 +25,21 @@ frontend `packages/core/src/modules/mcp/`.
 
 ## Contributions to the layout shell
 
-- **Panels** — `mcp.servers` ("MCP Servers", 🔌, `role: 'document'` + `dockable: 'left'` — five sections including an authoring surface do not fit a 280px rail, and `dockable` keeps the rail glyph for consulting one beside your work,
+- **Panels** — `mcp.servers` ("MCP Servers", 🔌, `role: 'document'` + `dockable: 'left'` — four sections including an authoring surface do not fit a 280px rail, and `dockable` keeps the rail glyph for consulting one beside your work,
   singleton). Configuration you consult while working, not a document you work in.
-  Three **sections**: `servers` (<kbd>s</kbd>, default), `discover` (<kbd>d</kbd>) and
-  `author` (<kbd>a</kbd>).
+  Four **sections**: `servers` (<kbd>s</kbd>, default), `discover` (<kbd>d</kbd>),
+  `author` (<kbd>a</kbd>) and `export` (<kbd>x</kbd>).
 - **Commands** — `mcp.openServers`, `mcp.addServer`, `mcp.discover`, `mcp.author`,
-  `mcp.status`.
+  `mcp.export`, `mcp.status`.
   `section.show:mcp.servers:discover` is synthesized by the registry; `mcp.discover`
   exists because that command only reveals a section of an *already open* pane.
 - **Chat** — `/mcp` lists servers inline, `/mcp open` runs `mcp.openServers`.
-- **Keybindings / settings** — none.
+- **Keybindings** — none. **Settings** — `mcp.server.exposeContent`, and it is now
+  rendered in the Export section beside the server it describes as well as in the
+  generic settings page.
 
-One pane with three sections rather than three panes: finding a server, writing one and
-running one are the same object at three moments. Discover hands its result straight to
+One pane with four sections rather than four panes: finding a server, writing one,
+running one and *being* one are the same object at four moments. Discover hands its result straight to
 Servers, and a scaffolded project *becomes* an ordinary row in Servers the moment it is
 provisioned. Splitting them would mean three copies of the config shape and a hand-off
 across every pane boundary.
@@ -398,6 +400,22 @@ says plainly when a tool isn't annotated read-only.
 the agent cannot: a nine-second tool will make every turn that touches it feel broken, and
 that is invisible in a result body.
 
+## Browsing a server's resources
+
+The inspector's **Resources** view lists every resource the server advertises and reads
+one on click.
+
+`readResource` had been exported from the API client since the module landed with **no
+consumer at all**: the tool list showed a count and the first URI followed by an
+ellipsis, so a server offering forty documents looked the same as one offering two and
+neither could be opened.
+
+Content is rendered raw, for the same reason the skill preview is: a resource is
+whatever the server says it is, and prettifying it here would hide exactly the malformed
+payload you opened the view to look at. A resource with no text is reported by MIME type
+and byte count rather than decoded — guessing at an encoding is how a binary ends up in
+a `<pre>` as mojibake.
+
 ## The conformance suite
 
 Run from the inspector's **Check** view against any connected server, third-party ones
@@ -455,7 +473,27 @@ The other direction: horrible-dashboard **as** an MCP server, so an external age
 It is an **interpretability surface, not a control surface**. Every exported tool is
 read-only — nothing can open a pane, run a command, edit a file, or start a turn. A test
 asserts that every tool carries `readOnlyHint`, because a write tool here would turn a
-bearer token into remote control of the node.
+bearer token into remote control of the node. The pane says this out loud, because "MCP
+server" reads like "remote control" to most people and the distinction is the whole
+safety argument.
+
+### It has a UI now
+
+All of the above shipped with **no frontend consumer whatsoever**: `GET /api/mcp/export`
+and `POST /api/mcp/export/token` existed and nothing called them. There was no way to see
+whether the export was mounted, no way to reveal or rotate the bearer token, and nowhere
+that named the environment variable which enables it. The one thing that did surface was
+`mcp.server.exposeContent`, sitting in the generic settings page describing a server the
+user had no way to know existed.
+
+The `export` section renders that state: whether it is mounted, the mount path, whether a
+token exists, and the content-disclosure toggle in the place it actually applies.
+
+Two details are deliberate. The **token is never in the status payload** — `hasToken` is,
+and revealing the value is a separate explicit action, because it grants read access to
+this node's trajectories and telemetry. And **rotating asks first, naming the
+consequence**: the old token stops working immediately, so any Claude Desktop config or
+CI job already holding it breaks until it is updated.
 
 | Tool | Answers |
 | --- | --- |
@@ -509,6 +547,13 @@ manager and is a no-op when the export is disabled.
 - **Watching the filesystem.** A save made *in this pane* restarts the server; a save
   made in an external editor does not, because nothing is watching the project
   directory. The restart is a route, not a watcher.
+
+  This is also why the Author section still has its own textarea rather than opening
+  the file in the [editor](editor.mdx), which would be a better text control in every
+  other respect. The editor writes through the files module, which knows nothing about
+  MCP, so the swap would trade a bare textarea for a save that silently leaves the
+  running server on the old code. The textarea does now carry a dirty marker and warns
+  before discarding an edit, which were the parts that were simply broken.
 - **Publishing an authored server.** Scaffolding produces a project that runs here; it
   has no path to the registry, a git remote, or a package. That is a real gap for anyone
   who writes something worth sharing.

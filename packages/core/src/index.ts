@@ -21,6 +21,18 @@ export {
   type DataRowProps,
   type RowKind,
 } from './DataList';
+/** The shared control primitives — button, chip, pane header, empty state,
+ * labelled field. See Primitives.tsx: the layer between the design tokens and a
+ * pane, so the things AROUND a list look as consistent as the list does. */
+export {
+  Button,
+  Chip,
+  EmptyState,
+  Field,
+  PaneHeader,
+  type ButtonIntent,
+  type ButtonProps,
+} from './Primitives';
 export {
   installExternalLinkBridge,
   isDesktopShell,

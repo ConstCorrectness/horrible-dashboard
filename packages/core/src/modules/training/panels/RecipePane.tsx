@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import { Button } from '../../../Primitives';
+import { registry } from '../../../registry';
+import { startServer } from '../../llamacpp/api';
 import { usePaneParams } from '../../../panes';
 import {
   applyRecipe,
@@ -150,6 +153,16 @@ function ConvertCard({ projectId }: { projectId: string }) {
   const [outType, setOutType] = useState('f16');
   const [log, setLog] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  /**
+   * The GGUF the last conversion produced, and whether it can be served alone.
+   *
+   * Kept so the card can hand off. Converting used to end in a sentence telling
+   * you to go to another pane and start a server yourself — the training frame
+   * docks those panes side by side and still nothing connected them, so the step
+   * between "I have a fine-tune" and "I can score it" was manual every time.
+   */
+  const [produced, setProduced] = useState<{ path: string; servable: boolean } | null>(null);
+  const [serving, setServing] = useState(false);
 
   const refresh = useCallback(() => {
     void listCheckpoints(projectId)
@@ -172,6 +185,7 @@ function ConvertCard({ projectId }: { projectId: string }) {
     setBusy(true);
     setLog([]);
     try {
+      setProduced(null);
       await convertCheckpoint(projectId, { checkpoint: selected, outType }, (event) => {
         if (event.error) setLog((l) => [...l, `error: ${String(event.error)}`]);
         else if (event.status === 'done')
@@ -179,9 +193,11 @@ function ConvertCard({ projectId }: { projectId: string }) {
             ...l,
             `done — ${String(event.path)} (${bytes(Number(event.sizeBytes ?? 0))})`,
             event.servable
-              ? 'It is in the llama.cpp catalog now; start a server on it from that pane.'
+              ? 'It is in the llama.cpp catalog now.'
               : 'This is a LoRA adapter: llama-server loads it with --lora beside its base model, not on its own.',
           ]);
+        if (event.status === 'done')
+          setProduced({ path: String(event.path ?? ''), servable: Boolean(event.servable) });
         else setLog((l) => [...l, String(event.status ?? '')]);
       });
     } catch (err) {
@@ -193,6 +209,41 @@ function ConvertCard({ projectId }: { projectId: string }) {
   };
 
   const current = checkpoints.find((c) => c.relPath === selected);
+
+  /**
+   * Serve what was just converted, without leaving the pane.
+   *
+   * `llama-server` holds one model at a time and `spawn` refuses while another is
+   * running, so this reports that refusal rather than stopping the running server
+   * on the user's behalf — it may be the model their chat is pointed at.
+   */
+  const serve = async () => {
+    if (!produced?.servable) return;
+    setServing(true);
+    try {
+      // gpuLayers/threads deliberately omitted: null means "let the hardware probe
+      // decide", and sending a concrete value here is how a machine with a GPU
+      // ends up running on CPU.
+      // No `wait`: `SpawnRequest.wait` already defaults to true on the backend, and
+      // restating a default in the client is how the two come to disagree.
+      await startServer({ modelPath: produced.path });
+      setLog((l) => [...l, `serving ${produced.path}`]);
+    } catch (err) {
+      setLog((l) => [
+        ...l,
+        err instanceof Error ? err.message : String(err),
+        'If a server is already running, stop it from the llama.cpp pane first.',
+      ]);
+    } finally {
+      setServing(false);
+    }
+  };
+
+  /** Open the evals pane on its Run section, with this model waiting to be picked. */
+  const score = () => {
+    registry.openPanel('evals.hub');
+    void registry.runCommand('section.show:evals.hub:run');
+  };
 
   return (
     <div style={card}>
@@ -231,6 +282,29 @@ function ConvertCard({ projectId }: { projectId: string }) {
               An adapter, not a model — it converts with llama.cpp&rsquo;s LoRA converter and its
               base model is read from <code>adapter_config.json</code>.
             </p>
+          )}
+          {/* The hand-off. Offered only once there is a file, and only when it is
+              servable — an adapter needs a base model beside it, so a Serve button
+              on one would produce nonsense. */}
+          {produced?.servable && (
+            <div
+              style={{
+                display: 'flex',
+                gap: 'var(--space-2)',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+              }}
+            >
+              <Button size="sm" intent="primary" disabled={serving} onClick={() => void serve()}>
+                {serving ? 'Starting…' : 'Serve this'}
+              </Button>
+              <Button size="sm" onClick={score}>
+                Score it
+              </Button>
+              <span style={{ ...dim, fontSize: 11 }}>
+                Serve it locally, then sweep it against its base in Evals.
+              </span>
+            </div>
           )}
         </>
       )}

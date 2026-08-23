@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Generator
 
 from backend import paths
+from backend.modules.localtrack import stream
 from backend.modules.localtrack.downsampling import ema_smooth, lttb
 from backend.modules.localtrack.models import (
     MetricLogItem,
@@ -103,6 +104,21 @@ def init_db() -> None:
                 content_type TEXT DEFAULT 'application/octet-stream',
                 created_at TEXT NOT NULL,
                 FOREIGN KEY (run_id) REFERENCES lt_runs(id) ON DELETE CASCADE
+            );
+
+            -- The pane's panel arrangement, per project.
+            --
+            -- It lived in `localStorage` under `localtrack_panels_<projectId>`,
+            -- which is per-browser-origin: the arrangement you built in the
+            -- browser layout was invisible in the desktop shell and vice versa,
+            -- and clearing site data silently reset it. Stored as an opaque blob
+            -- the backend never interprets — the `/api/flows` precedent, and the
+            -- reason a new panel type needs no migration here.
+            CREATE TABLE IF NOT EXISTS lt_layouts (
+                project_id TEXT PRIMARY KEY,
+                panels_json TEXT NOT NULL DEFAULT '[]',
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (project_id) REFERENCES lt_projects(id) ON DELETE CASCADE
             );
 
             CREATE INDEX IF NOT EXISTS idx_lt_runs_project ON lt_runs(project_id);
@@ -268,6 +284,8 @@ def create_run(
             (now, project_id),
         )
 
+    stream.publish("run_created", {"runId": rid, "projectId": project_id, "name": rname})
+
     return RunModel(
         id=rid,
         project_id=project_id,
@@ -332,14 +350,27 @@ def update_run(
                 tuple(params),
             )
 
-    return get_run(run_id)
+    updated = get_run(run_id)
+    if updated is not None:
+        stream.publish(
+            "run_updated",
+            {
+                "runId": run_id,
+                "projectId": updated.project_id,
+                "status": updated.status,
+            },
+        )
+    return updated
 
 
 def delete_run(run_id: str) -> bool:
     init_db()
     with get_conn() as conn:
         cur = conn.execute("DELETE FROM lt_runs WHERE id = ?", (run_id,))
-        return cur.rowcount > 0
+        deleted = cur.rowcount > 0
+    if deleted:
+        stream.publish("run_deleted", {"runId": run_id})
+    return deleted
 
 
 def _row_to_run(r: sqlite3.Row) -> RunModel:
@@ -404,6 +435,12 @@ def ingest_metrics(items: list[MetricLogItem]) -> int:
                     "UPDATE lt_runs SET summary_json = ? WHERE id = ?",
                     (json.dumps(curr_summary), run_id),
                 )
+
+    # Announce AFTER the commit, never before: a pane that refetches on the event
+    # would otherwise race the writer and read the pre-write state, which looks
+    # exactly like a dropped point.
+    for run_id, summary_updates in latest_summaries.items():
+        stream.publish_metrics(run_id, list(summary_updates))
 
     return len(rows_to_insert)
 
@@ -581,4 +618,44 @@ def get_artifact(artifact_id: str) -> RunArtifactModel | None:
             size_bytes=r["size_bytes"] or 0,
             content_type=r["content_type"] or "application/octet-stream",
             created_at=r["created_at"],
+        )
+
+
+# --- Panel layout (opaque blob, per project) ---
+
+
+def get_layout(project_id: str) -> list[dict[str, Any]] | None:
+    """The saved panel arrangement, or None when the project has never saved one.
+
+    None and `[]` are different answers and the caller depends on it: None means
+    "use the defaults", while an empty list means "the user removed every panel".
+    Collapsing them would make a deliberately cleared workspace spring back to the
+    four default charts on every reload.
+    """
+    init_db()
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT panels_json FROM lt_layouts WHERE project_id = ?", (project_id,)
+        ).fetchone()
+    if row is None:
+        return None
+    try:
+        parsed = json.loads(row["panels_json"])
+    except (TypeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, list) else None
+
+
+def save_layout(project_id: str, panels: list[dict[str, Any]]) -> None:
+    init_db()
+    with get_conn() as conn:
+        conn.execute(
+            """
+            INSERT INTO lt_layouts (project_id, panels_json, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(project_id) DO UPDATE SET
+                panels_json = excluded.panels_json,
+                updated_at = excluded.updated_at
+            """,
+            (project_id, json.dumps(panels), _utc_now_iso()),
         )

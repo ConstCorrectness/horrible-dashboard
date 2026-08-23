@@ -1,9 +1,49 @@
+/**
+ * The chart workspace: the filtered grid of metric panels.
+ *
+ * Converted to the shared primitives and the scale tokens. The three emoji that
+ * were doing icon duty here (🔍 in the filter, ✕ to clear it, 📊 in the empty
+ * state) are gone — the first two are vector strokes, and the third was pure
+ * decoration on a message that is better off saying what to do.
+ *
+ * The empty state also stopped conflating two different situations. "You have no
+ * panels" and "your filter matches none of them" want opposite advice, and the
+ * single message covering both ("No panels match your filter or none are
+ * configured") gave neither.
+ */
 import { useMemo, useState } from 'react';
+
+import { Button, EmptyState } from '../../../Primitives';
 import { useLocalTrackStore } from '../store';
 import { AddPanelModal } from './AddPanelModal';
 import { BarPanel } from './BarPanel';
 import { ChartPanel } from './ChartPanel';
 import { ScalarPanel } from './ScalarPanel';
+
+const stroke = {
+  fill: 'none',
+  stroke: 'currentColor',
+  strokeWidth: 1.6,
+  strokeLinecap: 'round' as const,
+  strokeLinejoin: 'round' as const,
+};
+
+function IconSearch() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" {...stroke} aria-hidden>
+      <circle cx="5" cy="5" r="3.2" />
+      <path d="M7.4 7.4 10.5 10.5" />
+    </svg>
+  );
+}
+
+function IconClear() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 12 12" {...stroke} aria-hidden>
+      <path d="M3 3l6 6M9 3l-6 6" />
+    </svg>
+  );
+}
 
 export function WorkspaceGrid() {
   const {
@@ -18,20 +58,23 @@ export function WorkspaceGrid() {
 
   const [showAddModal, setShowAddModal] = useState(false);
 
-  // Regex-filtered panels
   const visiblePanels = useMemo(() => {
     if (!searchRegex.trim()) return panels;
     try {
       const re = new RegExp(searchRegex.trim(), 'i');
       return panels.filter((p) => re.test(p.title) || re.test(p.metricKey));
     } catch {
-      // Fallback to substring match if regex is incomplete
+      // A half-typed regex ("eval/[") is a normal intermediate state, not an
+      // error — falling back to substring keeps the list responsive per keystroke
+      // instead of emptying it until the brackets balance.
       const q = searchRegex.toLowerCase();
       return panels.filter(
-        (p) => p.title.toLowerCase().includes(q) || p.metricKey.toLowerCase().includes(q)
+        (p) => p.title.toLowerCase().includes(q) || p.metricKey.toLowerCase().includes(q),
       );
     }
   }, [panels, searchRegex]);
+
+  const filtering = searchRegex.trim().length > 0;
 
   return (
     <div
@@ -41,62 +84,70 @@ export function WorkspaceGrid() {
         flexDirection: 'column',
         height: '100%',
         overflow: 'hidden',
-        background: 'var(--bg-primary, #0d1117)',
+        background: 'var(--bg)',
       }}
     >
-      {/* Top Workspace Toolbar */}
       <div
         style={{
-          padding: '10px 18px',
-          borderBottom: '1px solid var(--border-dim, #30363d)',
+          padding: 'var(--space-4) var(--space-6)',
+          borderBottom: '1px solid var(--border)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          gap: 16,
-          background: 'var(--bg-secondary, #161b22)',
+          gap: 'var(--space-6)',
+          background: 'var(--bg-raised)',
           flexWrap: 'wrap',
         }}
       >
-        {/* Left: Regex Filter Search Bar */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, maxWidth: 360 }}>
-          <span style={{ fontSize: 14, color: 'var(--text-dim, #8b949e)' }}>🔍</span>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 'var(--space-3)',
+            flex: 1,
+            maxWidth: 360,
+            color: 'var(--text-dim)',
+          }}
+        >
+          <IconSearch />
           <input
             type="text"
-            placeholder="Regex filter panels (e.g. .*loss.*, acc)..."
+            placeholder="Filter panels — regex or plain text"
             value={searchRegex}
             onChange={(e) => setSearchRegex(e.target.value)}
             style={{
               width: '100%',
-              background: 'var(--bg-tertiary, #0d1117)',
-              color: 'var(--text-primary, #c9d1d9)',
-              border: '1px solid var(--border-dim, #30363d)',
-              borderRadius: 6,
-              padding: '6px 10px',
-              fontSize: 12,
-              outline: 'none',
+              background: 'var(--bg-inset)',
+              color: 'var(--text)',
+              border: '1px solid var(--border)',
+              borderRadius: 'var(--radius-sm)',
+              padding: 'var(--space-2) var(--space-4)',
+              fontSize: 'var(--fs-meta)',
             }}
           />
-          {searchRegex && (
-            <button
+          {filtering && (
+            <Button
+              intent="ghost"
+              size="sm"
               onClick={() => setSearchRegex('')}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: 'var(--text-dim, #8b949e)',
-                cursor: 'pointer',
-              }}
-            >
-              ✕
-            </button>
+              title="Clear filter"
+              icon={<IconClear />}
+            />
           )}
         </div>
 
-        {/* Right: Smoothing Slider & Add Panel */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          {/* EMA Smoothing Slider */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 12, color: 'var(--text-secondary, #8b949e)', fontWeight: 500 }}>
-              EMA Smoothing:
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-6)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
+            <span
+              style={{
+                fontSize: 'var(--fs-meta)',
+                fontWeight: 'var(--fw-bold)',
+                letterSpacing: 'var(--tracking-badge)',
+                textTransform: 'uppercase',
+                color: 'var(--text-dim)',
+              }}
+            >
+              Smoothing
             </span>
             <input
               type="range"
@@ -105,110 +156,73 @@ export function WorkspaceGrid() {
               step="0.01"
               value={globalSmoothing}
               onChange={(e) => setGlobalSmoothing(parseFloat(e.target.value))}
-              style={{
-                width: 110,
-                cursor: 'pointer',
-                accentColor: 'var(--accent, #58a6ff)',
-              }}
+              aria-label="EMA smoothing"
+              style={{ width: 110, cursor: 'pointer', accentColor: 'var(--accent)' }}
             />
             <span
               style={{
-                fontSize: 12,
-                fontWeight: 600,
-                color: 'var(--text-primary, #c9d1d9)',
+                fontSize: 'var(--fs-meta)',
+                fontFamily: 'var(--font-mono)',
+                color: 'var(--text)',
                 minWidth: 32,
-                fontFamily: 'monospace',
+                // Without tabular figures the readout jiggles as you drag,
+                // because the digits are different widths.
+                fontVariantNumeric: 'tabular-nums',
               }}
             >
               {globalSmoothing.toFixed(2)}
             </span>
           </div>
 
-          <div style={{ height: 18, width: 1, background: 'var(--border-dim, #30363d)' }} />
+          <div style={{ height: 18, width: 1, background: 'var(--border)' }} />
 
-          {/* Reset Layout */}
-          <button
-            onClick={resetPanels}
-            title="Reset default panels"
-            style={{
-              background: 'none',
-              border: '1px solid var(--border-dim, #30363d)',
-              color: 'var(--text-secondary, #8b949e)',
-              borderRadius: 6,
-              padding: '6px 10px',
-              fontSize: 12,
-              cursor: 'pointer',
-            }}
-          >
+          <Button size="sm" onClick={resetPanels} title="Restore the default panels">
             Reset
-          </button>
-
-          {/* + Add Panel Button */}
-          <button
-            onClick={() => setShowAddModal(true)}
-            style={{
-              background: 'var(--accent, #1f6feb)',
-              border: 'none',
-              color: '#fff',
-              borderRadius: 6,
-              padding: '6px 14px',
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              boxShadow: '0 2px 6px rgba(31, 111, 235, 0.4)',
-            }}
-          >
-            <span>+</span> Add Panel
-          </button>
+          </Button>
+          <Button intent="primary" size="sm" onClick={() => setShowAddModal(true)}>
+            Add panel
+          </Button>
         </div>
       </div>
 
-      {/* Grid Content Area */}
-      <div
-        style={{
-          flex: 1,
-          overflowY: 'auto',
-          padding: 16,
-        }}
-      >
+      <div style={{ flex: 1, overflowY: 'auto', padding: 'var(--space-6)' }}>
         {visiblePanels.length === 0 ? (
-          <div
-            style={{
-              height: '100%',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: 'var(--text-dim, #8b949e)',
-              gap: 12,
-            }}
-          >
-            <span style={{ fontSize: 24 }}>📊</span>
-            <span>No panels match your filter or none are configured.</span>
-            <button
-              onClick={() => setShowAddModal(true)}
-              style={{
-                background: 'var(--accent, #1f6feb)',
-                color: '#fff',
-                border: 'none',
-                borderRadius: 4,
-                padding: '6px 12px',
-                fontSize: 12,
-                cursor: 'pointer',
-              }}
+          filtering ? (
+            <EmptyState
+              title="No panel matches"
+              actions={
+                <Button size="sm" onClick={() => setSearchRegex('')}>
+                  Clear filter
+                </Button>
+              }
             >
-              + Add Panel
-            </button>
-          </div>
+              Nothing in this workspace matches <code>{searchRegex}</code>. The filter reads as a
+              regular expression, falling back to plain text while it is incomplete.
+            </EmptyState>
+          ) : (
+            <EmptyState
+              title="No panels"
+              actions={
+                <>
+                  <Button intent="primary" size="sm" onClick={() => setShowAddModal(true)}>
+                    Add panel
+                  </Button>
+                  <Button size="sm" onClick={resetPanels}>
+                    Restore defaults
+                  </Button>
+                </>
+              }
+            >
+              Add a chart for any metric your runs have logged, or restore the four defaults
+              (training loss, eval loss, eval accuracy, learning rate).
+            </EmptyState>
+          )
         ) : (
           <div
             style={{
               display: 'grid',
               gridTemplateColumns: 'repeat(auto-fill, minmax(420px, 1fr))',
-              gap: 16,
+              gap: 'var(--space-6)',
               alignItems: 'start',
             }}
           >
@@ -224,19 +238,11 @@ export function WorkspaceGrid() {
               }
               if (panel.chartType === 'bar') {
                 return (
-                  <BarPanel
-                    key={panel.id}
-                    panel={panel}
-                    onRemove={() => removePanel(panel.id)}
-                  />
+                  <BarPanel key={panel.id} panel={panel} onRemove={() => removePanel(panel.id)} />
                 );
               }
               return (
-                <ChartPanel
-                  key={panel.id}
-                  panel={panel}
-                  onRemove={() => removePanel(panel.id)}
-                />
+                <ChartPanel key={panel.id} panel={panel} onRemove={() => removePanel(panel.id)} />
               );
             })}
           </div>

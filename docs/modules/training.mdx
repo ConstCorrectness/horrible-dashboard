@@ -236,6 +236,36 @@ its delete route may touch — so a model you trained is one this node serves. S
   `q8_0`). `q4_k_m` is a separate `llama-quantize` step and is deliberately not
   offered, because offering it and silently producing f16 would be worse.
 
+### The conversion records where the file came from
+
+`lineage.py` writes one row per produced GGUF into `app.db`, keyed by its path.
+
+Before it, a file called `my-project-checkpoint-1200-f16.gguf` in the llama.cpp
+catalog told you a project id and nothing else — not the base model it was fine-tuned
+from, not the recipe that produced it. "Score my fine-tune against its base" needs
+that first one, and it was something you had to remember by hand.
+
+**The GGUF path is the join key**, which is what keeps this a provenance row rather
+than a workflow engine: `RunTarget.model_path` already names a file and
+`_output_path` already writes a deterministic name, so everything downstream keys off
+the path already. **One writer** — `convert.py`, at the one moment every field is
+known. Several readers: `GET /api/evals/targets` labels a target *"fine-tune of
+&lt;base&gt;"* and carries `baseModel`, and `llamacpp.list_models` reports the same.
+
+Two details that decide whether it works:
+
+- **The base model falls back to the recipe.** `run_conversion`'s `base_model`
+  argument is only *required* for a LoRA (an adapter is meaningless without one), so
+  for a full fine-tune it is empty and the recipe is the only place the base is
+  recorded. Reading the argument alone would leave every full fine-tune with no base
+  — that is, with the feature not working in the common case.
+- **The recipe is snapshotted, not referenced.** `recipe.json` keeps changing as you
+  tune the next run, and a row saying "trained with lr=2e-4" has to keep meaning that
+  after you try 1e-4.
+
+Writing the row can never fail a conversion: `lineage.record` swallows, because the
+GGUF is on disk and servable whether or not the bookkeeping lands.
+
 ## The notebook pane & kernel sessions
 
 `training.notebook` is a **native cell UI** (CodeMirror cells, non-singleton, opened
@@ -287,6 +317,40 @@ run) drives them through the `horrible_train` helper's sentinel events:
   selected run. `metrics.py` keeps a per-run ring buffer (`training.metrics.bufferPoints`,
   default 5000) so a chart opened mid-run backfills via `watch_run`, and coalesces the
   wire to ≤20 events/s per run while keeping every point server-side.
+
+  **And they persist now.** They used to live *only* in that ring buffer, so they died
+  with the backend process: you could fine-tune for six hours, restart the app, and have
+  nothing but a checkpoint. Meanwhile [localtrack](localtrack.mdx) — the module whose
+  entire job is keeping exactly this — had one producer (the evals sweep) and four
+  default charts (`train/loss`, `eval/loss`, `eval/accuracy`, `train/learning_rate`)
+  that **nothing had ever written**. Those are Hugging Face `Trainer` key names and
+  `ht.callback()` emits precisely them, so connecting the two fills the default
+  workspace on the first run.
+
+  Three decisions about where that hook goes:
+
+  - **In `metrics.record_event`, not in `horrible_train`.** The helper's contract is
+    zero dependencies and a stdout sentinel protocol; giving it an HTTP client breaks
+    the Kaggle and Colab push, which run it on someone else's machine.
+  - **Not through `report_to`.** That is a Hugging Face field with known integration
+    names — an unknown one is a runtime error, not a no-op. `ht.callback()` is already
+    additive and installed regardless of `report_to`, which is exactly why it is the
+    right carrier. `localtrack` is deliberately *not* added to `recipes.TRACKERS`.
+  - **Every point, not the coalesced wire.** The wire drops intermediates at 20/s
+    because a chart cannot draw faster; a store has no such excuse, and a loss curve
+    missing 90% of its points is not the curve.
+
+  The localtrack project is the **training project's id**, so each project keeps its own
+  run history — deliberately unlike the evals sweep, which files everything under one
+  hardcoded `evals` project. The mirroring itself is
+  `localtrack.mirror.RunMirror`, shared with that sweep so the swallow-everything
+  posture cannot drift between two copies.
+
+  One honest limit: the helper emits no "finished" event and kernel lifecycle lives in
+  shared `notebook_core`, so a run is marked finished when a **new run supersedes it**
+  for the same project, or at backend shutdown. A run whose process merely died stays
+  `running` until the next one starts — visible in the pane, and better than guessing
+  from a timeout.
 The four panes below are declared **`embedded`**: they are companion strips of the
 notebook they ride on, reached with their region keys or the `Training: Open …`
 commands (which reveal the strip rather than opening a pane). `training.metrics` is
@@ -364,6 +428,15 @@ on demand or by keyword) so they don't bloat the model's tool budget:
   `list_projects`, `project_status` (read-only); `create_project`, `fetch_data`,
   `install_deps`, `start_run`, `stop_run`, `push`, `render_manim` (side-effecting, gated
   by the agent permission engine with a `specifierTemplate` like `{provider}:{ref}`).
+
+  Plus the two that close the loop: `training.list_checkpoints` (read-only — checkpoint
+  names are not guessable, so this is the call before the next one) and
+  `training.convert`, which turns a checkpoint into a GGUF in llama.cpp's managed
+  directory. `convert` drains the conversion's NDJSON stream and reports only the
+  outcome: the route streams it so a pane can show a progress log, but an agent has
+  nowhere to put hundreds of progress lines and would pay for every one in context. It
+  takes minutes and is deliberately *not* backgroundable the way `start_run` is —
+  there is no id to poll afterwards, the answer **is** the output path.
 - **`training` — frontend tools** (`agentTools` on the `training.notebook` panel). Full
   cell CRUD + execute against the pane's session store: `training.list_cells`,
   `read_cell`, `kernel_status` (read-only); `insert_cell`, `edit_cell`, `delete_cell`,
@@ -478,11 +551,18 @@ the furniture. The roster spec permits `training`, `evals`, `localtrack`, `edito
 and `files`, and **preloads only `training`**, so reading a recipe costs a
 `load_tools` rather than schema space on every turn.
 
-`llamacpp` and `hardware` deliberately do **not** appear in that list. A group is a
-tool name's prefix (`_group_of`), and those two namespaces hold *settings* keys
-(`llamacpp.diskBudgetGb`, `hardware.vramMb`) rather than tools — so listing one
-would silently permit nothing at all, which is the same trap the connectors rule
-names when it says a connector id must equal its tool prefix.
+`llamacpp` **now appears in that list, and used not to.** The original reasoning was
+right: a group is a tool name's prefix (`_group_of`), the `llamacpp.*` namespace held
+only *settings* keys (`llamacpp.diskBudgetGb`), and listing it would have silently
+permitted nothing at all — the same trap the connectors rule names when it says a
+connector id must equal its tool prefix.
+
+That stopped being true the moment [llama.cpp](llamacpp.mdx) grew real agent tools.
+Without the group this agent could convert a checkpoint and then had no way to serve
+it, which is the step immediately before the eval its own prompt tells it to run. It
+is permitted but **not preloaded** — this flow already sits close to `TOOL_BUDGET`.
+
+`hardware` still does not appear, for the original reason: settings keys only.
 
 ## Contributions to the Layout Shell
 
@@ -499,6 +579,7 @@ names when it says a connector id must equal its tool prefix.
 | Regions on `training.notebook` | metrics/architecture/rollout/manim/peers on the right strip, projects on the left |
 | Layout preset `training` (🧠) | the fine-tuning workspace — see [The fine-tuning workspace](#the-fine-tuning-workspace) |
 | Commands | `training.open`, `training.openRecipe`, `training.openMetrics`, `training.openModelGraph`, `training.openRollout`, `training.openManim`, `training.openPeers` |
+| Recipe pane hand-off | after a conversion, **Serve this** starts a local llama-server on the new GGUF and **Score it** opens Evals on its Run section. The training frame already docked those panes together; nothing connected them |
 | Project row actions | open notebook, 🧪 recipe, ⇪ push to Kaggle, ⇪ push to Colab, delete |
 | Connector `trackers` | W&B API key + MLflow tracking URI, Fernet-encrypted. The one connector contributing **no agent tools**, so its id names no tool group |
 | Settings | `training.projectsRoot`, `training.defaultPython`, `training.kaggle.username`, `training.kaggle.key`, `training.hf.token`, `training.google.clientId`, `training.google.clientSecret`, `training.metrics.bufferPoints`, `training.manim.quality`, `training.fabric.advertise`, `training.fabric.note` |

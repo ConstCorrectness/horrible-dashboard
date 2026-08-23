@@ -132,3 +132,23 @@ export function pullAgentModel(
     onProgress(p);
   });
 }
+
+/** One loadable tool group: the unit a skill's `allowed-tools` activates. */
+export interface ToolGroup {
+  name: string;
+  description: string;
+  tools: number;
+}
+
+/**
+ * Every tool group the agent could load, with its blurb and tool count.
+ *
+ * `connected: false` means no browser socket was attached when the backend built
+ * the list, so the frontend-contributed groups (editor, files, layout…) are
+ * missing from it — backend groups, including every connected MCP server, are
+ * still there. A caller showing this to a human should say so rather than
+ * presenting a short list as the whole catalog.
+ */
+export function listToolGroups(): Promise<{ groups: ToolGroup[]; connected: boolean }> {
+  return apiGet<{ groups: ToolGroup[]; connected: boolean }>('/agent/tool-groups');
+}

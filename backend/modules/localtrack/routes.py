@@ -29,18 +29,39 @@ from backend.modules.localtrack.models import (
 router = APIRouter(tags=["localtrack"])
 
 
+# --- Panel layout ---
+
+
+@router.get("/api/localtrack/projects/{project_id}/layout")
+async def get_layout(project_id: str) -> dict[str, Any]:
+    """The saved panel arrangement for a project.
+
+    `panels: null` means "never saved one" and the pane should use its defaults;
+    `panels: []` means the user removed every panel. Two different answers — see
+    `store.get_layout`.
+    """
+    return {"panels": store.get_layout(project_id)}
+
+
+@router.put("/api/localtrack/projects/{project_id}/layout")
+async def put_layout(project_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    panels = body.get("panels")
+    if not isinstance(panels, list):
+        raise HTTPException(status_code=400, detail="panels must be a list")
+    store.save_layout(project_id, panels)
+    return {"ok": True}
+
+
 # --- Projects Endpoints ---
 
 
 @router.get("/api/localtrack/projects", response_model=ProjectListResponse)
-@router.get("/api/projects", response_model=ProjectListResponse)
 async def list_projects() -> ProjectListResponse:
     """List all projects with run counts and activity timestamps."""
     return ProjectListResponse(projects=store.list_projects())
 
 
 @router.post("/api/localtrack/projects", response_model=ProjectModel)
-@router.post("/api/projects", response_model=ProjectModel)
 async def create_project(req: CreateProjectRequest) -> ProjectModel:
     """Create or update a project."""
     return store.create_project(
@@ -51,7 +72,6 @@ async def create_project(req: CreateProjectRequest) -> ProjectModel:
 
 
 @router.get("/api/localtrack/projects/{project_id}", response_model=ProjectModel)
-@router.get("/api/projects/{project_id}", response_model=ProjectModel)
 async def get_project(project_id: str) -> ProjectModel:
     """Get project details."""
     proj = store.get_project(project_id)
@@ -61,7 +81,6 @@ async def get_project(project_id: str) -> ProjectModel:
 
 
 @router.delete("/api/localtrack/projects/{project_id}")
-@router.delete("/api/projects/{project_id}")
 async def delete_project(project_id: str) -> dict[str, Any]:
     """Delete a project and its associated runs/metrics."""
     if project_id == "default":
@@ -76,7 +95,6 @@ async def delete_project(project_id: str) -> dict[str, Any]:
 
 
 @router.get("/api/localtrack/runs", response_model=RunListResponse)
-@router.get("/api/runs", response_model=RunListResponse)
 async def list_runs(
     project_id: str | None = Query(None, description="Filter by project ID"),
 ) -> RunListResponse:
@@ -85,7 +103,6 @@ async def list_runs(
 
 
 @router.post("/api/localtrack/runs", response_model=RunModel)
-@router.post("/api/runs", response_model=RunModel)
 async def create_run(req: CreateRunRequest) -> RunModel:
     """Create a new experiment run."""
     return store.create_run(
@@ -99,7 +116,6 @@ async def create_run(req: CreateRunRequest) -> RunModel:
 
 
 @router.get("/api/localtrack/runs/{run_id}", response_model=RunModel)
-@router.get("/api/runs/{run_id}", response_model=RunModel)
 async def get_run(run_id: str) -> RunModel:
     """Get a single run by ID."""
     run = store.get_run(run_id)
@@ -109,7 +125,6 @@ async def get_run(run_id: str) -> RunModel:
 
 
 @router.patch("/api/localtrack/runs/{run_id}", response_model=RunModel)
-@router.patch("/api/runs/{run_id}", response_model=RunModel)
 async def update_run(run_id: str, req: UpdateRunRequest) -> RunModel:
     """Update run status, config, summary, or metadata."""
     run = store.update_run(
@@ -128,7 +143,6 @@ async def update_run(run_id: str, req: UpdateRunRequest) -> RunModel:
 
 
 @router.delete("/api/localtrack/runs/{run_id}")
-@router.delete("/api/runs/{run_id}")
 async def delete_run(run_id: str) -> dict[str, Any]:
     """Delete a run and all its metrics/artifacts."""
     ok = store.delete_run(run_id)
@@ -141,7 +155,6 @@ async def delete_run(run_id: str) -> dict[str, Any]:
 
 
 @router.post("/api/localtrack/metrics/ingest", response_model=BatchIngestResponse)
-@router.post("/api/metrics/ingest", response_model=BatchIngestResponse)
 async def batch_ingest_metrics(req: BatchIngestRequest) -> BatchIngestResponse:
     """High-throughput batch ingestion of metric logs."""
     count = store.ingest_metrics(req.logs)
@@ -149,7 +162,6 @@ async def batch_ingest_metrics(req: BatchIngestRequest) -> BatchIngestResponse:
 
 
 @router.get("/api/localtrack/metrics/keys")
-@router.get("/api/metrics/keys")
 async def get_metric_keys(
     project_id: str | None = Query(None),
     run_ids: str | None = Query(None, description="Comma-separated list of run IDs"),
@@ -161,7 +173,6 @@ async def get_metric_keys(
 
 
 @router.post("/api/localtrack/metrics/query", response_model=MetricQueryResponse)
-@router.post("/api/metrics/query", response_model=MetricQueryResponse)
 async def query_metrics(req: MetricQueryRequest) -> MetricQueryResponse:
     """Fetch time-series metric series data with LTTB downsampling and EMA smoothing."""
     series = store.query_metrics(
@@ -179,7 +190,6 @@ async def query_metrics(req: MetricQueryRequest) -> MetricQueryResponse:
 
 
 @router.post("/api/localtrack/runs/{run_id}/artifacts", response_model=RunArtifactModel)
-@router.post("/api/runs/{run_id}/artifacts", response_model=RunArtifactModel)
 async def upload_artifact(
     run_id: str,
     file: UploadFile = File(...),
@@ -202,7 +212,6 @@ async def upload_artifact(
 
 
 @router.get("/api/localtrack/runs/{run_id}/artifacts", response_model=ArtifactListResponse)
-@router.get("/api/runs/{run_id}/artifacts", response_model=ArtifactListResponse)
 async def list_artifacts(run_id: str) -> ArtifactListResponse:
     """List all artifacts for a run."""
     run = store.get_run(run_id)
@@ -212,7 +221,6 @@ async def list_artifacts(run_id: str) -> ArtifactListResponse:
 
 
 @router.get("/api/localtrack/runs/{run_id}/artifacts/{artifact_id}/download")
-@router.get("/api/runs/{run_id}/artifacts/{artifact_id}/download")
 async def download_artifact(run_id: str, artifact_id: str) -> FileResponse:
     """Download a run artifact."""
     art = store.get_artifact(artifact_id)

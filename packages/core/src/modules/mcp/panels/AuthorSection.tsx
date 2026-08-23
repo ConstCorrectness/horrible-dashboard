@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 
+import { Button, Chip } from '../../../Primitives';
+import { dialogs } from '../../../dialogs';
+
 import {
   createProject,
   deleteProject,
@@ -39,12 +42,37 @@ function StateDot({ state }: { state: McpProject['state'] }) {
   return <span style={{ color }}>●</span>;
 }
 
+/**
+ * Edit a scaffolded server's source, in place.
+ *
+ * **Why this is not the real editor.** The obvious improvement is to open the file
+ * in `editor.buffer` — this app has a full CodeMirror editor with LSP, and this is
+ * a bare textarea. But a save *here* also restarts the server
+ * (`writeProjectFile` -> provision -> restart), and that is the entire reason the
+ * inline editor is usable: you change a tool's schema and the next agent call sees
+ * it. The editor module writes through the files module, which knows nothing about
+ * MCP, so moving the textarea would trade a worse text control for a broken
+ * feedback loop — you would save, and the running server would keep serving the old
+ * code with nothing saying so.
+ *
+ * Making that swap correctly needs a watcher on the project directory, which this
+ * module's own roadmap already names as the missing piece. Until then the honest
+ * fix is the one applied here: keep the restart-on-save, and repair what was
+ * actually wrong with the control — no dirty indicator, and no warning before
+ * discarding an edit.
+ */
 function FileEditor({ project, onSaved }: { project: McpProject; onSaved: () => void }) {
   const [path, setPath] = useState(project.entry);
   const [text, setText] = useState('');
+  // The last text the backend gave us. Comparing against it is what makes "dirty"
+  // real rather than "has been focused" — retyping a character back to its original
+  // value correctly reports clean.
+  const [saved, setSaved] = useState('');
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const dirty = text !== saved;
 
   const load = useCallback(
     async (target: string) => {
@@ -52,7 +80,9 @@ function FileEditor({ project, onSaved }: { project: McpProject; onSaved: () => 
       setError(null);
       setStatus(null);
       try {
-        setText((await readProjectFile(project.id, target)).text);
+        const next = (await readProjectFile(project.id, target)).text;
+        setText(next);
+        setSaved(next);
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
@@ -65,6 +95,21 @@ function FileEditor({ project, onSaved }: { project: McpProject; onSaved: () => 
   useEffect(() => {
     void load(path);
   }, [load, path]);
+
+  /** Switching files throws away unsaved work, so ask first. */
+  const switchTo = async (next: string) => {
+    if (next === path) return;
+    if (dirty) {
+      const ok = await dialogs.confirm({
+        title: `Discard changes to ${path}?`,
+        message: 'The edits in this file have not been saved and will be lost.',
+        confirmLabel: 'Discard',
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    setPath(next);
+  };
 
   const save = async () => {
     setError(null);
@@ -80,6 +125,7 @@ function FileEditor({ project, onSaved }: { project: McpProject; onSaved: () => 
             ? 'Saved and restarted.'
             : 'Saved.',
       );
+      setSaved(text);
       onSaved();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -87,18 +133,39 @@ function FileEditor({ project, onSaved }: { project: McpProject; onSaved: () => 
   };
 
   return (
-    <div style={{ marginTop: '0.4rem' }}>
-      <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
-        <select value={path} onChange={(e) => setPath(e.target.value)} style={{ flex: 1 }}>
+    <div style={{ marginTop: 'var(--space-3)' }}>
+      <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
+        <select
+          value={path}
+          onChange={(e) => void switchTo(e.target.value)}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            background: 'var(--bg-inset)',
+            color: 'var(--text)',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius-sm)',
+            padding: 'var(--space-2) var(--space-3)',
+            fontFamily: 'var(--font-mono)',
+            fontSize: 'var(--fs-meta)',
+          }}
+        >
           {project.files.map((f) => (
             <option key={f} value={f}>
               {f}
             </option>
           ))}
         </select>
-        <button onClick={() => void save()} disabled={loading}>
+        {dirty && <Chip kind="warn">unsaved</Chip>}
+        <Button
+          intent={dirty ? 'primary' : 'default'}
+          size="sm"
+          onClick={() => void save()}
+          disabled={loading || !dirty}
+          title={dirty ? 'Save and restart the server' : 'No changes to save'}
+        >
           Save
-        </button>
+        </Button>
       </div>
       <textarea
         value={text}
@@ -107,25 +174,33 @@ function FileEditor({ project, onSaved }: { project: McpProject; onSaved: () => 
         rows={16}
         style={{
           width: '100%',
-          marginTop: '0.3rem',
-          fontFamily: 'monospace',
-          fontSize: '0.7rem',
+          boxSizing: 'border-box',
+          marginTop: 'var(--space-2)',
+          background: 'var(--bg-inset)',
+          color: 'var(--text)',
+          border: `1px solid ${dirty ? 'var(--warn)' : 'var(--border)'}`,
+          borderRadius: 'var(--radius-sm)',
+          padding: 'var(--space-3)',
+          fontFamily: 'var(--font-mono)',
+          fontSize: 'var(--fs-meta)',
+          lineHeight: 1.5,
           whiteSpace: 'pre',
         }}
       />
+      <div style={{ fontSize: 'var(--fs-micro)', color: 'var(--text-faint)' }}>
+        Saving restarts the server, so the next agent call sees the change.
+      </div>
       {status && (
         <div
           style={{
-            fontSize: '0.68rem',
-            color: status.includes('did not restart')
-              ? 'var(--danger, #f85149)'
-              : 'var(--ok, #3fb950)',
+            fontSize: 'var(--fs-meta)',
+            color: status.includes('did not restart') ? 'var(--danger)' : 'var(--success)',
           }}
         >
           {status}
         </div>
       )}
-      {error && <div style={{ fontSize: '0.68rem', color: 'var(--danger, #f85149)' }}>{error}</div>}
+      {error && <div style={{ fontSize: 'var(--fs-meta)', color: 'var(--danger)' }}>{error}</div>}
     </div>
   );
 }

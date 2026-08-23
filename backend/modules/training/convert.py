@@ -41,7 +41,7 @@ from typing import Any
 
 import httpx
 
-from backend.modules.training import envs
+from backend.modules.training import envs, lineage
 from backend.modules.training.envs import python_path, venv_dir, venv_ready
 from backend.modules.training.models import ProjectModel
 from backend import paths
@@ -293,6 +293,25 @@ async def run_conversion(
     if not out_path.is_file():
         yield {"error": "the converter reported success but wrote no file", "log": tail}
         return
+    snapshot = _recipe_snapshot(project)
+    # Record where this file came from, at the one moment every field is known.
+    # Wrapped inside `lineage.record`, which never raises: the GGUF is on disk and
+    # servable whether or not the bookkeeping row lands.
+    lineage.record(
+        str(out_path),
+        project_id=project.id,
+        checkpoint=target.name,
+        # `base_model` is only *required* for a LoRA (the adapter is meaningless
+        # without it), so for a full fine-tune the argument is empty and the recipe
+        # is the only place the base is recorded. Falling back to it is what makes
+        # "score this against its base" work for the common case — reading the
+        # argument alone would leave every full fine-tune with no base at all.
+        base_model=base_model or snapshot.get("baseModel", ""),
+        out_type=out_type,
+        is_adapter=kind == "lora",
+        recipe=snapshot,
+    )
+
     yield {
         "status": "done",
         "path": str(out_path),
@@ -303,6 +322,30 @@ async def run_conversion(
         "servable": kind == "model",
         "log": tail,
     }
+
+
+def _recipe_snapshot(project: ProjectModel) -> dict[str, Any]:
+    """The recipe as it stood at conversion time.
+
+    A snapshot rather than a pointer to `recipe.json`: that file keeps changing as
+    the user tunes the next run, and a lineage row saying "trained with lr=2e-4"
+    must keep meaning that after they try 1e-4. Best-effort — a project whose
+    recipe was never saved converts perfectly well.
+    """
+    try:
+        from backend.modules.training.recipes import load_recipe
+
+        recipe = load_recipe(project)
+        return {
+            "baseModel": recipe.base_model,
+            "dataset": recipe.dataset,
+            "datasetSplit": recipe.dataset_split,
+            "useLora": recipe.use_lora,
+            "values": dict(recipe.values),
+        }
+    except Exception:  # noqa: BLE001 — provenance detail, never a conversion failure
+        logger.debug("training: no recipe snapshot for %s", project.id, exc_info=True)
+        return {}
 
 
 #: What the converter imports beyond what a training venv already has. `gguf` is

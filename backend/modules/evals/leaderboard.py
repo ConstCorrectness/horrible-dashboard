@@ -38,7 +38,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from backend.modules.evals import store
+from backend.modules.evals import fingerprint, store
 from backend.modules.evals.models import CaseResult, EvalRun
 
 
@@ -229,5 +229,34 @@ def diff(base_run_id: str, other_run_id: str) -> dict[str, Any]:
         #: True when neither run recorded hashes, so "edited" cannot be ruled out.
         "hashesUnknown": not any(
             r.case_hash for r in (*base_results.values(), *other_results.values())
+        ),
+        #: One level up from `case_hash`: whether the two runs saw the same tool
+        #: catalog. Reported as a banner over the whole diff rather than per case,
+        #: because it is a property of the sweep — see `evals/fingerprint.py`.
+        "harness": _harness_verdict(base, other),
+    }
+
+
+def _harness_verdict(base: EvalRun, other: EvalRun) -> dict[str, Any]:
+    """Whether these two runs were measured against the same tool catalog.
+
+    `unknown` is not a weaker `differs`: a run recorded before the column existed
+    has no hash at all, and saying "same harness" about it would be an assertion
+    nobody made. So the two states are carried separately and the pane says which
+    one it is.
+    """
+    known = bool(base.harness_hash) and bool(other.harness_hash)
+    differs = known and base.harness_hash != other.harness_hash
+    return {
+        "unknown": not known,
+        "differs": differs,
+        "base": base.harness_hash,
+        "other": other.harness_hash,
+        # Only worth computing when they actually differ; a list of changes
+        # alongside "these agree" would read as a contradiction.
+        "changes": (
+            fingerprint.describe_difference(base.harness_json, other.harness_json)
+            if differs
+            else []
         ),
     }

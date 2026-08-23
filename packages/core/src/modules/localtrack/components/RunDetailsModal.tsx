@@ -120,14 +120,14 @@ export function RunDetailsModal() {
             background: 'var(--bg-secondary, #161b22)',
           }}
         >
-          {[
-            { key: 'charts', label: '📈 Charts Workspace' },
-            { key: 'overview', label: '📋 Hyperparameters & Overview' },
-            { key: 'files', label: '📁 Logs & Artifacts' },
-          ].map((tab) => (
+          {([
+            { key: 'charts', label: 'Charts' },
+            { key: 'overview', label: 'Overview' },
+            { key: 'files', label: 'Artifacts' },
+          ] as const).map((tab) => (
             <button
               key={tab.key}
-              onClick={() => setActiveTab(tab.key as any)}
+              onClick={() => setActiveTab(tab.key)}
               style={{
                 background: 'none',
                 border: 'none',

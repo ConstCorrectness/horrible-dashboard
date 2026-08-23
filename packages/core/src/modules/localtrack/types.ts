@@ -19,8 +19,8 @@ export interface Run {
   project_id: string;
   name: string;
   status: RunStatus;
-  config: Record<string, any>;
-  system_info: Record<string, any>;
+  config: Record<string, unknown>;
+  system_info: Record<string, unknown>;
   summary: Record<string, number>;
   tags: string[];
   start_time: string;

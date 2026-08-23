@@ -44,6 +44,10 @@ export const evalsModule: ModuleManifest = {
       id: 'evals',
       name: 'Evals',
       icon: '🎯',
+      // The `trainer` persona already covers eval sweeps, conversion and serving —
+      // the whole flywheel this workspace sits in — so it is a capability the
+      // layout switches to, not a second persona invented for one pane.
+      agent: 'trainer',
       frame: {
         center: {
           split: 'row',
@@ -59,7 +63,15 @@ export const evalsModule: ModuleManifest = {
           ],
         },
         docks: {
-          left: { tools: ['explorer.home'], size: 260 },
+          // MCP and Skills are docked here because they are **variables of the
+          // experiment**, not furniture: an enabled skill rides every turn and a
+          // connected server contributes a whole tool group, so both change the
+          // catalog under test. The run records which ones were on (see
+          // `evals/fingerprint.py`); this puts the switches where the results are.
+          left: {
+            tools: ['explorer.home', 'mcp.servers', 'skills.library'],
+            size: 260,
+          },
           right: { tools: ['agent.chat'], size: 360 },
           bottom: { tools: ['observability.io'], size: 180, visible: false },
         },

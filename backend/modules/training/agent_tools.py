@@ -139,6 +139,58 @@ async def _install_deps(args: dict[str, Any]) -> Any:
     return {"status": "installing", "packages": packages}
 
 
+async def _list_checkpoints(args: dict[str, Any]) -> Any:
+    from backend.modules.training import convert
+
+    project = projects.get_project(str(args.get("projectId", "")))
+    if project is None:
+        return {"error": "unknown project"}
+    found = await asyncio.to_thread(convert.list_checkpoints, project)
+    return {"checkpoints": found, "note": convert.python_version_note()}
+
+
+async def _convert(args: dict[str, Any]) -> Any:
+    """Checkpoint -> GGUF, into llama.cpp's managed directory.
+
+    Drains the conversion's NDJSON stream and reports only the outcome. The route
+    streams it so a pane can show a progress log; an agent has nowhere to put
+    hundreds of progress lines and would pay for every one of them in context, so
+    the tool keeps the last error text and the final result and drops the rest.
+
+    Long — minutes for a large model — but not backgroundable the way
+    `start_run` is: there is no id to poll afterwards, the answer *is* the output
+    path. The turn waits.
+    """
+    from backend.modules.training import convert
+
+    project = projects.get_project(str(args.get("projectId", "")))
+    if project is None:
+        return {"error": "unknown project"}
+
+    checkpoint = str(args.get("checkpoint", ""))
+    if not checkpoint:
+        return {"error": "checkpoint is required; call training.list_checkpoints first"}
+
+    last_status = ""
+    async for event in convert.run_conversion(
+        project,
+        checkpoint,
+        out_type=str(args.get("outType", "f16")),
+        base_model=str(args.get("baseModel", "")),
+    ):
+        if event.get("error"):
+            return {"error": event["error"], "lastStatus": last_status}
+        if event.get("status") == "done":
+            return {
+                "path": event.get("path"),
+                "sizeBytes": event.get("sizeBytes"),
+                "servable": event.get("servable"),
+                "kind": event.get("kind"),
+            }
+        last_status = str(event.get("status") or last_status)
+    return {"error": "the conversion ended without reporting a result"}
+
+
 async def _start_run(args: dict[str, Any]) -> Any:
     from backend.modules.training.runners.script_runner import script_runner
 
@@ -335,6 +387,46 @@ _TOOLS = [
         side_effect=True,
         specifier_template="{projectId}",
         handler=_start_run,
+        group="training",
+    ),
+    AgentTool(
+        name="training.list_checkpoints",
+        description=(
+            "List the checkpoints a training project has written, with whether each is "
+            "a full model or a LoRA adapter. Call before training.convert — checkpoint "
+            "names are not guessable."
+        ),
+        parameters={**_PROJECT},
+        required=["projectId"],
+        handler=_list_checkpoints,
+        group="training",
+    ),
+    AgentTool(
+        name="training.convert",
+        description=(
+            "Convert a finished checkpoint to GGUF in llama.cpp's managed model "
+            "directory, so this node can serve it. Takes minutes. A LoRA adapter needs "
+            "baseModel; a full checkpoint does not."
+        ),
+        parameters={
+            **_PROJECT,
+            "checkpoint": {
+                "type": "string",
+                "description": "Checkpoint path from training.list_checkpoints.",
+            },
+            "outType": {
+                "type": "string",
+                "description": "f16 (default), bf16, f32 or q8_0.",
+            },
+            "baseModel": {
+                "type": "string",
+                "description": "Required for a LoRA adapter: the base model it was trained against.",
+            },
+        },
+        required=["projectId", "checkpoint"],
+        side_effect=True,
+        specifier_template="{checkpoint}",
+        handler=_convert,
         group="training",
     ),
     AgentTool(

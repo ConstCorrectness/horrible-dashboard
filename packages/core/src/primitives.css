@@ -1,0 +1,333 @@
+/*
+ * The shared control primitives — the layer between the tokens and a pane.
+ *
+ * `datalist.css` solved "a list of records"; this file solves everything around
+ * one: the button you press, the tag you read a state off, the header above the
+ * list, the message when the list is empty, and the labelled field in the form
+ * beneath it. Those five had been redrawn by hand in nearly every pane, with
+ * ~1,987 inline `style={{}}` objects between them and no spacing or type scale to
+ * agree on — which is why two panes docked side by side in one frame never lined
+ * up.
+ *
+ * Everything here is expressed in scale tokens (`--space-*`, `--fs-*`, `--dur-*`).
+ * No literal sizes: a literal is exactly how the drift started.
+ *
+ * The visual language is `datalist.css`'s, continued rather than reinvented — the
+ * clipped top-left corner, the accent carried on a leading edge instead of a
+ * glowing perimeter, uppercase tracked identity against monospace muted figures.
+ */
+
+/* ------------------------------------------------------------------ button --
+ *
+ * There was one bare `button` element rule in styles.css (one size, one weight,
+ * `.primary` recolouring the border) so every pane that wanted a small, ghost or
+ * destructive button wrote its own inline. Four intents and two sizes covers what
+ * those inline versions were actually reaching for.
+ *
+ * `danger` is a real intent rather than "red text": a destructive control has to
+ * be visibly different BEFORE the click, not only in the confirm dialog after it.
+ */
+.hd-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  font-weight: var(--fw-medium);
+  line-height: 1.4;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard);
+}
+
+.hd-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.hd-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Disabled is dimmed AND non-interactive. Opacity alone still shows a pointer
+   cursor and a hover, which reads as "it didn't work" rather than "you can't". */
+.hd-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.hd-btn[data-size='sm'] {
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--fs-meta);
+}
+
+/* The one filled control on a surface. Filled, not outlined, because a screen
+   where three things are outlined in the accent has no primary action. */
+.hd-btn[data-intent='primary'] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.hd-btn[data-intent='primary']:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 86%, white);
+  border-color: color-mix(in srgb, var(--accent) 86%, white);
+}
+
+.hd-btn[data-intent='ghost'] {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-dim);
+}
+
+.hd-btn[data-intent='ghost']:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: transparent;
+  color: var(--text);
+}
+
+.hd-btn[data-intent='danger'] {
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  color: var(--danger);
+}
+
+.hd-btn[data-intent='danger']:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border-color: var(--danger);
+}
+
+/* -------------------------------------------------------------------- chip --
+ *
+ * One component replacing five near-identical private ones (`OriginChip` and
+ * `stateColor` in the MCP servers pane, `Badge` in Discover, `StateDot` in
+ * Author, `Chip` in Skills). Same `data-kind` vocabulary as a row's verdict, so
+ * "ready" is the same green in a chip as in a row mark and a reader learns the
+ * colour once.
+ *
+ * `dot` is a modifier rather than a separate component: a connection state and a
+ * label are the same fact at two densities.
+ */
+.hd-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-badge);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.hd-chip[data-kind='ok'] {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 40%, transparent);
+}
+
+.hd-chip[data-kind='warn'] {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 40%, transparent);
+}
+
+.hd-chip[data-kind='fail'] {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
+
+.hd-chip[data-kind='info'] {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.hd-chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentcolor;
+  flex: none;
+}
+
+/* -------------------------------------------------------------- pane header --
+ *
+ * The title / figures / actions bar above a pane's content. Shares the row's
+ * split of jobs exactly — identity uppercase and tracked, telemetry monospace and
+ * muted — so a header and the rows under it read as one object rather than as a
+ * heading that happens to sit above a list.
+ */
+.hd-panehead {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.hd-panehead-title {
+  font-family: var(--font-sans);
+  font-size: var(--fs-label);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-display);
+  text-transform: uppercase;
+  color: var(--text-strong);
+}
+
+.hd-panehead-meta {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-dim);
+}
+
+.hd-panehead-spacer {
+  flex: 1 1 auto;
+}
+
+.hd-panehead-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* ------------------------------------------------------------- empty state --
+ *
+ * Three ad-hoc versions of this existed (browser panel, developer console,
+ * localtrack grid) and a fourth kept nearly getting written.
+ *
+ * The rule the component enforces is the useful part: an empty state must say
+ * what to DO, not that there is nothing. "No servers" is a fact the user can
+ * already see; "Add one below, or browse the registry" is the pane doing its job.
+ * So `children` (the action sentence) is where the design intent lives and the
+ * title is deliberately small.
+ */
+.hd-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  padding: var(--space-8) var(--space-6);
+  text-align: center;
+  color: var(--text-dim);
+}
+
+.hd-empty-title {
+  font-family: var(--font-sans);
+  font-size: var(--fs-label);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-display);
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.hd-empty-body {
+  font-size: var(--fs-body);
+  color: var(--text-faint);
+  max-width: 46ch;
+  line-height: 1.5;
+}
+
+.hd-empty-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+/* ------------------------------------------------------------------- field --
+ *
+ * Label + control + hint, and an error that replaces the hint.
+ *
+ * The error REPLACES rather than joins it, deliberately: showing both means the
+ * eye has to work out which line is the current truth, and the hint has already
+ * been read by the time a value is wrong.
+ */
+.hd-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.hd-field-label {
+  font-family: var(--font-sans);
+  font-size: var(--fs-meta);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-badge);
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.hd-field-hint {
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+  line-height: 1.45;
+}
+
+.hd-field-error {
+  font-size: var(--fs-meta);
+  color: var(--danger);
+  line-height: 1.45;
+}
+
+.hd-field-req {
+  color: var(--danger);
+  margin-left: var(--space-1);
+}
+
+/* The controls inside a field. Element selectors scoped to `.hd-field` rather
+   than a class on every input: a `<select>` in a field should not need the caller
+   to remember a class name, and forgetting one is invisible until you look. */
+.hd-field input[type='text'],
+.hd-field input[type='number'],
+.hd-field input[type='password'],
+.hd-field input[type='search'],
+.hd-field select,
+.hd-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  transition: border-color var(--dur-fast) var(--ease-standard);
+}
+
+/* A textarea in this app is always code or a prompt — never prose. */
+.hd-field textarea {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.hd-field input:focus-visible,
+.hd-field select:focus-visible,
+.hd-field textarea:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.hd-field[data-invalid='true'] input,
+.hd-field[data-invalid='true'] select,
+.hd-field[data-invalid='true'] textarea {
+  border-color: var(--danger);
+}

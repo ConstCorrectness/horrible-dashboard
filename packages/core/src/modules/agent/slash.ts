@@ -2,12 +2,17 @@
  * Chat slash commands: `/`-prefixed inputs that run **locally** in the chat widget
  * (no model turn) and render their output as an ephemeral system message. `/tools`
  * introspects the agent's live tool catalog over the WS; the rest are quick local
- * utilities; `/mcp` reads the MCP module's own client so it never drifts from the
- * servers pane. Subsystems that haven't landed yet (skills) keep an honest placeholder.
+ * utilities; `/mcp` and `/skills` read their own module's client so they never drift
+ * from the pane beside them.
  * See docs/modules/agent-chat.md.
  */
 import { registry } from '../../registry';
 import { listServers as listMcpServers, summarize as summarizeMcpServers } from '../mcp/api';
+import {
+  listSkills,
+  skillCost,
+  summarize as summarizeSkills,
+} from '../skills/api';
 import { getAgentRoster } from './api';
 import { requestAgentTools } from './orchestrator-client';
 import { getSetting, resetSetting, setSetting } from '../../settings';
@@ -123,8 +128,34 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   },
   {
     name: 'skills',
-    description: 'List available skills.',
-    run: () => 'No skills available yet.',
+    description: 'List skills and what they cost every turn (/skills, /skills open).',
+    /**
+     * Reads the skills module's own client, the way `/mcp` reads the MCP one, so
+     * the chat line and the pane cannot disagree.
+     *
+     * This returned the literal string "No skills available yet." for as long as
+     * the module has been shipping — a placeholder from before it landed that
+     * nothing ever came back to. Asking the agent about its own skills got a
+     * confident denial that they existed.
+     *
+     * The cost is fetched alongside the list because it is the number that decides
+     * whether a catalog is worth keeping, and it is not derivable from the list.
+     * A cost failure degrades to the plain list rather than losing the whole
+     * command — the names are the answer, the tokens are the footnote.
+     */
+    run: async (args) => {
+      if (args.trim() === 'open') {
+        await registry.runCommand('skills.open');
+        return 'Opened the Skills pane.';
+      }
+      try {
+        const { skills } = await listSkills();
+        const cost = await skillCost().catch(() => null);
+        return summarizeSkills(skills, cost);
+      } catch (e) {
+        return `Could not reach the skills module: ${e instanceof Error ? e.message : String(e)}`;
+      }
+    },
   },
   {
     name: 'llm',

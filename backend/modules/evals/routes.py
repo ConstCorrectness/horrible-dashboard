@@ -335,6 +335,27 @@ async def start_run(req: StartRunRequest) -> StartRunResponse:
     return StartRunResponse(started=True, key=key)
 
 
+@router.get("/sweeps")
+async def list_sweeps() -> dict[str, Any]:
+    """The sweeps running on this node right now.
+
+    A sweep outlives the pane that started it, so "what is running" cannot be
+    answered from the pane's own state — the same reason progress broadcasts
+    rather than replies.
+    """
+    return {"sweeps": sweep.active_sweeps()}
+
+
+@router.delete("/sweeps/{key:path}")
+async def cancel_sweep(key: str) -> dict[str, Any]:
+    """Stop a sweep. Runs it had already finished keep their results.
+
+    `{key:path}` because a sweep key contains a colon; the default converter would
+    still match, but being explicit stops a later key format from silently 404ing.
+    """
+    return {"cancelled": sweep.cancel_sweep(key)}
+
+
 def _live_agent_tools() -> list[dict[str, Any]]:
     """The richest tool manifest any connected browser has pushed.
 
@@ -391,14 +412,29 @@ async def suggest_targets() -> dict[str, Any]:
         from backend.modules.llamacpp import catalog
         from backend.modules.llamacpp.server import llama_manager
 
+        from backend.modules.training import lineage as _lineage
+
         loaded = llama_manager.model_path
         models = catalog.list_models()
+        # One query for the whole catalog rather than one per file: this route
+        # lists every GGUF on the machine, and a lookup per row would be a query
+        # per model on every page load.
+        provenance = _lineage.by_path()
         # Managed first: those are the ones this node produced, and after a
         # fine-tune the file you want is the one you just wrote.
         models.sort(key=lambda m: (m.origin != "managed", m.name.lower()))
         for model in models:
             path = str(model.path)
             is_loaded = bool(loaded) and _same_path(loaded, path)
+            # Where this file came from, when this node made it. Absent for every
+            # model the user downloaded, which is the normal case and must render
+            # as "no provenance" rather than as a guess.
+            origin = provenance.get(path)
+            label = f"{model.name} ({model.origin})"
+            if origin and origin.get("baseModel"):
+                label += f" — fine-tune of {origin['baseModel']}"
+            if is_loaded:
+                label += " — loaded"
             out.append(
                 {
                     "provider": "llamacpp",
@@ -409,10 +445,15 @@ async def suggest_targets() -> dict[str, Any]:
                     # file stem — so this is the id it will answer to.
                     "model": model.path.stem,
                     "modelPath": path,
-                    "label": f"{model.name} ({model.origin})"
-                    + (" — loaded" if is_loaded else ""),
+                    "label": label,
                     "source": "llamacpp",
                     "loaded": is_loaded,
+                    # The whole of "score my fine-tune against its base": the
+                    # picker can offer both targets in one click because this says
+                    # what the base was. Null for anything this node did not train.
+                    "baseModel": (origin or {}).get("baseModel") or None,
+                    "projectId": (origin or {}).get("projectId") or None,
+                    "isAdapter": bool((origin or {}).get("isAdapter")),
                     # Shown in the picker rather than used to filter it. The
                     # catalog reads this from the GGUF header, so an embedder
                     # (`nomic-bert`) or a TTS model sitting in the same directory

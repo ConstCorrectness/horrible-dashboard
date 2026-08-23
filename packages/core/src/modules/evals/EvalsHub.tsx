@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { DataList, DataRow, PickRow, RollingNumber } from '../../DataList';
+import { dialogs } from '../../dialogs';
 import { usePaneSection } from '../../layout/use-sections';
 import { subscribeChannel } from '../../ws';
 import {
   benchmarkPresets,
+  cancelSweep,
   CASE_TYPES,
   comparePreview,
   createSuite,
@@ -19,12 +21,14 @@ import {
   listCases,
   listRuns,
   listSuites,
+  listSweeps,
   METRICS,
   peekDataset,
   putCases,
   splitBase,
   startRun,
   suggestTargets,
+  type ActiveSweep,
   type BenchmarkPreset,
   type BoardCase,
   type BoardRun,
@@ -753,6 +757,7 @@ function Diff({ diff }: { diff: RunDiff }) {
           apart from one the model got better at.
         </div>
       )}
+      <HarnessBanner harness={diff.harness} />
       <DiffGroup label="Fixed" tone="var(--success, #3fb950)" items={diff.fixed} />
       <DiffGroup label="Broke" tone="var(--danger, #e06c75)" items={diff.broken} />
       <DiffGroup
@@ -771,6 +776,49 @@ function Diff({ diff }: { diff: RunDiff }) {
         diff.errored.length === 0 && (
           <div style={S.mono}>No case changed verdict between these two runs.</div>
         )}
+    </div>
+  );
+}
+
+/**
+ * Whether the two runs were even measured against the same tool catalog.
+ *
+ * Above the fixed/broke lists rather than inside them, because it invalidates the
+ * whole comparison rather than any one row: enabled skills ride every turn and each
+ * connected MCP server contributes a tool group, so toggling either between runs
+ * moves the pass rate for reasons that have nothing to do with the model. The
+ * unknown case is drawn distinctly from the differing one — a run with no recorded
+ * harness is not a run whose harness matched.
+ */
+function HarnessBanner({ harness }: { harness: RunDiff['harness'] }) {
+  if (harness.unknown) {
+    return (
+      <div style={{ ...S.mono, color: 'var(--text-dim, #8b949e)', marginBottom: 6 }}>
+        The tool catalog was not recorded for one of these runs, so a skill or MCP server
+        toggled between them cannot be ruled out.
+      </div>
+    );
+  }
+  if (!harness.differs) return null;
+  return (
+    <div
+      style={{
+        ...S.mono,
+        color: 'var(--warn, #e2c08d)',
+        borderLeft: '2px solid var(--warn, #e2c08d)',
+        paddingLeft: 8,
+        marginBottom: 8,
+      }}
+    >
+      <div>
+        ⚠ these two runs saw <strong>different tool catalogs</strong> — what changed below may be
+        the harness, not the model.
+      </div>
+      {harness.changes.map((line) => (
+        <div key={line} style={{ opacity: 0.85 }}>
+          · {line}
+        </div>
+      ))}
     </div>
   );
 }
@@ -1110,8 +1158,15 @@ function Suites({
         </select>
         <button
           style={S.button}
-          onClick={() => {
-            const name = window.prompt('Suite name');
+          onClick={async () => {
+            // `dialogs.prompt`, not `window.prompt`: the native one is unthemed,
+            // is blocked outright in the Tauri shell, and blocks the whole
+            // renderer while it is up.
+            const name = await dialogs.prompt({
+              title: 'New suite',
+              placeholder: 'Suite name',
+              confirmLabel: 'Create',
+            });
             if (name) createSuite(name).then(onReload);
           }}
         >
@@ -1219,12 +1274,30 @@ function Suites({
  */
 const targetId = (t: SuggestedTarget): string => t.modelPath || t.label;
 
+/**
+ * The localtrack project a suite's sweeps report into.
+ *
+ * Derived from the suite rather than fixed, and slugged because localtrack uses the
+ * string as both the project id and its display name. Falls back to the bare
+ * `evals` bucket only when no suite resolved, which is the one case where there is
+ * nothing to derive from.
+ */
+function localtrackProject(suite: EvalSuite | undefined): string {
+  if (!suite) return 'evals';
+  const slug = suite.name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+  return slug ? `evals-${slug}` : `evals-${suite.id}`;
+}
+
 /** Run: pick models, start a sweep, watch it. */
 function Run({ suites, selected }: { suites: EvalSuite[]; selected: string }) {
   const [targets, setTargets] = useState<SuggestedTarget[]>([]);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
   const [message, setMessage] = useState('');
   const [runs, setRuns] = useState<EvalRun[]>([]);
+  const [sweeps, setSweeps] = useState<ActiveSweep[]>([]);
 
   useEffect(() => {
     suggestTargets()
@@ -1236,6 +1309,12 @@ function Run({ suites, selected }: { suites: EvalSuite[]; selected: string }) {
     listRuns(selected)
       .then(setRuns)
       .catch(() => setRuns([]));
+    // Asked of the node, not derived from `runs`: a sweep started in another
+    // window — or before this pane was opened — is still yours to stop, and a
+    // `running` row tells you a sweep existed, not that it still does.
+    listSweeps()
+      .then(setSweeps)
+      .catch(() => setSweeps([]));
   }, [selected]);
 
   useEffect(reload, [reload]);
@@ -1271,7 +1350,12 @@ function Run({ suites, selected }: { suites: EvalSuite[]; selected: string }) {
                 model_path: t.modelPath,
                 label: t.label,
               })),
-              localtrack_project: 'evals',
+              // Per suite, not one 'evals' bucket for everything: localtrack
+              // charts a project's runs against each other, so pouring a
+              // tool-calling suite and an MMLU benchmark into one project plots
+              // two unrelated pass rates on the same axis. `suite` is the
+              // selected one, so a sweep always lands beside its own history.
+              localtrack_project: localtrackProject(suite),
             })
               .then((r) => setMessage(r.started ? 'Sweep started.' : r.message))
               .catch((e) => setMessage(String(e)));
@@ -1317,6 +1401,44 @@ function Run({ suites, selected }: { suites: EvalSuite[]; selected: string }) {
         </DataList>
         {message && <div style={{ ...S.mono, marginTop: 10 }}>{message}</div>}
 
+        {sweeps.length > 0 && (
+          <>
+            <div style={{ ...S.sectionHead, marginTop: 16 }}>
+              <span style={S.heading}>Running now</span>
+            </div>
+            <DataList label="Running sweeps">
+              {sweeps.map((sw, i) => (
+                <DataRow
+                  key={sw.key}
+                  index={i}
+                  title={sw.targets.join(', ') || sw.suiteId}
+                  kind="info"
+                  meta={[sw.startedAt, `${sw.targets.length} target(s)`]}
+                  actions={
+                    <button
+                      style={S.button}
+                      onClick={() =>
+                        cancelSweep(sw.key)
+                          .then(() => {
+                            // Says what survives, because "stop" on a half-finished
+                            // sweep reads as "throw the results away" otherwise.
+                            setMessage('Sweep stopped. Targets it finished keep their results.');
+                            reload();
+                          })
+                          .catch((e) => setMessage(String(e)))
+                      }
+                    >
+                      Stop
+                    </button>
+                  }
+                >
+                  {sw.suiteId}
+                </DataRow>
+              ))}
+            </DataList>
+          </>
+        )}
+
         <div style={{ ...S.sectionHead, marginTop: 16 }}>
           <span style={S.heading}>Recent runs</span>
         </div>
@@ -1358,15 +1480,25 @@ function Results({ selected }: { selected: string }) {
   const [results, setResults] = useState<CaseResult[]>([]);
   const [showPasses, setShowPasses] = useState(false);
 
+  // Keyed on the suite alone. `runId` was in this dep array *and* set inside it,
+  // which re-listed the runs on every pick — and because the guard was `!runId`,
+  // switching suite left the previous suite's run selected with its results still
+  // on screen. Reconciling against the list that just arrived does both jobs: keep
+  // the current pick if this suite still has it, otherwise fall to the newest.
   useEffect(() => {
     listRuns(selected).then((rs) => {
       setRuns(rs);
-      if (!runId && rs.length) setRunId(rs[0].id);
+      setRunId((current) => (rs.some((r) => r.id === current) ? current : (rs[0]?.id ?? '')));
     });
-  }, [selected, runId]);
+  }, [selected]);
 
   useEffect(() => {
-    if (!runId) return;
+    // Cleared rather than left standing: a suite with no runs would otherwise keep
+    // showing the last suite's rows under an empty selector.
+    if (!runId) {
+      setResults([]);
+      return;
+    }
     getRun(runId).then((r) => setResults(r.results));
   }, [runId]);
 
@@ -1436,6 +1568,16 @@ function Results({ selected }: { selected: string }) {
                   )}
                   {r.groups_loaded.length > 0 && (
                     <div style={S.mono}>loaded {r.groups_loaded.join(', ')}</div>
+                  )}
+                  {/* The recorder's turn id. Shown rather than kept in the database
+                      because it is the handle on the exact prompt and tool schemas
+                      that went out for this case — without it on screen there is no
+                      way to get from a puzzling row to what the model was actually
+                      given. */}
+                  {r.turn_id && (
+                    <div style={{ ...S.mono, color: 'var(--text-dim, #8b949e)' }}>
+                      turn {r.turn_id}
+                    </div>
                   )}
                 </>
               }

@@ -26,13 +26,14 @@ import time
 from contextlib import AsyncExitStack
 from typing import Any
 
-from backend.modules.evals import llama_target, store
+from backend.modules.evals import fingerprint, llama_target, store
 from backend.modules.evals.models import (
     CaseResult,
     EvalCase,
     EvalRun,
     RunTarget,
 )
+from backend.modules.localtrack.mirror import RunMirror
 from backend.modules.ws import broadcast_event
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,15 @@ _target_semaphore = asyncio.Semaphore(2)
 
 #: Live sweeps, so a second start can be refused and a cancel can find its task.
 _running: dict[str, asyncio.Task[Any]] = {}
+
+#: Strong references to fire-and-forget broadcasts, so the loop does not collect
+#: one mid-flight. `create_task` alone keeps only a weak reference.
+_detached: set[asyncio.Task[Any]] = set()
+
+#: What each live sweep is, for the pane that offers to stop it. Kept beside the
+#: task rather than parsed back out of the key: a key is an internal handle and
+#: reading a suite id out of it would make the format load-bearing.
+_sweep_info: dict[str, dict[str, Any]] = {}
 
 
 async def _emit(event: str, data: dict[str, Any]) -> None:
@@ -97,6 +107,8 @@ async def _run_one_target(
     target: RunTarget,
     agent_tools: list[dict[str, Any]],
     localtrack_project: str,
+    harness: tuple[str, str] = ("", ""),
+    started: list[str] | None = None,
 ) -> EvalRun:
     from backend.modules.evals.runner_agent import run_case
 
@@ -107,7 +119,16 @@ async def _run_one_target(
         endpoint=target.endpoint,
         model=target.model,
         total=len(cases),
+        harness_hash=harness[0],
+        harness_json=harness[1],
     )
+    # Reported upward the moment the row exists, so a cancel can name the runs it
+    # has to close out. Cancellation arrives as a `CancelledError` raised inside
+    # whichever await is in flight, and by the time it reaches the sweep's own
+    # task the gather has already discarded which children were running — so the
+    # ids have to be handed out on the way in, not recovered on the way out.
+    if started is not None:
+        started.append(run.id)
     await _emit("run_started", run.model_dump())
 
     try:
@@ -254,76 +275,47 @@ async def _run_benchmark_case(
 
 
 class _LocalTrack:
-    """Mirrors a sweep into localtrack, or does nothing at all.
+    """Mirrors a sweep into localtrack.
 
-    Wrapped in swallows throughout: localtrack is a *reporting* destination, and a
-    tracking failure must never cost a run the results already in `app.db`. The
-    scoreboard reads the database; localtrack is the place you go to compare a base
-    model against its own fine-tune over time.
+    A thin adapter over `localtrack.mirror.RunMirror`, which is shared with the
+    training module — the four moves and the swallow-everything posture are the
+    same, only the metric names differ. What stays here is the part that is
+    genuinely about evals: the metric vocabulary, and writing the localtrack run id
+    back onto the `EvalRun` so the two records can be joined later.
     """
 
     def __init__(self, project: str, run: EvalRun) -> None:
-        self.run_id = ""
-        if not project:
-            return
-        try:
-            from backend.modules.localtrack import store as lt
-
-            lt.create_project(project, project)
-            created = lt.create_run(
-                # `run_id` is positional and first; passing None lets localtrack
-                # mint one rather than colliding with our own run ids.
-                None,
-                project_id=project,
-                name=f"{run.label} · {run.suite_id}",
-                config={"model": run.model, "suite": run.suite_id},
-                tags=["evals", run.suite_id],
-            )
-            self.run_id = created.id
-            store.update_run(run.id, localtrack_run_id=created.id)
-        except Exception:  # noqa: BLE001
-            logger.debug("evals: localtrack unavailable for this sweep", exc_info=True)
+        self._mirror = RunMirror(
+            project,
+            name=f"{run.label} · {run.suite_id}",
+            config={"model": run.model, "suite": run.suite_id},
+            tags=["evals", run.suite_id],
+        )
+        self.run_id = self._mirror.run_id
+        if self.run_id:
+            try:
+                store.update_run(run.id, localtrack_run_id=self.run_id)
+            except Exception:  # noqa: BLE001
+                logger.debug(
+                    "evals: could not record the localtrack run id", exc_info=True
+                )
 
     def log(self, step: int, result: CaseResult) -> None:
-        if not self.run_id:
-            return
-        try:
-            from backend.modules.localtrack import store as lt
-            from backend.modules.localtrack.models import MetricLogItem
-
-            # One item carrying every metric for this step: `MetricLogItem` holds a
-            # `metrics` dict, so a case is one entry rather than three.
-            lt.ingest_metrics(
-                [
-                    MetricLogItem(
-                        run_id=self.run_id,
-                        step=step,
-                        metrics={
-                            "passed": float(result.passed),
-                            "duration_ms": result.duration_ms,
-                            "rounds": float(result.rounds),
-                            "tools_offered": float(result.tools_offered),
-                        },
-                    )
-                ]
-            )
-        except Exception:  # noqa: BLE001
-            logger.debug("evals: metric ingest failed", exc_info=True)
+        self._mirror.log(
+            step,
+            {
+                "passed": float(result.passed),
+                "duration_ms": result.duration_ms,
+                "rounds": float(result.rounds),
+                "tools_offered": float(result.tools_offered),
+            },
+        )
 
     def finish(self, run: EvalRun) -> None:
-        if not self.run_id:
-            return
-        try:
-            from backend.modules.localtrack import store as lt
-
-            rate = (run.passed / run.completed) if run.completed else 0.0
-            lt.update_run(
-                self.run_id,
-                status="finished",
-                summary={"pass_rate": rate, "passed": run.passed, "total": run.total},
-            )
-        except Exception:  # noqa: BLE001
-            logger.debug("evals: localtrack finish failed", exc_info=True)
+        rate = (run.passed / run.completed) if run.completed else 0.0
+        self._mirror.finish(
+            summary={"pass_rate": rate, "passed": run.passed, "total": run.total}
+        )
 
 
 def _now() -> str:
@@ -336,8 +328,13 @@ async def run_sweep(
     agent_tools: list[dict[str, Any]],
     case_ids: list[str] | None = None,
     localtrack_project: str = "",
+    started: list[str] | None = None,
 ) -> list[EvalRun]:
-    """Run one suite against every target. One `EvalRun` per target."""
+    """Run one suite against every target. One `EvalRun` per target.
+
+    `started` is filled with each run id as its row is created — the handle a
+    cancel needs to close those rows out.
+    """
     suite = store.get_suite(suite_id)
     if suite is None:
         raise ValueError(f"no suite {suite_id!r}")
@@ -348,9 +345,17 @@ async def run_sweep(
     if not cases:
         raise ValueError("no cases to run")
 
+    # Read once for the whole sweep, not per target: every run in a sweep is
+    # answering the same suite with the same catalog, and reading it per target
+    # would let a skill toggled mid-sweep make two runs of one comparison
+    # incomparable without anything saying so.
+    harness = fingerprint.compute()
+
     runs = await asyncio.gather(
         *(
-            _run_one_target(suite_id, cases, t, agent_tools, localtrack_project)
+            _run_one_target(
+                suite_id, cases, t, agent_tools, localtrack_project, harness, started
+            )
             for t in targets
         )
     )
@@ -371,21 +376,85 @@ def start_sweep(
     free to close.
     """
     key = f"{suite_id}:{time.time():.0f}"
+    started: list[str] = []
 
     async def _go() -> None:
         try:
             await run_sweep(
-                suite_id, targets, agent_tools, case_ids, localtrack_project
+                suite_id, targets, agent_tools, case_ids, localtrack_project, started
             )
+        except asyncio.CancelledError:
+            # A cancelled sweep must not leave rows reading `running` forever. They
+            # are closed as `cancelled` rather than `failed`, because "you stopped
+            # it" and "it broke" are different facts and the scoreboard treats a
+            # failed run as a signal about the model. Re-raised so the task ends
+            # cancelled, which is what it is.
+            _close_out(started)
+            # Detached, not awaited: this task is already cancelling, and an await
+            # inside the handler can be cancelled again before it lands — leaving
+            # the panes watching a sweep that simply stops updating. The rows are
+            # already closed out synchronously above, so the broadcast is the only
+            # thing at stake.
+            _detached.add(
+                task := asyncio.create_task(
+                    _emit("sweep_cancelled", {"suiteId": suite_id, "runs": started})
+                )
+            )
+            task.add_done_callback(_detached.discard)
+            raise
         except Exception as exc:  # noqa: BLE001
             logger.exception("evals: sweep failed")
             await _emit("sweep_failed", {"suiteId": suite_id, "error": str(exc)})
         finally:
             _running.pop(key, None)
+            _sweep_info.pop(key, None)
 
+    _sweep_info[key] = {
+        "key": key,
+        "suiteId": suite_id,
+        "targets": [t.label or t.model for t in targets],
+        "startedAt": _now(),
+    }
     _running[key] = asyncio.create_task(_go())
     return key
 
 
-def active_sweeps() -> list[str]:
-    return sorted(_running)
+def _close_out(run_ids: list[str]) -> None:
+    """Mark every run of a cancelled sweep that had not finished.
+
+    Only the unfinished ones: a target that completed before the cancel landed has
+    real results, and rewriting its status would throw away a measurement that was
+    actually taken.
+    """
+    for run_id in run_ids:
+        try:
+            run = store.get_run(run_id)
+            if run is None or run.status not in ("queued", "running"):
+                continue
+            store.update_run(run_id, status="cancelled", finished_at=_now())
+        except Exception:  # noqa: BLE001
+            logger.debug("evals: could not close out run %s", run_id, exc_info=True)
+
+
+def active_sweeps() -> list[dict[str, Any]]:
+    """The sweeps running right now, newest last.
+
+    Dicts rather than bare keys: a pane offering to stop something has to be able
+    to say *what* it is stopping, and a key is an opaque handle.
+    """
+    return [_sweep_info[k] for k in sorted(_running) if k in _sweep_info]
+
+
+def cancel_sweep(key: str) -> bool:
+    """Stop a running sweep. False when there is no such sweep.
+
+    Cancelling the task rather than setting a flag the loop checks: the time is
+    spent inside a provider call, so a flag would not be read until the case in
+    flight finished — which on a stuck endpoint is the timeout, and the whole
+    reason to press stop.
+    """
+    task = _running.get(key)
+    if task is None:
+        return False
+    task.cancel()
+    return True

@@ -26,6 +26,20 @@ export const skillsModule: ModuleManifest = {
       icon: '🎓',
       dockable: 'left',
       singleton: true,
+      /**
+       * Library and editor are **sections**, not a `useState` swap of the pane
+       * body.
+       *
+       * The editor used to replace the whole pane from local state, which meant it
+       * had no address: nothing could link to it, the tab strip did not know it was
+       * open, reloading dropped you back in the list, and the only way out was the
+       * component's own Cancel button. A section is persisted with the layout and
+       * reachable from the palette, which is what MCP's three sections already do.
+       */
+      sections: [
+        { id: 'library', label: 'Library', icon: '📚', key: 'l', default: true },
+        { id: 'editor', label: 'Editor', icon: '✎', key: 'e' },
+      ],
     },
   ],
   commands: [
@@ -37,8 +51,19 @@ export const skillsModule: ModuleManifest = {
     {
       id: 'skills.new',
       title: 'Skills: New skill',
-      // The form lives in the pane; the command is the discoverable way to reach it.
-      run: () => registry.openPanel('skills.library'),
+      /**
+       * Opens the pane and switches it to the editor. It used to call `openPanel`
+       * and stop, landing you in the library with no form in sight — the command's
+       * title was a promise it did not keep.
+       *
+       * Runs the registry-synthesized section command rather than reaching for
+       * `setPaneSection`: UI calls commands, never the reverse, which is the same
+       * rule `/mcp open` follows.
+       */
+      run: async () => {
+        registry.openPanel('skills.library');
+        await registry.runCommand('section.show:skills.library:editor');
+      },
     },
     {
       id: 'skills.status',

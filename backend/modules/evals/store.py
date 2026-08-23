@@ -102,7 +102,9 @@ def init_evals_db() -> None:
                 started_at TEXT NOT NULL DEFAULT '',
                 finished_at TEXT NOT NULL DEFAULT '',
                 error TEXT NOT NULL DEFAULT '',
-                localtrack_run_id TEXT NOT NULL DEFAULT ''
+                localtrack_run_id TEXT NOT NULL DEFAULT '',
+                harness_hash TEXT NOT NULL DEFAULT '',
+                harness_json TEXT NOT NULL DEFAULT ''
             )
             """
         )
@@ -134,6 +136,11 @@ def init_evals_db() -> None:
         # an explicit ALTER. Skipping this is how a new field silently never
         # appears on anyone's machine but the one it was written on.
         _ensure_column(conn, "eval_results", "case_hash", "TEXT NOT NULL DEFAULT ''")
+        # Same reasoning one level up: the skills catalog and the connected MCP
+        # servers decide what tools a run saw, so a comparison across a harness
+        # change is not a comparison of models (see evals/fingerprint.py).
+        _ensure_column(conn, "eval_runs", "harness_hash", "TEXT NOT NULL DEFAULT ''")
+        _ensure_column(conn, "eval_runs", "harness_json", "TEXT NOT NULL DEFAULT ''")
 
         # The two questions the scoreboard asks: every result for one run, and
         # every run's verdict on one case (the "which model fixed this" column).
@@ -346,7 +353,14 @@ def write_cases(suite: EvalSuite, cases: list[EvalCase]) -> None:
 
 
 def create_run(
-    suite_id: str, label: str, provider: str, endpoint: str, model: str, total: int
+    suite_id: str,
+    label: str,
+    provider: str,
+    endpoint: str,
+    model: str,
+    total: int,
+    harness_hash: str = "",
+    harness_json: str = "",
 ) -> EvalRun:
     run = EvalRun(
         id=uuid.uuid4().hex[:12],
@@ -358,12 +372,15 @@ def create_run(
         status="queued",
         total=total,
         started_at=_now(),
+        harness_hash=harness_hash,
+        harness_json=harness_json,
     )
     with get_db_conn() as conn:
         conn.execute(
             "INSERT INTO eval_runs (id, suite_id, label, provider, endpoint, model,"
             " status, total, passed, completed, started_at, finished_at, error,"
-            " localtrack_run_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, '', '', '')",
+            " localtrack_run_id, harness_hash, harness_json)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, '', '', '', ?, ?)",
             (
                 run.id,
                 run.suite_id,
@@ -374,6 +391,8 @@ def create_run(
                 run.status,
                 run.total,
                 run.started_at,
+                run.harness_hash,
+                run.harness_json,
             ),
         )
     return run

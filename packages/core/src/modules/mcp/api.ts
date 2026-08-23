@@ -364,6 +364,34 @@ export function readResource(
 }
 
 /**
+ * The MCP server this node *exports* — the other direction, where an external
+ * agent asks what this node's agent has been doing.
+ *
+ * `hasToken` and never the token: it grants read access to this node's
+ * trajectories and telemetry, so it appears only when someone explicitly asks
+ * (`revealExportToken`).
+ */
+export interface McpExportStatus {
+  enabled: boolean;
+  mountPath: string;
+  enableEnv: string;
+  hasToken: boolean;
+  exposeContent: boolean;
+}
+
+export function exportStatus(): Promise<McpExportStatus> {
+  return apiGet<McpExportStatus>('/mcp/export');
+}
+
+/** Reveal the bearer token, or mint a replacement when `rotate` is set. */
+export function revealExportToken(rotate = false): Promise<{ token: string; mountPath: string }> {
+  return apiPost<{ token: string; mountPath: string }>(
+    `/mcp/export/token${rotate ? '?rotate=true' : ''}`,
+    {},
+  );
+}
+
+/**
  * A one-line-per-server summary, shared by `/mcp` in chat and the `mcp.status`
  * command. Lives here so the two can never disagree about what "connected" means.
  */

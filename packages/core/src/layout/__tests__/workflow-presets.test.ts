@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { evalsModule } from '../../modules/evals';
 import { layoutsModule } from '../../modules/layouts';
 import { trainingModule } from '../../modules/training';
 import { seedFromPreset } from '../presets';
@@ -150,5 +151,28 @@ describe('fine-tuning frame preset', () => {
     const none = seedFromPreset(preset, { knownViews: new Set<string>() });
     expect(areasOf(real.center).flatMap((a) => a.tabs).length).toBe(4);
     expect(areasOf(none.center).flatMap((a) => a.tabs).length).toBe(0);
+  });
+});
+
+describe('evals frame preset', () => {
+  const preset = (() => {
+    const found = evalsModule.frames?.find((f) => f.id === 'evals');
+    expect(found, 'preset evals is declared').toBeDefined();
+    return found!;
+  })();
+
+  it('opens as the fine-tuning agent rather than one invented for this pane', () => {
+    expect(preset.agent).toBe('trainer');
+  });
+
+  it('docks the two panes that are variables of the experiment', () => {
+    // Not decoration: an enabled skill rides every turn and a connected MCP server
+    // contributes a whole tool group, so both change the catalog under test — and
+    // the run records which ones were on. The switches belong beside the results.
+    expect(preset.frame.docks?.left?.tools).toEqual([
+      'explorer.home',
+      'mcp.servers',
+      'skills.library',
+    ]);
   });
 });

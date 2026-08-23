@@ -1,10 +1,5 @@
-import { apiDelete, apiGet, apiPatch, apiPost } from '../../api';
-import type {
-  MetricSeries,
-  Project,
-  Run,
-  RunArtifact,
-} from './types';
+import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from '../../api';
+import type { MetricSeries, PanelConfig, Project, Run, RunArtifact } from './types';
 
 export async function fetchProjects(): Promise<Project[]> {
   const res = await apiGet<{ projects: Project[] }>('/localtrack/projects');
@@ -71,4 +66,23 @@ export async function fetchRunArtifacts(runId: string): Promise<RunArtifact[]> {
     `/localtrack/runs/${encodeURIComponent(runId)}/artifacts`
   );
   return res.artifacts;
+}
+
+/**
+ * The saved panel arrangement for a project.
+ *
+ * `null` means the project has never saved one (use the defaults); `[]` means the
+ * user removed every panel. Two different answers — collapsing them would make a
+ * deliberately cleared workspace spring back to the four default charts on every
+ * reload.
+ */
+export async function fetchLayout(projectId: string): Promise<PanelConfig[] | null> {
+  const res = await apiGet<{ panels: PanelConfig[] | null }>(
+    `/localtrack/projects/${encodeURIComponent(projectId)}/layout`,
+  );
+  return res.panels;
+}
+
+export async function saveLayout(projectId: string, panels: PanelConfig[]): Promise<void> {
+  await apiPut(`/localtrack/projects/${encodeURIComponent(projectId)}/layout`, { panels });
 }

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 
+import { Button, Chip, EmptyState } from '../../../Primitives';
 import {
   clearTranscript,
+  readResource,
   serverCost,
   serverTranscript,
   type McpCost,
@@ -29,10 +31,11 @@ import { ToolInvoker } from './ToolInvoker';
  * invokes a tool from a form generated off its own schema, with no model in the loop.
  * "Is it correct" — Check, the conformance suite.
  */
-type View = 'tools' | 'cost' | 'wire' | 'run' | 'check';
+type View = 'tools' | 'resources' | 'cost' | 'wire' | 'run' | 'check';
 
 const LABEL: Record<View, string> = {
   tools: 'Tools',
+  resources: 'Resources',
   cost: 'Context cost',
   wire: 'Wire',
   run: 'Run',
@@ -63,11 +66,108 @@ function ToolsView({ server }: { server: McpServer }) {
       )}
       {server.resources.length > 0 && (
         <li style={{ color: 'var(--text-dim)' }}>
-          Resources: {server.resources.length} — {server.resources[0]?.uri}
-          {server.resources.length > 1 ? ' …' : ''}
+          {server.resources.length} resource{server.resources.length === 1 ? '' : 's'} — see the
+          Resources view
         </li>
       )}
     </ul>
+  );
+}
+
+/**
+ * Browse the server's resources, and read one.
+ *
+ * `readResource` has been exported from the API client since the module landed with
+ * **no consumer at all** — the tool list showed a count and the first URI followed
+ * by an ellipsis, so a server offering forty documents was indistinguishable from
+ * one offering two, and neither could be opened.
+ *
+ * Text content is rendered raw. A resource is whatever the server says it is, and
+ * prettifying it here would hide exactly the malformed payload you opened this view
+ * to see. Anything without text (a blob) is reported by type rather than decoded —
+ * guessing at an encoding is how a binary lands in a `<pre>` as mojibake.
+ */
+function ResourcesView({ server }: { server: McpServer }) {
+  const [selected, setSelected] = useState<string | null>(null);
+  const [body, setBody] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const open = async (uri: string) => {
+    setSelected(uri);
+    setBusy(true);
+    setError(null);
+    setBody(null);
+    try {
+      const res = await readResource(server.id, uri);
+      if (res.error) {
+        setError(res.error);
+        return;
+      }
+      const parts = (res.contents ?? []).map((c) => {
+        const item = c as { text?: string; blob?: string; mimeType?: string };
+        if (typeof item.text === 'string') return item.text;
+        if (item.blob)
+          return `[${item.mimeType || 'binary'} — ${item.blob.length} bytes, not decoded]`;
+        return JSON.stringify(item, null, 2);
+      });
+      setBody(parts.join('\n\n') || '(the server returned no content)');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (server.resources.length === 0) {
+    return <EmptyState title="No resources">This server exposes none.</EmptyState>;
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)' }}>
+        {server.resources.map((r) => (
+          <Button
+            key={r.uri}
+            size="sm"
+            intent={selected === r.uri ? 'primary' : 'default'}
+            disabled={busy}
+            title={r.uri}
+            onClick={() => void open(r.uri)}
+          >
+            {r.name || r.uri}
+          </Button>
+        ))}
+      </div>
+
+      {selected && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+          <code style={{ fontSize: 'var(--fs-micro)', color: 'var(--text-dim)' }}>{selected}</code>
+          {busy && <Chip>reading</Chip>}
+        </div>
+      )}
+
+      {error && <div style={{ fontSize: 'var(--fs-meta)', color: 'var(--danger)' }}>{error}</div>}
+
+      {body !== null && (
+        <pre
+          style={{
+            margin: 0,
+            padding: 'var(--space-3)',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius-sm)',
+            background: 'var(--bg-inset)',
+            whiteSpace: 'pre-wrap',
+            fontFamily: 'var(--font-mono)',
+            fontSize: 'var(--fs-micro)',
+            maxHeight: 320,
+            overflow: 'auto',
+          }}
+        >
+          {body}
+        </pre>
+      )}
+    </div>
   );
 }
 
@@ -174,7 +274,7 @@ export function ServerInspector({ server }: { server: McpServer }) {
   return (
     <div style={{ marginTop: '0.4rem', fontSize: '0.75rem' }}>
       <div style={{ display: 'flex', gap: '0.35rem', marginBottom: '0.35rem' }}>
-        {(['tools', 'cost', 'wire', 'run', 'check'] as const).map((v) => (
+        {(['tools', 'resources', 'cost', 'wire', 'run', 'check'] as const).map((v) => (
           <button key={v} onClick={() => setView(v)} style={{ fontWeight: view === v ? 600 : 400 }}>
             {v === 'tools' ? `${server.tools.length} tools` : LABEL[v]}
           </button>
@@ -185,6 +285,7 @@ export function ServerInspector({ server }: { server: McpServer }) {
       </div>
       {error && <div style={{ color: 'var(--danger, #f85149)' }}>{error}</div>}
       {view === 'tools' && <ToolsView server={server} />}
+      {view === 'resources' && <ResourcesView server={server} />}
       {view === 'cost' && <CostView cost={cost} />}
       {view === 'wire' && (
         <WireView

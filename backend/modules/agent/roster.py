@@ -55,6 +55,10 @@ TRAINER_PROMPT = (
     "localtrack.query_metrics rather than waiting on it.\n"
     "- When asked whether a fine-tune helped, compare it against the base model "
     "with an eval sweep (evals.run over both), not against a remembered number.\n"
+    "- The loop after a run finishes is training.list_checkpoints -> "
+    "training.convert -> llamacpp.serve -> evals.run. Conversion takes minutes, and "
+    "llama-server holds one model at a time, so serving a second means stopping the "
+    "first — which may be the model the user is chatting with.\n"
     "- Never claim a metric you did not read from localtrack or an eval run."
     + _SHARED_RULES
 )
@@ -148,12 +152,30 @@ def _builtin_agents() -> dict[str, AgentSpec]:
             "scoring the result with an eval suite.",
             system_prompt=TRAINER_PROMPT,
             # A group is a tool name's **prefix** (`_group_of`), so only namespaces
-            # that real tools live under mean anything here. `llamacpp` and
-            # `hardware` deliberately do not appear: those namespaces are *settings*
-            # keys, and listing one would silently permit nothing at all.
-            # `editor`/`files` are permitted but not preloaded — reading a recipe
-            # costs a `load_tools`, not schema space on every turn.
-            tool_groups=["training", "evals", "localtrack", "editor", "files"],
+            # that real tools live under mean anything here.
+            #
+            # `llamacpp` is one of those now, and used not to be. It was excluded on
+            # the grounds that the namespace held only *settings* keys, so naming it
+            # would silently permit nothing — correct at the time, and wrong the
+            # moment `llamacpp.serve` / `list_models` / `stop` / `status` existed.
+            # Without it this agent could convert a checkpoint and then had no way to
+            # serve the result, which is the step immediately before the eval its own
+            # prompt tells it to run.
+            #
+            # `hardware` still does not appear, for the original reason: settings
+            # keys only, no tools.
+            #
+            # Not preloaded: `llamacpp`, `editor` and `files` are permitted but cost
+            # a `load_tools` rather than schema space on every turn. That matters
+            # here — this flow already sits close to `TOOL_BUDGET`.
+            tool_groups=[
+                "training",
+                "evals",
+                "localtrack",
+                "llamacpp",
+                "editor",
+                "files",
+            ],
             preload_groups=["training"],
         ),
         "dba": AgentSpec(

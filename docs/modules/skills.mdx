@@ -18,11 +18,27 @@ Backend `backend/modules/skills/`; frontend `packages/core/src/modules/skills/`.
 
 - **Panels** — `skills.library` ("Skills", 🎓, `role: 'document'` + `dockable: 'left'` — a browsable catalogue, the same shape as the marketplace; `dockable` keeps the rail glyph,
   singleton).
-- **Commands** — `skills.open`, `skills.new`, `skills.status` (prints the list *and*
-  the per-turn cost inline, no model turn).
+  Two **sections**: `library` (<kbd>l</kbd>, default) and `editor` (<kbd>e</kbd>).
+- **Commands** — `skills.open`, `skills.new` (opens the pane *and* switches it to the
+  editor), `skills.status` (prints the list *and* the per-turn cost inline, no model
+  turn).
+- **Chat** — `/skills` lists them with their per-turn cost, `/skills open` runs
+  `skills.open`.
 - **Agent tools** — `use_skill`, in the core set, but **only when a skill is enabled**.
 - **Keybindings / settings** — none. Enablement is machine-local state, not a setting;
   see [Enablement](#enablement-is-not-a-setting).
+
+The editor is a **section**, not a swap of the pane body from local state. It used to be
+the latter, which left it with no address at all: the tab strip did not know it was open,
+a reload dropped you back in the list, and the only way out was the component's own
+Cancel button. One honest limit remains — the section is addressable, but *which skill is
+loaded into it* is still component state, so a reload returns to an empty editor rather
+than to the skill you were writing.
+
+`/skills` returned the literal string `No skills available yet.` for as long as this
+module has shipped — a placeholder from before it landed that nothing came back to, so
+asking the agent about its own skills got a confident denial they existed. It reads the
+module's own client now, the way `/mcp` does, and the two cannot disagree.
 
 ## The format is not ours
 
@@ -110,6 +126,33 @@ for the same reason `load_tools` returns one).
 An entry may be a tool name (`files.read`) or a group name (`files`) — both are written
 in the wild, and a group name never contains a dot, so they're unambiguous. Resolving
 here keeps the file portable: Claude Code's `allowed-tools` lists *tools*.
+
+### The picker, and the seam it exposes
+
+That field used to be free text with a placeholder. Two things were wrong, and the second
+matters more.
+
+You could not tell whether what you typed was real. A name matching no group is not an
+error anywhere — the skill saves, loads, and activates nothing, surfacing much later as an
+agent that appears to have ignored its own skill.
+
+And it hid the relationship with [MCP](mcp.mdx) completely. A group is a tool name's
+prefix, and **a connected MCP server *is* a group** (`mcp-<id>`), so a skill can pull a
+whole third-party server's tools into a turn just by naming it here. Nothing in either
+pane said so. The picker reads the live catalog from `GET /api/agent/tool-groups` — the
+same `_group_catalog` the model gets from `list_tool_groups`, so the two cannot drift —
+and MCP servers appear in it beside the built-ins, which is the only place that
+relationship is visible.
+
+Free text is still accepted alongside the picker: the format allows individual tool names,
+Claude Code writes them that way, and refusing to round-trip a portable file would defeat
+the point of adopting the format. Entries the picker does not recognise are **kept and
+shown**, never dropped — a skill authored against another machine's servers is still a
+valid file, and silently discarding its entries on save would corrupt it.
+
+Note the route reports `connected`. With no browser socket attached it can only see
+backend groups, so the frontend-contributed ones (editor, files, layout…) are absent; the
+picker says so rather than presenting a short list as the whole catalog.
 
 A skill **cannot widen a specialized agent's scope**. `use_skill` running under a spec
 with `tool_groups` drops anything outside it and reports `refusedGroups` — otherwise a

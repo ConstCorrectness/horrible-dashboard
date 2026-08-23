@@ -126,7 +126,7 @@ export function TrainingPeersPane() {
                       background:
                         ad.status === 'offering'
                           ? 'var(--ok, #347d39)'
-                          : 'var(--attention, #966600)',
+                          : 'var(--warn)',
                       color: '#fff',
                     }}
                   >

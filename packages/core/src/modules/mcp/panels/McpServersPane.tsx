@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 
+import { Button, Chip, EmptyState, PaneHeader } from '../../../Primitives';
+import { DataList, DataRow, type RowKind } from '../../../DataList';
+import { dialogs } from '../../../dialogs';
 import { usePaneSection } from '../../../layout/use-sections';
 import {
   connectServer,
@@ -12,6 +15,7 @@ import {
   type McpTransport,
 } from '../api';
 import { AuthorSection } from './AuthorSection';
+import { ExportSection } from './ExportSection';
 import { DiscoverSection } from './DiscoverSection';
 import { ServerInspector } from './ServerInspector';
 
@@ -27,11 +31,19 @@ import { ServerInspector } from './ServerInspector';
 
 const EMPTY: McpServerInput = { id: '', name: '', transport: 'stdio', command: '', args: [] };
 
-function stateColor(state: McpServer['state']): string {
-  if (state === 'ready') return 'var(--ok, #3fb950)';
-  if (state === 'error') return 'var(--danger, #f85149)';
-  if (state === 'starting') return 'var(--warn, #d29922)';
-  return 'var(--text-dim)';
+/**
+ * A connection state as a row verdict.
+ *
+ * Mapped onto the shared `RowKind` vocabulary rather than a private colour table,
+ * so "ready" is the same green here as a passing eval row and a reader learns the
+ * palette once. `stopped` is `idle`, not a failure — a server you have not started
+ * has not gone wrong.
+ */
+function stateKind(state: McpServer['state']): RowKind {
+  if (state === 'ready') return 'ok';
+  if (state === 'error') return 'fail';
+  if (state === 'starting') return 'warn';
+  return 'idle';
 }
 
 /**
@@ -46,14 +58,8 @@ function OriginChip({ origin }: { origin: McpServer['origin'] }) {
   if (origin === 'manual') return null;
   const registry = origin === 'registry';
   return (
-    <span
-      style={{
-        fontSize: '0.62rem',
-        padding: '0 0.3rem',
-        borderRadius: 3,
-        border: '1px solid var(--border)',
-        color: registry ? 'var(--warn, #d29922)' : 'var(--text-dim)',
-      }}
+    <Chip
+      kind={registry ? 'warn' : 'idle'}
       title={
         registry
           ? 'Third-party code installed from the MCP registry.'
@@ -61,108 +67,127 @@ function OriginChip({ origin }: { origin: McpServer['origin'] }) {
       }
     >
       {registry ? 'third-party' : 'yours'}
-    </span>
+    </Chip>
   );
 }
 
-function ServerCard({ server, onChanged }: { server: McpServer; onChanged: () => void }) {
+function ServerCard({
+  server,
+  index,
+  onChanged,
+}: {
+  server: McpServer;
+  index: number;
+  onChanged: () => void;
+}) {
   const [busy, setBusy] = useState(false);
   const [open, setOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const act = async (fn: () => Promise<unknown>) => {
     setBusy(true);
+    setError(null);
     try {
       await fn();
       onChanged();
+    } catch (e) {
+      // Connecting a stdio server runs someone's package and can fail in a dozen
+      // ways; swallowing that left the button looking inert.
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
   };
 
+  const remove = async () => {
+    const ok = await dialogs.confirm({
+      title: `Remove “${server.name || server.id}”?`,
+      message:
+        'Forgets the configuration and any stored credential for it. The installed package, if there is one, stays on disk.',
+      confirmLabel: 'Remove',
+      danger: true,
+    });
+    if (ok) await act(() => deleteServer(server.id));
+  };
+
   const unavailable = server.transport === 'stdio' && !server.target.available;
+  const command =
+    server.transport === 'stdio'
+      ? (server.target.argv ?? [server.command, ...server.args]).join(' ')
+      : `${server.transport.toUpperCase()} ${server.url}${server.hasToken ? ' · authenticated' : ''}`;
 
   return (
-    <div
-      style={{
-        border: '1px solid var(--border)',
-        borderRadius: 6,
-        padding: '0.6rem 0.75rem',
-        marginBottom: '0.5rem',
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-        <span style={{ color: stateColor(server.state) }}>●</span>
-        <strong>{server.name || server.id}</strong>
-        <code style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>{server.group}</code>
-        <OriginChip origin={server.origin} />
-        <span style={{ marginLeft: 'auto', display: 'flex', gap: '0.35rem' }}>
-          <button disabled={busy} onClick={() => act(() => connectServer(server.id))}>
+    <DataRow
+      kind={stateKind(server.state)}
+      index={index}
+      title={server.name || server.id}
+      meta={[
+        server.group,
+        server.state,
+        ...(server.state === 'ready'
+          ? [
+              `${server.tools.length} tools`,
+              `${server.prompts.length} prompts`,
+              `${server.resources.length} resources`,
+            ]
+          : []),
+      ]}
+      metaTone={server.state === 'error' ? 'fail' : undefined}
+      badge={<OriginChip origin={server.origin} />}
+      actions={
+        <>
+          <Button size="sm" disabled={busy} onClick={() => act(() => connectServer(server.id))}>
             {server.state === 'ready' ? 'Reconnect' : 'Connect'}
-          </button>
+          </Button>
           {server.state === 'ready' && (
-            <button disabled={busy} onClick={() => act(() => disconnectServer(server.id))}>
+            <Button
+              size="sm"
+              disabled={busy}
+              onClick={() => act(() => disconnectServer(server.id))}
+            >
               Disconnect
-            </button>
+            </Button>
           )}
-          <button disabled={busy} onClick={() => act(() => deleteServer(server.id))}>
+          <Button intent="danger" size="sm" disabled={busy} onClick={remove}>
             Remove
-          </button>
-        </span>
-      </div>
-
-      <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)', marginTop: '0.3rem' }}>
-        {server.transport === 'stdio' ? (
-          <code>{(server.target.argv ?? [server.command, ...server.args]).join(' ')}</code>
-        ) : (
-          <code>
-            {server.transport.toUpperCase()} {server.url}
-            {server.hasToken ? ' · authenticated' : ''}
-          </code>
-        )}
-      </div>
-
-      {unavailable && (
-        <div style={{ fontSize: '0.72rem', color: 'var(--danger, #f85149)', marginTop: '0.3rem' }}>
-          `{server.command}` is not on PATH on this machine.
-        </div>
-      )}
-      {server.error && (
-        <div style={{ fontSize: '0.72rem', color: 'var(--danger, #f85149)', marginTop: '0.3rem' }}>
-          {server.error}
-        </div>
-      )}
-
-      {/* A server that starts but has no credential fails inside the *server*, whose
-          error text is rarely legible. Saying it here turns that into a fixable
-          state rather than a mystery. */}
-      {server.missingSecretEnv.length > 0 && (
-        <div style={{ fontSize: '0.72rem', color: 'var(--warn, #d29922)', marginTop: '0.3rem' }}>
-          Needs a value for {server.missingSecretEnv.join(', ')}.
-        </div>
-      )}
-
-      {/* The wire is available whenever anything has been recorded — including for a
-          server that never reached `ready`, which is exactly when it is worth
-          reading. */}
-      <div style={{ marginTop: '0.4rem', fontSize: '0.75rem' }}>
-        <button
-          onClick={() => setOpen((v) => !v)}
-          style={{
-            background: 'none',
-            border: 'none',
-            color: 'var(--text-dim)',
-            cursor: 'pointer',
-            padding: 0,
-          }}
-        >
-          {open ? '▾' : '▸'}{' '}
-          {server.state === 'ready'
-            ? `${server.tools.length} tools · ${server.prompts.length} prompts · ${server.resources.length} resources`
-            : 'Inspect'}
-        </button>
-        {open && <ServerInspector server={server} />}
-      </div>
-    </div>
+          </Button>
+        </>
+      }
+      footnotes={
+        <>
+          {unavailable && (
+            <div style={{ fontSize: 'var(--fs-meta)', color: 'var(--danger)' }}>
+              <code>{server.command}</code> is not on PATH on this machine.
+            </div>
+          )}
+          {server.error && (
+            <div style={{ fontSize: 'var(--fs-meta)', color: 'var(--danger)' }}>{server.error}</div>
+          )}
+          {error && (
+            <div style={{ fontSize: 'var(--fs-meta)', color: 'var(--danger)' }}>{error}</div>
+          )}
+          {/* A server that starts but has no credential fails inside the *server*,
+              whose error text is rarely legible. Saying it here turns that into a
+              fixable state rather than a mystery. */}
+          {server.missingSecretEnv.length > 0 && (
+            <div style={{ fontSize: 'var(--fs-meta)', color: 'var(--warn)' }}>
+              Needs a value for {server.missingSecretEnv.join(', ')}.
+            </div>
+          )}
+          {/* The wire is available whenever anything has been recorded — including
+              for a server that never reached `ready`, which is exactly when it is
+              worth reading. */}
+          <div style={{ marginTop: 'var(--space-3)' }}>
+            <Button intent="ghost" size="sm" onClick={() => setOpen((v) => !v)}>
+              {open ? 'Hide inspector' : 'Inspect'}
+            </Button>
+          </div>
+          {open && <ServerInspector server={server} />}
+        </>
+      }
+    >
+      <code style={{ fontSize: 'var(--fs-meta)', color: 'var(--text-dim)' }}>{command}</code>
+    </DataRow>
   );
 }
 
@@ -306,22 +331,67 @@ export function McpServersPane() {
     );
   }
 
+  // The other direction — this node serving an external agent. It shares this pane
+  // rather than getting one of its own for the reason the other three do: they are
+  // the same object (an MCP connection) seen from four positions, and a separate
+  // pane would mean a fourth opener for something you reach twice a year.
+  if (section === 'export') {
+    return <ExportSection />;
+  }
+
+  const ready = servers.filter((s) => s.state === 'ready').length;
+  const toolCount = servers.reduce((n, s) => n + s.tools.length, 0);
+
   return (
-    <div style={{ padding: '0.75rem', height: '100%', overflow: 'auto' }}>
-      <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginBottom: '0.5rem' }}>
-        MCP servers extend the agent with third-party tools, prompts and resources.
-      </div>
-      {loading && <div style={{ color: 'var(--text-dim)' }}>Loading…</div>}
-      {error && <div style={{ color: 'var(--danger, #f85149)' }}>{error}</div>}
-      {!loading && servers.length === 0 && (
-        <div style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>
-          No servers configured yet.
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <PaneHeader
+        title="MCP servers"
+        meta={[`${ready}/${servers.length} connected`, `${toolCount} tools`]}
+      />
+      <div style={{ padding: 'var(--space-5)', overflow: 'auto', flex: 1 }}>
+        <div
+          style={{
+            fontSize: 'var(--fs-meta)',
+            color: 'var(--text-dim)',
+            marginBottom: 'var(--space-5)',
+            lineHeight: 1.5,
+          }}
+        >
+          A connected server becomes a tool <em>group</em> the agent can load
+          (<code>mcp-&lt;id&gt;</code>) — which also means a skill can name it in its
+          allowed-tools and pull the whole server into a turn.
         </div>
-      )}
-      {servers.map((s) => (
-        <ServerCard key={s.id} server={s} onChanged={refresh} />
-      ))}
-      <AddServerForm onAdded={refresh} />
+
+        {error && (
+          <div
+            role="alert"
+            style={{
+              color: 'var(--danger)',
+              fontSize: 'var(--fs-body)',
+              marginBottom: 'var(--space-4)',
+            }}
+          >
+            {error}
+          </div>
+        )}
+
+        {loading ? (
+          <div style={{ color: 'var(--text-dim)', fontSize: 'var(--fs-body)' }}>Loading…</div>
+        ) : servers.length === 0 ? (
+          <EmptyState title="No servers">
+            Browse the registry in <strong>Discover</strong> to find one, write your own in{' '}
+            <strong>Author</strong>, or add a command or URL directly below.
+          </EmptyState>
+        ) : (
+          <DataList label="MCP servers">
+            {servers.map((s, i) => (
+              <ServerCard key={s.id} server={s} index={i} onChanged={refresh} />
+            ))}
+          </DataList>
+        )}
+
+        <AddServerForm onAdded={refresh} />
+      </div>
     </div>
   );
 }

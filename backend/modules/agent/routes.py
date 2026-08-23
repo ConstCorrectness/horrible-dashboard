@@ -278,6 +278,42 @@ def roster() -> RosterResponse:
     )
 
 
+@router.get("/tool-groups")
+def tool_groups() -> dict[str, Any]:
+    """Every loadable tool group, with its blurb and tool count.
+
+    The same catalog the model gets from `list_tool_groups`, built by the same
+    function, so the picker in the skills editor cannot drift from what
+    `use_skill`'s `allowed-tools` will actually resolve against. Groups are how a
+    skill activates capability, and until this existed the field was free text —
+    you typed a group name and found out whether it was real by watching an agent
+    turn fail to load it.
+
+    It reads the **richest** manifest any connected browser has pushed, for the
+    reason the evals sweep does: a second window still registering its panes would
+    otherwise hand back a shorter catalog than the one the user is looking at.
+    With nothing connected the frontend-contributed groups are simply absent —
+    backend groups (including every connected MCP server) are still listed, which
+    is the honest answer rather than an error.
+    """
+    from backend.modules.agent.orchestrator import _group_catalog
+    from backend.modules.ws import _active_connections
+
+    best: list[dict[str, Any]] = []
+    for conn in list(_active_connections):
+        tools = getattr(conn, "agent_tools", None) or []
+        if len(tools) > len(best):
+            best = list(tools)
+
+    class _Shim:
+        """`_group_catalog` only ever reads `agent_tools` off the connection."""
+
+        agent_tools = best
+
+    groups = _group_catalog(_Shim())  # type: ignore[arg-type]
+    return {"groups": groups, "connected": bool(_active_connections)}
+
+
 @router.get("/tts")
 async def tts(text: str) -> Response:
     """Speak ``text`` as MP3 audio.

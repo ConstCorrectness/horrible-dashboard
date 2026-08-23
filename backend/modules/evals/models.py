@@ -24,10 +24,17 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 #: How a case's expected calls are compared with what the model actually did.
+#:
+#: `judge` is in the vocabulary because a *result* row from an older run can carry
+#: it, but it is not something a case may ask for — see `Expect.grade` below.
 Grade = Literal["exact", "name_only", "subset", "sequence", "no_call", "judge"]
+
+#: Grades a case may actually select. `judge` needs a provider and `graders` is
+#: deliberately pure, so nothing routes it and it always returns False.
+AUTHORABLE_GRADES = ("exact", "name_only", "subset", "sequence", "no_call")
 
 #: What kind of thing a case measures, which decides which runner takes it.
 CaseType = Literal["tool_call", "agent_task", "generative", "hf_benchmark"]
@@ -89,6 +96,25 @@ class Expect(_Strict):
     rubric: str = ""
     #: `hf_benchmark` only: the metric name the project runner reports.
     metric: str = ""
+
+    @field_validator("grade")
+    @classmethod
+    def _authorable(cls, grade: Grade) -> Grade:
+        """Refuse a grade nothing can score.
+
+        `judge` is declared but unrouted, so a case selecting it fails every time
+        it runs — and the failure reads as the *model* getting it wrong, which is
+        the one thing this module exists not to do. The frontend's picker already
+        omits it; this closes the two paths that bypass the picker, an
+        agent-authored case and a hand-edited `.jsonl`, and it fails where a
+        mistake is cheap rather than twenty minutes into a sweep.
+        """
+        if grade not in AUTHORABLE_GRADES:
+            raise ValueError(
+                f"grade {grade!r} is declared but not scored by anything; "
+                f"use one of {', '.join(AUTHORABLE_GRADES)}"
+            )
+        return grade
 
 
 class HfBenchmark(_Strict):
@@ -309,6 +335,13 @@ class EvalRun(BaseModel):
     error: str = ""
     #: The localtrack run this sweep reported aggregates to, when there is one.
     localtrack_run_id: str = ""
+    #: The tool catalog this run actually saw — enabled skills and connected MCP
+    #: servers, hashed by content (see `evals/fingerprint.py`). Empty on rows
+    #: written before this existed, which Compare reports as "cannot tell" rather
+    #: than as agreement.
+    harness_hash: str = ""
+    #: The harness itself, so a differing hash can say *what* differed.
+    harness_json: str = ""
 
 
 class StartRunRequest(BaseModel):
