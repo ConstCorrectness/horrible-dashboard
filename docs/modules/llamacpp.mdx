@@ -361,16 +361,20 @@ model than the one its settings show.
 | Section | `llamacpp.server` → `server` | Default, key <kbd>s</kbd> — build + process + log |
 | Section | `llamacpp.server` → `models` | Key <kbd>m</kbd> — catalog + downloads |
 | Section | `llamacpp.server` → `traces` | Key <kbd>t</kbd> — the activation scrubber |
+| Section | `llamacpp.server` → `lens` | Key <kbd>l</kbd> — a trace read as words |
 | Command | `llamacpp.open` | llama.cpp: Server and models |
 | Command | `llamacpp.traceSelection` | llama.cpp: Trace editor selection (`/trace-selection`) |
 | Setting | `llamacpp.modelDirs` | Extra GGUF directories to scan |
 | Setting | `llamacpp.diskBudgetGb` | Ceiling for the managed directory |
 | Setting | `llamacpp.traceBudgetGb` | Ceiling for stored traces (default 2 GB) |
+| Setting | `llamacpp.lensCacheGb` | Ceiling for the dequantized output-head cache (default 4 GB) |
 
-One pane, three sections — the build, the weights and the traces are one workflow in
-a strict order (no build, no server; no weights, nothing to serve; nothing served,
-nothing to look inside), so splitting them would
-give panes of which most are usually an instruction to open another. The pane is
+One pane, four sections — the build, the weights, the traces and the lens are one
+workflow in a strict order (no build, no server; no weights, nothing to serve;
+nothing served, nothing to look inside; nothing traced, nothing to read), so
+splitting them would give panes of which most are usually an instruction to open
+another. Traces and Lens are two readings of the same object rather than two
+objects, which is exactly what the sections primitive is for. The pane is
 also tabbed into the [Lab](./lab.mdx) frame beside the Hub and the model explorer:
 find weights → serve them → look at what you served is one working position.
 
@@ -431,6 +435,12 @@ does not resurrect an old selection over what you were typing.
 | `GET` | `/api/llamacpp/traces/{id}/record/{i}` | One record's values, decoded server-side (capped at `_VALUE_CAP`) |
 | `GET` | `/api/llamacpp/traces/{id}/series` | One node's statistic per forward pass, **by name**. Summarizes the whole record, unlike `/record/{i}` |
 | `GET` | `/api/llamacpp/traces/{id}/tensors` | The raw blob, honouring `Range` |
+| `POST` | `/api/llamacpp/traces/{id}/fork` | Re-run with some tokens replaced (NDJSON progress) |
+| `GET` | `/api/llamacpp/traces/capture-sets` | The named capture sets and their real ggml node patterns |
+| `GET` | `/api/llamacpp/traces/{id}/lens` | The layer × position readout |
+| `GET` | `/api/llamacpp/traces/{id}/lens/track` | One vocabulary token's logit and rank at every cell |
+| `GET` | `/api/llamacpp/traces/{id}/lenses` | Which lenses apply to this trace's model |
+| `GET` | `/api/llamacpp/models/vocab` | Search a GGUF's own vocabulary — the token picker behind a swap |
 | `DELETE` | `/api/llamacpp/traces/{id}` | Delete a trace |
 
 Progress rides **NDJSON on the request**, not a `/ws` channel — the shape
@@ -682,6 +692,135 @@ server-side decoding of both dtypes, a summary record returning **no** values,
 oldest-first pruning, the overlay guard refusing when either the build or the model
 differs, and a trace id that tries to walk out of the trace directory with `..`.
 
+## The lens — a trace read as words
+
+The Traces section is a **debugger**: pin a node, watch its numbers. The Lens
+section (`packages/core/src/modules/llamacpp/lens/`, backend
+`backend/modules/llamacpp/lens.py`) asks the other question, the one
+[Neuronpedia's Jacobian Lens](https://github.com/anthropics/jacobian-lens) asks —
+at every layer and every position, **what is the model disposed to say?**
+
+The readout is `unembed(norm(J_L · h))`, where `h` is the residual stream at
+(layer, position) — which the tracer already captures as `l_out-L` — and `J_L` is
+a per-layer transport matrix. Anthropic's J-lens fits `J_L = E[∂h_final/∂h_L]`
+over a corpus, which needs autograd this backend deliberately does not have. Set
+`J_L = I` and the same machinery is the classic **logit lens**: no artifact, no
+download, works on every GGUF on the machine. That is what ships. `LensSpec`
+names the transport, so a fitted `J` is a directory of `J_<layer>.npy` plus a
+`lens.json` rather than a rewrite — and the identity lens is labelled
+"identity (logit lens)" everywhere so it is never mistaken for a J-space readout.
+
+On a real 40-layer Mistral trace of `The capital of France is`, ` Paris` enters
+the top 4000 around layer 16, reaches rank 513 by layer 24 and rank 1 by layer 28.
+That progression is the artifact; a single grid is a screenshot.
+
+### The self-check is the correctness argument
+
+Per-architecture details are exactly the kind that yield confident wrong numbers
+rather than errors: Gemma folds `1 +` into its norm weights at convert time,
+Gemma 2 softcaps final logits, most models tie `output.weight` to
+`token_embd.weight`. So at the last layer the identity lens **must reproduce the
+trace's own captured `result_output`**, and `result_norm` independently checks the
+norm on its own — the two are separately wrong-able, and a disagreement that names
+neither is a worse answer than none.
+
+`verified` is therefore three-valued, the module's standing rule: `true`,
+`false` (rendered as a banner, never as numbers), and `unavailable` — the trace
+captured no logits to check against. A fitted lens always reports `unavailable`,
+because a J-lens does **not** reproduce the model's output by design; reporting
+`true` for one would mean the check was measuring nothing. It still says whether
+the identity path agreed, which is what tells you the machinery is sound even
+when the lens on screen cannot be validated.
+
+The check costs nothing: it rides the grid's own streaming pass as one extra
+column rather than a second pass over the output head.
+
+### Reading a pruned graph
+
+**The rows are ragged, and that is not a bug in the trace.** llama.cpp prunes its
+graph to what the pass needs, so on a prompt pass the last block's `l_out` is
+**one column wide** — only the final position's residual produces logits — while
+every earlier block is the full width, and `result_output` is one column covering
+that same final position. Two things follow, both silent when wrong:
+
+- A narrow tensor covers the **tail** of the sequence, so `column_of` maps a
+  position to a column and returns `None` when there is none. A cell that was
+  never computed renders **blank**; falling back to the nearest column would put
+  the last token's readout under every earlier one and make the top of the grid
+  look uncannily prescient.
+- The self-check addresses **both** tensors from the end. Taking column 0 of a
+  one-wide `result_output` against position 0 of the residual compares the last
+  token's logits with the first token's activation, disagrees wildly, and reports
+  every real trace as unverified.
+
+### The output head is never materialized
+
+For gemma-3-12b the head is 262144 × 3840 — 2 GB in fp16. Weight chunks stream
+past a matrix of **every cell in the grid stacked together**, so a 40 × 6 grid
+costs one pass over the head rather than 240. Dequantization is llama.cpp's own
+numpy implementation (the `gguf` package, ~110 kB over numpy); a quantization it
+cannot read is **named and refused**, the same instinct as `traces.decode`
+refusing a dtype it never wrote.
+
+The dequantized fp16 head is cached under
+`$HORRIBLE_DATA_DIR/llamacpp/lens/<modelSha>/unembed.f16.npy` when it fits
+`llamacpp.lensCacheGb` (4 GB default) — measured on a Q6_K 131k × 5120 head, that
+takes a grid from 7.9s to 2.0s. Two traps are pinned by tests: `np.save` **appends
+`.npy`** to a path that lacks it, so a temp file named `unembed.f16.part` lands as
+`unembed.f16.part.npy` and the rename after it finds nothing (a cache never
+installed, plus a gigabyte of litter per grid); and a cache whose shape does not
+match is deleted rather than used, which needs the memmap **released first**
+because on Windows an open mapping keeps the file undeletable.
+
+`modelSha` keys the cache, which is the same key the trace carries — two
+quantizations of one model are two caches, as they must be.
+
+### Swapping a token
+
+A grid alone cannot separate *the model knows this* from *the prompt said it*.
+`POST /traces/{id}/fork` replaces tokens and re-runs, and the two grids are
+diffed cell by cell.
+
+Three decisions carry it:
+
+- **Token ids, not text.** `TraceRequest.tokenIds` bypasses tokenization
+  entirely. Re-tokenizing an edited *string* can merge or split its neighbours,
+  so the run would differ in more places than the one you changed and the diff
+  would be unreadable.
+- **Everything else is inherited** from the parent — model, generation length,
+  layer selection, fidelity, capture set. A fork that also changed those is not a
+  counterfactual.
+- **`fromId` is stamped from the parent**, never trusted from the caller. It is
+  the record of what was actually replaced, and a client sending a stale one
+  would make the fork's own provenance wrong.
+
+Only the **prompt** is forkable: a generated token is an output, and replacing
+one would be editing the answer rather than the question. The diff aligns by
+(layer, position) rather than by array index, because a fork can differ from its
+parent in either and comparing `cells[2][3]` to `cells[2][3]` of a grid with a
+different layer subset silently compares different layers.
+
+The picker searches the **GGUF's own** vocabulary (`GET /models/vocab`), not an HF
+tokenizer's: `interpretability/tokenizer.py`'s family fallback can hand back a
+different generation's vocabulary while looking exact, and a swap has to name a
+token the traced weights actually have. It distinguishes ` Italy` (#16507) from
+`Italy` (#93355), which is the distinction a swap turns on.
+
+### Capture sets
+
+`TraceRequest.capture` is now reachable over HTTP, and `GET /traces/capture-sets`
+serves the named sets **with their real ggml node patterns** — the `plane_order`
+precedent: two lists of node names in two languages is one upstream rename away
+from a capture set that matches nothing and fails silently.
+
+`lens` is the one that matters. The lens reads the residual stream and the output
+head and nothing else, so it drops the default six-nodes-per-block to one: a
+40-layer, 6-token trace is megabytes rather than a gigabyte, and seconds rather
+than minutes. That is what makes swapping a token and looking again a loop rather
+than an errand. `traces.nodes_per_layer` teaches the pre-flight estimate about it,
+counting only the per-block nodes — `inp_embd` and the output head are captured
+once per pass, and charging them per layer would inflate the estimate by half.
+
 ## Not done here
 
 `topk` fidelity is declared as an idea and not implemented — only `full`, `fp16` and
@@ -689,3 +828,10 @@ differs, and a trace id that tries to walk out of the trace directory with `..`.
 on a chat turn in the interpretability pane: `traces.matches_run` is the guard that
 work will need, but the pane wiring is not built. The tracer also samples greedily
 and traces a raw prompt, so it reproduces a *forward pass*, not a chat turn.
+
+No **fitted** J-lens ships yet: the artifact format, the picker and the
+`unavailable` verdict for a non-identity lens are all in place, but importing
+Neuronpedia's published `.pt` lenses (which needs a torch environment to convert
+once) and fitting our own are not built. There are also no `lens.*` agent tools —
+the lens is reachable from the pane and over HTTP, but an agent cannot yet sweep
+one, and the `llamacpp` tool group still has no trace verbs at all.

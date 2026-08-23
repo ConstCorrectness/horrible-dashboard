@@ -89,6 +89,7 @@ export const llamacppModule: ModuleManifest = {
         { id: 'server', label: 'Server', icon: '⚙️', key: 's', default: true },
         { id: 'models', label: 'Models', icon: '🧠', key: 'm' },
         { id: 'traces', label: 'Traces', icon: '🔬', key: 't' },
+        { id: 'lens', label: 'Lens', icon: '🔭', key: 'l' },
       ],
     },
   ],

@@ -50,7 +50,17 @@ The computation between them is now covered too, and it lives **next door in
 engine and a different install. A traced run captures ggml's per-node `cb_eval`
 tensors into a **snapshot on disk**, scrubbed offline rather than streamed (one
 pass with attention on is about a gigabyte), and is read in the `traces` section
-of the llama.cpp pane. That path still avoids autograd entirely — the backend has
+of the llama.cpp pane.
+
+That page also now carries the **lens** — the same snapshot read as *words*
+rather than as numbers, a layer × position grid of what the model was disposed to
+say at each point, which is [Neuronpedia's Jacobian
+Lens](https://github.com/anthropics/jacobian-lens) with the identity transport.
+It needs no autograd and no fitted artifact, so the rule below still holds: this
+backend has no torch and should not grow one. Its correctness argument is the
+same shape as everything else here — at the last layer the lens must reproduce
+the trace's own captured logits, and a grid that cannot show that says
+`unavailable` rather than presenting itself as checked. That path still avoids autograd entirely — the backend has
 no torch and should not grow one; heavy dependencies live in per-project uv envs
 (`backend/modules/training/envs.py`) or optional extras, and tracing is
 `uv sync --extra llamacpp`, lazy-imported and CPU-only.

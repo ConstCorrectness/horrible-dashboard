@@ -22,14 +22,28 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse, StreamingResponse
 
 from backend.modules.hardware import probe as hardware
-from backend.modules.llamacpp import binaries, catalog, offload, trace_runner, traces
+from backend.modules.llamacpp import (
+    binaries,
+    catalog,
+    lens as lens_module,
+    offload,
+    trace_runner,
+    traces,
+)
 from backend.modules.llamacpp.models import (
     DeleteModelRequest,
     DownloadRequest,
+    CaptureSet,
+    CaptureSetsResponse,
     EstimateRequest,
     EstimateResponse,
+    ForkRequest,
     InstallRequest,
     LayerPlanResponse,
+    LensGridResponse,
+    LensListResponse,
+    LensSpecModel,
+    LensTrackResponse,
     ModelEntry,
     ModelsResponse,
     RecordValues,
@@ -43,6 +57,8 @@ from backend.modules.llamacpp.models import (
     TraceListResponse,
     TraceRequest,
     VariantAvailabilityResponse,
+    VocabEntry,
+    VocabResponse,
 )
 from backend.modules.llamacpp.server import llama_manager
 
@@ -276,6 +292,38 @@ def list_traces() -> TraceListResponse:
     )
 
 
+@router.get("/traces/capture-sets", response_model=CaptureSetsResponse)
+def capture_sets() -> CaptureSetsResponse:
+    """The named capture sets, with their real ggml node patterns.
+
+    Served rather than restated in TypeScript, for the reason `plane_order` is:
+    two lists of ggml node names in two languages is one upstream rename away
+    from a capture set that matches nothing and fails silently.
+    """
+    from backend.modules.llamacpp.tracer import CAPTURE_PRESETS
+
+    return CaptureSetsResponse(
+        sets=[
+            CaptureSet(
+                id="default",
+                label="Everything",
+                patterns=list(CAPTURE_PRESETS["default"]),
+                note="The architecture's own default set — six activations per block.",
+            ),
+            CaptureSet(
+                id="lens",
+                label="Lens only",
+                patterns=list(CAPTURE_PRESETS["lens"]),
+                note=(
+                    "The residual stream and the output head. All the lens reads, "
+                    "and a fraction of the bytes — which is what makes swapping a "
+                    "token and looking again take seconds."
+                ),
+            ),
+        ]
+    )
+
+
 @router.post("/traces/estimate", response_model=EstimateResponse)
 def estimate_trace(req: EstimateRequest) -> EstimateResponse:
     """What the run will cost, before it starts.
@@ -304,7 +352,9 @@ def estimate_trace(req: EstimateRequest) -> EstimateResponse:
     # Tokens are approximated by whitespace-ish splitting rather than by loading
     # the model to tokenize: this is an estimate, and loading a 20 GB GGUF to
     # refine an estimate would cost more than the trace.
-    prompt_tokens = max(1, len(req.prompt.split()) * 4 // 3)
+    prompt_tokens = (
+        len(req.tokenIds) if req.tokenIds else max(1, len(req.prompt.split()) * 4 // 3)
+    )
     result = traces.estimate(
         n_layer=dims["layers"],
         n_embd=dims["embeddingLength"],
@@ -314,6 +364,7 @@ def estimate_trace(req: EstimateRequest) -> EstimateResponse:
         layers=len(req.layers) or None,
         attention=req.attention,
         fidelity=req.fidelity,
+        nodes_per_layer=traces.nodes_per_layer(req.capture),
     )
     return EstimateResponse(
         **result.to_dict(),
@@ -332,6 +383,10 @@ async def create_trace(req: TraceRequest) -> StreamingResponse:
         spec = {
             "modelPath": req.modelPath,
             "prompt": req.prompt,
+            "tokenIds": req.tokenIds,
+            "capture": req.capture,
+            "derivedFrom": req.derivedFrom,
+            "edits": [edit.model_dump() for edit in req.edits],
             "maxTokens": req.maxTokens,
             "layers": req.layers,
             "attention": req.attention,
@@ -363,20 +418,24 @@ def _require(trace_id: str) -> traces.Trace:
     return trace
 
 
+def _trace_tokens(trace: traces.Trace) -> list[dict[str, Any]]:
+    """The tokens a pass ran on. An unreadable file is an empty strip, not a 500."""
+    tokens_path = trace.directory / "tokens.json"
+    if not tokens_path.is_file():
+        return []
+    try:
+        return list(json.loads(tokens_path.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        return []
+
+
 @router.get("/traces/{trace_id}", response_model=TraceDetail)
 def get_trace(trace_id: str) -> TraceDetail:
     trace = _require(trace_id)
-    tokens_path = trace.directory / "tokens.json"
-    tokens: list[dict[str, Any]] = []
-    if tokens_path.is_file():
-        try:
-            tokens = json.loads(tokens_path.read_text(encoding="utf-8"))
-        except ValueError:
-            tokens = []
     return TraceDetail(
         trace=trace.summary_dict(),
         records=trace.manifest.get("records") or [],
-        tokens=tokens,
+        tokens=_trace_tokens(trace),
     )
 
 
@@ -519,6 +578,204 @@ def get_tensors(trace_id: str, request: Request) -> Response:
             "content-length": str(end - start + 1),
             "accept-ranges": "bytes",
         },
+    )
+
+
+@router.post("/traces/{trace_id}/fork")
+async def fork_trace(trace_id: str, req: ForkRequest) -> StreamingResponse:
+    """Re-run a trace with some of its tokens replaced.
+
+    The counterfactual half of the lens: a grid tells you what the model was
+    disposed to say, and a fork tells you what changing one word does to that.
+    Everything but the tokens is inherited from the parent, so the two grids
+    differ in exactly the place you edited — a fork that also changed the
+    fidelity or the layer selection would not be comparable to what it forked.
+    """
+    parent = _require(trace_id)
+    try:
+        spec = fork_spec(parent, [edit.model_dump() for edit in req.edits])
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    async def gen() -> AsyncIterator[str]:
+        spec["architecture"] = await asyncio.to_thread(
+            _architecture, str(spec["modelPath"])
+        )
+        async for event in trace_runner.run_trace(spec):
+            yield json.dumps(event) + "\n"
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
+
+
+def fork_spec(parent: traces.Trace, edits: list[dict[str, Any]]) -> dict[str, Any]:
+    """The tracer spec for a fork of `parent`.
+
+    Pure, and separated from the route for that reason: the subprocess it feeds
+    needs a native library, and the thing that can actually be wrong here — which
+    token ends up where — does not.
+    """
+    prompt_tokens = [t for t in _trace_tokens(parent) if not t.get("generated")]
+    if not prompt_tokens:
+        raise ValueError(
+            "this trace records no prompt tokens, so there is nothing to fork"
+        )
+    tokens = [int(t.get("id", 0)) for t in prompt_tokens]
+
+    stamped: list[dict[str, Any]] = []
+    for edit in edits:
+        position = int(edit.get("position", -1))
+        if not 0 <= position < len(tokens):
+            raise ValueError(
+                f"position {position} is outside this trace's "
+                f"{len(tokens)} prompt tokens"
+            )
+        # `fromId` is stamped from the parent rather than trusted from the
+        # caller: it is the record of what was actually replaced, and a client
+        # that sent a stale one would make the fork's own provenance wrong.
+        stamped.append(
+            {
+                "position": position,
+                "fromId": int(prompt_tokens[position].get("id", -1)),
+                "toId": int(edit.get("toId", 0)),
+            }
+        )
+        tokens[position] = int(edit.get("toId", 0))
+
+    manifest = parent.manifest
+    return {
+        "modelPath": manifest.get("modelPath", ""),
+        "prompt": manifest.get("prompt", ""),
+        "tokenIds": tokens,
+        "capture": list(manifest.get("capture") or []),
+        "derivedFrom": parent.trace_id,
+        "edits": stamped,
+        "maxTokens": int(manifest.get("maxTokens") or 0),
+        "layers": list(manifest.get("layers") or []),
+        "attention": bool(manifest.get("attention")),
+        "fidelity": str(manifest.get("fidelity") or "fp16"),
+        # The parent already ran within a cap; re-imposing the hardware probe's
+        # current one would silently truncate a fork of a trace made on a better
+        # machine, and a fork shorter than its parent is not a comparison.
+        "tokenCap": traces.MAX_TRACE_TOKENS,
+        "gpuLayers": 0,
+    }
+
+
+# ── the lens ────────────────────────────────────────────────────────────────
+#
+# A trace read as *words* rather than as numbers. Everything here is derived
+# from records the trace already holds plus the model's own output head, so a
+# lens costs no new forward pass — which is what makes swapping a token and
+# re-reading the grid a seconds-long loop instead of a minutes-long one.
+
+
+def _lens_ids(raw: str) -> list[int]:
+    """A comma-separated `layers=` / `positions=` filter.
+
+    Silently dropping an unparseable entry would answer a question the caller
+    did not ask, so a malformed filter is a 400.
+    """
+    if not raw.strip():
+        return []
+    try:
+        return [int(part) for part in raw.split(",") if part.strip()]
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail=f"not a list of integers: {raw!r}"
+        ) from exc
+
+
+@router.get("/traces/{trace_id}/lens", response_model=LensGridResponse)
+def get_lens_grid(
+    trace_id: str,
+    lens: str = "identity",
+    k: int = 5,
+    layers: str = "",
+    positions: str = "",
+    passIndex: int = 0,
+) -> LensGridResponse:
+    """The layer x position grid for one traced pass."""
+    trace = _require(trace_id)
+    try:
+        grid = lens_module.compute_grid(
+            trace,
+            lens_id=lens,
+            k=max(1, min(k, 100)),
+            layers=_lens_ids(layers),
+            positions=_lens_ids(positions),
+            pass_index=passIndex,
+        )
+    except lens_module.LensError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    data = grid.to_dict()
+    data["tokens"] = _trace_tokens(trace)
+    return LensGridResponse(**data)
+
+
+@router.get("/traces/{trace_id}/lens/track", response_model=LensTrackResponse)
+def get_lens_track(
+    trace_id: str, tokenId: int, lens: str = "identity", passIndex: int = 0
+) -> LensTrackResponse:
+    """One vocabulary token's rank and logit at every cell — the token pin."""
+    trace = _require(trace_id)
+    try:
+        tracked = lens_module.track_token(
+            trace, tokenId, lens_id=lens, pass_index=passIndex
+        )
+    except lens_module.LensError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return LensTrackResponse(**tracked)
+
+
+@router.get("/traces/{trace_id}/lenses", response_model=LensListResponse)
+def list_lenses(trace_id: str) -> LensListResponse:
+    """Which lenses apply to this trace's model.
+
+    Keyed by the trace rather than by a model path so the id in the URL is the
+    same one every other lens route takes, and so a fitted lens can never be
+    offered for weights it was not fitted on.
+    """
+    trace = _require(trace_id)
+    model_sha = str(trace.manifest.get("modelSha") or "")
+    specs = [
+        LensSpecModel(**s.to_dict()) for s in lens_module.available_lenses(model_sha)
+    ]
+    try:
+        lens_module.load_unembedding(str(trace.manifest.get("modelPath") or ""))
+    except lens_module.LensError as exc:
+        return LensListResponse(lenses=specs, available=False, reason=str(exc))
+    return LensListResponse(lenses=specs, available=True)
+
+
+@router.get("/models/vocab", response_model=VocabResponse)
+def get_vocab(path: str, q: str = "", limit: int = 50) -> VocabResponse:
+    """Search a GGUF's own vocabulary — the token picker behind a swap.
+
+    The model's vocabulary and not an HF tokenizer's: a swap has to name a token
+    the traced weights actually have, and `tokenizer.py`'s family fallback can
+    hand back the wrong generation's vocabulary while looking precise.
+    """
+    try:
+        un = lens_module.load_unembedding(path)
+    except lens_module.LensError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    needle = q.strip()
+    cap = max(1, min(limit, 500))
+    matches: list[VocabEntry] = []
+    truncated = False
+    for token_id, piece in enumerate(un.vocab):
+        text = lens_module.render_piece(piece, un.tokenizer_model)
+        if needle and needle not in text and needle not in piece:
+            continue
+        if len(matches) >= cap:
+            truncated = True
+            break
+        matches.append(VocabEntry(id=token_id, piece=piece, text=text))
+    return VocabResponse(
+        tokens=matches,
+        total=len(un.vocab),
+        tokenizerModel=un.tokenizer_model,
+        truncated=truncated,
     )
 
 

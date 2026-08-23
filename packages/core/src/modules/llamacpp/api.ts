@@ -224,6 +224,14 @@ export interface TraceSummary {
   diskBytes: number;
   chatTemplate: boolean;
   note: string;
+  /** "ids" when the tokens were supplied rather than tokenized from `prompt` —
+   * the difference between a trace reproducible from the text above and one
+   * that is not. */
+  tokenSource?: 'text' | 'ids';
+  /** Set on a fork: the trace it came from, and what was changed. */
+  derivedFrom?: string;
+  edits?: TokenEdit[];
+  capture?: string[];
 }
 
 export interface TraceListResponse {
@@ -268,6 +276,13 @@ export interface TraceEstimate {
   error: string;
 }
 
+export interface TokenEdit {
+  position: number;
+  /** Stamped by the backend from the parent, never trusted from here. */
+  fromId?: number;
+  toId: number;
+}
+
 export interface TraceOptions {
   modelPath: string;
   prompt: string;
@@ -276,6 +291,14 @@ export interface TraceOptions {
   attention?: boolean;
   fidelity?: string;
   tokenCap?: number;
+  /**
+   * Exact tokens, bypassing tokenization. Re-tokenizing an edited *string* can
+   * merge or split its neighbours, so a swap expressed as text would change the
+   * run in more places than the one you meant.
+   */
+  tokenIds?: number[];
+  /** Graph-node patterns; `[]` is the architecture's own default set. */
+  capture?: string[];
 }
 
 export function listTraces(): Promise<TraceListResponse> {
@@ -324,6 +347,145 @@ export function runTrace(
   signal?: AbortSignal,
 ): Promise<void> {
   return streamNdjson('/llamacpp/traces', options, (obj) => onProgress(obj as Progress), signal);
+}
+
+// ── the lens ────────────────────────────────────────────────────────────────
+
+/** A transport applied before unembedding. `identity` is the classic logit lens
+ * and is always available; a `jacobian` lens is a fitted artifact on disk. */
+export interface LensSpec {
+  id: string;
+  kind: 'identity' | 'jacobian';
+  label: string;
+  provenance: string;
+  layers: number[];
+  dModel: number;
+}
+
+/** One (layer, position) readout. `relProbs` is a softmax over the shown
+ * candidates only — not the model's distribution, and never rendered as one. */
+export interface LensCell {
+  ids: number[];
+  texts: string[];
+  logits: number[];
+  relProbs: number[];
+}
+
+export interface LensGrid {
+  layers: number[];
+  positions: number[];
+  cells: LensCell[][];
+  lens: LensSpec;
+  unembedding: {
+    tensor: string;
+    tied: boolean;
+    quant: string;
+    nEmbd: number;
+    nVocab: number;
+    architecture: string;
+    tokenizerModel: string;
+    logitSoftcap: number | null;
+  };
+  tokens: TraceToken[];
+  /**
+   * Three-valued on purpose. `true`: the identity lens reproduced this trace's
+   * own captured logits. `false`: it did not, and every cell is suspect.
+   * `unavailable`: there was nothing to check against. Rendering the third as
+   * the first is the failure this whole surface exists to refuse.
+   */
+  verified: 'true' | 'false' | 'unavailable';
+  verifyNote: string;
+  verifyDetail: Record<string, unknown>;
+}
+
+export interface LensTrack {
+  tokenId: number;
+  text: string;
+  layers: number[];
+  positions: number[];
+  logits: number[][];
+  ranks: number[][];
+  lens: LensSpec;
+}
+
+export interface LensListResponse {
+  lenses: LensSpec[];
+  available: boolean;
+  reason: string;
+}
+
+export interface VocabEntry {
+  id: number;
+  /** The raw GGUF entry ("Ġthe"), so a search typed in the encoding still hits. */
+  piece: string;
+  text: string;
+}
+
+export interface VocabResponse {
+  tokens: VocabEntry[];
+  total: number;
+  tokenizerModel: string;
+  truncated: boolean;
+}
+
+export interface CaptureSet {
+  id: string;
+  label: string;
+  patterns: string[];
+  note: string;
+}
+
+export function getLensGrid(
+  traceId: string,
+  options: { lens?: string; k?: number; layers?: number[]; positions?: number[] } = {},
+): Promise<LensGrid> {
+  const query = new URLSearchParams();
+  if (options.lens) query.set('lens', options.lens);
+  if (options.k) query.set('k', String(options.k));
+  if (options.layers?.length) query.set('layers', options.layers.join(','));
+  if (options.positions?.length) query.set('positions', options.positions.join(','));
+  const suffix = query.toString() ? `?${query}` : '';
+  return apiGet<LensGrid>(`/llamacpp/traces/${encodeURIComponent(traceId)}/lens${suffix}`);
+}
+
+export function getLensTrack(traceId: string, tokenId: number, lens = 'identity'): Promise<LensTrack> {
+  return apiGet<LensTrack>(
+    `/llamacpp/traces/${encodeURIComponent(traceId)}/lens/track` +
+      `?tokenId=${tokenId}&lens=${encodeURIComponent(lens)}`,
+  );
+}
+
+export function listLenses(traceId: string): Promise<LensListResponse> {
+  return apiGet<LensListResponse>(`/llamacpp/traces/${encodeURIComponent(traceId)}/lenses`);
+}
+
+export function searchVocab(path: string, q: string, limit = 50): Promise<VocabResponse> {
+  return apiGet<VocabResponse>(
+    `/llamacpp/models/vocab?path=${encodeURIComponent(path)}` +
+      `&q=${encodeURIComponent(q)}&limit=${limit}`,
+  );
+}
+
+/** The capture sets, served rather than restated here — two lists of ggml node
+ * names in two languages is one upstream rename from matching nothing. */
+export function getCaptureSets(): Promise<{ sets: CaptureSet[] }> {
+  return apiGet<{ sets: CaptureSet[] }>('/llamacpp/traces/capture-sets');
+}
+
+/** Re-run a trace with some of its tokens replaced. Everything else is
+ * inherited from the parent, so the two are comparable. */
+export function forkTrace(
+  traceId: string,
+  edits: TokenEdit[],
+  onProgress: (p: Progress) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return streamNdjson(
+    `/llamacpp/traces/${encodeURIComponent(traceId)}/fork`,
+    { edits },
+    (obj) => onProgress(obj as Progress),
+    signal,
+  );
 }
 
 export function deleteTrace(traceId: string): Promise<{ deleted: boolean }> {

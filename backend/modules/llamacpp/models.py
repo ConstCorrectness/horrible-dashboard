@@ -144,6 +144,14 @@ class DeleteModelRequest(BaseModel):
     path: str
 
 
+class TokenEdit(BaseModel):
+    """One token swapped out of a parent trace's sequence."""
+
+    position: int
+    fromId: int = -1
+    toId: int
+
+
 class TraceRequest(BaseModel):
     """Run one traced forward pass.
 
@@ -152,7 +160,19 @@ class TraceRequest(BaseModel):
     """
 
     modelPath: str
-    prompt: str
+    prompt: str = ""
+    #: The exact tokens to run, bypassing tokenization. This is what makes a
+    #: swapped trace possible at all: re-tokenizing an edited *string* can change
+    #: neighbouring tokens too, so the counterfactual would differ in more than
+    #: the one place you changed. When set, `prompt` is descriptive only.
+    tokenIds: list[int] | None = None
+    #: Graph-node name patterns to capture. Empty = the architecture's default
+    #: set. A lens needs only the residual stream, which is ~1% of a full trace.
+    capture: list[str] = Field(default_factory=list)
+    #: The trace this one was forked from, and what was changed. Provenance, not
+    #: behaviour — a fork runs exactly as an ordinary trace does.
+    derivedFrom: str = ""
+    edits: list[TokenEdit] = Field(default_factory=list)
     #: Tokens to generate after the prompt. Each is its own forward pass and its
     #: own set of records; 0 traces the prompt alone.
     maxTokens: int = 0
@@ -176,6 +196,32 @@ class EstimateRequest(BaseModel):
     layers: list[int] = Field(default_factory=list)
     attention: bool = False
     fidelity: str = "fp16"
+    capture: list[str] = Field(default_factory=list)
+    tokenIds: list[int] | None = None
+
+
+class CaptureSet(BaseModel):
+    id: str
+    label: str
+    #: The real ggml node-name substrings. Empty means "the architecture's own
+    #: default", which the tracer chooses — a client must not guess at it.
+    patterns: list[str] = Field(default_factory=list)
+    note: str = ""
+
+
+class CaptureSetsResponse(BaseModel):
+    sets: list[CaptureSet] = Field(default_factory=list)
+
+
+class ForkRequest(BaseModel):
+    """Re-run a trace with some of its tokens replaced.
+
+    Everything else — model, generation length, layer selection, fidelity — is
+    inherited from the parent, because a counterfactual that also changed the
+    capture settings is not a counterfactual.
+    """
+
+    edits: list[TokenEdit] = Field(default_factory=list)
 
 
 class EstimateResponse(BaseModel):
@@ -222,6 +268,75 @@ class RecordValues(BaseModel):
     #: True when `values` is a prefix of the tensor rather than all of it.
     truncated: bool = False
     summary: dict[str, float] = Field(default_factory=dict)
+
+
+class LensSpecModel(BaseModel):
+    """A transport a lens can apply before unembedding."""
+
+    id: str = ""
+    kind: str = "identity"
+    label: str = ""
+    provenance: str = ""
+    layers: list[int] = Field(default_factory=list)
+    dModel: int = 0
+
+
+class LensListResponse(BaseModel):
+    lenses: list[LensSpecModel] = Field(default_factory=list)
+    #: False when the model's output head cannot be read at all, with `reason`
+    #: naming the quantization. The pane says so rather than showing an empty grid.
+    available: bool = True
+    reason: str = ""
+
+
+class LensGridResponse(BaseModel):
+    """The layer x position readout.
+
+    `verified` is deliberately three-valued. `true` means the identity lens
+    reproduced this trace's own captured logits; `false` means it did not and
+    every cell is suspect; `unavailable` means there was nothing to check
+    against. Rendering the third as the first is the failure this whole surface
+    is arranged to prevent.
+    """
+
+    layers: list[int] = Field(default_factory=list)
+    positions: list[int] = Field(default_factory=list)
+    #: None where llama.cpp did not compute that position at that layer —
+    #: a blank cell, never a fabricated one.
+    cells: list[list[dict[str, Any] | None]] = Field(default_factory=list)
+    lens: LensSpecModel = Field(default_factory=LensSpecModel)
+    unembedding: dict[str, Any] = Field(default_factory=dict)
+    tokens: list[dict[str, Any]] = Field(default_factory=list)
+    verified: str = "unavailable"
+    verifyNote: str = ""
+    verifyDetail: dict[str, Any] = Field(default_factory=dict)
+
+
+class LensTrackResponse(BaseModel):
+    """One vocabulary token's logit and rank at every cell."""
+
+    tokenId: int = 0
+    text: str = ""
+    layers: list[int] = Field(default_factory=list)
+    positions: list[int] = Field(default_factory=list)
+    logits: list[list[float | None]] = Field(default_factory=list)
+    ranks: list[list[int | None]] = Field(default_factory=list)
+    lens: LensSpecModel = Field(default_factory=LensSpecModel)
+
+
+class VocabEntry(BaseModel):
+    id: int
+    #: The raw GGUF vocabulary entry ("Ġthe"), kept beside the rendered text so
+    #: a search that matches the encoding still finds its token.
+    piece: str = ""
+    text: str = ""
+
+
+class VocabResponse(BaseModel):
+    tokens: list[VocabEntry] = Field(default_factory=list)
+    total: int = 0
+    tokenizerModel: str = ""
+    truncated: bool = False
 
 
 class StatusResponse(BaseModel):

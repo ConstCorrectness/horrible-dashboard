@@ -6839,3 +6839,210 @@ kbd {
   overflow-wrap: anywhere;
   color: var(--text-dim);
 }
+
+/* ── the lens ──────────────────────────────────────────────────────────────
+   A trace read as words: layers down, positions across, one candidate word per
+   cell. The visual job is to make a *column* legible top to bottom — where an
+   answer settles — so the cells are uniform and only the tint varies. */
+
+.llama-lens {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* The verdict is the first thing on screen because it decides whether anything
+   below it means anything. Three states, three colours, never two. */
+.llama-verify {
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 4px;
+  padding: 0.35rem 0.5rem;
+}
+
+.llama-verify strong {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.llama-verify-ok {
+  border-left-color: rgb(110 200 140);
+}
+.llama-verify-ok strong {
+  color: rgb(130 210 160);
+}
+
+.llama-verify-bad {
+  border-left-color: rgb(240 138 138);
+  background: rgb(240 138 138 / 8%);
+}
+.llama-verify-bad strong {
+  color: rgb(240 138 138);
+}
+
+.llama-verify-unknown {
+  border-left-color: rgb(230 180 90);
+}
+.llama-verify-unknown strong {
+  color: rgb(230 190 120);
+}
+
+.llama-lens-scroll {
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  max-height: 60vh;
+}
+
+.llama-lens-grid {
+  border-collapse: collapse;
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+}
+
+.llama-lens-grid th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 0.15rem 0.3rem;
+  background: var(--surface, #16181d);
+  color: var(--text-dim);
+  font-weight: 500;
+  white-space: pre;
+}
+
+.llama-lens-grid th[scope='row'] {
+  position: sticky;
+  left: 0;
+  top: auto;
+  z-index: 2;
+  text-align: right;
+}
+
+.llama-lens-corner {
+  z-index: 3 !important;
+  left: 0;
+}
+
+.llama-lens-cell {
+  padding: 0;
+  border: 1px solid transparent;
+}
+
+.llama-lens-cellbtn {
+  display: block;
+  width: 100%;
+  padding: 0.1rem 0.3rem;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  white-space: pre;
+  cursor: pointer;
+}
+
+.llama-lens-cell-on {
+  border-color: var(--accent, #6ea8fe);
+}
+
+/* A cell whose top word changed between a trace and its fork. Outlined rather
+   than recoloured: the tint already carries confidence, and overloading one
+   channel with two meanings makes both unreadable. */
+.llama-lens-cell-changed {
+  border-color: rgb(230 180 90 / 80%);
+}
+
+.llama-lens-rank {
+  margin-left: 2px;
+  color: var(--text-dim);
+  font-size: 8px;
+}
+
+.llama-lens-strip .llama-token-swap {
+  border: 1px solid transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.llama-lens-strip .llama-token-swap:hover {
+  border-color: var(--accent, #6ea8fe);
+}
+
+.llama-token-swapping {
+  border-color: var(--accent, #6ea8fe) !important;
+}
+
+.llama-lens-pins {
+  gap: 0.3rem;
+}
+
+.llama-lens-candidates {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.llama-lens-candidate {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.1rem 0.3rem;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.llama-lens-candidate:hover {
+  background: rgb(255 255 255 / 6%);
+}
+
+.llama-lens-word {
+  font-family: var(--font-mono, monospace);
+}
+
+.llama-picker {
+  max-width: 26rem;
+}
+
+.llama-picker-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 12rem;
+  overflow: auto;
+}
+
+.llama-picker-row {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.1rem 0.3rem;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.llama-picker-row:hover {
+  background: rgb(255 255 255 / 6%);
+}
+
+.llama-picker-text {
+  font-family: var(--font-mono, monospace);
+}

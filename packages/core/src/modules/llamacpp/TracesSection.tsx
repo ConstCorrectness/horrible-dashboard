@@ -4,6 +4,7 @@ import {
   deleteTrace,
   estimateTrace,
   formatBytes,
+  getCaptureSets,
   getRecordValues,
   getTrace,
   listTraces,
@@ -17,6 +18,7 @@ import {
   getTraceSeries,
   type TraceRecord,
   type TraceSeries,
+  type CaptureSet,
 } from './api';
 import { KIND_LABELS, kindsPresent, nodeKind, type NodeKind } from './node-kind';
 import { addPin, addPins, clearPins, getPins, MAX_PINS, removePin } from './pins';
@@ -697,12 +699,30 @@ function NewTrace({ models, onDone }: { models: ModelEntry[]; onDone: (traceId: 
   const [maxTokens, setMaxTokens] = useState(0);
   const [attention, setAttention] = useState(false);
   const [fidelity, setFidelity] = useState('fp16');
+  const [captureId, setCaptureId] = useState('default');
+  const [captureSets, setCaptureSets] = useState<CaptureSet[]>([]);
   const [estimate, setEstimate] = useState<TraceEstimate | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
   const path = modelPath || models[0]?.path || '';
+
+  // The capture sets come from the backend rather than being restated here: two
+  // lists of ggml node names in two languages is one upstream rename away from a
+  // capture set that matches nothing and fails silently. Same reason `plane_order`
+  // is served.
+  useEffect(() => {
+    let alive = true;
+    void getCaptureSets()
+      .then((res) => alive && setCaptureSets(res.sets))
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const capture = captureSets.find((set) => set.id === captureId)?.patterns ?? [];
 
   // `llamacpp.traceSelection` firing while this section is already open.
   useEffect(
@@ -721,7 +741,7 @@ function NewTrace({ models, onDone }: { models: ModelEntry[]; onDone: (traceId: 
     if (!path) return;
     let alive = true;
     const timer = window.setTimeout(() => {
-      void estimateTrace({ modelPath: path, prompt, maxTokens, attention, fidelity })
+      void estimateTrace({ modelPath: path, prompt, maxTokens, attention, fidelity, capture })
         .then((e) => alive && setEstimate(e))
         .catch(() => alive && setEstimate(null));
     }, 300);
@@ -729,7 +749,9 @@ function NewTrace({ models, onDone }: { models: ModelEntry[]; onDone: (traceId: 
       alive = false;
       window.clearTimeout(timer);
     };
-  }, [path, prompt, maxTokens, attention, fidelity]);
+    // `capture` is derived from `captureId`; depending on the array itself would
+    // re-fire every render because a fresh array is never the same reference.
+  }, [path, prompt, maxTokens, attention, fidelity, captureId, captureSets]);
 
   const run = async () => {
     if (!path) return;
@@ -738,7 +760,7 @@ function NewTrace({ models, onDone }: { models: ModelEntry[]; onDone: (traceId: 
     setProgress({ status: 'starting' });
     let traceId = '';
     try {
-      await runTrace({ modelPath: path, prompt, maxTokens, attention, fidelity }, (p) => {
+      await runTrace({ modelPath: path, prompt, maxTokens, attention, fidelity, capture }, (p) => {
         if (p.error) setError(String(p.error));
         else {
           if (typeof p.traceId === 'string') traceId = p.traceId;
@@ -808,6 +830,16 @@ function NewTrace({ models, onDone }: { models: ModelEntry[]; onDone: (traceId: 
           </select>
         </label>
         <label>
+          Capture
+          <select value={captureId} onChange={(e) => setCaptureId(e.target.value)}>
+            {captureSets.map((set) => (
+              <option key={set.id} value={set.id}>
+                {set.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
           <input
             type="checkbox"
             checked={attention}
@@ -816,6 +848,9 @@ function NewTrace({ models, onDone }: { models: ModelEntry[]; onDone: (traceId: 
           Attention scores
         </label>
       </div>
+      {captureSets.find((set) => set.id === captureId)?.note ? (
+        <p className="llama-meta">{captureSets.find((set) => set.id === captureId)?.note}</p>
+      ) : null}
       {estimate &&
         (estimate.error ? (
           <p className="llama-error">{estimate.error}</p>

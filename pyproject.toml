@@ -45,6 +45,7 @@ dependencies = [
     # It is still lazy-imported: `import yt_dlp` is ~1s of module scanning, and
     # most sessions never open the karaoke pane.
     "yt-dlp>=2025.1.15",
+    "gguf>=0.19",
 ]
 
 [project.optional-dependencies]

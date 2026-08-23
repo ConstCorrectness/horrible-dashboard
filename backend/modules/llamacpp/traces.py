@@ -275,20 +275,41 @@ def summarize(values: list[float]) -> dict[str, float]:
     }
 
 
-def decode(payload: bytes, dtype: str) -> list[float]:
-    """Bytes from `tensors.bin` back to numbers.
+#: The two dtypes this module ever *writes*, as numpy descriptors. Little-endian,
+#: matching the manifest's `byteOrder`. A quantized weight is recorded as metadata
+#: and never as bytes, so there is deliberately no dequantizer here to go subtly
+#: wrong — reading GGUF weight data is `lens.py`'s job and its own budget.
+_NUMPY_DTYPES: dict[str, str] = {
+    "f32": "<f4",
+    "F32": "<f4",
+    "f16": "<f2",
+    "F16": "<f2",
+}
 
-    Little-endian, matching the manifest's `byteOrder`. Only the two dtypes this
-    module ever *writes* are decodable: a quantized weight is recorded as
-    metadata, never as bytes, so there is no dequantizer here to go subtly wrong.
+
+def decode_array(payload: bytes, dtype: str) -> Any:
+    """Bytes from `tensors.bin` back to a float32 numpy array.
+
+    The lens reads whole records and multiplies them by a vocabulary-sized
+    matrix, so a Python list of 3.7M floats per grid is the wrong shape of
+    answer. `decode` is defined in terms of this rather than beside it: two
+    decoders for one format is a second implementation waiting to disagree.
     """
-    if dtype in ("f32", "F32"):
-        count = len(payload) // 4
-        return list(struct.unpack(f"<{count}f", payload[: count * 4]))
-    if dtype in ("f16", "F16"):
-        count = len(payload) // 2
-        return list(struct.unpack(f"<{count}e", payload[: count * 2]))
-    raise ValueError(f"cannot decode dtype {dtype!r} — it was never written as bytes")
+    import numpy as np
+
+    descriptor = _NUMPY_DTYPES.get(dtype)
+    if descriptor is None:
+        raise ValueError(
+            f"cannot decode dtype {dtype!r} — it was never written as bytes"
+        )
+    width = np.dtype(descriptor).itemsize
+    count = len(payload) // width
+    return np.frombuffer(payload, dtype=descriptor, count=count).astype(np.float32)
+
+
+def decode(payload: bytes, dtype: str) -> list[float]:
+    """Bytes from `tensors.bin` back to numbers."""
+    return [float(v) for v in decode_array(payload, dtype)]
 
 
 def encode_f16(values: list[float]) -> bytes:
@@ -433,6 +454,23 @@ class Estimate:
         }
 
 
+#: Nodes outside any decoder block. They are captured once per pass, not once
+#: per block, so they do not scale the per-layer term of the estimate.
+_GLOBAL_NODES = ("inp_embd", "result_norm", "result_output")
+
+
+def nodes_per_layer(capture: list[str] | tuple[str, ...] | None) -> int:
+    """How many residual-width activations a capture set keeps per block.
+
+    The default set keeps roughly six. A lens needs only `l_out`, which is why a
+    lens trace is a percent of a full one rather than a fraction of it — and why
+    the estimate has to know the capture set instead of always charging six.
+    """
+    if not capture:
+        return 6
+    return max(1, sum(1 for name in capture if name not in _GLOBAL_NODES))
+
+
 def estimate(
     *,
     n_layer: int,
@@ -443,6 +481,7 @@ def estimate(
     layers: int | None = None,
     attention: bool = False,
     fidelity: str = "fp16",
+    nodes_per_layer: int = 6,
 ) -> Estimate:
     """What a trace will cost, *before* it starts.
 
@@ -451,10 +490,11 @@ def estimate(
     is one checkbox. This is an estimate and is labelled as one everywhere it is
     shown — the real cost lands in the manifest's `blobBytes`.
 
-    The model is coarse on purpose: per traced block, roughly six residual-width
-    activations per pass (`attn_norm`, `kqv_out`, `ffn_inp`, `ffn_out`, `l_out`
-    and one spare), plus — when attention is on — a `[n_kv, n_tokens, n_head]`
-    score matrix.
+    The model is coarse on purpose: per traced block, `nodes_per_layer`
+    residual-width activations per pass — six for the default capture set
+    (`attn_norm`, `kqv_out`, `ffn_inp`, `ffn_out`, `l_out` and one spare), one
+    for a lens-only set — plus, when attention is on, a
+    `[n_kv, n_tokens, n_head]` score matrix.
     """
     width = 2 if fidelity == "fp16" else 4
     if fidelity == "summary":
@@ -468,7 +508,7 @@ def estimate(
     for pass_index, tokens in enumerate(per_pass_tokens):
         if tokens <= 0:
             continue
-        total += traced_layers * 6 * n_embd * tokens * width
+        total += traced_layers * nodes_per_layer * n_embd * tokens * width
         if attention:
             # The score matrix is over the whole KV cache, which has grown by
             # every token emitted so far — the generated passes are not cheap

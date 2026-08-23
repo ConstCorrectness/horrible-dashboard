@@ -21,6 +21,7 @@ import {
   type RepoFile,
   type VariantAvailability,
 } from './api';
+import { LensSection } from './lens/LensSection';
 import { OffloadPreview } from './OffloadPreview';
 import { TracesSection } from './TracesSection';
 
@@ -621,7 +622,9 @@ export function LlamaCppPane() {
 
   return (
     <div className="llama-pane">
-      {section === 'traces' ? (
+      {section === 'lens' ? (
+        <LensSection />
+      ) : section === 'traces' ? (
         <TracesSection models={models?.models ?? []} />
       ) : section === 'models' ? (
         <ModelsSection data={models} refresh={refresh} />

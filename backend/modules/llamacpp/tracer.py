@@ -57,6 +57,19 @@ DEFAULT_CAPTURE = (
     "result_output",
 )
 
+#: Named capture sets the pane offers. Served rather than duplicated in TS —
+#: the `plane_order` precedent: two lists of ggml node names in two languages is
+#: one rename away from a capture set that silently matches nothing.
+#:
+#: `lens` is the interesting one. The lens reads the residual stream and nothing
+#: else, so dropping the six-nodes-per-block default turns a gigabyte-scale run
+#: into a few megabytes and a minutes-long wait into seconds — which is what
+#: makes swapping a token and looking again a loop rather than an errand.
+CAPTURE_PRESETS: dict[str, tuple[str, ...]] = {
+    "default": (),
+    "lens": ("inp_embd", "l_out", "result_norm", "result_output"),
+}
+
 #: Added when attention capture is on. These are the nodes that only exist with
 #: flash attention disabled.
 ATTENTION_CAPTURE = ("kq_soft_max", "kq-", "kq_mask")
@@ -350,7 +363,21 @@ def run(spec: dict[str, Any]) -> dict[str, Any]:
 
     try:
         vocab = _vocab(llama_cpp, model)
-        tokens = _tokenize(llama_cpp, vocab, str(spec.get("prompt") or ""))
+        supplied = spec.get("tokenIds")
+        if supplied:
+            # Exact token ids, not text. This is what makes a swapped trace a
+            # real counterfactual: re-tokenizing an edited *string* can merge or
+            # split its neighbours, so the run would differ in more places than
+            # the one you changed and the diff would be unreadable.
+            tokens = [int(t) for t in supplied]
+            n_vocab = _n_vocab(llama_cpp, vocab)
+            bad = [t for t in tokens if not 0 <= t < n_vocab]
+            if bad:
+                raise RuntimeError(
+                    f"token ids outside this model's vocabulary of {n_vocab}: {bad[:8]}"
+                )
+        else:
+            tokens = _tokenize(llama_cpp, vocab, str(spec.get("prompt") or ""))
         cap = min(
             int(spec.get("tokenCap") or traces.MAX_TRACE_TOKENS),
             traces.MAX_TRACE_TOKENS,
@@ -358,7 +385,9 @@ def run(spec: dict[str, Any]) -> dict[str, Any]:
         if len(tokens) > cap:
             tokens = tokens[:cap]
         if not tokens:
-            raise RuntimeError("the prompt tokenized to nothing")
+            raise RuntimeError(
+                "no tokens to run" if supplied else "the prompt tokenized to nothing"
+            )
         gen_tokens = max(0, int(spec.get("maxTokens") or 0))
 
         cparams = llama_cpp.llama_context_default_params()
@@ -392,6 +421,13 @@ def run(spec: dict[str, Any]) -> dict[str, Any]:
             "attention": tracer.attention,
             "layers": sorted(tracer.layers),
             "prompt": str(spec.get("prompt") or ""),
+            #: "text" when the prompt was tokenized here, "ids" when the caller
+            #: supplied them — which is the difference between a trace you can
+            #: reproduce from the text above and one you cannot.
+            "tokenSource": "ids" if supplied else "text",
+            "capture": list(tracer.patterns),
+            "derivedFrom": str(spec.get("derivedFrom") or ""),
+            "edits": list(spec.get("edits") or []),
             "promptTokens": len(tokens),
             "maxTokens": gen_tokens,
             "chatTemplate": False,
