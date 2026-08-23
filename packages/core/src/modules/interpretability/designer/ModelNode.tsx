@@ -14,6 +14,7 @@
  */
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 
+import { FrameNode } from './FrameNode';
 import {
   formatCount,
   formatShape,
@@ -28,6 +29,13 @@ export interface ModelNodeData {
   node: GraphNode;
   shape?: Shape;
   params?: number;
+  /** Measured, from a probe that actually ran the module. Replaces the estimate on
+   * this node rather than sitting beside it — two numbers for one quantity is a
+   * question, and the measurement is the answer. */
+  measured?: number;
+  /** False when the measurement contradicted the estimate here. That is a finding
+   * about `shapes.py`, and the node is the only place it can be pointed at. */
+  measuredAgrees?: boolean;
   issue?: ShapeIssue;
   /** For a `group` instance: the name of the class it runs, which is what a reader
    * needs. Every instance titled "Group" makes a canvas of blocks unreadable. */
@@ -125,9 +133,40 @@ function summarise(spec: NodeSpec, node: GraphNode): string {
   }
 }
 
+/**
+ * A reroute: a bend in a wire, drawn as one.
+ *
+ * Blender's is a dot, and it has to be — a reroute rendered as a full titled box
+ * would be a node that looks like it does something, when codegen walks straight
+ * through it and it contributes no code and no parameters at all. The socket
+ * positions are the whole component.
+ */
+function RerouteNode({ d, selected }: { d: ModelNodeData; selected?: boolean }) {
+  return (
+    <div
+      className={`mg-reroute${selected ? ' mg-selected' : ''}${d.issue ? ' mg-invalid' : ''}`}
+      title={d.issue?.message || `Reroute${d.shape ? ` — ${formatShape(d.shape)}` : ''}`}
+    >
+      <Handle
+        id="in"
+        type="target"
+        position={Position.Left}
+        className="mg-socket mg-socket-tensor"
+      />
+      <Handle
+        id="out"
+        type="source"
+        position={Position.Right}
+        className="mg-socket mg-socket-tensor"
+      />
+    </div>
+  );
+}
+
 export function ModelNode({ data, selected }: NodeProps) {
   const d = data as ModelNodeData;
   const { spec, node } = d;
+  if (spec.type === 'struct.reroute') return <RerouteNode d={d} selected={selected} />;
   const summary = summarise(spec, node);
   const shape = formatShape(d.shape);
   const classes = [
@@ -171,8 +210,26 @@ export function ModelNode({ data, selected }: NodeProps) {
         </div>
       )}
 
-      {!d.collapsed && d.showCost && d.params ? (
-        <div className="mg-node-cost">{formatCount(d.params)} params</div>
+      {!d.collapsed && d.showCost && (d.measured ?? d.params) ? (
+        <div
+          className={`mg-node-cost${d.measured !== undefined ? ' mg-node-measured' : ''}${
+            d.measuredAgrees === false ? ' mg-node-disagrees' : ''
+          }`}
+          title={
+            d.measured !== undefined
+              ? d.measuredAgrees === false
+                ? `Measured ${d.measured} parameters, but the estimate said ${d.params}. The estimate is the one that is wrong.`
+                : 'Measured by running the module, not estimated.'
+              : 'Counted from the graph, not measured.'
+          }
+        >
+          {formatCount(d.measured ?? d.params ?? 0)} params
+          {d.measured !== undefined && (
+            <span className="mg-chip mg-chip-measured">
+              {d.measuredAgrees === false ? 'measured — estimate wrong' : 'measured'}
+            </span>
+          )}
+        </div>
       ) : null}
 
       {d.issue && !d.collapsed && <div className="mg-node-issue">{d.issue.message}</div>}
@@ -196,4 +253,4 @@ export function ModelNode({ data, selected }: NodeProps) {
 }
 
 /** Stable for React Flow's `nodeTypes` — a fresh object every render remounts every node. */
-export const NODE_TYPES = { model: ModelNode };
+export const NODE_TYPES = { model: ModelNode, frame: FrameNode };

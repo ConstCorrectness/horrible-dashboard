@@ -1,4 +1,5 @@
 import { registry, type ModuleManifest } from '../../registry';
+import { designerAction } from './designer/actions';
 import { ModelExplorer } from './ModelExplorer';
 import { InterpretabilityPanel } from './view';
 
@@ -81,10 +82,79 @@ export const interpretabilityModule: ModuleManifest = {
       title: 'Interpretability: Explore model structure',
       run: () => registry.openPanel('interpretability.architecture'),
     },
+    // The designer's verbs, borrowed from Blender's node editor. Each one calls
+    // through `designer/actions.ts`, which the Design tab publishes while it is
+    // mounted — so in Inspect mode, where none of these mean anything, they are
+    // no-ops without a mode flag to keep in step.
+    {
+      id: 'interpretability.design.addNode',
+      title: 'Model designer: Add node',
+      run: () => designerAction('addNode'),
+    },
+    {
+      id: 'interpretability.design.mute',
+      title: 'Model designer: Mute node (ablate)',
+      run: () => designerAction('toggleMute'),
+    },
+    {
+      id: 'interpretability.design.delete',
+      title: 'Model designer: Delete node',
+      run: () => designerAction('deleteSelected'),
+    },
+    {
+      id: 'interpretability.design.collapse',
+      title: 'Model designer: Collapse node',
+      run: () => designerAction('toggleCollapse'),
+    },
+    {
+      id: 'interpretability.design.frameAll',
+      title: 'Model designer: Frame all',
+      run: () => designerAction('frameAll'),
+    },
+    {
+      id: 'interpretability.design.enterGroup',
+      title: 'Model designer: Enter group',
+      run: () => designerAction('enterGroup'),
+    },
+    {
+      id: 'interpretability.design.exitGroup',
+      title: 'Model designer: Leave group',
+      run: () => designerAction('exitGroup'),
+    },
+    {
+      id: 'interpretability.design.group',
+      title: 'Model designer: Group selection',
+      run: () => designerAction('groupSelection'),
+    },
   ],
   // `mod+` so one binding covers Ctrl and Cmd, matching the other modules. Not
   // ctrl+shift+i — that's DevTools in every browser, and the browser wins.
-  keybindings: [{ key: 'mod+shift+x', command: 'interpretability.open' }],
+  //
+  // The designer's are single keys, so every one of them is scoped to the pane
+  // *and* guarded with `!textInput`: unguarded, typing a `d_model` value in the
+  // inspector or a class name in the code pane would delete the selected node.
+  // A binding naming `paneFocus` already beats an unscoped global, so the pane
+  // does not need to take capture — which matters, because the same pane hosts
+  // Inspect mode, where swallowing the keyboard would be wrong.
+  keybindings: [
+    { key: 'mod+shift+x', command: 'interpretability.open' },
+    ...(
+      [
+        ['shift+a', 'addNode'],
+        ['m', 'mute'],
+        ['x', 'delete'],
+        ['h', 'collapse'],
+        ['home', 'frameAll'],
+        ['tab', 'enterGroup'],
+        ['shift+tab', 'exitGroup'],
+        ['mod+g', 'group'],
+      ] as const
+    ).map(([key, verb]) => ({
+      key,
+      command: `interpretability.design.${verb}`,
+      when: "paneFocus == 'interpretability.architecture' && !textInput",
+    })),
+  ],
   settings: [
     {
       key: 'interpretability.modelRepo',

@@ -333,3 +333,91 @@ def test_a_table_from_before_the_column_gains_it(tmp_path):
     row = results.latest("acct")
     assert row["kills"] == 7
     assert row["authority"] == "local"
+
+
+def test_a_drop_is_attached_to_the_match_that_earned_it():
+    """The drop and the row are written by two different things at two different
+    times — `record` when the player leaves, the drop once the client process has
+    actually exited — so attaching it is an update, and it has to exist."""
+    match_id = results.record("acct", sample())
+    results.attach_drop(match_id, "inst-42")
+    assert results.latest("acct")["dropId"] == "inst-42"
+
+
+def test_only_the_drops_id_is_stored():
+    """Not its name, rarity or wear. Copying those onto the match row would mean a
+    renamed skin showing its old name on every card that ever mentioned it."""
+    match_id = results.record("acct", sample())
+    results.attach_drop(match_id, "inst-42")
+    summary = results.latest("acct")
+    # Resolved by the route against the inventory, not by the row.
+    assert summary["earnedDrop"] is None
+    assert summary["dropId"] == "inst-42"
+
+
+def test_a_drop_for_no_match_is_reported_not_swallowed(caplog):
+    """The shape of the bug this function was missing for: the skin was rolled
+    into the inventory, attaching it raised `AttributeError`, the watchdog logged
+    it as "could not roll a drop", and the card showed nothing — leaving an item
+    in the armoury that came from nowhere."""
+    results.init_results_db()
+    with caplog.at_level("WARNING"):
+        results.attach_drop("no-such-match", "inst-42")
+    assert "inst-42" in caplog.text
+
+
+def test_a_table_from_before_drop_id_gains_it(tmp_path):
+    """`drop_id` gets the same treatment `authority` does: an install predating a
+    column keeps a table without it, and every read then fails."""
+    import sqlite3
+
+    from backend.modules.database.app_db import ensure_app_db_dir
+
+    with sqlite3.connect(str(ensure_app_db_dir())) as conn:
+        conn.execute(
+            """
+            CREATE TABLE hassault_matches (
+                id TEXT PRIMARY KEY, account_id TEXT NOT NULL,
+                player_name TEXT NOT NULL DEFAULT '', map_name TEXT NOT NULL,
+                room TEXT NOT NULL DEFAULT '', kills INTEGER NOT NULL DEFAULT 0,
+                deaths INTEGER NOT NULL DEFAULT 0, head_kills INTEGER NOT NULL DEFAULT 0,
+                damage_dealt INTEGER NOT NULL DEFAULT 0, opponents INTEGER NOT NULL DEFAULT 0,
+                won INTEGER NOT NULL DEFAULT 0, mvp INTEGER NOT NULL DEFAULT 0,
+                xp INTEGER NOT NULL DEFAULT 0,
+                authority TEXT NOT NULL DEFAULT 'local',
+                played_at REAL NOT NULL, dismissed_at REAL
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO hassault_matches (id, account_id, map_name, kills, played_at) "
+            "VALUES ('old', 'acct', 'hd_pit', 7, 900.0)"
+        )
+
+    results.attach_drop("old", "inst-42")
+    row = results.latest("acct")
+    assert row["kills"] == 7
+    assert row["dropId"] == "inst-42"
+
+
+def test_the_card_shows_the_skin_the_drop_resolves_to():
+    """End to end, because the two halves are in different modules: the row holds
+    an id, and `GET /match/latest_summary` turns it into the name, rarity colour
+    and wear the card draws."""
+    from fastapi.testclient import TestClient
+
+    from backend.app import app
+    from backend.modules.hassault.skins import skin_manager
+
+    account = "local_player"
+    match_id = results.record(account, sample())
+    drop = skin_manager.roll_drop(account)
+    results.attach_drop(match_id, drop.instance_id)
+
+    res = TestClient(app).get("/api/hassault/match/latest_summary")
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["matchId"] == match_id
+    assert body["earnedDrop"] is not None
+    assert body["earnedDrop"]["instanceId"] == drop.instance_id
+    assert body["earnedDrop"]["definition"]["name"]

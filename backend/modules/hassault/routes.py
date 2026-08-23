@@ -9,12 +9,15 @@ planes** the browser adopts directly as typed arrays — one copy, no parsing.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
+from backend.paths import data_dir
 from backend.modules.hassault import assets, fabric, hitbox, lore, mapsource, weapons
 from backend.modules.hassault.cgz import PLANE_ORDER, CgzError, write_cgz
 from backend.modules.hassault.match import MAX_PLAYERS, match_server
@@ -511,7 +514,7 @@ def _watchdog_game_process(account_id: str, map_name: str, proc: Any) -> None:
     """
     import time
     from backend.modules.hassault import results
-    from backend.modules.hassault.skins import SKIN_DICT, skin_manager
+    from backend.modules.hassault.skins import skin_manager
 
     proc.wait()
 
@@ -534,8 +537,11 @@ def _watchdog_game_process(account_id: str, map_name: str, proc: Any) -> None:
     # a dict on the skin manager and was gone on the next restart.
     try:
         drop = skin_manager.roll_drop(account_id)
+        # The id only. The card wants the skin's name, rarity colour and wear, and
+        # `GET /match/latest_summary` resolves those against the inventory —
+        # copying them onto the row would mean a renamed skin showing its old name
+        # forever.
         results.attach_drop(summary["matchId"], drop.instance_id)
-        _ = SKIN_DICT.get(drop.skin_id)
     except Exception:
         logger.exception("hassault: could not roll a drop for the finished match")
 
@@ -543,6 +549,28 @@ def _watchdog_game_process(account_id: str, map_name: str, proc: Any) -> None:
 #: When each account's client was launched, so a stale undismissed card is not
 #: mistaken for the match that just ended.
 _LAUNCHED_AT: dict[str, float] = {}
+
+#: How long the launch route watches the client before calling it launched.
+#: Long enough to catch a startup that dies (a panic, an unreachable node, no
+#: usable GPU backend), short enough that a launch still feels immediate — the
+#: window itself opens well after this, so it is not a wait for the game.
+_LAUNCH_SETTLE_SECONDS = 0.8
+
+
+def _tail(path: Path, lines: int = 3) -> str:
+    """The last few lines the client printed, for a launch that did not survive.
+
+    Best-effort by design: this runs on the failure path, and a message that says
+    only "it exited" is still better than one that raises while trying to explain
+    why.
+    """
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return ""
+    if not text:
+        return ""
+    return " / ".join(text.splitlines()[-lines:])
 
 
 @router.post("/launch_native", response_model=LaunchNativeResponse)
@@ -577,7 +605,6 @@ async def launch_native_client(
     way to ask it for solitude.
     """
     import subprocess
-    from pathlib import Path
 
     from backend.modules.settings.routes import get_value
 
@@ -668,7 +695,65 @@ async def launch_native_client(
 
         account_id = _account_id()
 
-        proc = subprocess.Popen([bin_path, *connect_args])
+        # **The client is never handed this process's stdio.**
+        #
+        # It used to inherit it, and that is a launch that fails for a reason
+        # having nothing to do with the game: the backend is routinely an orphan
+        # (`pnpm dev` exits, or a `--reload` parent dies) whose stdout and stderr
+        # are pipes with no reader left. The client's first act is an
+        # `eprintln!` — "hassault: loading <map> from <origin>" — so on Windows
+        # that write fails, Rust panics on a failed print to stderr, and the
+        # process is gone (exit 101) before a window is ever created. Nothing
+        # said so: `Popen` had returned a pid, so the pane reported a successful
+        # launch of a client that no longer existed.
+        #
+        # A file also keeps the diagnostics, which `DEVNULL` would throw away —
+        # and the client's startup lines are the only place the map, the GPU
+        # backend and a missing loadout are reported. Truncated per launch, so
+        # its tail is *this* run.
+        # Deliberately **not** `log_dir()`: a second file in `logs/` breaks the
+        # dev backend outright, because `--reload-exclude "logs/*"` is expanded by
+        # the shell that launches it and uvicorn is handed the extra filename as a
+        # positional argument. A log nobody asked for is not worth a backend that
+        # will not boot.
+        log_path = data_dir() / "hassault" / "native-client.log"
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            child_log: Any = open(log_path, "wb")
+        except OSError:
+            child_log = subprocess.DEVNULL
+
+        try:
+            proc = subprocess.Popen(
+                [bin_path, *connect_args],
+                stdin=subprocess.DEVNULL,
+                stdout=child_log,
+                stderr=subprocess.STDOUT,
+            )
+        finally:
+            # Our copy of the handle; the child has its own.
+            if child_log is not subprocess.DEVNULL:
+                child_log.close()
+
+        # **Did it survive?** A pid is not a running game. Everything that kills
+        # this client kills it in the first moments — a GPU with no usable
+        # backend, a node it cannot read, a panic on startup — so a short wait
+        # turns "launched" from an assumption into an observation, and the tail
+        # of the log says which of those it was.
+        await asyncio.sleep(_LAUNCH_SETTLE_SECONDS)
+        code = proc.poll()
+        if code is not None:
+            detail = _tail(log_path)
+            return LaunchNativeResponse(
+                launched=False,
+                connect_args=connect_args,
+                message=(
+                    f"The native client exited immediately (code {code})."
+                    + (f" {detail}" if detail else "")
+                    + f" Full output: {log_path}"
+                ),
+            )
+
         ACTIVE_GAME_PROCESSES[account_id] = proc
         _LAUNCHED_AT[account_id] = time.time()
 

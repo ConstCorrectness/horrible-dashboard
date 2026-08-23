@@ -50,6 +50,7 @@ machine — decides what happened.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import time
 import uuid
@@ -57,6 +58,8 @@ from contextlib import contextmanager
 from typing import Any, Generator
 
 from backend.modules.database.app_db import ensure_app_db_dir
+
+logger = logging.getLogger(__name__)
 
 #: XP for turning up. A match played is worth something even when it went badly —
 #: the alternative is a progression that only moves for people who are already
@@ -126,17 +129,22 @@ def init_results_db() -> None:
             "ON hassault_matches(account_id, played_at DESC)"
         )
         # **`CREATE TABLE IF NOT EXISTS` never adds a column to a table that
-        # already exists.** An install that recorded a match before `authority`
-        # was introduced keeps a table without it, and every read of that column
-        # then fails — on exactly the machines that have been playing longest.
-        # Defaulting to `local` is also the honest backfill: those matches were
-        # adjudicated by the node that wrote them.
-        columns = {r[1] for r in conn.execute("PRAGMA table_info(hassault_matches)")}
-        if "authority" not in columns:
-            conn.execute(
-                "ALTER TABLE hassault_matches "
-                "ADD COLUMN authority TEXT NOT NULL DEFAULT 'local'"
-            )
+        # already exists.** An install that recorded a match before a column was
+        # introduced keeps a table without it, and every read of that column then
+        # fails — on exactly the machines that have been playing longest.
+        #
+        # Defaulting `authority` to `local` is also the honest backfill: those
+        # matches were adjudicated by the node that wrote them. `drop_id` is
+        # nullable because a match genuinely may not have earned one.
+        _ensure_column(conn, "authority", "TEXT NOT NULL DEFAULT 'local'")
+        _ensure_column(conn, "drop_id", "TEXT")
+
+
+def _ensure_column(conn: sqlite3.Connection, name: str, decl: str) -> None:
+    """Add one column to `hassault_matches` if this install predates it."""
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(hassault_matches)")}
+    if name not in columns:
+        conn.execute(f"ALTER TABLE hassault_matches ADD COLUMN {name} {decl}")
 
 
 def xp_for(result: dict[str, Any]) -> int:
@@ -195,6 +203,42 @@ def record(
             ),
         )
     return match_id
+
+
+def attach_drop(match_id: str, instance_id: str) -> None:
+    """Hang a rolled skin drop on the match that earned it.
+
+    The drop and the row are written by two different things at two different
+    times, which is why this exists at all. `record` runs when the player leaves
+    the match, from the simulation's own counters; the drop is the reward for
+    *finishing*, so it is rolled by `_watchdog_game_process` once the client
+    process has actually exited and its result has landed. By then the row is
+    already written, so the drop arrives as an update.
+
+    Only the **id** is stored. The card wants the skin's name, rarity colour and
+    wear, and copying those onto the match row would mean a renamed skin showing
+    its old name forever; `GET /match/latest_summary` resolves the id against the
+    inventory instead.
+
+    A match id that matches nothing is reported rather than swallowed. That is
+    the exact shape of the bug this function was missing for: the drop was rolled
+    into the player's inventory, the call to attach it raised, and the card
+    showed no drop — with the skin sitting in the armoury having come from
+    nowhere.
+    """
+    init_results_db()
+    with get_db_conn() as conn:
+        cur = conn.execute(
+            "UPDATE hassault_matches SET drop_id = ? WHERE id = ?",
+            (instance_id, match_id),
+        )
+        if cur.rowcount == 0:
+            logger.warning(
+                "hassault: drop %s belongs to no match (%s); it is in the "
+                "inventory but no card will show it",
+                instance_id,
+                match_id,
+            )
 
 
 def progression(account_id: str) -> dict[str, int]:

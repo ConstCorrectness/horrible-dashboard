@@ -810,6 +810,12 @@ _GROUP_DESCRIPTIONS: dict[str, str] = {
         "Personal knowledge libraries: semantic-search a library, list its sources, "
         "and add new ones."
     ),
+    "model": (
+        "Neural-network designs in the interpretability pane: list and read saved "
+        "designs, fork the model currently being inspected into an editable one, "
+        "retune its hyperparameters and see what they cost in parameters, and get "
+        "the PyTorch nn.Module it generates. Counts are estimates, not measurements."
+    ),
     "keymap": "Inspect and rebind keyboard shortcuts.",
     "code": "Search the code symbol index (jumping the editor to a hit) and rebuild it.",
     "clubhouse": "Connected Clubhouse account and its live rooms.",

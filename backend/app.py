@@ -80,6 +80,9 @@ from backend.modules.audio import register_agent_tools as register_audio_tools
 from backend.modules.audio import router as audio_router
 from backend.modules.audio import shutdown_voicemeeter
 from backend.modules.hardware import router as hardware_router
+from backend.modules.interpretability import (
+    register_agent_tools as register_model_designer_tools,
+)
 from backend.modules.interpretability import router as interpretability_router
 from backend.modules.evals import register_agent_tools as register_evals_tools
 from backend.modules.evals import router as evals_router
@@ -310,6 +313,11 @@ register_training_tools()
 
 # Register the LocalTrack experiment tracking agent tools (grouped under `localtrack`)
 register_localtrack_tools()
+
+# Register the model designer's agent tools (grouped under `model`): read a saved
+# design, fork the inspected model into one, retune its hyperparameters, emit its
+# PyTorch. Node-level surgery is deliberately not offered — see agent_tools.py.
+register_model_designer_tools()
 
 # Register the games module's backend agent tools (grouped under `games`); the
 # manual-play seat drives its move through game.getObservation/game.chooseAction.

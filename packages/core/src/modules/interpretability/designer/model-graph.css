@@ -105,6 +105,24 @@
   border-color: var(--mg-bad);
   color: var(--mg-bad);
 }
+/* A measurement, not our arithmetic. Deliberately a different colour from the
+   `estimated` chip — the whole point of the probe is that the two are not the
+   same kind of claim. */
+.mg-chip-measured {
+  border-color: var(--mg-ffn);
+  color: var(--mg-ffn);
+  margin-left: 5px;
+}
+.mg-node-measured {
+  color: var(--mg-ffn);
+}
+.mg-node-disagrees {
+  color: var(--mg-bad);
+}
+.mg-node-disagrees .mg-chip-measured {
+  border-color: var(--mg-bad);
+  color: var(--mg-bad);
+}
 
 .mg-button {
   font: inherit;
@@ -215,10 +233,15 @@
   border-right: 1px solid var(--mg-line);
   overflow-y: auto;
 }
+/* A column, so the import report can sit above the canvas rather than float over
+   it: a panel covering the graph it is describing is a panel you dismiss unread. */
 .mg-center {
   flex: 1 1 auto;
   min-width: 0;
+  min-height: 0;
   position: relative;
+  display: flex;
+  flex-direction: column;
 }
 .mg-right {
   width: 320px;
@@ -322,7 +345,8 @@
 
 .mg-canvas {
   width: 100%;
-  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .mg-canvas .react-flow__renderer,
 .mg-canvas .react-flow {
@@ -467,6 +491,147 @@
 }
 .mg-minimap {
   background: var(--surface-1, #1a1a1a) !important;
+}
+
+/* Reroute and frames ------------------------------------------------------- */
+
+/* A bend in a wire, drawn as one. A titled box here would look like a node that
+   does something, and codegen walks straight through it. */
+.mg-reroute {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--surface-2, #232323);
+  border: 1px solid var(--mg-structure);
+}
+.mg-reroute.mg-selected {
+  border-color: var(--mg-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--mg-accent) 40%, transparent);
+}
+.mg-reroute.mg-invalid {
+  border-color: var(--mg-bad);
+}
+
+.mg-frame {
+  width: 100%;
+  height: 100%;
+  border: 1px dashed var(--mg-line);
+  border-top-width: 2px;
+  border-top-style: solid;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--mg-panel) 60%, transparent);
+  pointer-events: none;
+}
+.mg-frame-label {
+  position: absolute;
+  top: -16px;
+  left: 0;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--mg-dim);
+}
+/* React Flow warns on a node type with no handles; a frame connects to nothing,
+   so its handles exist and are invisible rather than being absent. */
+.mg-frame-handle {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Link-drag search --------------------------------------------------------- */
+
+/* Positioned in screen coordinates, because that is where the wire was let go —
+   the one place in this pane that does not live in the canvas transform. */
+.mg-linksearch {
+  position: fixed;
+  z-index: 40;
+  width: 220px;
+  padding: 6px;
+  background: var(--surface-2, #232323);
+  border: 1px solid var(--mg-accent);
+  border-radius: 2px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 45%);
+}
+.mg-linksearch-list {
+  max-height: 240px;
+  overflow-y: auto;
+  margin-top: 6px;
+}
+.mg-linksearch-empty {
+  font-size: 11px;
+  color: var(--mg-dim);
+  margin: 6px 2px;
+  line-height: 1.45;
+}
+
+/* Import report ------------------------------------------------------------ */
+
+/* Not a toast. A list of decisions made on your behalf about a model you may be
+   about to train is not a thing to flash for four seconds — it stays until closed,
+   and it is capped so a very chatty import cannot push the canvas off screen. */
+.mg-import {
+  flex: 0 0 auto;
+  max-height: 45%;
+  overflow-y: auto;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--mg-line);
+  background: var(--mg-panel);
+}
+.mg-import-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.mg-import-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  margin: 0;
+}
+.mg-import-sub {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--mg-dim);
+  margin: 10px 0 4px;
+}
+.mg-import-lead {
+  font-size: 11px;
+  color: var(--mg-dim);
+  margin: 0 0 6px;
+  line-height: 1.45;
+}
+.mg-import-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.mg-import-item {
+  font-size: 11.5px;
+  line-height: 1.5;
+  padding: 5px 0 5px 10px;
+  border-left: 2px solid var(--mg-line);
+  margin-bottom: 4px;
+}
+.mg-import-assumed {
+  border-left-color: var(--mg-attention);
+}
+.mg-import-count {
+  font-size: 11.5px;
+  margin: 10px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--mg-line);
+  color: var(--mg-dim);
+}
+.mg-import-agrees {
+  color: var(--mg-ffn);
+}
+.mg-template-import {
+  border-top-color: var(--mg-embedding);
 }
 
 /* Inspector ---------------------------------------------------------------- */
@@ -671,10 +836,18 @@
   padding: 8px 10px;
   border-bottom: 1px solid var(--mg-line);
 }
+/* Wraps because the row grew a fourth control (the hand-off) and the right panel
+   is a fixed 320px — without this the last button is simply clipped off the edge,
+   which reads as a feature that is not there. */
 .mg-probe-head {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+}
+.mg-probe-pick {
+  flex: 1 1 120px;
+  min-width: 0;
 }
 .mg-probe-title {
   font-size: 10px;

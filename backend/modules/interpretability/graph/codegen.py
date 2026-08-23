@@ -116,6 +116,27 @@ def _split_call(text: str) -> list[str]:
     ]
 
 
+class _Attrs:
+    """Which node each generated `self.<attr>` came from, per class.
+
+    Built as the attributes are emitted rather than recovered afterwards, for the
+    same reason the line markers are: a second pass that re-derives names has to
+    reimplement the naming rules, and the day the two disagree nothing says so —
+    a measured parameter count simply lands on the wrong box.
+    """
+
+    def __init__(self) -> None:
+        #: class → attr → node id
+        self.of: dict[str, dict[str, str]] = {}
+        #: class → attr → the class that attribute instantiates (groups only)
+        self.classes: dict[str, dict[str, str]] = {}
+
+    def record(self, cls: str, attr: str, node_id: str, holds: str = "") -> None:
+        self.of.setdefault(cls, {})[attr] = node_id
+        if holds:
+            self.classes.setdefault(cls, {})[attr] = holds
+
+
 class _Lines:
     """Accumulated source plus the line→node map, kept in step by construction."""
 
@@ -165,6 +186,7 @@ def _generate(graph: DesignGraph) -> CodeResult:
     ctx = Ctx(config=dict(graph.config))
     used_prims: set[str] = set()
     _check_class_names(graph)
+    attrs = _Attrs()
 
     bodies = _Lines()
     for sub in _group_order(graph):
@@ -177,6 +199,7 @@ def _generate(graph: DesignGraph) -> CodeResult:
                 class_name(sub.name),
                 arg="x",
                 used=used_prims,
+                attrs=attrs,
             )
         )
         bodies.add()
@@ -190,6 +213,7 @@ def _generate(graph: DesignGraph) -> CodeResult:
         class_name(graph.name),
         arg=_root_arg(graph),
         used=used_prims,
+        attrs=attrs,
     )
 
     out = _Lines()
@@ -221,7 +245,13 @@ def _generate(graph: DesignGraph) -> CodeResult:
 
     out.extend(bodies)
     out.extend(root)
-    return CodeResult(source=out.render(), markers=out.markers)
+    return CodeResult(
+        source=out.render(),
+        markers=out.markers,
+        attrs=attrs.of,
+        attrClasses=attrs.classes,
+        rootClass=class_name(graph.name),
+    )
 
 
 def _check_class_names(graph: DesignGraph) -> None:
@@ -358,6 +388,7 @@ def _emit_class(
     *,
     arg: str,
     used: set[str],
+    attrs: _Attrs,
 ) -> _Lines:
     lines = _Lines()
     order = topo_order(nodes, edges)
@@ -374,7 +405,7 @@ def _emit_class(
     init = _Lines()
     body = _Lines()
     values: dict[str, str] = {}
-    attrs: dict[str, str] = {}
+    owned: dict[str, str] = {}
     stems: dict[str, int] = {}
     value_seq = 0
     returned: str | None = None
@@ -417,7 +448,9 @@ def _emit_class(
         if node.type == "group":
             value_seq += 1
             target = f"x_{value_seq}"
-            _emit_group(graph, ctx, node, init, body, ins, target, stems, used)
+            _emit_group(
+                graph, ctx, node, init, body, ins, target, stems, used, attrs, name
+            )
             values[node.id] = target
             continue
 
@@ -426,7 +459,8 @@ def _emit_class(
             stem = spec.attr or "mod"
             stems[stem] = stems.get(stem, 0) + 1
             attr_name = _identifier(node.name) if node.name else f"{stem}_{stems[stem]}"
-            attrs[node.id] = attr_name
+            owned[node.id] = attr_name
+            attrs.record(name, attr_name, node.id)
             attr = f"self.{attr_name}"
             init.wrap(f"        {attr} = {spec.init_fn(node, ctx)}", node)
 
@@ -439,7 +473,7 @@ def _emit_class(
         values[node.id] = target
 
     if not init.rows:
-        init.add("        pass" if not attrs else "")
+        init.add("        pass" if not owned else "")
     lines.extend(init)
     lines.add()
     lines.add(f"    def forward(self, {arg}):")
@@ -463,6 +497,8 @@ def _emit_group(
     target: str,
     stems: dict[str, int],
     used: set[str],
+    attrs: _Attrs,
+    owner: str,
 ) -> None:
     """A group instance — one submodule, or a `ModuleList` and a loop for a stack."""
     sub = graph.group(str(node.params.get("group", "")))
@@ -485,16 +521,18 @@ def _emit_group(
     if count == 1:
         stem = _identifier(sub.name).lower() or "block"
         stems[stem] = stems.get(stem, 0) + 1
-        attr = (
-            f"self.{_identifier(node.name) if node.name else f'{stem}_{stems[stem]}'}"
-        )
+        attr_name = _identifier(node.name) if node.name else f"{stem}_{stems[stem]}"
+        attrs.record(owner, attr_name, node.id, holds=cls)
+        attr = f"self.{attr_name}"
         init.wrap(f"        {attr} = {cls}({passed})", node)
         body.add(f"        {target} = {attr}({source})", node)
         return
 
     stem = f"{_identifier(sub.name).lower() or 'block'}s"
     stems[stem] = stems.get(stem, 0) + 1
-    attr = f"self.{_identifier(node.name) if node.name else f'{stem}_{stems[stem]}'}"
+    attr_name = _identifier(node.name) if node.name else f"{stem}_{stems[stem]}"
+    attrs.record(owner, attr_name, node.id, holds=cls)
+    attr = f"self.{attr_name}"
     one_line = f"        {attr} = nn.ModuleList([{cls}({passed}) for _ in range({count_code})])"
     if len(one_line) <= LINE_LIMIT:
         init.add(one_line, node)

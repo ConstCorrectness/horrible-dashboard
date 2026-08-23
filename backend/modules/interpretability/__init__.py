@@ -17,6 +17,7 @@ thing to fork.
 
 from fastapi import APIRouter
 
+from backend.modules.interpretability.agent_tools import register_agent_tools
 from backend.modules.interpretability.graph.routes import router as graph_router
 from backend.modules.interpretability.routes import router as _inspect_router
 
@@ -26,4 +27,4 @@ router.include_router(_inspect_router)
 # designer's paths all sit under `/interpretability/graph`.
 router.include_router(graph_router)
 
-__all__ = ["router"]
+__all__ = ["register_agent_tools", "router"]

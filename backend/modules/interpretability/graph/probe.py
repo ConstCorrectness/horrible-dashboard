@@ -40,7 +40,11 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 from backend.modules.interpretability.graph import codegen, shapes
-from backend.modules.interpretability.graph.models import DesignGraph
+from backend.modules.interpretability.graph.models import (
+    CodeResult,
+    DesignGraph,
+    ShapeReport,
+)
 from backend.modules.training.envs import python_path, venv_exists
 from backend.modules.training.models import ProjectModel
 
@@ -74,12 +78,33 @@ class ProbeResult(BaseModel):
     #: estimate is wrong, and it is `shapes.py` that needs fixing.
     agrees: bool | None = None
 
+    #: Node id → measured parameters, summed across every copy a ×N stack made.
+    #: This is what turns the cost overlay from an estimate into a measurement, one
+    #: box at a time.
+    nodeParams: dict[str, int] = Field(default_factory=dict)
+    #: Node id → whether the measurement agrees with what `shapes.py` predicted for
+    #: it. A `False` here is the useful one: it says *which* node's arithmetic is
+    #: wrong, which a single total never can.
+    nodeAgrees: dict[str, bool] = Field(default_factory=dict)
+    #: False when the model had more parameter-holding modules than the probe will
+    #: report, so `nodeParams` is a partial picture and must not be read as a full one.
+    nodeParamsComplete: bool = True
+
     project: str = ""
     torchVersion: str = ""
     durationMs: int = 0
 
 
-_SCRIPT = r"""
+#: A model with more param-holding modules than this is one where the per-node
+#: overlay stops being the interesting question. Capped so a pathological design
+#: cannot return a megabyte of JSON, and reported as incomplete rather than trimmed
+#: silently — a per-node count that is quietly missing half its leaves is worse than
+#: no per-node count.
+MAX_LEAVES = 5000
+
+_SCRIPT = (
+    f"MAX_LEAVES = {MAX_LEAVES}\n"
+    + r"""
 import json, sys, traceback, importlib.util, time
 
 def main():
@@ -118,16 +143,30 @@ def main():
         return
 
     shape = list(result.shape) if hasattr(result, "shape") else []
+    # Every module's *own* parameters, not its subtree's. Reporting subtree totals
+    # would double-count the moment anything is nested, and nesting is the normal
+    # case here — the mapping back onto nodes happens on the backend, which is the
+    # only side that knows which attribute came from which node.
+    leaves = {}
+    for name, sub in model.named_modules():
+        own = sum(p.numel() for p in sub.parameters(recurse=False))
+        if own:
+            leaves[name] = int(own)
+            if len(leaves) >= MAX_LEAVES:
+                break
     print(json.dumps({
         "status": "ran",
         "torch": out.get("torch", ""),
         "shape": [int(d) for d in shape],
         "params": int(sum(p.numel() for p in model.parameters())),
+        "leaves": leaves,
+        "leavesComplete": len(leaves) < MAX_LEAVES,
         "ms": int((time.time() - started) * 1000),
     }))
 
 main()
 """
+)
 
 
 def run(graph: DesignGraph, project: ProjectModel | None) -> ProbeResult:
@@ -197,15 +236,62 @@ def run(graph: DesignGraph, project: ProjectModel | None) -> ProbeResult:
                 estimatedParams=estimated,
             )
 
-    return _read_output(out, project, estimated)
+    return _read_output(out, project, estimate, generated)
+
+
+def attribute_params(
+    leaves: dict[str, int],
+    attrs: dict[str, dict[str, str]],
+    attr_classes: dict[str, dict[str, str]],
+    root_class: str,
+) -> dict[str, int]:
+    """Fold measured module paths back onto the nodes that emitted them.
+
+    A runtime path is something like `decoderblocks_1.0.norm_1.weight`'s owner,
+    `decoderblocks_1.0.norm_1`. Walking it needs two things codegen hands over: which
+    attribute belongs to which node, and which *class* a group attribute holds — the
+    `norm_1` under `decoderblocks_1` can only be looked up once you know that slot
+    contains a `DecoderBlock`.
+
+    Two rules make the arithmetic come out right:
+
+    - **The deepest mapped node wins.** `attn_1.q_proj` is inside a primitive we
+      emitted whole; its weights belong to the attention node, not to some node of
+      their own. Once the walk enters a class with no map, everything below is
+      charged to the last node it did recognise.
+    - **Numeric segments are skipped and their counts accumulate.** A ×N stack is one
+      node drawn once, so all N copies of `norm_1` add up to that node's cost —
+      exactly what `shapes.py` does when it multiplies an inner node by the count.
+    """
+    totals: dict[str, int] = {}
+    for path, count in leaves.items():
+        cls = root_class
+        node: str | None = None
+        for segment in path.split("."):
+            if segment.isdigit():  # a ModuleList index: same class, another copy
+                continue
+            if not cls:
+                break
+            found = attrs.get(cls, {}).get(segment)
+            if found is None:
+                # Inside a primitive or a hand-written class: stop descending and
+                # charge the rest to whatever node owns this subtree.
+                break
+            node = found
+            cls = attr_classes.get(cls, {}).get(segment, "")
+        if node:
+            totals[node] = totals.get(node, 0) + count
+    return totals
 
 
 def _read_output(
     out: subprocess.CompletedProcess[str],
     project: ProjectModel,
-    estimated: int | None,
+    estimate: ShapeReport,
+    generated: CodeResult,
 ) -> ProbeResult:
     """Turn the subprocess's last line into a result, or say why we cannot."""
+    estimated = estimate.totalParams or None
     try:
         payload = json.loads((out.stdout or "").strip().splitlines()[-1])
     except (ValueError, IndexError):
@@ -237,11 +323,25 @@ def _read_output(
         )
 
     measured = int(payload.get("params", 0))
+    leaves = {str(k): int(v) for k, v in (payload.get("leaves") or {}).items()}
+    per_node = attribute_params(
+        leaves, generated.attrs, generated.attrClasses, generated.rootClass
+    )
     return ProbeResult(
         status="ran",
         outputShape=[int(d) for d in payload.get("shape", [])],
         totalParams=measured,
         estimatedParams=estimated,
+        nodeParams=per_node,
+        # Only for the nodes we actually predicted a count for. A node with no
+        # estimate has nothing to agree or disagree with, and entering `False`
+        # would report our own silence as the model's fault.
+        nodeAgrees={
+            nid: count == estimate.params[nid]
+            for nid, count in per_node.items()
+            if nid in estimate.params
+        },
+        nodeParamsComplete=bool(payload.get("leavesComplete", True)),
         # A disagreement is a finding, not a rounding error: the estimate is what the
         # cost overlay shows on every keystroke, so if it is wrong the pane has been
         # lying quietly. Surfaced rather than reconciled.

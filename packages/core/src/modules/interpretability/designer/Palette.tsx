@@ -7,7 +7,7 @@
  * is the nicer gesture and comes with the drop-onto-a-link insert, but a palette you
  * can only use by dragging is a palette that does not work on a trackpad.
  */
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type RefObject } from 'react';
 
 import type { NodeSpec, TemplateSpec } from './graph';
 
@@ -27,13 +27,24 @@ const TITLES: Record<string, string> = {
 export function Palette({
   specs,
   templates,
+  inspectedModel,
+  importing,
   onAdd,
   onTemplate,
+  onImport,
+  searchRef,
 }: {
   specs: NodeSpec[];
   templates: TemplateSpec[];
+  /** The model the Inspect tab is showing, when there is one. */
+  inspectedModel?: string;
+  importing?: boolean;
   onAdd: (spec: NodeSpec) => void;
   onTemplate: (id: string) => void;
+  onImport: () => void;
+  /** Focused by the add-node binding — Blender's Shift-A, which opens a search
+   * rather than making the user hunt the list. */
+  searchRef?: RefObject<HTMLInputElement | null>;
 }) {
   const [query, setQuery] = useState('');
 
@@ -63,6 +74,7 @@ export function Palette({
   return (
     <div className="mg-palette">
       <input
+        ref={searchRef}
         className="mg-search"
         placeholder="Search nodes"
         value={query}
@@ -73,6 +85,23 @@ export function Palette({
       {templates.length > 0 && !query && (
         <section className="mg-palette-group">
           <h3 className="mg-palette-title">Start from</h3>
+          {/* The bridge to the other tab, and the reason the two share a pane: the
+              model you are reading is the obvious thing to fork. It sits with the
+              templates because that is what it is — a starting point, not a copy. */}
+          {inspectedModel && (
+            <button
+              type="button"
+              className="mg-template mg-template-import"
+              onClick={onImport}
+              disabled={importing}
+              title="Build an editable design from the model the Inspect tab is showing. It will tell you what it had to assume."
+            >
+              <span className="mg-template-label">
+                {importing ? 'Importing…' : 'The inspected model'}
+              </span>
+              <span className="mg-template-desc mg-mono">{inspectedModel}</span>
+            </button>
+          )}
           {templates.map((template) => (
             <button
               key={template.id}

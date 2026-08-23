@@ -344,6 +344,38 @@ stay out of the headline count: a class the model never instantiates holds no we
 The model panel lists every group with its instance count and offers to delete the
 unused ones, since they are still written into the file.
 
+### Forking the model you are looking at
+
+**The inspected model** sits at the top of the palette's starting points, named after
+whatever the Inspect tab is showing. It turns that model's GGUF (or `config.json`)
+metadata into an editable graph — the bridge the two modes share a pane for.
+
+The difficulty is that [`ModelArchitecture`](#the-two-things-it-shows-that-a-drawn-diagram-cannot)
+is deliberately full of holes: a dimension the metadata did not state stays `null`
+rather than being guessed. A graph has no holes. So the import splits the difference
+along one line:
+
+| | |
+| --- | --- |
+| **Width, depth, vocabulary, head count** | Required. Missing any of them, there is **no import** — and the reason names which. A hidden size we invented would produce a plausible model of nothing |
+| **Gated or dense, RMSNorm or LayerNorm, RoPE or not** | Assumed when absent, and **every assumption is listed** in a panel that stays until you close it. These only shape the graph, and the result is a starting point you edit, not a measurement |
+
+:::note The import audits itself
+The panel ends with the parameter count our arithmetic derives beside the one the
+metadata states. On Llama 3.2 3B those differ by 12% — and the whole difference is the
+output head, which that model ties to its embedding while the graph gives it its own
+matrix. So the import says that, in those words. A gap it *cannot* account for is
+reported as exactly that: a wrong import that stays quiet is worse than one that says
+it does not add up.
+:::
+
+Two RoPE-shaped caveats worth knowing. Absent rotary parameters are ambiguous — they
+mean either "this model has none" or "the metadata omitted them" — and the import
+assumes RoPE anyway, because a decoder with no positional encoding at all is certainly
+wrong. And head width is left derived (hidden ÷ heads) unless the metadata explicitly
+decoupled them, which keeps the generated class parametric; a model like Gemma that
+decouples them is called out in the panel.
+
 ### Running it for real
 
 Everything above is the pane&apos;s own arithmetic. **Run it** builds the generated module
@@ -372,6 +404,70 @@ on a technicality about our own helper package would read as the model being bro
 parameter** — including the mixture-of-experts one. The test skips when torch is absent,
 because the backend genuinely does not have it.
 :::
+
+### Tracing a module that already exists
+
+The other importer reads a *description* of a model; **Trace** reads the model.
+`torch.fx.symbolic_trace` records what a `forward` actually does, in order, with real
+propagated shapes, and that becomes an editable graph. It runs in a training project's
+venv, like the probe and for the same reason.
+
+A trace is in torch's vocabulary, not ours, so some of it will not map onto the
+twenty-one node types. Those arrive as `custom.module` placeholders that **raise
+`NotImplementedError`**, named after the class they stand for.
+
+:::warning A pass-through stub would be the worst possible default
+The tempting placeholder returns its input unchanged. It would compile, run, train —
+and be a different model than the one you traced, wrong in a way nothing would ever
+report. Raising means the design refuses to run until you fill in the blanks, which is
+worth far more than one that quietly computes something else. The pane names every
+placeholder rather than only counting them.
+:::
+
+### Keyboard
+
+The canvas takes Blender's verbs, declared through
+[the keymap](../architecture/keybindings.mdx) — never a `keydown` listener in a
+component:
+
+| | |
+| --- | --- |
+| `Shift-A` | focus the node search |
+| `M` | mute (ablate) the selected node |
+| `X` | delete it |
+| `H` | collapse it |
+| `Home` | frame everything |
+| `Tab` / `Shift-Tab` | enter / leave a group |
+| `Ctrl-G` | fold the selection into a group |
+
+Every one is scoped to the pane **and** guarded with `!textInput`: unguarded, typing a
+`d_model` value in the inspector would delete the selected node. A binding naming
+`paneFocus` already beats an unscoped global, so the pane does not take capture —
+which matters, because the same pane hosts Inspect mode, where swallowing the keyboard
+would be wrong.
+
+### Reroutes and frames
+
+Two more borrowings, both deliberately weightless. A **reroute** is a bend in a wire,
+drawn as a dot rather than a titled box — codegen walks straight through it, and a box
+would look like a node that does something. A **frame** is a labelled rectangle behind
+a set of nodes: pure cosmetics, living entirely in the layout sidecar, so the generated
+module is byte-identical before and after you draw one. Its rectangle is *derived* from
+where its members currently are, never stored, so dragging a member re-draws the frame
+around it and there is never a second competing fact about where the frame is.
+
+### Handing it to training
+
+**Send to project** writes the design into a training project as `model.py` and adds a
+notebook block that imports and instantiates it. No new execution path — the project's
+own kernel, venv and Kaggle/Colab push all apply unchanged.
+
+Two rules keep it from colliding with the [recipe](training.mdx) machinery that writes
+into the same notebook. The block carries **its own marker** (`horrible_model`, not
+`horrible_recipe`), because sharing the flag would make a recipe regenerate delete the
+model definition and a model regenerate delete the trainer config — each silently. And
+it lands **above** the recipe block, because a notebook where the trainer is configured
+above the model it trains does not run.
 
 ### Where a design lives
 

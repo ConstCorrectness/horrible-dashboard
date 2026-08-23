@@ -118,9 +118,16 @@ export interface NodeLayout {
   frame?: string;
 }
 
+/** A labelled rectangle behind a set of nodes. Pure cosmetics — see FrameNode.tsx. */
+export interface FrameBox {
+  id: string;
+  label: string;
+  color: string;
+}
+
 export interface Layout {
   nodes: Record<string, NodeLayout>;
-  frames: { id: string; label: string; color: string }[];
+  frames: FrameBox[];
   viewport: Record<string, number>;
 }
 
@@ -190,9 +197,43 @@ export interface ProbeResult {
   estimatedParams: number | null;
   /** null when there is nothing to compare; false means our estimate is wrong. */
   agrees: boolean | null;
+  /** Node id → measured parameters, summed across every copy a ×N stack made. */
+  nodeParams: Record<string, number>;
+  /** Node id → whether the measurement matched the estimate for that node. A
+   * `false` says *which* node's arithmetic is wrong, which a total never can. */
+  nodeAgrees: Record<string, boolean>;
+  /** False when the model had more parameter-holding modules than the probe
+   * reports, so the per-node picture is partial and must not be read as whole. */
+  nodeParamsComplete: boolean;
   project: string;
   torchVersion: string;
   durationMs: number;
+}
+
+/**
+ * A design derived from the model the Inspect tab is showing.
+ *
+ * The qualifications are not decoration. `ModelArchitecture` is deliberately full of
+ * holes — a dimension the metadata did not state is `None` rather than guessed — so
+ * an import either refuses (`missing` non-empty, no graph) or fills the gaps and says
+ * exactly which ones it filled. `statedParams` beside `estimatedParams` is the
+ * import auditing itself: if the two disagree, something here is wrong.
+ */
+export interface ImportResult {
+  graph: DesignGraph | null;
+  model: string;
+  source: string;
+  assumed: string[];
+  missing: string[];
+  notes: string[];
+  statedParams: number | null;
+  estimatedParams: number | null;
+  error: string | null;
+}
+
+/** Fork the inspected model into an editable design. Saves nothing by itself. */
+export function importInspectedModel(): Promise<ImportResult> {
+  return apiPost<ImportResult>(`${BASE}/from-model`, {});
 }
 
 export interface TrainingProject {
@@ -210,6 +251,54 @@ export interface TrainingProject {
  */
 export function probeGraph(graph: DesignGraph, project: string): Promise<ProbeResult> {
   return apiPost<ProbeResult>(`${BASE}/probe`, { graph, project });
+}
+
+/** What handing a design to a training project did, or why it did nothing. */
+export interface HandoffResult {
+  ok: boolean;
+  project: string;
+  modulePath: string;
+  /** Zero with `ok` true means the module was written but the project has no
+   * notebook to wire it into — a real outcome, not a failure. */
+  cells: number;
+  replaced: boolean;
+  className: string;
+  message: string;
+}
+
+/**
+ * Write the design into a training project as `model.py` plus a notebook block.
+ *
+ * No new execution path — the project's own kernel, venv and Kaggle/Colab push all
+ * apply unchanged. The block carries its own marker, so regenerating a *recipe*
+ * cannot delete the model and vice versa.
+ */
+export function handoffToProject(graph: DesignGraph, project: string): Promise<HandoffResult> {
+  return apiPost<HandoffResult>(`${BASE}/handoff`, { graph, project });
+}
+
+/** A design traced out of a running `nn.Module`, and how much of it we understood. */
+export interface TraceResult {
+  graph: DesignGraph | null;
+  status: 'traced' | 'failed' | 'unavailable';
+  message: string;
+  traceback: string;
+  /** Operations that became a real node type. */
+  mapped: number;
+  /** Classes that became placeholders, named — an opaque import nobody is told
+   * about is indistinguishable from a wrong one. */
+  placeholders: string[];
+  torchVersion: string;
+}
+
+/**
+ * Trace `package.module.ClassName` in a training project's venv.
+ *
+ * The other importer reads someone's *description* of a model; this one reads the
+ * model. Slow and manual for the same reason the probe is: it runs a real torch.
+ */
+export function traceModule(project: string, target: string): Promise<TraceResult> {
+  return apiPost<TraceResult>(`${BASE}/from-traced`, { project, target });
 }
 
 /** Projects that could host a probe. Read from the training module's own store. */

@@ -11,7 +11,7 @@
  * state that everything gets wrong by collapsing into silence, and a model reported
  * as validated when nothing validated it is worse than not offering the button.
  */
-import { formatCount, type ProbeResult, type TrainingProject } from './graph';
+import { formatCount, type HandoffResult, type ProbeResult, type TrainingProject } from './graph';
 
 function Outcome({ result }: { result: ProbeResult }) {
   if (result.status === 'ran') {
@@ -68,6 +68,9 @@ export function ProbeBar({
   onRun,
   running,
   result,
+  onHandoff,
+  handingOff,
+  handoff,
 }: {
   projects: TrainingProject[];
   project: string;
@@ -75,6 +78,10 @@ export function ProbeBar({
   onRun: () => void;
   running: boolean;
   result: ProbeResult | null;
+  /** Write the design into the selected project as a trainable model. */
+  onHandoff: () => void;
+  handingOff: boolean;
+  handoff: HandoffResult | null;
 }) {
   return (
     <div className="mg-probe">
@@ -96,6 +103,22 @@ export function ProbeBar({
         <button type="button" className="mg-button" onClick={onRun} disabled={running}>
           {running ? 'running…' : 'Forward pass'}
         </button>
+        {/* The other thing a chosen project is for: not checking the design, but
+            keeping it. Same picker, because picking twice for one project is a
+            question the user has already answered. */}
+        <button
+          type="button"
+          className="mg-button"
+          onClick={onHandoff}
+          disabled={handingOff || !project}
+          title={
+            project
+              ? 'Write this design into the project as model.py, and add a notebook cell that imports it.'
+              : 'Pick a training project first.'
+          }
+        >
+          {handingOff ? 'writing…' : 'Send to project'}
+        </button>
       </div>
       {result && <Outcome result={result} />}
       {!result && (
@@ -103,6 +126,22 @@ export function ProbeBar({
           Builds the generated module in that project&apos;s venv and runs one batch through it.
           Needs torch installed there — the backend deliberately has none.
         </p>
+      )}
+      {handoff && (
+        <div className={`mg-probe-out ${handoff.ok ? 'mg-probe-ok' : 'mg-probe-bad'}`}>
+          <span className="mg-probe-line">
+            {handoff.ok
+              ? `${handoff.className} written to model.py${
+                  handoff.cells
+                    ? `, and ${handoff.replaced ? 'the notebook block was replaced' : 'a notebook block added'}.`
+                    : '.'
+                }`
+              : handoff.message}
+          </span>
+          {handoff.ok && handoff.message && (
+            <span className="mg-probe-line mg-probe-note">{handoff.message}</span>
+          )}
+        </div>
       )}
     </div>
   );

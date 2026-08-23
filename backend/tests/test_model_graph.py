@@ -11,16 +11,24 @@ argument; individually none of them is.
 from __future__ import annotations
 
 import ast
+import asyncio
+from pathlib import Path
 
 import pytest
 
+from backend.modules.interpretability import agent_tools
 from backend.modules.interpretability.graph import (
     codegen,
     examples,
     generate,
+    handoff,
+    importer,
     infer,
     parse,
+    probe,
     spec,
+    store,
+    tracer,
 )
 from backend.modules.interpretability.graph.models import (
     DesignGraph,
@@ -28,7 +36,14 @@ from backend.modules.interpretability.graph.models import (
     GraphNode,
     SubGraph,
 )
+from backend.modules.interpretability.models import (
+    AttentionSpec,
+    FfnSpec,
+    ModelArchitecture,
+    MoeSpec,
+)
 from backend.modules.interpretability.graph.walk import CycleError, topo_order
+from backend.modules.training.models import ProjectModel
 
 TEMPLATES = ("llama", "gpt", "moe")
 
@@ -556,3 +571,417 @@ def test_the_generated_module_runs_and_the_estimate_is_right(name: str) -> None:
 
     assert list(out.shape) == [2, 8, vocab]
     assert sum(p.numel() for p in model.parameters()) == estimate.totalParams
+
+    # And the same measurement, resolved back onto individual nodes. A total that
+    # agrees can still hide two nodes wrong in opposite directions, which is exactly
+    # what the per-node overlay exists to catch.
+    leaves = {
+        path: sum(p.numel() for p in sub.parameters(recurse=False))
+        for path, sub in model.named_modules()
+    }
+    emitted = generate(graph)
+    per_node = probe.attribute_params(
+        {k: v for k, v in leaves.items() if v},
+        emitted.attrs,
+        emitted.attrClasses,
+        emitted.rootClass,
+    )
+    assert per_node, "no measured module resolved back to a node"
+    assert sum(per_node.values()) == estimate.totalParams
+    for nid, measured in per_node.items():
+        assert measured == estimate.params[nid], f"{nid} was estimated wrong"
+
+
+# ── importing an inspected model ─────────────────────────────────────────────────
+
+
+def _llama_metadata(**over: object) -> ModelArchitecture:
+    """Metadata as complete as a good GGUF actually gets."""
+    base = dict(
+        source="ollama",
+        model="llama-3.2-3b-instruct",
+        hiddenSize=3072,
+        layers=28,
+        vocabSize=128256,
+        normType="rmsnorm",
+        attention=AttentionSpec(
+            heads=24, kvHeads=8, headDim=128, headDimDerived=True, ropeTheta=500000.0
+        ),
+        ffn=FfnSpec(intermediateSize=8192, activation="silu", gated=True),
+    )
+    base.update(over)
+    return ModelArchitecture(**base)  # type: ignore[arg-type]
+
+
+def test_a_complete_model_imports_with_nothing_assumed() -> None:
+    result = importer.from_architecture(_llama_metadata())
+    assert result.error is None
+    assert result.assumed == []
+    assert result.graph is not None
+    assert result.graph.config["d_model"] == 3072
+    assert result.graph.config["n_kv_heads"] == 8
+
+
+def test_an_imported_model_generates_compiling_source() -> None:
+    result = importer.from_architecture(_llama_metadata())
+    assert result.graph is not None
+    code = generate(result.graph)
+    assert code.error is None
+    ast.parse(code.source)
+
+
+def test_an_imported_model_has_no_shape_problems() -> None:
+    result = importer.from_architecture(_llama_metadata())
+    assert result.graph is not None
+    assert infer(result.graph).ok
+
+
+@pytest.mark.parametrize(
+    "field,label",
+    [
+        ("hiddenSize", "hidden size"),
+        ("layers", "layer count"),
+        ("vocabSize", "vocabulary size"),
+    ],
+)
+def test_a_fact_that_decides_the_shape_is_never_invented(
+    field: str, label: str
+) -> None:
+    """`ModelArchitecture` is full of holes by design — the module refuses to invent a
+    dimension it could not read. An import that filled them in would produce a
+    plausible model of nothing, so the required ones refuse instead."""
+    result = importer.from_architecture(_llama_metadata(**{field: None}))
+    assert result.graph is None
+    assert label in result.missing
+    assert label in (result.error or "")
+
+
+def test_a_missing_head_count_refuses_too() -> None:
+    result = importer.from_architecture(_llama_metadata(attention=AttentionSpec()))
+    assert result.graph is None
+    assert "attention head count" in result.missing
+
+
+def test_every_choice_made_for_absent_metadata_is_reported() -> None:
+    """The facts that only *shape* the graph are assumed rather than refused — but an
+    assumption nobody is told about is indistinguishable from a measurement."""
+    sparse = ModelArchitecture(
+        source="huggingface",
+        model="mystery",
+        hiddenSize=1024,
+        layers=12,
+        vocabSize=32000,
+        attention=AttentionSpec(heads=16),
+    )
+    result = importer.from_architecture(sparse)
+    assert result.graph is not None
+    joined = " ".join(result.assumed).lower()
+    for expected in (
+        "kv-head",
+        "feed-forward width",
+        "gated",
+        "normalisation",
+        "rotary",
+    ):
+        assert expected in joined, f"{expected!r} was assumed silently"
+
+
+def test_a_tied_embedding_explains_the_parameter_gap() -> None:
+    """On Llama 3.2 3B our count is 12% above the stated one, and the whole difference
+    is the output head the model ties to its embedding. Reporting the number without
+    the reason reads as a broken import."""
+    graph = importer.from_architecture(_llama_metadata()).graph
+    assert graph is not None
+    estimated = infer(graph).totalParams
+    tied = estimated - 128256 * 3072
+    result = importer.from_architecture(_llama_metadata(parameterCount=tied))
+    assert result.estimatedParams == estimated
+    assert any("ties it to the embedding" in note for note in result.notes)
+
+
+def test_a_gap_we_cannot_explain_says_so_rather_than_going_quiet() -> None:
+    result = importer.from_architecture(_llama_metadata(parameterCount=999_999_999))
+    assert any("cannot account" in note for note in result.notes)
+
+
+def test_a_count_that_agrees_adds_no_note() -> None:
+    graph = importer.from_architecture(_llama_metadata()).graph
+    assert graph is not None
+    exact = infer(graph).totalParams
+    result = importer.from_architecture(_llama_metadata(parameterCount=exact))
+    assert not any("parameters against" in note for note in result.notes)
+
+
+def test_a_mixture_of_experts_imports_as_a_router_not_a_dense_ffn() -> None:
+    result = importer.from_architecture(
+        _llama_metadata(
+            moe=MoeSpec(experts=8, expertsPerToken=2, expertIntermediateSize=1408)
+        )
+    )
+    assert result.graph is not None
+    block = result.graph.groups[0]
+    assert any(node.type == "ffn.moe" for node in block.nodes)
+
+
+# ── agent tools ──────────────────────────────────────────────────────────────────
+
+
+def test_the_designer_tools_are_grouped_so_they_cost_nothing_when_unused() -> None:
+    """An ungrouped namespaced tool joins the always-on core and is charged to every
+    turn of every agent. Five of them would be a quiet tax on unrelated work."""
+    assert all(tool.group == "model" for tool in agent_tools._TOOLS)
+    assert all(tool.name.startswith("model.") for tool in agent_tools._TOOLS)
+
+
+def test_inspecting_a_design_reports_its_shape_and_its_problems() -> None:
+    store.save("Demo", examples.llama_small())
+    out = asyncio.run(agent_tools._inspect_design({"name": "Demo"}))
+    assert out["className"] == "TinyLlama"
+    assert out["estimatedParams"] > 0
+    assert out["estimated"] is True
+    assert out["groups"][0]["name"] == "DecoderBlock"
+    assert out["problems"] == []
+
+
+def test_a_missing_design_lists_the_ones_that_exist() -> None:
+    store.save("Demo", examples.llama_small())
+    out = asyncio.run(agent_tools._inspect_design({"name": "Nope"}))
+    assert "error" in out
+    assert [row["name"] for row in out["designs"]] == ["Demo"]
+
+
+def test_retuning_a_design_reports_what_it_cost() -> None:
+    store.save("Demo", examples.llama_small())
+    before = infer(examples.llama_small()).totalParams
+    out = asyncio.run(
+        agent_tools._set_config({"name": "Demo", "values": {"d_model": 256}})
+    )
+    assert out["applied"] is True
+    assert out["estimatedParamsBefore"] == before
+    assert out["estimatedParams"] < before
+    assert store.load("Demo").graph.config["d_model"] == 256
+
+
+def test_a_config_key_no_node_reads_is_refused_rather_than_added() -> None:
+    """Adding a key would be read by nothing, so the call would report success and
+    change the model not at all — the worst of both outcomes."""
+    store.save("Demo", examples.llama_small())
+    out = asyncio.run(
+        agent_tools._set_config({"name": "Demo", "values": {"widht": 256}})
+    )
+    assert "error" in out and "widht" in out["error"]
+
+
+def test_a_config_that_breaks_the_model_is_not_written() -> None:
+    """`n_heads = 7` does not divide the KV heads, so the graph stops describing a
+    runnable model. Saving would also rewrite the `.py` sitting beside it."""
+    store.save("Demo", examples.llama_small())
+    out = asyncio.run(
+        agent_tools._set_config({"name": "Demo", "values": {"n_heads": 7}})
+    )
+    assert out["applied"] is False
+    assert out["problems"]
+    assert store.load("Demo").graph.config["n_heads"] == 8
+
+
+def test_generated_code_is_capped_and_says_when_it_was_cut() -> None:
+    """A truncated result that does not admit it is a result the caller will quote
+    back as the whole module — and the missing half is always the end of the file."""
+    store.save("Demo", examples.llama_small())
+    full = generate(examples.llama_small()).source
+    assert len(full) > agent_tools.MAX_SOURCE_CHARS, "fixture is too small to cap"
+
+    out = asyncio.run(agent_tools._generate_code({"name": "Demo"}))
+    assert out["lines"] == full.count("\n") + 1
+    assert len(out["source"]) == agent_tools.MAX_SOURCE_CHARS
+    assert out["truncated"] is True
+
+
+# ── handing a design to a training project ───────────────────────────────────────
+
+
+def _project(tmp_path) -> ProjectModel:
+    root = tmp_path / "proj"
+    root.mkdir(parents=True, exist_ok=True)
+    return ProjectModel(id="p1", name="Proj", provider="local", root=str(root))
+
+
+def _notebook(project: ProjectModel, cells: list) -> None:
+    import nbformat
+
+    from backend.notebook_core import notebooks as core
+
+    nb = nbformat.v4.new_notebook()
+    nb.cells = cells
+    core.save(Path(project.root) / "main.ipynb", nb)
+
+
+def _cells(project: ProjectModel) -> list:
+    from backend.notebook_core import notebooks as core
+
+    return core.load(Path(project.root) / "main.ipynb").cells
+
+
+def test_the_handoff_writes_a_module_and_a_cell_block(tmp_path) -> None:
+    import nbformat
+
+    project = _project(tmp_path)
+    _notebook(project, [nbformat.v4.new_code_cell("import torch")])
+
+    result = handoff.apply(examples.llama_small(), project)
+    assert result.ok
+    assert result.className == "TinyLlama"
+    assert (Path(project.root) / "model.py").read_text(encoding="utf-8").startswith('"""')
+    sources = [c.source for c in _cells(project)]
+    assert any("from model import TinyLlama" in s for s in sources)
+
+
+def test_the_model_block_lands_above_the_recipe_that_consumes_it(tmp_path) -> None:
+    """A notebook where the trainer is configured above the model it trains does not
+    run. Appending is only right when there is nothing to be above."""
+    import nbformat
+
+    from backend.modules.training import recipes
+
+    project = _project(tmp_path)
+    trainer = nbformat.v4.new_markdown_cell(recipes.marker_cell())
+    trainer.metadata["horrible_recipe"] = True
+    _notebook(project, [nbformat.v4.new_code_cell("import torch"), trainer])
+
+    handoff.apply(examples.llama_small(), project)
+    kinds = [
+        "model"
+        if c.metadata.get(handoff.MARKER_KEY)
+        else "recipe"
+        if c.metadata.get("horrible_recipe")
+        else "other"
+        for c in _cells(project)
+    ]
+    assert kinds.index("model") < kinds.index("recipe")
+
+
+def test_the_model_block_does_not_use_the_recipe_marker(tmp_path) -> None:
+    """`recipes.apply_to_notebook` replaces *everything* carrying `horrible_recipe`.
+    Sharing the flag would make a recipe regenerate delete the model definition, and
+    a model regenerate delete the trainer config — each silently."""
+    import nbformat
+
+    project = _project(tmp_path)
+    _notebook(project, [nbformat.v4.new_code_cell("import torch")])
+    handoff.apply(examples.llama_small(), project)
+    assert handoff.MARKER_KEY != "horrible_recipe"
+    for cell in _cells(project):
+        if cell.metadata.get(handoff.MARKER_KEY):
+            assert not cell.metadata.get("horrible_recipe")
+
+
+def test_regenerating_replaces_the_block_rather_than_stacking_a_second(tmp_path) -> None:
+    import nbformat
+
+    project = _project(tmp_path)
+    _notebook(project, [nbformat.v4.new_code_cell("import torch")])
+    handoff.apply(examples.llama_small(), project)
+    first = len(_cells(project))
+    second = handoff.apply(examples.gpt_small(), project)
+    assert second.replaced
+    assert len(_cells(project)) == first
+    sources = [c.source for c in _cells(project)]
+    assert any("from model import NanoGPT" in s for s in sources)
+    assert not any("TinyLlama" in s for s in sources)
+
+
+def test_a_project_with_no_notebook_still_gets_the_module(tmp_path) -> None:
+    """The module is importable either way. Failing the whole hand-off over a
+    notebook that may not be part of this project would be the wrong call."""
+    project = _project(tmp_path)
+    result = handoff.apply(examples.llama_small(), project)
+    assert result.ok
+    assert result.cells == 0
+    assert "no main.ipynb" in result.message
+    assert (Path(project.root) / "model.py").exists()
+
+
+def test_a_design_that_generates_nothing_is_refused(tmp_path) -> None:
+    project = _project(tmp_path)
+    broken = examples.llama_small()
+    broken.edges = [e for e in broken.edges if e.target != "output"]
+    result = handoff.apply(broken, project)
+    assert not result.ok
+    assert not (Path(project.root) / "model.py").exists()
+
+
+# ── tracing a real module into a design ──────────────────────────────────────────
+
+
+def _trace(nodes: list[dict], edges: list[dict]):
+    return tracer.build(nodes, edges, "pkg.mod.MyNet")
+
+
+def test_a_trace_becomes_a_graph_with_its_terminals() -> None:
+    graph, mapped, opaque = _trace(
+        [
+            {"id": "x", "op": "placeholder", "target": "x"},
+            {"id": "fc", "op": "call_module", "target": "fc", "cls": "Linear", "shape": [2, 8, 16]},
+            {"id": "out", "op": "output", "target": "output"},
+        ],
+        [{"from": "x", "to": "fc"}, {"from": "fc", "to": "out"}],
+    )
+    assert [n.type for n in graph.nodes] == ["io.input", "ffn.linear", "io.output"]
+    assert graph.nodes[1].params["out_features"] == 16
+    assert mapped == 1
+    assert opaque == []
+    assert len(graph.edges) == 2
+
+
+def test_an_unmapped_module_raises_rather_than_passing_through() -> None:
+    """A stub returning its input unchanged would compile, run, train, and be a
+    different model than the one traced — wrong with nothing to report it. So the
+    placeholder raises, and the design refuses to run until it is filled in."""
+    graph, mapped, opaque = _trace(
+        [
+            {"id": "x", "op": "placeholder", "target": "x"},
+            {"id": "blk", "op": "call_module", "target": "blk", "cls": "FancyBlock"},
+            {"id": "out", "op": "output", "target": "output"},
+        ],
+        [{"from": "x", "to": "blk"}, {"from": "blk", "to": "out"}],
+    )
+    assert mapped == 0
+    assert opaque == ["FancyBlock"]
+    stub = graph.nodes[1]
+    assert stub.type == "custom.module"
+    assert "raise NotImplementedError" in str(stub.params["code"])
+    assert "return x" not in str(stub.params["code"])
+
+
+def test_a_traced_placeholder_still_defines_its_class() -> None:
+    """A `custom.module` whose code never reaches the file is a `NameError` at import
+    from a node whose whole purpose is to carry code we could not map."""
+    graph, _mapped, _opaque = _trace(
+        [
+            {"id": "x", "op": "placeholder", "target": "x"},
+            {"id": "blk", "op": "call_module", "target": "blk", "cls": "FancyBlock"},
+            {"id": "out", "op": "output", "target": "output"},
+        ],
+        [{"from": "x", "to": "blk"}, {"from": "blk", "to": "out"}],
+    )
+    result = generate(graph)
+    assert result.error is None
+    assert "class FancyBlock(nn.Module):" in result.source
+    ast.parse(result.source)
+
+
+def test_an_edge_to_a_node_the_trace_dropped_is_dropped_too() -> None:
+    graph, _mapped, _opaque = _trace(
+        [{"id": "x", "op": "placeholder", "target": "x"}],
+        [{"from": "x", "to": "ghost"}, {"from": "nowhere", "to": "x"}],
+    )
+    assert graph.edges == []
+
+
+def test_tracing_without_a_project_says_it_could_not_ask() -> None:
+    """Three states, never two — the same rule the probe follows. Reporting a model
+    as traced when nothing traced it is the failure this module exists to prevent."""
+    result = tracer.trace(None, "pkg.mod.Net")
+    assert result.status == "unavailable"
+    assert result.graph is None
+    assert "training project" in result.message

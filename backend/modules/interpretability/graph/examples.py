@@ -29,7 +29,7 @@ def _e(source: str, target: str, handle: str = "in") -> GraphEdge:
     )
 
 
-def _decoder_block(
+def decoder_block(
     gid: str, name: str, ffn_type: str, ffn_params: dict[str, object]
 ) -> SubGraph:
     """Pre-norm decoder block: two residual branches, each around a normed sublayer.
@@ -64,7 +64,7 @@ def _decoder_block(
     )
 
 
-def _stack(name: str, config: dict[str, object], block: SubGraph) -> DesignGraph:
+def stack(name: str, config: dict[str, object], block: SubGraph) -> DesignGraph:
     return DesignGraph(
         name=name,
         config=config,  # type: ignore[arg-type]
@@ -93,7 +93,7 @@ def llama_small() -> DesignGraph:
     Small on purpose — every dimension here is a number you can change in the
     inspector and immediately run, which is the point of the pane.
     """
-    return _stack(
+    return stack(
         "TinyLlama",
         {
             "vocab_size": 32000,
@@ -103,7 +103,7 @@ def llama_small() -> DesignGraph:
             "ffn_hidden": 1376,
             "n_layers": 8,
         },
-        _decoder_block("blk", "DecoderBlock", "ffn.swiglu", {}),
+        decoder_block("blk", "DecoderBlock", "ffn.swiglu", {}),
     )
 
 
@@ -113,7 +113,7 @@ def gpt_small() -> DesignGraph:
     Kept beside `llama_small` because the diff between the two graphs is a compact
     statement of what actually changed in five years of decoder design.
     """
-    graph = _stack(
+    graph = stack(
         "NanoGPT",
         {
             "vocab_size": 50257,
@@ -124,7 +124,7 @@ def gpt_small() -> DesignGraph:
             "n_layers": 6,
             "max_seq": 1024,
         },
-        _decoder_block("blk", "TransformerBlock", "ffn.mlp", {"activation": "gelu"}),
+        decoder_block("blk", "TransformerBlock", "ffn.mlp", {"activation": "gelu"}),
     )
     block = graph.groups[0]
     for node in block.nodes:
@@ -144,7 +144,7 @@ def gpt_small() -> DesignGraph:
 
 def moe_small() -> DesignGraph:
     """A sparse decoder: the FFN branch is a router over eight gated experts."""
-    return _stack(
+    return stack(
         "TinyMoE",
         {
             "vocab_size": 32000,
@@ -154,7 +154,7 @@ def moe_small() -> DesignGraph:
             "ffn_hidden": 1024,
             "n_layers": 4,
         },
-        _decoder_block("blk", "MoEBlock", "ffn.moe", {"experts": 8, "top_k": 2}),
+        decoder_block("blk", "MoEBlock", "ffn.moe", {"experts": 8, "top_k": 2}),
     )
 
 

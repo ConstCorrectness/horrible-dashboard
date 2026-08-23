@@ -192,3 +192,75 @@ def test_a_ranked_launch_carries_no_bots(client: TestClient) -> None:
     server refuses, arriving inside a window that had already opened."""
     args = args_for(client, mode="ranked", bots=4)
     assert not any(a.startswith("--bots=") for a in args)
+
+
+class DeadProc(FakeProc):
+    """A client that is gone before the route answers.
+
+    The real one: the backend is routinely an orphan (`pnpm dev` exits, a
+    `--reload` parent dies) holding stdio pipes with no reader left, the client
+    inherits them, and its first `eprintln!` panics — exit 101, no window. That
+    is now impossible (the child gets a log file, never this process's stdio),
+    but every other way a startup can die still exists, so the route observes
+    rather than assumes.
+    """
+
+    def poll(self) -> int:
+        return 101
+
+
+def test_a_client_that_dies_on_startup_is_not_reported_as_launched(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("HORRIBLE_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(subprocess, "Popen", DeadProc)
+    monkeypatch.setattr(
+        "backend.modules.settings.routes.get_value",
+        lambda key, default=None: (
+            str(tmp_path / "hassault-native.exe")
+            if key == "hassault.nativeBinaryPath"
+            else default
+        ),
+    )
+    (tmp_path / "hassault-native.exe").write_text("")
+
+    res = TestClient(app).post(
+        "/api/hassault/launch_native", json={"map_name": "hd_pit", "mode": "train"}
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["launched"] is False
+    # The exit code is the whole diagnosis on this path; a message that only said
+    # "it did not start" would be the same silence in different words.
+    assert "101" in (body["message"] or "")
+
+
+def test_the_client_never_inherits_this_process_stdio(tmp_path, monkeypatch) -> None:
+    """A pipe with no reader kills the client on its first printed line."""
+    seen: dict[str, object] = {}
+
+    class Recording(FakeProc):
+        def __init__(self, argv, *args, **kwargs) -> None:
+            super().__init__(argv)
+            seen.update(kwargs)
+
+    monkeypatch.setenv("HORRIBLE_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(subprocess, "Popen", Recording)
+    monkeypatch.setattr(
+        "backend.modules.settings.routes.get_value",
+        lambda key, default=None: (
+            str(tmp_path / "hassault-native.exe")
+            if key == "hassault.nativeBinaryPath"
+            else default
+        ),
+    )
+    (tmp_path / "hassault-native.exe").write_text("")
+
+    res = TestClient(app).post(
+        "/api/hassault/launch_native", json={"map_name": "hd_pit", "mode": "train"}
+    )
+    assert res.status_code == 200, res.text
+    assert seen["stdout"] is not None
+    assert seen["stdout"] is not subprocess.DEVNULL
+    assert seen["stderr"] == subprocess.STDOUT
+    assert seen["stdin"] == subprocess.DEVNULL

@@ -172,6 +172,55 @@ Four decisions the implementation is built on:
   broken one really does break the file. Its parameter counts are reported per node but
   **kept out of the total**: a class the model never instantiates holds no weights.
 
+## Identity, in two directions
+
+Codegen emits two maps, and they answer different questions about the same file:
+
+- **`markers`** — line → node. How re-parsing recovers which node a *line* came from,
+  so your canvas layout survives a round trip.
+- **`attrs` / `attrClasses`** — class → `self.<attr>` → node, and which class a group
+  attribute holds. How a *runtime module path* finds its way back to a box: a measured
+  `decoderblocks_1.0.norm_1` is resolved by walking those tables from `rootClass`.
+
+Both are built **as the code is emitted**, never recovered afterwards. A second pass
+that re-derives attribute names would have to reimplement the naming rules, and the day
+the two disagree nothing says so — a measured parameter count simply lands on the wrong
+node.
+
+Two rules make the per-node arithmetic come out right. **The deepest mapped node
+wins**: `attn_1.q_proj` is inside a primitive emitted whole, so its weights belong to
+the attention node rather than to some node of their own, and once the walk enters a
+class with no map everything below is charged to the last node it recognised. And
+**numeric segments are skipped and accumulate**: a ×N stack is one node drawn once, so
+all N copies of `norm_1` add up to that node's cost — exactly what `shapes.py` does
+when it multiplies an inner node by the count.
+
+## Agent tools
+
+Six verbs under the `model` group: `list_designs`, `inspect_design`, `import_model`,
+`set_config`, `generate_code`, `to_training_project`. The shape of the set is a
+decision rather than an oversight, and the omission is the interesting half.
+
+The obvious design — `add_node`, `connect`, `delete_node` — gives an agent that
+**cannot see the canvas** a way to build a graph one wire at a time, which is both the
+slowest way to describe a transformer and the easiest way to produce a disconnected
+one. What an agent is genuinely good at here is the *parametric* question: "what would
+this be at half the width", "how much of Llama 3.2 is the embedding", "import what I am
+looking at and tell me whether the counts agree". So node surgery stays on the canvas,
+where the person doing it can see the wires.
+
+Two rules the handlers follow, both for the same reason a wrong answer here is
+expensive:
+
+- **`set_config` refuses a key no node reads.** Adding one would report success and
+  change the model not at all.
+- **A config that breaks the graph is not written.** Saving also rewrites the `.py`
+  beside it, so an `n_heads` that no longer divides the KV heads would take the
+  generated module down with it.
+
+Every result labels our arithmetic `estimated`. The only thing that turns an estimate
+into a measurement is `probe.py`, in a venv that has torch.
+
 ## What a shape error must carry
 
 A message with no `nodeId` cannot become a red socket, which is the whole point of
@@ -191,6 +240,14 @@ fixing them one round-trip at a time is worse than seeing them all.
 | GET | `/api/interpretability/graph` | saved designs |
 | GET/PUT/DELETE | `/api/interpretability/graph/{name}` | one design |
 | GET | `/api/interpretability/graph/template/{id}` | a starting graph |
+| POST | `/api/interpretability/graph/from-model` | the inspected model → a design (stateless) |
+| POST | `/api/interpretability/graph/from-traced` | a real `nn.Module`, traced by `torch.fx` in a project venv |
+| POST | `/api/interpretability/graph/handoff` | write a design into a training project as `model.py` + notebook cells |
+
+`/from-model` re-reads the architecture through the **same function the inspect route
+serves** rather than accepting one the caller posts. The two tabs must never be able to
+disagree about what the model is, and a caller that can supply the architecture is a
+caller that can supply a different one.
 
 `/code` and `/validate` are **stateless on purpose**: the canvas calls them on every
 edit, long before a design has a name, and they must not touch the disk.

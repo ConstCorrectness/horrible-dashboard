@@ -20,13 +20,19 @@
  * everything about entering, creating and folding them lives in `scope.ts` as pure
  * functions, and this component is the part that turns them into buttons.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
+import { interpretabilityStore } from '../store';
+import { bindDesigner } from './actions';
 import { CodePane } from './CodePane';
+import { ImportReport } from './ImportReport';
+import { LinkSearch } from './LinkSearch';
 import {
   formatCount,
   getCatalog,
   getTemplate,
+  handoffToProject,
+  importInspectedModel,
   listProjects,
   loadDesign,
   nodeFromSpec,
@@ -34,18 +40,22 @@ import {
   probeGraph,
   saveDesign,
   toCode,
+  traceModule,
   validateGraph,
   type Catalog,
   type CodeResult,
   type DesignGraph,
   type GraphEdge,
   type GraphNode,
+  type HandoffResult,
+  type ImportResult,
   type Layout,
   type NodeLayout,
   type NodeSpec,
   type ProbeResult,
   type ShapeReport,
   type SubGraph,
+  type TraceResult,
   type TrainingProject,
 } from './graph';
 import { Inspector } from './Inspector';
@@ -53,6 +63,7 @@ import { autoLayout } from './layout';
 import { ModelCanvas } from './ModelCanvas';
 import { Palette } from './Palette';
 import { ProbeBar } from './ProbeBar';
+import { TraceBar } from './TraceBar';
 import {
   createGroup,
   deleteGroup,
@@ -107,6 +118,29 @@ export function ModelDesigner() {
   const [project, setProject] = useState('');
   const [probe, setProbe] = useState<ProbeResult | null>(null);
   const [probing, setProbing] = useState(false);
+  const [imported, setImported] = useState<ImportResult | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [handoff, setHandoff] = useState<HandoffResult | null>(null);
+  const [handingOff, setHandingOff] = useState(false);
+  const [traced, setTraced] = useState<TraceResult | null>(null);
+  const [tracing, setTracing] = useState(false);
+  /** The palette's search box and the canvas's "fit everything" — both owned by a
+   * child, and both things a keybinding has to be able to reach. */
+  const paletteSearch = useRef<HTMLInputElement | null>(null);
+  /** A wire let go in empty space, waiting for the user to say what goes there. */
+  const [pendingLink, setPendingLink] = useState<{
+    screen: { x: number; y: number };
+    position: { x: number; y: number };
+    from: { nodeId: string; handle: string; type: string; side: 'input' | 'output' };
+  } | null>(null);
+  const fitView = useRef<(() => void) | null>(null);
+
+  // The other tab's subject, read from the same store that renders it. The button
+  // this enables is the bridge the two modes share a pane for.
+  const architecture = useSyncExternalStore(
+    interpretabilityStore.subscribe,
+    interpretabilityStore.getArchitecture,
+  );
 
   const specs = useMemo(() => new Map((catalog?.nodes ?? []).map((s) => [s.type, s])), [catalog]);
   const groupNames = useMemo(
@@ -233,6 +267,33 @@ export function ModelDesigner() {
 
   // Tidies the level you are looking at, and only it: laying out a group's insides
   // would move nodes the user cannot see.
+  /**
+   * Fork the inspected model into a design.
+   *
+   * A refusal — metadata too sparse to build anything without inventing it — is
+   * shown and changes nothing. A success replaces the canvas, so it is laid out
+   * once and the qualifications are put on screen and left there: an import that
+   * assumed five things and said so in a toast has effectively said nothing.
+   */
+  const runImport = useCallback(() => {
+    setImporting(true);
+    void importInspectedModel()
+      .then((result) => {
+        if (!result.graph) {
+          setNotice(result.error ?? 'That model cannot be imported.');
+          setImported(null);
+          return;
+        }
+        setGraph(result.graph);
+        setLayout({ ...EMPTY_LAYOUT, nodes: autoLayout(result.graph.nodes, result.graph.edges) });
+        setSelectedId(null);
+        setPath([]);
+        setImported(result);
+      })
+      .catch(() => setNotice('Could not reach the importer.'))
+      .finally(() => setImporting(false));
+  }, []);
+
   const tidy = useCallback(() => {
     setLayout((current) => ({
       ...current,
@@ -323,6 +384,123 @@ export function ModelDesigner() {
     );
   }, [graph, path, selectedIds, scope.nodes, layout.nodes]);
 
+  /**
+   * A wire dropped in empty space: add the node the user picks, already connected.
+   *
+   * The node lands exactly where the wire was let go, because that is where the
+   * user was looking — `resolvePositions` would otherwise park it off to the right
+   * of the whole drawing, which for this gesture is the wrong answer even though it
+   * is the right default everywhere else.
+   */
+  const completeLink = useCallback(
+    (spec: NodeSpec) => {
+      const drop = pendingLink;
+      if (!drop) return;
+      const node = nodeFromSpec(spec);
+      const sockets = drop.from.side === 'input' ? spec.inputs : spec.outputs;
+      const socket = sockets.find((s) => s.type === drop.from.type);
+      if (!socket) return;
+
+      const [source, sourceHandle, target, targetHandle] =
+        drop.from.side === 'input'
+          ? [drop.from.nodeId, drop.from.handle, node.id, socket.name]
+          : [node.id, socket.name, drop.from.nodeId, drop.from.handle];
+
+      editScope((nodes, edges) => [
+        [...nodes, node],
+        [
+          ...edges.filter(
+            (e) =>
+              socket.multi || !(e.target === target && (e.targetHandle ?? 'in') === targetHandle),
+          ),
+          {
+            id: `${source}:${sourceHandle}->${target}:${targetHandle}`,
+            source,
+            sourceHandle,
+            target,
+            targetHandle,
+          },
+        ],
+      ]);
+      setLayout((current) => ({
+        ...current,
+        nodes: { ...current.nodes, [node.id]: { x: drop.position.x, y: drop.position.y } },
+      }));
+      setSelectedId(node.id);
+      setPendingLink(null);
+    },
+    [pendingLink, editScope],
+  );
+
+  /**
+   * Trace a real module into a design.
+   *
+   * Replaces the canvas on success, like the other importer does — and like it,
+   * lays the result out once, because a trace arrives with no positions at all.
+   */
+  const runTrace = useCallback(
+    (target: string) => {
+      setTracing(true);
+      void traceModule(project, target)
+        .then((result) => {
+          setTraced(result);
+          if (!result.graph) return;
+          setGraph(result.graph);
+          setLayout({
+            ...EMPTY_LAYOUT,
+            nodes: autoLayout(result.graph.nodes, result.graph.edges),
+          });
+          setSelectedId(null);
+          setPath([]);
+        })
+        .catch(() => setNotice('Could not reach the tracer.'))
+        .finally(() => setTracing(false));
+    },
+    [project],
+  );
+
+  /**
+   * Put a frame around the selection — a label on the canvas, and nothing else.
+   *
+   * It writes only to the layout sidecar, so the generated module is byte-identical
+   * before and after. That is the entire contract of a frame, and the reason it can
+   * be created this freely: nothing here can break a model.
+   */
+  const frameSelection = useCallback(() => {
+    const picked = selectedIds.filter((id) => scope.nodes.some((n) => n.id === id));
+    if (!picked.length) {
+      setNotice('Select the nodes to frame first.');
+      return;
+    }
+    const id = `frm_${Date.now().toString(36)}`;
+    setLayout((current) => {
+      const nodes = { ...current.nodes };
+      for (const nodeId of picked) {
+        // A node the sidecar has never placed still joins the frame; `resolvePositions`
+        // will give it coordinates, and the frame is drawn from those.
+        nodes[nodeId] = { ...(nodes[nodeId] ?? { x: 0, y: 0 }), frame: id };
+      }
+      return {
+        ...current,
+        nodes,
+        frames: [...(current.frames ?? []), { id, label: 'Frame', color: '' }],
+      };
+    });
+  }, [selectedIds, scope.nodes]);
+
+  /** Blender's H. The layout sidecar already carried `collapsed`; nothing set it. */
+  const toggleCollapse = useCallback(() => {
+    if (!selectedId) return;
+    setLayout((current) => {
+      const at = current.nodes[selectedId];
+      if (!at) return current;
+      return {
+        ...current,
+        nodes: { ...current.nodes, [selectedId]: { ...at, collapsed: !at.collapsed } },
+      };
+    });
+  }, [selectedId]);
+
   const changeGroup = useCallback(
     (next: SubGraph) => setGraph((current) => renameGroup(current, next.id, next.name)),
     [],
@@ -391,6 +569,9 @@ export function ModelDesigner() {
           totalParams: null,
           estimatedParams: null,
           agrees: null,
+          nodeParams: {},
+          nodeAgrees: {},
+          nodeParamsComplete: true,
           project,
           torchVersion: '',
           durationMs: 0,
@@ -399,11 +580,71 @@ export function ModelDesigner() {
       .finally(() => setProbing(false));
   }, [graph, project]);
 
+  /**
+   * Keep the design: write it into the chosen project as a trainable model.
+   *
+   * Separate from the probe on purpose. The probe answers "does this run"; this one
+   * writes two files into somebody's project, which is not a thing to do as a side
+   * effect of asking a question.
+   */
+  const runHandoff = useCallback(() => {
+    setHandingOff(true);
+    void handoffToProject(graph, project)
+      .then(setHandoff)
+      .catch(() =>
+        setHandoff({
+          ok: false,
+          project,
+          modulePath: '',
+          cells: 0,
+          replaced: false,
+          className: '',
+          message: 'Could not reach the backend to write it.',
+        }),
+      )
+      .finally(() => setHandingOff(false));
+  }, [graph, project]);
+
+  // A measurement and a hand-off both describe the graph they were made against, so
+  // both are cleared the moment it changes. A result shown beside a graph it did not
+  // describe is exactly the confident wrongness this pane exists to refuse.
   useEffect(() => {
     setProbe(null);
+    setHandoff(null);
   }, [graph]);
 
+  /**
+   * Publish the verbs the keybindings call.
+   *
+   * Rebound whenever any of them changes identity, so a shortcut can never run a
+   * closure over a graph two edits old — the failure that would look like the
+   * canvas ignoring you, then undoing something you did since.
+   */
+  useEffect(() => {
+    bindDesigner({
+      addNode: () => paletteSearch.current?.focus(),
+      toggleMute: () => selected && updateNode({ ...selected, muted: !selected.muted }),
+      deleteSelected: () => selectedId && deleteNode(selectedId),
+      toggleCollapse,
+      frameAll: () => fitView.current?.(),
+      enterGroup: () => selectedId && enterGroup(selectedId),
+      exitGroup: () => setPath((current) => current.slice(0, -1)),
+      groupSelection,
+    });
+    return () => bindDesigner(null);
+  }, [selected, selectedId, updateNode, deleteNode, toggleCollapse, enterGroup, groupSelection]);
+
   const errors = (report?.issues ?? []).filter((issue) => issue.severity === 'error');
+
+  // A measurement only describes the graph it measured, and `probe` is already
+  // cleared on every edit — so this needs no staleness check of its own.
+  const measured = useMemo(
+    () =>
+      probe?.status === 'ran' && Object.keys(probe.nodeParams ?? {}).length
+        ? { params: probe.nodeParams, agrees: probe.nodeAgrees ?? {} }
+        : null,
+    [probe],
+  );
 
   return (
     <div className="mg-designer">
@@ -496,6 +737,15 @@ export function ModelDesigner() {
         <button
           type="button"
           className="mg-button"
+          onClick={frameSelection}
+          disabled={selectedIds.length === 0}
+          title="Draw a labelled box behind the selection. Purely visual — the generated module does not change."
+        >
+          Frame
+        </button>
+        <button
+          type="button"
+          className="mg-button"
           onClick={newGroup}
           title="Add an empty group here and step into it."
         >
@@ -514,12 +764,17 @@ export function ModelDesigner() {
           <Palette
             specs={catalog?.nodes ?? []}
             templates={catalog?.templates ?? []}
+            inspectedModel={architecture?.model || undefined}
+            importing={importing}
             onAdd={addNode}
             onTemplate={applyTemplate}
+            onImport={runImport}
+            searchRef={paletteSearch}
           />
         </aside>
 
         <main className="mg-center">
+          {imported && <ImportReport result={imported} onClose={() => setImported(null)} />}
           {scope.nodes.length === 0 ? (
             <div className="mg-blank">
               <h2 className="mg-blank-title">Nothing here yet</h2>
@@ -538,13 +793,28 @@ export function ModelDesigner() {
               specs={specs}
               groupNames={groupNames}
               showCost={showCost}
+              measured={measured}
               selectedId={selectedId}
               onSelect={setSelectedId}
               onSelectionChange={handleSelection}
               onScopeChange={setScope}
               onLayoutChange={setLayout}
               onEnter={enterGroup}
+              onReady={(fit) => {
+                fitView.current = fit;
+              }}
+              onDropInSpace={setPendingLink}
               onRefused={setNotice}
+            />
+          )}
+          {pendingLink && (
+            <LinkSearch
+              at={pendingLink.screen}
+              socketType={pendingLink.from.type}
+              wants={pendingLink.from.side}
+              specs={catalog?.nodes ?? []}
+              onPick={completeLink}
+              onClose={() => setPendingLink(null)}
             />
           )}
         </main>
@@ -570,7 +840,11 @@ export function ModelDesigner() {
             onRun={runProbe}
             running={probing}
             result={probe}
+            onHandoff={runHandoff}
+            handingOff={handingOff}
+            handoff={handoff}
           />
+          <TraceBar project={project} onTrace={runTrace} tracing={tracing} result={traced} />
           <CodePane
             source={code.source}
             error={code.error}

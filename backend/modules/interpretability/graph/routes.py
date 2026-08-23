@@ -20,11 +20,14 @@ from pydantic import BaseModel, Field
 from backend.modules.interpretability.graph import (
     codegen,
     examples,
+    handoff,
+    importer,
     parse,
     probe,
     shapes,
     spec,
     store,
+    tracer,
 )
 from backend.modules.interpretability.graph.models import (
     CodeResult,
@@ -111,7 +114,9 @@ def parse_source(body: ParseRequest) -> ParseResponse:
         result = parse.parse_module(body.source)
     except parse.ParseError as exc:
         return ParseResponse(error=str(exc))
-    return ParseResponse(graph=result.graph, opaque=result.opaque, warnings=result.warnings)
+    return ParseResponse(
+        graph=result.graph, opaque=result.opaque, warnings=result.warnings
+    )
 
 
 @router.post("/validate", response_model=ShapeReport)
@@ -138,8 +143,75 @@ def run_probe(body: ProbeRequest) -> probe.ProbeResult:
 
     project = get_project(body.project) if body.project else None
     if body.project and project is None:
-        raise HTTPException(status_code=404, detail=f"No training project {body.project!r}")
+        raise HTTPException(
+            status_code=404, detail=f"No training project {body.project!r}"
+        )
     return probe.run(body.graph, project)
+
+
+class TraceRequest(BaseModel):
+    project: str
+    #: `package.module.ClassName` inside the project, importable from its root.
+    target: str
+
+
+@router.post("/from-traced", response_model=tracer.TraceResult)
+def from_traced(body: TraceRequest) -> tracer.TraceResult:
+    """The second importer: trace a real `nn.Module` into an editable design.
+
+    Reports how much of the trace mapped onto node types, and names the classes that
+    became placeholders — which raise rather than pass their input through, so a
+    half-understood import cannot be trained by mistake.
+    """
+    from backend.modules.training.projects import get_project
+
+    project = get_project(body.project) if body.project else None
+    if body.project and project is None:
+        raise HTTPException(
+            status_code=404, detail=f"No training project {body.project!r}"
+        )
+    return tracer.trace(project, body.target)
+
+
+class HandoffRequest(BaseModel):
+    graph: DesignGraph
+    project: str
+
+
+@router.post("/handoff", response_model=handoff.HandoffResult)
+def to_training(body: HandoffRequest) -> handoff.HandoffResult:
+    """Write the design into a training project as `model.py` plus a notebook block.
+
+    No new execution path: the project's own kernel, venv and Kaggle/Colab push all
+    apply unchanged. The block carries its own marker so regenerating a *recipe*
+    cannot delete the model, and vice versa.
+    """
+    from backend.modules.training.projects import get_project
+
+    project = get_project(body.project)
+    if project is None:
+        raise HTTPException(
+            status_code=404, detail=f"No training project {body.project!r}"
+        )
+    return handoff.apply(body.graph, project)
+
+
+@router.post("/from-model", response_model=importer.ImportResult)
+async def from_model() -> importer.ImportResult:
+    """The bridge: the model the Inspect tab is showing, as an editable design.
+
+    It deliberately re-reads the architecture through the **same** function the
+    inspect route serves, rather than accepting one the browser posts back. The two
+    tabs must never be able to disagree about what the model is, and a caller that
+    can supply the architecture is a caller that can supply a different one.
+
+    Stateless like `/template`: this returns a graph, and the pane saves it through
+    the ordinary PUT if the user keeps it. An import that wrote itself to disk would
+    overwrite whatever design was open.
+    """
+    from backend.modules.interpretability.routes import model_architecture
+
+    return importer.from_architecture(await model_architecture())
 
 
 @router.get("", response_model=DesignListResponse)

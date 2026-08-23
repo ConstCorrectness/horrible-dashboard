@@ -135,4 +135,16 @@ class CodeResult(BaseModel):
     source: str
     #: 1-based line number → node id.
     markers: dict[int, str] = Field(default_factory=dict)
+    #: Generated class → its `self.<attr>` → the node that emitted it. This is the
+    #: other half of the identity map: `markers` says which node wrote a *line*,
+    #: this says which node became a *runtime module*, which is the only way a
+    #: measured `decoderblocks_1.0.norm_1` finds its way back to a box on the canvas.
+    attrs: dict[str, dict[str, str]] = Field(default_factory=dict)
+    #: Generated class → its `self.<attr>` → the class that attribute instantiates,
+    #: for the attributes that hold a group. Walking a runtime path needs it: without
+    #: knowing `decoderblocks_1` holds a `DecoderBlock`, the `norm_1` under it cannot
+    #: be looked up in any table.
+    attrClasses: dict[str, dict[str, str]] = Field(default_factory=dict)
+    #: The class the model itself is, where a runtime path starts.
+    rootClass: str = ""
     error: str | None = None

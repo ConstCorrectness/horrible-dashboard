@@ -2161,6 +2161,36 @@ candidate; a named `hassault.nativeBinaryPath` still wins outright, because that
 is somebody naming the binary they mean.
 :::
 
+:::danger The client never inherits the backend's stdio
+A launch that reported a pid and opened nothing was not a graphics problem. The
+client was spawned with `subprocess.Popen([bin])`, inheriting this process's
+stdout and stderr — and the backend is routinely an **orphan**: `pnpm dev` exits,
+or a `--reload` parent dies, leaving pipes with no reader on the other end. The
+client's very first act is an `eprintln!` (`hassault: loading <map> from
+<origin>`), that write fails, Rust panics on a failed print to stderr, and the
+process is gone with exit code **101** before a window is ever created.
+
+Nothing said so, because `Popen` had already returned: the pane reported
+*"Launched native FPS client (PID: 12392) from release/, built 18.0h ago"* about a
+process that no longer existed.
+
+Two changes close it. The child is given a **log file** —
+`$HORRIBLE_DATA_DIR/hassault/native-client.log`, truncated per launch, with
+`stderr` folded into it and `stdin` on `DEVNULL` — so its output depends on
+nothing about how the backend was started, and the startup lines (map, GPU
+backend, loadout, hitbox) survive to be read. Deliberately not `logs/`: a second
+file there breaks the dev backend outright, because `--reload-exclude "logs/*"`
+is expanded by the launching shell and uvicorn is handed the extra filename as a
+positional argument.
+
+And `launched: true` is now an **observation, not an assumption**. The route
+waits `_LAUNCH_SETTLE_SECONDS` (0.8s) and polls: everything that kills this
+client kills it in the first moments — a panic, a node it cannot read, no usable
+GPU backend — so a startup that died comes back as `launched: false` carrying the
+exit code and the tail of the log, instead of a pid for a process that is not
+there.
+:::
+
 ### The pane stops rendering while the native client plays
 
 The pane's three.js loop used to run the whole time the native window was up: a
@@ -2697,6 +2727,26 @@ the skin manager with an optional Atlas sync that nothing awaited — so every s
 anybody earned, including the drop the card had just congratulated them on, was
 gone the next time the backend restarted.
 
+**The drop reaches the row a step later than the row does.** `record` runs when
+the player leaves the match, from the simulation's own counters; the drop is the
+reward for *finishing*, so `_watchdog_game_process` rolls it once the client
+process has exited and its result has landed. `results.attach_drop(match_id,
+instance_id)` hangs it on the row — and only the **id**: the card wants the
+skin's name, rarity colour and wear, and copying those onto the match row would
+mean a renamed skin showing its old name on every card that ever mentioned it.
+`GET /match/latest_summary` resolves the id against the inventory instead.
+
+:::warning A drop that belongs to no match is reported, not swallowed
+`attach_drop` did not exist. The watchdog called it anyway, so every finished
+match raised `AttributeError` inside a `try` that logged *"could not roll a drop
+for the finished match"* — which was the one thing that had worked. The skin was
+rolled, saved into the armoury, and attached to nothing; the card showed no drop,
+and an item appeared in the inventory having come from nowhere.
+
+An `UPDATE` that matches no row now logs a warning naming the instance, because
+that is the same failure in its next disguise.
+:::
+
 :::note What the card deliberately does not show any more
 **Rating and tier.** The old card printed `1520 + random.randint(18, 32)` under
 the heading "Competitive Rank", which looked exactly like a ladder standing and
@@ -2724,6 +2774,8 @@ The migration matters: `CREATE TABLE IF NOT EXISTS` never adds a column to a tab
 that already exists, so `init_results_db` also runs an `ALTER TABLE` for installs
 that recorded a match before the column existed. Those rows backfill to `local`,
 which is the honest answer — they *were* adjudicated by the node that wrote them.
+That check is `_ensure_column`, and it covers `drop_id` as well: one column had
+grown its own inline migration, which is how the second one goes missing.
 
 ## Rated matches: the game server as referee
 
