@@ -1,0 +1,407 @@
+/*
+ * The card primitive — an item you configure and act on.
+ *
+ * `datalist.css` styles a record you read; this file styles the one you fill in.
+ * The difference is that a card has *bands*: identity, content, configuration,
+ * actions, in that order and always in that order. Before this existed each feed
+ * that needed one grew its own `<div>` with its own padding, its own font sizes
+ * and its own idea of where the buttons went, which is why two of them side by
+ * side never looked like the same application.
+ *
+ * The visual language is `datalist.css`'s, continued rather than reinvented — the
+ * clipped top-left corner, the accent on a leading edge instead of a glowing
+ * perimeter, uppercase tracked identity against monospace muted figures — and
+ * every value is a scale token. A literal is exactly how the drift started.
+ */
+
+.hd-cardfeed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  /* Wider than a row's gutter. Cards carry their own internal padding, so the
+     row gap that reads as "one list" between hairline rows reads as "these are
+     touching" between two objects this tall. */
+  gap: var(--space-5);
+}
+
+/* ------------------------------------------------------------------ surface -- */
+
+.hd-card {
+  position: relative;
+  /* The card's own padding — the one number every band inside it inherits, so a
+     header, a form row and a footer all start on the same vertical line. */
+  padding: var(--space-5) var(--space-6);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  /* A one-pixel inset highlight along the top edge — the light catching the lip
+     of a raised surface. Mixed from `--text` rather than from white so it stays a
+     highlight on a dark theme and a soft shadow line on a light one; a hardcoded
+     white inset is invisible on half the themes and wrong on the rest. */
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 7%, transparent);
+  /* The notch, from the row. Cut a little deeper than a row's 9px because the
+     card's radius would otherwise swallow it. It reads as an angular container
+     without becoming a symmetric bevel, which reads as a tag. */
+  clip-path: polygon(12px 0, 100% 0, 100% 100%, 0 100%, 0 12px);
+  transition:
+    background var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard);
+  animation: hd-card-in var(--dur-base) var(--ease-entrance) both;
+  animation-delay: calc(var(--hd-i, 0) * var(--stagger-step));
+}
+
+/* Hover is a crisp accent border, not a glow. The card is a target you are about
+   to configure, and the accent at 40% says "this one" without the perimeter
+   bloom that the house style rules out. */
+.hd-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+
+/* The leading rail. Inset past the notch so it begins where the straight edge
+   does rather than being sliced off by the clip — and 2px on one edge rather
+   than a glow on all four, which is the house rule this whole file follows. */
+.hd-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 12px;
+  bottom: 0;
+  width: 2px;
+  background: var(--hd-card-accent, var(--border-strong));
+  transform-origin: top;
+  animation: hd-card-rail-in var(--dur-slow) var(--ease-standard) both;
+  animation-delay: calc(var(--hd-i, 0) * var(--stagger-step) + 120ms);
+}
+
+/* The faint technical grid, as on a row: a repeating hairline rather than a
+   gradient, so the surface has a texture at rest and none at reading distance. */
+.hd-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.4;
+  background-image: repeating-linear-gradient(
+    to right,
+    color-mix(in srgb, var(--border) 55%, transparent) 0 1px,
+    transparent 1px 28px
+  );
+  mask-image: linear-gradient(to right, transparent 0%, #000 40%, #000 100%);
+}
+
+.hd-card[data-kind='ok'] {
+  --hd-card-accent: var(--success);
+}
+.hd-card[data-kind='fail'] {
+  --hd-card-accent: var(--danger);
+}
+.hd-card[data-kind='warn'] {
+  --hd-card-accent: var(--warn);
+}
+.hd-card[data-kind='info'] {
+  --hd-card-accent: var(--accent);
+}
+
+/* The bands sit above the texture layer. Without this the `::after` grid paints
+   over the controls and swallows their clicks — `pointer-events: none` stops the
+   swallowing but not the painting. */
+.hd-card > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* ------------------------------------------------------------------- header --
+ *
+ * Title, tags and identifier on one line, with the identifier pushed to the far
+ * end. Wrapping is allowed and the spacer collapses when it does, so a narrow
+ * card stacks the id under the title instead of crushing it to three characters.
+ */
+
+.hd-card-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  min-height: var(--control-h);
+}
+
+.hd-card-title {
+  font-family: var(--font-sans);
+  font-size: var(--fs-label);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-display);
+  text-transform: uppercase;
+  color: var(--text-strong);
+}
+
+.hd-card-tags {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.hd-card-spacer {
+  flex: 1 1 auto;
+}
+
+.hd-card-id {
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text-dim);
+  /* An id is for copying, not reading: it may be long, and truncating it would
+     make the copy wrong. It gets its own line before it gets shortened. */
+  overflow-wrap: anywhere;
+}
+
+/* --------------------------------------------------------------------- body -- */
+
+.hd-card-body {
+  display: flex;
+  flex-direction: column;
+  /* Start-aligned, not stretched. A column flex container stretches its children
+     by default, which silently turns the snippet from a chip hugging one command
+     into a full-width bar — indistinguishable from a text input at a glance, and
+     wrong precisely because a chip's boundary is meant to be its content. */
+  align-items: flex-start;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+/* Prose still gets its full measure; only the chip hugs. */
+.hd-card-body > .hd-card-summary,
+.hd-card-body > .hd-card-note {
+  align-self: stretch;
+}
+
+.hd-card-summary,
+.hd-card-note {
+  margin: 0;
+  font-size: var(--fs-body);
+  line-height: 1.5;
+  /* Prose stops before the card does. A description running the full width of a
+     document-width pane is a line 200 characters long, which nobody reads. */
+  max-width: 78ch;
+}
+
+.hd-card-summary {
+  color: var(--text);
+}
+
+/* The secondary line. Muted by default so it reads as an aside rather than as a
+   second summary the reader has to weigh against the first. */
+.hd-card-note {
+  font-size: var(--fs-meta);
+  color: var(--text-faint);
+}
+
+.hd-card-note[data-tone='warn'] {
+  color: var(--warn);
+}
+
+.hd-card-note[data-tone='danger'] {
+  color: var(--danger);
+}
+
+/* ---------------------------------------------------------------- code chip -- */
+
+.hd-codechip {
+  display: inline-block;
+  max-width: 100%;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-inset);
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  line-height: 1.6;
+  /* Scrolls rather than wraps: a wrapped command line is a command you paste
+     wrong, and this is precisely the text a reader is about to copy. */
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.hd-codechip[data-block='true'] {
+  display: block;
+  padding: var(--space-3) var(--space-4);
+}
+
+/* The leading token of a command — `npx`, `uvx`, `https` — set in the accent.
+   One word of colour is enough to tell "a package this node will run" from "a URL
+   it will call" before the line is read, which is the distinction that actually
+   matters when you are deciding whether to press Inspect. */
+.hd-codechip-lead {
+  color: var(--accent);
+  font-weight: var(--fw-medium);
+}
+
+/* ------------------------------------------------------------ configuration --
+ *
+ * Divided from the body by a hairline, because a control is a different kind of
+ * thing from a sentence and the reader should not have to discover that by
+ * clicking. One rule, not a box: a nested panel inside a card is two borders
+ * saying the same thing.
+ */
+
+.hd-card-config {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-top: var(--space-5);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border);
+}
+
+/* An auto-filling grid, not a flex row. A card is as likely to be 300px wide in a
+   side dock as 900px in a document tab; three flexed inputs at 300px are three
+   unusable 60px boxes, whereas these reflow to one per line and stay operable.
+
+   `auto-fill`, not `auto-fit`: `auto-fit` collapses the empty tracks, so a card
+   with a single "Server id" gave that one input the card's whole width — an id
+   field 760px long, which reads as a mistake because it is one. `auto-fill` keeps
+   the tracks, so one field is one column wide and two fields still line up with
+   it. `span="full"` is how a control asks for the whole row on purpose. */
+.hd-controlrow {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+  gap: var(--space-4) var(--space-5);
+  align-items: end;
+}
+
+/* Set by `Field span="full"` — the extra-arguments box, a path, a secret. */
+.hd-controlrow > [data-span='full'] {
+  grid-column: 1 / -1;
+}
+
+/* A snippet living in a control row is a *readout*, not a control: it lines up
+   with the fields but does not pretend to be one. */
+.hd-controlrow > .hd-codechip {
+  align-self: center;
+}
+
+/* One subject and the buttons that act on it — a search box and its Search.
+   Flex, not the grid above, because these are not peers: the input takes what is
+   left and the buttons keep their own size. `wrap` is off on purpose. A button
+   that drops onto its own line reads as unrelated to the field above it. */
+.hd-controlbar {
+  display: flex;
+  align-items: end;
+  gap: var(--space-3);
+}
+
+.hd-controlbar > .hd-field {
+  flex: 1 1 auto;
+  /* Without this a long placeholder sets the flex base and pushes the buttons
+     off the end instead of the input shrinking. */
+  min-width: 0;
+}
+
+/* The container a feed and its controls sit in. One gutter, declared once,
+   rather than a margin on each child — which is the arrangement that leaves a
+   hole when a conditional element does not render. */
+.hd-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+/* ------------------------------------------------------------------ caption --
+ *
+ * The aside. Used for a qualifying sentence anywhere — a card footer, a degraded
+ * search result, a hint under a control — so the same fact is the same size and
+ * colour wherever it appears.
+ */
+
+.hd-caption {
+  margin: 0;
+  font-size: var(--fs-meta);
+  line-height: 1.45;
+  color: var(--text-faint);
+  max-width: 78ch;
+}
+
+.hd-caption[data-tone='warn'] {
+  color: var(--warn);
+}
+
+.hd-caption[data-tone='danger'] {
+  color: var(--danger);
+}
+
+/* ------------------------------------------------------------------- footer --
+ *
+ * Caption left, buttons right. The caption is the qualifying sentence that used
+ * to be set as body text spanning the action bar, where it read as an error
+ * message; small and muted, it reads as what it is.
+ */
+
+.hd-card-foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  margin-top: var(--space-5);
+}
+
+.hd-card-caption {
+  font-size: var(--fs-meta);
+  line-height: 1.45;
+  color: var(--text-faint);
+  max-width: 60ch;
+}
+
+.hd-card-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  /* The buttons are the one thing that must never wrap into a column: a primary
+     and a secondary stacked read as two unrelated actions. */
+  flex: none;
+}
+
+/* An outcome, not a control — so it sits below the footer and gets its own rule
+   rather than being squeezed in beside the buttons. */
+.hd-card-extra {
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+/* The outcome region is arbitrary content, so it spaces its own children rather
+   than requiring each caller to remember a wrapper with a gap on it. */
+.hd-card-extra > * + * {
+  margin-top: var(--space-3);
+}
+
+/* ----------------------------------------------------------------- entrance -- */
+
+@keyframes hd-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes hd-card-rail-in {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hd-card,
+  .hd-card::before {
+    animation: none;
+  }
+}

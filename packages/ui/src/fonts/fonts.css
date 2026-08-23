@@ -9,15 +9,15 @@
  * replaced when the real face lands — the display stack falls back to Georgia, which
  * is metrically close enough to Instrument Serif that the swap isn't jarring.
  *
- * Both families are SIL OFL 1.1 — the licences ship beside them as `OFL-*.txt`,
+ * All four families are SIL OFL 1.1 — the licences ship beside them as `OFL-*.txt`,
  * which is what the licence asks of anyone redistributing the binaries, and we do
  * redistribute: they are bundled into every web build and every desktop installer.
  * Adding a face: drop the woff2 here, add the @font-face, and reference it from a
  * token in themes.css — never from a component.
  *
  * PROVENANCE. These are the **upstream** fonts from github.com/google/fonts
- * (`ofl/dmsans`, `ofl/instrumentserif`), converted TTF → woff2 locally with
- * fonttools:
+ * (`ofl/dmsans`, `ofl/instrumentserif`, `ofl/geist`, `ofl/jetbrainsmono`), converted
+ * TTF → woff2 locally with fonttools:
  *
  *   uvx --from "fonttools[woff]" python -c "from fontTools.ttLib import TTFont; \
  *     f=TTFont('DMSans[opsz,wght].ttf'); f.flavor='woff2'; f.save('DMSans-Variable.woff2')"
@@ -27,8 +27,15 @@
  * per face — which is what the rules below assume — silently drops every accented
  * character outside Latin-1. That failure is invisible until a peer's name or a
  * karaoke title contains one and a single glyph renders in the fallback face. The
- * upstream files carry the full 333–403 codepoints for 144 KB total, which is not
+ * upstream files carry the full 333–976 codepoints for 361 KB total, which is not
  * a size worth being clever about.
+ *
+ * WHY EVERY FACE HERE IS VARIABLE where upstream ships one. A variable file covers
+ * its whole weight range in a single request, so `font-weight: 500` on a chip and
+ * `700` on a heading cost nothing extra — whereas static faces mean one file per
+ * weight, and the weight nobody remembered to ship is silently synthesised by the
+ * browser into a smeared fake bold. The three tokens in `themes.css` between them
+ * ask for four different weights, so this is not hypothetical.
  */
 
 @font-face {
@@ -53,5 +60,43 @@
   src: url('./DMSans-Variable.woff2') format('woff2-variations');
   font-weight: 100 1000;
   font-style: normal;
+  font-display: swap;
+}
+
+/* Geist. Vercel's UI face, and the app's default sans: `midnight` reached for a bare
+   `Segoe UI` stack before this, so it was the one theme whose typography was
+   whatever the OS happened to have. Variable, 100–900. */
+@font-face {
+  font-family: 'Geist';
+  src: url('./Geist-Variable.woff2') format('woff2-variations');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* JetBrains Mono. The one mono face, and the reason it is worth shipping rather than
+   naming: `--font-mono` has always listed it, but a stack only reaches a font the
+   machine already has — so the same editor, diff and log rendered in Cascadia on one
+   box and Consolas on another, and the app's code surfaces had no typography of their
+   own at all. Variable, 100–800.
+
+   The italic is a SEPARATE FILE and not optional. Every syntax theme italicises
+   something (comments, keywords), and with no italic face the browser synthesises one
+   by shearing the upright — which on a monospace face breaks the advance width, so a
+   line of italic comment no longer lines up with the code above it. That is the one
+   thing a monospace font exists to guarantee. */
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('./JetBrainsMono-Variable.woff2') format('woff2-variations');
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('./JetBrainsMono-Italic-Variable.woff2') format('woff2-variations');
+  font-weight: 100 800;
+  font-style: italic;
   font-display: swap;
 }

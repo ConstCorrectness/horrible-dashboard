@@ -76,7 +76,11 @@
   --shadow-card: 0 4px 6px rgb(0 0 0 / 15%);
   --shadow-overlay: 0 8px 24px rgb(0 0 0 / 40%);
 
-  --font-sans: 'Segoe UI', system-ui, sans-serif;
+  /* Geist, self-hosted. This was a bare `Segoe UI` stack, which made the DEFAULT
+     theme the one whose typography was whatever the OS happened to have — Segoe on
+     Windows, a Helvetica on macOS, whatever fontconfig chose on Linux. The three
+     other themes that wanted a designed face all had to name DM Sans to get one. */
+  --font-sans: 'Geist', 'Segoe UI', system-ui, sans-serif;
   /* The app has exactly one editorial face and midnight already uses it (the games
      lobby's hero and ceremony type). Declared identically in both themes rather
      than collapsed to `--font-sans` here: a theme is free to agree with another,
@@ -380,11 +384,19 @@
  * are kept as aliases rather than renamed across 40 files in a theming change.
  */
 :root {
-  /* The one mono stack. Every "mono" surface (editors, diffs, logs, terminal)
-     reads this token — don't hardcode a stack in a component. It is deliberately
-     NOT per-theme: a theme changes how the app looks, not which glyphs line up. */
+  /* The one mono stack. Every "mono" surface (editors, diffs, logs, terminal, and
+     every figure in a DataRow) reads this token — don't hardcode a stack in a
+     component. It is deliberately NOT per-theme: a theme changes how the app looks,
+     not which glyphs line up.
+
+     JetBrains Mono is now FIRST and self-hosted. It was already named here, but
+     fourth, behind three faces that ship with an OS — so the stack only ever reached
+     it on a machine whose owner had installed it themselves, and the same editor,
+     diff and log rendered in Cascadia on one box and Menlo on another. A stack does
+     not choose a font; it chooses whichever font the machine already has. The rest
+     of the list stays as the fallback for the first paint before the woff2 lands. */
   --font-mono:
-    ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', 'JetBrains Mono', menlo, consolas, monospace;
+    'JetBrains Mono', ui-monospace, 'Cascadia Mono', 'Segoe UI Mono', menlo, consolas, monospace;
 
   /* A translucent wash of the accent — selected rows, active tabs, the user's own
      chat bubble. `color-mix` rather than a hardcoded rgba so it tracks `--accent`
@@ -510,6 +522,14 @@
   --ease-standard: ease;
   --ease-entrance: cubic-bezier(0.22, 0.61, 0.36, 1);
   --stagger-step: 26ms;
+
+  /* The height every inline control settles on. A `<select>`, a text input and a
+     small button have three different intrinsic heights, so a form row built from
+     all three is ragged unless one number is imposed — and a row of controls that
+     do not share a baseline is the single loudest sign of an unfinished form.
+     30px is the developer-tool standard the UI standards in CLAUDE.md ask for:
+     comfortable to hit, still dense enough for a form inside a docked pane. */
+  --control-h: 30px;
 
   /* -------------------------------------------------- OS chrome (--win-*) --
    *

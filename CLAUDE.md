@@ -149,3 +149,21 @@ The docs are authored as **MDX with Mermaid diagrams** and published as a
 [Docusaurus](https://docusaurus.io) site (`website/`, which reads this `docs/`
 tree directly). `pnpm --filter @horrible/docs build` builds it locally; pushing to
 `main` deploys to GitHub Pages via `.github/workflows/docs.yml`.
+
+
+## UI and Design Standards
+
+Apply a modern, developer-first Kombai aesthetic across the UI components:
+
+- Elevation & Color:
+  - Surface: Dark slate background (#16181D) with subtle 1px border (#262934) and inset top shadow.
+  - Accentuate cards on hover with a crisp border highlight (#3B82F6 or #6366F1 at 40% opacity).
+- Typography & Badging:
+  - Use Geist/Inter for UI text and Geist Mono/JetBrains Mono for IDs, paths, and registry keys.
+  - Replace raw badge borders with soft pill chips (e.g. green status dot + text on translucent green fill).
+- Command Snippets:
+  - Display commands (uvx, npx, http endpoints) inside recessed, rounded code containers with syntax-colored protocol prefixes.
+- Compact Dev-Tool Form Controls:
+  - Standardize all inputs, selectors, and action buttons to a sleek 30px height with 6px border-radius.
+  - Group related inputs into inline segmented blocks.
+  - Use high-contrast primary buttons paired with subtle ghost secondary buttons and clean micro-icons.

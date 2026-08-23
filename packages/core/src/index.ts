@@ -33,6 +33,20 @@ export {
   type ButtonIntent,
   type ButtonProps,
 } from './Primitives';
+/** The shared card primitive — one item in a feed you configure and act on
+ * (a registry entry, a plugin, a downloadable model). See ResourceCard.tsx: a
+ * `DataRow` is a record you read, a card is a small form you fill in. */
+export {
+  Caption,
+  CodeChip,
+  ControlBar,
+  ControlRow,
+  ResourceCard,
+  ResourceCardList,
+  Stack,
+  type CardTag,
+  type ResourceCardProps,
+} from './ResourceCard';
 export {
   installExternalLinkBridge,
   isDesktopShell,

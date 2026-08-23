@@ -1,0 +1,547 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-23T00:00:00.000Z",
+  "title": "Design System: horrible-dashboard",
+  "extensions": {
+    "colorMeta": {
+      "accent": {
+        "role": "primary",
+        "displayName": "Signal Blue",
+        "canonical": "#6ea8fe",
+        "tonalRamp": [
+          "oklch(20% 0.06 262)",
+          "oklch(30% 0.09 262)",
+          "oklch(40% 0.12 262)",
+          "oklch(50% 0.14 262)",
+          "oklch(60% 0.14 262)",
+          "oklch(74% 0.11 262)",
+          "oklch(85% 0.06 262)",
+          "oklch(95% 0.02 262)"
+        ]
+      },
+      "accent-contrast": {
+        "role": "primary",
+        "displayName": "Contrast Ink",
+        "canonical": "#0b0d10",
+        "tonalRamp": [
+          "oklch(15% 0.008 250)",
+          "oklch(25% 0.008 250)",
+          "oklch(35% 0.008 250)",
+          "oklch(45% 0.008 250)",
+          "oklch(55% 0.008 250)",
+          "oklch(70% 0.006 250)",
+          "oklch(85% 0.004 250)",
+          "oklch(95% 0.002 250)"
+        ]
+      },
+      "gold": {
+        "role": "secondary",
+        "displayName": "Achievement Gold",
+        "canonical": "#f5b942",
+        "tonalRamp": [
+          "oklch(25% 0.06 78)",
+          "oklch(35% 0.09 78)",
+          "oklch(45% 0.12 78)",
+          "oklch(58% 0.14 78)",
+          "oklch(70% 0.15 78)",
+          "oklch(82% 0.13 78)",
+          "oklch(90% 0.08 78)",
+          "oklch(96% 0.03 78)"
+        ]
+      },
+      "success": {
+        "role": "tertiary",
+        "displayName": "Ready Green",
+        "canonical": "#3fb950",
+        "tonalRamp": [
+          "oklch(20% 0.05 145)",
+          "oklch(30% 0.08 145)",
+          "oklch(40% 0.11 145)",
+          "oklch(52% 0.14 145)",
+          "oklch(67% 0.16 145)",
+          "oklch(80% 0.12 145)",
+          "oklch(89% 0.07 145)",
+          "oklch(96% 0.02 145)"
+        ]
+      },
+      "warn": {
+        "role": "tertiary",
+        "displayName": "Caution Sand",
+        "canonical": "#e2c08d",
+        "tonalRamp": [
+          "oklch(22% 0.03 75)",
+          "oklch(32% 0.04 75)",
+          "oklch(44% 0.06 75)",
+          "oklch(56% 0.07 75)",
+          "oklch(68% 0.08 75)",
+          "oklch(81% 0.07 75)",
+          "oklch(90% 0.05 75)",
+          "oklch(96% 0.02 75)"
+        ]
+      },
+      "danger": {
+        "role": "tertiary",
+        "displayName": "Fault Red",
+        "canonical": "#e06c75",
+        "tonalRamp": [
+          "oklch(22% 0.06 20)",
+          "oklch(32% 0.09 20)",
+          "oklch(43% 0.12 20)",
+          "oklch(54% 0.15 20)",
+          "oklch(67% 0.15 20)",
+          "oklch(80% 0.10 20)",
+          "oklch(89% 0.06 20)",
+          "oklch(96% 0.02 20)"
+        ]
+      },
+      "bg": {
+        "role": "neutral",
+        "displayName": "Console Ground",
+        "canonical": "#14161a",
+        "tonalRamp": [
+          "oklch(15% 0.008 260)",
+          "oklch(22% 0.008 260)",
+          "oklch(30% 0.008 260)",
+          "oklch(42% 0.008 260)",
+          "oklch(55% 0.008 260)",
+          "oklch(70% 0.006 260)",
+          "oklch(85% 0.004 260)",
+          "oklch(95% 0.002 260)"
+        ]
+      },
+      "bg-raised": {
+        "role": "neutral",
+        "displayName": "Raised Surface",
+        "canonical": "#1d2026",
+        "tonalRamp": [
+          "oklch(18% 0.009 260)",
+          "oklch(25% 0.009 260)",
+          "oklch(33% 0.009 260)",
+          "oklch(45% 0.009 260)",
+          "oklch(57% 0.008 260)",
+          "oklch(72% 0.006 260)",
+          "oklch(86% 0.004 260)",
+          "oklch(95% 0.002 260)"
+        ]
+      },
+      "bg-elevated": {
+        "role": "neutral",
+        "displayName": "Elevated Surface",
+        "canonical": "#22262e",
+        "tonalRamp": [
+          "oklch(19% 0.010 260)",
+          "oklch(27% 0.010 260)",
+          "oklch(35% 0.010 260)",
+          "oklch(47% 0.010 260)",
+          "oklch(59% 0.008 260)",
+          "oklch(73% 0.006 260)",
+          "oklch(87% 0.004 260)",
+          "oklch(95% 0.002 260)"
+        ]
+      },
+      "bg-hover": {
+        "role": "neutral",
+        "displayName": "Hover Wash",
+        "canonical": "#262a32",
+        "tonalRamp": [
+          "oklch(20% 0.010 260)",
+          "oklch(28% 0.010 260)",
+          "oklch(37% 0.010 260)",
+          "oklch(48% 0.010 260)",
+          "oklch(60% 0.008 260)",
+          "oklch(74% 0.006 260)",
+          "oklch(87% 0.004 260)",
+          "oklch(95% 0.002 260)"
+        ]
+      },
+      "bg-inset": {
+        "role": "neutral",
+        "displayName": "Recessed Well",
+        "canonical": "rgb(0 0 0 / 25%)",
+        "tonalRamp": [
+          "rgb(0 0 0 / 45%)",
+          "rgb(0 0 0 / 38%)",
+          "rgb(0 0 0 / 32%)",
+          "rgb(0 0 0 / 25%)",
+          "rgb(0 0 0 / 18%)",
+          "rgb(0 0 0 / 12%)",
+          "rgb(0 0 0 / 8%)",
+          "rgb(0 0 0 / 5%)"
+        ]
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "#2e333d",
+        "tonalRamp": [
+          "oklch(20% 0.012 260)",
+          "oklch(28% 0.012 260)",
+          "oklch(36% 0.012 260)",
+          "oklch(48% 0.012 260)",
+          "oklch(60% 0.010 260)",
+          "oklch(74% 0.007 260)",
+          "oklch(87% 0.004 260)",
+          "oklch(95% 0.002 260)"
+        ]
+      },
+      "border-strong": {
+        "role": "neutral",
+        "displayName": "Hairline Strong",
+        "canonical": "#3b414c",
+        "tonalRamp": [
+          "oklch(22% 0.013 260)",
+          "oklch(30% 0.013 260)",
+          "oklch(39% 0.013 260)",
+          "oklch(50% 0.013 260)",
+          "oklch(62% 0.010 260)",
+          "oklch(75% 0.007 260)",
+          "oklch(88% 0.004 260)",
+          "oklch(95% 0.002 260)"
+        ]
+      },
+      "text-strong": {
+        "role": "neutral",
+        "displayName": "Primary Read",
+        "canonical": "#f0f2f5",
+        "tonalRamp": [
+          "oklch(20% 0.004 260)",
+          "oklch(32% 0.004 260)",
+          "oklch(44% 0.004 260)",
+          "oklch(56% 0.004 260)",
+          "oklch(68% 0.004 260)",
+          "oklch(80% 0.003 260)",
+          "oklch(90% 0.003 260)",
+          "oklch(96% 0.002 260)"
+        ]
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Body Read",
+        "canonical": "#d7dae0",
+        "tonalRamp": [
+          "oklch(20% 0.006 260)",
+          "oklch(32% 0.006 260)",
+          "oklch(44% 0.006 260)",
+          "oklch(56% 0.006 260)",
+          "oklch(68% 0.006 260)",
+          "oklch(80% 0.005 260)",
+          "oklch(88% 0.004 260)",
+          "oklch(95% 0.002 260)"
+        ]
+      },
+      "text-dim": {
+        "role": "neutral",
+        "displayName": "Telemetry Muted",
+        "canonical": "#8a909c",
+        "tonalRamp": [
+          "oklch(20% 0.010 260)",
+          "oklch(30% 0.010 260)",
+          "oklch(40% 0.012 260)",
+          "oklch(50% 0.014 260)",
+          "oklch(63% 0.014 260)",
+          "oklch(76% 0.010 260)",
+          "oklch(87% 0.006 260)",
+          "oklch(95% 0.002 260)"
+        ]
+      },
+      "text-faint": {
+        "role": "neutral",
+        "displayName": "Hint Faint",
+        "canonical": "#5c6169",
+        "tonalRamp": [
+          "oklch(18% 0.009 260)",
+          "oklch(27% 0.009 260)",
+          "oklch(36% 0.010 260)",
+          "oklch(46% 0.011 260)",
+          "oklch(58% 0.011 260)",
+          "oklch(72% 0.008 260)",
+          "oklch(85% 0.005 260)",
+          "oklch(95% 0.002 260)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "The largest identity type — a hero label or section banner. Still uppercase and tracked; this system has no large lowercase heading."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "The lead line inside a pane — a title read as a sentence rather than as a label."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "The workhorse: a row's identity, a pane header's title, an empty state's title. Small by design — weight and tracking carry it, not size."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "A row's body, a description, prose in a pane. Cap measure at ~46ch in centered contexts."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Field labels. Uppercase, tracked, muted — never --text-strong."
+      },
+      "telemetry": {
+        "displayName": "Telemetry",
+        "purpose": "Every id, count, duration, path, hash and float. Monospace and muted, always, divided by a 1px hairline rather than a middot."
+      },
+      "micro": {
+        "displayName": "Micro",
+        "purpose": "Chips and badges only. The smallest legible type in the system."
+      },
+      "editorial": {
+        "displayName": "Editorial",
+        "purpose": "Instrument Serif, used rarely and ceremonially — a games hero, a result announcement. Its scarcity is the point."
+      }
+    },
+    "shadows": [
+      {
+        "name": "elev-0",
+        "value": "none",
+        "purpose": "The default. Surfaces are flat at rest; structure comes from 1px borders."
+      },
+      {
+        "name": "elev-1",
+        "value": "0 4px 6px rgb(0 0 0 / 15%)",
+        "purpose": "Cards, rows, raised panes. Aliases --shadow-card, which each theme redefines (studio softens and widens it; hud replaces it with an edge glow; retro with a hard 2px offset block)."
+      },
+      {
+        "name": "elev-2",
+        "value": "0 8px 24px rgb(0 0 0 / 40%)",
+        "purpose": "Popovers, dialogs, floating windows. Aliases --shadow-overlay."
+      },
+      {
+        "name": "card-inset-highlight",
+        "value": "inset 0 1px 0 color-mix(in srgb, var(--text) 7%, transparent)",
+        "purpose": "The light catching the lip of a raised surface. Mixed from --text so it stays a highlight on dark themes and a soft line on light ones."
+      }
+    ],
+    "motion": [
+      {
+        "name": "dur-fast",
+        "value": "120ms",
+        "purpose": "Hover and state transitions."
+      },
+      {
+        "name": "dur-base",
+        "value": "220ms",
+        "purpose": "Entrance animations."
+      },
+      {
+        "name": "dur-slow",
+        "value": "320ms",
+        "purpose": "The rail draw-in and other slower reveals."
+      },
+      {
+        "name": "ease-standard",
+        "value": "ease",
+        "purpose": "Default easing for state transitions."
+      },
+      {
+        "name": "ease-entrance",
+        "value": "cubic-bezier(0.22, 0.61, 0.36, 1)",
+        "purpose": "Arrivals — a row or card sliding in from the left."
+      },
+      {
+        "name": "stagger-step",
+        "value": "26ms",
+        "purpose": "Per-item entrance delay via --hd-i. Must stay small and must be capped by the caller (STAGGER_CAP), because the delay is linear in list length."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "pane-narrow",
+        "value": "720px"
+      },
+      {
+        "name": "pane-compact",
+        "value": "620px"
+      },
+      {
+        "name": "grid-item-min",
+        "value": "240px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one filled control on a surface. Filled, not outlined, because a screen where three things are outlined in the accent has no primary action.",
+      "html": "<button class=\"ds-btn ds-btn-primary\">Connect</button>",
+      "css": ".ds-btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-3, 6px); padding: var(--space-2, 4px) var(--space-5, 12px); min-height: var(--control-h, 30px); border: 1px solid var(--border, #2e333d); border-radius: var(--radius-sm, 4px); background: var(--bg-raised, #1d2026); color: var(--text, #d7dae0); font-family: var(--font-sans, system-ui); font-size: var(--fs-body, 12.5px); font-weight: 500; line-height: 1.4; white-space: nowrap; cursor: pointer; transition: background 120ms ease, border-color 120ms ease, color 120ms ease; } .ds-btn-primary { background: var(--accent, #6ea8fe); border-color: var(--accent, #6ea8fe); color: var(--accent-contrast, #0b0d10); } .ds-btn-primary:hover { background: color-mix(in srgb, var(--accent, #6ea8fe) 86%, white); border-color: color-mix(in srgb, var(--accent, #6ea8fe) 86%, white); } .ds-btn:focus-visible { outline: 2px solid var(--accent, #6ea8fe); outline-offset: 1px; } .ds-btn:disabled { opacity: 0.45; cursor: not-allowed; }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Secondary and repeated actions. Transparent and dim at rest; hover supplies both the wash and full-strength text.",
+      "html": "<button class=\"ds-btn ds-btn-ghost\">Dismiss</button>",
+      "css": ".ds-btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-3, 6px); padding: var(--space-2, 4px) var(--space-5, 12px); min-height: var(--control-h, 30px); border: 1px solid var(--border, #2e333d); border-radius: var(--radius-sm, 4px); background: var(--bg-raised, #1d2026); color: var(--text, #d7dae0); font-family: var(--font-sans, system-ui); font-size: var(--fs-body, 12.5px); font-weight: 500; line-height: 1.4; cursor: pointer; transition: background 120ms ease, border-color 120ms ease, color 120ms ease; } .ds-btn-ghost { background: transparent; border-color: transparent; color: var(--text-dim, #8a909c); } .ds-btn-ghost:hover { background: var(--bg-hover, #262a32); border-color: transparent; color: var(--text, #d7dae0); } .ds-btn:focus-visible { outline: 2px solid var(--accent, #6ea8fe); outline-offset: 1px; }"
+    },
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "A real intent, not red text. A destructive control has to be visibly different BEFORE the click, not only in the confirm dialog after it.",
+      "html": "<button class=\"ds-btn ds-btn-danger\">Delete node</button>",
+      "css": ".ds-btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-3, 6px); padding: var(--space-2, 4px) var(--space-5, 12px); min-height: var(--control-h, 30px); border: 1px solid var(--border, #2e333d); border-radius: var(--radius-sm, 4px); background: var(--bg-raised, #1d2026); color: var(--text, #d7dae0); font-family: var(--font-sans, system-ui); font-size: var(--fs-body, 12.5px); font-weight: 500; line-height: 1.4; cursor: pointer; transition: background 120ms ease, border-color 120ms ease, color 120ms ease; } .ds-btn-danger { background: transparent; border-color: color-mix(in srgb, var(--danger, #e06c75) 45%, transparent); color: var(--danger, #e06c75); } .ds-btn-danger:hover { background: color-mix(in srgb, var(--danger, #e06c75) 12%, transparent); border-color: var(--danger, #e06c75); } .ds-btn:focus-visible { outline: 2px solid var(--accent, #6ea8fe); outline-offset: 1px; }"
+    },
+    {
+      "name": "Verdict Chip",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "A soft pill: the semantic colour as text, a 40% mix as border, a 12% mix as background. An outline alone at 9.5px reads as a text input, which is the wrong affordance entirely.",
+      "html": "<span class=\"ds-chip ds-chip-ok\"><span class=\"ds-chip-dot\"></span>Ready</span> <span class=\"ds-chip ds-chip-warn\">Unverified</span> <span class=\"ds-chip ds-chip-fail\">Failed</span> <span class=\"ds-chip\">stdio</span>",
+      "css": ".ds-chip { display: inline-flex; align-items: center; gap: var(--space-2, 4px); padding: var(--space-1, 2px) var(--space-3, 6px); border: 1px solid var(--border, #2e333d); border-radius: calc(var(--radius-sm, 4px) * 4); background: var(--bg-inset, rgb(0 0 0 / 25%)); color: var(--text-dim, #8a909c); font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--fs-micro, 9.5px); font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; white-space: nowrap; } .ds-chip-dot { width: 6px; height: 6px; border-radius: 50%; background: currentcolor; flex: none; } .ds-chip-ok { color: var(--success, #3fb950); border-color: color-mix(in srgb, var(--success, #3fb950) 40%, transparent); background: color-mix(in srgb, var(--success, #3fb950) 12%, transparent); } .ds-chip-warn { color: var(--warn, #e2c08d); border-color: color-mix(in srgb, var(--warn, #e2c08d) 40%, transparent); background: color-mix(in srgb, var(--warn, #e2c08d) 12%, transparent); } .ds-chip-fail { color: var(--danger, #e06c75); border-color: color-mix(in srgb, var(--danger, #e06c75) 40%, transparent); background: color-mix(in srgb, var(--danger, #e06c75) 12%, transparent); }"
+    },
+    {
+      "name": "Record Row",
+      "kind": "custom",
+      "refersTo": "row",
+      "description": "The signature component and the most-used object in the app. Three separable jobs: uppercase tracked identity, monospace hairline-divided telemetry, and a verdict carried on a 2px leading rail plus the 9px corner notch.",
+      "html": "<button class=\"ds-row ds-row-ok\"><span class=\"ds-row-head\"><span class=\"ds-row-title\">ollama · gemma4:e2b</span><span class=\"ds-row-meta\"><span>4.1 GB</span><span>ctx 8192</span><span>218 ms</span></span></span><span class=\"ds-row-body\">Local provider, 3 tools loaded.</span></button>",
+      "css": ".ds-row { position: relative; display: block; width: 100%; text-align: left; padding: 7px 10px 7px 14px; background: var(--bg-raised, #1d2026); border: 1px solid var(--border, #2e333d); border-radius: 0; color: var(--text, #d7dae0); font: inherit; cursor: pointer; clip-path: polygon(9px 0, 100% 0, 100% 100%, 0 100%, 0 9px); transition: background 120ms ease, border-color 120ms ease, transform 120ms ease; } .ds-row::before { content: ''; position: absolute; left: 0; top: 9px; bottom: 0; width: 2px; background: var(--ds-row-accent, var(--border-strong, #3b414c)); } .ds-row::after { content: ''; position: absolute; inset: 0; pointer-events: none; opacity: 0.5; background-image: repeating-linear-gradient(to right, color-mix(in srgb, var(--border, #2e333d) 55%, transparent) 0 1px, transparent 1px 28px); mask-image: linear-gradient(to right, transparent 0%, #000 40%, #000 100%); } .ds-row-ok { --ds-row-accent: var(--success, #3fb950); } .ds-row:hover { background: var(--bg-hover, #262a32); border-color: var(--border-strong, #3b414c); transform: translateX(2px); } .ds-row:focus-visible { outline: 2px solid var(--accent, #6ea8fe); outline-offset: 1px; } .ds-row-head { display: flex; align-items: center; gap: 8px; min-height: 18px; } .ds-row-title { font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-strong, #f0f2f5); } .ds-row-meta { display: flex; align-items: center; gap: 7px; margin-left: auto; font-family: var(--font-mono, ui-monospace, monospace); font-size: 10.5px; color: var(--text-dim, #8a909c); white-space: nowrap; } .ds-row-meta > * + *::before { content: ''; display: inline-block; width: 1px; height: 9px; margin-right: 7px; vertical-align: -1px; background: var(--border-strong, #3b414c); } .ds-row-body { display: block; margin-top: 3px; font-size: 12.5px; line-height: 1.45; color: var(--text, #d7dae0); }"
+    },
+    {
+      "name": "Resource Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "A record you configure rather than read. Bands in fixed order — identity, content, configuration, actions — all inheriting the card's single padding value so they start on one vertical line.",
+      "html": "<div class=\"ds-card\"><div class=\"ds-card-head\"><span class=\"ds-card-title\">filesystem</span><span class=\"ds-card-meta\">stdio · 7 tools</span></div><p class=\"ds-card-body\">Read and write files under an allowed root.</p><div class=\"ds-card-actions\"><button class=\"ds-btn ds-btn-primary\">Install</button><button class=\"ds-btn ds-btn-ghost\">Details</button></div></div>",
+      "css": ".ds-card { position: relative; padding: var(--space-5, 12px) var(--space-6, 16px); background: var(--bg-raised, #1d2026); border: 1px solid var(--border, #2e333d); border-radius: var(--radius-md, 6px); color: var(--text, #d7dae0); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text, #d7dae0) 7%, transparent); clip-path: polygon(12px 0, 100% 0, 100% 100%, 0 100%, 0 12px); transition: background 120ms ease, border-color 120ms ease; } .ds-card:hover { border-color: color-mix(in srgb, var(--accent, #6ea8fe) 40%, var(--border, #2e333d)); } .ds-card::before { content: ''; position: absolute; left: 0; top: 12px; bottom: 0; width: 2px; background: var(--ds-card-accent, var(--border-strong, #3b414c)); } .ds-card::after { content: ''; position: absolute; inset: 0; pointer-events: none; opacity: 0.4; background-image: repeating-linear-gradient(to right, color-mix(in srgb, var(--border, #2e333d) 55%, transparent) 0 1px, transparent 1px 28px); mask-image: linear-gradient(to right, transparent 0%, #000 40%, #000 100%); } .ds-card-head { display: flex; align-items: baseline; gap: var(--space-4, 8px); } .ds-card-title { font-family: var(--font-sans, system-ui); font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-strong, #f0f2f5); } .ds-card-meta { font-family: var(--font-mono, ui-monospace, monospace); font-size: 10.5px; color: var(--text-dim, #8a909c); } .ds-card-body { margin: var(--space-4, 8px) 0 var(--space-5, 12px); font-size: 12.5px; line-height: 1.45; color: var(--text, #d7dae0); } .ds-card-actions { display: flex; gap: var(--space-2, 4px); }"
+    },
+    {
+      "name": "Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Label + control + hint, where an error REPLACES the hint rather than joining it — showing both makes the eye work out which line is the current truth.",
+      "html": "<div class=\"ds-field\"><label class=\"ds-field-label\" for=\"ds-endpoint\">Endpoint</label><input id=\"ds-endpoint\" type=\"text\" value=\"http://127.0.0.1:11434\"><span class=\"ds-field-hint\">Leave blank to use the provider default.</span></div>",
+      "css": ".ds-field { display: flex; flex-direction: column; gap: var(--space-2, 4px); max-width: 320px; } .ds-field-label { font-family: var(--font-sans, system-ui); font-size: 10.5px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-dim, #8a909c); } .ds-field input { width: 100%; box-sizing: border-box; padding: var(--space-2, 4px) var(--space-3, 6px); min-height: var(--control-h, 30px); border: 1px solid var(--border, #2e333d); border-radius: var(--radius-sm, 4px); background: var(--bg-inset, rgb(0 0 0 / 25%)); color: var(--text, #d7dae0); font-family: var(--font-sans, system-ui); font-size: 12.5px; transition: border-color 120ms ease; } .ds-field input:focus-visible { outline: none; border-color: var(--accent, #6ea8fe); } .ds-field-hint { font-size: 10.5px; line-height: 1.45; color: var(--text-faint, #5c6169); }"
+    },
+    {
+      "name": "Switch",
+      "kind": "custom",
+      "refersTo": "button-default",
+      "description": "For a setting that takes effect immediately, which is every boolean in this app. A button[role=switch] rather than a styled checkbox: the role carries state to a screen reader AND drives the visual state, so the two cannot drift apart.",
+      "html": "<button class=\"ds-switch\" role=\"switch\" aria-checked=\"true\" aria-label=\"CLIP visual search\"></button> <button class=\"ds-switch\" role=\"switch\" aria-checked=\"false\" aria-label=\"Remote agent turns\"></button>",
+      "css": ".ds-switch { position: relative; flex: none; width: 44px; height: 26px; padding: 0; border: none; border-radius: 999px; background: var(--border-strong, #3b414c); cursor: pointer; transition: background 0.15s; } .ds-switch::after { content: ''; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--text-strong, #f0f2f5); transition: transform 0.15s; } .ds-switch:hover:not(:disabled) { background: color-mix(in srgb, var(--border-strong, #3b414c) 70%, var(--text-dim, #8a909c)); } .ds-switch[aria-checked='true'], .ds-switch[aria-checked='true']:hover:not(:disabled) { background: var(--accent, #6ea8fe); } .ds-switch[aria-checked='true']::after { transform: translateX(18px); } .ds-switch:disabled { opacity: 0.5; cursor: not-allowed; } .ds-switch:focus-visible { outline: 2px solid var(--accent, #6ea8fe); outline-offset: 2px; }"
+    },
+    {
+      "name": "Pane Header",
+      "kind": "nav",
+      "refersTo": "field-label",
+      "description": "Title / figures / actions on one baseline-aligned bar. It shares the row's split of jobs exactly, so a header and the rows beneath it read as one object rather than as a heading that happens to sit above a list.",
+      "html": "<div class=\"ds-panehead\"><span class=\"ds-panehead-title\">MCP Servers</span><span class=\"ds-panehead-meta\"><span>6 connected</span><span>41 tools</span></span><span class=\"ds-panehead-spacer\"></span><div class=\"ds-panehead-actions\"><button class=\"ds-btn ds-btn-ghost\" data-size=\"sm\">Refresh</button></div></div>",
+      "css": ".ds-panehead { display: flex; align-items: baseline; gap: var(--space-4, 8px); padding: var(--space-4, 8px) var(--space-5, 12px); border-bottom: 1px solid var(--border, #2e333d); background: var(--bg, #14161a); } .ds-panehead-title { font-family: var(--font-sans, system-ui); font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-strong, #f0f2f5); } .ds-panehead-meta { display: flex; align-items: baseline; gap: var(--space-3, 6px); font-family: var(--font-mono, ui-monospace, monospace); font-size: 10.5px; color: var(--text-dim, #8a909c); } .ds-panehead-meta > * + *::before { content: ''; display: inline-block; width: 1px; height: 9px; margin-right: 6px; vertical-align: -1px; background: var(--border-strong, #3b414c); } .ds-panehead-spacer { flex: 1 1 auto; } .ds-panehead-actions { display: flex; align-items: center; gap: var(--space-2, 4px); } .ds-panehead-actions .ds-btn { background: transparent; border-color: transparent; color: var(--text-dim, #8a909c); padding: 2px 6px; min-height: 0; font-size: 10.5px; border-radius: var(--radius-sm, 4px); cursor: pointer; font-family: var(--font-sans, system-ui); } .ds-panehead-actions .ds-btn:hover { background: var(--bg-hover, #262a32); color: var(--text, #d7dae0); }"
+    },
+    {
+      "name": "Empty State",
+      "kind": "custom",
+      "refersTo": "card",
+      "description": "An empty state says what to DO, not that there is nothing. 'No servers' is a fact the user can already see; the action sentence is where the design intent lives, which is why the title is deliberately quiet.",
+      "html": "<div class=\"ds-empty\"><span class=\"ds-empty-title\">No servers</span><span class=\"ds-empty-body\">Add one below, or browse the registry to install a Model Context Protocol server.</span><div class=\"ds-empty-actions\"><button class=\"ds-btn ds-btn-primary\">Add server</button><button class=\"ds-btn ds-btn-ghost\">Browse registry</button></div></div>",
+      "css": ".ds-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-3, 6px); padding: var(--space-8, 32px) var(--space-6, 16px); text-align: center; color: var(--text-dim, #8a909c); } .ds-empty-title { font-family: var(--font-sans, system-ui); font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-dim, #8a909c); } .ds-empty-body { font-size: 12.5px; line-height: 1.5; max-width: 46ch; color: var(--text-faint, #5c6169); } .ds-empty-actions { display: flex; gap: var(--space-2, 4px); margin-top: var(--space-2, 4px); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Field Console",
+    "overview": "This is an instrument you operate, not a site you browse. The whole system is built for a person sitting in front of a dense, docked workspace for hours, reading state off a dozen panes at once and acting on it by keyboard. Every decision follows from that: information is packed, hierarchy does the work that whitespace does elsewhere, and personality comes from restraint plus one accent used sparingly enough that it still means something when it appears.\n\nThe structural motif is the clipped top-left corner — a 9px notch on a row, 12px on a card, cut with clip-path. It makes a container read as machined and angular without a symmetric bevel, which would read as a tag. Colour arrives on a 2px leading rail down the left edge, never as a perimeter. A faint repeating 28px hairline gives every surface a tooling texture at rest that disappears at reading distance. Type splits into two jobs that must never be confused: identity is uppercase Geist with heavy 0.14em tracking; telemetry — every id, count, duration and float — is muted JetBrains Mono. A row scans as label-then-figures at a glance because the two never share a treatment.\n\nNothing here is per-component invention. Six themes are declared as blocks of primitives on <html>, and every colour, radius, elevation and font family in the app resolves through them; there is a test that fails when a component hardcodes a value. The spacing, type and motion scale is deliberately theme-independent — a theme changes how the app looks, not how far apart things sit — with radius as the one exception, because a radius IS a theme's character.",
+    "keyCharacteristics": [
+      "Angular containers with a clipped top-left corner, never a symmetric bevel",
+      "Accent on a leading edge or a crisp border — never a glowing perimeter",
+      "Uppercase tracked identity against monospace muted telemetry",
+      "One imposed control height (30px) so mixed form rows share a baseline",
+      "Six themes, one token set; the component layer has no per-theme branches",
+      "Motion is a brief staggered arrival, capped, and fully disabled under prefers-reduced-motion"
+    ],
+    "rules": [
+      {
+        "name": "The One Voice Rule",
+        "body": "The accent is the answer to \"which one thing?\" — one filled primary action per surface, one focus ring at a time. A screen where three elements are outlined in the accent has no primary action.",
+        "section": "colors"
+      },
+      {
+        "name": "The Leading Edge Rule",
+        "body": "A verdict is a 2px rail on the left edge plus a matching corner notch, never a coloured perimeter. The row stays a row instead of becoming a card.",
+        "section": "colors"
+      },
+      {
+        "name": "The One Vocabulary Rule",
+        "body": "ok / warn / fail / info mean the same colour in a chip, a row rail, a row mark and a badge. A reader learns the colour once.",
+        "section": "colors"
+      },
+      {
+        "name": "The No Literal Rule",
+        "body": "A component never hardcodes a colour. If a needed colour is absent, add the token to every theme — a literal is invisible to the switcher and silently survives into a theme it was never designed for. design-tokens.test.ts enforces this.",
+        "section": "colors"
+      },
+      {
+        "name": "The Two Jobs Rule",
+        "body": "Identity is uppercase tracked sans; telemetry is muted mono. A figure that takes the title's treatment stops being scannable, and a label that takes the mono treatment stops being a label. Never blend them.",
+        "section": "typography"
+      },
+      {
+        "name": "The Named-For-The-Job Rule",
+        "body": "Type tokens are named for what they do (--fs-label, --fs-meta), not what size they are, because the job is what a caller knows. The oddly precise sizes (10.5px, 12.5px) are measured values from the incumbent row design; rounding them silently reflows every row in the app.",
+        "section": "typography"
+      },
+      {
+        "name": "The One Mono Rule",
+        "body": "--font-mono is deliberately not per-theme. A theme changes how the app looks, not which glyphs line up.",
+        "section": "typography"
+      },
+      {
+        "name": "The One Height Rule",
+        "body": "Every inline control settles on --control-h (30px). A select, a text input and a small button have three different intrinsic heights, so a form row built from all three is ragged unless one number is imposed — and a row of controls that do not share a baseline is the loudest sign of an unfinished form.",
+        "section": "layout"
+      },
+      {
+        "name": "The Scale-Or-Nothing Rule",
+        "body": "No literal sizes in new work. The app already carries ~1,987 inline style objects written before the scale existed, each picking its own fontSize: 11 and gap: 6; that is precisely why two panes docked side by side never lined up. Reach for a token or add one.",
+        "section": "layout"
+      },
+      {
+        "name": "The Three-Step Rule",
+        "body": "There are exactly three elevation steps, and each aliases what a theme already declares. Inventing a middle shadow per theme produces a ramp with a step no theme designed — one that looks wrong in five of six themes.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Edge-Not-Bloom Rule",
+        "body": "Where a theme wants to signal depth with light, it lights a hairline edge. It does not add a perimeter glow to a component.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Reduced-Motion Rule",
+        "body": "Every animation and every hover transform is disabled under prefers-reduced-motion: reduce. Seven such blocks exist; a new animated component adds the eighth.",
+        "section": "components"
+      }
+    ],
+    "dos": [
+      "Do resolve every colour, radius, elevation and font family through a token. If the token you need doesn't exist, add it to all six themes.",
+      "Do put identity in uppercase tracked sans (11px/700/0.14em) and every figure in muted mono (10.5px). The split is the whole reason a row scans.",
+      "Do carry a verdict on a 2px leading rail plus the corner notch, using the shared ok / warn / fail / info vocabulary.",
+      "Do pin every inline control to --control-h (30px) so a mixed form row shares one baseline.",
+      "Do use the spacing scale (2/4/6/8/12/16/24/32) rather than a literal, and 8px as the default gutter inside a row.",
+      "Do design a pane to survive at 320px wide in a split. Density adapts to the pane, not to the viewport.",
+      "Do derive state colours with color-mix from the semantic tokens (40% border, 12% background) so a new theme inherits every state for free.",
+      "Do disable animation and hover transforms under prefers-reduced-motion, and cap any stagger.",
+      "Do make an empty state name the next action, not the absence.",
+      "Do use :focus-visible with a 2px accent outline at 1px offset, and never remove a focus indicator without replacing it with a stronger one."
+    ],
+    "donts": [
+      "Don't put a glowing perimeter border on anything. The accent rides a leading edge or a crisp 1px border; the full-perimeter bloom is out.",
+      "Don't build a centered vertical stack of soft cards with heavy drop shadows. Favor asymmetric structured grids, technical dividers, and clipped containers.",
+      "Don't use native OS emojis as UI icons or decorative badges inside a pane. Vector stroke icons that inherit currentColor only. The single documented exception is a pane manifest's icon: field, which is the activity rail's own convention.",
+      "Don't hardcode a colour, a radius, or a 999px pill. A pill is calc(var(--radius-sm) * 4); hud and retro chose square corners and a literal overrides that decision app-wide.",
+      "Don't give a figure the title's treatment, or a label the mono treatment.",
+      "Don't round the measured type sizes (10.5px, 12.5px, 9.5px) — doing so reflows every row in the app.",
+      "Don't signal disabled with opacity alone; add cursor: not-allowed.",
+      "Don't show a hint and an error at the same time. The error replaces the hint.",
+      "Don't use a border-left for a rail on a clipped container — a clipped border loses its own corner. Use an inset pseudo-element.",
+      "Don't branch a component on the active theme. If a theme needs different behavior, it belongs in a token (the --win-border-light/--win-border-dark bevel is the model: one rule, two looks, no conditional).",
+      "Don't invent a middle elevation step. There are three, and each aliases what the theme already declares."
+    ]
+  }
+}

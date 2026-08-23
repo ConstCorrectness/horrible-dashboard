@@ -165,6 +165,11 @@ export function EmptyState({
  * The control is `children` rather than a prop, because this app's forms hold
  * selects, textareas, checkbox rows and bespoke pickers — a `type` prop would
  * have to grow a case for each and would still not cover the pickers.
+ *
+ * `span` is the one layout affordance, and it is deliberately not a width: it
+ * says "this field wants the whole line" and leaves the container to decide what
+ * a line is. A field that could name its own pixels is a field that will
+ * eventually be 260px inside a 200px dock.
  */
 export function Field({
   label,
@@ -172,6 +177,7 @@ export function Field({
   error,
   required,
   htmlFor,
+  span,
   children,
 }: {
   label: ReactNode;
@@ -179,10 +185,17 @@ export function Field({
   error?: ReactNode;
   required?: boolean;
   htmlFor?: string;
+  /** `full` takes the whole width of a `ControlRow` at any card size. */
+  span?: 'auto' | 'full';
   children: ReactNode;
 }) {
   return (
-    <label className="hd-field" data-invalid={error ? 'true' : undefined} htmlFor={htmlFor}>
+    <label
+      className="hd-field"
+      data-invalid={error ? 'true' : undefined}
+      data-span={span === 'full' ? 'full' : undefined}
+      htmlFor={htmlFor}
+    >
       <span className="hd-field-label">
         {label}
         {required && <span className="hd-field-req">*</span>}

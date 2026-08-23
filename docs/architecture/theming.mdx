@@ -158,6 +158,7 @@ reads as unfinished even when each pane in isolation is carefully made.
 | Weight | `--fw-regular` `--fw-medium` `--fw-bold` | |
 | Elevation | `--elev-0` `--elev-1` `--elev-2` | Aliases of `--shadow-card` / `--shadow-overlay` |
 | Motion | `--dur-fast` `--dur-base` `--dur-slow`, `--ease-standard` `--ease-entrance`, `--stagger-step` | |
+| Controls | `--control-h` (30px) | The one height every input, select and button settles on — see [The card](#one-control-height) |
 
 None of these values is invented: they are the ones `datalist.css` had already
 settled on, promoted so everything else can use them. Sizes that look oddly precise
@@ -174,6 +175,81 @@ look and a soft one.
 `--elev-1` and `--elev-2` alias the two shadows each theme already declares, rather
 than introducing a middle step. A ramp with a rung no theme designed is a ramp that
 looks wrong in five of the six themes.
+
+## The card: a list item you fill in
+
+`DataList` gave "a record you read" one shape and `Primitives` gave the controls
+around a list one shape. Neither covers the third thing the app keeps drawing:
+an item that is a **small form**. A registry entry, a marketplace plugin, a
+downloadable model — each has an identity, some prose, a command you want to read
+before you commit, two or three inputs, and a pair of buttons. A `DataRow` cannot
+hold that without its head line collapsing, so every such feed grew its own `<div>`
+with its own padding and its own idea of where the buttons go.
+
+`packages/core/src/ResourceCard.tsx` is that third primitive.
+
+| Export | What it is |
+| --- | --- |
+| `ResourceCardList` | The feed. A `<ul>`, gutter `--space-5` — cards are far taller than rows |
+| `ResourceCard` | One item: **header → body → configuration → footer**, in that order and only that order |
+| `ControlRow` | Inline fields that line up. An auto-filling grid, so they reflow rather than crush |
+| `ControlBar` | One subject and the buttons acting on it — a search box and its Search |
+| `CodeChip` | A read-only command, endpoint or parameter. `lead` colours the runner/protocol |
+| `Caption` | The quiet aside. Where a long helper string goes instead of the action bar |
+| `Stack` | A vertical stack at the card gutter — one number instead of a margin per child |
+
+The type contract *is* the design, as in the other two files:
+
+**The order of the props is the order on screen.** A caller cannot put the buttons
+above the summary, because no prop would do it.
+
+**Nothing takes a colour, a size or a `style`.** `kind` is a *meaning*, drawn from
+`RowKind` — the same vocabulary a row's verdict uses — so `ok` is the same green in
+a card as in a row and the reader learns it once.
+
+**Every section renders nothing when empty.** That is what makes the component
+survive the conditional cases (an entry with no install options, a remote with no
+arguments, a card with no snippet) instead of leaving a gap where a border was.
+
+### One control height
+
+`--control-h` (30px) is imposed in `primitives.css` on inputs, selects, textareas
+*and* buttons alike. Those four have four different intrinsic heights, so a form row
+built from a select, a text input and a small button is ragged unless one number is
+imposed on all of them — and a row of controls that do not share a baseline is the
+single loudest sign of an unfinished form.
+
+It sits with the scale rather than with a theme, for the scale's reason: how tall a
+text box is does not change when you change how the app looks.
+
+`Field` grew one layout affordance, `span="full"`, and it is deliberately not a
+width: it says "this field wants the whole line" and leaves the container to decide
+what a line is. A field that could name its own pixels is a field that will
+eventually be 260px inside a 200px dock.
+
+`ControlRow` uses `auto-fill` rather than `auto-fit` for the same reason. `auto-fit`
+collapses the empty tracks, so a card with a single "Server id" gave that one input
+the card's entire width — an id field 760px long, which reads as a mistake because
+it is one.
+
+### A chip is a soft pill
+
+A verdict chip is now a translucent wash of its own colour behind a matching
+border, rather than a bare outline — an outline alone at `--fs-micro` reads as a
+text input, which is the wrong affordance entirely. The wash is `color-mix`ed from
+the semantic colour, so a new theme gets all four states from its accent and status
+colours for free.
+
+Its radius is `calc(var(--radius-sm) * 4)` rather than a hardcoded `999px`. A chip
+is about 20px tall, so that is fully round in `midnight` and `studio` while the two
+themes that deliberately set every radius to 0 keep their square tags. Pinning the
+pill would have overridden a theme author's decision app-wide, which is the one
+thing the per-theme radius exists to prevent.
+
+The same reasoning governs the card's own surface: its top-edge inset highlight is
+mixed from `--text`, not from white, so it stays a highlight on a dark theme and
+becomes a soft shadow line on a light one. A hardcoded white inset is invisible on
+half the themes and wrong on the rest.
 
 ## The guard
 
@@ -258,13 +334,51 @@ things there are easy to get wrong:
 
 ## Typography
 
-`studio` asks for DM Sans and Instrument Serif, and both ship: three self-hosted
-woff2 files (144 KB total) in `packages/ui/src/fonts/`, bundled by Vite into every
-web build and desktop installer. Never the Google Fonts CDN — the app is
-offline-first, so a network dependency for text means unstyled UI on a plane.
+Four families ship, as six self-hosted woff2 files (361 KB total) in
+`packages/ui/src/fonts/`, bundled by Vite into every web build and desktop
+installer. Never the Google Fonts CDN — the app is offline-first, so a network
+dependency for text means unstyled UI on a plane.
 
-They are the **upstream** fonts from `github.com/google/fonts`, converted TTF →
-woff2 locally, rather than the files the Google Fonts CSS API serves. The API
+| Family | Token | Role |
+| --- | --- | --- |
+| **Geist** | `--font-sans` in `midnight` | The UI face of the default theme |
+| **DM Sans** | `--font-sans` in `studio`, `glass`, `daylight` | The Settings Kit face |
+| **Instrument Serif** | `--font-display` | The one editorial face, upright + italic |
+| **JetBrains Mono** | `--font-mono`, app-wide | Every code surface and every figure, upright + italic |
+
+### Naming a font is not shipping one
+
+`--font-mono` had listed `'JetBrains Mono'` since the token existed — fourth in the
+stack, behind three faces that ship with an operating system. A stack does not
+choose a font; it chooses whichever font the machine already has. So that entry was
+only ever reached by a user who had installed JetBrains Mono themselves, and the
+same editor, diff and log rendered in Cascadia on one box and Menlo on another. The
+app's code surfaces had no typography of their own at all.
+
+`midnight` had the same problem one level up: a bare `'Segoe UI', system-ui` stack
+made the **default** theme the one whose type was whatever the OS supplied, while
+the three themes that wanted a designed face all had to name DM Sans to get one.
+
+Self-hosting is what makes a font token mean something. The rest of each stack stays
+as the fallback for the first paint before the woff2 lands.
+
+### Every face is variable, and the mono italic is not optional
+
+Each file covers its whole weight range in one request (Geist 100–900, JetBrains
+Mono 100–800, DM Sans 100–1000), so `font-weight: 500` on a chip and `700` on a
+heading cost nothing extra. Static faces mean one file per weight, and the weight
+nobody remembered to ship gets silently synthesised into a smeared fake bold.
+
+The JetBrains Mono **italic is a separate file** and is load-bearing. Every syntax
+theme italicises something; with no italic face the browser makes one by shearing
+the upright, and on a monospace face that changes the advance width — so a line of
+italic comment stops lining up with the code above it, which is the one thing a
+monospace font exists to guarantee. Measured after the change: `iiiiiiiiii` is
+96.000px upright and 96.000px italic.
+
+They are the **upstream** fonts from `github.com/google/fonts` (`ofl/dmsans`,
+`ofl/instrumentserif`, `ofl/geist`, `ofl/jetbrainsmono`), converted TTF → woff2
+locally, rather than the files the Google Fonts CSS API serves. The API
 splits each family into `latin` and `latin-ext` subsets paired with
 `unicode-range`; taking one file per face from that — which is what `fonts.css`
 assumes — silently drops every accented character outside Latin-1, and the failure
@@ -272,7 +386,7 @@ is invisible until a peer's name or a karaoke title contains one and a single gl
 renders in the fallback face. See the provenance note in `fonts.css` for the
 conversion command.
 
-Both families are SIL OFL 1.1 and the licences ship beside them as `OFL-*.txt`,
+All four families are SIL OFL 1.1 and the licences ship beside them as `OFL-*.txt`,
 which is what the licence asks of anyone redistributing the binaries.
 
 `--font-display` is the app's one editorial face and is declared identically in both

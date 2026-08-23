@@ -100,6 +100,31 @@ It does **run the server**. For a stdio package that means fetching and executin
 third-party code locally — the same act as adding it, minus the persistence — so the
 pane says so next to the button rather than in a tooltip.
 
+### The card is a shared primitive
+
+Discover is a feed of `ResourceCard`s (`packages/core/src/ResourceCard.tsx`), not a
+pane-local `<div>`. A catalog entry has an identity, a publisher's sentence, a command
+worth reading before you commit, two or three inputs and a pair of buttons — and it was
+drawing all of that with 32 inline `style={{}}` objects, each choosing its own font size
+and gap. See [Theming](../architecture/theming.mdx#the-card-a-list-item-you-fill-in).
+
+Three things about the entry are design decisions rather than layout:
+
+- **`curated` and a version are different kinds of fact**, so they are drawn
+  differently. The first is this node vouching for the entry and gets a status chip
+  with a dot; the second is a number the publisher chose and stays neutral.
+- **The command's leading word is set in the accent** — `npx`, `uvx`, `http`. That word
+  is the whole of what you are deciding when you press Inspect (will this node *execute
+  a package* or *call a URL*), and it answers before the line is read.
+- **An env var you cannot fill is not a field.** The non-secret ones are set in the
+  server's own environment after adding, so they are listed as a caption; rendering them
+  as inputs made the form look like it had failed to populate itself. A secret one *is*
+  a field, and a separate one, because it never reaches the config file.
+
+The warning about Inspect running third-party code is now the card's footer caption —
+small and muted beside the buttons rather than body text spanning the action bar, where
+it read as an error message the pane had just produced.
+
 ## What a server costs you
 
 `GET /servers/{id}/cost` counts the **provider-shaped** payload (`orchestrator._tool`),

@@ -43,6 +43,9 @@
   line-height: 1.4;
   cursor: pointer;
   white-space: nowrap;
+  /* Same height as a field control, so a button sitting in a form row lines up
+     with the input beside it rather than sitting a pixel or three proud of it. */
+  min-height: var(--control-h);
   transition:
     background var(--dur-fast) var(--ease-standard),
     border-color var(--dur-fast) var(--ease-standard),
@@ -121,9 +124,15 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  padding: 0 var(--space-2);
+  padding: var(--space-1) var(--space-3);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  /* A pill rather than a rounded rectangle — but derived from the theme's own
+     radius, not pinned at `999px`. A chip is roughly 20px tall, so 4× `--radius-sm`
+     is fully round in midnight and studio, while the two themes that deliberately
+     set every radius to 0 keep their square tags. Hardcoding the pill would have
+     overridden a theme author's decision app-wide, which is the one thing the
+     radius scale is per-theme to prevent. */
+  border-radius: calc(var(--radius-sm) * 4);
   background: var(--bg-inset);
   color: var(--text-dim);
   font-family: var(--font-mono);
@@ -134,24 +143,35 @@
   white-space: nowrap;
 }
 
+/* A chip with a verdict is a soft pill: a translucent wash of its own colour
+   behind a matching border, rather than a bare outline. The wash is what lets the
+   chip stay legible at `--fs-micro` without shouting — an outline alone at this
+   size reads as a text-input box, which is the wrong affordance entirely.
+
+   Mixed from the semantic colour rather than declared per theme, so a new theme
+   gets all four states from its accent and status colours for free. */
 .hd-chip[data-kind='ok'] {
   color: var(--success);
   border-color: color-mix(in srgb, var(--success) 40%, transparent);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
 }
 
 .hd-chip[data-kind='warn'] {
   color: var(--warn);
   border-color: color-mix(in srgb, var(--warn) 40%, transparent);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
 }
 
 .hd-chip[data-kind='fail'] {
   color: var(--danger);
   border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
 }
 
 .hd-chip[data-kind='info'] {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
 .hd-chip-dot {
@@ -308,11 +328,16 @@
   color: var(--text);
   font-family: var(--font-sans);
   font-size: var(--fs-body);
+  /* One height for every control shape. A select, a text input and a small button
+     each have their own intrinsic height, so a row mixing them is ragged unless a
+     single number is imposed on all three. */
+  min-height: var(--control-h);
   transition: border-color var(--dur-fast) var(--ease-standard);
 }
 
 /* A textarea in this app is always code or a prompt — never prose. */
 .hd-field textarea {
+  min-height: calc(var(--control-h) * 2);
   font-family: var(--font-mono);
   font-size: var(--fs-meta);
   line-height: 1.5;
