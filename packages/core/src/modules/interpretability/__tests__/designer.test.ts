@@ -4,12 +4,22 @@ import {
   newNodeId,
   socketsCompatible,
   formatShape,
+  type DesignGraph,
   type GraphEdge,
   type GraphNode,
   type Layout,
   type SocketSpec,
 } from '../designer/graph';
 import { autoLayout, NODE_W, resolvePositions } from '../designer/layout';
+import {
+  createGroup,
+  deleteGroup,
+  extractGroup,
+  groupUsage,
+  isExtracted,
+  resolveScope,
+  withScope,
+} from '../designer/scope';
 
 /**
  * The designer's pure logic. The canvas itself is a React Flow surface and is
@@ -95,5 +105,111 @@ describe('shape labels', () => {
   it('renders nothing for an unknown shape rather than empty brackets', () => {
     expect(formatShape(undefined)).toBe('');
     expect(formatShape([])).toBe('');
+  });
+});
+
+describe('node groups', () => {
+  function design(): DesignGraph {
+    return {
+      name: 'MyModel',
+      config: { d_model: 512 },
+      nodes: [node('in', 'io.input'), node('a'), node('b'), node('out', 'io.output')],
+      edges: [edge('in', 'a'), edge('a', 'b'), edge('b', 'out')],
+      groups: [],
+    };
+  }
+
+  it('resolves the root when the path is empty', () => {
+    const scope = resolveScope(design(), []);
+    expect(scope.group).toBeNull();
+    expect(scope.nodes).toHaveLength(4);
+  });
+
+  it('truncates a path naming a group that is gone rather than blanking the canvas', () => {
+    // A group deleted under you should drop you to the level above. Resolving to
+    // nothing would leave a canvas that shows no nodes and silently swallows edits.
+    const scope = resolveScope(design(), ['grp_missing']);
+    expect(scope.path).toEqual([]);
+    expect(scope.nodes).toHaveLength(4);
+  });
+
+  it('writes an edit back into the group the path names, not the root', () => {
+    const made = createGroup(design(), []);
+    const inside = resolveScope(made.graph, [made.groupId]);
+    const added = [...inside.nodes, node('extra')];
+    const next = withScope(made.graph, [made.groupId], added, inside.edges);
+    expect(next.groups[0].nodes).toHaveLength(3);
+    expect(next.nodes).toHaveLength(5); // untouched: 4 + the instance
+  });
+
+  it('creates a group already wired input to output', () => {
+    // An empty group cannot be generated at all — codegen refuses a group whose
+    // output has nothing connected — so it would be broken from the instant it
+    // existed.
+    const made = createGroup(design(), []);
+    const sub = made.graph.groups[0];
+    expect(sub.nodes.map((n) => n.type)).toEqual(['io.group_input', 'io.group_output']);
+    expect(sub.edges).toHaveLength(1);
+    expect(made.graph.nodes.some((n) => n.id === made.instanceId && n.type === 'group')).toBe(true);
+  });
+
+  it('never suggests a name another group already generates', () => {
+    const first = createGroup(design(), []);
+    const second = createGroup(first.graph, []);
+    expect(second.graph.groups[1].name).not.toBe(second.graph.groups[0].name);
+  });
+
+  it('folds a selection into a group and reconnects both boundaries', () => {
+    const result = extractGroup(design(), [], ['a', 'b']);
+    if (!isExtracted(result)) throw new Error(result.error);
+    const sub = result.graph.groups[0];
+    const gin = sub.nodes.find((n) => n.type === 'io.group_input')!;
+    const gout = sub.nodes.find((n) => n.type === 'io.group_output')!;
+
+    // Inside: the boundary wires now come from and go to the group's own terminals.
+    expect(sub.edges).toContainEqual(expect.objectContaining({ source: gin.id, target: 'a' }));
+    expect(sub.edges).toContainEqual(expect.objectContaining({ source: 'b', target: gout.id }));
+    expect(sub.edges).toContainEqual(expect.objectContaining({ source: 'a', target: 'b' }));
+
+    // Outside: the instance stands exactly where the selection did.
+    expect(result.graph.nodes.map((n) => n.id).sort()).toEqual(
+      ['in', 'out', result.instanceId].sort(),
+    );
+    expect(result.graph.edges).toContainEqual(
+      expect.objectContaining({ source: 'in', target: result.instanceId }),
+    );
+    expect(result.graph.edges).toContainEqual(
+      expect.objectContaining({ source: result.instanceId, target: 'out' }),
+    );
+  });
+
+  it('refuses a selection needing two inputs, and says how many', () => {
+    // A group is a `forward(self, x)` — one tensor in, one out. Wiring a second
+    // external source to whichever socket came first is the silent reinterpretation
+    // this whole pane exists to refuse.
+    const graph = design();
+    graph.nodes.push(node('side'));
+    graph.edges.push(edge('side', 'b'));
+    const result = extractGroup(graph, [], ['a', 'b']);
+    expect(isExtracted(result)).toBe(false);
+    if (!isExtracted(result)) expect(result.error).toContain('2 places');
+  });
+
+  it('refuses to swallow the graph’s own input or output', () => {
+    const result = extractGroup(design(), [], ['in', 'a']);
+    expect(isExtracted(result)).toBe(false);
+  });
+
+  it('refuses to delete a group something still runs', () => {
+    const made = createGroup(design(), []);
+    expect(deleteGroup(made.graph, made.groupId)).toHaveProperty('error');
+    const orphaned = { ...made.graph, nodes: made.graph.nodes.filter((n) => n.type !== 'group') };
+    expect(deleteGroup(orphaned, made.groupId)).not.toHaveProperty('error');
+  });
+
+  it('counts instances across every level, not just the root', () => {
+    const outer = createGroup(design(), []);
+    const inner = createGroup(outer.graph, [outer.groupId]);
+    expect(groupUsage(inner.graph, inner.groupId)).toBe(1);
   });
 });

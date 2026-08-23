@@ -29,6 +29,9 @@ export interface ModelNodeData {
   shape?: Shape;
   params?: number;
   issue?: ShapeIssue;
+  /** For a `group` instance: the name of the class it runs, which is what a reader
+   * needs. Every instance titled "Group" makes a canvas of blocks unreadable. */
+  groupName?: string;
   collapsed?: boolean;
   /** Set while the cost overlay is on, so nodes can show their share. */
   showCost?: boolean;
@@ -107,7 +110,7 @@ function summarise(spec: NodeSpec, node: GraphNode): string {
       return `${value('vocab_size')} × ${value('dim')}`;
     case 'group': {
       const count = value('count');
-      return count && count !== '1' ? `× ${count}` : 'group';
+      return count && count !== '1' ? `× ${count}` : '';
     }
     case 'op.scale':
       return `× ${value('factor')}`;
@@ -157,7 +160,7 @@ export function ModelNode({ data, selected }: NodeProps) {
 
       <div className="mg-node-head">
         <Icon category={spec.category} />
-        <span className="mg-node-title">{node.name || spec.label}</span>
+        <span className="mg-node-title">{node.name || d.groupName || spec.label}</span>
         {node.muted && <span className="mg-chip mg-chip-muted">muted</span>}
       </div>
 

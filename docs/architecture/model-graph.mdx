@@ -62,8 +62,9 @@ Notable members of the vocabulary:
   `AttentionSpec.kind` derives them from a GGUF's metadata.
 - **`group` with `count > 1` is the ×N stack** — the direct descendant of the model
   explorer's "drawn once with a multiplier".
-- **`custom.module`** is the escape hatch, and also where the round-trip parser will
-  put source it cannot map: preserved verbatim and labelled opaque, never dropped.
+- **`custom.module`** is the escape hatch, and where the round-trip parser puts source
+  it cannot map: preserved verbatim, still emitted into the generated file so it keeps
+  running, and named to the reader — never dropped.
 
 ## Codegen
 
@@ -117,11 +118,21 @@ batch and sequence stay symbolic (`B`, `T`) — a symbolic dimension compared ag
 concrete one is an *unknown*, not a conflict, and reporting unknowns as errors would
 paint every honest graph red.
 
-Tier 2 follows `recipes._probe` exactly, `subprocess.run` on the caller's thread
-included (asyncio subprocess spawn is broken under `uvicorn --reload` on Windows). It
-reports three states, never two: it ran / it raised, with the traceback verbatim / **we
-could not ask**. When the two tiers disagree, tier 1 is wrong and the disagreement is
-surfaced rather than reconciled.
+Tier 2 (`probe.py`) follows `recipes._probe` exactly, `subprocess.run` on the caller's
+thread included (asyncio subprocess spawn is broken under `uvicorn --reload` on
+Windows). It writes the generated module to a temp file, imports it under the project's
+python, instantiates it, and runs a `(2, 8)` batch of token ids through it — two rows so
+a bug that only appears with a batch dimension cannot hide.
+
+It reports three states, never two: it ran / it raised, with the traceback verbatim /
+**we could not ask**. When the two tiers disagree, tier 1 is wrong and the disagreement
+is surfaced rather than reconciled — the estimate is what the cost overlay shows on
+every keystroke, so a silent divergence means the pane has been lying.
+
+The probe script is **self-contained** and does not import `horrible_train`. A project's
+venv is not guaranteed to have it (an evals-owned project carries only its benchmark's
+requirements), and a probe failing on a technicality about our own helper package would
+be read as the model being broken.
 
 :::warning One cause, one message
 A node failing inside a group must not *also* make the group claim its output is
@@ -129,6 +140,37 @@ unwired. It is wired; the chain feeding it broke. Two explanations, one of them 
 sends the reader after the wrong one — so `_group` distinguishes "nothing is connected"
 from "the upstream value never arrived" and stays quiet about the second.
 :::
+
+## Groups
+
+A group **is** one generated `nn.Module` subclass, which is the whole reason Blender's
+metaphor fits a neural network. It lives in `DesignGraph.groups` (flat, addressed by
+id — nesting is a matter of who instantiates whom, not of where the record is stored),
+and the canvas edits one *level* at a time: the root, or the inside of one group. The
+list of group ids you have stepped into is the **context path**, Blender's breadcrumb,
+and every rule about it is a pure function in
+`packages/core/src/modules/interpretability/designer/scope.ts`.
+
+Four decisions the implementation is built on:
+
+- **A path segment naming a group that no longer exists truncates.** Deleting a group
+  you are standing in drops you to the level above; resolving to nothing would leave a
+  canvas that shows nothing and silently swallows every edit.
+- **A group has exactly one input and one output**, because a `forward(self, x)` that
+  takes one tensor and returns one is what the ×N stack is built on. So folding a
+  selection into a group (Blender's Ctrl-G) is **refused, with the count**, when the
+  selection would need two of either — wiring the second one to whichever socket came
+  first is precisely the silent reinterpretation this pane exists to refuse. Widening
+  the selection is the fix, and saying so is more use than a generic complaint.
+- **Two groups compiling to the same class name are refused at codegen.**
+  `class_name` strips punctuation, so `Block 1` and `Block-1` are one class, and a
+  second definition of it silently wins — every instance of the first would then run
+  the second's code, with no error anywhere. The same check covers a group named after
+  the model itself.
+- **A group nothing instantiates is still inferred**, so its wires carry shapes while
+  you build it, and its errors are still reported — codegen emits every group, so a
+  broken one really does break the file. Its parameter counts are reported per node but
+  **kept out of the total**: a class the model never instantiates holds no weights.
 
 ## What a shape error must carry
 
@@ -144,6 +186,8 @@ fixing them one round-trip at a time is worse than seeing them all.
 | GET | `/api/interpretability/graph/specs` | the node catalog + templates |
 | POST | `/api/interpretability/graph/code` | graph → Python (stateless) |
 | POST | `/api/interpretability/graph/validate` | tier-1 shape inference (stateless) |
+| POST | `/api/interpretability/graph/parse` | source → graph (stateless; an unreadable file returns `error`, not a 400) |
+| POST | `/api/interpretability/graph/probe` | tier-2: build and run it in a project venv |
 | GET | `/api/interpretability/graph` | saved designs |
 | GET/PUT/DELETE | `/api/interpretability/graph/{name}` | one design |
 | GET | `/api/interpretability/graph/template/{id}` | a starting graph |
@@ -154,3 +198,36 @@ edit, long before a design has a name, and they must not touch the disk.
 A save that cannot generate code is still written, with the reason in `codeError`.
 Refusing the write would lose an afternoon over one unfinished wire, and a canvas is
 unfinished nearly all the time.
+
+## Reading the file back (`parse.py`)
+
+`ast` walks the module: `__init__` assignments become nodes, `forward` statements
+become edges, and the `__init__` signature's defaults become the model's `config` — a
+`Name` argument like `RMSNorm(d_model)` is read back as the reference `"$d_model"`,
+never as the 512 it happens to resolve to, because collapsing it would quietly turn a
+family of models into one.
+
+**The correctness argument is `emit(parse(emit(g))) == emit(g)`**, byte for byte, over
+every template. That is deliberately a stronger and more useful promise than IR
+equality: it is exactly what a user experiences when they edit the code pane and save.
+Two details fall out of insisting on it — attribute names are only recorded when they
+are *not* what codegen would have derived (otherwise every generated name gets frozen
+as a user override), and the `x_n` locals must renumber identically, which is why
+`topo_order` is deterministic.
+
+Three shapes need explicit handling because they are one node written as several
+statements, or several nodes written as one:
+
+| Source | Read as |
+| --- | --- |
+| `x_2 = x_1` followed by `for _layer in self.blocks_1:` | the **loop** attaches the stack; the alias above it carries no structure. Treating the alias as the connection leaves the whole block stack unwired |
+| `x + self.pos_1(torch.arange(...))` | **one** learned-positional node, not an `Add` of two — it adds itself |
+| `x * 2.0` | a **Scale**, not a `Multiply` with a missing input, which would draw a broken wire |
+
+:::warning `CONSTRUCTORS` mirrors `init_fn`, and mirrors drift
+`init_fn` builds a string and a string cannot be run backwards, so `parse.py` carries an
+explicit constructor table. A node type added to the catalog but missing from that table
+does not crash — it silently becomes an opaque `custom.module` on the way back in. A
+test asserts every spec that emits a constructor appears in the table, which is the only
+thing standing between that mirror and quiet rot.
+:::

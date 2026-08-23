@@ -20,6 +20,8 @@ from pydantic import BaseModel, Field
 from backend.modules.interpretability.graph import (
     codegen,
     examples,
+    parse,
+    probe,
     shapes,
     spec,
     store,
@@ -81,10 +83,63 @@ def to_code(graph: DesignGraph) -> CodeResult:
     return codegen.generate(graph)
 
 
+class ParseRequest(BaseModel):
+    source: str
+
+
+class ParseResponse(BaseModel):
+    """The graph a file describes, and everything we could not read.
+
+    `error` is carried in a 200 rather than raised as a 400 on purpose: an
+    unreadable file is a normal thing to have on screen mid-edit, and the pane needs
+    to show the reason *beside the code you are still typing* rather than as a failed
+    request. When `error` is set, `graph` is absent and the caller keeps what it has.
+    """
+
+    graph: DesignGraph | None = None
+    #: Classes preserved verbatim as `custom.module` nodes. Named, because an opaque
+    #: import the reader is not told about is indistinguishable from a wrong one.
+    opaque: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+@router.post("/parse", response_model=ParseResponse)
+def parse_source(body: ParseRequest) -> ParseResponse:
+    """Python → a design graph. The half of the round trip that reads your edits."""
+    try:
+        result = parse.parse_module(body.source)
+    except parse.ParseError as exc:
+        return ParseResponse(error=str(exc))
+    return ParseResponse(graph=result.graph, opaque=result.opaque, warnings=result.warnings)
+
+
 @router.post("/validate", response_model=ShapeReport)
 def validate(graph: DesignGraph) -> ShapeReport:
     """Tier-1 shape inference: instant, symbolic, and explicitly not torch's answer."""
     return shapes.infer(graph)
+
+
+class ProbeRequest(BaseModel):
+    graph: DesignGraph
+    #: A training project id. Empty means "we could not ask" — reported as such
+    #: rather than silently skipped, which would read as the model being fine.
+    project: str = ""
+
+
+@router.post("/probe", response_model=probe.ProbeResult)
+def run_probe(body: ProbeRequest) -> probe.ProbeResult:
+    """Tier 2: build the module in a project's venv and run a real forward pass.
+
+    Slow (a cold torch import dominates) and deliberately manual — this is the button
+    you press when you want the measurement, not something that fires as you type.
+    """
+    from backend.modules.training.projects import get_project
+
+    project = get_project(body.project) if body.project else None
+    if body.project and project is None:
+        raise HTTPException(status_code=404, detail=f"No training project {body.project!r}")
+    return probe.run(body.graph, project)
 
 
 @router.get("", response_model=DesignListResponse)

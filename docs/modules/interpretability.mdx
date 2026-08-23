@@ -282,6 +282,97 @@ the module in a training project's venv — a separate, slower question, and a s
 answer. Where they disagree, the estimate is the one that is wrong.
 :::
 
+### Edits go both ways
+
+The code pane is editable. Change a number in the generated module, hit **Apply**, and
+it lands on the canvas — because the `.py` is the structural source of truth and the
+graph is a projection of it.
+
+Three rules make that safe rather than merely clever:
+
+- **The sync is explicit.** Ctrl-S or Apply, never per keystroke. Parsing mid-word
+  would replace your graph with whatever half-typed source currently means.
+- **Your positions survive.** Every emitted line carries `# horrible:node=<id>`, so
+  re-reading the file recovers node identity and the layout sidecar still describes the
+  graph. A round trip that re-arranged the canvas would make the pane useless for
+  anything but a glance.
+- **A file we cannot read changes nothing.** It is read whole or not at all: the graph
+  stays, your edit stays, and the reason is shown. Half a graph silently replacing a
+  whole one is the worst outcome available here.
+
+Source that does not match the shape the generator emits is **not** refused — it is
+preserved verbatim as a `custom.module` node, and the pane names the classes it kept
+that way. An opaque import nobody is told about is indistinguishable from a wrong one.
+
+:::note The file is the fixed point
+The guarantee under test is `emit(parse(emit(g))) == emit(g)`, byte for byte, for every
+template. It is a stronger promise than IR equality in the way that matters: parse and
+regenerate and nothing churns, so a save never looks like a change you did not make.
+:::
+
+### Blocks are editable, not just instantiable
+
+A group is one generated `nn.Module` subclass, so editing one is editing a class. The
+breadcrumb under the toolbar is Blender's context path — the model, then whichever
+groups you have stepped into. **Double-click a block** (or *Edit contents* in the
+inspector) to go in; click a crumb to come back out. The canvas is handed one level and
+knows nothing about groups; the rules live in `designer/scope.ts` as pure functions.
+
+Two ways to make one:
+
+- **New group** drops an empty one here — already wired input to output, because a
+  group whose output has nothing connected to it cannot be generated at all — and steps
+  into it.
+- **Group selection** is Blender's Ctrl-G: the selected nodes move inside, the wires
+  that crossed the boundary reconnect to the group's own terminals, and an instance
+  lands where the selection was. Select several the way any node editor does —
+  Ctrl/Cmd-click to add one, or Shift-drag a box across the canvas.
+
+:::warning A group takes one tensor and returns one
+That is what `forward(self, x)` is, and what the ×N stack depends on. So a selection
+that would need **two** inputs, or that feeds the rest of the graph from **two** nodes,
+is refused with the count rather than wired to whichever one came first. Widening the
+selection is the fix. For the same reason, the graph's own Input and Output nodes can
+never go inside a group — they are the boundary it sits within, and it brings its own.
+:::
+
+Renaming a group renames its class, and two groups compiling to the same class name are
+**refused** — the second definition would silently replace the first, and every
+instance of the first would quietly start running the second's code. A group nothing
+instantiates still shows shapes on its wires while you build it, but its parameters
+stay out of the headline count: a class the model never instantiates holds no weights.
+The model panel lists every group with its instance count and offers to delete the
+unused ones, since they are still written into the file.
+
+### Running it for real
+
+Everything above is the pane&apos;s own arithmetic. **Run it** builds the generated module
+in a training project&apos;s venv and runs one batch through it — the only thing that can
+turn an estimate into a measurement. It reports **three** states, never two:
+
+| | What it means |
+| --- | --- |
+| **Ran** | Output shape, parameter count and torch version, measured. If the measurement disagrees with the estimate, the pane says so and by how much — the measurement is right and the cost overlay was wrong |
+| **Failed** | The traceback, verbatim. Not summarised: the traceback *is* the answer, and paraphrasing throws away the line number |
+| **Not checked** | No project, no venv, or no torch — said out loud, with the reason, and with a reminder that the numbers are still estimates |
+
+That third state is the point. A model reported as validated when nothing validated it
+is worse than not offering the button at all — the same rule the
+[hardware](hardware.mdx) probe exists to enforce.
+
+The probe runs as a subprocess in the project&apos;s venv, never in the backend, which has
+no torch and [should not grow one](#prompt-weights-activations--three-surfaces-three-modules).
+The script it runs is self-contained and does not import `horrible_train`: an
+evals-owned project carries only its benchmark&apos;s requirements, and a probe that failed
+on a technicality about our own helper package would read as the model being broken.
+
+:::note The estimate is checked against the real thing in CI
+`test_model_graph.py` builds each template in real PyTorch and asserts
+`sum(p.numel())` equals what `shapes.py` predicted. All three currently agree **to the
+parameter** — including the mixture-of-experts one. The test skips when torch is absent,
+because the backend genuinely does not have it.
+:::
+
 ### Where a design lives
 
 Two files under `$HORRIBLE_DATA_DIR/model-graphs/`: `<name>.py` — the generated module,
@@ -406,6 +497,8 @@ read and work in, not tiles you glance at.
 | GET | `/api/interpretability/graph/specs` | The designer's node catalog and templates |
 | POST | `/api/interpretability/graph/code` | A design graph → a PyTorch module (stateless) |
 | POST | `/api/interpretability/graph/validate` | Shape inference and parameter counts (stateless) |
+| POST | `/api/interpretability/graph/parse` | A PyTorch module → a design graph (the round trip in) |
+| POST | `/api/interpretability/graph/probe` | Build and run the module in a training project's venv |
 | GET/PUT/DELETE | `/api/interpretability/graph/{name}` | A saved design |
 
 `/api/interpretability/model` reads Ollama's `/api/show`. The OpenAI dialect (LM

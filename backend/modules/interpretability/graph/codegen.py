@@ -164,6 +164,7 @@ def generate(graph: DesignGraph) -> CodeResult:
 def _generate(graph: DesignGraph) -> CodeResult:
     ctx = Ctx(config=dict(graph.config))
     used_prims: set[str] = set()
+    _check_class_names(graph)
 
     bodies = _Lines()
     for sub in _group_order(graph):
@@ -212,9 +213,75 @@ def _generate(graph: DesignGraph) -> CodeResult:
         out.add()
         out.add()
 
+    for block in _custom_classes(graph):
+        for line in block.split("\n"):
+            out.add(line)
+        out.add()
+        out.add()
+
     out.extend(bodies)
     out.extend(root)
     return CodeResult(source=out.render(), markers=out.markers)
+
+
+def _check_class_names(graph: DesignGraph) -> None:
+    """Refuse a design where two groups compile to the same class.
+
+    `class_name` strips punctuation, so "Block 2" and "Block-2" are one class, and
+    two definitions of it in one file means the second silently wins — every
+    instance of the first would then run the second's code, with no error anywhere.
+    Naming them is the user's job; noticing the collision is ours.
+    """
+    seen: dict[str, str] = {}
+    for sub in graph.groups:
+        emitted = class_name(sub.name)
+        if emitted in seen and seen[emitted] != sub.name:
+            raise CodegenError(
+                f"groups {seen[emitted]!r} and {sub.name!r} both generate a class named "
+                f"{emitted!r} — rename one, or the second definition silently replaces the first"
+            )
+        if emitted in seen:
+            raise CodegenError(
+                f"two groups are named {sub.name!r} — rename one, or the second "
+                "definition silently replaces the first"
+            )
+        seen[emitted] = sub.name
+
+    root = class_name(graph.name)
+    if root in seen:
+        raise CodegenError(
+            f"the model and the group {seen[root]!r} both generate a class named "
+            f"{root!r} — the model's definition would replace the block's"
+        )
+
+
+def _custom_classes(graph: DesignGraph) -> list[str]:
+    """Source carried by `custom.module` nodes, deduplicated, in first-seen order.
+
+    Without this the generated file instantiates a class it never defines — a
+    `NameError` at import, from a node whose entire purpose is to hold code the
+    generator does not understand. It is also what makes the round-trip parser's
+    fallback honest: source it cannot map onto a node is preserved *and still runs*,
+    rather than being preserved somewhere the file never reaches.
+
+    Deduplicated by class name because two instances of the same custom block are two
+    nodes and one class; emitting the definition twice is a redefinition that silently
+    wins.
+    """
+    seen: set[str] = set()
+    blocks: list[str] = []
+    scopes = [graph.nodes, *(group.nodes for group in graph.groups)]
+    for nodes in scopes:
+        for node in nodes:
+            if node.type != "custom.module" or node.muted:
+                continue
+            name = str(node.params.get("class_name", "")).strip()
+            source = str(node.params.get("code", "")).strip("\n")
+            if not source.strip() or name in seen:
+                continue
+            seen.add(name)
+            blocks.append(source)
+    return blocks
 
 
 def _root_arg(graph: DesignGraph) -> str:

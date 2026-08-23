@@ -161,6 +161,62 @@ export function validateGraph(graph: DesignGraph): Promise<ShapeReport> {
   return apiPost<ShapeReport>(`${BASE}/validate`, graph);
 }
 
+export interface ParseResponse {
+  graph: DesignGraph | null;
+  /** Classes preserved verbatim as `custom.module` nodes because we could not map them. */
+  opaque: string[];
+  warnings: string[];
+  error: string | null;
+}
+
+/**
+ * Python → a design graph: the other half of the round trip.
+ *
+ * Deliberately **not** called on every keystroke. A parse mid-word would replace the
+ * graph with whatever half-typed source currently means, so this runs only on an
+ * explicit sync — blur, or the save key.
+ */
+export function parseSource(source: string): Promise<ParseResponse> {
+  return apiPost<ParseResponse>(`${BASE}/parse`, { source });
+}
+
+export interface ProbeResult {
+  status: 'ran' | 'failed' | 'unavailable';
+  message: string;
+  /** The exception, verbatim. Never summarised — the traceback is the answer. */
+  traceback: string;
+  outputShape: number[];
+  totalParams: number | null;
+  estimatedParams: number | null;
+  /** null when there is nothing to compare; false means our estimate is wrong. */
+  agrees: boolean | null;
+  project: string;
+  torchVersion: string;
+  durationMs: number;
+}
+
+export interface TrainingProject {
+  id: string;
+  name: string;
+  venv_ready?: boolean;
+}
+
+/**
+ * Tier 2: build the module in a training project's venv and run a real forward pass.
+ *
+ * Slow and deliberately manual. Everything else in the pane is our own arithmetic
+ * labelled `estimated`; this is the only call that can replace an estimate with a
+ * measurement, and it needs a venv with torch, which the backend deliberately lacks.
+ */
+export function probeGraph(graph: DesignGraph, project: string): Promise<ProbeResult> {
+  return apiPost<ProbeResult>(`${BASE}/probe`, { graph, project });
+}
+
+/** Projects that could host a probe. Read from the training module's own store. */
+export function listProjects(): Promise<{ projects: TrainingProject[] }> {
+  return apiGet<{ projects: TrainingProject[] }>('/training/projects');
+}
+
 export function listDesigns(): Promise<{ designs: DesignSummary[] }> {
   return apiGet<{ designs: DesignSummary[] }>(BASE);
 }
@@ -199,6 +255,12 @@ let seq = 0;
 export function newNodeId(type: string): string {
   seq += 1;
   return `${type.split('.').pop()}_${Date.now().toString(36)}${seq}`;
+}
+
+/** Unique among the design's groups, which is what a `group` node's id param names. */
+export function newGroupId(): string {
+  seq += 1;
+  return `grp_${Date.now().toString(36)}${seq}`;
 }
 
 /** A node carrying every default its spec declares, so nothing is `undefined`. */

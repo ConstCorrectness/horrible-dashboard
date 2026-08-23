@@ -19,12 +19,14 @@ from backend.modules.interpretability.graph import (
     examples,
     generate,
     infer,
+    parse,
     spec,
 )
 from backend.modules.interpretability.graph.models import (
     DesignGraph,
     GraphEdge,
     GraphNode,
+    SubGraph,
 )
 from backend.modules.interpretability.graph.walk import CycleError, topo_order
 
@@ -231,6 +233,72 @@ def test_a_group_with_a_genuinely_unwired_output_still_says_so() -> None:
     assert any("nothing connected to its output" in i.message for i in report.issues)
 
 
+def test_a_group_nothing_instantiates_is_still_labelled() -> None:
+    """A group you are part-way through building is not wired into the model yet.
+    Leaving its wires unlabelled would make the canvas useless for exactly the job
+    of building one."""
+    graph = examples.llama_small()
+    spare = SubGraph(
+        id="spare",
+        name="Spare",
+        nodes=[
+            node("sp_gin", "io.group_input"),
+            node("sp_norm", "norm.rms"),
+            node("sp_gout", "io.group_output"),
+        ],
+        edges=[edge("sp_gin", "sp_norm"), edge("sp_norm", "sp_gout")],
+    )
+    graph.groups.append(spare)
+    report = infer(graph)
+    assert report.ok
+    assert report.shapes["sp_norm"]["out"] == ["B", "T", 512]
+
+
+def test_an_uninstantiated_group_adds_no_parameters_to_the_total() -> None:
+    """A class the model never instantiates holds no weights. Counting its
+    parameters would inflate the headline number by a block that does not run."""
+    graph = examples.llama_small()
+    before = infer(graph).totalParams
+    graph.groups.append(
+        SubGraph(
+            id="spare",
+            name="Spare",
+            nodes=[
+                node("sp_gin", "io.group_input"),
+                node("sp_lin", "ffn.linear", dim="$d_model", out_features="$d_model"),
+                node("sp_gout", "io.group_output"),
+            ],
+            edges=[edge("sp_gin", "sp_lin"), edge("sp_lin", "sp_gout")],
+        )
+    )
+    report = infer(graph)
+    assert report.totalParams == before
+    # Still reported per node — that is what the layer you are editing holds — just
+    # not added to a model that does not contain it.
+    assert report.params["sp_lin"] > 0
+
+
+def test_two_groups_generating_one_class_are_refused() -> None:
+    """`class_name` strips punctuation, so "Block 1" and "Block-1" are one class and
+    the second definition silently replaces the first — every instance of the first
+    would then run the second's code, with no error anywhere."""
+    graph = examples.llama_small()
+    graph.groups.append(
+        SubGraph(id="twin", name=f"{graph.groups[0].name}!", nodes=[], edges=[])
+    )
+    result = generate(graph)
+    assert result.error is not None
+    assert "silently replaces" in result.error
+
+
+def test_a_group_named_after_the_model_is_refused() -> None:
+    graph = examples.llama_small()
+    graph.groups[0].name = graph.name
+    result = generate(graph)
+    assert result.error is not None
+    assert "would replace" in result.error
+
+
 def test_a_missing_residual_input_is_an_error_not_a_silent_sum() -> None:
     graph = examples.llama_small()
     block = graph.groups[0]
@@ -343,3 +411,148 @@ def test_primitives_are_emitted_before_they_are_referenced() -> None:
     assert source.index("class RotaryEmbedding") < source.index(
         "class MultiHeadAttention"
     )
+
+
+# ── round trip (graph ⇄ code) ────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("name", TEMPLATES)
+def test_the_generated_file_is_a_fixed_point(name: str) -> None:
+    """`emit(parse(emit(g))) == emit(g)`, byte for byte.
+
+    This is the guarantee that matters more than IR equality: parse a file, regenerate
+    it, and nothing churns. It is what a user experiences when they edit the code pane
+    and hit save — a round trip that reformatted the file, renumbered its locals or
+    renamed its attributes would make every save look like a change.
+    """
+    source = generate(examples.template(name)).source
+    assert generate(parse.parse_module(source).graph).source == source
+
+
+@pytest.mark.parametrize("name", TEMPLATES)
+def test_node_ids_survive_the_round_trip(name: str) -> None:
+    """Recovered from the markers — which is what lets the layout sidecar still
+    describe the graph, instead of the canvas being re-arranged on every save."""
+    graph = examples.template(name)
+    parsed = parse.parse_module(generate(graph).source).graph
+    original = {n.id for n in graph.nodes if n.type not in ("io.input", "io.output")}
+    recovered = {n.id for n in parsed.nodes}
+    assert original <= recovered
+
+
+def test_an_edit_in_the_code_lands_on_the_graph() -> None:
+    """The actual point of the feature: change a number in the source and the node
+    carries it."""
+    source = generate(examples.llama_small()).source.replace(
+        "heads=n_heads", "heads=16"
+    )
+    parsed = parse.parse_module(source).graph
+    attn = next(n for n in parsed.groups[0].nodes if n.type == "attn.mha")
+    assert attn.params["heads"] == 16
+
+
+def test_config_comes_back_from_the_init_signature() -> None:
+    parsed = parse.parse_module(generate(examples.llama_small()).source).graph
+    assert parsed.config["d_model"] == 512
+    assert parsed.config["n_layers"] == 8
+    # And the reference survives as a reference, not as the number it resolves to —
+    # collapsing it would turn a family of models into one.
+    norm = next(n for n in parsed.nodes if n.type == "norm.rms")
+    assert norm.params["dim"] == "$d_model"
+
+
+def test_source_we_cannot_map_is_preserved_rather_than_dropped() -> None:
+    """The load-bearing rule. A class the parser does not understand becomes a
+    `custom.module` holding its source verbatim, and the caller is told which — an
+    opaque import nobody is told about is indistinguishable from a wrong one."""
+    graph = examples.llama_small()
+    block = graph.groups[0]
+    body = "class Mystery(nn.Module):\n    def forward(self, x):\n        return x * 2"
+    block.nodes.append(
+        GraphNode(
+            id="mystery",
+            type="custom.module",
+            params={"class_name": "Mystery", "code": body, "args": ""},
+        )
+    )
+    block.edges = [e for e in block.edges if e.target != "blk_gout"]
+    block.edges += [edge("blk_res2", "mystery"), edge("mystery", "blk_gout")]
+
+    result = parse.parse_module(generate(graph).source)
+    assert result.opaque == ["Mystery"]
+    node = next(n for n in result.graph.groups[0].nodes if n.type == "custom.module")
+    assert "return x * 2" in str(node.params["code"])
+
+
+def test_a_file_we_cannot_read_is_refused_whole() -> None:
+    """Never a partial import. Half a graph silently replacing a whole one is the
+    worst outcome available here."""
+    with pytest.raises(parse.ParseError):
+        parse.parse_module("class Broken(nn.Module)\n    pass")
+    with pytest.raises(parse.ParseError):
+        parse.parse_module("x = 1\n")
+
+
+def test_every_constructor_the_generator_emits_can_be_read_back() -> None:
+    """`CONSTRUCTORS` mirrors `init_fn`, because a string cannot be run backwards.
+
+    A node type added to the catalog but not to the mirror is not a crash — it is a
+    node that silently becomes an opaque custom module on the way back in, which is
+    exactly the kind of quiet degradation this suite exists to catch.
+    """
+    emitted = {
+        s.type
+        for s in spec.SPECS.values()
+        if s.init_fn is not None and s.type not in ("custom.module", "group")
+    }
+    readable = {node_type for node_type, _ in parse.CONSTRUCTORS.values()}
+    # Both embeddings share `nn.Embedding`; `forward` is what tells them apart.
+    readable.add("embed.learned_positional")
+    assert emitted <= readable, f"no way to parse back: {sorted(emitted - readable)}"
+
+
+# ── tier 2: does the generated code actually run? ────────────────────────────────
+
+
+@pytest.mark.parametrize("name", TEMPLATES)
+def test_the_generated_module_runs_and_the_estimate_is_right(name: str) -> None:
+    """The one test that can turn an estimate into a measurement.
+
+    Everything else here checks our arithmetic against itself. This builds the emitted
+    module in real PyTorch, runs a forward pass, and compares `sum(p.numel())` against
+    what `shapes.py` predicted — which is the number the cost overlay shows on every
+    keystroke. If they ever diverge, the pane has been quietly lying and `shapes.py` is
+    what needs fixing, not this assertion.
+
+    Skipped when torch is absent, because the backend deliberately does not depend on
+    it: heavy dependencies live in per-project uv envs, and in production this runs as
+    a subprocess in one (`probe.py`).
+    """
+    torch = pytest.importorskip(
+        "torch", reason="tier-2 validation needs torch; tier 1 is torch-free by design"
+    )
+
+    import importlib.util
+    import tempfile
+    from pathlib import Path
+
+    graph = examples.template(name)
+    estimate = infer(graph)
+    source = generate(graph).source
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "design_under_test.py"
+        path.write_text(source, encoding="utf-8")
+        spec_ = importlib.util.spec_from_file_location("design_under_test", path)
+        assert spec_ and spec_.loader
+        module = importlib.util.module_from_spec(spec_)
+        spec_.loader.exec_module(module)
+        model = getattr(module, codegen.class_name(graph.name))()
+
+    vocab = int(graph.config["vocab_size"])
+    ids = torch.randint(0, vocab, (2, 8))
+    with torch.no_grad():
+        out = model(ids)
+
+    assert list(out.shape) == [2, 8, vocab]
+    assert sum(p.numel() for p in model.parameters()) == estimate.totalParams

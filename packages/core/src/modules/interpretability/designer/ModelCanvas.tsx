@@ -42,8 +42,8 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   formatShape,
   socketsCompatible,
-  type DesignGraph,
   type GraphEdge,
+  type GraphNode,
   type Layout,
   type NodeSpec,
   type ShapeReport,
@@ -54,15 +54,28 @@ import { NODE_TYPES, type ModelNodeData } from './ModelNode';
 type RFNode = Node<ModelNodeData>;
 
 export interface ModelCanvasProps {
-  graph: DesignGraph;
+  /**
+   * One graph *level* — the root, or the inside of a group. The canvas has no idea
+   * which: a group is a graph, and giving this component a `DesignGraph` and a path
+   * to dig into would put the group-editing rules in the one file that is supposed
+   * to know only about wires.
+   */
+  nodes: GraphNode[];
+  edges: GraphEdge[];
   layout: Layout;
   report: ShapeReport | null;
   specs: Map<string, NodeSpec>;
+  /** Group id → the class it generates, so an instance can title itself with it. */
+  groupNames: Map<string, string>;
   showCost: boolean;
   selectedId: string | null;
   onSelect: (id: string | null) => void;
-  onGraphChange: (graph: DesignGraph) => void;
+  /** Every selected node, for the operations that act on a set (grouping). */
+  onSelectionChange?: (ids: string[]) => void;
+  onScopeChange: (nodes: GraphNode[], edges: GraphEdge[]) => void;
   onLayoutChange: (layout: Layout) => void;
+  /** Double-click on a group instance: Blender's Tab, before the keymap work. */
+  onEnter?: (id: string) => void;
   /** Told about a refused connection so the pane can say why out loud. */
   onRefused?: (reason: string) => void;
 }
@@ -75,21 +88,25 @@ function edgeId(edge: GraphEdge): string {
 }
 
 export function ModelCanvas({
-  graph,
+  nodes: scopeNodes,
+  edges: scopeEdges,
   layout,
   report,
   specs,
+  groupNames,
   showCost,
   selectedId,
   onSelect,
-  onGraphChange,
+  onSelectionChange,
+  onScopeChange,
   onLayoutChange,
+  onEnter,
   onRefused,
 }: ModelCanvasProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState<RFNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
-  /** The last graph this canvas emitted, so its own edits don't bounce back in. */
-  const emitted = useRef<DesignGraph | null>(null);
+  /** The last level this canvas emitted, so its own edits don't bounce back in. */
+  const emitted = useRef<{ nodes: GraphNode[]; edges: GraphEdge[] } | null>(null);
 
   const issues = useMemo(() => {
     const map = new Map<string, ShapeReport['issues'][number]>();
@@ -103,10 +120,10 @@ export function ModelCanvas({
   // template, an inspector edit). Rebuilding on our own emissions would fight the
   // user's drag.
   useEffect(() => {
-    if (emitted.current === graph) return;
-    const positions = resolvePositions(graph.nodes, graph.edges, layout);
+    if (emitted.current?.nodes === scopeNodes && emitted.current?.edges === scopeEdges) return;
+    const positions = resolvePositions(scopeNodes, scopeEdges, layout);
     setNodes(
-      graph.nodes
+      scopeNodes
         .filter((node) => specs.has(node.type))
         .map((node) => ({
           id: node.id,
@@ -116,13 +133,15 @@ export function ModelCanvas({
           data: {
             spec: specs.get(node.type)!,
             node,
+            groupName:
+              node.type === 'group' ? groupNames.get(String(node.params.group ?? '')) : undefined,
             collapsed: layout.nodes[node.id]?.collapsed,
             showCost,
           },
         })),
     );
     setEdges(
-      graph.edges.map((edge) => ({
+      scopeEdges.map((edge) => ({
         id: edgeId(edge),
         source: edge.source,
         target: edge.target,
@@ -132,11 +151,15 @@ export function ModelCanvas({
     );
     // `selectedId` and `showCost` are folded in by the effect below; including them
     // here would rebuild every node (and lose in-flight drags) on a mere selection.
-  }, [graph, layout, specs, setNodes, setEdges]);
+  }, [scopeNodes, scopeEdges, layout, specs, groupNames, setNodes, setEdges]);
 
   // Shapes, costs and issues change far more often than the graph does — every
   // validate round-trip — so they are painted onto the existing nodes rather than
   // rebuilt into new ones.
+  //
+  // `scopeNodes` is a dependency because stepping into a group rebuilds every node
+  // from a report that did not change: without it the wires inside a block you just
+  // entered carry no shapes at all, which is exactly the labelling the pane is for.
   useEffect(() => {
     setNodes((current) =>
       current.map((node) => ({
@@ -150,7 +173,7 @@ export function ModelCanvas({
         },
       })),
     );
-  }, [report, issues, showCost, setNodes]);
+  }, [report, issues, showCost, scopeNodes, setNodes]);
 
   // Edges carry the shape they transport, and go red when their target could not
   // resolve — the wire is where a mismatch is actually legible.
@@ -171,8 +194,7 @@ export function ModelCanvas({
 
   const commit = useCallback(
     (nextNodes: RFNode[], nextEdges: Edge[]) => {
-      const next: DesignGraph = {
-        ...graph,
+      const level = {
         nodes: nextNodes.map((n) => n.data.node),
         edges: nextEdges.map((e) => ({
           id: e.id,
@@ -182,10 +204,10 @@ export function ModelCanvas({
           targetHandle: e.targetHandle ?? 'in',
         })),
       };
-      emitted.current = next;
-      onGraphChange(next);
+      emitted.current = level;
+      onScopeChange(level.nodes, level.edges);
     },
-    [graph, onGraphChange],
+    [onScopeChange],
   );
 
   const onConnect = useCallback(
@@ -270,6 +292,8 @@ export function ModelCanvas({
         onConnect={onConnect}
         onNodeDragStop={persistPositions}
         onNodeClick={(_event, node) => onSelect(node.id)}
+        onNodeDoubleClick={(_event, node) => onEnter?.(node.id)}
+        onSelectionChange={({ nodes: selected }) => onSelectionChange?.(selected.map((n) => n.id))}
         onPaneClick={() => onSelect(null)}
         proOptions={{ hideAttribution: true }}
         fitView

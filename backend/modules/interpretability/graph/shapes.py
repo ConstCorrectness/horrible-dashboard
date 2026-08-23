@@ -49,6 +49,13 @@ class _Run:
         self.issues: list[ShapeIssue] = []
         self.shapes: dict[str, dict[str, Shape]] = {}
         self.params: dict[str, int] = {}
+        #: Groups reached from the root, so the ones nothing instantiates can be
+        #: inferred separately afterwards rather than left unlabelled.
+        self.entered: set[str] = set()
+        #: Nodes whose weights are not in this model: they sit inside a group
+        #: nothing instantiates. Their counts are still reported — that is what the
+        #: node you are editing holds — but they are kept out of the total.
+        self.uncounted: set[str] = set()
 
     def fail(self, node: GraphNode, message: str, handle: str = "") -> None:
         self.issues.append(ShapeIssue(nodeId=node.id, handle=handle, message=message))
@@ -61,6 +68,8 @@ def infer(graph: DesignGraph) -> ShapeReport:
         outputs = _scope(run, graph.nodes, graph.edges, bound=None, depth=0)
     except CycleError as exc:
         return ShapeReport(ok=False, issues=[ShapeIssue(message=str(exc))])
+
+    _uninstantiated(run)
 
     if not any(n.type == "io.input" for n in graph.nodes):
         run.issues.append(
@@ -82,9 +91,35 @@ def infer(graph: DesignGraph) -> ShapeReport:
         ok=not any(i.severity == "error" for i in run.issues),
         shapes=run.shapes,
         params=run.params,
-        totalParams=sum(run.params.values()),
+        totalParams=sum(
+            count for nid, count in run.params.items() if nid not in run.uncounted
+        ),
         issues=run.issues,
     )
+
+
+def _uninstantiated(run: _Run) -> None:
+    """Label the wires inside groups nothing instantiates.
+
+    A group you are part-way through building is not yet wired into the model, and a
+    canvas that shows no shapes at all while you build one is a canvas you stop
+    using. So its interior is inferred too, with an unbound input.
+
+    Its per-node counts are still reported — the node you are editing holds what it
+    holds — but they are kept **out of the total**, because a class the model never
+    instantiates holds no weights and letting them through would inflate the headline
+    number by a block that does not run. Its *errors* are kept too: codegen emits
+    every group, so a broken one really does break the file.
+    """
+    for group in run.graph.groups:
+        if group.id in run.entered:
+            continue
+        before = set(run.params)
+        try:
+            _scope(run, group.nodes, group.edges, bound=None, depth=1)
+        except CycleError as exc:
+            run.issues.append(ShapeIssue(message=f"{group.name}: {exc}"))
+        run.uncounted |= set(run.params) - before
 
 
 def _scope(
@@ -192,6 +227,7 @@ def _group(
     if sub is None:
         run.fail(node, f"This instance points at group {gid!r}, which does not exist.")
         return None
+    run.entered.add(gid)
 
     incoming = next(iter(ins.values()), None)
     try:

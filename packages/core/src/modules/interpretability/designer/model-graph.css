@@ -135,6 +135,65 @@
   color: var(--mg-bad);
 }
 
+/* Breadcrumb --------------------------------------------------------------- */
+
+/* Blender's context path. Deliberately a second, quieter bar under the toolbar:
+   which graph you are editing is a different question from what the model is, and
+   collapsing the two makes "am I inside a block?" a thing you have to work out. */
+.mg-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--mg-line);
+  background: var(--mg-panel);
+  flex: 0 0 auto;
+}
+.mg-crumb-row {
+  display: contents;
+}
+.mg-crumb {
+  font: inherit;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  padding: 2px 6px;
+  color: var(--mg-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  cursor: pointer;
+}
+.mg-crumb:hover {
+  color: var(--text-primary, #fff);
+}
+.mg-crumb-here {
+  color: var(--mg-accent);
+  border-color: var(--mg-line);
+}
+.mg-crumb-sep {
+  color: var(--mg-dim);
+  opacity: 0.6;
+}
+
+.mg-group-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--mg-line);
+}
+.mg-group-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mg-group-uses {
+  color: var(--mg-dim);
+  font-size: 11px;
+}
+
 .mg-notice {
   padding: 6px 12px;
   border-bottom: 1px solid var(--mg-bad);
@@ -412,10 +471,13 @@
 
 /* Inspector ---------------------------------------------------------------- */
 
+/* Never shrinks. The code pane's flex basis is its full source height, so leaving
+   this shrinkable let it lose most of its 195px to a pane that scrolls internally
+   anyway — the group panel arrived 49px tall, with its class-name field cut off. */
 .mg-inspector {
   padding: 10px;
   overflow-y: auto;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   max-height: 55%;
   border-bottom: 1px solid var(--mg-line);
 }
@@ -567,4 +629,103 @@
   text-align: right;
   color: var(--mg-dim);
   user-select: none;
+}
+
+/* A successful read-back says what it did — including which classes it kept as
+   opaque custom code, because an opaque import nobody is told about is
+   indistinguishable from a wrong one. */
+.mg-code-note {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--mg-line);
+  font-size: 11px;
+  color: var(--mg-dim);
+}
+
+.mg-code-edit {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  box-sizing: border-box;
+  resize: none;
+  border: none;
+  border-top: 2px solid var(--mg-accent);
+  padding: 6px 10px;
+  background: var(--surface-1, #1a1a1a);
+  color: var(--text-primary, #ddd);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  tab-size: 4;
+  white-space: pre;
+  overflow: auto;
+}
+
+.mg-code-edit:focus {
+  outline: none;
+}
+
+/* Tier 2 — the measurement --------------------------------------------------- */
+
+.mg-probe {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--mg-line);
+}
+.mg-probe-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.mg-probe-title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+.mg-probe-pick {
+  flex: 1 1 auto;
+  width: auto;
+}
+.mg-probe-note {
+  font-size: 10px;
+  color: var(--mg-dim);
+  line-height: 1.45;
+  margin: 6px 0 0;
+}
+.mg-probe-out {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 7px;
+  padding-left: 8px;
+  font-size: 11px;
+  /* A 2px left rule rather than a filled card: the state is the accent, not a box. */
+  border-left: 2px solid var(--mg-line);
+}
+.mg-probe-ok {
+  border-left-color: var(--mg-ffn);
+}
+.mg-probe-bad {
+  border-left-color: var(--mg-bad);
+  color: var(--mg-bad);
+}
+.mg-probe-unknown {
+  border-left-color: var(--mg-dim);
+  color: var(--mg-dim);
+}
+.mg-probe-line {
+  line-height: 1.45;
+}
+.mg-probe-mismatch {
+  color: var(--mg-bad);
+}
+.mg-probe-trace {
+  margin: 4px 0 0;
+  max-height: 140px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  line-height: 1.4;
+  white-space: pre;
+  color: var(--mg-bad);
 }

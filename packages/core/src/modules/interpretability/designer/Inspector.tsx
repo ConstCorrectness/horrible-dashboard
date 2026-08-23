@@ -12,8 +12,9 @@
  * what keeps the generated class parametric. It is offered as a dropdown of the
  * config keys, because typing `$d_model` correctly is not a skill worth requiring.
  */
-import type { DesignGraph, GraphNode, NodeSpec, ParamSpec } from './graph';
+import type { DesignGraph, GraphNode, NodeSpec, ParamSpec, SubGraph } from './graph';
 import { formatCount } from './graph';
+import { groupUsage } from './scope';
 
 function isReference(value: unknown): value is string {
   return typeof value === 'string' && value.startsWith('$');
@@ -130,22 +131,58 @@ function Field({
 
 export function Inspector({
   graph,
+  group,
   node,
   spec,
   params,
   onNodeChange,
   onGraphChange,
+  onGroupChange,
+  onDeleteGroup,
+  onEnterGroup,
   onDelete,
 }: {
   graph: DesignGraph;
+  /** The group being edited, if the breadcrumb is inside one. */
+  group: SubGraph | null;
   node: GraphNode | null;
   spec: NodeSpec | null;
   params: number | undefined;
   onNodeChange: (next: GraphNode) => void;
   onGraphChange: (next: DesignGraph) => void;
+  onGroupChange: (next: SubGraph) => void;
+  onDeleteGroup: (id: string) => void;
+  onEnterGroup: (nodeId: string) => void;
   onDelete: (id: string) => void;
 }) {
   const configKeys = Object.keys(graph.config);
+
+  // Inside a group, the panel describes the *group* when nothing is selected —
+  // Blender's context, and the only place its generated class name can be edited.
+  if (!node && group) {
+    return (
+      <div className="mg-inspector">
+        <h3 className="mg-inspector-title">Group</h3>
+        <label className="mg-field">
+          <span className="mg-field-label">Class name</span>
+          <input
+            className="mg-input"
+            value={group.name}
+            onChange={(e) => onGroupChange({ ...group, name: e.target.value })}
+          />
+          <span className="mg-field-help">
+            The <code>nn.Module</code> subclass this group generates. Two groups compiling to the
+            same class is refused — the second definition would silently replace the first.
+          </span>
+        </label>
+        <p className="mg-inspector-note">
+          Instantiated {groupUsage(graph, group.id)}× in this design. Its input is whatever the
+          instance is handed; stacking it ×N feeds each copy the previous one&apos;s output, so it
+          has to return the shape it took.
+        </p>
+      </div>
+    );
+  }
 
   if (!node || !spec) {
     return (
@@ -185,6 +222,38 @@ export function Inspector({
         {configKeys.length === 0 && (
           <p className="mg-inspector-note">No configuration values yet.</p>
         )}
+
+        {graph.groups.length > 0 && (
+          <>
+            <h3 className="mg-inspector-title">Groups</h3>
+            <p className="mg-inspector-note">
+              One generated class each. A group nothing instantiates is still written to the file,
+              so an unused one is offered for deletion rather than left to accumulate.
+            </p>
+            {graph.groups.map((sub) => {
+              const used = groupUsage(graph, sub.id);
+              return (
+                <div key={sub.id} className="mg-group-row">
+                  <span className="mg-group-name">{sub.name}</span>
+                  <span className="mg-mono mg-group-uses">{used}×</span>
+                  <button
+                    type="button"
+                    className="mg-button mg-button-danger"
+                    disabled={used > 0}
+                    title={
+                      used > 0
+                        ? 'Still instantiated. Delete the instances first.'
+                        : 'Nothing runs this group; drop the class.'
+                    }
+                    onClick={() => onDeleteGroup(sub.id)}
+                  >
+                    Delete
+                  </button>
+                </div>
+              );
+            })}
+          </>
+        )}
       </div>
     );
   }
@@ -210,17 +279,55 @@ export function Inspector({
         </span>
       </label>
 
-      {spec.params.map((param) => (
-        <Field
-          key={param.name}
-          spec={param}
-          value={node.params[param.name] ?? param.default}
-          configKeys={configKeys}
-          onChange={(next) => update(param.name, next)}
-        />
-      ))}
+      {/* A group instance's `group` param is an id, and a text box for an id is a
+          text box you can typo into a design that no longer generates. The groups
+          the design actually has are the only legal values, so it is a list. */}
+      {node.type === 'group' && (
+        <label className="mg-field">
+          <span className="mg-field-label">Group</span>
+          <select
+            className="mg-input"
+            value={String(node.params.group ?? '')}
+            onChange={(e) => update('group', e.target.value)}
+          >
+            {!graph.groups.some((g) => g.id === node.params.group) && (
+              <option value={String(node.params.group ?? '')}>
+                {node.params.group ? `${node.params.group} (missing)` : 'none'}
+              </option>
+            )}
+            {graph.groups.map((sub) => (
+              <option key={sub.id} value={sub.id}>
+                {sub.name}
+              </option>
+            ))}
+          </select>
+          <span className="mg-field-help">The subgraph this instance runs.</span>
+        </label>
+      )}
+
+      {spec.params
+        .filter((param) => !(node.type === 'group' && param.name === 'group'))
+        .map((param) => (
+          <Field
+            key={param.name}
+            spec={param}
+            value={node.params[param.name] ?? param.default}
+            configKeys={configKeys}
+            onChange={(next) => update(param.name, next)}
+          />
+        ))}
 
       <div className="mg-inspector-actions">
+        {node.type === 'group' && (
+          <button
+            type="button"
+            className="mg-button"
+            onClick={() => onEnterGroup(node.id)}
+            title="Step inside and edit what this block does. Double-clicking it on the canvas does the same."
+          >
+            Edit contents
+          </button>
+        )}
         <button
           type="button"
           className={`mg-button${node.muted ? ' mg-button-on' : ''}`}
