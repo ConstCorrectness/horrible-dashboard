@@ -7,6 +7,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import { useAgentContext } from '../../agent-context';
 import { ApiError } from '../../api';
 import { dialogs } from '../../dialogs';
+import { openContextMenu } from '../../overlay/context-menu';
 import { useSetting } from '../../settings';
 import { toastsStore } from '../../toasts';
 import type { SourceModel, SourceStatus, SourceType } from './api';
@@ -299,7 +300,25 @@ export function LibraryPanel() {
                 </a>
               )}
               {g.chunks.slice(0, 2).map((c) => (
-                <p className="lib-snippet" key={c.chunk_index}>
+                <p
+                  className="lib-snippet"
+                  key={c.chunk_index}
+                  // A retrieved chunk is a thing other modules can act on — the
+                  // lens traces it — and the library does not have to know who
+                  // offers what. See docs/architecture/context-menus.mdx.
+                  onContextMenu={(e) => {
+                    if (
+                      openContextMenu(e, {
+                        kind: 'library.chunk',
+                        text: c.text,
+                        title: g.title,
+                        sourceId: g.source_id,
+                        chunkIndex: c.chunk_index,
+                      })
+                    )
+                      e.preventDefault();
+                  }}
+                >
                   {c.text.slice(0, 280)}
                   {c.text.length > 280 ? '…' : ''}
                 </p>

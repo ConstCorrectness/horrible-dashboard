@@ -19,6 +19,8 @@ import { python } from '@codemirror/lang-python';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { unifiedMergeView } from '@codemirror/merge';
 
+import { openContextMenu } from '../../overlay/context-menu';
+
 import {
   clearActiveContextInstance,
   PaneInstanceContext,
@@ -729,7 +731,29 @@ export function BufferView() {
           </button>
         </div>
       )}
-      <div className="editor-cm" ref={hostRef} />
+      <div
+        className="editor-cm"
+        ref={hostRef}
+        // The selection, offered to whoever can do something with it. Read from
+        // the live view rather than from the persisted bytes: what is on screen
+        // is what the user right-clicked, and tracing anything else is worse
+        // than declining. An empty selection is a real target — "trace the whole
+        // file" is the same convention "run selection" tools use.
+        onContextMenu={(e) => {
+          const view = viewRef.current;
+          if (!view) return;
+          const { from, to } = view.state.selection.main;
+          if (
+            openContextMenu(e, {
+              kind: 'editor.selection',
+              uri: source,
+              text: view.state.sliceDoc(from, to),
+              empty: from === to,
+            })
+          )
+            e.preventDefault();
+        }}
+      />
     </div>
   );
 }

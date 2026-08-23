@@ -283,7 +283,7 @@ The dashboard keeps its own data in **two** places, and they are not the same th
 
 | Store | Path | Shape | Console connection |
 | --- | --- | --- | --- |
-| **App database** | `.data/app.db` | SQLite file — `library_sources`, `browser_history`, `browser_bookmarks`, `code_symbols`, `async_tasks` | built-in `app` (`sqlite`, `sql` dialect) |
+| **App database** | `.data/app.db` | SQLite file — `library_sources`, `browser_history`, `browser_bookmarks`, `code_symbols`, `llamacpp_traces`, `async_tasks` | built-in `app` (`sqlite`, `sql` dialect) |
 | **Vector store** | `.data/lancedb` | LanceDB *directory*, one table per collection | built-in `vectors` (`lancedb`, `json` dialect) |
 
 Both are built-in, synthesized rather than stored, and neither can be edited or deleted.

@@ -488,6 +488,60 @@ export function forkTrace(
   );
 }
 
+/** One `llamacpp_traces` catalog row — the queryable index, not the blobs. */
+export interface TraceCatalogRow {
+  traceId: string;
+  modelName: string;
+  modelSha: string;
+  prompt: string;
+  promptTokens: number;
+  fidelity: string;
+  attention: boolean;
+  derivedFrom: string;
+  edits: TokenEdit[];
+  diskBytes: number;
+  createdAt: number;
+}
+
+export function getTraceCatalog(
+  options: { limit?: number; modelSha?: string; derivedFrom?: string } = {},
+): Promise<{ traces: TraceCatalogRow[] }> {
+  const query = new URLSearchParams();
+  if (options.limit) query.set('limit', String(options.limit));
+  if (options.modelSha) query.set('modelSha', options.modelSha);
+  if (options.derivedFrom) query.set('derivedFrom', options.derivedFrom);
+  const suffix = query.toString() ? `?${query}` : '';
+  return apiGet<{ traces: TraceCatalogRow[] }>(`/llamacpp/traces/catalog${suffix}`);
+}
+
+export interface SaveFindingResult {
+  sourceId: string;
+  library: string;
+  title: string;
+  traceId: string;
+  chars: number;
+  chunks: number;
+  /** Set when the reading was refused (an unverified grid is not a finding), or
+   * when the note was created but could not be indexed — a source with zero
+   * chunks is one no search will ever return, so it is not a save. */
+  error: string;
+  verified: string;
+  verifyNote: string;
+}
+
+/** File this lens reading into the library as a note, so it outlives the trace.
+ * The grid is recomputed server-side: the browser holds a rendered, rounded,
+ * already-narrowed copy, and a note written from that records the picture. */
+export function saveFinding(
+  traceId: string,
+  body: { note?: string; library?: string; lens?: string; k?: number },
+): Promise<SaveFindingResult> {
+  return apiPost<SaveFindingResult>(
+    `/llamacpp/traces/${encodeURIComponent(traceId)}/finding`,
+    body,
+  );
+}
+
 export function deleteTrace(traceId: string): Promise<{ deleted: boolean }> {
   return apiDelete(`/llamacpp/traces/${encodeURIComponent(traceId)}`);
 }

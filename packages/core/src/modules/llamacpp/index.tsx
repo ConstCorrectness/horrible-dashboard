@@ -1,5 +1,6 @@
 import { revealSection } from '../../layout/controller';
 import { minibuffer } from '../../minibuffer';
+import type { ContextMenuItem, ContextTarget } from '../../overlay/context-menu';
 import { registry, type ModuleManifest } from '../../registry';
 import type { EditorService } from '../editor/service';
 import { LlamaCppPane } from './ServerPane';
@@ -58,6 +59,36 @@ function traceSelection(): void {
 }
 
 /**
+ * "Trace this" wherever there is text worth tracing.
+ *
+ * The command above needs the editor focused and the palette open; a provider
+ * puts the same verb on the thing itself. The llama.cpp module contributes to
+ * two surfaces it does not own — an editor selection and a retrieved library
+ * chunk — and neither module learns that this one exists, which is the whole
+ * point of the context-menu registry (docs/architecture/context-menus.mdx).
+ *
+ * `order: 1` so the owning module's own items come first.
+ */
+function traceTextItems(target: ContextTarget): ContextMenuItem[] {
+  const text = String(target.text ?? '');
+  const label = String(target.title ?? target.uri ?? '');
+  // Absent, not disabled: there is no state in which tracing empty text becomes
+  // available, and a permanently grey row is what `items: () => []` prevents.
+  if (!text.trim()) return [];
+  return [
+    {
+      id: 'llamacpp.traceThis',
+      label: 'Trace this',
+      detail: 'Record a forward pass over this text and read it in the lens.',
+      run: () => {
+        sendTracePrompt({ prompt: text, label: label ? bufferLabel(label) : 'selection' });
+        revealSection('traces', 'llamacpp.server');
+      },
+    },
+  ];
+}
+
+/**
  * llama.cpp: the node serving its own weights.
  *
  * Ollama and LM Studio are applications the user installs and runs elsewhere; the
@@ -104,6 +135,13 @@ export const llamacppModule: ModuleManifest = {
       title: 'llama.cpp: Trace editor selection',
       run: traceSelection,
       slash: 'trace-selection',
+    },
+  ],
+  contextMenu: [
+    {
+      kind: ['editor.selection', 'library.chunk'],
+      order: 1,
+      items: traceTextItems,
     },
   ],
   settings: [

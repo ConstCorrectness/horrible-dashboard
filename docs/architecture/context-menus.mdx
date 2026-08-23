@@ -144,6 +144,8 @@ row that has moved is pointing at the wrong thing.
 | `rail.glyph`      | `viewId`, `title`, `dockSide`              | shell               |
 | `workspace.tab`   | `workspaceId`, `workspaceName`, `isPreset` | shell               |
 | `area.tab`        | `areaId`, `instanceId`, `viewId`, `title`  | shell               |
+| `editor.selection`| `uri`, `text`, `empty`                     | **llamacpp**        |
+| `library.chunk`   | `text`, `title`, `sourceId`, `chunkIndex`  | **llamacpp**        |
 
 `files.background` is the empty space below the last row of the tree, which the
 tree used to swallow. It is a **separate kind** rather than `files.node` with a
@@ -159,6 +161,15 @@ the tab list from the store **when they run**, and close by instance id rather t
 by index: every close is guarded and may prompt, so the strip can shift under a
 half-finished *Close Others*, and closing by position would then start eating the
 wrong panes.
+
+`editor.selection` and `library.chunk` are the two **text** kinds, and both exist
+because a surface owned by one module holds text another can do something with:
+the llama.cpp module puts *Trace this* on both, and neither the editor nor the
+library has any idea it did. The editor reads the selection from the **live
+CodeMirror view** rather than the buffer's persisted bytes — what is on screen is
+what was right-clicked, and acting on anything else is worse than declining. An
+`empty` selection is a real target rather than an absent one, following the same
+convention "run selection" tools use: no selection means the whole file.
 
 `files.node` is the one to copy: the **notebook** module contributes *Open as
 Notebook* for a `.ipynb` without the files module knowing anything about it, and

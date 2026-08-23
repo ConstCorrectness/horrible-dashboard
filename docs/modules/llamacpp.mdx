@@ -441,6 +441,8 @@ does not resurrect an old selection over what you were typing.
 | `GET` | `/api/llamacpp/traces/{id}/lens/track` | One vocabulary token's logit and rank at every cell |
 | `GET` | `/api/llamacpp/traces/{id}/lenses` | Which lenses apply to this trace's model |
 | `GET` | `/api/llamacpp/models/vocab` | Search a GGUF's own vocabulary — the token picker behind a swap |
+| `GET` | `/api/llamacpp/traces/catalog` | The `llamacpp_traces` rows in `app.db` — filterable by model hash or parent, which the directory listing cannot do |
+| `POST` | `/api/llamacpp/traces/{id}/finding` | File a lens reading into a library as a `note`. A 200 with `error` set is a refusal, not a failure |
 | `DELETE` | `/api/llamacpp/traces/{id}` | Delete a trace |
 
 Progress rides **NDJSON on the request**, not a `/ws` channel — the shape
@@ -821,6 +823,126 @@ than an errand. `traces.nodes_per_layer` teaches the pre-flight estimate about i
 counting only the per-block nodes — `inp_embd` and the output head are captured
 once per pass, and charging them per layer would inflate the estimate by half.
 
+### The trace catalog — why a trace is in two places
+
+`trace_catalog.py` keeps one row per trace in `app.db` (`llamacpp_traces`) while
+the activations stay on disk. That is the split `library_sources` and
+`karaoke_songs` already use, and it is not redundancy: a directory of manifests is
+answerable only by this module's own code, whereas a table in `app.db` sits beside
+`agent_turns` and `traj_steps`, so "which traces were taken during that agent run"
+and "every fork of this trace" become one query in the **database** console.
+
+**Disk stays the authority.** A row is a description of a directory and nothing
+depends on it — delete `app.db` and you lose the query surface, not an activation.
+Two hooks and a reconciler keep the two honest:
+
+- `trace_runner.run_trace` records the row at the one point every trace, forks
+  included, is known to have finished.
+- `traces.delete_trace` drops it. Hooked _there_ rather than at the routes because
+  `prune()` also deletes — a budget eviction is the path nothing else would ever
+  tell the catalog about.
+- `sync()` runs at startup and reconciles both ways. A node that traced before this
+  table existed has directories and no rows, and an empty catalog reads as "no
+  traces" rather than "not indexed yet"; a manual `rm -rf` leaves rows claiming
+  traces that are gone.
+
+### The model locus
+
+`packages/core/src/model-locus.ts` is "which part of the model am I looking at",
+the way `locus.ts` is "which code am I looking at": a global
+`{modelSha, traceId, layer, position, tokenId}` that panes publish to and follow.
+Click layer 15 in the lens grid and the **model explorer** reveals `blk.15`'s
+tensors — neither pane imports the other or knows it exists. Core rather than a
+module, for the same reason `locus.ts` is: it is the spine several surfaces hang
+off.
+
+One deliberate difference from the code locus: the `/ws` mirror is **inbound
+only**. The code locus is bidirectional because two panes in two windows publish
+to it. Here every publisher that matters is either in this tab — the grid and the
+explorer, which a local store notifies synchronously — or on the backend
+(`dash.lens.focus`, the `lens.focus` tool). Sending our own clicks up would buy
+nothing and cost a frame per mouse-move over a grid. So `setModelLocus` does not
+send, there is deliberately **no `lens` entry in `app.py`'s inbound channel
+ladder** (only the outbound `push_lens_events` fan-out), and consequently there is
+no self-echo to suppress — which is why this has no `origin` field where the code
+locus needs one.
+
+`setModelLocus` **merges**; an inbound one **replaces**. The grid knows the layer
+and position but not which vocabulary token is pinned, so a local replace would
+make every publisher restate facts it does not own and the first to forget would
+silently clear a pin. A locus off the wire came from a publisher that stated the
+whole thing it meant, and merging would leave a stale layer under an agent's "look
+at the embedding".
+
+### Agent tools
+
+Two groups, both loaded on demand.
+
+`llamacpp` gains the trace verbs it never had: `llamacpp.trace` records a pass and
+`llamacpp.list_traces` reads the catalog. `trace` defaults to the **lens** capture
+set with attention off — megabytes and seconds — and `full: true` opts into the
+whole mechanism; `attention` needs `full`, since the score matrix is the largest
+thing a trace can hold.
+
+`lens` is the readout: `lens.grid`, `lens.cell`, `lens.track_token`, `lens.fork`,
+`lens.focus` and `lens.save_finding`. The group name equals the tool prefix because
+`_group_of` splits on the dot and `AgentTool.group` does _not_ name the group —
+the connectors rule, and the trap `llamacpp` itself inverted.
+
+Three things carry the containment:
+
+- **An unverified grid is reported as unverified, never as numbers.** Every payload
+  carries `verified` in the same three states the pane renders, and `false` /
+  `unavailable` lead with a warning rather than burying it under the cells. A model
+  whose norm convention we get wrong produces confident wrong _words_, not an
+  error, and an agent summarising those into prose is how a wrong reading becomes
+  a claim.
+- **A grid too large to carry is refused, with its dimensions.** A tool answer is
+  prose in a context window, not a screen an eye skips; `MAX_TOOL_CELLS` bounds it
+  and the error names the axes so a caller narrows rather than guesses.
+- **`lens.fork` and `lens.save_finding` are side effects.** A fork mmaps the
+  weights for minutes and writes a trace that may prune an older one; a save writes
+  to the user's library.
+
+`lens.track_token` accepts text as well as an id, and **does not strip it**: a
+leading space is what makes `" Paris"` a token and `"Paris"` not one, so stripping
+deletes the very thing the error message tells you to add.
+
+### `dash.lens`
+
+The REPL facade, for **sweeps** — "which layer does the answer first appear at,
+across these forty prompts" is a loop and a `max()`, which is neither a click nor a
+chat turn. Backend-local like `dash.io`, so it needs no browser attached; the one
+exception is `focus()`, which pushes to browsers and still works with none, since
+the locus is stored and the next window to attach follows it.
+
+### Saving a finding
+
+`findings.py` renders a grid plus the reader's note as a `note` source in a library
+— the `browser.save` precedent, and the reason it matters is that a trace is pruned
+the moment the budget wants its bytes.
+
+A note is deliberately **not** an artifact: the activations are not copied, because
+megabytes of fp16 have no business being embedded and the numbers mean nothing
+apart from the weights that produced them. What is written down is the _reading_ —
+prompt, top token per layer, and the provenance to reproduce it (model sha, llama
+build, trace id, and any edits, so a fork's note says what was changed).
+
+**An unverified grid is refused rather than filed with a caveat.** A caveat in a
+note body survives exactly as far as the first retrieval that quotes the numbers
+without it.
+
+### "Trace this" on someone else's surface
+
+The module contributes a `contextMenu` provider for two target kinds it does not
+own — `editor.selection` and `library.chunk` — so the verb reaches the text
+instead of requiring the palette and a focused editor. Neither the editor nor the
+library learns this module exists, which is the point of the context-menu registry
+(see [context menus](../architecture/context-menus.mdx)). The editor reads the
+selection from the **live view** rather than the persisted bytes, for the same
+reason `llamacpp.traceSelection` does: tracing something other than what is on
+screen is worse than declining.
+
 ## Not done here
 
 `topk` fidelity is declared as an idea and not implemented — only `full`, `fp16` and
@@ -832,6 +954,10 @@ and traces a raw prompt, so it reproduces a *forward pass*, not a chat turn.
 No **fitted** J-lens ships yet: the artifact format, the picker and the
 `unavailable` verdict for a non-identity lens are all in place, but importing
 Neuronpedia's published `.pt` lenses (which needs a torch environment to convert
-once) and fitting our own are not built. There are also no `lens.*` agent tools —
-the lens is reachable from the pane and over HTTP, but an agent cannot yet sweep
-one, and the `llamacpp` tool group still has no trace verbs at all.
+once) and fitting our own are not built.
+
+Distributed computation is designed for and not built: a trace, a grid and a fork
+are all job-shaped, so a peer holding the same `modelSha` could run one and return
+only the result — with `traces.matches_run` generalizing exactly (a result computed
+elsewhere may only be shown here when the build and the model hash agree). Nothing
+crosses the fabric today.

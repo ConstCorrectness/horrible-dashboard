@@ -339,6 +339,46 @@ class VocabResponse(BaseModel):
     truncated: bool = False
 
 
+class SaveFindingRequest(BaseModel):
+    """File a lens reading into the knowledge library as a `note` source.
+
+    The grid is recomputed here rather than posted from the pane: the browser
+    holds a *rendered* grid (already narrowed to what fit on screen, already
+    rounded for display), and a note written from that would record the picture
+    instead of the reading.
+    """
+
+    note: str = ""
+    library: str = "default"
+    lens: str = "identity"
+    k: int = 5
+    layers: list[int] = Field(default_factory=list)
+    positions: list[int] = Field(default_factory=list)
+    passIndex: int = 0
+
+
+class SaveFindingResponse(BaseModel):
+    sourceId: str = ""
+    library: str = ""
+    title: str = ""
+    traceId: str = ""
+    chars: int = 0
+    chunks: int = 0
+    #: Set when the reading was refused (an unverified grid is not a finding) or
+    #: when the note was created but could not be indexed — a source with zero
+    #: chunks is one no search will ever return, so it is not a save.
+    error: str = ""
+    verified: str = ""
+    verifyNote: str = ""
+
+
+class TraceCatalogResponse(BaseModel):
+    """The `llamacpp_traces` rows. The catalog, not the directory — see
+    `trace_catalog.py` for why both exist."""
+
+    traces: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class StatusResponse(BaseModel):
     """Everything the pane needs in one poll: binary, process, weights."""
 

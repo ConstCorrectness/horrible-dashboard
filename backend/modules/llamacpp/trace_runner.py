@@ -152,6 +152,12 @@ async def run_trace(spec: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
 
     pruned = traces.prune()
     trace = traces.load(str(spec["traceId"]))
+    if trace is not None:
+        # Catalogued here — the one place every trace, forks included, is known
+        # to have finished. `prune()` above already dropped the rows it evicted.
+        from backend.modules.llamacpp import trace_catalog
+
+        trace_catalog.record(trace)
     yield {
         "status": "stored",
         "traceId": spec["traceId"],

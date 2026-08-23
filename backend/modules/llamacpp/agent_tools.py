@@ -153,6 +153,116 @@ async def _stop(_args: dict[str, Any]) -> Any:
     return _status_payload()
 
 
+async def _list_traces(args: dict[str, Any]) -> Any:
+    """The stored activation traces, read from the catalog rather than the disk.
+
+    The catalog is in `app.db` and answers this in one query; walking the
+    directory means parsing every manifest, which is the same answer for more
+    work. `sync()` on startup keeps the two honest.
+    """
+    from backend.modules.llamacpp import trace_catalog, trace_runner
+
+    available, reason = trace_runner.available()
+    rows = await asyncio.to_thread(
+        trace_catalog.rows,
+        limit=int(args.get("limit") or 20),
+        model_sha=str(args.get("modelSha") or ""),
+        derived_from=str(args.get("derivedFrom") or ""),
+    )
+    return {
+        "traces": [
+            {
+                "traceId": r["traceId"],
+                "model": r["modelName"],
+                "prompt": r["prompt"],
+                "promptTokens": r["promptTokens"],
+                "fidelity": r["fidelity"],
+                "attention": r["attention"],
+                # Present only on a fork, and the pair is the whole point of a
+                # fork appearing in a listing at all.
+                "derivedFrom": r["derivedFrom"] or None,
+                "edits": r["edits"] or None,
+                "diskBytes": r["diskBytes"],
+                "createdAt": r["createdAt"],
+            }
+            for r in rows
+        ],
+        "canTrace": available,
+        "reason": reason,
+    }
+
+
+async def _trace(args: dict[str, Any]) -> Any:
+    """Run one traced forward pass and store it.
+
+    Defaults to the **lens** capture set and no attention, which is the cheap
+    shape: the residual stream plus the output head is ~1% of a full trace, so
+    this returns in seconds rather than minutes and costs megabytes rather than
+    a gigabyte. `full=true` opts into the architecture's whole default set for
+    someone who wants the mechanism and not just the readout.
+    """
+    from backend.modules.hardware import probe as hardware
+    from backend.modules.llamacpp import trace_runner, traces
+    from backend.modules.llamacpp.routes import _architecture
+    from backend.modules.llamacpp.tracer import CAPTURE_PRESETS
+
+    model_path = str(args.get("modelPath", "")).strip()
+    prompt = str(args.get("prompt", "")).strip()
+    if not model_path:
+        return {"error": "modelPath is required; call llamacpp.list_models first"}
+    if not prompt:
+        return {"error": "prompt is required — a trace runs on text"}
+
+    available, reason = trace_runner.available()
+    if not available:
+        return {"error": reason}
+
+    full = bool(args.get("full"))
+    spec: dict[str, Any] = {
+        "modelPath": model_path,
+        "prompt": prompt,
+        "capture": [] if full else list(CAPTURE_PRESETS["lens"]),
+        "maxTokens": max(0, min(int(args.get("maxTokens") or 0), 16)),
+        "layers": [],
+        # Attention only on request *and* only with the full set: the score
+        # matrix grows with the square of the token count and is the single
+        # largest thing a trace can hold.
+        "attention": bool(args.get("attention")) and full,
+        "fidelity": "fp16",
+        "tokenCap": hardware.defaults().trace_token_cap,
+        "gpuLayers": None,
+        "architecture": await asyncio.to_thread(_architecture, model_path),
+    }
+
+    error = ""
+    trace_id = ""
+    pruned: list[str] = []
+    async for event in trace_runner.run_trace(spec):
+        if event.get("error"):
+            error = str(event["error"])
+        if event.get("status") == "stored":
+            trace_id = str(event.get("traceId") or "")
+            pruned = list(event.get("pruned") or [])
+    if error or not trace_id:
+        return {"error": error or "the tracer produced no trace"}
+
+    # `run_trace` catalogued it already — one chokepoint, not two.
+    trace = traces.load(trace_id)
+    manifest = trace.manifest if trace else {}
+    return {
+        "traceId": trace_id,
+        "model": manifest.get("modelName") or "",
+        "promptTokens": manifest.get("promptTokens") or 0,
+        "records": manifest.get("recordCount") or 0,
+        "diskBytes": trace.bytes_on_disk() if trace else 0,
+        # Named rather than silent: a trace that pushed the directory over its
+        # budget deleted somebody's older one, and finding that out later is
+        # worse than being told.
+        "pruned": pruned,
+        "next": "Load the `lens` tool group to read this trace as words.",
+    }
+
+
 LLAMACPP_TOOLS: list[AgentTool] = [
     AgentTool(
         name="llamacpp.status",
@@ -203,11 +313,72 @@ LLAMACPP_TOOLS: list[AgentTool] = [
         handler=_stop,
         group="llamacpp",
     ),
+    AgentTool(
+        name="llamacpp.list_traces",
+        description=(
+            "Activation traces stored on this node — recorded forward passes that "
+            "the `lens` tools read as words. Shows which are forks of which."
+        ),
+        parameters={
+            "limit": {"type": "integer", "description": "Rows to return (default 20)."},
+            "modelSha": {
+                "type": "string",
+                "description": "Only traces of this model hash.",
+            },
+            "derivedFrom": {
+                "type": "string",
+                "description": "Only forks of this trace id.",
+            },
+        },
+        handler=_list_traces,
+        group="llamacpp",
+    ),
+    AgentTool(
+        name="llamacpp.trace",
+        description=(
+            "Record a forward pass of a local GGUF over a prompt, so the `lens` "
+            "tools can read what the model was disposed to say at each layer. "
+            "Cheap by default (residual stream only, seconds); `full` captures the "
+            "whole mechanism and is minutes and gigabytes."
+        ),
+        parameters={
+            "modelPath": {
+                "type": "string",
+                "description": "Path from llamacpp.list_models.",
+            },
+            "prompt": {
+                "type": "string",
+                "description": "Traced as raw text — no chat template is applied.",
+            },
+            "maxTokens": {
+                "type": "integer",
+                "description": "Tokens to generate after the prompt (0-16, default 0).",
+            },
+            "full": {
+                "type": "boolean",
+                "description": "Capture the architecture's whole default set, not just the lens nodes.",
+            },
+            "attention": {
+                "type": "boolean",
+                "description": "Attention scores. Needs full; the largest thing in a trace.",
+            },
+        },
+        required=["modelPath", "prompt"],
+        side_effect=True,
+        specifier_template="{modelPath}",
+        handler=_trace,
+        group="llamacpp",
+    ),
 ]
 
 
 def register_llamacpp_tools() -> None:
+    from backend.modules.llamacpp.lens_tools import register_lens_tools
     from backend.sdk.registry import registry
 
     for tool in LLAMACPP_TOOLS:
         registry.agent_tools[tool.name] = tool
+    # The `lens` group ships with this module but is its own group: reading a
+    # trace as words and supervising a server are different jobs, and a turn that
+    # wants one rarely wants the other's schemas.
+    register_lens_tools()

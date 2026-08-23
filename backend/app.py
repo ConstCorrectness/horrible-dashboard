@@ -96,6 +96,11 @@ from backend.modules.karaoke import router as karaoke_router
 from backend.modules.library import router as library_router
 from backend.modules.llamacpp import router as llamacpp_router
 from backend.modules.llamacpp.agent_tools import register_llamacpp_tools
+from backend.modules.llamacpp.dash_facade import (
+    register_dash_facade as register_lens_facade,
+)
+from backend.modules.llamacpp.locus import push_lens_events
+from backend.modules.llamacpp.trace_catalog import sync as sync_trace_catalog
 from backend.modules.llamacpp.server import llama_manager
 from backend.modules.records import (
     init_records_db,
@@ -190,6 +195,11 @@ async def lifespan(app: FastAPI):
     # shows up in the database console's built-in `app` connection on a fresh
     # install, before anyone has opened the pane that would create them lazily.
     init_trajectories_db()
+    # Reconcile the activation-trace catalog with the trace directory. Eager for
+    # the same reason as the line above, plus one of its own: a node that traced
+    # before this table existed has directories and no rows, and an empty catalog
+    # reads as "no traces" rather than as "not indexed yet".
+    await asyncio.to_thread(sync_trace_catalog)
     # LocalTrack's live channel needs the loop captured before the first writer
     # runs, and the first writer is very likely a worker thread (the training
     # metrics pump), which has no running loop of its own to discover.
@@ -326,9 +336,15 @@ register_training_tools()
 # Register the LocalTrack experiment tracking agent tools (grouped under `localtrack`)
 register_localtrack_tools()
 
-# The `llamacpp` group: list the node's GGUFs, serve one, stop it. Without these
-# the fine-tuning agent could convert a checkpoint and then had no way to serve it.
+# The `llamacpp` group: list the node's GGUFs, serve one, stop it, and record or
+# list an activation trace. Without these the fine-tuning agent could convert a
+# checkpoint and then had no way to serve it. Also registers the `lens` group,
+# which reads a trace as words.
 register_llamacpp_tools()
+
+# `dash.lens` — scripting sweeps over traces from the REPL. A backend-local
+# facade: it reads this node's own disk and needs no browser attached.
+register_lens_facade()
 
 # Register the model designer's agent tools (grouped under `model`): read a saved
 # design, fork the inspected model into one, retune its hyperparameters, emit its
@@ -441,6 +457,10 @@ async def ws(websocket: WebSocket) -> None:
     code_task = asyncio.create_task(push_code_events(conn))
     # Fan symdex index progress (packages/schema/docs builds) to this browser.
     symdex_task = asyncio.create_task(push_symdex_events(conn))
+    # Fan model-locus updates (set by `dash.lens` / the `lens` tools) to this
+    # browser. Outbound only — there is deliberately no inbound `lens` channel;
+    # a browser's own grid clicks are local and never cross the socket.
+    lens_task = asyncio.create_task(push_lens_events(conn))
     # Fan peer/presence events from the process-global hub out to this browser.
     network_unsub = subscribe_conn(conn)
     # Fan lobby (directory/rooms) events out to this browser.
@@ -514,6 +534,7 @@ async def ws(websocket: WebSocket) -> None:
         crawl_task.cancel()
         code_task.cancel()
         symdex_task.cancel()
+        lens_task.cancel()
         network_unsub()  # type: ignore[operator]
         lobby_unsub()  # type: ignore[operator]
         commons_unsub()  # type: ignore[operator]

@@ -389,6 +389,13 @@ def delete_trace(trace_id: str) -> bool:
     if not directory.is_dir():
         return False
     shutil.rmtree(directory, ignore_errors=True)
+    # The catalog row goes with the directory. Hooked here rather than at the
+    # routes, because `prune()` also deletes — a budget eviction that left rows
+    # behind would make the catalog claim traces that are gone. Imported here to
+    # keep this module free of a database dependency it does not otherwise have.
+    from backend.modules.llamacpp import trace_catalog
+
+    trace_catalog.forget(directory.name)
     return True
 
 

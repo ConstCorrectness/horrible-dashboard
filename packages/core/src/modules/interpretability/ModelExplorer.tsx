@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 
+import { useModelLocus } from '../../model-locus';
 import { ModelDesigner } from './designer/ModelDesigner';
 
 import {
@@ -255,6 +256,28 @@ function ModelInspector() {
   }, [modelName]);
 
   const inventory = tensors?.source === 'gguf' ? tensors : null;
+
+  /**
+   * Follow the model locus: clicking layer 15 in the lens grid reveals
+   * `blk.15`'s tensors here. The two panes know nothing about each other — see
+   * `packages/core/src/model-locus.ts`.
+   *
+   * `!= null` and not a truthiness check: layer 0 is the first decoder block and
+   * `-1` is the embedding, so both are real values that a falsy test drops.
+   */
+  const locus = useModelLocus();
+  const locusLayer = locus.layer;
+  useEffect(() => {
+    if (locusLayer == null) return;
+    if (locusLayer < 0) {
+      setSelection({ stage: 'embedding', layer: null });
+      return;
+    }
+    setSelection({ stage: 'block', layer: locusLayer });
+    // Opening the block is the point: a selected block whose tensor list is
+    // still collapsed looks like nothing happened.
+    setLayerOpen(true);
+  }, [locusLayer]);
 
   /** Tensors grouped by (component, layer), computed once per inventory. */
   const index = useMemo(() => {

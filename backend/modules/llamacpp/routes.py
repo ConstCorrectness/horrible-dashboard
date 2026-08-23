@@ -25,8 +25,10 @@ from backend.modules.hardware import probe as hardware
 from backend.modules.llamacpp import (
     binaries,
     catalog,
+    findings,
     lens as lens_module,
     offload,
+    trace_catalog,
     trace_runner,
     traces,
 )
@@ -49,9 +51,12 @@ from backend.modules.llamacpp.models import (
     RecordValues,
     RemoveInstallRequest,
     RepoFilesResponse,
+    SaveFindingRequest,
+    SaveFindingResponse,
     SeriesPoint,
     SpawnRequest,
     StatusResponse,
+    TraceCatalogResponse,
     TraceSeriesResponse,
     TraceDetail,
     TraceListResponse,
@@ -321,6 +326,29 @@ def capture_sets() -> CaptureSetsResponse:
                 ),
             ),
         ]
+    )
+
+
+@router.get("/traces/catalog", response_model=TraceCatalogResponse)
+def trace_catalog_rows(
+    limit: int = 50, modelSha: str = "", derivedFrom: str = ""
+) -> TraceCatalogResponse:
+    """The trace catalog in `app.db`, which is what makes traces joinable.
+
+    Declared **above** `/traces/{trace_id}`, and that is load-bearing: FastAPI
+    matches in declaration order, so a static path below the parameterized one
+    is never reached — the id route answers first and 404s with "no trace
+    catalog".
+
+    Served alongside `GET /traces` rather than replacing it: that one walks the
+    directory and is the authority, this one answers questions the directory
+    cannot (every fork of a trace, every trace of a model hash) without parsing
+    every manifest on disk.
+    """
+    return TraceCatalogResponse(
+        traces=trace_catalog.rows(
+            limit=limit, model_sha=modelSha, derived_from=derivedFrom
+        )
     )
 
 
@@ -777,6 +805,25 @@ def get_vocab(path: str, q: str = "", limit: int = 50) -> VocabResponse:
         tokenizerModel=un.tokenizer_model,
         truncated=truncated,
     )
+
+
+@router.post("/traces/{trace_id}/finding", response_model=SaveFindingResponse)
+async def save_finding(trace_id: str, req: SaveFindingRequest) -> SaveFindingResponse:
+    """Write this reading into the library, so it outlives the trace."""
+    result = await findings.save_finding(
+        trace_id,
+        note=req.note,
+        library=req.library,
+        lens_id=req.lens,
+        k=req.k,
+        layers=req.layers,
+        positions=req.positions,
+        pass_index=req.passIndex,
+    )
+    # A refusal is a 200 with `error` set, not a 4xx: "this grid is unverified" is
+    # an answer about the reading, and the pane renders it beside the verify chip
+    # that already says so rather than as a failed request.
+    return SaveFindingResponse(**result)
 
 
 @router.delete("/traces/{trace_id}")

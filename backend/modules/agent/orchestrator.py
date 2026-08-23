@@ -778,6 +778,12 @@ _GROUP_DESCRIPTIONS: dict[str, str] = {
         "How the desktop looks: its backdrop or wallpaper, the app theme, the "
         "taskbar's zones, and whether the desktop tiles or floats its windows."
     ),
+    "lens": (
+        "Read a recorded forward pass of a local model as words: what it was "
+        "disposed to say at each layer and prompt position, how one vocabulary "
+        "token's rank climbs through the layers, and what changing a prompt token "
+        "does to all of it. Needs a trace — `llamacpp.trace` records one."
+    ),
     "files": "Browse, read, search, create, and edit files in the workspace.",
     "editor": "Inspect and modify open editor buffers (read, propose edits, format, rename).",
     "terminal": "Run shell commands and manage terminal sessions.",

@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { setModelLocus, useModelLocus } from '../../../model-locus';
 import {
   forkTrace,
   getLensGrid,
   getLensTrack,
   listLenses,
   listTraces,
+  saveFinding,
   type LensGrid,
   type LensSpec,
   type LensTrack,
@@ -236,6 +238,11 @@ export function LensSection() {
   const [activeTrack, setActiveTrack] = useState<number | null>(null);
   const [swapAt, setSwapAt] = useState<number | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
+  const [findingNote, setFindingNote] = useState('');
+  const [findingState, setFindingState] = useState<{ kind: 'ok' | 'error'; text: string } | null>(
+    null,
+  );
+  const [saving, setSaving] = useState(false);
   const alive = useRef(true);
 
   useEffect(() => {
@@ -305,6 +312,24 @@ export function LensSection() {
 
   useEffect(loadGrid, [loadGrid]);
 
+  // Follow a locus set from outside this pane — `dash.lens.focus(...)` or the
+  // agent's `lens.focus`, so an explanation can point at the cell it is talking
+  // about. Our own clicks are skipped by `source`: they already set the
+  // selection, and re-applying it would fight the user on every click.
+  const locus = useModelLocus();
+  useEffect(() => {
+    if (locus.source === 'lens') return;
+    if (locus.traceId && locus.traceId !== traceId) {
+      // Switch first and land the cell on the next pass: the grid reloads
+      // asynchronously and clears the selection when it arrives, so selecting
+      // now would be undone by the response.
+      setTraceId(locus.traceId);
+      return;
+    }
+    if (locus.layer === undefined || locus.position === undefined) return;
+    setSelected({ layer: locus.layer, position: locus.position });
+  }, [locus, traceId]);
+
   // The parent of a fork, so the diff has something to compare against. Loaded
   // only when the trace declares one — every other trace has no parent, and
   // asking for one would 404 on the common case.
@@ -324,11 +349,41 @@ export function LensSection() {
     [grid, parentGrid],
   );
 
+  /**
+   * File this reading into the library, so it outlives the trace — traces are
+   * pruned the moment the budget wants their bytes.
+   *
+   * A refusal comes back as a 200 with `error` set rather than a rejected
+   * promise: "this grid is unverified" is an answer about the reading, and it
+   * belongs beside the verify banner that already says so.
+   */
+  const save = useCallback(() => {
+    if (!traceId) return;
+    setSaving(true);
+    setFindingState(null);
+    void saveFinding(traceId, { note: findingNote, lens: lensId, k })
+      .then((res) => {
+        if (!alive.current) return;
+        if (res.error) {
+          setFindingState({ kind: 'error', text: res.error });
+          return;
+        }
+        setFindingState({ kind: 'ok', text: `Saved to the ${res.library} library: ${res.title}` });
+        setFindingNote('');
+      })
+      .catch((err: unknown) => {
+        if (!alive.current) return;
+        setFindingState({ kind: 'error', text: err instanceof Error ? err.message : String(err) });
+      })
+      .finally(() => alive.current && setSaving(false));
+  }, [traceId, findingNote, lensId, k]);
+
   const pin = useCallback(
     (id: number, text: string) => {
       if (!model) return;
       setPins(addVocabPin(model, { id, text }));
       setActiveTrack(id);
+      setModelLocus({ tokenId: id }, 'lens');
       if (!traceId) return;
       void getLensTrack(traceId, id, lensId)
         .then((res) => alive.current && setTracks((prev) => ({ ...prev, [id]: res })))
@@ -512,7 +567,13 @@ export function LensSection() {
             track={track}
             diff={diff}
             selected={selected}
-            onSelect={(layer, position) => setSelected({ layer, position })}
+            onSelect={(layer, position) => {
+              setSelected({ layer, position });
+              // Publishing the click is what makes the model explorer reveal
+              // this block's tensors. The grid does not know the explorer
+              // exists — see `model-locus.ts`.
+              setModelLocus({ modelSha: trace?.modelSha, traceId, layer, position }, 'lens');
+            }}
           />
 
           {selected ? <CellDetail grid={grid} at={selected} onPin={pin} /> : null}
@@ -526,6 +587,29 @@ export function LensSection() {
               ? ` · logits softcapped at ${grid.unembedding.logitSoftcap}`
               : ''}
           </p>
+
+          <div className="llama-row llama-lens-save">
+            <input
+              type="text"
+              value={findingNote}
+              placeholder="What did you find? Saved with the reading…"
+              onChange={(e) => setFindingNote(e.target.value)}
+            />
+            <button onClick={save} disabled={saving || grid.verified !== 'true'}>
+              {saving ? 'Saving…' : 'Save to library'}
+            </button>
+          </div>
+          {grid.verified !== 'true' ? (
+            <p className="llama-meta">
+              Only a verified reading can be filed — a caveat in a note does not survive the
+              first search that quotes its numbers.
+            </p>
+          ) : null}
+          {findingState ? (
+            <p className={findingState.kind === 'error' ? 'llama-error' : 'llama-meta'}>
+              {findingState.text}
+            </p>
+          ) : null}
         </>
       ) : null}
     </div>

@@ -142,6 +142,34 @@ Read and write app settings — the same values the
 | `dash.settings.set(key, value)` | `{'ok': True, 'key', 'value'}` — persisted |
 | `dash.settings.all()` | every override as a flat `dict` |
 
+### `dash.lens` (backend-local)
+
+Read a recorded forward pass of a local GGUF as *words* — see
+[llama.cpp](../modules/llamacpp.mdx). Contributed through `host.add_dash_facade`,
+so it attaches exactly the way a backend plugin's facade does.
+
+Here for **sweeps**, which is the thing neither the pane nor a chat turn can do:
+"which layer does the answer first appear at, across these forty prompts" is a
+loop and a `max()`.
+
+| Method | Returns |
+| --- | --- |
+| `dash.lens.traces(limit=20, model_sha='', derived_from='')` | catalog rows, newest first |
+| `dash.lens.lenses(trace_id)` | which lenses apply to that trace's model (`identity` always) |
+| `dash.lens.grid(trace_id, lens='identity', k=5, layers=None, positions=None)` | the layer × position readout, carrying `verified` |
+| `dash.lens.track(trace_id, token_id, lens='identity')` | one vocabulary token's rank and logit at every cell |
+| `dash.lens.vocab(trace_id, query, limit=20)` | search the traced model's own vocabulary |
+| `dash.lens.focus(trace_id='', layer=None, position=None, token_id=None)` | point the user's panes at part of the model |
+| `dash.lens.locus()` | the model locus most recently set from this side |
+
+Calls block on the worker thread deliberately: `grid()` streams a 262k-row output
+head, so it is seconds of real work, and an async surface would only make REPL
+code harder to write. **Check `verified` before believing the cells** — an
+unverified reading is confident wrong words, not an error.
+
+`focus()` is the one that pushes rather than reads, and it works with no browser
+attached: the locus is stored, and the next window to connect follows it.
+
 ### `dash.help()`
 
 Print the whole surface — every facade, method, and one-line description —

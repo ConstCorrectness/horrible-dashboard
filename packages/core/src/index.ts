@@ -534,6 +534,14 @@ export {
   type LocusPosition,
   type LocusRange,
 } from './locus';
+export {
+  clearModelLocus,
+  getModelLocus,
+  setModelLocus,
+  subscribeModelLocus,
+  useModelLocus,
+  type ModelLocus,
+} from './model-locus';
 export { toastsStore, type Toast } from './toasts';
 export { closeTransientChrome, hasTransientChrome, registerTransient } from './transient';
 export {
