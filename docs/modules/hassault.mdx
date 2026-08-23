@@ -3105,12 +3105,254 @@ rather than normalized, because a "cleaned" traversal attempt is still an attemp
 which is what actually catches symlinks and encoded forms; a string check for `..`
 would miss both.
 
-## Browser vs desktop
+## In-Browser vs. Native Desktop Client
 
-Identical in both layouts. The install is read by the backend, so the browser
-never touches the filesystem.
+hAssault supports two client execution targets that speak the exact same backend protocol:
+
+1. **In-Browser Client (`packages/core/src/modules/hassault/*`)**:
+   - Built with TypeScript, React 19, and Three.js (WebGL).
+   - Embedded directly in the Horrible Dashboard window.
+   - Features the full HTML/React Developer Console (`~`), NetGraph HUD, and articulated character rigs.
+
+2. **Native Desktop FPS Client (`apps/native-fps/*`)**:
+   - Built in Rust using `wgpu` (DirectX 12 / Vulkan / Metal), `winit`, and `cpal`.
+   - Runs as a standalone external OS window for maximum performance and ultra-low input latency.
+   - Shares the same authoritative `/ws` wire, collision hitboxes, and physics models.
+   - Renders articulated operator models with multi-part joint rigs, 3D weapon props, procedural walk/run cycles, and crouch compression.
+   - Includes in-game CS:GO-style NetGraph HUD (FPS, Ping, Loss, Variance) toggled with `F3`.
+
+## The Developer Console and Macro System
+
+`backend/modules/hassault/console.py` + `packages/core/src/modules/hassault/console/*`.
+
+A Counter-Strike and Source-engine inspired Developer Console providing direct,
+low-level control over rendering variables, authoritative networking simulations,
+server physics, bot populations, player cheats, and Python macro scripting.
+
+The console is accessible at any time during gameplay by pressing **Backquote**
+(`` ` `` or `~`), clicking the in-game HUD console indicator, or opening the
+standalone dashboard panel (**HorribleAssault: Open Developer Console** / `hassault.console`).
+
+```
++---------------------------------------------------------------------------------------+
+| ~ DEV CONSOLE   [ROOM: rm_8f3 (hd_atrium)]   [PING: 24ms]   [CHEATS: ON]              |
++---------------------------------------------------------------------------------------+
+| [🎯 Hitboxes: ON] [🕸️ Wireframe: OFF] [📊 NetGraph: L2] [Speed: 0.35x 1.0x 2.0x]       |
++-----------------------------------------------------------------------+---------------+
+| [04:30:12] net.graph = 2                                              | Python Macros |
+| [04:30:15] draw.hitboxes = true                                       | ------------- |
+| [04:30:18] server.timescale = 0.5                                     | ▶ warmup      |
+| [04:30:22] > server.bots.add(count=3, skill="hard")                   | ▶ bot_1v5     |
+| [04:30:22] [bots] Added 3 bot(s) (skill=hard) to room rm_8f3           | ▶ net_stress  |
++-----------------------------------------------------------------------+---------------+
+| > draw.hitboxes 1                                                   [Single] [Execute]|
++---------------------------------------------------------------------------------------+
+```
+
+### Dual-Syntax Parser: Source Commands + Python AST
+
+Commands can be expressed in either standard Source-engine console syntax or
+native Python expression/statement syntax. The console parser automatically
+differentiates between the two:
+
+1. **Source / Quake Command Syntax**:
+   - Set CVar: `net.graph 2`, `draw.hitboxes 1`, `server.timescale 0.5`
+   - Query CVar: `draw.fov`, `net.simulate_lag`
+   - Command with keyword params: `server.start map:hd_atrium bots:3 skill:hard`
+   - Command chaining: `server.cheats 1; draw.hitboxes 1; net.graph 2`
+   - Client binds & aliases: `bind F1 "macro.run('warmup')"`, `alias prac "server.cheats 1; draw.hitboxes 1"`
+
+2. **Python Sandbox Syntax**:
+   - Property assignment: `draw.wireframe = True`, `server.timescale = 0.35`
+   - Function invocation: `server.bots.add(count=2, skill="hard")`
+   - Multi-line scripting & loops:
+     ```python
+     server.cheats = True
+     player.god = True
+     for s in ["easy", "normal", "hard"]:
+         server.bots.add(count=1, skill=s)
+     print("Configured test arena with multi-tier bots!")
+     ```
+
+### Hierarchical Namespaces
+
+Every CVar and ConCommand is strictly structured into modular namespaces:
+
+#### `net.*` — Networking & Lag Compensation
+| Name | Type | Default | Description | Flags |
+|---|---|---|---|---|
+| `net.graph` | `int` (0-3) | `0` | In-game NetGraph overlay (0: off, 1: fps/ping, 2: io/interp, 3: loss/jitter) | `client` |
+| `net.simulate_lag` | `float` (0-1000) | `0.0` | Injects artificial round-trip latency in milliseconds | `cheat`, `client` |
+| `net.simulate_loss` | `float` (0-1) | `0.0` | Injects artificial packet loss ratio (0.0 to 1.0) | `cheat`, `client` |
+| `net.simulate_jitter` | `float` (0-500) | `0.0` | Injects latency variance in milliseconds | `cheat`, `client` |
+| `net.prediction` | `bool` | `true` | Client-side movement prediction | `client` |
+| `net.reconciliation` | `bool` | `true` | Server reconciliation on snapshot replay | `client` |
+| `net.interp_delay` | `float` (0-500) | `50.0` | Entity interpolation buffer delay in milliseconds | `client` |
+
+#### `draw.*` — Visuals, Rendering & Debugging
+| Name | Type | Default | Description | Flags |
+|---|---|---|---|---|
+| `draw.hitboxes` | `bool` | `false` | Renders authoritative bounding boxes & headshot bands | `client` |
+| `draw.trajectories` | `bool` | `true` | Traces bullet raycast rays and impact decals | `client` |
+| `draw.wireframe` | `bool` | `false` | Renders map geometry in wireframe mode | `client` |
+| `draw.fps` | `bool` | `false` | Shows FPS & frame time variance counter | `client` |
+| `draw.noise_rings` | `bool` | `true` | Shows spatial audio noise bearing indicator | `client` |
+| `draw.fov` | `float` (60-110) | `75.0` | Vertical field of view | `client`, `archived` |
+| `draw.viewmodel` | `bool` | `true` | Renders first-person weapon model | `client` |
+| `draw.crosshair.*` | `sub-ns` | - | Dynamic spread crosshair color, size, and dot toggles | `client` |
+
+#### `server.*` — Match & Bot Simulation
+| Name | Type | Description |
+|---|---|---|
+| `server.cheats` | `bool` CVar | Allows cheat commands (`player.god`, `player.noclip`, `give`) |
+| `server.timescale` | `float` CVar | Simulation speed multiplier (0.05 to 5.0) |
+| `server.max_players` | `int` CVar | Max client capacity per match room |
+| `server.start(map, bots, skill)` | Command | Spawns a new server room with optional bots |
+| `server.stop()` | Command | Terminates current match session |
+| `server.map(name)` | Command | Changes the active map |
+| `server.restart()` | Command | Resets match scores, timer, and positions |
+| `server.bots.add(count, skill)` | Command | Spawns reactive AI bots into the match |
+| `server.bots.kick_all()` | Command | Removes all active bots |
+| `server.bots.freeze(frozen)` | Command | Halts bot movement and weapon logic |
+
+#### `player.*` — Movement, State & Loadout
+| Name | Type | Description |
+|---|---|---|
+| `player.god` | `bool` CVar | Invulnerability / god mode (cheat protected) |
+| `player.noclip` | `bool` CVar | Freely fly through walls and level geometry |
+| `player.infinite_ammo` | `bool` CVar | Infinite magazine and reserve ammunition |
+| `player.speed_scale` | `float` CVar | Movement speed modifier (0.1 to 10.0) |
+| `player.give(weapon)` | Command | Equips knife, pistol, carbine, shotgun, or sniper |
+| `player.teleport(x, y, z)` | Command | Warps player to specified world coordinates |
+| `player.respawn()` | Command | Forces immediate respawn at a team spawn point |
+| `player.get_pos()` | Command | Returns player coordinate tuple `(x, y, z)` |
+
+#### `physics.*` & `hitbox.*` — World & Hitbox Tuning
+| Name | Type | Description |
+|---|---|---|
+| `physics.gravity` | `float` CVar | World downward acceleration constant (def: 18.0) |
+| `physics.jump_boost` | `float` CVar | Velocity impulse applied upon jumping (def: 9.5) |
+| `hitbox.get(part)` | Command | Returns dimensions `[radius, height, head_band]` |
+| `hitbox.tune(part, radius, height, head_band)` | Command | Hot-tunes live hitbox geometry |
+| `hitbox.reset()` | Command | Resets hitboxes to canonical specification |
+
+#### `macro.*` — Macro Engine & Drills
+| Name | Type | Description |
+|---|---|---|
+| `macro.run(name)` | Command | Executes a saved or built-in macro |
+| `macro.list()` | Command | Lists all stored macros and descriptions |
+| `macro.save(name, code, desc)` | Command | Saves a new Python macro script |
+| `macro.delete(name)` | Command | Removes a user macro |
+
+---
+
+### Built-in Macros & Drills
+
+The console ships with five pre-configured training and diagnostic drills:
+
+1. **`warmup`**: Enables cheats, infinite ammo, spawns 3 easy bots, and activates bullet tracers.
+2. **`bot_1v5`**: Spawns 5 hard AI bots with god mode enabled for high-intensity target acquisition.
+3. **`smoke_practice`**: Warps to high vantage point with noclip and slow-motion timescale (0.4x).
+4. **`net_stress_test`**: Injects 120ms artificial latency and 5% packet loss with full NetGraph breakdown.
+5. **`slowmo_duel`**: Matrix-style 0.35x timescale sniper challenge against an elite bot.
+
+---
+
+### Agent Tools Integration
+
+The console is fully exposed to AI pair-programming agents via two structured tools:
+
+- **`hassault.console_exec`**:
+  ```python
+  await agent_tools.hassault_console_exec(command="draw.hitboxes 1; server.timescale 0.5")
+  ```
+- **`hassault.run_macro`**:
+  ```python
+  await agent_tools.hassault_run_macro(name="warmup")
+  ```
+
+---
+
+## Articulated Character Models, Skeletal Animations & Skin System
+
+`packages/core/src/modules/hassault/models/*` + `packages/core/src/modules/hassault/avatars.ts`.
+
+Remote players and AI bots are rendered using full-featured articulated humanoid operator models
+driven by a 60fps procedural skeletal animation engine. This replaces placeholder capsules
+with expressive, tactical 3D characters while guaranteeing **100% competitive hitbox invariance**.
+
+### Humanoid Joint Hierarchy & Weapon Rig
+
+Each character is constructed from optimized procedural geometric primitives arranged in a hierarchical bone tree:
+
+```
+RootGroup (World Coordinate Anchor)
+ └── Pelvis (Hips & Tactical Belt)
+      ├── Spine (Torso & Tactical Plate Carrier Vest)
+      │    ├── Neck & Head (Balaclava, Ballistic Helmet, Tactical Visor)
+      │    ├── Left Arm: Shoulder → Upper Arm → Forearm → Support Hand
+      │    └── Right Arm: Shoulder → Upper Arm → Forearm → Trigger Hand
+      │         └── Weapon Socket (Active 3D Weapon Prop + Muzzle Flash Point)
+      ├── Left Leg: Hip → Thigh → Knee Pad → Shin → Tactical Boot
+      └── Right Leg: Hip → Thigh → Knee Pad → Shin → Tactical Boot
+```
+
+Every character carries a 3D weapon prop matching their active weapon slot:
+- **Slot 0 (Knife)**: Combat blade with handle and bevelled edge.
+- **Slot 1 (Pistol)**: Semi-automatic handgun with slide, grip, and barrel.
+- **Slot 2 (Carbine / Assault Rifle)**: Tactical rifle with receiver, stock, magazine, barrel, and optic rail.
+- **Slot 3 (Shotgun)**: Heavy pump-action combat shotgun with ribbed pump and barrel.
+- **Slot 4 (Sniper Rifle)**: Long-range precision rifle with extended barrel, scope cylinder, and stock.
+- **Muzzle Flash**: Dynamically triggered on trigger pull and rapidly decayed over 2 frames.
+
+---
+
+### Procedural Skeletal Animation Engine
+
+`CharacterAnimator` computes real-time joint rotations and offsets every frame based on player locomotion velocity, look pitch, crouch fraction, ground state, and combat actions:
+
+1. **Locomotion & Pendulum Leg Kinematics**:
+   - Derives movement velocity vector $(dx/dt, dy/dt)$ from consecutive snapshots.
+   - 2-phase forward/backward pendulum leg swing with knee flexion on the backswing.
+   - Hip bobbing and vertical stride oscillation at twice the stride frequency.
+2. **Breathing Idle Sway**:
+   - Subtle sinusoidal chest and shoulder oscillation ($2.2\text{ Hz}$) when standing still.
+3. **Smooth Crouch Compression**:
+   - Seamlessly interpolates hip descent from standing height ($5.2$) to crouch height ($4.075$).
+   - Knees bend forward and spine leans slightly into tactical posture while nameplates lower accordingly.
+4. **Airborne / Jump Tuck**:
+   - When airborne (`ground === false`), legs tuck upward at the knees and arms spread for balance.
+5. **Aim Pitch Look (Up / Down Tracking)**:
+   - Pitch angle is distributed proportionally ($40\%$ spine, $60\%$ neck/head).
+   - Other players visually see exactly where an enemy is aiming in 3D world space.
+6. **Recoil Kickback**:
+   - Triggering shots applies an instant rearward kick impulse on the weapon socket, decaying with exponential damping.
+7. **Elimination / Death Slump**:
+   - When eliminated (`alive === false`), the model gracefully slumps to the ground with sprawl kinematics.
+
+---
+
+### Cosmetic Skins & Hitbox Invariance Guarantee
+
+The skin system provides distinct faction styling and collectible operator skins without ever altering the collision volume or giving competitive advantages:
+
+| Skin ID | Name | Faction | Body Palette | Armor & Trim | Visor Glow |
+|---|---|---|---|---|---|
+| `arc_default` | ARC Scavenger | ARC | Desert Sand (`#d9a441`) | Weathered Brown (`#4a3b2c`) | Ballistic (`#222222`) |
+| `halon_default` | HALON Enforcer | HALON | Steel Blue (`#4c8fd4`) | Slate Plate (`#1e293b`) | Cyan Glow (`#38bdf8`) |
+| `scavenger_prime` | Scavenger Prime | ARC | Deep Rust (`#b45309`) | Carbon Black (`#1c1917`) | Amber Lens (`#fbbf24`) |
+| `cyber_ghost` | Ghost Recon | Neutral | Stealth Black (`#18181b`) | Charcoal (`#27272a`) | Purple Holo (`#c084fc`) |
+| `arctic_specops` | Arctic SpecOps | Neutral | Snow White (`#e2e8f0`) | Frost Slate (`#64748b`) | Ice Cyan (`#0ea5e9`) |
+| `hazmat_warden` | Hazmat Warden | HALON | Hazard Yellow (`#eab308`)| Heavy Rubber (`#18181b`) | Bio Green (`#22c55e`) |
+
+> [!IMPORTANT]
+> **Strict Hitbox Invariance**:
+> Every operator skin and attachment is strictly bounded within the canonical collision cylinder ($r = 1.1, h = 5.2$) and head band ($1.0$) defined in `DEFAULT_HITBOX`. Hit registration remains strictly server-authoritative raycast vs canonical cylinder. Skins never alter hitboxes, movement speeds, or sight lines.
+
+---
 
 ## Known limitations
+
 
 - **Ranked is XP and a logged result, not a rating.** ELO applies to two seats
   facing each other, and a free-for-all people come and go from is not that

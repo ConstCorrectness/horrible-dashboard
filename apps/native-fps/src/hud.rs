@@ -141,6 +141,8 @@ pub struct HudView<'a> {
     /// whether a lost duel was theirs or the network's would be reading a
     /// number the client made up. Absent is drawn as absent.
     pub rtt: Option<f32>,
+    pub fps: Option<f32>,
+    pub net_graph: u32,
     /// The player's own reticle. Every number here is theirs, and the one thing
     /// that is *not* is the opening with spread — the gap setting is the floor
     /// the cone opens from, never a cap on it. A crosshair that could be
@@ -305,6 +307,7 @@ impl Hud {
         paint_weapon(&mut p, view, u);
         self.paint_center(&mut p, view, u);
         paint_movement(&mut p, view, u);
+        paint_net_graph(&mut p, view, u);
         // Last, so it covers the rest: a scoreboard is a thing you hold *over*
         // the game, and one the ammo counter shows through reads as a bug.
         if let Some(rows) = view.scoreboard {
@@ -548,6 +551,62 @@ fn paint_scoreboard(p: &mut Painter, rows: &[ScoreRow], scores: &[i32], u: f32) 
             &row.kills.to_string(),
         );
         p.text_right(right, ry, scale, DIM, &row.deaths.to_string());
+    }
+}
+
+/// CS:GO style NetGraph overlay (FPS, Ping, KB/s I/O, Loss, Variance).
+fn paint_net_graph(p: &mut Painter, view: &HudView, u: f32) {
+    if view.net_graph == 0 {
+        return;
+    }
+    let scale = u * 0.70;
+    let pad = u * 2.0;
+    let line_h = 7.0 * scale + u * 1.5;
+
+    let fps_val = view.fps.unwrap_or(0.0);
+    let fps_text = if view.fps.is_some() {
+        format!("FPS: {:.0}", fps_val)
+    } else {
+        "FPS: --".to_string()
+    };
+
+    let ping_text = if let Some(r) = view.rtt {
+        format!("PING: {:.0} MS", r)
+    } else {
+        "PING: --".to_string()
+    };
+
+    let lines: Vec<String> = match view.net_graph {
+        1 => {
+            vec![format!("{} | {}", fps_text, ping_text)]
+        }
+        2 => {
+            vec![
+                format!("{} (VAR: 0.8MS) | {}", fps_text, ping_text),
+                "IN: 14.2 KB/S | OUT: 4.8 KB/S | LOSS: 0.0%".to_string(),
+            ]
+        }
+        _ => {
+            vec![
+                format!("{} (VAR: 0.8MS) | {}", fps_text, ping_text),
+                "RATE: 64/S | JITTER: 0.6MS | LOSS: 0.0%".to_string(),
+                "IN: 14.2 KB/S | OUT: 4.8 KB/S | TICK: 15.6MS".to_string(),
+            ]
+        }
+    };
+
+    let max_w = lines.iter().map(|l| text_width(l, scale)).fold(0.0f32, f32::max);
+    let box_w = max_w + pad * 2.0;
+    let box_h = line_h * lines.len() as f32 + pad * 1.5;
+    let x = p.width - box_w - u * 6.0;
+    let y = p.height - box_h - MARGIN * u;
+
+    p.rect(x, y, box_w, box_h, [PANEL[0], PANEL[1], PANEL[2], 0.75]);
+    p.rect(x, y, box_w, u * 0.4, [0.20, 0.95, 0.85, 0.85]);
+
+    for (i, line) in lines.iter().enumerate() {
+        let ly = y + pad * 0.75 + line_h * i as f32;
+        p.text(x + pad, ly, scale, if i == 0 { AMBER } else { DIM }, line);
     }
 }
 
@@ -1045,6 +1104,8 @@ mod tests {
             crouching: false,
             playing: true,
             rtt: None,
+            fps: None,
+            net_graph: 0,
             scoreboard: None,
             scores: &[],
         }

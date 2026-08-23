@@ -52,6 +52,7 @@ import {
   type Bindings,
   type GameAction,
 } from './controls';
+import { DeveloperConsole, NetGraphHUD } from './console';
 import { EffectsPool } from './effects';
 import { GameMenu } from './GameMenu';
 import { buildWorldMesh } from './geometry';
@@ -284,6 +285,9 @@ export function HorribleAssaultPanel() {
 
   // ---- the pause menu and the preferences it edits --------------------------
   const [menuOpen, setMenuOpen] = useState(false);
+  const [consoleOpen, setConsoleOpen] = useState(false);
+  const consoleOpenRef = useRef(false);
+  consoleOpenRef.current = consoleOpen;
   const sensitivity = useSetting<number>(SENSITIVITY_KEY) ?? 1;
   const fov = useSetting<number>(FOV_KEY) ?? 75;
   const volume = useSetting<number>(VOLUME_KEY) ?? 0.7;
@@ -955,7 +959,7 @@ export function HorribleAssaultPanel() {
           // builds and frees its wireframes inside `sync`, so the flag has to be
           // in force by the time it runs or the toggle lands a frame late.
           avatars.setHitboxes(showHitboxesRef.current);
-          avatars.sync(remote);
+          avatars.sync(remote, dt);
           if (session.pendingShots.length > 0) {
             // Teams come from the roster, not from `remote` — that one excludes
             // us, and our own tracer needs a colour too.
@@ -1326,6 +1330,27 @@ export function HorribleAssaultPanel() {
       shotsRef.current?.cycle(e.deltaY > 0 ? 1 : -1);
     };
     const onKeyDown = (e: KeyboardEvent) => {
+      // Backquote (`) or Tilde (~) opens/closes the developer console
+      if (e.code === 'Backquote' || (e.key === '`' && !e.ctrlKey && !e.altKey)) {
+        e.preventDefault();
+        if (consoleOpenRef.current) {
+          setConsoleOpen(false);
+          if (!menuOpenRef.current) grabInput();
+        } else {
+          if (document.pointerLockElement) document.exitPointerLock?.();
+          setConsoleOpen(true);
+        }
+        return;
+      }
+      if (consoleOpenRef.current) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          setConsoleOpen(false);
+          if (!menuOpenRef.current) grabInput();
+        }
+        return;
+      }
+
       // Escape is the pause menu, and it is the one key handled while *not*
       // locked — because by the time it reaches us the shell's ladder may already
       // have released the lock (see `openMenu`). `lockedRef` is the state before
@@ -2033,7 +2058,7 @@ export function HorribleAssaultPanel() {
                 {/* The player's own keys, not the shipped ones: this line is a
                     lie the moment anything is rebound. */}
                 <span style={{ color: 'var(--text-dim)' }}>
-                  {describeControls(controls)} · Esc menu
+                  {describeControls(controls)} · Esc menu · ` console
                 </span>
                 <span style={{ color: 'var(--text-dim)' }}>
                   Left fire · right scope · wheel or {keyLabel(controls.weapon1[0] ?? '1')}–
@@ -2056,6 +2081,21 @@ export function HorribleAssaultPanel() {
             )}
           </div>
         )}
+
+        {/* CS:GO Style NetGraph HUD */}
+        {phase === 'playing' && <NetGraphHUD rttMs={net.rtt} />}
+
+        {/* Developer Console (Overlay) */}
+        <DeveloperConsole
+          isOpen={consoleOpen}
+          onClose={() => {
+            setConsoleOpen(false);
+            if (!menuOpen) grabInput();
+          }}
+          roomId={net.room}
+          mapName={mapName}
+          rttMs={net.rtt}
+        />
 
         {/* The pause menu. Deployed players only: before that the boot overlay owns
             the pane, and Escape there is the shell's business, not the game's. */}

@@ -470,3 +470,70 @@ def register_hassault_tools() -> None:
             },
         },
     )
+    registry.agent_tools["hassault.console_exec"] = AgentTool(
+        name="hassault.console_exec",
+        description=(
+            "Execute a developer console command, CVar assignment/query, or Python script "
+            "in hAssault (e.g. 'draw.hitboxes 1', 'server.timescale 0.5', 'player.give carbine')."
+        ),
+        handler=console_exec_tool,
+        group="hassault",
+        parameters={
+            "command": {"type": "string", "description": "Command string or Python script."},
+            "room": {"type": "string", "description": "Optional match room id."},
+        },
+        required=["command"],
+        side_effect=True,
+    )
+    registry.agent_tools["hassault.run_macro"] = AgentTool(
+        name="hassault.run_macro",
+        description="Execute a named hAssault developer console macro (e.g. 'warmup', 'bot_1v5').",
+        handler=run_macro_tool,
+        group="hassault",
+        parameters={
+            "name": {"type": "string", "description": "Macro name, e.g. warmup, bot_1v5."},
+            "room": {"type": "string", "description": "Optional match room id."},
+        },
+        required=["name"],
+        side_effect=True,
+    )
+
+
+async def console_exec_tool(args: dict[str, Any]) -> dict[str, Any]:
+    from backend.modules.hassault.console import ConsoleExecRequest, console_registry
+
+    cmd = str(args.get("command") or "").strip()
+    room_id = str(args.get("room") or "").strip() or None
+    if not cmd:
+        return {"error": "command string required"}
+    req = ConsoleExecRequest(command=cmd, room_id=room_id)
+    res = await console_registry.execute(req)
+    return {
+        "ok": res.ok,
+        "command": res.command,
+        "output": res.output,
+        "error": res.error,
+        "affected_cvars": res.affected_cvars,
+    }
+
+
+async def run_macro_tool(args: dict[str, Any]) -> dict[str, Any]:
+    from backend.modules.hassault.console import ConsoleExecRequest, console_registry
+
+    name = str(args.get("name") or "").strip()
+    room_id = str(args.get("room") or "").strip() or None
+    if not name:
+        return {"error": "macro name required"}
+    macro = console_registry.macros.get(name)
+    if not macro:
+        return {"error": f"no macro named {name!r}"}
+    req = ConsoleExecRequest(command=f"macro.run({name!r})", room_id=room_id)
+    res = await console_registry.execute(req)
+    return {
+        "ok": res.ok,
+        "macro": name,
+        "output": res.output,
+        "error": res.error,
+        "affected_cvars": res.affected_cvars,
+    }
+

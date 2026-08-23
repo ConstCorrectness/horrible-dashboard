@@ -229,6 +229,38 @@ async def handle(conn: WsConnection, msg: dict[str, Any]) -> None:
     elif event == "list":
         await conn.send_json(_evt("matches", {"matches": match_server.listing()}))
 
+    elif event == "console_exec":
+        from backend.modules.hassault.console import ConsoleExecRequest, console_registry
+
+        cmd = str(data.get("command") or "")
+        req_id = data.get("reqId")
+        entry = match_server.player_for(conn)
+        room_id = entry[0].id if entry else str(data.get("room") or "")
+        player_id = entry[1].id if entry else None
+
+        req = ConsoleExecRequest(
+            command=cmd,
+            room_id=room_id or None,
+            player_id=player_id,
+            client_context=data.get("context") or {},
+        )
+        res = await console_registry.execute(req)
+        await conn.send_json(
+            _evt(
+                "console_res",
+                {
+                    "reqId": req_id,
+                    "ok": res.ok,
+                    "command": res.command,
+                    "output": res.output,
+                    "error": res.error,
+                    "affectedCvars": res.affected_cvars,
+                    "resultData": res.result_data,
+                },
+            )
+        )
+
+
 
 def _signed_in_username() -> str | None:
     """This node's player identity, or None when signed out / not yet enlisted.

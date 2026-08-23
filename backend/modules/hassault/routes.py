@@ -16,10 +16,18 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response
+from pydantic import BaseModel
 
 from backend.paths import data_dir
-from backend.modules.hassault import assets, fabric, hitbox, lore, mapsource, weapons
+from backend.modules.hassault import assets, console, fabric, hitbox, lore, mapsource, weapons
 from backend.modules.hassault.cgz import PLANE_ORDER, CgzError, write_cgz
+from backend.modules.hassault.console import (
+    ConsoleDefinitionsResponse,
+    ConsoleExecRequest,
+    ConsoleExecResponse,
+    MacroDefinition,
+    console_registry,
+)
 from backend.modules.hassault.match import MAX_PLAYERS, match_server
 from backend.modules.hassault.models import (
     BrowseMatch,
@@ -949,3 +957,54 @@ async def execute_trade_up(instance_ids: list[str]) -> dict[str, Any]:
         )
     await skin_manager.sync_to_atlas(account_id)
     return result.to_dict(SKIN_DICT.get(result.skin_id))
+
+
+# -----------------------------------------------------------------------------
+# Developer Console & Macro Endpoints
+# -----------------------------------------------------------------------------
+
+
+@router.get("/console/definitions", response_model=ConsoleDefinitionsResponse)
+async def get_console_definitions() -> ConsoleDefinitionsResponse:
+    """Return all registered CVars, ConCommands, and Macros for the console."""
+    return ConsoleDefinitionsResponse(
+        cvars=list(console_registry.cvars.values()),
+        commands=list(console_registry.commands.values()),
+        macros=list(console_registry.macros.values()),
+    )
+
+
+@router.post("/console/exec", response_model=ConsoleExecResponse)
+async def exec_console_command(req: ConsoleExecRequest) -> ConsoleExecResponse:
+    """Execute a developer console command, CVar query/assignment, or Python script."""
+    return await console_registry.execute(req)
+
+
+@router.get("/console/macros", response_model=list[MacroDefinition])
+async def list_console_macros() -> list[MacroDefinition]:
+    """List all available developer console macros."""
+    return list(console_registry.macros.values())
+
+
+class SaveMacroRequest(BaseModel):
+    name: str
+    code: str
+    description: str = ""
+
+
+@router.post("/console/macros", response_model=MacroDefinition)
+async def save_console_macro(req: SaveMacroRequest) -> MacroDefinition:
+    """Save or update a developer console macro."""
+    if not req.name.strip():
+        raise HTTPException(status_code=400, detail="Macro name cannot be empty")
+    return console_registry.save_macro(req.name, req.code, req.description)
+
+
+@router.delete("/console/macros/{name}")
+async def delete_console_macro(name: str) -> dict[str, bool]:
+    """Delete a user-created developer console macro."""
+    ok = console_registry.delete_macro(name)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Macro not found or is builtin")
+    return {"ok": True}
+

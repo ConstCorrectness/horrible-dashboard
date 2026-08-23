@@ -1,5 +1,6 @@
 import { registry, type ModuleManifest } from '../../registry';
 import { registerNotificationAction } from '../notifications';
+import { DeveloperConsole } from './console';
 import { HorribleAssaultPanel } from './HorribleAssaultPanel';
 import { requestJoin } from './invite-notify';
 
@@ -54,12 +55,25 @@ export const hassaultModule: ModuleManifest = {
       icon: '🔫',
       singleton: true,
     },
+    {
+      id: 'hassault.console',
+      title: 'hAssault Developer Console',
+      component: DeveloperConsole,
+      role: 'tool',
+      icon: '💻',
+      singleton: false,
+    },
   ],
   commands: [
     {
       id: 'hassault.open',
       title: 'HorribleAssault: Open',
       run: () => registry.openPanel('hassault.play'),
+    },
+    {
+      id: 'hassault.openConsole',
+      title: 'HorribleAssault: Open Developer Console',
+      run: () => registry.openPanel('hassault.console'),
     },
   ],
   settings: [

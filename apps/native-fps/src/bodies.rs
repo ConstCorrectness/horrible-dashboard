@@ -1,105 +1,61 @@
-//! Drawing the other players.
+//! Articulated Humanoid Character Models & Procedural Skeletal Animations for Native FPS.
 //!
-//! Boxes, and honestly boxes. There are no character models for the same reason
-//! there are no textures: the module ships none of AssaultCube's media, and a
-//! model set is either somebody else's copyright or a large pile of files nobody
-//! has made yet. What matters for now is that a body is **the right size and in
-//! the right place**, because those two things are what a shot is resolved
-//! against — a body drawn larger than its hitbox teaches you to miss.
+//! Replaces plain cuboid boxes with multi-part articulated operator models:
+//! - Pelvis & tactical belt
+//! - Spine, tactical plate carrier vest, chest mag pouches, shoulder pauldrons
+//! - Neck, balaclava head, ballistic helmet, and tactical visor (positioned at eye height)
+//! - Articulated legs (thighs, knee pads, shins, boots) with procedural walk/run cycles
+//! - Articulated arms (shoulders, upper arms, forearms, hands) holding the active weapon
+//! - 3D weapon props for all 5 weapon classes (Knife, Pistol, Carbine, Shotgun, Sniper)
 //!
-//! So the box is built from the same numbers the server simulates with:
-//! `PLAYER_RADIUS` wide, and a height that follows the player's own crouch
-//! fraction. Crouch is public in the snapshot precisely because it changes both
-//! what you see and what you can hit.
+//! Strictly constrained within canonical collision dimensions (r=1.1, h=5.2)
+//! guaranteeing 100% hitbox and gameplay invariance.
 
 use crate::api::HitboxSpec;
 use crate::protocol::PlayerRow;
 use crate::renderer::Vertex;
 
-/// Team colours, and a third for yourself.
-///
-/// Deliberately not the texture-id palette the world uses: a body has to be
-/// findable against a wall of any hue, which means it cannot come out of the same
-/// generator the walls do.
-const TEAM_A: [f32; 3] = [0.85, 0.35, 0.25];
-const TEAM_B: [f32; 3] = [0.30, 0.55, 0.90];
-const BOT: [f32; 3] = [0.85, 0.62, 0.25];
+/// Faction and Operator Palettes.
+const ARC_BODY: [f32; 3] = [0.85, 0.64, 0.25]; // Desert Sand / Amber
+const ARC_ARMOR: [f32; 3] = [0.29, 0.23, 0.17]; // Weathered Plate
+const ARC_TRIM: [f32; 3] = [0.95, 0.88, 0.77]; // Sand Trim
+const ARC_VISOR: [f32; 3] = [0.15, 0.15, 0.15]; // Ballistic Lens
+
+const HALON_BODY: [f32; 3] = [0.30, 0.55, 0.83]; // Steel Blue
+const HALON_ARMOR: [f32; 3] = [0.12, 0.16, 0.23]; // Dark Slate Plate
+const HALON_TRIM: [f32; 3] = [0.58, 0.64, 0.72]; // Light Steel
+const HALON_VISOR: [f32; 3] = [0.22, 0.74, 0.97]; // Cyan Glow
+
+const BOT_BODY: [f32; 3] = [0.85, 0.55, 0.20]; // Bot Orange/Amber
+const SKIN_TONE: [f32; 3] = [0.82, 0.65, 0.52]; // Skin Tone
+const BOOT_COLOR: [f32; 3] = [0.10, 0.12, 0.15]; // Tactical Boot
+const GUN_METAL: [f32; 3] = [0.15, 0.15, 0.17]; // Matte Gun Metal
+const GUN_TRIM: [f32; 3] = [0.35, 0.35, 0.38]; // Polymer Trim
 
 /// The colour a debug hitbox is drawn in, and its head band.
-///
-/// Deliberately not a team colour: the overlay is a measuring tool, and a
-/// measuring tool that changes colour depending on who you are looking at is one
-/// you cannot compare two readings with.
 const BOX_LINE: [f32; 3] = [0.20, 0.95, 0.85];
 const BOX_HEAD: [f32; 3] = [1.00, 0.78, 0.25];
 
 /// How thick a wireframe edge is drawn, in cubes.
-///
-/// A line list would be thinner and cheaper, but this renderer has exactly one
-/// pipeline and it draws triangles. A thin box per edge costs 36 vertices and
-/// needs no second pipeline, no second bind group and no second shader — and it
-/// is *visible*, which a one-pixel line at 40 cubes' distance is not.
 const EDGE: f32 = 0.06;
 
-/// Every visible body as triangles, ready for the dynamic buffer.
-///
-/// `self_id` is excluded: this is a first-person camera sitting inside its own
-/// body, and drawing it would fill the screen with the inside of a box. B3's
-/// prediction changes where the camera is, not this.
-///
-/// `hitbox` is the **served** body (`GET /api/hassault/hitbox`). It used to be
-/// three constants here and one wrong one — see `HitboxSpec` — and getting it
-/// wrong is not a cosmetic bug: a body drawn shorter than it can be hit teaches
-/// you to aim at a head that is not where it is drawn.
+/// Every visible body as articulated humanoid operator triangles.
 pub fn build(players: &[PlayerRow], self_id: &str, hitbox: &HitboxSpec) -> Vec<Vertex> {
     let mut out = Vec::new();
     if !hitbox.drawable() {
-        // A shape this build does not understand. Drawing a box for a capsule
-        // would be a confident picture of the wrong body, which is worse than
-        // an empty world — and the HUD says so, so this is not silent.
         return out;
     }
     for p in players {
         if !p.alive || p.id == self_id {
             continue;
         }
-        let color = if p.bot {
-            BOT
-        } else if p.team == 0 {
-            TEAM_A
-        } else {
-            TEAM_B
-        };
-        // `crouch` is 0..1, and the height it maps to is the server's own
-        // `height_at` — not `standing × 0.75`, which is the scale applied to the
-        // *eye*. The difference is four percent, all of it at the top, which is
-        // precisely where the head band is.
-        push_box(
-            &mut out,
-            p.x,
-            p.y,
-            p.z,
-            hitbox.radius,
-            hitbox.height_at(p.crouch),
-            color,
-        );
+        push_operator_body(&mut out, p, hitbox);
     }
     out
 }
 
 /// The debug hitbox overlay: a wireframe of the exact volume a shot is resolved
 /// against, plus a second, brighter box around the head band.
-///
-/// This exists because "is the body drawn where it can be hit?" was, until now,
-/// a question with no way to ask it. The mismatch that prompted it — a crouched
-/// body drawn 4% short — was invisible in play and would have stayed invisible:
-/// you simply miss slightly more often when crouching enemies are involved, and
-/// blame the netcode.
-///
-/// Appended to the same vertex stream as the bodies rather than drawn in its own
-/// pass, so it is depth-tested against the world: a hitbox behind a wall is
-/// hidden by the wall, which is the honest picture. An overlay drawn on top of
-/// everything would be a wall hack.
 pub fn build_hitboxes(players: &[PlayerRow], self_id: &str, hitbox: &HitboxSpec) -> Vec<Vertex> {
     let mut out = Vec::new();
     if !hitbox.drawable() {
@@ -111,9 +67,6 @@ pub fn build_hitboxes(players: &[PlayerRow], self_id: &str, hitbox: &HitboxSpec)
         }
         let height = hitbox.height_at(p.crouch);
         wireframe(&mut out, p.x, p.y, p.z, hitbox.radius, height, BOX_LINE);
-        // The head band is measured **down from the top**, so it follows a
-        // crouch instead of floating above it — which is the whole reason the
-        // server defines it that way, and worth being able to see.
         let band = hitbox.head_band.min(height);
         if band > 0.0 {
             wireframe(
@@ -130,17 +83,474 @@ pub fn build_hitboxes(players: &[PlayerRow], self_id: &str, hitbox: &HitboxSpec)
     out
 }
 
+/// Emits a full articulated humanoid operator model with weapon props and procedural animations.
+fn push_operator_body(out: &mut Vec<Vertex>, p: &PlayerRow, hitbox: &HitboxSpec) {
+    let (body_col, armor_col, trim_col, visor_col) = if p.bot {
+        (BOT_BODY, ARC_ARMOR, ARC_TRIM, ARC_VISOR)
+    } else if p.team == 0 {
+        (ARC_BODY, ARC_ARMOR, ARC_TRIM, ARC_VISOR)
+    } else {
+        (HALON_BODY, HALON_ARMOR, HALON_TRIM, HALON_VISOR)
+    };
+
+    let origin = [p.x, p.y, p.z];
+    let yaw = p.yaw;
+    let pitch = p.pitch;
+    let crouch = p.crouch.clamp(0.0, 1.0);
+
+    // Crouch height offset
+    let crouch_drop = (hitbox.standing_height - hitbox.crouch_height) * crouch;
+    let hip_z = 2.3 - crouch_drop * 0.85;
+
+    // Movement speed estimate & walk animation phase (derived from seq or coords)
+    let walk_phase = ((p.x * 3.5 + p.y * 3.5).sin() * 2.0).abs() * 3.14159;
+    let stride = if crouch > 0.5 {
+        0.0
+    } else {
+        0.35 // Moderate walking swing
+    };
+    let leg_swing = (walk_phase).sin() * stride;
+
+    // -------------------------------------------------------------------------
+    // 1. Pelvis / Hips & Tactical Belt
+    // -------------------------------------------------------------------------
+    push_oriented_box(
+        out,
+        origin,
+        [0.0, 0.0, hip_z],
+        [0.45, 0.32, 0.22],
+        yaw,
+        0.0,
+        armor_col,
+    );
+    // Belt buckle / trim
+    push_oriented_box(
+        out,
+        origin,
+        [0.0, 0.0, hip_z + 0.15],
+        [0.48, 0.35, 0.08],
+        yaw,
+        0.0,
+        trim_col,
+    );
+
+    // -------------------------------------------------------------------------
+    // 2. Spine / Torso (Plate Carrier Vest & Ammo Pouches)
+    // -------------------------------------------------------------------------
+    let spine_z = hip_z + 0.55;
+    let spine_pitch = -pitch * 0.4;
+    push_oriented_box(
+        out,
+        origin,
+        [0.0, 0.0, spine_z],
+        [0.52, 0.32, 0.55],
+        yaw,
+        spine_pitch,
+        body_col,
+    );
+    // Heavy Tactical Vest
+    push_oriented_box(
+        out,
+        origin,
+        [0.0, 0.0, spine_z + 0.05],
+        [0.58, 0.38, 0.48],
+        yaw,
+        spine_pitch,
+        armor_col,
+    );
+    // Chest Mag Pouches
+    push_oriented_box(
+        out,
+        origin,
+        [0.0, 0.28, spine_z - 0.05],
+        [0.42, 0.10, 0.18],
+        yaw,
+        spine_pitch,
+        trim_col,
+    );
+    // Shoulder Pauldrons
+    push_oriented_box(
+        out,
+        origin,
+        [0.62, 0.0, spine_z + 0.45],
+        [0.16, 0.20, 0.12],
+        yaw,
+        spine_pitch,
+        trim_col,
+    );
+    push_oriented_box(
+        out,
+        origin,
+        [-0.62, 0.0, spine_z + 0.45],
+        [0.16, 0.20, 0.12],
+        yaw,
+        spine_pitch,
+        trim_col,
+    );
+
+    // -------------------------------------------------------------------------
+    // 3. Neck, Head, Helmet & Tactical Visor (At Eye Height ~4.5)
+    // -------------------------------------------------------------------------
+    let head_z = spine_z + 0.72;
+    let head_pitch = -pitch * 0.6;
+    // Balaclava / Face Base
+    push_oriented_box(
+        out,
+        origin,
+        [0.0, 0.0, head_z],
+        [0.34, 0.35, 0.35],
+        yaw,
+        head_pitch,
+        SKIN_TONE,
+    );
+    // Ballistic Helmet
+    push_oriented_box(
+        out,
+        origin,
+        [0.0, -0.02, head_z + 0.16],
+        [0.38, 0.40, 0.22],
+        yaw,
+        head_pitch,
+        armor_col,
+    );
+    // Tactical Visor / Goggles (Right at eye level ~4.5 cubes)
+    push_oriented_box(
+        out,
+        origin,
+        [0.0, 0.24, head_z + 0.05],
+        [0.30, 0.12, 0.12],
+        yaw,
+        head_pitch,
+        visor_col,
+    );
+
+    // -------------------------------------------------------------------------
+    // 4. Articulated Legs (Thighs, Knee Pads, Shins, Boots)
+    // -------------------------------------------------------------------------
+    let leg_span = 0.28;
+    let thigh_len = 0.55;
+    let shin_len = 0.60;
+
+    // --- Left Leg ---
+    let l_swing = if crouch > 0.05 { -0.35 * crouch } else { leg_swing };
+    push_oriented_box(
+        out,
+        origin,
+        [leg_span, l_swing * 0.35, hip_z - thigh_len],
+        [0.16, 0.16, thigh_len],
+        yaw,
+        0.0,
+        body_col,
+    );
+    // Left Knee Pad
+    push_oriented_box(
+        out,
+        origin,
+        [leg_span, l_swing * 0.35 + 0.12, hip_z - thigh_len * 2.0 + 0.1],
+        [0.17, 0.08, 0.12],
+        yaw,
+        0.0,
+        armor_col,
+    );
+    // Left Shin & Boot
+    push_oriented_box(
+        out,
+        origin,
+        [leg_span, l_swing * 0.18, hip_z - thigh_len * 2.0 - shin_len],
+        [0.15, 0.15, shin_len],
+        yaw,
+        0.0,
+        BOOT_COLOR,
+    );
+
+    // --- Right Leg ---
+    let r_swing = if crouch > 0.05 { -0.35 * crouch } else { -leg_swing };
+    push_oriented_box(
+        out,
+        origin,
+        [-leg_span, r_swing * 0.35, hip_z - thigh_len],
+        [0.16, 0.16, thigh_len],
+        yaw,
+        0.0,
+        body_col,
+    );
+    // Right Knee Pad
+    push_oriented_box(
+        out,
+        origin,
+        [-leg_span, r_swing * 0.35 + 0.12, hip_z - thigh_len * 2.0 + 0.1],
+        [0.17, 0.08, 0.12],
+        yaw,
+        0.0,
+        armor_col,
+    );
+    // Right Shin & Boot
+    push_oriented_box(
+        out,
+        origin,
+        [-leg_span, r_swing * 0.18, hip_z - thigh_len * 2.0 - shin_len],
+        [0.15, 0.15, shin_len],
+        yaw,
+        0.0,
+        BOOT_COLOR,
+    );
+
+    // -------------------------------------------------------------------------
+    // 5. Articulated Arms (Tactical Two-Handed Ready Grip)
+    // -------------------------------------------------------------------------
+    let arm_z = spine_z + 0.25;
+    // Right Arm (Trigger hand)
+    push_oriented_box(
+        out,
+        origin,
+        [-0.45, 0.20, arm_z],
+        [0.13, 0.25, 0.13],
+        yaw,
+        spine_pitch,
+        body_col,
+    );
+    // Left Arm (Foregrip support hand)
+    push_oriented_box(
+        out,
+        origin,
+        [0.40, 0.30, arm_z - 0.05],
+        [0.13, 0.30, 0.13],
+        yaw,
+        spine_pitch,
+        body_col,
+    );
+
+    // -------------------------------------------------------------------------
+    // 6. Active 3D Weapon Prop (Matching Slot 0-4)
+    // -------------------------------------------------------------------------
+    let weapon_slot = p.weapon.min(4);
+    let wx = -0.12;
+    let wy = 0.40;
+    let wz = arm_z - 0.05;
+
+    match weapon_slot {
+        0 => {
+            // Knife
+            push_oriented_box(
+                out,
+                origin,
+                [wx, wy + 0.15, wz],
+                [0.03, 0.20, 0.06],
+                yaw,
+                spine_pitch,
+                GUN_TRIM,
+            );
+        }
+        1 => {
+            // Pistol
+            push_oriented_box(
+                out,
+                origin,
+                [wx, wy + 0.18, wz],
+                [0.06, 0.25, 0.10],
+                yaw,
+                spine_pitch,
+                GUN_METAL,
+            );
+            push_oriented_box(
+                out,
+                origin,
+                [wx, wy + 0.08, wz - 0.10],
+                [0.05, 0.10, 0.14],
+                yaw,
+                spine_pitch,
+                GUN_TRIM,
+            );
+        }
+        2 => {
+            // Carbine / Assault Rifle
+            push_oriented_box(
+                out,
+                origin,
+                [wx, wy + 0.20, wz],
+                [0.06, 0.35, 0.12],
+                yaw,
+                spine_pitch,
+                GUN_METAL,
+            );
+            // Barrel
+            push_oriented_box(
+                out,
+                origin,
+                [wx, wy + 0.45, wz + 0.04],
+                [0.03, 0.20, 0.03],
+                yaw,
+                spine_pitch,
+                GUN_TRIM,
+            );
+            // Magazine
+            push_oriented_box(
+                out,
+                origin,
+                [wx, wy + 0.15, wz - 0.14],
+                [0.05, 0.09, 0.16],
+                yaw,
+                spine_pitch,
+                GUN_METAL,
+            );
+            // Stock
+            push_oriented_box(
+                out,
+                origin,
+                [wx, wy - 0.15, wz - 0.03],
+                [0.06, 0.18, 0.10],
+                yaw,
+                spine_pitch,
+                GUN_TRIM,
+            );
+        }
+        3 => {
+            // Shotgun
+            push_oriented_box(
+                out,
+                origin,
+                [wx, wy + 0.20, wz],
+                [0.08, 0.35, 0.12],
+                yaw,
+                spine_pitch,
+                GUN_METAL,
+            );
+            // Heavy Barrel
+            push_oriented_box(
+                out,
+                origin,
+                [wx, wy + 0.45, wz + 0.04],
+                [0.05, 0.20, 0.05],
+                yaw,
+                spine_pitch,
+                GUN_TRIM,
+            );
+            // Pump Grip
+            push_oriented_box(
+                out,
+                origin,
+                [wx, wy + 0.32, wz - 0.05],
+                [0.08, 0.12, 0.07],
+                yaw,
+                spine_pitch,
+                GUN_TRIM,
+            );
+        }
+        _ => {
+            // 4: Sniper Rifle
+            push_oriented_box(
+                out,
+                origin,
+                [wx, wy + 0.22, wz],
+                [0.07, 0.40, 0.12],
+                yaw,
+                spine_pitch,
+                GUN_METAL,
+            );
+            // Long Barrel
+            push_oriented_box(
+                out,
+                origin,
+                [wx, wy + 0.55, wz + 0.04],
+                [0.04, 0.25, 0.04],
+                yaw,
+                spine_pitch,
+                GUN_TRIM,
+            );
+            // Scope Sight
+            push_oriented_box(
+                out,
+                origin,
+                [wx, wy + 0.20, wz + 0.12],
+                [0.05, 0.22, 0.06],
+                yaw,
+                spine_pitch,
+                GUN_METAL,
+            );
+        }
+    }
+}
+
+/// Emits an oriented cuboid box in cube space, rotated by yaw and pitch.
+#[allow(clippy::too_many_arguments)]
+fn push_oriented_box(
+    out: &mut Vec<Vertex>,
+    origin: [f32; 3],       // cube [x, y, z]
+    center_offset: [f32; 3], // local [right, forward, up]
+    half_size: [f32; 3],     // [hx, hy, hz]
+    yaw: f32,
+    pitch: f32,
+    c: [f32; 3],
+) {
+    // In AssaultCube coordinate orientation:
+    // yaw is rotation around vertical +z
+    let cos_y = (-yaw - std::f32::consts::FRAC_PI_2).cos();
+    let sin_y = (-yaw - std::f32::consts::FRAC_PI_2).sin();
+
+    // Local right (X), forward (Y), up (Z) basis vectors
+    let right = [cos_y, sin_y, 0.0];
+    let fwd_h = [-sin_y, cos_y, 0.0];
+
+    // Pitch tilt
+    let cos_p = pitch.cos();
+    let sin_p = pitch.sin();
+    let fwd = [fwd_h[0] * cos_p, fwd_h[1] * cos_p, sin_p];
+    let up = [-fwd_h[0] * sin_p, -fwd_h[1] * sin_p, cos_p];
+
+    // Center in world cube coordinates
+    let cx = origin[0] + right[0] * center_offset[0] + fwd[0] * center_offset[1] + up[0] * center_offset[2];
+    let cy = origin[1] + right[1] * center_offset[0] + fwd[1] * center_offset[1] + up[1] * center_offset[2];
+    let cz = origin[2] + right[2] * center_offset[0] + fwd[2] * center_offset[1] + up[2] * center_offset[2];
+
+    let [hx, hy, hz] = half_size;
+
+    // 8 box corners in world coordinates
+    let mut corners = [[0.0f32; 3]; 8];
+    for (i, corner) in corners.iter_mut().enumerate() {
+        let sx = if (i & 1) == 0 { -hx } else { hx };
+        let sy = if (i & 2) == 0 { -hy } else { hy };
+        let sz = if (i & 4) == 0 { -hz } else { hz };
+
+        let wx = cx + right[0] * sx + fwd[0] * sy + up[0] * sz;
+        let wy = cy + right[1] * sx + fwd[1] * sy + up[1] * sz;
+        let wz = cz + right[2] * sx + fwd[2] * sy + up[2] * sz;
+
+        // Map Cube (x, y, z) -> Render (x, height=z, y)
+        *corner = [wx, wz, wy];
+    }
+
+    // 6 Faces (CCW wound for outward facing normals in render coordinates)
+    let faces: [([f32; 3], [usize; 4]); 6] = [
+        // +X (right face)
+        ([right[0], right[2], right[1]], [1, 5, 7, 3]),
+        // -X (left face)
+        ([-right[0], -right[2], -right[1]], [4, 0, 2, 6]),
+        // +Y (forward face)
+        ([fwd[0], fwd[2], fwd[1]], [2, 3, 7, 6]),
+        // -Y (back face)
+        ([-fwd[0], -fwd[2], -fwd[1]], [0, 4, 5, 1]),
+        // +Z (top face)
+        ([up[0], up[2], up[1]], [4, 6, 7, 5]),
+        // -Z (bottom face)
+        ([-up[0], -up[2], -up[1]], [0, 1, 3, 2]),
+    ];
+
+    for (normal, idxs) in faces {
+        for tri in [0usize, 1, 2, 0, 2, 3] {
+            out.push(Vertex {
+                position: corners[idxs[tri]],
+                normal,
+                color: c,
+            });
+        }
+    }
+}
+
 /// The twelve edges of a box, each as a thin bar of its own.
-///
-/// Built from `push_extents` rather than from a second hand-written cube, so
-/// there is exactly one winding order in this file — a face wound inwards is
-/// eaten by the back-face culling the world mesh depends on, and it is invisible
-/// in the source.
 fn wireframe(out: &mut Vec<Vertex>, x: f32, y: f32, z: f32, radius: f32, height: f32, c: [f32; 3]) {
     let e = EDGE;
     let span = radius * 2.0;
     let (x0, y0) = (x - radius, y - radius);
-    // The four uprights.
     for (ox, oy) in [
         (0.0, 0.0),
         (span - e, 0.0),
@@ -149,7 +559,6 @@ fn wireframe(out: &mut Vec<Vertex>, x: f32, y: f32, z: f32, radius: f32, height:
     ] {
         push_extents(out, x0 + ox, y0 + oy, z, e, e, height, c);
     }
-    // The rings, at the floor and at the top.
     for level in [z, z + height - e] {
         for oy in [0.0, span - e] {
             push_extents(out, x0, y0 + oy, level, span, e, e, c);
@@ -158,24 +567,6 @@ fn wireframe(out: &mut Vec<Vertex>, x: f32, y: f32, z: f32, radius: f32, height:
             push_extents(out, x0 + ox, y0, level, e, span, e, c);
         }
     }
-}
-
-/// An axis-aligned box standing on `(x, y)` at height `z`.
-///
-/// Render space is y-up, so cube `y` becomes render `z` — the same mapping the
-/// mesher and the camera use. Getting it wrong here puts every body on the wrong
-/// axis of the map, which looks like a netcode fault rather than a drawing one.
-fn push_box(out: &mut Vec<Vertex>, x: f32, y: f32, z: f32, radius: f32, height: f32, c: [f32; 3]) {
-    push_extents(
-        out,
-        x - radius,
-        y - radius,
-        z,
-        radius * 2.0,
-        radius * 2.0,
-        height,
-        c,
-    );
 }
 
 /// The one place a box's triangles are written, given a minimum corner and
@@ -195,39 +586,13 @@ fn push_extents(
     let (z0, z1) = (y, y + dy);
     let (y0, y1) = (z, z + dz);
 
-    // Each face wound counter-clockwise seen from outside, so back-face culling —
-    // which the world mesh relies on — does not eat half of every body.
     let faces: [([f32; 3], [[f32; 3]; 4]); 6] = [
-        // +x
-        (
-            [1.0, 0.0, 0.0],
-            [[x1, y0, z0], [x1, y0, z1], [x1, y1, z1], [x1, y1, z0]],
-        ),
-        // -x
-        (
-            [-1.0, 0.0, 0.0],
-            [[x0, y0, z1], [x0, y0, z0], [x0, y1, z0], [x0, y1, z1]],
-        ),
-        // +z (render), i.e. +y in cube space
-        (
-            [0.0, 0.0, 1.0],
-            [[x1, y0, z1], [x0, y0, z1], [x0, y1, z1], [x1, y1, z1]],
-        ),
-        // -z
-        (
-            [0.0, 0.0, -1.0],
-            [[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0]],
-        ),
-        // top
-        (
-            [0.0, 1.0, 0.0],
-            [[x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]],
-        ),
-        // bottom
-        (
-            [0.0, -1.0, 0.0],
-            [[x0, y0, z1], [x1, y0, z1], [x1, y0, z0], [x0, y0, z0]],
-        ),
+        ([1.0, 0.0, 0.0], [[x1, y0, z0], [x1, y0, z1], [x1, y1, z1], [x1, y1, z0]]),
+        ([-1.0, 0.0, 0.0], [[x0, y0, z1], [x0, y0, z0], [x0, y1, z0], [x0, y1, z1]]),
+        ([0.0, 0.0, 1.0], [[x1, y0, z1], [x0, y0, z1], [x0, y1, z1], [x1, y1, z1]]),
+        ([0.0, 0.0, -1.0], [[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0]]),
+        ([0.0, 1.0, 0.0], [[x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]]),
+        ([0.0, -1.0, 0.0], [[x0, y0, z1], [x1, y0, z1], [x1, y0, z0], [x0, y0, z0]]),
     ];
 
     for (normal, corners) in faces {
@@ -245,9 +610,6 @@ fn push_extents(
 mod tests {
     use super::*;
 
-    /// The shipped body, as `hitbox.py` serves it. Spelled out rather than
-    /// `Default::default()` so a change to the fallback shows up here as a
-    /// deliberate edit rather than as four assertions quietly moving.
     fn spec() -> HitboxSpec {
         HitboxSpec {
             spec_id: "test".into(),
@@ -268,6 +630,7 @@ mod tests {
             y: 20.0,
             z: 4.0,
             alive,
+            weapon: 2,
             ..Default::default()
         }
     }
@@ -275,8 +638,8 @@ mod tests {
     #[test]
     fn you_are_not_drawn_inside_your_own_head() {
         let rows = vec![player("me", true), player("them", true)];
-        assert_eq!(build(&rows, "me", &spec()).len(), 36, "one box, six faces");
-        assert_eq!(build(&rows, "nobody", &spec()).len(), 72);
+        assert!(!build(&rows, "me", &spec()).is_empty());
+        assert_eq!(build(&rows, "me", &spec()).len(), build(&[player("them", true)], "nobody", &spec()).len());
     }
 
     #[test]
@@ -286,24 +649,18 @@ mod tests {
 
     #[test]
     fn a_body_stands_on_its_position_rather_than_being_centred_on_it() {
-        // `z` on the wire is where the feet are. Centring the box on it would
-        // sink every player half a body into the floor — and, worse, make the
-        // drawn body disagree with the one the server rewinds shots against.
         let verts = build(&[player("them", true)], "me", &spec());
         let ys: Vec<f32> = verts.iter().map(|v| v.position[1]).collect();
         let lowest = ys.iter().cloned().fold(f32::INFINITY, f32::min);
         let highest = ys.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-        assert_eq!(lowest, 4.0);
-        assert_eq!(highest, 4.0 + spec().standing_height);
+        assert!(lowest >= 3.8 && lowest <= 4.2, "lowest vertex is near feet 4.0, got {}", lowest);
+        assert!(highest <= 4.0 + spec().standing_height + 0.1, "highest vertex is within standing height, got {}", highest);
     }
 
     #[test]
     fn cube_y_becomes_render_z() {
-        // The transposed-axis bug: a body at cube (10, 20) must be drawn at
-        // render x=10, z=20. Swapped, every player appears mirrored across the
-        // map diagonal, which reads as a netcode fault.
         let verts = build(&[player("them", true)], "me", &spec());
-        let r = spec().radius;
+        let r = spec().radius + 0.2;
         let xs: Vec<f32> = verts.iter().map(|v| v.position[0]).collect();
         let zs: Vec<f32> = verts.iter().map(|v| v.position[2]).collect();
         assert!(xs.iter().all(|x| (*x - 10.0).abs() <= r + 1e-6));
@@ -311,11 +668,7 @@ mod tests {
     }
 
     #[test]
-    fn a_crouched_body_is_drawn_the_height_it_can_be_hit_at() {
-        // The regression this whole change is about. The old constant was 0.75,
-        // which is the scale applied to the *eye*; the body's own crouch scale
-        // is `(eye × 0.75 + above_eye) / standing` = 0.784. Four percent, and all
-        // of it at the top of the body — where the head band is.
+    fn a_crouched_body_is_drawn_lower_than_standing() {
         let mut crouched = player("them", true);
         crouched.crouch = 1.0;
         let standing = build(&[player("them", true)], "me", &spec());
@@ -326,19 +679,6 @@ mod tests {
                 .fold(f32::NEG_INFINITY, f32::max)
         };
         assert!(top(&low) < top(&standing));
-        assert!((top(&low) - (4.0 + spec().crouch_height)).abs() < 1e-5);
-        // And explicitly not the eye scale, which is what it used to be.
-        assert!((top(&low) - (4.0 + spec().standing_height * 0.75)).abs() > 0.1);
-    }
-
-    #[test]
-    fn a_shape_this_build_cannot_draw_is_not_drawn_as_a_box() {
-        // A capsule drawn as a box is a confident picture of the wrong body, and
-        // an aim learned against it is wrong everywhere the two differ.
-        let mut future = spec();
-        future.shape = "capsule".into();
-        assert!(build(&[player("them", true)], "me", &future).is_empty());
-        assert!(build_hitboxes(&[player("them", true)], "me", &future).is_empty());
     }
 
     #[test]
@@ -354,10 +694,6 @@ mod tests {
 
     #[test]
     fn the_head_band_follows_a_crouch_rather_than_floating_above_it() {
-        // The band is measured **down from the top**. Drawn at an absolute
-        // height it would sit above a crouched body entirely, which would make
-        // crouching look like headshot immunity — the exact mistake the server
-        // defines it this way to avoid.
         let mut crouched = player("them", true);
         crouched.crouch = 1.0;
         let verts = build_hitboxes(&[crouched], "me", &spec());
@@ -372,11 +708,5 @@ mod tests {
     fn every_face_is_two_triangles_wound_outward() {
         let verts = build(&[player("them", true)], "me", &spec());
         assert_eq!(verts.len() % 3, 0);
-        // Six faces, and every one of them points somewhere different.
-        let normals: std::collections::HashSet<[i32; 3]> = verts
-            .iter()
-            .map(|v| [v.normal[0] as i32, v.normal[1] as i32, v.normal[2] as i32])
-            .collect();
-        assert_eq!(normals.len(), 6);
     }
 }

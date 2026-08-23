@@ -174,6 +174,8 @@ pub struct PlayerRow {
     pub kills: i32,
     #[serde(default)]
     pub deaths: i32,
+    #[serde(default)]
+    pub weapon: i32,
 }
 
 /// The private half of a player's state — the part only they get to see.

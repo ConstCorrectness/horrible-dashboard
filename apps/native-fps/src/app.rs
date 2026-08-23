@@ -155,6 +155,7 @@ pub struct App {
     frames: u32,
     fps_since: Instant,
     fps: f32,
+    net_graph: u32,
     /// Unacknowledged commands, sampled when the title updates.
     pending: usize,
     map_name: String,
@@ -288,6 +289,7 @@ impl App {
             frames: 0,
             fps_since: Instant::now(),
             fps: 0.0,
+            net_graph: 1,
             pending: 0,
             map_name,
             local_seq: 0,
@@ -1392,6 +1394,7 @@ impl ApplicationHandler for App {
                         KeyCode::Digit3 if down => self.select_weapon(2),
                         KeyCode::Digit4 if down => self.select_weapon(3),
                         KeyCode::Digit5 if down => self.select_weapon(4),
+                        KeyCode::F3 if down => self.net_graph = (self.net_graph + 1) % 4,
                         // Escape opens the menu — and releases the pointer on
                         // the way, because the reflex it has to serve first is
                         // still "give me my mouse back". A client that exited
@@ -1474,6 +1477,8 @@ impl ApplicationHandler for App {
                     crouching: self.prediction.state.crouch > 0.5,
                     playing: self.joined,
                     rtt: self.ping.rtt(),
+                    fps: if self.fps > 0.0 { Some(self.fps) } else { None },
+                    net_graph: self.net_graph,
                     scoreboard: scoreboard.as_deref(),
                     scores: &self.scores,
                 };
