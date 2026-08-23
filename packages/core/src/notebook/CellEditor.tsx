@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
 import { python } from '@codemirror/lang-python';
-import { EditorState, Compartment, Prec } from '@codemirror/state';
+import { EditorState, Compartment, Prec, type Extension } from '@codemirror/state';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { EditorView, keymap, placeholder } from '@codemirror/view';
 
@@ -17,14 +17,34 @@ interface CellEditorProps {
   onRun: () => void;
   /** Notebook path — lets the docs popup ask this cell's own kernel. */
   notebookPath?: string;
+  /**
+   * Extra CodeMirror extensions for this cell — how the notebook *modules* add
+   * language-server support without the kit depending on the editor module (it
+   * stays domain-neutral; see `EditorService.openNotebookLsp`).
+   *
+   * Held in a compartment because it arrives late: the server session resolves an
+   * interpreter and a project root first, so a cell mounts before its extension
+   * exists and must pick it up without being remounted (a remount would drop the
+   * cell's undo history and the cursor mid-edit).
+   */
+  extraExtensions?: Extension[];
 }
 
 /**
- * Documentation sources a cell may use, minus `lsp`: a cell has no language
- * server, and leaving it in the chain would spend a round trip on a resolver that
- * is never registered here before falling through to the ones that work.
+ * Documentation sources for a cell with no language server attached, minus `lsp`:
+ * the resolver is never registered here, so leaving it in would spend a round trip
+ * before falling through to the ones that work.
  */
 const CELL_DOC_SOURCES: DocSourceId[] = ['kernel', 'index', 'web'];
+
+/**
+ * …and for a cell that *does* have one (`extraExtensions`). The LSP extension runs
+ * its own hover with the same index/web fallback behind it, so keeping those here
+ * too would render two tooltips saying the same thing. `kernel` stays because it is
+ * the one thing a language server cannot do: ask the live kernel what the object
+ * actually is right now, which in a notebook is often the only real answer.
+ */
+const CELL_DOC_SOURCES_WITH_LSP: DocSourceId[] = ['kernel'];
 
 /**
  * A compact CodeMirror editor for one notebook cell. Grows with content; the
@@ -38,6 +58,7 @@ export function CellEditor({
   onChange,
   onRun,
   notebookPath,
+  extraExtensions,
 }: CellEditorProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewRef = useRef<EditorView | null>(null);
@@ -48,7 +69,14 @@ export function CellEditor({
   // in the closure would go stale if the pane were ever rebound to another file.
   const pathRef = useRef(notebookPath);
   pathRef.current = notebookPath;
+  // Same reason as `pathRef`: the docs callbacks are captured once, but whether this
+  // cell has a language server flips when the session finishes coming up.
+  const hasLspRef = useRef(false);
+  hasLspRef.current = (extraExtensions?.length ?? 0) > 0;
+  const docSources = (): DocSourceId[] =>
+    hasLspRef.current ? CELL_DOC_SOURCES_WITH_LSP : CELL_DOC_SOURCES;
   const langCompartment = useRef(new Compartment());
+  const extraCompartment = useRef(new Compartment());
 
   useEffect(() => {
     if (!hostRef.current) return;
@@ -82,7 +110,7 @@ export function CellEditor({
           Prec.high(
             docsKeymap({
               notebookPath: () => pathRef.current,
-              sources: () => CELL_DOC_SOURCES,
+              sources: docSources,
               show: (entry) => {
                 const host = panelRef.current;
                 if (!host) return;
@@ -94,10 +122,11 @@ export function CellEditor({
           ),
           docsHover({
             notebookPath: () => pathRef.current,
-            sources: () => CELL_DOC_SOURCES,
+            sources: docSources,
           }),
           keymap.of([...defaultKeymap, ...historyKeymap]),
           langCompartment.current.of(language === 'markdown' ? markdown() : python()),
+          extraCompartment.current.of(extraExtensions ?? []),
           oneDark,
           placeholder('# …'),
           EditorView.lineWrapping,
@@ -136,6 +165,12 @@ export function CellEditor({
       effects: langCompartment.current.reconfigure(language === 'markdown' ? markdown() : python()),
     });
   }, [language]);
+
+  useEffect(() => {
+    viewRef.current?.dispatch({
+      effects: extraCompartment.current.reconfigure(extraExtensions ?? []),
+    });
+  }, [extraExtensions]);
 
   return (
     <>

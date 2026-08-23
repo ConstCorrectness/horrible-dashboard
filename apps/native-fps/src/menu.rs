@@ -47,6 +47,7 @@ pub enum Action {
     RenderScale,
     Quality,
     Vsync,
+    ShowHitboxes,
     Sensitivity,
 }
 
@@ -207,6 +208,14 @@ impl Menu {
                     "VSYNC",
                     if settings.video.vsync { "ON" } else { "OFF" }.to_string(),
                     Action::Vsync,
+                ),
+                // On the video page rather than a debug one, because it is a
+                // thing you turn on for thirty seconds to answer a question and
+                // then turn off — and a debug page is somewhere you never look.
+                row(
+                    "SHOW HITBOXES",
+                    if settings.show_hitboxes { "ON" } else { "OFF" }.to_string(),
+                    Action::ShowHitboxes,
                 ),
                 row("BACK", String::new(), Action::Back),
             ],
@@ -412,6 +421,10 @@ pub fn apply(action: Action, step: i32, settings: &mut Settings) -> Option<&'sta
         Action::Vsync => {
             settings.video.vsync = !settings.video.vsync;
             Some(KEY_VSYNC)
+        }
+        Action::ShowHitboxes => {
+            settings.show_hitboxes = !settings.show_hitboxes;
+            Some(KEY_SHOW_HITBOXES)
         }
         Action::Quality => {
             settings.video.quality = cycle(&Quality::ALL, settings.video.quality, step);

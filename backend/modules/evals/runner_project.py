@@ -62,6 +62,10 @@ BASE_REQUIREMENTS = ["datasets"]
 #: Metrics the harness scores without help.
 BUILTIN_METRICS = {"exact_match", "contains"}
 
+#: Stamped on the training projects this module creates (`ProjectModel.owner`), so
+#: the training pane can tell working storage from a project you author in.
+OWNER = "evals"
+
 
 def requirements_for(cases: list[EvalCase]) -> list[str]:
     """What this set of benchmark cases needs installed.
@@ -92,8 +96,17 @@ def ensure_project(suite_name: str, project_id: str = "") -> Any:
     name = f"evals-{suite_name}"[:48]
     for existing in projects.list_projects():
         if existing.name == name:
+            # An older run made this before projects carried an owner. Stamp it, so
+            # the training pane stops offering it a notebook it does not have.
+            if not existing.owner:
+                existing.owner = OWNER
+                projects.update_project(existing)
             return existing
-    return projects.create_project(name, [], "3.12")
+    # `owner` marks it as ours: working storage for a benchmark, not somewhere you
+    # author. It is created straight through `create_project`, so it has no
+    # `main.ipynb` and its venv gets only `requirements_for(cases)` — no ipykernel.
+    # Without the mark the training pane offers "Open notebook" and the open fails.
+    return projects.create_project(name, [], "3.12", owner=OWNER)
 
 
 async def prepare_env(

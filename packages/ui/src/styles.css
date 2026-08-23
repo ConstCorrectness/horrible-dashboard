@@ -1522,7 +1522,7 @@ body {
 
 .io-inbound {
   background: rgb(46 213 115 / 18%);
-  color: #2ed573;
+  color: var(--success);
 }
 
 .io-outbound {
@@ -1537,7 +1537,7 @@ body {
 }
 
 .io-status-ok {
-  color: #2ed573;
+  color: var(--success);
 }
 
 .io-status-bad {
@@ -2365,12 +2365,107 @@ body {
 
 .home-actions li {
   padding: 0.15rem 0;
-  color: #2ed573;
+  color: var(--success);
 }
 
 .home-hint {
   color: var(--text-dim);
   font-size: 0.9rem;
+}
+
+/* --- minimizing the home screen ------------------------------------------- */
+
+/*
+ * The home screen is a backdrop, so it has no title bar to hang a minimize
+ * control on and no taskbar button to restore it from. Both jobs are done by
+ * one control that swaps direction, which is also why it is a chevron rather
+ * than the usual minimize dash: a dash going one way and a window coming back
+ * from somewhere unstated is the ambiguity this had in the first place.
+ */
+.home-collapse {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.6rem;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.home-collapse:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+/* Aligned to the trailing edge of the home column rather than the viewport: it
+   belongs to this surface, and a control pinned to the screen corner would sit
+   under the taskbar tray on a short window. */
+.home-collapse-corner {
+  align-self: flex-end;
+  margin-bottom: -0.4rem;
+}
+
+/*
+ * The collapsed form: a bottom-docked strip.
+ *
+ * `pointer-events` is the load-bearing part. The splash backdrop is registered
+ * `interactive`, so its layer takes clicks across the whole desktop — which is
+ * right when the home screen fills it and completely wrong when it is a strip,
+ * because the desktop underneath would stop responding while *looking* like it
+ * should. So the collapsed surface is transparent to the pointer and only the
+ * strip itself takes clicks back.
+ */
+.os-backdrop-splash[data-collapsed] {
+  pointer-events: none;
+}
+
+.home-strip {
+  align-items: flex-end;
+  justify-content: center;
+  padding: 0 0 1rem;
+  /* No radial wash: the glow is the landing screen's, and leaving it on would
+     tint every window sitting over a collapsed desktop. */
+  background: none;
+}
+
+.home-strip-inner,
+.home-strip-answer {
+  pointer-events: auto;
+}
+
+.home-strip-inner {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: min(38rem, 92vw);
+}
+
+.home-strip-inner .ask-bar {
+  box-shadow: var(--shadow-overlay);
+}
+
+.home-strip-answer {
+  position: absolute;
+  bottom: 4.25rem;
+  width: min(38rem, 92vw);
+  max-height: 32vh;
+  box-shadow: var(--shadow-overlay);
+}
+
+.home-strip {
+  position: relative;
+}
+
+.home-actions li {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
 }
 
 /* The intro setup flow (SetupCard): model → account → tools. Wraps the existing
@@ -2545,7 +2640,7 @@ body {
 
 .step.done {
   border-color: #2ed573;
-  color: #2ed573;
+  color: var(--success);
 }
 
 .pull-progress {
@@ -3369,7 +3464,7 @@ kbd {
   margin: 0;
   padding: 0;
   font-size: 0.8rem;
-  color: #2ed573;
+  color: var(--success);
 }
 
 .agent-reasoning {
@@ -5317,7 +5412,7 @@ kbd {
 }
 .interp-kind-editor {
   background: rgb(46 213 115 / 55%);
-  color: #2ed573;
+  color: var(--success);
 }
 .interp-kind-user {
   background: rgb(255 200 87 / 55%);
@@ -5437,11 +5532,58 @@ kbd {
 
 .mx-src-strong {
   border-color: rgb(46 213 115 / 45%);
-  color: #2ed573;
+  color: var(--success);
 }
 
 /* Two columns while there's room; the stack drops above the detail when the pane
    is docked narrow, since neither half is useful clipped. */
+/* The model explorer's two modes: the model that exists, and the one being drawn.
+   The switch is a tab strip rather than a toggle because neither mode is the
+   "off" state of the other. */
+.mx-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.mx-modes {
+  display: flex;
+  gap: 0;
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+}
+
+.mx-mode {
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  padding: 6px 14px;
+  background: transparent;
+  color: var(--text-dim);
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+
+.mx-mode:hover {
+  color: var(--text-primary);
+}
+
+.mx-mode-on {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent);
+}
+
+.mx-mode-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .mx-body {
   display: grid;
   grid-template-columns: minmax(190px, 260px) minmax(0, 1fr);

@@ -99,7 +99,7 @@ export const hassaultModule: ModuleManifest = {
       key: 'hassault.nativeClient',
       title: 'Play in the native client',
       description:
-        'On by default, and the way in: Play, Train and Host open the native window — GPU-rendered, raw mouse input, no frame cap, its own HUD, weapon and sound. This pane is then setup and spectating. Turning it off plays in the pane instead, which is the same game and a slower one; it is kept because the pane is also the third implementation the physics conformance fixture pins.',
+        'On by default, and the way in: Play, Train and Host open the native window — GPU-rendered, raw mouse input, no frame cap, its own HUD, scoreboard, weapon and sound. This pane is then setup and spectating. Turning it off plays in the pane instead, which is the same game and a slower one; it is kept because the pane is also the third implementation the physics conformance fixture pins.',
       type: 'boolean',
       default: true,
     },
@@ -173,6 +173,18 @@ export const hassaultModule: ModuleManifest = {
         'white, green, cyan, amber, magenta or red. Named rather than a hex field: the reason to change it is contrast against a particular map, and all six are bright — a dark crosshair on a dark map is the one choice that would make the game worse.',
       type: 'string',
       default: 'white',
+    },
+    {
+      // Declared here rather than only in the native client's `settings.rs`, so
+      // it shows up on the Settings page and both clients read the same row —
+      // which is the point: a hitbox overlay you can only turn on in one of them
+      // cannot be used to compare them.
+      key: 'hassault.debug.hitboxes',
+      title: 'Show hitboxes',
+      description:
+        'Draw the exact volume a shot is resolved against around every body, with the head band marked. Off by default. It reads the served spec rather than a second copy of the numbers — which is the whole use of it: a body drawn a few percent off its hitbox costs you shots you were sure of and reads as lag rather than as a drawing bug.',
+      type: 'boolean',
+      default: false,
     },
     {
       key: 'hassault.nativeBinaryPath',

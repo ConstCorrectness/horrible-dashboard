@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
+import { DataList, DataRow, PickRow, RollingNumber } from '../../DataList';
 import { usePaneSection } from '../../layout/use-sections';
 import { subscribeChannel } from '../../ws';
 import {
@@ -60,8 +61,8 @@ const S = {
     flexDirection: 'column' as const,
     height: '100%',
     overflow: 'hidden',
-    background: 'var(--bg-primary, #0d1117)',
-    color: 'var(--text-primary, #c9d1d9)',
+    background: 'var(--bg, #14161a)',
+    color: 'var(--text, #d7dae0)',
     fontSize: 13,
   },
   bar: {
@@ -69,7 +70,7 @@ const S = {
     alignItems: 'center',
     gap: 8,
     padding: '8px 12px',
-    borderBottom: '1px solid var(--border-dim, #30363d)',
+    borderBottom: '1px solid var(--border, #2e333d)',
     flexShrink: 0,
   },
   // Headings: uppercase with heavy tracking; metadata and numbers monospace and
@@ -79,18 +80,18 @@ const S = {
     fontWeight: 700,
     letterSpacing: '0.12em',
     textTransform: 'uppercase' as const,
-    color: 'var(--text-dim, #8b949e)',
+    color: 'var(--text-dim, #8a909c)',
   },
   mono: {
     fontFamily: 'var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace)',
     fontSize: 11,
-    color: 'var(--text-dim, #8b949e)',
+    color: 'var(--text-dim, #8a909c)',
   },
   scroll: { flex: 1, overflowY: 'auto' as const, padding: 12 },
   input: {
-    background: 'var(--bg-primary, #0d1117)',
-    border: '1px solid var(--border-dim, #30363d)',
-    color: 'var(--text-primary, #c9d1d9)',
+    background: 'var(--bg, #14161a)',
+    border: '1px solid var(--border, #2e333d)',
+    color: 'var(--text, #d7dae0)',
     borderRadius: 4,
     padding: '4px 8px',
     fontSize: 12,
@@ -103,34 +104,42 @@ const S = {
     fontWeight: 700,
     letterSpacing: '0.08em',
     textTransform: 'uppercase' as const,
-    color: 'var(--text-dim, #8b949e)',
-    border: '1px solid var(--border-dim, #30363d)',
+    color: 'var(--text-dim, #8a909c)',
+    border: '1px solid var(--border, #2e333d)',
     borderRadius: 3,
     padding: '1px 5px',
   },
   field: { marginBottom: 8 },
+  // Section heads carry their own count on the right. A heading that has to
+  // sit above a list of unknown length is a heading that tells you nothing.
+  sectionHead: {
+    display: 'flex',
+    alignItems: 'baseline',
+    gap: 8,
+    marginBottom: 6,
+  },
   label: {
     display: 'block',
     fontSize: 10,
     fontWeight: 700,
     letterSpacing: '0.1em',
     textTransform: 'uppercase' as const,
-    color: 'var(--text-dim, #8b949e)',
+    color: 'var(--text-dim, #8a909c)',
     marginBottom: 3,
   },
   button: {
-    background: 'var(--bg-secondary, #161b22)',
-    border: '1px solid var(--border-dim, #30363d)',
-    color: 'var(--text-primary, #c9d1d9)',
+    background: 'var(--bg-raised, #1d2026)',
+    border: '1px solid var(--border, #2e333d)',
+    color: 'var(--text, #d7dae0)',
     borderRadius: 4,
     padding: '4px 10px',
     fontSize: 12,
     cursor: 'pointer',
   },
   select: {
-    background: 'var(--bg-secondary, #161b22)',
-    border: '1px solid var(--border-dim, #30363d)',
-    color: 'var(--text-primary, #c9d1d9)',
+    background: 'var(--bg-raised, #1d2026)',
+    border: '1px solid var(--border, #2e333d)',
+    color: 'var(--text, #d7dae0)',
     borderRadius: 4,
     padding: '4px 8px',
     fontSize: 12,
@@ -138,8 +147,8 @@ const S = {
   // A left border accent rather than a full glowing perimeter: the colour marks
   // the verdict without turning every row into a card.
   row: (passed: boolean) => ({
-    borderLeft: `2px solid ${passed ? 'var(--ok, #3fb950)' : 'var(--danger, #f85149)'}`,
-    background: 'var(--bg-secondary, #161b22)',
+    borderLeft: `2px solid ${passed ? 'var(--success, #3fb950)' : 'var(--danger, #e06c75)'}`,
+    background: 'var(--bg-raised, #1d2026)',
     padding: '8px 10px',
     marginBottom: 6,
   }),
@@ -148,6 +157,19 @@ const S = {
 function pct(run: EvalRun): string {
   if (!run.completed) return '—';
   return `${Math.round((run.passed / run.completed) * 100)}%`;
+}
+
+/**
+ * A run's verdict.
+ *
+ * Three states, not two: a run still going is not a failure, and drawing it as
+ * one is how a sweep at 3/50 comes to look broken thirty seconds after it was
+ * started. Only a finished run with a shortfall is a failure.
+ */
+function runKind(run: EvalRun): 'ok' | 'fail' | 'info' {
+  if (run.error) return 'fail';
+  if (run.status !== 'done') return 'info';
+  return run.passed === run.total ? 'ok' : 'fail';
 }
 
 function describeCalls(calls: ToolCall[]): string {
@@ -199,7 +221,9 @@ function BenchmarkFields({
   const set = (patch: Partial<HfBenchmark>) => onChange({ ...bench, ...patch });
 
   useEffect(() => {
-    benchmarkPresets().then(setPresets).catch(() => setPresets([]));
+    benchmarkPresets()
+      .then(setPresets)
+      .catch(() => setPresets([]));
   }, []);
 
   const doPeek = useCallback(() => {
@@ -282,8 +306,8 @@ function BenchmarkFields({
             ))}
           </div>
           <div style={{ ...S.mono, marginTop: 4 }}>
-            Presets carry the regexes these datasets need. GSM8K without them scores
-            zero against a model answering perfectly.
+            Presets carry the regexes these datasets need. GSM8K without them scores zero against a
+            model answering perfectly.
           </div>
         </div>
       )}
@@ -324,7 +348,7 @@ function BenchmarkFields({
       </div>
 
       {peekError && (
-        <div style={{ ...S.mono, color: 'var(--warn, #d29922)' }}>
+        <div style={{ ...S.mono, color: 'var(--warn, #e2c08d)' }}>
           {peekError} — the fields still work, you just have to know the columns.
         </div>
       )}
@@ -456,7 +480,7 @@ function BenchmarkFields({
       {peek && (
         <div
           style={{
-            border: '1px solid var(--border-dim, #30363d)',
+            border: '1px solid var(--border, #2e333d)',
             borderTop: '2px solid var(--accent, #58a6ff)',
             padding: '8px 10px',
             marginBottom: 8,
@@ -478,7 +502,7 @@ function BenchmarkFields({
                   key={p}
                   style={{
                     ...S.mono,
-                    color: 'var(--warn, #d29922)',
+                    color: 'var(--warn, #e2c08d)',
                     marginBottom: 4,
                   }}
                 >
@@ -493,9 +517,7 @@ function BenchmarkFields({
                   <Cmp label="reply → compared" value={preview.prediction_normalised} />
                 </tbody>
               </table>
-              <div style={{ ...S.mono, marginTop: 6 }}>
-                {verdict(preview, bench.metric)}
-              </div>
+              <div style={{ ...S.mono, marginTop: 6 }}>{verdict(preview, bench.metric)}</div>
             </>
           ) : (
             <div style={S.mono}>…</div>
@@ -511,13 +533,11 @@ function Cmp({ label, value, dim }: { label: string; value: string; dim?: boolea
   const text = (value || '').replace(/\s+/g, ' ').trim();
   return (
     <tr>
-      <td style={{ ...S.label, width: 150, verticalAlign: 'top', paddingRight: 8 }}>
-        {label}
-      </td>
+      <td style={{ ...S.label, width: 150, verticalAlign: 'top', paddingRight: 8 }}>{label}</td>
       <td
         style={{
           ...S.mono,
-          color: dim ? 'var(--text-dim, #8b949e)' : 'var(--text-primary, #c9d1d9)',
+          color: dim ? 'var(--text-dim, #8a909c)' : 'var(--text, #d7dae0)',
           wordBreak: 'break-word',
         }}
       >
@@ -591,8 +611,8 @@ function Compare({ selected }: { selected: string }) {
   if (board.runs.length === 0) {
     return (
       <div style={S.scroll}>
-        No finished runs for this suite yet. A sweep in progress is deliberately not
-        shown — it would look like a model failing everything it has not reached.
+        No finished runs for this suite yet. A sweep in progress is deliberately not shown — it
+        would look like a model failing everything it has not reached.
       </div>
     );
   }
@@ -613,8 +633,8 @@ function Compare({ selected }: { selected: string }) {
       {board.universalFailures.length > 0 && (
         <div
           style={{
-            border: '1px solid var(--border-dim, #30363d)',
-            borderLeft: '2px solid var(--warn, #d29922)',
+            border: '1px solid var(--border, #2e333d)',
+            borderLeft: '2px solid var(--warn, #e2c08d)',
             padding: '8px 10px',
             marginBottom: 16,
           }}
@@ -623,12 +643,12 @@ function Compare({ selected }: { selected: string }) {
             Failed by every run — suspect the case
           </div>
           <div style={{ ...S.mono, marginBottom: 6 }}>
-            A case nothing passes is usually a case that is wrong, not a capability
-            every model lacks. Read the expectation against the tool&rsquo;s own
-            description before treating this as a model problem.
+            A case nothing passes is usually a case that is wrong, not a capability every model
+            lacks. Read the expectation against the tool&rsquo;s own description before treating
+            this as a model problem.
           </div>
           {board.universalFailures.map((id) => (
-            <div key={id} style={{ ...S.mono, color: 'var(--warn, #d29922)' }}>
+            <div key={id} style={{ ...S.mono, color: 'var(--warn, #e2c08d)' }}>
               {id}
             </div>
           ))}
@@ -664,9 +684,7 @@ function Compare({ selected }: { selected: string }) {
         <table style={{ borderCollapse: 'collapse', fontSize: 11, minWidth: '100%' }}>
           <thead>
             <tr>
-              <th style={{ ...S.label, textAlign: 'left', padding: '4px 8px 4px 0' }}>
-                Case
-              </th>
+              <th style={{ ...S.label, textAlign: 'left', padding: '4px 8px 4px 0' }}>Case</th>
               {board.runs.map((r) => (
                 <th
                   key={r.id}
@@ -703,12 +721,12 @@ function RankRow({ run, place }: { run: BoardRun; place: number }) {
       <td style={{ padding: '3px 8px', width: '40%' }}>
         {/* A bar rather than a number alone: the gap between 42% and 67% is the
             thing being read, and a column of percentages does not show it. */}
-        <div style={{ background: 'var(--bg-primary, #0d1117)', height: 6 }}>
+        <div style={{ background: 'var(--bg, #14161a)', height: 6 }}>
           <div
             style={{
               width: `${Math.round(run.rate * 100)}%`,
               height: '100%',
-              background: 'var(--ok, #3fb950)',
+              background: 'var(--success, #3fb950)',
             }}
           />
         </div>
@@ -730,21 +748,21 @@ function Diff({ diff }: { diff: RunDiff }) {
         {dropped > 0 && ` · ${dropped} attempted by only one of them, and left out`}
       </div>
       {diff.hashesUnknown && (
-        <div style={{ ...S.mono, color: 'var(--warn, #d29922)', marginBottom: 6 }}>
-          ⚠ these runs predate case hashing, so a case that was edited between them
-          cannot be told apart from one the model got better at.
+        <div style={{ ...S.mono, color: 'var(--warn, #e2c08d)', marginBottom: 6 }}>
+          ⚠ these runs predate case hashing, so a case that was edited between them cannot be told
+          apart from one the model got better at.
         </div>
       )}
-      <DiffGroup label="Fixed" tone="var(--ok, #3fb950)" items={diff.fixed} />
-      <DiffGroup label="Broke" tone="var(--danger, #f85149)" items={diff.broken} />
+      <DiffGroup label="Fixed" tone="var(--success, #3fb950)" items={diff.fixed} />
+      <DiffGroup label="Broke" tone="var(--danger, #e06c75)" items={diff.broken} />
       <DiffGroup
         label="Case edited — not a fix or a regression"
-        tone="var(--warn, #d29922)"
+        tone="var(--warn, #e2c08d)"
         items={diff.changed}
       />
       <DiffGroup
         label="Errored — something other than the model broke"
-        tone="var(--warn, #d29922)"
+        tone="var(--warn, #e2c08d)"
         items={diff.errored}
       />
       {diff.fixed.length === 0 &&
@@ -789,9 +807,7 @@ function MatrixRow({ row, runs }: { row: BoardCase; runs: BoardRun[] }) {
         style={{
           ...S.mono,
           padding: '3px 8px 3px 0',
-          color: row.universalFailure
-            ? 'var(--warn, #d29922)'
-            : 'var(--text-primary, #c9d1d9)',
+          color: row.universalFailure ? 'var(--warn, #e2c08d)' : 'var(--text, #d7dae0)',
           whiteSpace: 'nowrap',
         }}
         title={row.edited ? 'this case was edited between these runs' : undefined}
@@ -810,11 +826,11 @@ function MatrixRow({ row, runs }: { row: BoardCase; runs: BoardRun[] }) {
             {/* Three states, not two: a run that did not attempt a case has not
                 failed it, and rendering both as a cross would invent regressions. */}
             {verdict === undefined ? (
-              <span style={{ color: 'var(--text-dim, #8b949e)' }}>·</span>
+              <span style={{ color: 'var(--text-dim, #8a909c)' }}>·</span>
             ) : verdict ? (
-              <span style={{ color: 'var(--ok, #3fb950)' }}>✓</span>
+              <span style={{ color: 'var(--success, #3fb950)' }}>✓</span>
             ) : (
-              <span style={{ color: 'var(--danger, #f85149)' }}>✕</span>
+              <span style={{ color: 'var(--danger, #e06c75)' }}>✕</span>
             )}
           </td>
         );
@@ -835,9 +851,7 @@ function CaseEditor({
   onCancel: () => void;
 }) {
   const [draft, setDraft] = useState<EvalCase>(initial);
-  const [callsText, setCallsText] = useState(() =>
-    JSON.stringify(initial.expect.calls, null, 0),
-  );
+  const [callsText, setCallsText] = useState(() => JSON.stringify(initial.expect.calls, null, 0));
   const [error, setError] = useState('');
 
   const set = (patch: Partial<EvalCase>) => setDraft({ ...draft, ...patch });
@@ -845,9 +859,7 @@ function CaseEditor({
   const isBench = draft.type === 'hf_benchmark';
   // Kept even while the case is a tool_call, so flipping the type back and forth
   // does not throw away what you typed.
-  const [bench, setBench] = useState<HfBenchmark>(
-    () => initial.benchmark ?? emptyBenchmark(),
-  );
+  const [bench, setBench] = useState<HfBenchmark>(() => initial.benchmark ?? emptyBenchmark());
 
   return (
     <div style={{ ...S.row(true), borderLeftColor: 'var(--accent, #58a6ff)' }}>
@@ -890,57 +902,55 @@ function CaseEditor({
       )}
       {isBench && <BenchmarkFields bench={bench} onChange={setBench} />}
       {!isBench && (
-      <div style={{ display: 'flex', gap: 8 }}>
-        <div style={{ ...S.field, flex: 1 }}>
-          <label style={S.label}>Grade</label>
-          <select
-            style={{ ...S.select, width: '100%' }}
-            value={draft.expect.grade}
-            onChange={(e) =>
-              set({ expect: { ...draft.expect, grade: e.target.value } })
-            }
-          >
-            {GRADES.map((g) => (
-              <option key={g} value={g}>
-                {g}
-              </option>
-            ))}
-          </select>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ ...S.field, flex: 1 }}>
+            <label style={S.label}>Grade</label>
+            <select
+              style={{ ...S.select, width: '100%' }}
+              value={draft.expect.grade}
+              onChange={(e) => set({ expect: { ...draft.expect, grade: e.target.value } })}
+            >
+              {GRADES.map((g) => (
+                <option key={g} value={g}>
+                  {g}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div style={{ ...S.field, flex: 1 }}>
+            <label style={S.label}>Exposure</label>
+            <select
+              style={{ ...S.select, width: '100%' }}
+              value={draft.expose.mode}
+              onChange={(e) => set({ expose: { ...draft.expose, mode: e.target.value } })}
+            >
+              {EXPOSE_MODES.map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div style={{ ...S.field, flex: 1 }}>
+            <label style={S.label}>Preload groups</label>
+            <input
+              style={S.input}
+              value={draft.expose.preload.join(', ')}
+              placeholder="layout, github"
+              onChange={(e) =>
+                set({
+                  expose: {
+                    ...draft.expose,
+                    preload: e.target.value
+                      .split(',')
+                      .map((g) => g.trim())
+                      .filter(Boolean),
+                  },
+                })
+              }
+            />
+          </div>
         </div>
-        <div style={{ ...S.field, flex: 1 }}>
-          <label style={S.label}>Exposure</label>
-          <select
-            style={{ ...S.select, width: '100%' }}
-            value={draft.expose.mode}
-            onChange={(e) => set({ expose: { ...draft.expose, mode: e.target.value } })}
-          >
-            {EXPOSE_MODES.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div style={{ ...S.field, flex: 1 }}>
-          <label style={S.label}>Preload groups</label>
-          <input
-            style={S.input}
-            value={draft.expose.preload.join(', ')}
-            placeholder="layout, github"
-            onChange={(e) =>
-              set({
-                expose: {
-                  ...draft.expose,
-                  preload: e.target.value
-                    .split(',')
-                    .map((g) => g.trim())
-                    .filter(Boolean),
-                },
-              })
-            }
-          />
-        </div>
-      </div>
       )}
       {/* A no_call case has nothing to expect, so the field goes away rather than
           sitting there inviting you to fill in something that would be ignored. */}
@@ -957,15 +967,9 @@ function CaseEditor({
       )}
       <div style={S.field}>
         <label style={S.label}>Note — why this case exists</label>
-        <input
-          style={S.input}
-          value={draft.note}
-          onChange={(e) => set({ note: e.target.value })}
-        />
+        <input style={S.input} value={draft.note} onChange={(e) => set({ note: e.target.value })} />
       </div>
-      {error && (
-        <div style={{ ...S.mono, color: 'var(--danger, #f85149)' }}>{error}</div>
-      )}
+      {error && <div style={{ ...S.mono, color: 'var(--danger, #e06c75)' }}>{error}</div>}
       <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
         <button
           style={S.button}
@@ -1157,41 +1161,63 @@ function Suites({
         )}
         {!error && !cases.length && selected && !editing && (
           <div style={S.mono}>
-            No cases yet. Add one above, ask the agent to draft some, or open the
-            .jsonl in the editor.
+            No cases yet. Add one above, ask the agent to draft some, or open the .jsonl in the
+            editor.
           </div>
         )}
-        {cases.map((c) => (
-          <div key={c.id} style={{ ...S.row(true), borderLeftColor: 'var(--border-dim, #30363d)' }}>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
-              <span style={{ fontWeight: 600 }}>{c.id}</span>
-              <span style={S.mono}>
-                {c.expect.grade} · {c.expose.mode}
-                {c.expose.preload.length ? ` · ${c.expose.preload.join(',')}` : ''}
-              </span>
-              <span style={{ flex: 1 }} />
-              {suite && !suite.read_only && (
+        <DataList label="Cases in this suite">
+          {cases.map((c, i) => (
+            <DataRow
+              key={c.id}
+              index={i}
+              title={c.id}
+              // A case has no verdict — it has not been run. `info` marks it as a
+              // record rather than claiming it passed, which a tick would.
+              kind="info"
+              hideMark
+              meta={[
+                c.expect.grade,
+                c.expose.mode,
+                ...(c.expose.preload.length ? [c.expose.preload.join(',')] : []),
+              ]}
+              badge={c.expect.calls.length > 0 ? `${c.expect.calls.length} calls` : undefined}
+              actions={
+                suite && !suite.read_only ? (
+                  <>
+                    <button style={S.button} onClick={() => setEditing(c)}>
+                      Edit
+                    </button>
+                    <button style={S.button} onClick={() => remove(c.id)}>
+                      Delete
+                    </button>
+                  </>
+                ) : undefined
+              }
+              footnotes={
                 <>
-                  <button style={S.button} onClick={() => setEditing(c)}>
-                    Edit
-                  </button>
-                  <button style={S.button} onClick={() => remove(c.id)}>
-                    Delete
-                  </button>
+                  {c.expect.calls.length > 0 && (
+                    <div style={S.mono}>expects {describeCalls(c.expect.calls)}</div>
+                  )}
+                  {c.note && <div style={S.mono}>{c.note}</div>}
                 </>
-              )}
-            </div>
-            <div style={{ marginTop: 2 }}>{c.prompt}</div>
-            {c.expect.calls.length > 0 && (
-              <div style={S.mono}>expects {describeCalls(c.expect.calls)}</div>
-            )}
-            {c.note && <div style={S.mono}>{c.note}</div>}
-          </div>
-        ))}
+              }
+            >
+              {c.prompt}
+            </DataRow>
+          ))}
+        </DataList>
       </div>
     </>
   );
 }
+
+/**
+ * A target's identity for selection. The GGUF path when there is one, because two
+ * files can share a name across the managed directory and a configured extra dir —
+ * keying on the label would make them one checkbox that sweeps whichever the
+ * backend listed first.
+ */
+const targetId = (t: SuggestedTarget): string => t.modelPath || t.label;
 
 /** Run: pick models, start a sweep, watch it. */
 function Run({ suites, selected }: { suites: EvalSuite[]; selected: string }) {
@@ -1232,13 +1258,17 @@ function Run({ suites, selected }: { suites: EvalSuite[]; selected: string }) {
           style={S.button}
           disabled={!selected || chosen.size === 0}
           onClick={() => {
-            const picked = targets.filter((t) => chosen.has(t.label));
+            const picked = targets.filter((t) => chosen.has(targetId(t)));
             startRun({
               suite_id: selected,
               targets: picked.map((t) => ({
                 provider: t.provider,
                 endpoint: t.endpoint,
                 model: t.model,
+                // Carried through, or a local GGUF target would fall back to
+                // whatever llama-server happened to have loaded — scoring the
+                // wrong weights under the right name.
+                model_path: t.modelPath,
                 label: t.label,
               })),
               localtrack_project: 'evals',
@@ -1251,37 +1281,71 @@ function Run({ suites, selected }: { suites: EvalSuite[]; selected: string }) {
         </button>
       </div>
       <div style={S.scroll}>
-        <div style={{ ...S.heading, marginBottom: 6 }}>Models</div>
+        <div style={S.sectionHead}>
+          <span style={S.heading}>Models</span>
+          <span style={S.mono}>
+            {chosen.size} of {targets.length} selected
+          </span>
+        </div>
         {targets.length === 0 && <div style={S.mono}>No models resolved on this node.</div>}
-        {targets.map((t) => (
-          <label key={t.label} style={{ display: 'block', marginBottom: 4, cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={chosen.has(t.label)}
-              onChange={(e) => {
+        {/* A grid, not a column of checkboxes: these are peers being chosen
+            between for one sweep, and the stacked-label form is exactly the
+            shape that reads as an unstyled form rather than a loadout. */}
+        <DataList layout="grid" label="Models to sweep">
+          {targets.map((t, i) => (
+            <PickRow
+              key={targetId(t)}
+              index={i}
+              title={t.label}
+              meta={
+                <>
+                  <span>{t.provider}</span>
+                  <span>{t.source}</span>
+                  {t.architecture && <span>{t.architecture}</span>}
+                  {t.loaded && <span>loaded</span>}
+                </>
+              }
+              checked={chosen.has(targetId(t))}
+              onChange={(on) => {
                 const next = new Set(chosen);
-                if (e.target.checked) next.add(t.label);
-                else next.delete(t.label);
+                if (on) next.add(targetId(t));
+                else next.delete(targetId(t));
                 setChosen(next);
               }}
-            />{' '}
-            {t.label} <span style={S.mono}>{t.source}</span>
-          </label>
-        ))}
+            />
+          ))}
+        </DataList>
         {message && <div style={{ ...S.mono, marginTop: 10 }}>{message}</div>}
 
-        <div style={{ ...S.heading, margin: '16px 0 6px' }}>Recent runs</div>
-        {runs.map((r) => (
-          <div key={r.id} style={S.row(r.status === 'done' && r.passed === r.total)}>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
-              <span style={{ fontWeight: 600 }}>{r.label}</span>
-              <span style={S.mono}>
-                {r.status} · {r.passed}/{r.completed || r.total} · {pct(r)}
-              </span>
-            </div>
-            {r.error && <div style={{ ...S.mono, color: 'var(--danger, #f85149)' }}>{r.error}</div>}
-          </div>
-        ))}
+        <div style={{ ...S.sectionHead, marginTop: 16 }}>
+          <span style={S.heading}>Recent runs</span>
+        </div>
+        <DataList label="Recent runs">
+          {runs.map((r, i) => (
+            <DataRow
+              key={r.id}
+              index={i}
+              title={r.label}
+              kind={runKind(r)}
+              meta={[
+                r.status,
+                <>
+                  <em>
+                    <RollingNumber value={r.passed} />
+                  </em>
+                  /{r.completed || r.total}
+                </>,
+                pct(r),
+              ]}
+              metaTone={r.error ? 'fail' : undefined}
+              footnotes={
+                r.error ? (
+                  <div style={{ ...S.mono, color: 'var(--danger, #e06c75)' }}>{r.error}</div>
+                ) : undefined
+              }
+            />
+          ))}
+        </DataList>
       </div>
     </>
   );
@@ -1335,33 +1399,52 @@ function Results({ selected }: { selected: string }) {
             {results.length ? 'Everything passed.' : 'No results for this run yet.'}
           </div>
         )}
-        {shown.map((r) => (
-          <div key={r.case_id} style={S.row(r.passed)}>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
-              <span style={{ fontWeight: 600 }}>{r.case_id}</span>
-              <span style={S.mono}>
-                {r.grade} · {r.rounds} rounds · {r.tools_offered} tools ·{' '}
-                {Math.round(r.duration_ms)}ms
-              </span>
-            </div>
-            {/* The detail line first: it is the sentence that says what to do. */}
-            <div style={{ marginTop: 2 }}>{r.detail}</div>
-            {!r.passed && (
-              <div style={S.mono}>
-                expected {describeCalls(r.expected)} · actual {describeCalls(r.actual)}
-              </div>
-            )}
-            {r.tools_dropped.length > 0 && (
-              <div style={{ ...S.mono, color: 'var(--warn, #d29922)' }}>
-                {r.tools_dropped.length} tool(s) dropped by the budget — this model never saw{' '}
-                {r.tools_dropped.slice(0, 3).join(', ')}
-              </div>
-            )}
-            {r.groups_loaded.length > 0 && (
-              <div style={S.mono}>loaded {r.groups_loaded.join(', ')}</div>
-            )}
-          </div>
-        ))}
+        <DataList label="Case results">
+          {shown.map((r, i) => (
+            <DataRow
+              key={r.case_id}
+              index={i}
+              title={r.case_id}
+              kind={r.passed ? 'ok' : 'fail'}
+              meta={[
+                r.grade,
+                <>
+                  <em>{r.rounds}</em> rounds
+                </>,
+                <>
+                  <em>{r.tools_offered}</em> tools
+                </>,
+                `${Math.round(r.duration_ms)}ms`,
+              ]}
+              // A dropped tool is not a failure of the model, so it must not be the
+              // row's verdict — but it is often the reason a failure happened, so it
+              // tints the figures rather than sitting silently below them.
+              metaTone={r.tools_dropped.length > 0 ? 'warn' : undefined}
+              badge={r.tools_dropped.length > 0 ? 'budget' : undefined}
+              footnotes={
+                <>
+                  {!r.passed && (
+                    <div style={S.mono}>
+                      expected {describeCalls(r.expected)} · actual {describeCalls(r.actual)}
+                    </div>
+                  )}
+                  {r.tools_dropped.length > 0 && (
+                    <div style={{ ...S.mono, color: 'var(--warn, #e2c08d)' }}>
+                      {r.tools_dropped.length} tool(s) dropped by the budget — this model never saw{' '}
+                      {r.tools_dropped.slice(0, 3).join(', ')}
+                    </div>
+                  )}
+                  {r.groups_loaded.length > 0 && (
+                    <div style={S.mono}>loaded {r.groups_loaded.join(', ')}</div>
+                  )}
+                </>
+              }
+            >
+              {/* The detail line first: it is the sentence that says what to do. */}
+              {r.detail}
+            </DataRow>
+          ))}
+        </DataList>
       </div>
     </>
   );

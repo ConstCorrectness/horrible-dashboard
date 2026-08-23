@@ -1,0 +1,305 @@
+/*
+ * The list-row design system.
+ *
+ * Every module that shows "a list of things with a verdict and some figures"
+ * was drawing its own row, and they had all drifted to the same shape: a
+ * centred stack of soft cards, sans-serif at one weight, colour carried by a
+ * full glowing perimeter. That reads as generated rather than designed, and —
+ * worse — it made the *figures* look like prose.
+ *
+ * So a row here is built from three separable jobs:
+ *
+ * - **Identity** (`hd-row-title`): uppercase, heavy tracking. What the row is.
+ * - **Telemetry** (`hd-row-meta`): monospace, muted, divided by hairlines.
+ *   Anything numeric, any id, any duration. Never the same treatment as the
+ *   title, so a row scans as label-then-figures at a glance.
+ * - **Verdict** (`data-kind`): a 2px rail down the leading edge and a matching
+ *   corner notch. An accent *edge*, not an accent perimeter — the row stays a
+ *   row instead of becoming a card.
+ *
+ * The clipped top-left corner is the structural motif. It is drawn with
+ * `clip-path` on the row itself, which is why the rail is a child pseudo
+ * element rather than a `border-left`: a clipped border loses its own corner.
+ */
+
+.hd-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* A grid rather than a column, for lists whose items are peers being picked
+   from (models, targets) rather than records being read in order. */
+.hd-list[data-layout='grid'] {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 6px;
+}
+
+.hd-row {
+  position: relative;
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 10px 7px 14px;
+  background: var(--bg-raised, #1d2026);
+  border: 1px solid var(--border, #2e333d);
+  border-radius: 0;
+  color: var(--text, #d7dae0);
+  font: inherit;
+  /* The notch. 9px off the top-left only: an angular container that still
+     reads as a horizontal row, unlike a symmetric bevel which reads as a tag. */
+  clip-path: polygon(9px 0, 100% 0, 100% 100%, 0 100%, 0 9px);
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    transform 120ms ease;
+  animation: hd-row-in 220ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  animation-delay: calc(var(--hd-i, 0) * 26ms);
+}
+
+/* The verdict rail. Inset past the notch so it starts where the straight edge
+   does rather than being sliced off by the clip. */
+.hd-row::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 9px;
+  bottom: 0;
+  width: 2px;
+  background: var(--hd-row-accent, var(--border-strong, #3b414c));
+  transform-origin: top;
+  animation: hd-rail-in 260ms ease both;
+  animation-delay: calc(var(--hd-i, 0) * 26ms + 120ms);
+}
+
+/* The faint technical grid. A repeating hairline rather than a gradient: it
+   gives the surface a texture at rest and disappears at reading distance. */
+.hd-row::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.5;
+  background-image: repeating-linear-gradient(
+    to right,
+    color-mix(in srgb, var(--border, #2e333d) 55%, transparent) 0 1px,
+    transparent 1px 28px
+  );
+  mask-image: linear-gradient(to right, transparent 0%, #000 40%, #000 100%);
+}
+
+.hd-row[data-kind='ok'] {
+  --hd-row-accent: var(--success, #3fb950);
+}
+.hd-row[data-kind='fail'] {
+  --hd-row-accent: var(--danger, #e06c75);
+}
+.hd-row[data-kind='warn'] {
+  --hd-row-accent: var(--warn, #e2c08d);
+}
+.hd-row[data-kind='info'] {
+  --hd-row-accent: var(--accent, #6ea8fe);
+}
+
+.hd-row[data-interactive='true'] {
+  cursor: pointer;
+}
+.hd-row[data-interactive='true']:hover {
+  background: var(--bg-hover, #262a32);
+  border-color: var(--border-strong, #3b414c);
+  transform: translateX(2px);
+}
+.hd-row[data-selected='true'] {
+  background: var(--bg-elevated, #22262e);
+  border-color: color-mix(in srgb, var(--hd-row-accent, var(--accent, #6ea8fe)) 60%, transparent);
+}
+.hd-row:focus-visible {
+  outline: 2px solid var(--accent, #6ea8fe);
+  outline-offset: 1px;
+}
+
+.hd-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 18px;
+}
+
+.hd-row-mark {
+  flex: none;
+  display: inline-flex;
+  color: var(--hd-row-accent, var(--text-dim, #8a909c));
+}
+
+.hd-row-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-strong, #f0f2f5);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Telemetry. Monospace and muted, always — an id, a duration and a count are
+   figures, and figures that share the title's treatment stop being scannable. */
+.hd-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 10.5px;
+  color: var(--text-dim, #8a909c);
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* A hairline divider rather than a middot: it is a technical rule, and it does
+   not read as punctuation inside a number. */
+.hd-row-meta > * + *::before {
+  content: '';
+  display: inline-block;
+  width: 1px;
+  height: 9px;
+  margin-right: 7px;
+  vertical-align: -1px;
+  background: var(--border-strong, #3b414c);
+}
+
+.hd-row-meta em {
+  font-style: normal;
+  color: var(--text, #d7dae0);
+}
+.hd-row-meta[data-tone='warn'] {
+  color: var(--warn, #e2c08d);
+}
+.hd-row-meta[data-tone='fail'] {
+  color: var(--danger, #e06c75);
+}
+
+.hd-row-spacer {
+  flex: 1;
+  min-width: 8px;
+}
+
+.hd-row-actions {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+
+.hd-row-body {
+  margin-top: 3px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text, #d7dae0);
+  overflow-wrap: anywhere;
+}
+
+.hd-row-badge {
+  flex: none;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--hd-row-accent, var(--text-dim, #8a909c));
+  border: 1px solid currentcolor;
+  padding: 0 4px;
+  line-height: 15px;
+}
+
+/* --- the pick control -------------------------------------------------- */
+
+.hd-pick {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+/* A square with a drawn check, not a native checkbox: the native control is
+   the one element on the page that cannot be given the rest of this language,
+   and a column of OS checkboxes is most of what makes a list look unstyled. */
+.hd-pick-box {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border-strong, #3b414c);
+  color: var(--accent-contrast, #0b0d10);
+  background: transparent;
+  clip-path: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+}
+.hd-row[data-selected='true'] .hd-pick-box {
+  background: var(--accent, #6ea8fe);
+  border-color: var(--accent, #6ea8fe);
+}
+.hd-pick-input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 0;
+  height: 0;
+}
+
+.hd-pick-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+/* --- entrance ----------------------------------------------------------- */
+
+/*
+ * Staggered, and capped by the caller (`STAGGER_CAP`): the delay is per item,
+ * so an unbounded stagger means a 200-row list is still arriving seconds after
+ * it rendered. The cap is what keeps it a flourish rather than a wait.
+ */
+@keyframes hd-row-in {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The rail draws itself in after the row lands — the one moving part that
+   says "this is a verdict" rather than "this is a container". */
+@keyframes hd-rail-in {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hd-row,
+  .hd-row::before {
+    animation: none;
+  }
+  .hd-row[data-interactive='true']:hover {
+    transform: none;
+  }
+}
+
+/* --- the rolling counter ------------------------------------------------ */
+
+.hd-counter {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+}

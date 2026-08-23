@@ -30,6 +30,11 @@ export interface Project {
   venv_ready: boolean;
   data_ready: boolean;
   created_at: string;
+  /** The module that owns this project as working storage (`evals` builds one per
+   * benchmark suite). Empty means it is yours. An owned project has no scaffolded
+   * notebook and a venv without `ipykernel`, so the authoring actions are marked
+   * and disabled rather than hidden. */
+  owner?: string;
 }
 
 export interface NotebookCell {

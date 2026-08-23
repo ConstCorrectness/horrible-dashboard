@@ -51,6 +51,36 @@ references a project that no longer exists, the kernel-open error carries an
 `unknown_project` code and the pane shows a "no longer exists" state with a **Close**
 button that drops the dead pane from the saved layout — so it self-heals on the next load.
 
+### Projects another module owns
+
+`ProjectModel.owner` names the module that keeps a project as **working storage**.
+The only one today is [evals](evals.mdx#that-project-is-working-storage-and-says-so),
+which builds one per suite to run Hugging Face benchmarks in. Those are created
+straight through `create_project` rather than through the create *route*, so — and
+this is the part that bit — they have **no scaffolded `main.ipynb`**, and their venv
+carries only the benchmark's requirements: no `ipykernel`, no `horrible_train`.
+
+They are listed and **marked, not hidden** (the bundled-suite rule): a project
+missing from the pane is a directory eating disk you can neither see nor delete. What
+they do not get is authoring actions — open notebook, recipe, and both pushes are
+disabled with the reason in their tooltip, because every one of them could only fail.
+Delete stays enabled.
+
+Two failures this closed, both of the silent kind:
+
+- **A missing notebook read as a path.** The open reached a bare `FileNotFoundError`,
+  whose `str()` is *only* the path, and the pane renders that verbatim — so the whole
+  explanation was a lone `C:\…\main.ipynb`. It is now a `MissingNotebookError`
+  carrying a sentence, and it deliberately does **not** use the `unknown_project`
+  code: the project is fine, so a pane that self-heals by closing itself would be
+  throwing away the wrong thing.
+- **The kernel badge contradicted the error.** `kernel` starts at `starting` and only
+  `opened` or a `kernel_status` event ever moved it, so a failed open left "● starting"
+  sitting next to the message explaining why it hadn't. An error arriving before
+  `opened` now marks the kernel `dead` — and *only* then, since the same event also
+  carries recoverable errors on a live session (a rejected `cells` op), where calling
+  the kernel dead would be its own lie.
+
 That "unreadable means not a project" rule has a sharp edge: background workers rewrite
 `project.json` (`_mark(project, venv_ready=True)`) while requests read it, and a
 `write_text` truncates before it writes. A read landing in that window saw an empty file
@@ -232,6 +262,17 @@ from the project venv, with the stdout sentinel scan. The backend side runs one
   long blocking C call (one `time.sleep(600)`) defers it until that call returns;
   **Restart** is the hard stop.
 
+Cells also get a **language server** — completion, hover and diagnostics, with names
+resolving across cells (see
+[Notebook cells get the same language server](editor.mdx#notebook-cells-get-the-same-language-server)).
+This is the one place it matters most: the server resolves its interpreter by walking
+up from the file to the nearest `.venv`, which for a training notebook is **the project
+venv** — so a recipe completes against the `transformers`/`trl`/`peft` it will actually
+run on, not against the dashboard's own environment. That is also why the pane resolves
+`Project.root` from `GET /api/training/projects/{id}` and joins it to the relative
+notebook path before attaching: a relative path would point the server somewhere else
+entirely, and it would resolve *something* rather than fail.
+
 Kernel slice of the `training` ws channel: client sends `open`, `run_cell`, `run_all`,
 `cells` (ops: insert/edit/delete/move), `interrupt`, `restart`, `shutdown`, `watch_run`;
 server sends `opened`, `kernel_status`, `execution_state`, `output` (raw nbformat output
@@ -396,6 +437,53 @@ Long-running work reports over the shared `/ws` socket on the **`training` chann
 events, plus `metrics` / `model_graph` / `model_stats` / `frame` / `run_output` /
 `run_state` / `manim_status` / `manim_done`.
 
+## The fine-tuning workspace
+
+The `training` preset (🧠) is the whole loop in one frame — write the recipe, run
+it, watch the curves, convert the checkpoint, score it — rather than five panes
+opened one at a time from the command palette.
+
+```
+┌──────────────┬───────────────────────────────┬──────────────────┐
+│ Training     │  (document area — empty)      │ Training Metrics │
+│ Projects     │  notebook · recipe land here  │ LocalTrack       │
+│ Explorer     ├───────────────────────────────┤                  │
+│              │  Evals · llama.cpp            │                  │
+└──────────────┴───────────────────────────────┴──────────────────┘
+                 Observability (bottom, closed)   Agent chat (right)
+```
+
+The pairing that carries the idea is **evals directly under the notebook**: a
+regression in Results names a case, and the code that produced it is one pane up.
+`llamacpp.server` shares that lower area because converting a checkpoint and
+serving it to be scored are the same errand, and the right column is where a run is
+*watched* — `training.metrics` live, `localtrack.workspace` for comparing it against
+previous runs.
+
+The document area is seeded **empty** on purpose. `training.notebook` and
+`training.recipe` are params-bound (`{projectId, notebook}`) and a preset's `tabs`
+carry no params, so seeding them would open two panes reading "No project — open me
+from the Training projects pane". Which is exactly why that pane is *first* in the
+left dock: it is the entry point, and what it opens lands in the empty area.
+
+A preset that names a view the registry does not have is **skipped in silence**
+(`seedFromPreset`), so a typo is a pane that simply never appears — pinned by
+`workflow-presets.test.ts`, which seeds the preset against the real ids and against
+none at all and requires the two to differ.
+
+### It opens as the fine-tuning agent
+
+`agent: 'trainer'` — the workspace switches the persona and the tool scope, not just
+the furniture. The roster spec permits `training`, `evals`, `localtrack`, `editor`
+and `files`, and **preloads only `training`**, so reading a recipe costs a
+`load_tools` rather than schema space on every turn.
+
+`llamacpp` and `hardware` deliberately do **not** appear in that list. A group is a
+tool name's prefix (`_group_of`), and those two namespaces hold *settings* keys
+(`llamacpp.diskBudgetGb`, `hardware.vramMb`) rather than tools — so listing one
+would silently permit nothing at all, which is the same trap the connectors rule
+names when it says a connector id must equal its tool prefix.
+
 ## Contributions to the Layout Shell
 
 | Contribution | Value |
@@ -409,7 +497,7 @@ events, plus `metrics` / `model_graph` / `model_stats` / `frame` / `run_output` 
 | Widget `training.manim` | manim render viewer (progress log + mp4 player) |
 | Widget `training.peers` | peer training ads: advertise offer/seek, match-highlighted peer list, open-chat handoff |
 | Regions on `training.notebook` | metrics/architecture/rollout/manim/peers on the right strip, projects on the left |
-| Layout preset `training` (🧠) | projects · notebook · metrics workspace |
+| Layout preset `training` (🧠) | the fine-tuning workspace — see [The fine-tuning workspace](#the-fine-tuning-workspace) |
 | Commands | `training.open`, `training.openRecipe`, `training.openMetrics`, `training.openModelGraph`, `training.openRollout`, `training.openManim`, `training.openPeers` |
 | Project row actions | open notebook, 🧪 recipe, ⇪ push to Kaggle, ⇪ push to Colab, delete |
 | Connector `trackers` | W&B API key + MLflow tracking URI, Fernet-encrypted. The one connector contributing **no agent tools**, so its id names no tool group |

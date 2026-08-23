@@ -383,20 +383,55 @@ async def suggest_targets() -> dict[str, Any]:
             "evals: could not resolve the node's agent provider", exc_info=True
         )
 
+    # The local GGUFs, which is what "score the checkpoint I just converted" means.
+    # These used to be the llama.cpp *builds* (`list_installs`), emitted with an
+    # empty `model` — a build is a binary, not something you can evaluate, so the
+    # one target that mattered on this node was the one you could not pick.
     try:
-        from backend.modules.llamacpp import binaries
+        from backend.modules.llamacpp import catalog
+        from backend.modules.llamacpp.server import llama_manager
 
-        for install in binaries.list_installs():
+        loaded = llama_manager.model_path
+        models = catalog.list_models()
+        # Managed first: those are the ones this node produced, and after a
+        # fine-tune the file you want is the one you just wrote.
+        models.sort(key=lambda m: (m.origin != "managed", m.name.lower()))
+        for model in models:
+            path = str(model.path)
+            is_loaded = bool(loaded) and _same_path(loaded, path)
             out.append(
                 {
                     "provider": "llamacpp",
+                    # Left blank deliberately: the sweep loads the GGUF and reads
+                    # the endpoint after the spawn, because the port is chosen then.
                     "endpoint": "",
-                    "model": "",
-                    "label": f"llama.cpp {install.tag} ({install.variant})",
+                    # llama-server advertises the `--alias`, which defaults to the
+                    # file stem — so this is the id it will answer to.
+                    "model": model.path.stem,
+                    "modelPath": path,
+                    "label": f"{model.name} ({model.origin})"
+                    + (" — loaded" if is_loaded else ""),
                     "source": "llamacpp",
+                    "loaded": is_loaded,
+                    # Shown in the picker rather than used to filter it. The
+                    # catalog reads this from the GGUF header, so an embedder
+                    # (`nomic-bert`) or a TTS model sitting in the same directory
+                    # is visibly not a chat model — but a header we could not
+                    # parse is not evidence of anything, and hiding a model on
+                    # that basis would be presenting a guess as a measurement.
+                    "architecture": model.architecture,
                 }
             )
     except Exception:  # noqa: BLE001
-        logger.debug("evals: llama.cpp installs unavailable", exc_info=True)
+        logger.debug("evals: llama.cpp catalog unavailable", exc_info=True)
 
     return {"targets": out}
+
+
+def _same_path(a: str, b: str) -> bool:
+    from pathlib import Path
+
+    try:
+        return Path(a).resolve() == Path(b).resolve()
+    except OSError:
+        return a == b

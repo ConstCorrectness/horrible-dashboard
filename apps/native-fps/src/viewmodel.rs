@@ -248,6 +248,33 @@ pub struct Frame {
     pub move_speed: f32,
 }
 
+/// How long one inspect takes, in seconds.
+///
+/// Long enough to read the weapon, short enough that it is over before it costs
+/// you a gunfight — and it is interruptible anyway, so this is a maximum rather
+/// than a commitment.
+const INSPECT_DURATION: f32 = 1.35;
+
+/// The inspect pose's weight over its own duration: ease in, hold, ease out.
+///
+/// Smoothstepped at both ends rather than linear. A linear ramp reverses
+/// direction instantly at the hold, which reads as the animation being cut off
+/// and restarted — the one thing a "look at this weapon" flourish must not do.
+fn inspect_envelope(t: f32) -> f32 {
+    const RISE: f32 = 0.28;
+    const FALL: f32 = 0.42;
+    let out = INSPECT_DURATION - FALL;
+    let x = if t < RISE {
+        t / RISE
+    } else if t > out {
+        1.0 - (t - out) / FALL
+    } else {
+        1.0
+    }
+    .clamp(0.0, 1.0);
+    x * x * (3.0 - 2.0 * x)
+}
+
 /// One part of a weapon, in the model's own space.
 struct Part {
     size: [f32; 3],
@@ -284,6 +311,12 @@ pub struct WeaponViewModel {
     /// stride.
     walk: f32,
     flash_age: f32,
+    /// How far through the inspect animation we are, in seconds, or `None`.
+    ///
+    /// A *duration* rather than a bool with a separate clock: the pose is a
+    /// function of how far in it is, and every frame of it — including the fact
+    /// that it has finished — falls out of one number.
+    inspect: Option<f32>,
     /// The pivot's transform for this frame, rebuilt by `update`.
     transform: Mat4,
     visible: bool,
@@ -296,6 +329,7 @@ impl Default for WeaponViewModel {
     fn default() -> WeaponViewModel {
         WeaponViewModel {
             weapon: String::new(),
+            inspect: None,
             skin: None,
             shape: None,
             kick: 0.0,
@@ -351,6 +385,33 @@ impl WeaponViewModel {
         // shake, not to a weapon behind the player's ear.
         self.kick = (self.kick + 0.8).min(1.0);
         self.flash_age = 0.0;
+        // Firing cancels an inspect. It has to: the animation swings the barrel
+        // away from the crosshair, and a shot that came out of a weapon pointing
+        // at the floor would be a picture of a shot that did not happen. The
+        // server has already resolved it against the real view angles.
+        self.inspect = None;
+    }
+
+    /// Start the inspect animation — the weapon turned over in the hands.
+    ///
+    /// Purely cosmetic, purely local, and deliberately *not* on the wire: it
+    /// changes nothing about where a shot goes, what can be hit, or what anyone
+    /// else sees. That is what makes it safe to interrupt at any moment, which
+    /// in turn is what makes it usable in a match rather than a state you have
+    /// to wait out.
+    ///
+    /// Re-pressing while it runs restarts it rather than queueing a second pass:
+    /// the button means "show me the gun", and it should answer every press.
+    pub fn inspect(&mut self) {
+        if self.shape.is_some() {
+            self.inspect = Some(0.0);
+        }
+    }
+
+    /// Whether the inspect animation is running. The HUD reads it to name what
+    /// the weapon is doing, so it is not a fact this module keeps to itself.
+    pub fn inspecting(&self) -> bool {
+        self.inspect.is_some()
     }
 
     /// Advance the animation.
@@ -366,6 +427,9 @@ impl WeaponViewModel {
             self.bob_phase = 0.0;
             self.last_yaw = None;
             self.walk = 0.0;
+            // Dying mid-inspect must not resume it on respawn: the animation is
+            // a thing you asked for, not a state of the weapon.
+            self.inspect = None;
             return;
         }
 
@@ -395,19 +459,45 @@ impl WeaponViewModel {
         let reload_target = if frame.reloading { 1.0 } else { 0.0 };
         self.reload_t += (reload_target - self.reload_t) * (dt * RELOAD_RATE).min(1.0);
 
+        // A reload takes the weapon away for its own animation, and two poses
+        // fighting over the same pivot is one that looks broken. The reload
+        // wins because it is the one the *server* is doing.
+        if frame.reloading {
+            self.inspect = None;
+        }
+        // The envelope: in, hold, out. Advanced before it is read, so the frame
+        // it completes on is the frame it is back at rest rather than one after.
+        let inspect = match self.inspect {
+            None => 0.0,
+            Some(t) => {
+                let t = t + dt;
+                if t >= INSPECT_DURATION {
+                    self.inspect = None;
+                    0.0
+                } else {
+                    self.inspect = Some(t);
+                    inspect_envelope(t)
+                }
+            }
+        };
+
         let bob_x = (self.bob_phase * 0.5).cos() * 0.05 * bob_amount;
         let bob_y = (self.bob_phase).sin().abs() * -0.055 * bob_amount;
 
+        // Where the inspect pose takes the weapon: in towards the centre of
+        // the screen, up, and rolled most of the way over so the side of the
+        // receiver — which is where a skin's pattern actually lives — faces the
+        // camera. A pose that only lifted the gun would show the same face it
+        // already shows.
         let position = Vec3::new(
-            HOME.x + bob_x + self.sway_x,
-            HOME.y + bob_y + self.sway_y - self.reload_t * 0.55,
-            // Recoil is mostly backwards: a gun that only rotates looks hinged.
-            HOME.z + self.kick * 0.28,
+            HOME.x + bob_x + self.sway_x - inspect * 0.30,
+            HOME.y + bob_y + self.sway_y - self.reload_t * 0.55 + inspect * 0.16,
+            HOME.z + self.kick * 0.28 + inspect * 0.20,
         );
         let rotation = Vec3::new(
-            self.kick * -0.16 + self.reload_t * 0.7 + bob_y * 0.4,
-            self.sway_x * 0.7 + self.reload_t * 0.25,
-            self.sway_x * 0.5 + bob_x * 0.6,
+            self.kick * -0.16 + self.reload_t * 0.7 + bob_y * 0.4 + inspect * 0.34,
+            self.sway_x * 0.7 + self.reload_t * 0.25 - inspect * 0.95,
+            self.sway_x * 0.5 + bob_x * 0.6 + inspect * 2.15,
         );
         self.transform = Mat4::from_translation(position)
             * Mat4::from_euler(glam::EulerRot::XYZ, rotation.x, rotation.y, rotation.z);

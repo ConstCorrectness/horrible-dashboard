@@ -73,6 +73,28 @@ def _free_port(preferred: int) -> int:
         return int(sock.getsockname()[1])
 
 
+@dataclass(frozen=True)
+class SpawnSpec:
+    """Exactly how a running server was started.
+
+    Recorded because the process holds **one** model at a time, so anything that
+    wants to borrow the server — an eval sweep loading a fine-tune to score it —
+    has to be able to put back what it evicted. Restoring from defaults instead
+    would silently re-tune the user's own server: `context_size` back to 4096,
+    `extra_args` gone, and `gpu_layers` reset, which is how a 4080 ends up running
+    on CPU with nothing said (the same failure `hardware.defaults()` exists to
+    prevent).
+    """
+
+    model_path: str
+    alias: str
+    port: int
+    context_size: int
+    gpu_layers: int
+    threads: int | None
+    extra_args: tuple[str, ...]
+
+
 @dataclass
 class LlamaServerManager:
     """Owns at most one `llama-server` for the app's lifetime."""
@@ -80,6 +102,7 @@ class LlamaServerManager:
     launcher: Launcher | None = None
     _proc: subprocess.Popen[str] | None = field(default=None, init=False)
     _model_path: str | None = field(default=None, init=False)
+    _spec: SpawnSpec | None = field(default=None, init=False)
     _alias: str = field(default="", init=False)
     _port: int = field(default=DEFAULT_PORT, init=False)
     _ready: bool = field(default=False, init=False)
@@ -112,6 +135,11 @@ class LlamaServerManager:
     def alias(self) -> str:
         """The model id the server advertises on `/v1/models`."""
         return self._alias if self.running() else ""
+
+    @property
+    def spawn_spec(self) -> SpawnSpec | None:
+        """How the running server was started, for anyone who has to restore it."""
+        return self._spec if self.running() else None
 
     def status(self) -> dict[str, Any]:
         install = binaries.newest_install()
@@ -160,6 +188,15 @@ class LlamaServerManager:
         self._model_path = str(path)
         self._alias = alias or path.stem
         self._port = _free_port(port or DEFAULT_PORT)
+        self._spec = SpawnSpec(
+            model_path=str(path),
+            alias=self._alias,
+            port=self._port,
+            context_size=context_size,
+            gpu_layers=gpu_layers,
+            threads=threads,
+            extra_args=tuple(extra_args or ()),
+        )
         self._ready = False
         self._error = ""
         self._started_at = time.time()
@@ -206,6 +243,7 @@ class LlamaServerManager:
         self._proc = None
         self._ready = False
         self._model_path = None
+        self._spec = None
         self._alias = ""
         return self.status()
 

@@ -61,6 +61,12 @@ describe('LSP IntelliSense client', () => {
     const client = getLspClient(bufferUri);
     expect(client).toBeDefined();
 
+    // The document attaches to its session through a `DocumentBinding`, which is
+    // async for every language (Python resolves an interpreter and a project root
+    // first). So the session lands a microtask after the view is constructed, not
+    // during it — everything below needs it in place.
+    await Promise.resolve();
+
     // Verify session started
     const sentMessages = _getSent();
     expect(sentMessages).toContainEqual(

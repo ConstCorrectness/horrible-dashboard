@@ -349,3 +349,65 @@ def test_kernel_session_end_to_end(project) -> None:
             await _shutdown(mgr)
 
     asyncio.run(go())
+
+
+def test_a_project_with_no_notebook_says_so(project, monkeypatch) -> None:
+    """A missing notebook must arrive as a sentence, not as a bare path.
+
+    `notebook_path` resolves without touching the disk, so the open used to reach a
+    bare `FileNotFoundError`, whose `str()` is *only the path* — and that is exactly
+    what the pane renders. The result was a project showing a lone path beside a
+    kernel badge still reading "starting".
+    """
+
+    async def go() -> None:
+        mgr = TrainingKernelManager()
+        conn = FakeConn()
+        unsub = stream.subscribe_conn(conn)
+        try:
+            await _handle(
+                mgr,
+                conn,
+                {"event": "open", "data": {"projectId": project.id, "notebook": "gone.ipynb"}},
+            )
+            # `open` is detached (`handle` returns before `_open` runs), so the
+            # failure has to be waited for like the success is.
+            errors = await _wait(lambda: conn.events("error"), 30, "the open to fail")
+            message = errors[0]["message"]
+            assert "gone.ipynb" in message
+            assert "has no" in message, f"not a sentence: {message!r}"
+            # It is not `unknown_project`: the project is fine, so a pane that
+            # self-heals by closing itself would be throwing away the wrong thing.
+            assert errors[0].get("code") != "unknown_project"
+            assert not conn.events("opened")
+        finally:
+            unsub()
+            await mgr.shutdown_all()
+
+    asyncio.run(go())
+
+
+def test_an_owned_project_explains_whose_it_is(project, monkeypatch) -> None:
+    """The message names the module, since "no notebook" reads like a bug on a
+    project you thought was yours."""
+    project.owner = "evals"
+    projects.update_project(project)
+
+    async def go() -> None:
+        mgr = TrainingKernelManager()
+        conn = FakeConn()
+        unsub = stream.subscribe_conn(conn)
+        try:
+            await _handle(
+                mgr,
+                conn,
+                {"event": "open", "data": {"projectId": project.id, "notebook": "gone.ipynb"}},
+            )
+            errors = await _wait(lambda: conn.events("error"), 30, "the open to fail")
+            message = errors[0]["message"]
+            assert "evals" in message and "working storage" in message
+        finally:
+            unsub()
+            await mgr.shutdown_all()
+
+    asyncio.run(go())

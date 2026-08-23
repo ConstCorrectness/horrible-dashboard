@@ -1,6 +1,8 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
-import type { NotebookCell } from '../api';
+import type { Extension } from '@codemirror/state';
+
+import { getProject, type NotebookCell } from '../api';
 import {
   interruptKernel,
   restartKernel,
@@ -12,6 +14,7 @@ import {
 import { openSession, useSession } from '../store';
 import { OutputRenderer } from '../outputs/OutputRenderer';
 import { CellEditor } from './CellEditor';
+import { useNotebookLsp } from '../../../notebook/useNotebookLsp';
 import { PaneInstanceContext, useAgentContext } from '../../../agent-context';
 import { usePaneParams } from '../../../panes';
 import { registry } from '../../../registry';
@@ -41,6 +44,30 @@ export function NotebookPane() {
   const store = useMemo(() => openSession(projectId, notebookPath), [projectId, notebookPath]);
   const state = useSession(store);
   const editTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  // The pane addresses notebooks by a path relative to the project, but the language
+  // server resolves the interpreter and the project root by walking *up* from the
+  // file — so it needs the real one. `.venv` lives at the project root, which is the
+  // whole point here: a fine-tuning notebook must complete against the torch/trl it
+  // will actually run on, not against the dashboard's own environment.
+  const [projectRoot, setProjectRoot] = useState('');
+  useEffect(() => {
+    let cancelled = false;
+    if (!projectId) return;
+    void getProject(projectId)
+      .then((p) => {
+        if (!cancelled) setProjectRoot(p.root);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId]);
+  const absNotebookPath = useMemo(() => {
+    if (!projectRoot) return '';
+    const sep = projectRoot.includes('\\') ? '\\' : '/';
+    return `${projectRoot}${sep}${notebookPath.replace(/[\\/]/g, sep)}`;
+  }, [projectRoot, notebookPath]);
+  const lsp = useNotebookLsp(absNotebookPath, state.cells);
 
   useAgentContext(() => ({
     projectId,
@@ -205,6 +232,7 @@ export function NotebookPane() {
           <Cell
             key={cell.id}
             cell={cell}
+            lspExtensions={lsp.cellExtensions(cell)}
             runState={state.runStates[cell.id]}
             onChange={(src) => syncEdit(cell.id, src)}
             onRun={() => run(cell.id)}
@@ -249,9 +277,12 @@ function Cell({
   onRun,
   onDelete,
   onAddBelow,
+  lspExtensions,
 }: {
   cell: NotebookCell;
   runState?: CellRunState;
+  /** This cell's slice of the notebook's language server (empty for markdown). */
+  lspExtensions?: Extension[];
   onChange: (source: string) => void;
   onRun: () => void;
   onDelete: () => void;
@@ -295,6 +326,7 @@ function Cell({
           language={isCode ? 'python' : 'markdown'}
           onChange={onChange}
           onRun={onRun}
+          extraExtensions={lspExtensions}
         />
         {cell.outputs.length > 0 && (
           <div

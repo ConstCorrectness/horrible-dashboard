@@ -40,6 +40,7 @@ pub const KEY_CROSSHAIR_SIZE: &str = "hassault.crosshair.size";
 pub const KEY_CROSSHAIR_GAP: &str = "hassault.crosshair.gap";
 pub const KEY_CROSSHAIR_THICKNESS: &str = "hassault.crosshair.thickness";
 pub const KEY_CROSSHAIR_COLOR: &str = "hassault.crosshair.color";
+pub const KEY_SHOW_HITBOXES: &str = "hassault.debug.hitboxes";
 
 /// How much the renderer is allowed to spend on looking good.
 ///
@@ -311,6 +312,13 @@ pub struct Settings {
     pub sensitivity: f32,
     pub crosshair: Crosshair,
     pub video: Video,
+    /// Draw the served hitbox around every body.
+    ///
+    /// A setting rather than a build flag, because the question it answers —
+    /// "is what I am shooting at where it is drawn?" — is one a *player* asks,
+    /// usually right after a shot they were sure of. It is off by default: a
+    /// permanent wireframe is a worse picture of the game than the game.
+    pub show_hitboxes: bool,
 }
 
 impl Default for Settings {
@@ -319,6 +327,7 @@ impl Default for Settings {
             sensitivity: 1.0,
             crosshair: Crosshair::default(),
             video: Video::default(),
+            show_hitboxes: false,
         }
     }
 }
@@ -359,6 +368,9 @@ impl Settings {
         if let Some(v) = get(KEY_CROSSHAIR_THICKNESS).and_then(|v| v.as_f64()) {
             s.crosshair.thickness = (v as f32).clamp(0.2, 3.0);
         }
+        if let Some(v) = get(KEY_SHOW_HITBOXES).and_then(|v| v.as_bool()) {
+            s.show_hitboxes = v;
+        }
         if let Some(v) = get(KEY_CROSSHAIR_COLOR).and_then(|v| v.as_str()) {
             s.crosshair.color = CrosshairColor::parse(v);
         }
@@ -379,6 +391,7 @@ impl Settings {
             KEY_CROSSHAIR_GAP => json!(self.crosshair.gap),
             KEY_CROSSHAIR_THICKNESS => json!(self.crosshair.thickness),
             KEY_CROSSHAIR_COLOR => json!(self.crosshair.color.key()),
+            KEY_SHOW_HITBOXES => json!(self.show_hitboxes),
             _ => return None,
         })
     }
@@ -513,6 +526,7 @@ mod tests {
             KEY_CROSSHAIR_GAP,
             KEY_CROSSHAIR_THICKNESS,
             KEY_CROSSHAIR_COLOR,
+            KEY_SHOW_HITBOXES,
         ] {
             bag.insert(key.into(), original.value_for(key).expect("a value"));
         }

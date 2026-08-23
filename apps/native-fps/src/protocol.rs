@@ -161,6 +161,15 @@ pub struct PlayerRow {
     pub bot: bool,
     #[serde(default)]
     pub crouch: f32,
+    /// Whether the server has this body resting on the floor.
+    ///
+    /// Read by reconciliation, which used to pass a hardcoded `false`. That is
+    /// not a neutral default: the first replayed step then converges on the wish
+    /// direction at `AIR_RESPONSE` instead of `GROUND_RESPONSE` — five times
+    /// slower — applies a frame of gravity, and refuses a jump. Every correction
+    /// replayed a body that was falling when the server says it was standing.
+    #[serde(default)]
+    pub ground: bool,
     #[serde(default)]
     pub kills: i32,
     #[serde(default)]
@@ -179,12 +188,16 @@ pub struct PlayerRow {
 #[derive(Debug, Deserialize, Clone, Default)]
 #[allow(dead_code)]
 pub struct SelfState {
-    #[serde(default)]
-    pub x: f32,
-    #[serde(default)]
-    pub y: f32,
-    #[serde(default)]
-    pub z: f32,
+    // **No `x`/`y`/`z` here, deliberately.** `private_view` does not send a
+    // position — the authoritative one is in the shared row, which is where
+    // reconciliation reads it and where the browser client reads it.
+    //
+    // They used to be declared anyway, with `#[serde(default)]`, which is how a
+    // field that is never on the wire passes for one that is: every snapshot
+    // deserialized them to 0.0 in silence. The respawn path then reset the body
+    // to the world origin, which is inside the solid border every map has, where
+    // `step` finds itself enclosed and holds still — so a respawn put the player
+    // in rock, unable to move, until the next snapshot reconciled them out of it.
     #[serde(default)]
     pub hp: f32,
     #[serde(default)]
@@ -226,6 +239,46 @@ pub struct SelfState {
     /// light up on every shot, including the ones that hit a wall.
     #[serde(default)]
     pub hits: Vec<HitMarker>,
+    /// The momentum the prediction rebases on. See `MoveState`.
+    ///
+    /// `move` is a Rust keyword, hence the rename. `Option` because a server
+    /// older than the field sends none, and replaying on the local velocity is
+    /// the best guess available then — it is only *wrong* to prefer it when the
+    /// authoritative number is right there.
+    #[serde(rename = "move", default)]
+    pub movement: Option<MoveState>,
+}
+
+/// The private half of a snapshot's momentum: what a client cannot derive from a
+/// position and must not guess.
+///
+/// Movement here is velocity integrated against AC's friction constants, so the
+/// velocity **is** the state — a position alone does not describe a body that is
+/// still sliding. Replaying unacknowledged commands on top of the client's own
+/// velocity runs the replay on the very number the correction exists to fix, and
+/// the error compounds instead of settling: the prediction runs away from the
+/// server, the next snapshot drags it back, and that is the elastic banding.
+///
+/// Private rather than in the shared rows because it is nobody else's business,
+/// and would be sixteen more numbers per packet.
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct MoveState {
+    /// `[x, y, z]` cubes per second.
+    #[serde(default)]
+    pub vel: [f32; 3],
+    /// Seconds airborne, which is what the gravity ramp reads.
+    #[serde(default)]
+    pub air: f32,
+    /// Crouch animation, 0 standing to 1 fully crouched.
+    #[serde(default)]
+    pub crouch: f32,
+    #[serde(rename = "crouchedInAir", default)]
+    pub crouched_in_air: bool,
+    /// **A duration, not a timestamp.** The client's simulated clock and the
+    /// server's are unrelated — only "how long ago" transfers — so this is
+    /// converted against our own `t` at the moment it is applied.
+    #[serde(rename = "sinceLanded", default)]
+    pub since_landed: f32,
 }
 
 /// One sound, as ears give it: a bearing and a loudness, never an offset.
@@ -342,6 +395,22 @@ pub struct Snapshot {
     pub fx: Vec<Fx>,
 }
 
+/// The server's answer to a `ping`.
+///
+/// It echoes the client stamp back rather than the server measuring anything:
+/// the round trip is `now - t` on *this* clock, and a difference of two clocks
+/// is not a duration.
+#[derive(Debug, Deserialize, Default)]
+#[allow(dead_code)]
+pub struct Pong {
+    #[serde(default)]
+    pub t: f64,
+    /// The server's own clock in ms when it answered. Unused today; kept because
+    /// it is the field a future clock-sync would be built from.
+    #[serde(rename = "serverT", default)]
+    pub server_t: f64,
+}
+
 #[derive(Debug, Deserialize, Default)]
 #[allow(dead_code)]
 pub struct Welcome {
@@ -372,8 +441,12 @@ pub enum Event {
     Welcome(Welcome),
     Snapshot(Box<Snapshot>),
     Error(WireError),
-    /// A `hassault` event this build has no use for (`invite`, `matches`, `pong`,
-    /// …). Named rather than dropped silently so `--verbose` can show it.
+    /// The answer to our own `ping`, which is the only measurement of the link
+    /// this client has. Without it the round trip is unknown and unshowable —
+    /// and "no ping displayed" is indistinguishable from "the ping is fine".
+    Pong(Pong),
+    /// A `hassault` event this build has no use for (`invite`, `matches`, …).
+    /// Named rather than dropped silently so `--verbose` can show it.
     Other(String),
 }
 
@@ -393,6 +466,7 @@ pub fn classify(line: &str) -> Option<Event> {
         "snapshot" => Event::Snapshot(Box::new(
             serde_json::from_value(env.data).unwrap_or_default(),
         )),
+        "pong" => Event::Pong(serde_json::from_value(env.data).unwrap_or_default()),
         "error" => Event::Error(serde_json::from_value(env.data).unwrap_or_default()),
         other => Event::Other(other.to_string()),
     })

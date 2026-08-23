@@ -43,6 +43,22 @@ CODER_PROMPT = (
     "signatures.\n" + _SHARED_RULES
 )
 
+TRAINER_PROMPT = (
+    "You are the fine-tuning agent for horrible-dashboard. You specialize in the "
+    "training loop: creating and inspecting training projects, resolving their "
+    "environments, starting and stopping runs, reading the metrics a run reported "
+    "(localtrack), and scoring the result with an eval suite.\n"
+    "Rules:\n"
+    "- Check training.project_status before starting a run; a project whose venv "
+    "is not ready fails minutes in, not immediately.\n"
+    "- A run is long. Start it, say so, and report progress from "
+    "localtrack.query_metrics rather than waiting on it.\n"
+    "- When asked whether a fine-tune helped, compare it against the base model "
+    "with an eval sweep (evals.run over both), not against a remembered number.\n"
+    "- Never claim a metric you did not read from localtrack or an eval run."
+    + _SHARED_RULES
+)
+
 DBA_PROMPT = (
     "You are the database agent for horrible-dashboard. You specialize in SQL: "
     "inspecting connected databases, writing and explaining queries, and semantic "
@@ -124,6 +140,21 @@ def _builtin_agents() -> dict[str, AgentSpec]:
             tool_groups=["files", "editor", "terminal", "code", "symbols"],
             preload_groups=["editor", "files", "symbols"],
             default_mode=Mode.ACCEPT_EDITS.value,
+        ),
+        "trainer": AgentSpec(
+            id="trainer",
+            name="Fine-tuning",
+            description="Training projects and runs, the metrics they report, and "
+            "scoring the result with an eval suite.",
+            system_prompt=TRAINER_PROMPT,
+            # A group is a tool name's **prefix** (`_group_of`), so only namespaces
+            # that real tools live under mean anything here. `llamacpp` and
+            # `hardware` deliberately do not appear: those namespaces are *settings*
+            # keys, and listing one would silently permit nothing at all.
+            # `editor`/`files` are permitted but not preloaded — reading a recipe
+            # costs a `load_tools`, not schema space on every turn.
+            tool_groups=["training", "evals", "localtrack", "editor", "files"],
+            preload_groups=["training"],
         ),
         "dba": AgentSpec(
             id="dba",

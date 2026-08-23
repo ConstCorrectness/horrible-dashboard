@@ -1,0 +1,156 @@
+---
+sidebar_label: Model graph IR
+---
+
+# The model graph: a design, its shapes, and its PyTorch
+
+The [interpretability](../modules/interpretability.mdx) pane's **Design** mode edits a
+`DesignGraph` and generates a `nn.Module` subclass from it. This page is the contract
+between the two: what the IR holds, what the generator promises, and the rules that
+are silent failures if they are broken.
+
+Backend: `backend/modules/interpretability/graph/`. Frontend:
+`packages/core/src/modules/interpretability/designer/`.
+
+## Three things it is not
+
+- **Not `ModelArchitecture`** (`../modules/interpretability.mdx#model-explorer`), which
+  is a *description* normalised out of GGUF metadata.
+- **Not `ModelGraph`** (`packages/core/src/modules/training/client.ts`), which is a
+  `torch.fx` *trace* of a module that ran.
+- **Not a runtime.** The generated file imports nothing from this app. You can move it
+  into a Kaggle notebook or a colleague's repo and it runs.
+
+Those first two both describe a model that exists. This one describes one that does
+not yet — which is why it is a separate type with a separate name.
+
+## The IR
+
+```py
+class GraphNode:  id, type, params, muted, name
+class GraphEdge:  source, sourceHandle, target, targetHandle
+class SubGraph:   id, name, nodes, edges          # one generated nn.Module subclass
+class DesignGraph: name, config, nodes, edges, groups
+```
+
+Two rules the shape enforces:
+
+**No cosmetics in the IR.** Positions, frames, collapse state and labels live in a
+separate layout sidecar (`<name>.graph.json`), because a `.py` file has nowhere sane
+to put an x/y coordinate. That separation is what lets the generated source be the
+structural source of truth without a round trip scattering your canvas.
+
+**A param is a literal or a reference, never ambiguously both.** `"$d_model"` reads
+`DesignGraph.config`; anything else is the value itself. Config entries become the
+generated class's `__init__` keyword arguments, so one graph describes a family of
+models rather than a single frozen one — `RMSNorm(d_model)`, not `RMSNorm(512)`.
+
+## What each node knows
+
+One entry per type in `spec.py`, carrying **everything** about it: sockets, editable
+params (in the `RecipeField` shape the training pane already renders), a `shape_fn`, a
+`params_fn`, and the two lines of Python it becomes. Adding a node type is adding an
+entry there and nothing else — the palette, the inspector and the generator all read
+it, and the catalog is **served** (`GET /api/interpretability/graph/specs`) rather than
+restated in TypeScript, the same reason hassault serves its weapon numbers.
+
+Notable members of the vocabulary:
+
+- **`op.add` is the residual connection.** Not a flag on a block, not an implicit
+  convention: a wire you can see, reroute, mute, or get wrong.
+- **`attn.mha` is MHA, GQA and MQA**, distinguished by the head counts exactly as
+  `AttentionSpec.kind` derives them from a GGUF's metadata.
+- **`group` with `count > 1` is the ×N stack** — the direct descendant of the model
+  explorer's "drawn once with a multiplier".
+- **`custom.module`** is the escape hatch, and also where the round-trip parser will
+  put source it cannot map: preserved verbatim and labelled opaque, never dropped.
+
+## Codegen
+
+A topological walk in SSA form. Three structures do the work: a group emits a class, a
+repeated group emits a `ModuleList` and a loop, and config values stay variables.
+Primitives `torch.nn` does not ship (`RMSNorm`, `MultiHeadAttention`, `SwiGLU`, `MoE`,
+`RotaryEmbedding`) are **emitted into the file**, only the ones used, in
+dependency-safe order.
+
+```py
+class DecoderBlock(nn.Module):
+    def __init__(self, d_model: int = 512, n_heads: int = 8, n_kv_heads: int = 2, ...):
+        super().__init__()
+        self.norm_1 = RMSNorm(d_model, eps=1e-06)  # horrible:node=blk_n1
+        ...
+
+    def forward(self, x):
+        x_1 = self.norm_1(x)     # horrible:node=blk_n1
+        x_2 = self.attn_1(x_1)   # horrible:node=blk_attn
+        x_3 = x + x_2            # horrible:node=blk_res1   ← the residual
+```
+
+:::note The marker is the round-trip hinge
+Every emitted line carries `# horrible:node=<id>` on the line `ast` reports for the
+statement. Re-parsing the file recovers node identity, and with it the layout sidecar.
+Without it, a code edit would generate fresh ids and re-lay-out the canvas on every
+save — the single most annoying thing a node editor can do.
+:::
+
+**Mute is ablation.** A muted node emits nothing, its input passes through, and it
+stops being counted — *and* it stops dragging its primitive class into the file. A
+generated module that still defines `SwiGLU` after you ablated the only SwiGLU makes
+the ablation look like it did not take.
+
+**Determinism is required, not incidental.** The same graph must produce the same
+bytes: golden fixtures and round-tripping both depend on it, so `topo_order` is Kahn's
+algorithm in declaration order rather than anything hash-ordered.
+
+## Two tiers of validation, and why they stay separate
+
+| | Tier 1 — `shapes.py` | Tier 2 — a probe |
+| --- | --- | --- |
+| Runs | in the backend, per keystroke | in a training project's venv |
+| Needs torch | **no** | yes |
+| Answers | our symbolic arithmetic | what torch actually does |
+| Shown as | *estimated* | measured |
+
+The backend has no torch and [must not grow one](../modules/interpretability.mdx);
+heavy dependencies live in per-project uv envs. So shape inference is pure Python, and
+batch and sequence stay symbolic (`B`, `T`) — a symbolic dimension compared against a
+concrete one is an *unknown*, not a conflict, and reporting unknowns as errors would
+paint every honest graph red.
+
+Tier 2 follows `recipes._probe` exactly, `subprocess.run` on the caller's thread
+included (asyncio subprocess spawn is broken under `uvicorn --reload` on Windows). It
+reports three states, never two: it ran / it raised, with the traceback verbatim / **we
+could not ask**. When the two tiers disagree, tier 1 is wrong and the disagreement is
+surfaced rather than reconciled.
+
+:::warning One cause, one message
+A node failing inside a group must not *also* make the group claim its output is
+unwired. It is wired; the chain feeding it broke. Two explanations, one of them false,
+sends the reader after the wrong one — so `_group` distinguishes "nothing is connected"
+from "the upstream value never arrived" and stays quiet about the second.
+:::
+
+## What a shape error must carry
+
+A message with no `nodeId` cannot become a red socket, which is the whole point of
+inferring shapes. `ShapeIssue` carries `nodeId`/`handle`, and inference **accumulates**
+issues instead of raising on the first: a graph mid-edit usually has several, and
+fixing them one round-trip at a time is worse than seeing them all.
+
+## HTTP surface
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/api/interpretability/graph/specs` | the node catalog + templates |
+| POST | `/api/interpretability/graph/code` | graph → Python (stateless) |
+| POST | `/api/interpretability/graph/validate` | tier-1 shape inference (stateless) |
+| GET | `/api/interpretability/graph` | saved designs |
+| GET/PUT/DELETE | `/api/interpretability/graph/{name}` | one design |
+| GET | `/api/interpretability/graph/template/{id}` | a starting graph |
+
+`/code` and `/validate` are **stateless on purpose**: the canvas calls them on every
+edit, long before a design has a name, and they must not touch the disk.
+
+A save that cannot generate code is still written, with the reason in `codeError`.
+Refusing the write would lose an afternoon over one unfinished wire, and a canvas is
+unfinished nearly all the time.

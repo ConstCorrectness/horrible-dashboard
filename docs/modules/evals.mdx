@@ -259,6 +259,45 @@ charts do the plotting, wrapped in swallows throughout: localtrack is a *reporti
 destination and a tracking failure must never cost a run the results already in
 `app.db`.
 
+### Sweeping a local GGUF: the server is borrowed, then given back
+
+`GET /api/evals/targets` offers the node's configured agent provider **and every
+GGUF in the [llama.cpp](llamacpp.mdx) catalog**, managed origin first — because
+after a fine-tune the file you want to score is the one this node just wrote. It
+used to offer llama.cpp *installs*: builds, emitted with an empty `model`, so the
+one target that mattered on the machine was the one you could not pick.
+
+A target therefore names a **file**, not just a model id (`RunTarget.model_path`).
+`llama-server` holds one model at a time — `spawn` refuses while a server is
+running — so "score my fine-tune against its base" cannot be two models answering
+in parallel; it is one, then the other, with a load in between. `evals/llama_target.py`
+does that borrowing, and three rules there are bugs if dropped:
+
+- **One llama.cpp target at a time.** Targets otherwise run concurrently, which for
+  every other provider is free parallelism. Here two of them would race over a
+  single process and each would score the other's weights. The lock is held for the
+  whole target, not just the load.
+- **Put back what was evicted**, from the recorded `SpawnSpec` rather than from
+  defaults. The evicted server may be the user's chat provider, and restoring from
+  defaults would quietly reset `gpu_layers`, drop `extra_args` and shrink
+  `context_size` — leaving their machine slower with nothing said.
+- **A load that fails, fails the run.** `wait_ready` returns False rather than
+  raising when a model is too large to load, and a target that scored zero because
+  no server ever came up must not sit on the scoreboard next to a model that
+  genuinely got everything wrong.
+
+A GGUF the server already has loaded is used in place: no stop, no reload, and no
+restore afterwards, because nothing was taken. The endpoint is read **after** the
+spawn — the port is chosen then, and `_resolve_target` now asks `_endpoint_for`
+rather than falling back to `:8080`, which is nothing but a closed port whenever
+llama-server took an ephemeral one.
+
+Each target also carries its `architecture` from the GGUF header. That is *shown*
+in the picker, never filtered on: it is what marks the `nomic-bert` embedder or a
+TTS model living in the same directory, while a header that could not be parsed is
+no evidence at all — hiding a model on that basis would present a guess as a
+measurement.
+
 ### A sweep needs a browser attached
 
 The frontend tool catalog only exists on a live connection — panes push their
@@ -295,6 +334,52 @@ None of the three authoring paths is privileged: the form, the agent's
 `evals.addCase`, and opening the `.jsonl` in the code editor all write the same
 file, which is what keeps a suite reviewable and diffable.
 
+## The rows are a shared component, not four hand-drawn lists
+
+Every section of this pane is a list of records with an identity, some figures and
+a verdict — cases, sweep targets, runs, results — and all four had independently
+converged on the same undesigned shape: one font weight throughout, colour carried
+on the whole perimeter, and numbers set as prose. They also referenced theme tokens
+that **do not exist** (`--bg-primary`, `--text-primary`, `--border-dim`, `--ok`), so
+every one of them silently fell through to a hardcoded fallback and ignored the
+theme entirely.
+
+They now compose `DataList` / `DataRow` / `PickRow` from
+`packages/core/src/DataList.tsx`, which splits a row into three separable jobs:
+
+- **Identity** (`hd-row-title`) — uppercase, heavy tracking. What the row is.
+- **Telemetry** (`hd-row-meta`) — monospace, muted, divided by hairlines. Every id,
+  count, duration and percentage. Never the title's treatment, so a row scans as
+  label-then-figures at a glance.
+- **Verdict** (`data-kind`) — a 2px rail down the leading edge and a matching corner
+  notch. An accent *edge*, not an accent perimeter: the row stays a row instead of
+  becoming a card.
+
+The type contract is the design. There is no `color` or `style` prop — a caller that
+could pick a colour directly is a caller that will eventually pick one that means
+nothing — and `meta` takes an **array** rather than a pre-joined string, because the
+hairline dividers cannot be drawn between cells that were concatenated first.
+
+Three details that are decisions rather than styling:
+
+- **The Models picker is a grid of tiles, not a column of checkboxes.** Those items
+  are peers being chosen between for one sweep, and the stacked-label form is
+  exactly the shape that reads as an unstyled form. `PickRow` keeps the native
+  `<input type="checkbox">` — hidden, but still doing the focus, announcement and
+  space-bar work — and draws the square beside it. Replacing the input with a
+  `role="checkbox"` div is the version that looks the same and loses the keyboard.
+- **A case row is `kind="info"` with no mark.** A case has no verdict: it has not
+  been run. A tick there would claim something that was never tested.
+- **A run has three states, not two.** `runKind` returns `info` while a sweep is
+  still going — drawing it as a failure is how a sweep at 3/50 comes to look broken
+  thirty seconds after it was started.
+
+The entrance stagger is capped (`STAGGER_CAP`, 12). The delay is per item, so
+without a cap a suite with two hundred results is still arriving four seconds after
+it rendered. `RollingNumber` is **seeded at its final value** with a timeout that
+snaps to it: `requestAnimationFrame` does not fire in a backgrounded tab, and a
+counter reading `0` for a figure that is `62` is worse than no animation at all.
+
 ## Backend surface
 
 `backend/modules/evals/`, mounted at `/api/evals`.
@@ -318,7 +403,7 @@ file, which is what keeps a suite reviewable and diffable.
 | `GET /api/evals/datasets/presets` | Known-good benchmark blocks for datasets whose answer column is a trap |
 | `POST /api/evals/exports` | Turn a run's results into an SFT dataset on disk |
 | `GET /api/evals/exports/preview` | The first few examples, without writing a file |
-| `GET /api/evals/targets` | Models this node could sweep, so the launcher is a picker not a form |
+| `GET /api/evals/targets` | Models this node could sweep — the agent provider plus every catalog GGUF — so the launcher is a picker not a form |
 
 ## Agent tools
 
@@ -384,6 +469,26 @@ and **only if a benchmark is actually present**, so a pure tool-calling sweep ne
 waits for `datasets` to resolve. If the environment cannot be prepared, the
 benchmark cases fail with that reason and the tool-calling half of the suite still
 runs — losing it because `uv` is missing would be a poor trade.
+
+### That project is working storage, and says so
+
+`ensure_project` goes **straight to `projects.create_project`**, not through the
+training create *route* — so it gets a directory and a venv, but no scaffolded
+`main.ipynb` (the route is what asks a provider for starter cells), and the venv
+holds only `requirements_for(cases)`: no `ipykernel`, no `horrible_train`.
+
+That is correct for a benchmark runner and wrong for a notebook. Since the project
+lands under the training projects root, the [training](training.mdx) pane listed it
+as an ordinary project with an **Open notebook** button whose only possible outcome
+was an error — and the error it produced was a bare `FileNotFoundError`, whose
+`str()` is *only the path*, rendered beside a kernel badge still reading "starting".
+
+So these projects carry `ProjectModel.owner = "evals"`. The training pane **marks
+them rather than hiding them** — the same call the bundled suites above make — and
+disables the authoring actions with the reason in their tooltip. Delete stays
+enabled: a project quietly missing from the list is a directory eating disk that you
+can neither see nor remove. Projects created before `owner` existed are stamped on
+the next sweep, so the dead button does not survive for anyone who already ran one.
 
 ### A script, not a notebook
 

@@ -330,6 +330,63 @@ buffer and mounts another — reuses the already-indexed server instead of respa
 the server stops once no buffer has reused it. The project root and interpreter come from
 `GET /api/editor/python-env` (below), so files anywhere under a project pool together.
 
+### Notebook cells get the same language server
+
+Both notebook panes — the `notebook` module's and `training`'s — attach a language
+server to their **code cells**, so a fine-tuning notebook completes against the
+`torch`/`trl` in its own project venv rather than against nothing.
+
+A notebook is **one document made of cells**, not N little files: `import torch` in
+cell 1 is what makes `torch.` complete in cell 7. That is exactly what LSP 3.17's
+`notebookDocument/*` notifications describe, and basedpyright implements them, so
+`editor/notebook-lsp.ts` is a *coordinator* rather than a second client. One
+`NotebookLspDoc` per open notebook owns the session and the ordered cell array; each
+cell's CodeMirror view gets an ordinary `lspExtension` whose **`DocumentBinding`**
+routes sync through the notebook instead of through `textDocument/*`. Panes reach it
+through `EditorService.openNotebookLsp` and the `useNotebookLsp` hook — the notebook
+kit stays domain-neutral and never deep-imports the editor module.
+
+```mermaid
+flowchart LR
+  Pane["notebook pane<br/>(cells in order)"] -->|sync| Doc["NotebookLspDoc"]
+  Cell["CellEditor<br/>(one per cell)"] -->|DocumentBinding| Doc
+  Doc -->|"notebookDocument/didOpen<br/>didChange · structure"| Session["shared LspSession"]
+  Session -->|"publishDiagnostics<br/>(per cell URI)"| Cell
+```
+
+Four things here are **silent** when wrong — the server stays up and answers, it just
+answers about a document that isn't yours. All four were measured against
+basedpyright 1.39.9 rather than read off the spec:
+
+- A cell document must use the **`vscode-notebook-cell:` scheme**. Under `file:` with
+  a `#cell0` fragment the server accepts the notebook and then resolves nothing: no
+  diagnostics, empty completions, no error. The fragment itself is free-form, so it
+  carries the nbformat cell id (stable across reordering).
+- A cell's edits must ride **`notebookDocument/didChange`**. A plain
+  `textDocument/didChange` aimed at a cell URI is accepted and **discarded**, leaving
+  the server analyzing the text the cell was opened with — which reads as "completions
+  are stale" rather than as a sync bug.
+- **Only code cells** belong to the array. A markdown cell shifts every later cell's
+  index, so a structural edit would land in the wrong place.
+- `didOpen` must carry the **real cells**. `fetchPythonEnv` is cached per directory, so
+  on a second open the session is ready before React has run the effect that describes
+  the cells; opening anyway sent `cells: []`, and a notebook the server believes is
+  empty resolves nothing in any of it. The cells are the trigger for `didOpen`, not the
+  session.
+
+The pane must also hand the coordinator an **absolute** path. Both modules address
+notebooks relatively (to the notebook root, or to a training project), but the
+interpreter and project root are resolved by walking *up* from the file — so each pane
+joins its own root first. `useNotebookLsp` disables itself on a relative path rather
+than resolving some unrelated directory's environment.
+
+Cells deliberately get **no F12/F2**: a definition or rename can land in another cell,
+and jumping there means mapping a cell URI back to a mounted editor the coordinator
+does not own. A key that silently does nothing across cells is worse than no key, so
+cross-cell navigation waits for the panes to expose a "reveal cell" callback. Hover
+still works, and the cell's docs chain narrows to the **kernel** source — the one thing
+a language server cannot do is ask the live kernel what the object actually is.
+
 **Framework auto-imports.** basedpyright only auto-imports **stdlib and workspace
 symbols** — it never indexes installed third-party libraries (a documented limitation,
 unlike Pylance), so `torch`/`numpy`/`pandas`/… symbols aren't offered in a file until

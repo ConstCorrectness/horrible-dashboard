@@ -4,10 +4,13 @@
  * content as an editable buffer and read/write open buffers through this contract
  * instead of deep-importing the editor module's internals. See docs/modules/editor.md.
  */
+import type { Extension } from '@codemirror/state';
+
 import { registry } from '../../registry';
 import { getRoots, loadRoots } from '../files/store';
 import { getBuffer, listBufferUris } from './buffers';
 import { getActiveBufferSource, openBuffer } from './index';
+import { NotebookLspDoc, type LspCell } from './notebook-lsp';
 import { createNote, loadSource, saveSource } from './sources';
 
 /** Languages the editor can be told to highlight for a source with no extension. */
@@ -53,6 +56,25 @@ export interface EditorService {
   setBufferContent(uri: string, content: string): boolean;
   /** Source URIs of all currently mounted buffers. */
   listBuffers(): string[];
+  /**
+   * Attach a language server to an open notebook. The caller (a notebook pane)
+   * owns the handle: `sync` it whenever the cell list changes, hand each code
+   * cell's editor its `cellExtension`, and `dispose` on unmount.
+   *
+   * Here rather than in the notebook kit because the kit is domain-neutral and
+   * LSP is this module's; the two notebook modules reach it through this contract
+   * instead of deep-importing the client.
+   */
+  openNotebookLsp(path: string): NotebookLspHandle;
+}
+
+/** A notebook's language-server session, as the notebook panes see it. */
+export interface NotebookLspHandle {
+  /** Reconcile the server's cell array with the notebook's (cheap when unchanged). */
+  sync(cells: LspCell[]): void;
+  /** The CodeMirror extension giving one code cell completion, hover and diagnostics. */
+  cellExtension(cellId: string): Extension;
+  dispose(): void;
 }
 
 const EXT: Record<BufferLanguage, string> = { javascript: 'js', python: 'py' };
@@ -127,6 +149,14 @@ const editorService: EditorService = {
   },
 
   listBuffers: listBufferUris,
+
+  openNotebookLsp(path) {
+    const doc = new NotebookLspDoc(path);
+    // Detached: the pane gets a usable handle immediately and `sync` queues cells
+    // until the environment resolves and the session comes up.
+    void doc.start();
+    return doc;
+  },
 };
 
 /** Register the editor service on the shared registry (called once at module load). */

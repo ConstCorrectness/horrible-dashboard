@@ -233,6 +233,62 @@ isn't" are different claims, and only the second justifies drawing a
 single-projection FFN. The same reasoning governs every optional field.
 :::
 
+## Model designer
+
+Beside Inspect sits **Design**: the same pane, switched from reading a model to
+drawing one. It is a [Blender-shaped node editor](../architecture/model-graph.mdx) —
+drag `RMSNorm`, `Attention`, `SwiGLU`, wire a residual `Add` back around a block,
+stack it `×N` — and a real PyTorch `nn.Module` subclass materialises beside it on
+every edit.
+
+The two modes share a pane because of the bridge between them. Inspect answers "what
+is this model"; Design answers "what if it were different", and the obvious way to
+start a design is from the thing you are currently reading. Putting a workspace switch
+between a question and its follow-up would be the wrong seam.
+
+### What is taken from Blender, and what is refused
+
+| Blender | Here |
+| --- | --- |
+| Colour-coded **typed sockets** | `tensor` / `int` / `float` / `bool`; a link between different types is refused at the wire |
+| **Node groups** (Group input/output) | a group **is** a generated `nn.Module` subclass — the reason the metaphor fits at all |
+| A socket that accepts **many links** | `op.add`, so a residual can fold several branches; every other input takes exactly one |
+| **Mute** a node (`M`) | ablation: it emits nothing, its input passes through, and it stops being counted |
+| **Reroute** nodes, **frames** | the same, and purely cosmetic — codegen walks straight through them |
+| **Timings overlay** | a **cost overlay**: each node's share of the parameter count |
+| Left→right data flow | enforced by the dagre auto-layout (`rankdir: 'LR'`) |
+
+Not taken: Blender's **implicit socket conversions**. A float becoming a colour is a
+convenience; a tensor silently becoming a differently-shaped tensor is the class of
+bug this module exists to refuse, so a mismatch is a red wire you fix with an explicit
+`Reshape` node.
+
+### The two things it shows that a drawn diagram cannot
+
+**The shape on every wire.** `[B, T, 2048]`, propagated from the Input node in pure
+Python, in under a millisecond, on every keystroke. Batch and sequence stay symbolic,
+because a symbolic dimension compared against a concrete one is an unknown rather than
+a conflict.
+
+**Where the parameters actually are.** Change `d_model` from 512 to 256 and the count
+drops from 54.9M to 26.2M, every downstream shape re-labels, and the generated
+`__init__` signature changes with it — because config values stay *variables* in the
+emitted class rather than being frozen into it.
+
+:::note Estimated until something runs it
+Those numbers are **our** arithmetic, and the pane chips them `estimated`. The backend
+has no torch and should not grow one, so measuring the real thing means instantiating
+the module in a training project's venv — a separate, slower question, and a separate
+answer. Where they disagree, the estimate is the one that is wrong.
+:::
+
+### Where a design lives
+
+Two files under `$HORRIBLE_DATA_DIR/model-graphs/`: `<name>.py` — the generated module,
+importing nothing from this app, yours to take anywhere — and `<name>.graph.json`,
+holding the graph plus the canvas cosmetics Python has nowhere to put. Losing the
+sidecar costs you a tidy layout; losing the `.py` costs you the model.
+
 ## Block classification
 
 The provider payload is an undifferentiated list of role/content dicts, and four
@@ -292,7 +348,7 @@ to prevent.
 | --- | --- | --- |
 | Layout | `interpretability` | "Interpretability" workspace in the top tab strip |
 | Panel | `interpretability.context` | Singleton; role `document` |
-| Panel | `interpretability.architecture` | Model explorer; sits beside the context view |
+| Panel | `interpretability.architecture` | Model explorer **and designer** — two modes, one pane; sits beside the context view |
 | Command | `interpretability.open` | Inspect context window |
 | Command | `interpretability.openDiagram` | Explore model structure |
 | Keybinding | `mod+shift+x` | → `interpretability.open` |
@@ -347,6 +403,10 @@ read and work in, not tiles you glance at.
 | GET | `/api/interpretability/model` | Model metadata + true context length |
 | GET | `/api/interpretability/architecture` | Normalized model structure (the description) |
 | GET | `/api/interpretability/tensors` | The GGUF tensor inventory; no fallback source |
+| GET | `/api/interpretability/graph/specs` | The designer's node catalog and templates |
+| POST | `/api/interpretability/graph/code` | A design graph → a PyTorch module (stateless) |
+| POST | `/api/interpretability/graph/validate` | Shape inference and parameter counts (stateless) |
+| GET/PUT/DELETE | `/api/interpretability/graph/{name}` | A saved design |
 
 `/api/interpretability/model` reads Ollama's `/api/show`. The OpenAI dialect (LM
 Studio, vLLM) has no equivalent, so it returns an `error` the pane renders as

@@ -243,17 +243,58 @@ export const trainingModule: ModuleManifest = {
     },
   ],
   frames: [
+    /**
+     * The fine-tuning workspace: the whole loop in one frame — write the recipe,
+     * run it, watch the curves, convert the checkpoint, and score it — rather than
+     * five panes you open one at a time from the command palette.
+     *
+     * The pairing that carries the idea is **evals directly under the notebook**: a
+     * regression in Results names a case, and the code that produced it is one pane
+     * up. Everything else is arranged around that. `llamacpp.server` shares the
+     * lower area because converting a checkpoint and serving it to be scored are
+     * the same errand, and the right column is where a run is *watched* —
+     * `training.metrics` live, `localtrack.workspace` for comparing it against
+     * previous runs.
+     *
+     * The document area is seeded **empty** on purpose. `training.notebook` and
+     * `training.recipe` are params-bound (`{projectId, notebook}`) and a preset's
+     * `tabs` carry no params, so seeding them here would open two panes reading
+     * "No project — open me from the Training projects pane". Which is why that
+     * pane is first in the left dock: it is the entry point, and the panes it opens
+     * land in the empty area.
+     */
     {
       id: 'training',
       name: 'Training',
       icon: '🧠',
+      // Scoped to the work: `training` + `evals` + `localtrack`, preloading only
+      // the first. Deliberately *not* `llamacpp` or `hardware` — those namespaces
+      // are settings keys, not agent tools, and a group naming no tools is granted
+      // silently (groups are the tool name's prefix; see `_group_of`). `editor` and
+      // `files` are permitted but not preloaded, so reading a recipe costs a
+      // `load_tools` rather than schema space on every turn.
+      agent: 'trainer',
       frame: {
         center: {
           split: 'row',
-          sizes: [0.65, 0.35],
-          children: [{ tabs: [] }, { pane: 'training.metrics' }],
+          sizes: [0.62, 0.38],
+          children: [
+            {
+              split: 'column',
+              sizes: [0.58, 0.42],
+              children: [{ tabs: [] }, { tabs: ['evals.hub', 'llamacpp.server'], active: 0 }],
+            },
+            { tabs: ['training.metrics', 'localtrack.workspace'], active: 0 },
+          ],
         },
-        docks: { left: { tools: ['explorer.home'], size: 280 } },
+        docks: {
+          left: { tools: ['training.projects', 'explorer.home'], size: 280 },
+          right: { tools: ['agent.chat'], size: 360 },
+          // Present but closed: a fine-tune is exactly when you want to see what
+          // the node is talking to, and exactly when you do not want a log tailing
+          // under the charts by default.
+          bottom: { tools: ['observability.io'], size: 180, visible: false },
+        },
       },
     },
   ],

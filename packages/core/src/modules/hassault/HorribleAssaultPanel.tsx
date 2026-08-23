@@ -61,6 +61,7 @@ import {
   CROUCH_TOGGLE_KEY,
   FOV_KEY,
   NATIVE_CLIENT_KEY,
+  SHOW_HITBOXES_KEY,
   SENSITIVITY_KEY,
   VOLUME_KEY,
 } from './menu-panels';
@@ -185,6 +186,10 @@ interface SceneHandle {
    * after construction rather than only at it. */
   setFov: (degrees: number) => void;
   avatars: AvatarPool;
+  /** The gun in your hands. Exposed so the key handler can start an inspect: it
+   * is a *local* animation with no command behind it, so there is nothing on the
+   * frame loop's side to ask for it. */
+  weapon: WeaponViewModel;
   reveal: Reveal;
   backdrop: Backdrop;
   camera: {
@@ -285,6 +290,7 @@ export function HorribleAssaultPanel() {
   const crouchToggle = useSetting<boolean>(CROUCH_TOGGLE_KEY) ?? false;
   /** Whether Play, Train and Host open the native window rather than this pane. */
   const nativeClient = useSetting<boolean>(NATIVE_CLIENT_KEY) ?? true;
+  const showHitboxes = useSetting<boolean>(SHOW_HITBOXES_KEY) ?? false;
   const storedControls = useSetting<string>(CONTROLS_KEY);
   const controls = useMemo(() => parseControls(storedControls), [storedControls]);
   const codes = useMemo(() => codeMap(controls), [controls]);
@@ -460,6 +466,10 @@ export function HorribleAssaultPanel() {
   codesRef.current = codes;
   const crouchToggleRef = useRef(crouchToggle);
   crouchToggleRef.current = crouchToggle;
+  // By ref like the rest: the frame loop is built once and cannot read React
+  // state, and a toggle has to reach it without tearing the scene down.
+  const showHitboxesRef = useRef(showHitboxes);
+  showHitboxesRef.current = showHitboxes;
   /** Pointer-lock state as the *handlers* see it: `document.pointerLockElement`
    * has already been cleared by the time an Escape that released it reaches us. */
   const lockedRef = useRef(false);
@@ -941,6 +951,10 @@ export function HorribleAssaultPanel() {
           remote = online
             ? session.snapshots.sample(now, session.state.playerId)
             : (rangeRef.current?.rows() ?? []);
+          // Set before the sync rather than in an effect of its own: the pool
+          // builds and frees its wireframes inside `sync`, so the flag has to be
+          // in force by the time it runs or the toggle lands a frame late.
+          avatars.setHitboxes(showHitboxesRef.current);
           avatars.sync(remote);
           if (session.pendingShots.length > 0) {
             // Teams come from the roster, not from `remote` — that one excludes
@@ -1067,6 +1081,7 @@ export function HorribleAssaultPanel() {
         setMesh,
         setFov,
         avatars,
+        weapon: viewmodel,
         reveal,
         backdrop,
         camera: camera as never,
@@ -1330,6 +1345,9 @@ export function HorribleAssaultPanel() {
       if (e.repeat) return;
       if (action === 'noclip') noclipRef.current = !noclipRef.current;
       if (action === 'reload') shotsRef.current?.requestReload();
+      // Purely local — see `WeaponViewModel.inspect`. It is never a command, so
+      // it needs no server, works in Train, and costs the wire nothing.
+      if (action === 'inspect') sceneRef.current?.weapon.inspect();
       if (action === 'scores') setShowScores(true);
       // Two modes, one ref. In hold mode the key up clears it; in toggle mode
       // nothing does but the next press, which is exactly why crouch cannot live

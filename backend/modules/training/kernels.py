@@ -45,6 +45,14 @@ class UnknownProjectError(ValueError):
     can self-heal instead of showing a dead-end error."""
 
 
+class MissingNotebookError(ValueError):
+    """The project exists but the notebook file does not. Distinct from
+    `UnknownProjectError`: the project is fine and deleting the pane is not the fix.
+
+    A plain `FileNotFoundError` would carry only the path in its `str()`, and that is
+    what the pane shows the user."""
+
+
 class TrainingKernelSession(KernelSession):
     """A kernel session whose stdout is scanned for the training sentinel."""
 
@@ -146,6 +154,24 @@ class TrainingKernelManager(KernelSessionManager):
             raise UnknownProjectError(f"unknown project: {project_id}")
         if not venv_ready(project):
             raise ValueError("project venv is not ready yet — wait for the bootstrap")
+        # Checked here, with a sentence, because the alternative is a bare
+        # `FileNotFoundError` whose `str()` is *only the path* — the pane rendered
+        # that verbatim, so a project with no notebook showed a lone `C:\…\main.ipynb`
+        # next to a kernel badge still reading "starting", and said nothing about
+        # what had gone wrong. A project owned by another module (`evals` builds one
+        # per benchmark suite) never has a scaffolded notebook: it is working
+        # storage, not somewhere to author.
+        nb_abs = notebooks.notebook_path(project, nb_rel)
+        if not nb_abs.is_file():
+            owned = (
+                f" — it is working storage for the {project.owner} module, "
+                "not a notebook project"
+                if project.owner
+                else ""
+            )
+            raise MissingNotebookError(
+                f"project {project.name!r} has no {nb_rel}{owned}"
+            )
         config = SessionConfig(
             key=key,
             python_executable=str(python_path(project)),

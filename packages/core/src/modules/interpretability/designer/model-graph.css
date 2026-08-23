@@ -1,0 +1,570 @@
+/**
+ * The model designer's surface.
+ *
+ * Structured rather than soft: nodes are angular, each carries a 2px accent along
+ * its top edge in its category's colour, titles are uppercase with heavy tracking,
+ * and every number — a shape, a parameter count, a dimension — is monospace and
+ * muted. Shapes and counts read as instrument output, not as prose, because that is
+ * what they are.
+ *
+ * Colours come from the theme tokens with literal fallbacks, so the pane survives a
+ * token that has not been defined in every theme (see docs/architecture for the
+ * theme system).
+ */
+
+.mg-designer {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  font-size: 13px;
+  color: var(--text-primary, #ddd);
+  background: var(--surface-1, #1a1a1a);
+
+  --mg-line: var(--border, rgba(255, 255, 255, 0.12));
+  --mg-panel: var(--surface-2, rgba(255, 255, 255, 0.03));
+  --mg-dim: var(--text-dim, rgba(255, 255, 255, 0.45));
+  --mg-accent: var(--accent, #4d9fff);
+  --mg-bad: var(--danger, #e0564a);
+
+  --mg-io: #9aa4b2;
+  --mg-embedding: #c58af9;
+  --mg-norm: #4fc3f7;
+  --mg-attention: #ffb74d;
+  --mg-ffn: #81c784;
+  --mg-activation: #4db6ac;
+  --mg-op: #90a4ae;
+  --mg-structure: #f06292;
+}
+
+/* Toolbar ------------------------------------------------------------------ */
+
+.mg-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--mg-line);
+  flex: 0 0 auto;
+}
+.mg-toolbar-spacer {
+  flex: 1 1 auto;
+}
+.mg-name {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding: 4px 6px;
+  width: 200px;
+}
+.mg-name:hover,
+.mg-name:focus {
+  border-color: var(--mg-line);
+  outline: none;
+}
+.mg-save {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--mg-dim);
+}
+.mg-save-error {
+  color: var(--mg-bad);
+}
+.mg-stat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--mg-dim);
+}
+.mg-stat-bad {
+  color: var(--mg-bad);
+}
+.mg-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-primary, #ddd);
+}
+
+.mg-chip {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding: 1px 4px;
+  border: 1px solid var(--mg-line);
+  border-radius: 2px;
+  color: var(--mg-dim);
+}
+.mg-chip-muted {
+  border-color: var(--mg-bad);
+  color: var(--mg-bad);
+}
+
+.mg-button {
+  font: inherit;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding: 4px 10px;
+  color: var(--text-secondary, #bbb);
+  background: var(--mg-panel);
+  border: 1px solid var(--mg-line);
+  border-radius: 2px;
+  cursor: pointer;
+}
+.mg-button:hover:not(:disabled) {
+  color: var(--text-primary, #fff);
+  border-color: var(--mg-accent);
+}
+.mg-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.mg-button-on {
+  border-color: var(--mg-accent);
+  color: var(--mg-accent);
+}
+.mg-button-danger:hover {
+  border-color: var(--mg-bad);
+  color: var(--mg-bad);
+}
+
+.mg-notice {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--mg-bad);
+  background: color-mix(in srgb, var(--mg-bad) 12%, transparent);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* Frame -------------------------------------------------------------------- */
+
+.mg-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.mg-left {
+  width: 176px;
+  flex: 0 0 auto;
+  border-right: 1px solid var(--mg-line);
+  overflow-y: auto;
+}
+.mg-center {
+  flex: 1 1 auto;
+  min-width: 0;
+  position: relative;
+}
+.mg-right {
+  width: 320px;
+  flex: 0 0 auto;
+  border-left: 1px solid var(--mg-line);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.mg-blank {
+  padding: 48px 32px;
+  max-width: 460px;
+  color: var(--mg-dim);
+}
+.mg-blank-title {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-primary, #ddd);
+  margin: 0 0 10px;
+}
+
+/* Palette ------------------------------------------------------------------ */
+
+.mg-palette {
+  padding: 8px;
+}
+.mg-search {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--mg-panel);
+  border: 1px solid var(--mg-line);
+  border-radius: 2px;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 7px;
+  margin-bottom: 10px;
+}
+.mg-palette-group {
+  margin-bottom: 12px;
+}
+.mg-palette-title {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--mg-dim);
+  margin: 0 0 5px;
+}
+.mg-palette-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-secondary, #bbb);
+  background: var(--mg-panel);
+  border: 1px solid var(--mg-line);
+  border-left-width: 2px;
+  border-radius: 2px;
+  padding: 4px 8px;
+  margin-bottom: 3px;
+  cursor: pointer;
+}
+.mg-palette-item:hover {
+  color: var(--text-primary, #fff);
+  background: color-mix(in srgb, var(--mg-accent) 10%, transparent);
+}
+.mg-template {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  background: var(--mg-panel);
+  border: 1px solid var(--mg-line);
+  border-top: 2px solid var(--mg-accent);
+  border-radius: 2px;
+  color: inherit;
+  padding: 6px 8px;
+  margin-bottom: 4px;
+  cursor: pointer;
+}
+.mg-template-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+.mg-template-desc {
+  display: block;
+  font-size: 10px;
+  color: var(--mg-dim);
+  margin-top: 2px;
+}
+
+/* Canvas and nodes --------------------------------------------------------- */
+
+.mg-canvas {
+  width: 100%;
+  height: 100%;
+}
+.mg-canvas .react-flow__renderer,
+.mg-canvas .react-flow {
+  background: var(--surface-1, #1a1a1a);
+}
+
+.mg-node {
+  min-width: 168px;
+  max-width: 220px;
+  background: var(--surface-2, #232323);
+  border: 1px solid var(--mg-line);
+  border-top: 2px solid var(--mg-op);
+  border-radius: 2px;
+  padding: 6px 9px 7px;
+  /* Angular rather than rounded: the top-right corner is clipped, which reads as
+     a technical component instead of a card. */
+  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%);
+}
+.mg-cat-io {
+  border-top-color: var(--mg-io);
+}
+.mg-cat-embedding {
+  border-top-color: var(--mg-embedding);
+}
+.mg-cat-norm {
+  border-top-color: var(--mg-norm);
+}
+.mg-cat-attention {
+  border-top-color: var(--mg-attention);
+}
+.mg-cat-ffn {
+  border-top-color: var(--mg-ffn);
+}
+.mg-cat-activation {
+  border-top-color: var(--mg-activation);
+}
+.mg-cat-op {
+  border-top-color: var(--mg-op);
+}
+.mg-cat-structure {
+  border-top-color: var(--mg-structure);
+}
+
+.mg-selected {
+  border-color: var(--mg-accent);
+  box-shadow: 0 0 0 1px var(--mg-accent);
+}
+.mg-invalid {
+  border-color: var(--mg-bad);
+}
+.mg-muted {
+  opacity: 0.55;
+}
+.mg-collapsed {
+  min-width: 120px;
+}
+
+.mg-node-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.mg-icon {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  opacity: 0.8;
+}
+.mg-node-title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mg-node-body {
+  margin-top: 4px;
+}
+.mg-node-summary {
+  font-size: 11px;
+  color: var(--text-secondary, #bbb);
+}
+.mg-node-shape,
+.mg-node-cost {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  color: var(--mg-dim);
+}
+.mg-node-cost {
+  margin-top: 3px;
+  padding-top: 3px;
+  border-top: 1px dashed var(--mg-line);
+}
+.mg-node-issue {
+  margin-top: 4px;
+  font-size: 10px;
+  color: var(--mg-bad);
+}
+
+/* Sockets: coloured by type, and shaped by whether they take one link or many. */
+.mg-canvas .mg-socket {
+  width: 9px;
+  height: 9px;
+  border: 1px solid var(--surface-1, #1a1a1a);
+  background: var(--mg-op);
+}
+.mg-canvas .mg-socket-tensor {
+  background: #6ea8fe;
+}
+.mg-canvas .mg-socket-int {
+  background: #a5d84f;
+}
+.mg-canvas .mg-socket-float {
+  background: #cfd3d8;
+}
+.mg-canvas .mg-socket-bool {
+  background: #f5a3c7;
+}
+.mg-canvas .mg-socket-multi {
+  border-radius: 2px;
+  width: 11px;
+  height: 7px;
+}
+
+.mg-canvas .mg-edge .react-flow__edge-path {
+  stroke: var(--mg-line);
+  stroke-width: 1.5;
+}
+.mg-canvas .mg-edge-broken .react-flow__edge-path {
+  stroke: var(--mg-bad);
+  stroke-dasharray: 4 3;
+}
+.mg-canvas .react-flow__edge-text {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+  fill: var(--mg-dim);
+}
+.mg-canvas .react-flow__edge-textbg {
+  fill: var(--surface-1, #1a1a1a);
+}
+.mg-minimap {
+  background: var(--surface-1, #1a1a1a) !important;
+}
+
+/* Inspector ---------------------------------------------------------------- */
+
+.mg-inspector {
+  padding: 10px;
+  overflow-y: auto;
+  flex: 0 1 auto;
+  max-height: 55%;
+  border-bottom: 1px solid var(--mg-line);
+}
+.mg-inspector-title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--mg-dim);
+  margin: 10px 0 6px;
+}
+.mg-inspector-title:first-child {
+  margin-top: 0;
+}
+.mg-inspector-note {
+  font-size: 11px;
+  color: var(--mg-dim);
+  margin: 0 0 10px;
+  line-height: 1.45;
+}
+.mg-field {
+  display: block;
+  margin-bottom: 9px;
+}
+.mg-field-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--mg-dim);
+  margin-bottom: 3px;
+}
+.mg-field-help {
+  display: block;
+  font-size: 10px;
+  color: var(--mg-dim);
+  margin-top: 2px;
+  line-height: 1.4;
+}
+.mg-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--mg-panel);
+  border: 1px solid var(--mg-line);
+  border-radius: 2px;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 6px;
+}
+.mg-input:focus {
+  outline: none;
+  border-color: var(--mg-accent);
+}
+.mg-ref-toggle {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  line-height: 1;
+  padding: 1px 4px;
+  background: transparent;
+  color: var(--mg-dim);
+  border: 1px solid var(--mg-line);
+  border-radius: 2px;
+  cursor: pointer;
+}
+.mg-ref-on {
+  color: var(--mg-accent);
+  border-color: var(--mg-accent);
+}
+.mg-inspector-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 12px;
+}
+.mg-inspector-cost {
+  font-size: 11px;
+  color: var(--mg-dim);
+  margin: 10px 0 0;
+}
+
+/* Code --------------------------------------------------------------------- */
+
+.mg-code {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.mg-code-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--mg-line);
+}
+.mg-code-title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+.mg-code-meta {
+  flex: 1 1 auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  color: var(--mg-dim);
+}
+.mg-code-error {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--mg-bad);
+  font-size: 11px;
+  color: var(--mg-bad);
+}
+.mg-code-error-note {
+  display: block;
+  color: var(--mg-dim);
+  margin-top: 4px;
+  line-height: 1.45;
+}
+.mg-code-empty {
+  padding: 16px 10px;
+  font-size: 11px;
+  color: var(--mg-dim);
+}
+.mg-code-body {
+  margin: 0;
+  padding: 6px 0;
+  overflow: auto;
+  flex: 1 1 auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  tab-size: 4;
+}
+.mg-code-line {
+  display: block;
+  white-space: pre;
+  padding-right: 10px;
+}
+.mg-code-lit {
+  background: color-mix(in srgb, var(--mg-accent) 16%, transparent);
+}
+.mg-code-num {
+  display: inline-block;
+  width: 34px;
+  padding-right: 10px;
+  text-align: right;
+  color: var(--mg-dim);
+  user-select: none;
+}

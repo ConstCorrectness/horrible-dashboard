@@ -30,7 +30,7 @@
 use std::net::TcpStream;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
@@ -71,12 +71,43 @@ pub enum Incoming {
     Closed(String),
 }
 
+/// Minimum gap between input messages.
+///
+/// **Not** one message per frame, which is what this used to do. This client
+/// deliberately runs without a frame cap, so "flush every frame" meant several
+/// hundred WebSocket text frames a second at a player — each one a JSON parse on
+/// the backend's single event loop, which is also running the 20 Hz match tick
+/// for everybody in the room. The tick then slips, snapshots arrive in lumps,
+/// and the prediction gets corrected in lumps: rubber-banding produced entirely
+/// by the client's own send rate.
+///
+/// Batching costs nothing, because every command still arrives — commands carry
+/// their own `dt` and sequence number, so a batch of eight is exactly as
+/// simulable as eight messages of one. 33 ms is the browser client's
+/// `SEND_INTERVAL_MS`; the two clients having the same send rate is worth more
+/// than either number being optimal.
+pub const SEND_INTERVAL: Duration = Duration::from_millis(33);
+
+/// Commands one `input` message may carry, matching the server's
+/// `MAX_COMMANDS_PER_MESSAGE`. Anything past this is discarded on arrival, so
+/// the client trims first rather than sending bytes to be thrown away.
+pub const MAX_COMMANDS_PER_MESSAGE: usize = 64;
+
+/// How often to measure the round trip.
+const PING_INTERVAL: Duration = Duration::from_millis(1000);
+
 pub struct MatchSocket {
     outbound: Sender<String>,
     rx: Receiver<Incoming>,
     seq: u64,
     /// Commands accumulated since the last flush.
     pending: Vec<Command>,
+    /// When the last input message went out, so `flush` can rate-limit itself
+    /// rather than trusting every caller to remember to.
+    last_send: Option<Instant>,
+    last_ping: Option<Instant>,
+    /// Whether the backlog warning has already been printed. See `flush`.
+    warned_overflow: bool,
 }
 
 impl MatchSocket {
@@ -117,6 +148,9 @@ impl MatchSocket {
             rx,
             seq: 0,
             pending: Vec::new(),
+            last_send: None,
+            last_ping: None,
+            warned_overflow: false,
         })
     }
 
@@ -181,18 +215,46 @@ impl MatchSocket {
         self.seq
     }
 
-    /// Hand everything queued to the socket thread. A no-op when there is
-    /// nothing, so it is safe to call every frame.
+    /// Hand everything queued to the socket thread.
+    ///
+    /// Rate-limited to `SEND_INTERVAL` and a no-op when there is nothing, so it
+    /// is safe — and correct — to call every frame. The limit lives here rather
+    /// than at the call site for the reason the browser client gives: a caller
+    /// that has to remember to throttle is a caller that will eventually not.
     pub fn flush(&mut self, rtt_ms: Option<f32>) -> Result<(), NetError> {
         if self.pending.is_empty() {
             return Ok(());
         }
+        let now = Instant::now();
+        if let Some(last) = self.last_send {
+            if now.duration_since(last) < SEND_INTERVAL {
+                return Ok(());
+            }
+        }
+        self.last_send = Some(now);
         // The server caps a batch at `MAX_COMMANDS_PER_MESSAGE` (64) and drops
         // the rest, so trim here rather than sending frames that will be
         // discarded — and keep the *newest*, since a client that has been stalled
         // legitimately has a backlog and the recent commands are the live ones.
-        let commands = if self.pending.len() > 64 {
-            self.pending.split_off(self.pending.len() - 64)
+        //
+        // Reaching this at all is a bug, and it used to be a *silent* one: every
+        // command trimmed here has already been predicted locally under a
+        // sequence number the server will never acknowledge, so the prediction
+        // walks away from the authoritative position and stays there. Input is
+        // produced on its own clock now (`app::INPUT_HZ`, 8.25 commands per
+        // flush), so the only way to overflow is a stall longer than two
+        // seconds. Say so rather than quietly binning a third of someone's
+        // movement — once, because a client that is doing this is doing it every
+        // flush and a log line per flush helps nobody.
+        let commands = if self.pending.len() > MAX_COMMANDS_PER_MESSAGE {
+            let dropped = self.pending.len() - MAX_COMMANDS_PER_MESSAGE;
+            if !self.warned_overflow {
+                self.warned_overflow = true;
+                eprintln!(
+                    "hassault: input backlog over {MAX_COMMANDS_PER_MESSAGE} commands;                      dropping the oldest {dropped}. Movement will be corrected                      backwards until it clears."
+                );
+            }
+            self.pending.split_off(dropped)
         } else {
             std::mem::take(&mut self.pending)
         };
@@ -203,6 +265,29 @@ impl MatchSocket {
                 commands,
                 rtt: rtt_ms,
             },
+        ))
+    }
+
+    /// Send a round-trip probe, at most once per `PING_INTERVAL`.
+    ///
+    /// The stamp is this process's clock and the server echoes it back
+    /// untouched, so the round trip is a subtraction on one clock. Reading the
+    /// server's own timestamp instead would be differencing two unrelated
+    /// clocks, which is not a duration at all.
+    ///
+    /// Returns the stamp when one was actually sent, so the caller can pair the
+    /// answer with it.
+    pub fn ping(&mut self, stamp_ms: f64) -> Result<(), NetError> {
+        let now = Instant::now();
+        if let Some(last) = self.last_ping {
+            if now.duration_since(last) < PING_INTERVAL {
+                return Ok(());
+            }
+        }
+        self.last_ping = Some(now);
+        self.send(&Outbound::new(
+            "ping",
+            serde_json::json!({ "t": stamp_ms.round() }),
         ))
     }
 

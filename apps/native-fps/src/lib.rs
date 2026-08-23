@@ -17,6 +17,7 @@ pub mod bodies;
 pub mod camera;
 pub mod geometry;
 pub mod hud;
+pub mod interp;
 pub mod menu;
 pub mod net;
 pub mod physics;

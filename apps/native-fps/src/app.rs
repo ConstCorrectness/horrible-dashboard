@@ -25,7 +25,7 @@
 //! ground.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use winit::application::ApplicationHandler;
@@ -34,12 +34,13 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
-use hassault_native::api::WeaponSpec;
+use hassault_native::api::{HitboxSpec, WeaponSpec};
 use hassault_native::audio::GameAudio;
 use hassault_native::bodies;
 use hassault_native::camera::Camera;
 use hassault_native::geometry::MeshData;
-use hassault_native::hud::{Hud, HudView, OverlayVertex};
+use hassault_native::hud::{Hud, HudView, OverlayVertex, ScoreRow};
+use hassault_native::interp::{PingTracker, SnapshotBuffer};
 use hassault_native::menu::{self, Action, Menu, Page};
 use hassault_native::net::{Incoming, MatchSocket};
 use hassault_native::physics::{self, eye_height, MoveInput, JUMP_SPEED, MOVE_SPEED};
@@ -64,6 +65,36 @@ const LOOK_SCALE: f32 = 0.08;
 /// next second of genuine movement. The browser client clamps for the same reason
 /// and at the same value.
 const MAX_DT: f32 = 0.05;
+
+/// Input commands produced per second, independent of the frame rate.
+///
+/// **This client deliberately runs uncapped** (`Immediate` present mode, vsync
+/// off by default), so `about_to_wait` iterates thousands of times a second on
+/// any machine that can draw this scene quickly. One command per iteration was
+/// wrong twice over, and both failures were silent:
+///
+/// 1. `dt` used to be clamped up to a 1 ms floor, so every iteration faster than
+///    that claimed more simulated time than had actually passed. The server
+///    spends client-supplied `dt` from a budget that replenishes at 1.1x real
+///    time (`match.py`), so a client claiming 4x real time is throttled to a
+///    quarter of what it predicted — its prediction runs permanently ahead and
+///    every snapshot yanks it back. That reads as "I press forward and get
+///    dragged back into the wall behind me", which is what it was reported as.
+/// 2. `MatchSocket::flush` sends at most 64 commands per 33 ms window (the
+///    server's `MAX_COMMANDS_PER_MESSAGE`), so above ~1940 iterations a second
+///    the surplus was dropped *after* being predicted locally. The client had
+///    already moved on commands the server would never see.
+///
+/// So input is produced on its own clock and the real elapsed time is
+/// accumulated between commands, which makes the claimed time exactly the time
+/// that passed no matter how fast the loop spins. 250 Hz is above any display
+/// refresh rate — the local body is not what limits smoothness here, the mouse
+/// is, and `look` still runs per event — and `INPUT_HZ * SEND_INTERVAL` is 8.25
+/// commands per flush, comfortably inside the 64 a message may carry.
+const INPUT_HZ: f32 = 250.0;
+
+/// Seconds between input commands. See `INPUT_HZ`.
+const INPUT_INTERVAL: f32 = 1.0 / INPUT_HZ;
 
 /// Cubes of travel between footsteps at a run, from `noise.py`'s
 /// `STRIDE_DISTANCE`. Your own steps are made locally — the server does not send
@@ -91,13 +122,34 @@ pub struct App {
     /// Whether the pointer is captured. Look is only applied while it is, so a
     /// click on the title bar does not spin the view.
     focused: bool,
+    /// The newest snapshot's rows, verbatim. The **authoritative** roster:
+    /// reconciliation and the scoreboard read it, and nothing draws it.
     players: Vec<PlayerRow>,
+    /// Snapshot history, and the render clock derived from it.
+    ///
+    /// Bodies used to be drawn straight from `players`, which meant every other
+    /// player in the match moved in 50 ms steps with the jitter landing on top —
+    /// the rubber-banding this client was reported for. They are drawn from here
+    /// instead, a tenth of a second in the past, between two snapshots that have
+    /// both already arrived. See `interp.rs`.
+    snapshots: SnapshotBuffer,
+    /// This frame's interpolated bodies. Rebuilt each frame rather than each
+    /// snapshot: the whole point is that it changes between snapshots.
+    drawn: Vec<PlayerRow>,
+    ping: PingTracker,
     self_id: String,
     joined: bool,
     /// Whether the last snapshot had us dead, so a respawn can be told from an
     /// ordinary correction.
     was_dead: bool,
     last_frame: Instant,
+    /// Real seconds elapsed since the last input command was produced.
+    ///
+    /// The whole point of the accumulator: an iteration too short to be worth a
+    /// command is not discarded and not rounded up, it is *banked*, so the sum
+    /// of the `dt`s this client puts on the wire is the wall-clock time that
+    /// actually passed. See `INPUT_HZ`.
+    input_accum: f32,
     /// Frame timing, reported in the title bar — the number this client exists to
     /// move, so it should not need a profiler to read.
     frames: u32,
@@ -109,6 +161,10 @@ pub struct App {
     /// Sequence numbers for the offline simulation, which has no socket to stamp
     /// them. Only the ordering matters here — nothing acknowledges them.
     local_seq: u64,
+    /// The served body every hit is resolved against, fetched once at startup
+    /// beside the loadout and for the same reason. See `api::HitboxSpec` — the
+    /// local copy this replaced had the crouched height wrong.
+    hitbox: HitboxSpec,
     /// The served loadout. **Never hardcoded**: the crosshair opens by the
     /// weapon's own cone and the view model is built from the weapon's own id,
     /// and a local copy of either is wrong only for the weapon it is wrong for.
@@ -117,6 +173,9 @@ pub struct App {
     /// like the loadout: this process is launched per match, so there is no
     /// moment during one when the armoury could change under it.
     skins: HashMap<String, Skin>,
+    /// Team scores from the last snapshot. Two numbers, and they are the only
+    /// statement of who is winning anywhere in this client.
+    scores: Vec<i32>,
     /// The private half of the last snapshot — health, ammo, the reload clock.
     /// `None` in Train, which has no server to have said any of it.
     you: Option<SelfState>,
@@ -180,9 +239,19 @@ struct Keys {
     jump: bool,
     crouch: bool,
     fire: bool,
+    /// Whether the scoreboard is being held open. A held key rather than a
+    /// toggle, matching the browser client and every shooter: you look at the
+    /// scores *during* a lull, and a toggle is a scoreboard you leave up by
+    /// accident and then die behind.
+    scores: bool,
 }
 
 impl App {
+    // Eight arguments, and every one of them is a *fetched* thing this client is
+    // forbidden to hold a copy of — the world, its mesh, the socket, the
+    // settings bag, the loadout, the skins, the hitbox. Bundling them into a
+    // struct would only move the list somewhere the compiler checks less.
+    #[allow(clippy::too_many_arguments)]
     /// `socket: None` is Train: a world, a body, and nobody else in it.
     pub fn new(
         world: World,
@@ -192,6 +261,7 @@ impl App {
         writer: SettingsWriter,
         weapons: Vec<WeaponSpec>,
         skins: HashMap<String, Skin>,
+        hitbox: HitboxSpec,
     ) -> App {
         let map_name = world.info.name.clone();
         let mut app = App {
@@ -207,10 +277,14 @@ impl App {
             sensitivity: settings.sensitivity,
             focused: false,
             players: Vec::new(),
+            snapshots: SnapshotBuffer::new(),
+            drawn: Vec::new(),
+            ping: PingTracker::default(),
             self_id: String::new(),
             joined: false,
             was_dead: false,
             last_frame: Instant::now(),
+            input_accum: 0.0,
             frames: 0,
             fps_since: Instant::now(),
             fps: 0.0,
@@ -219,6 +293,8 @@ impl App {
             local_seq: 0,
             weapons,
             skins,
+            hitbox,
+            scores: Vec::new(),
             you: None,
             hud: Hud::default(),
             viewmodel: WeaponViewModel::default(),
@@ -330,6 +406,48 @@ impl App {
     /// 4×, which is precisely the aim being wrong only while scoped.
     fn apply_zoom(&mut self) {
         self.camera.fov = self.base_fov / self.magnification();
+    }
+
+    /// The roster, ranked.
+    ///
+    /// Most kills first, then fewest deaths — the ordering the browser client
+    /// uses, because two clients ranking the same match differently is a thing
+    /// people notice and nobody can explain.
+    ///
+    /// Read from `players` (the authoritative roster) and never from `drawn`:
+    /// the interpolated copy is a hundred milliseconds old and, more to the
+    /// point, deliberately excludes us.
+    fn score_rows(&self) -> Vec<ScoreRow> {
+        let mut rows: Vec<ScoreRow> = self
+            .players
+            .iter()
+            .map(|p| ScoreRow {
+                name: if p.name.is_empty() {
+                    p.id.clone()
+                } else {
+                    p.name.clone()
+                },
+                kills: p.kills,
+                deaths: p.deaths,
+                team: p.team,
+                bot: p.bot,
+                you: p.id == self.self_id,
+            })
+            .collect();
+        rows.sort_by(|a, b| b.kills.cmp(&a.kills).then(a.deaths.cmp(&b.deaths)));
+        rows
+    }
+
+    /// This process's clock in milliseconds.
+    ///
+    /// The *base* is arbitrary — `SnapshotBuffer` only ever differences it
+    /// against the server's stamp — but it must not step, which is exactly what
+    /// a wall clock does when NTP corrects it. A jump there would move every
+    /// interpolated body on screen at once, and would put a `viewT` on the wire
+    /// pointing at a moment the server's position history never covered.
+    fn clock_ms() -> f64 {
+        static START: OnceLock<Instant> = OnceLock::new();
+        START.get_or_init(Instant::now).elapsed().as_secs_f64() * 1000.0
     }
 
     /// Horizontal speed, in cubes per second. Vertical is deliberately excluded:
@@ -510,18 +628,21 @@ impl App {
         // Copied out before the call: `reconcile` borrows `self.world` mutably
         // through `self.prediction`, and holding a reference into `self.players`
         // across it would borrow `self` twice.
-        let Some((x, y, z)) = self
+        let Some((x, y, z, ground)) = self
             .players
             .iter()
             .find(|p| p.id == self.self_id)
-            .map(|p| (p.x, p.y, p.z))
+            .map(|p| (p.x, p.y, p.z, p.ground))
         else {
             return;
         };
-        // `on_ground` is not on the wire — the snapshot sends a position, not a
-        // support state — so the replay re-derives it from the first step, which
-        // is exactly what it would do anyway.
-        self.prediction.reconcile(&self.world, ack, x, y, z, false);
+        // `ground` comes off the shared row and the momentum off the private
+        // half. Both used to be invented here — `false` for the first, the
+        // client's own velocity for the second — and both are on the wire. See
+        // `Prediction::reconcile` for what inventing the momentum cost.
+        let movement = self.you.as_ref().and_then(|y| y.movement.clone());
+        self.prediction
+            .reconcile(&self.world, ack, x, y, z, ground, movement.as_ref());
         self.follow_prediction();
     }
 
@@ -547,6 +668,13 @@ impl App {
                             }
                         }
                     }
+                    // Nothing in the old buffer belongs to this match: the
+                    // server's clock and the roster both start again, and one
+                    // stale frame is enough to hold every body at a position
+                    // from the previous round.
+                    self.snapshots.clear();
+                    self.drawn.clear();
+                    self.ping.reset();
                     // A join is not a correction — there is nothing in flight to
                     // replay, and treating it as one would replay commands from
                     // before we had a body.
@@ -602,18 +730,32 @@ impl App {
                             audio.heard(event, yaw, &self.weapons);
                         }
                     }
+                    self.scores = s.scores.clone();
                     self.you = Some(s.you.clone());
+                    // Filed for interpolation *before* the roster is replaced,
+                    // and cloned rather than moved: the roster is what
+                    // reconciliation reads and the buffer is what the renderer
+                    // reads, and they are deliberately different things.
+                    self.snapshots
+                        .push(s.t, s.players.clone(), Self::clock_ms());
                     self.players = s.players;
                     if respawned {
-                        let (yaw, pitch) = (self.camera.yaw, self.camera.pitch);
-                        self.prediction.reset(
-                            s.you.x,
-                            s.you.y,
-                            s.you.z,
-                            yaw.to_radians(),
-                            pitch.to_radians(),
-                        );
-                        self.follow_prediction();
+                        // From the shared row, not from `you`: the private half
+                        // carries no position at all. Reading one off it got
+                        // `0.0` three times over — the world origin, which is
+                        // inside the solid border, where the body wedges and
+                        // cannot move.
+                        let placed = self
+                            .players
+                            .iter()
+                            .find(|p| p.id == self.self_id)
+                            .map(|p| (p.x, p.y, p.z));
+                        if let Some((x, y, z)) = placed {
+                            let (yaw, pitch) = (self.camera.yaw, self.camera.pitch);
+                            self.prediction
+                                .reset(x, y, z, yaw.to_radians(), pitch.to_radians());
+                            self.follow_prediction();
+                        }
                     } else {
                         self.reconcile(ack);
                     }
@@ -629,6 +771,13 @@ impl App {
                     }
                     event_loop.exit();
                 }
+                Incoming::Event(Event::Pong(p)) => {
+                    // A round trip on one clock. `p.t` is the stamp we sent, so
+                    // this is a subtraction rather than a comparison of two
+                    // machines' ideas of the time.
+                    let rtt = (Self::clock_ms() - p.t).max(0.0) as f32;
+                    self.ping.record(rtt);
+                }
                 Incoming::Event(Event::Other(_)) => {}
                 Incoming::Closed(why) => {
                     eprintln!("hassault: connection closed: {why}");
@@ -636,6 +785,21 @@ impl App {
                 }
             }
         }
+    }
+
+    /// This frame's view angles **in the simulation's units**.
+    ///
+    /// One expression, called by both the command that goes on the wire and the
+    /// prediction that runs locally. That is the whole point of it: those two
+    /// have to agree, they are written eighteen lines apart, and when one of them
+    /// converted and the other did not the result was a client whose server-side
+    /// body walked up to 93 degrees away from where the player was aiming —
+    /// silently, and only in a match.
+    ///
+    /// The camera is the only thing in this client that thinks in degrees.
+    /// Everything downstream of here is radians.
+    fn view_angles(&self) -> (f32, f32) {
+        (self.camera.yaw.to_radians(), self.camera.pitch.to_radians())
     }
 
     /// The frame's input, applied.
@@ -649,7 +813,19 @@ impl App {
         if !self.joined {
             return;
         }
-        let dt = dt.clamp(0.001, MAX_DT);
+        // Bank the frame's real time and produce a command only once a whole
+        // interval has passed. `dt` below is therefore the time that genuinely
+        // elapsed since the previous command, never a frame time rounded up to
+        // a floor — see `INPUT_HZ` for what the floor cost.
+        self.input_accum += dt.max(0.0);
+        if self.input_accum < INPUT_INTERVAL {
+            return;
+        }
+        // The upper clamp still discards: a stall longer than `MAX_DT` is time
+        // the server would refuse anyway, and banking it would only spend the
+        // next second of honest movement paying it back.
+        let dt = self.input_accum.min(MAX_DT);
+        self.input_accum = 0.0;
         let input = MoveInput {
             forward: axis(self.keys.forward, self.keys.back),
             strafe: axis(self.keys.right, self.keys.left),
@@ -658,8 +834,9 @@ impl App {
         };
         if self.socket.is_none() {
             self.local_seq += 1;
-            self.prediction.state.yaw = self.camera.yaw.to_radians();
-            self.prediction.state.pitch = self.camera.pitch.to_radians();
+            let (yaw, pitch) = self.view_angles();
+            self.prediction.state.yaw = yaw;
+            self.prediction.state.pitch = pitch;
             physics::step(&self.world, &mut self.prediction.state, &input, dt);
             // The range plays the server's part, and it has to run *after* the
             // step: a shot leaves from where the body is this frame, and firing
@@ -678,6 +855,18 @@ impl App {
         // which is the server's design: the shot then carries the exact angles and
         // sequence number of the frame it was fired on.
         cmd.fire = self.keys.fire;
+        // And the instant it was aimed at. Bodies are drawn `INTERP_DELAY_MS` in
+        // the past, so without this every shot is resolved against positions a
+        // tenth of a second newer than the ones on screen when the trigger was
+        // pulled — which is not a small error at a running target, and reads as
+        // "the hit registration is bad" rather than as a missing field.
+        //
+        // Left absent before the first snapshot rather than defaulted: a
+        // fabricated render time asks the server to rewind to a moment that
+        // never existed. The clamp on the far side is a bound, not a repair.
+        if cmd.fire {
+            cmd.view_t = self.snapshots.render_time(Self::clock_ms());
+        }
         // Which cone the server should use for it. Clamped there against the
         // weapon this command lands on — the wire parser cannot know that.
         cmd.scoped = self.scoped;
@@ -686,8 +875,23 @@ impl App {
         // the rest of the match repeats a switch that already happened.
         cmd.weapon = std::mem::replace(&mut self.want_weapon, -1);
         cmd.reload = std::mem::take(&mut self.want_reload);
-        cmd.yaw = self.camera.yaw;
-        cmd.pitch = self.camera.pitch;
+        // **Radians on the wire, not degrees**, and from the same expression the
+        // prediction uses — see `view_angles`. This line read `self.camera.yaw`
+        // raw. The server does not range-check an angle, because there is no
+        // range to check: it assigns `player.state.yaw = command.yaw` and takes
+        // its sine. So a heading of 315 arrived as 315 *radians* — 48 degrees —
+        // and the body was walked 93 degrees away from where the player was
+        // looking, far enough that forward carried a backward component.
+        //
+        // Zero error at yaw 0, growing with the angle, which is what made it read
+        // as "sometimes W goes backwards" rather than as a units bug — and why
+        // every test in this crate missed it: they all aim along +x. Only a match
+        // could show it at all, because Train sends no command; it steps the
+        // physics straight off `to_radians()` and so was the one mode that had
+        // the conversion right.
+        let (yaw, pitch) = self.view_angles();
+        cmd.yaw = yaw;
+        cmd.pitch = pitch;
 
         // `push_command` stamps the sequence number, and the prediction is keyed
         // by it. Predicting under a number we invented separately would make
@@ -696,21 +900,21 @@ impl App {
             return;
         };
         let seq = socket.push_command(cmd);
-        self.prediction.predict(
-            &self.world,
-            seq,
-            input,
-            dt,
-            // The physics works in radians about +x; the wire and the camera are
-            // in degrees. One conversion, at the one seam that needs it.
-            self.camera.yaw.to_radians(),
-            self.camera.pitch.to_radians(),
-        );
+        // The same angles the command carries — literally, not equivalently.
+        self.prediction
+            .predict(&self.world, seq, input, dt, yaw, pitch);
         self.prediction.ease(dt);
         self.follow_prediction();
 
+        // Rate-limited inside `flush` — see `SEND_INTERVAL`. Called every frame
+        // regardless, so a command is never held longer than one interval.
+        let rtt = self.ping.rtt();
+        let stamp = Self::clock_ms();
         if let Some(socket) = &mut self.socket {
-            if let Err(e) = socket.flush(None) {
+            if let Err(e) = socket.flush(rtt) {
+                eprintln!("hassault: {e}");
+            }
+            if let Err(e) = socket.ping(stamp) {
                 eprintln!("hassault: {e}");
             }
         }
@@ -936,6 +1140,9 @@ impl App {
         match action {
             Action::Sensitivity => self.sensitivity = self.settings.sensitivity,
             Action::Fullscreen => self.set_fullscreen(self.settings.video.fullscreen),
+            // Nothing to apply: the flag is read straight from `self.settings`
+            // by the render path, so toggling it is already in force.
+            Action::ShowHitboxes => {}
             Action::RenderScale | Action::Quality | Action::Vsync => {
                 if let Some(renderer) = &mut self.renderer {
                     renderer.set_video(self.settings.video);
@@ -1171,7 +1378,11 @@ impl ApplicationHandler for App {
                         KeyCode::KeyD => self.keys.right = down,
                         KeyCode::Space => self.keys.jump = down,
                         KeyCode::ShiftLeft => self.keys.crouch = down,
+                        KeyCode::Tab => self.keys.scores = down,
                         KeyCode::KeyR if down => self.reload(),
+                        // Inspect. Purely local — see `WeaponViewModel::inspect`
+                        // — so it is not a command and never touches the wire.
+                        KeyCode::KeyF if down => self.viewmodel.inspect(),
                         // The number row picks a weapon. `Digit1` is the knife,
                         // matching the server's slot order — which is the order
                         // `GET /api/hassault/weapons` serves them in, so the two
@@ -1205,10 +1416,25 @@ impl ApplicationHandler for App {
                     dummies = self.range.rows();
                     &dummies
                 } else {
-                    &self.players
+                    // `drawn`, never `players`: the roster is where the server
+                    // last said everyone was, which is a different question from
+                    // where they should be shown this frame.
+                    &self.drawn
                 };
-                let verts = bodies::build(rows, &self.self_id);
+                let mut verts = bodies::build(rows, &self.self_id, &self.hitbox);
+                if self.settings.show_hitboxes {
+                    // Appended to the same stream, so the wireframes are depth
+                    // tested against the world like everything else: a hitbox
+                    // behind a wall is hidden by the wall. Drawn in their own
+                    // always-on-top pass they would be a wall hack.
+                    verts.extend(bodies::build_hitboxes(rows, &self.self_id, &self.hitbox));
+                }
                 self.viewmodel.vertices(&mut self.weapon_verts);
+                // Built here rather than in the painter: sorting is a game-mode
+                // question and the painter has no business having an opinion.
+                // `None` when the key is not held, which is a different fact
+                // from "an empty match" and must not draw the same.
+                let scoreboard = self.keys.scores.then(|| self.score_rows());
                 let (width, height) = self.renderer.as_ref().map(|r| r.size()).unwrap_or((1, 1));
                 // The name and the cone are copied out rather than borrowed:
                 // `self.overlay` is taken mutably below, and a `HudView` holding
@@ -1247,6 +1473,9 @@ impl ApplicationHandler for App {
                     on_ground: self.prediction.state.on_ground,
                     crouching: self.prediction.state.crouch > 0.5,
                     playing: self.joined,
+                    rtt: self.ping.rtt(),
+                    scoreboard: scoreboard.as_deref(),
+                    scores: &self.scores,
                 };
                 self.hud.build(&view, &mut overlay);
                 // After the HUD, so the scrim covers it: the menu is *over* the
@@ -1306,6 +1535,10 @@ impl ApplicationHandler for App {
         let now = Instant::now();
         let dt = now.duration_since(self.last_frame).as_secs_f32();
         self.last_frame = now;
+        // Resampled every frame, before the input: the shot this frame may fire
+        // is aimed at what is on screen, so what is on screen has to be decided
+        // first. See `interp.rs`.
+        self.drawn = self.snapshots.sample(Self::clock_ms(), &self.self_id);
         self.send_input(dt);
         // After the input, so the weapon sways to the angles this frame is about
         // to be drawn with rather than to the previous one's.
@@ -1370,6 +1603,55 @@ mod tests {
         World::new(info, &bytes).expect("training world")
     }
 
+    /// An open room `ssize` cubes square with the spawn near the middle.
+    ///
+    /// `training_world` is 4x4 — a closet, which is all most of these tests need.
+    /// Anything that measures a *direction* needs somewhere to walk: against a
+    /// wall the collision resolve slides the body along it, and the bearing it
+    /// travelled is then the wall's, not the camera's.
+    fn open_world(ssize: i32) -> World {
+        let n = (ssize * ssize) as usize;
+        let mut bytes = Vec::with_capacity(n * 9);
+        bytes.extend(std::iter::repeat_n(2u8, n)); // type: SPACE
+        bytes.extend(std::iter::repeat_n(0u8, n)); // floor
+        bytes.extend(std::iter::repeat_n(16u8, n)); // ceil
+        bytes.extend(std::iter::repeat_n(0u8, n * 6)); // wtex..tag
+        let info = MapInfo {
+            ssize,
+            cubic_size: n,
+            plane_order: [
+                "type", "floor", "ceil", "wtex", "ftex", "ctex", "vdelta", "utex", "tag",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+            entities: vec![Entity {
+                name: "playerstart".into(),
+                x: (ssize / 2) as f32,
+                y: (ssize / 2) as f32,
+                z: 19.0,
+                yaw: 90.0,
+                attrs: vec![0, 0],
+            }],
+            ..Default::default()
+        };
+        World::new(info, &bytes).expect("open world")
+    }
+
+    fn app_on(world: World) -> App {
+        let mesh = build_world_mesh(&world);
+        App::new(
+            world,
+            mesh,
+            None,
+            Settings::default(),
+            SettingsWriter::disabled(),
+            weapons(),
+            HashMap::new(),
+            Default::default(),
+        )
+    }
+
     /// The loadout the node serves, trimmed to what these tests read.
     fn weapons() -> Vec<WeaponSpec> {
         vec![
@@ -1423,7 +1705,148 @@ mod tests {
             SettingsWriter::disabled(),
             weapons(),
             HashMap::new(),
+            // The shipped body. A test that fetched one would depend on a node.
+            Default::default(),
         )
+    }
+
+    /// Drive `send_input` at `fps` for one real second and report the simulated
+    /// time claimed and the number of commands produced.
+    fn spin(app: &mut App, fps: u32) -> (f32, u64) {
+        let before_t = app.prediction.state.t;
+        let before_seq = app.local_seq;
+        let dt = 1.0 / fps as f32;
+        for _ in 0..fps {
+            app.send_input(dt);
+        }
+        (
+            app.prediction.state.t - before_t,
+            app.local_seq - before_seq,
+        )
+    }
+
+    #[test]
+    fn the_view_angles_are_radians() {
+        // The units the *simulation* uses, which is what both the wire and the
+        // prediction consume. The camera is degrees; nothing downstream is.
+        let mut app = training_app();
+        app.camera.yaw = 315.0;
+        app.camera.pitch = 20.0;
+        let (yaw, pitch) = app.view_angles();
+        assert!((yaw - 315f32.to_radians()).abs() < 1e-6, "yaw {yaw}");
+        assert!((pitch - 20f32.to_radians()).abs() < 1e-6, "pitch {pitch}");
+        // The bug, stated as the assertion that would have caught it: a heading
+        // handed over as 315 rather than 5.5 is not a rounding difference.
+        assert!(yaw < std::f32::consts::TAU, "degrees leaked through: {yaw}");
+    }
+
+    #[test]
+    fn walking_forward_goes_where_the_camera_points() {
+        // At **every** heading, not just along +x. Every other test in this
+        // crate aims at yaw 0, which is the one angle at which degrees and
+        // radians happen to agree — so the units bug was invisible to all of
+        // them and to the conformance fixture alike.
+        for heading in [0.0f32, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0] {
+            let mut app = app_on(open_world(48));
+            app.camera.yaw = heading;
+            app.keys.forward = true;
+            let (x0, y0) = (app.prediction.state.x, app.prediction.state.y);
+            for _ in 0..20 {
+                app.send_input(1.0 / 60.0);
+            }
+            let (dx, dy) = (app.prediction.state.x - x0, app.prediction.state.y - y0);
+            assert!(
+                dx.hypot(dy) > 0.05,
+                "did not move at heading {heading}: ({dx}, {dy})"
+            );
+            // The bearing actually travelled, against the one asked for.
+            let want = heading.to_radians();
+            let got = dy.atan2(dx);
+            let off = (got - want).sin().atan2((got - want).cos()).abs();
+            assert!(
+                off < 0.02,
+                "at heading {heading} the body travelled {:.1} degrees off",
+                off.to_degrees()
+            );
+        }
+    }
+
+    #[test]
+    fn a_fast_loop_claims_no_more_time_than_actually_passed() {
+        // The bug this pins. `dt` used to be clamped up to a 1 ms floor, so an
+        // uncapped loop — which is what this client runs, `Immediate` present
+        // mode with vsync off — claimed a millisecond for every iteration no
+        // matter how short it was. At 4000 iterations a second that is four
+        // simulated seconds per real one, and the server grants 1.1; the
+        // prediction ends up permanently ahead of the authoritative position and
+        // every snapshot drags it back. It reads as being unable to walk.
+        for fps in [60, 144, 500, 1000, 4000, 20_000] {
+            let mut app = training_app();
+            app.keys.forward = true;
+            let (simulated, _) = spin(&mut app, fps);
+            assert!(
+                (simulated - 1.0).abs() < 0.02,
+                "at {fps} fps the client claimed {simulated:.3} s for one real second"
+            );
+        }
+    }
+
+    #[test]
+    fn the_command_rate_is_the_frame_rate_only_while_it_is_slower() {
+        // Below `INPUT_HZ` a command is still one frame — the accumulator never
+        // withholds time that has already passed, it only refuses to *round up*.
+        let mut app = training_app();
+        app.keys.forward = true;
+        let (_, commands) = spin(&mut app, 144);
+        assert_eq!(commands, 144, "a 144 Hz loop should send 144 commands");
+    }
+
+    #[test]
+    fn a_fast_loop_stays_inside_one_input_message() {
+        // `MatchSocket::flush` may carry 64 commands per 33 ms window, and the
+        // surplus used to be dropped *after* being predicted locally — the
+        // client moving on commands the server would never see. However fast the
+        // loop spins, a flush window's worth has to fit.
+        let window = hassault_native::net::SEND_INTERVAL.as_secs_f32();
+        let cap = hassault_native::net::MAX_COMMANDS_PER_MESSAGE as f32;
+        let per_flush = |commands: u64| commands as f32 * window;
+        for fps in [1000, 4000, 20_000] {
+            let mut app = training_app();
+            app.keys.forward = true;
+            let (_, commands) = spin(&mut app, fps);
+            assert!(
+                per_flush(commands) <= cap,
+                "at {fps} fps a flush window carries {} commands",
+                per_flush(commands)
+            );
+        }
+    }
+
+    #[test]
+    fn a_jittering_loop_claims_exactly_what_it_spent() {
+        // A real frame time is not a constant, and the accumulator has to be
+        // honest about a *mixture* — a burst of 20 000 fps iterations between two
+        // ordinary frames must contribute the microseconds it actually took, not
+        // one interval each and not nothing at all.
+        let mut app = training_app();
+        app.keys.forward = true;
+        let mut real = 0.0;
+        // Ten ordinary frames, each preceded by a burst of very short ones.
+        for _ in 0..10 {
+            for _ in 0..500 {
+                let dt = 1.0 / 20_000.0;
+                real += dt;
+                app.send_input(dt);
+            }
+            let dt = 1.0 / 60.0;
+            real += dt;
+            app.send_input(dt);
+        }
+        let simulated = app.prediction.state.t;
+        assert!(
+            (simulated - real).abs() < INPUT_INTERVAL,
+            "spent {real:.4} s and claimed {simulated:.4} s"
+        );
     }
 
     #[test]

@@ -32,6 +32,7 @@
 //! seeing the correction.
 
 use crate::physics::{step, MoveInput, PlayerState};
+use crate::protocol::MoveState;
 use crate::world::World;
 
 /// A command we have simulated and the server has not yet acknowledged.
@@ -154,7 +155,21 @@ impl Prediction {
     /// `ack` is the last sequence number the server applied. Everything at or
     /// below it is history; everything above it is input the server has not
     /// processed, and re-running it is what puts the prediction back at "now".
-    pub fn reconcile(&mut self, world: &World, ack: u64, x: f32, y: f32, z: f32, on_ground: bool) {
+    // Eight, and every one is a distinct fact off the wire: the ack, three
+    // position components, the support state and the momentum block. Bundling
+    // them into a struct would only move the list somewhere the compiler checks
+    // less — the same call this crate already makes for `App::new`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn reconcile(
+        &mut self,
+        world: &World,
+        ack: u64,
+        x: f32,
+        y: f32,
+        z: f32,
+        on_ground: bool,
+        movement: Option<&MoveState>,
+    ) {
         if !self.live {
             self.reset(x, y, z, self.state.yaw, self.state.pitch);
             return;
@@ -164,9 +179,6 @@ impl Prediction {
         // the replayed result rather than against a stale frame.
         let before = (self.state.x, self.state.y, self.state.z);
 
-        // The server's word, with our own velocity carried over: the snapshot
-        // sends a position but not a velocity, and re-deriving one from two
-        // positions would be noisier than the value we already have.
         let mut replayed = PlayerState {
             x,
             y,
@@ -174,9 +186,36 @@ impl Prediction {
             on_ground,
             ..self.settled
         };
-        replayed.x = x;
-        replayed.y = y;
-        replayed.z = z;
+
+        // **Momentum is rebased too, and this is the load-bearing half.**
+        //
+        // This used to carry the client's own velocity over, on the reasoning
+        // that a snapshot sends a position and not a velocity. It sends both —
+        // `MatchPlayer.private_view` has carried a `move` block since movement
+        // became velocity-based, and the browser client has read it since. The
+        // consequence of ignoring it is not a small drift: movement is a velocity
+        // integrated against AC's friction constants, so the velocity *is* the
+        // state, and replaying on the local one runs the replay on the very
+        // number the correction exists to fix. The error compounds rather than
+        // settling — the prediction runs away, the next snapshot drags it back,
+        // and that is the elastic banding, at the snapshot rate, forever. It only
+        // shows in a match, because Train never reconciles.
+        //
+        // A server too old to send the block leaves the predicted momentum alone,
+        // which is the best guess available rather than a lie.
+        if let Some(m) = movement {
+            replayed.vel_x = m.vel[0];
+            replayed.vel_y = m.vel[1];
+            replayed.vel_z = m.vel[2];
+            replayed.time_in_air = m.air;
+            replayed.crouch = m.crouch;
+            replayed.crouched_in_air = m.crouched_in_air;
+            // `since_landed` is a duration, converted against *our* simulated
+            // clock: the two clocks are unrelated, so the server's timestamp
+            // would be meaningless here and the chain-jump window would open at
+            // an arbitrary moment.
+            replayed.landed_at = replayed.t - m.since_landed;
+        }
 
         self.unacked.retain(|c| c.seq > ack);
         for c in &self.unacked {
@@ -315,7 +354,15 @@ mod tests {
         for _ in 0..6 {
             step(&world, &mut server, &forward(), 1.0 / 60.0);
         }
-        p.reconcile(&world, 6, server.x, server.y, server.z, server.on_ground);
+        p.reconcile(
+            &world,
+            6,
+            server.x,
+            server.y,
+            server.z,
+            server.on_ground,
+            None,
+        );
 
         assert_eq!(p.pending(), 4, "four commands are still in flight");
         // Replaying the four should land within a whisker of where we already
@@ -337,7 +384,7 @@ mod tests {
         let predicted = p.state.x;
 
         // The server puts us slightly behind where we thought.
-        p.reconcile(&world, 1, predicted - 0.3, 8.0, 0.0, true);
+        p.reconcile(&world, 1, predicted - 0.3, 8.0, 0.0, true, None);
         // Visibly, we have barely moved: the error is carried, not shown.
         assert!(
             (p.state.x - predicted).abs() < 0.01,
@@ -361,9 +408,79 @@ mod tests {
         let mut p = Prediction::default();
         p.reset(8.0, 8.0, 0.0, 0.0, 0.0);
         p.predict(&world, 1, forward(), 1.0 / 60.0, 0.0, 0.0);
-        p.reconcile(&world, 1, 4.0, 4.0, 0.0, true);
+        p.reconcile(&world, 1, 4.0, 4.0, 0.0, true, None);
         assert!((p.state.x - 4.0).abs() < 1e-5, "{}", p.state.x);
         assert!((p.state.y - 4.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn the_servers_momentum_replaces_ours_rather_than_being_replayed_over() {
+        // The elastic banding, isolated. The server says we are standing still —
+        // walked into a wall, throttled, shoved — and the replay has to start
+        // from *its* velocity. Starting from ours re-runs the exact number the
+        // correction exists to fix.
+        // Roomy on purpose: half a second at full sprint covers eight cubes, and
+        // a body that reaches a wall has had its velocity zeroed by the collision
+        // rather than by the thing under test.
+        let world = room(64);
+        let mut p = Prediction::default();
+        p.reset(8.0, 8.0, 0.0, 0.0, 0.0);
+
+        let forward = MoveInput {
+            forward: 1.0,
+            ..Default::default()
+        };
+        for seq in 1..=30 {
+            p.predict(&world, seq, forward, 1.0 / 60.0, 0.0, 0.0);
+        }
+        assert!(p.settled.vel_x > 15.0, "not moving: {}", p.settled.vel_x);
+
+        // The server acknowledges everything and reports a body at rest.
+        let stopped = MoveState::default();
+        p.reconcile(&world, 30, p.settled.x, 8.0, 0.0, true, Some(&stopped));
+        assert!(
+            p.settled.vel_x.abs() < 1e-6,
+            "kept {} of its own velocity",
+            p.settled.vel_x
+        );
+    }
+
+    #[test]
+    fn without_the_momentum_block_the_replay_runs_away_from_the_server() {
+        // Why the field is not optional in practice. Two identical clients
+        // reconcile against the same authoritative "you are here, at rest"; the
+        // one that ignores the momentum keeps sprinting away from it, and the
+        // gap it opens is the distance the next snapshot has to yank back.
+        let world = room(64);
+        let run = |movement: Option<&MoveState>| {
+            let mut p = Prediction::default();
+            p.reset(8.0, 8.0, 0.0, 0.0, 0.0);
+            let forward = MoveInput {
+                forward: 1.0,
+                ..Default::default()
+            };
+            for seq in 1..=30 {
+                p.predict(&world, seq, forward, 1.0 / 60.0, 0.0, 0.0);
+            }
+            let acked_at = p.settled.x;
+            // Ten unacknowledged commands: the replay tail a round trip leaves.
+            for seq in 31..=40 {
+                p.predict(&world, seq, forward, 1.0 / 60.0, 0.0, 0.0);
+            }
+            // The server's word: you are where command 30 left you, at rest.
+            p.reconcile(&world, 30, acked_at, 8.0, 0.0, true, movement);
+            p.settled.x - acked_at
+        };
+
+        let stopped = MoveState::default();
+        let rebased = run(Some(&stopped));
+        let carried = run(None);
+        // Ten commands from a standstill barely move a body that has to
+        // accelerate; ten replayed at full sprint cover several times as much.
+        assert!(
+            carried > rebased * 2.0,
+            "rebased replay travelled {rebased:.3}, carried-over {carried:.3} —              the block is supposed to make a difference"
+        );
     }
 
     #[test]
@@ -386,7 +503,7 @@ mod tests {
         // the origin.
         let world = room(16);
         let mut p = Prediction::default();
-        p.reconcile(&world, 0, 5.0, 6.0, 1.0, true);
+        p.reconcile(&world, 0, 5.0, 6.0, 1.0, true, None);
         assert!(p.live);
         assert_eq!((p.state.x, p.state.y, p.state.z), (5.0, 6.0, 1.0));
     }

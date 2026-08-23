@@ -107,8 +107,16 @@ def get_project(project_id: str) -> ProjectModel | None:
 
 
 def create_project(
-    name: str, refs: list[EnvironmentRefModel], python: str
+    name: str, refs: list[EnvironmentRefModel], python: str, owner: str = ""
 ) -> ProjectModel:
+    """A new project directory. `owner` names the module that owns it as working
+    storage (see `ProjectModel.owner`); leave it empty for a user's own project.
+
+    Note this creates the *directory*, not a notebook — `main.ipynb` is scaffolded by
+    the create **route**, from the environment provider's cells. A caller that comes
+    straight here (as `evals` does) therefore gets a project with no notebook at all,
+    which is why owned projects do not offer to open one.
+    """
     slug = _unique_slug(name)
     directory = projects_root() / slug
     (directory / "data").mkdir(parents=True, exist_ok=True)
@@ -119,6 +127,7 @@ def create_project(
         root=str(directory),
         refs=refs,
         python=python,
+        owner=owner,
         created_at=_dt.datetime.now(_dt.UTC).isoformat(),
     )
     _write(project)

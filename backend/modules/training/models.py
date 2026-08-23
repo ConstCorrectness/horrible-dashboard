@@ -45,6 +45,19 @@ class ProjectModel(BaseModel):
     venv_ready: bool = False
     data_ready: bool = False
     created_at: str = ""
+    #: Which module created this project. Empty means you did, and it behaves like
+    #: any other training project. A non-empty owner marks a project some other
+    #: module keeps as **working storage** — `evals` builds one per suite to run
+    #: Hugging Face benchmarks in — and those are deliberately not notebooks you
+    #: author in: they are created straight through `create_project`, so they have
+    #: no scaffolded `main.ipynb` and their venv carries only the benchmark's own
+    #: requirements (no `ipykernel`, no `horrible_train`).
+    #:
+    #: They are still *listed*, and marked rather than hidden — the same call the
+    #: bundled eval suites make. A project quietly missing from the pane is a
+    #: directory eating disk that you cannot see or delete; what it must not do is
+    #: offer a notebook button that cannot work.
+    owner: str = ""
 
 
 class SearchResponse(BaseModel):

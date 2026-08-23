@@ -183,7 +183,7 @@ export function dirOf(path: string): string {
 }
 
 /** A `file://` URI for an absolute OS path (handles Windows drive letters). */
-function pathToUri(path: string): string {
+export function pathToUri(path: string): string {
   let s = path.replace(/\\/g, '/');
   if (/^[A-Za-z]:/.test(s)) s = `/${s}`; // C:/x → /C:/x
   return `file://${encodeURI(s)}`;
@@ -193,7 +193,7 @@ interface LspPosition {
   line: number;
   character: number;
 }
-interface LspDiagnostic {
+export interface LspDiagnostic {
   range: { start: LspPosition; end: LspPosition };
   severity?: number;
   message: string;
@@ -349,6 +349,15 @@ interface SessionDoc {
   onDiagnostics: (raw: LspDiagnostic[]) => void;
 }
 
+/** One code cell of a notebook document: its cell URI, a live read of its text
+ * (the mounted editor's doc when there is one, else the notebook's stored source),
+ * and where its diagnostics go. */
+export interface NotebookCellDoc {
+  uri: string;
+  text: () => string;
+  doc: SessionDoc;
+}
+
 /**
  * One language-server session, **shared by every buffer** on the same interpreter +
  * project root (the pool key). Owns the transport — its `sessionId`, the `start`/
@@ -358,7 +367,7 @@ interface SessionDoc {
  * process per `sessionId`, so one session here is **one basedpyright indexed once for
  * the whole project**. Refcounted: the server is stopped when the last document closes.
  */
-class LspSession {
+export class LspSession {
   readonly sessionId = `lsp-${++sessionCounter}`;
   initialized = false;
   dead = false;
@@ -487,6 +496,136 @@ class LspSession {
     this.docs.delete(uri);
   }
 
+  // --- Notebook documents (LSP 3.17 `notebookDocument/*`) --------------------
+  //
+  // A notebook is **one** document made of cells, not N independent files: names
+  // bound in an earlier cell have to resolve in a later one. That is the whole
+  // reason these are separate notifications rather than N `textDocument/didOpen`s
+  // — pyright chains the cells of a notebook and analyzes them as one scope.
+  //
+  // Two things here are silent if broken, both measured against basedpyright
+  // 1.39.9 rather than assumed (see editor/notebook-lsp.ts for the probe results):
+  //
+  // 1. **A cell URI must use the `vscode-notebook-cell:` scheme.** The server's
+  //    `notebookDocumentSync` selector matches the *notebook* on `scheme: file`,
+  //    but cell documents under any other scheme (including `file:` with a
+  //    `#cell0` fragment) are accepted and then resolve nothing at all — no
+  //    error, no diagnostics, empty completions. The fragment itself is free-form,
+  //    so we key it by nbformat cell id.
+  // 2. **A cell's edits must ride `notebookDocument/didChange`.** A plain
+  //    `textDocument/didChange` addressed to a cell URI is accepted and silently
+  //    discarded: the server keeps analyzing the text the cell was opened with,
+  //    which reads as "completions are stale" rather than as a sync bug.
+  //
+  // Diagnostics come back per *cell* URI, so cells register in the same `docs` map
+  // buffers use and route to their own editor with no extra machinery.
+
+  /** Open a notebook and its code cells as one document. `cells` is in notebook
+   * order; each registers as a doc so its diagnostics reach its own editor. */
+  openNotebook(notebookUri: string, cells: NotebookCellDoc[]): void {
+    for (const cell of cells) this.docs.set(cell.uri, cell.doc);
+    const open = (): void => {
+      if (this.dead) return;
+      this.rpc({
+        jsonrpc: '2.0',
+        method: 'notebookDocument/didOpen',
+        params: {
+          notebookDocument: {
+            uri: notebookUri,
+            notebookType: 'jupyter-notebook',
+            version: 1,
+            cells: cells.map((c) => ({ kind: 2, document: c.uri })),
+          },
+          cellTextDocuments: cells.map((c) => ({
+            uri: c.uri,
+            languageId: 'python',
+            version: 1,
+            text: c.text(),
+          })),
+        },
+      });
+    };
+    if (this.initialized) open();
+    else this.queuedOpens.push(open);
+  }
+
+  /** Push new text for one cell. See note 2 above: this is the *only* way a cell's
+   * content reaches the server. */
+  notebookCellChanged(
+    notebookUri: string,
+    version: number,
+    cellUri: string,
+    cellVersion: number,
+    text: string,
+  ): void {
+    if (!this.ready()) return;
+    this.rpc({
+      jsonrpc: '2.0',
+      method: 'notebookDocument/didChange',
+      params: {
+        notebookDocument: { uri: notebookUri, version },
+        change: {
+          cells: {
+            textContent: [
+              { document: { uri: cellUri, version: cellVersion }, changes: [{ text }] },
+            ],
+          },
+        },
+      },
+    });
+  }
+
+  /** Splice cells in or out at `start`. `opened` cells are registered for diagnostics
+   * routing; `closed` ones are dropped. */
+  notebookStructureChanged(
+    notebookUri: string,
+    version: number,
+    change: { start: number; deleteCount: number; opened: NotebookCellDoc[]; closed: string[] },
+  ): void {
+    for (const cell of change.opened) this.docs.set(cell.uri, cell.doc);
+    for (const uri of change.closed) this.docs.delete(uri);
+    if (!this.ready()) return;
+    this.rpc({
+      jsonrpc: '2.0',
+      method: 'notebookDocument/didChange',
+      params: {
+        notebookDocument: { uri: notebookUri, version },
+        change: {
+          cells: {
+            structure: {
+              array: {
+                start: change.start,
+                deleteCount: change.deleteCount,
+                cells: change.opened.map((c) => ({ kind: 2, document: c.uri })),
+              },
+              didOpen: change.opened.map((c) => ({
+                uri: c.uri,
+                languageId: 'python',
+                version: 1,
+                text: c.text(),
+              })),
+              didClose: change.closed.map((uri) => ({ uri })),
+            },
+          },
+        },
+      },
+    });
+  }
+
+  closeNotebook(notebookUri: string, cellUris: string[]): void {
+    if (this.ready()) {
+      this.rpc({
+        jsonrpc: '2.0',
+        method: 'notebookDocument/didClose',
+        params: {
+          notebookDocument: { uri: notebookUri },
+          cellTextDocuments: cellUris.map((uri) => ({ uri })),
+        },
+      });
+    }
+    for (const uri of cellUris) this.docs.delete(uri);
+  }
+
   dispose(): void {
     sendChannel('lsp', 'stop', { sessionId: this.sessionId });
     this.unsubscribe();
@@ -539,6 +678,15 @@ class LspSession {
           processId: null,
           rootUri: pathToUri(this.root),
           capabilities: {
+            // Notebook cells are synced as one document (see the notebook section
+            // above), which the spec says a client must advertise before sending the
+            // notifications. basedpyright 1.39.9 happens to report its
+            // `notebookDocumentSync` either way (measured), so this is not what makes
+            // notebooks work today — it is what stops them breaking on a server that
+            // reads the capability, and that failure would be a silent one.
+            notebookDocument: {
+              synchronization: { dynamicRegistration: true, executionSummarySupport: false },
+            },
             workspace: {
               configuration: true,
               didChangeConfiguration: { dynamicRegistration: true },
@@ -617,7 +765,7 @@ const sessionPool = new Map<string, LspSession>();
 // indexed server instead of respawning and reindexing it.
 const SESSION_IDLE_MS = 60_000;
 
-function acquireSession(
+export function acquireSession(
   key: string,
   languageId: string,
   root: string,
@@ -636,7 +784,7 @@ function acquireSession(
   return session;
 }
 
-function releaseSession(session: LspSession): void {
+export function releaseSession(session: LspSession): void {
   session.refcount--;
   if (session.refcount > 0 || session.disposeTimer !== undefined) return;
   // Idle: stop the server after a grace period unless it's re-acquired first.
@@ -648,10 +796,39 @@ function releaseSession(session: LspSession): void {
   }, SESSION_IDLE_MS);
 }
 
+/**
+ * How one editor's document is opened on a session, kept in sync, and closed —
+ * the single thing that differs between a file buffer and a notebook cell.
+ * Everything else the client does (completion, hover, diagnostics, the caches, the
+ * cold-start wait) is identical, so it is parameterized here rather than forked.
+ *
+ * The default binding is a plain `textDocument/*` one built from `path` +
+ * `languageId`. A notebook cell supplies one that rides `notebookDocument/*`
+ * instead, because a cell synced as a text document resolves nothing and says
+ * nothing about it (see `LspSession`'s notebook section).
+ */
+export interface DocumentBinding {
+  /** The LSP URI of this editor's document. */
+  readonly uri: string;
+  /** Join or start the session and open the document on it. Resolves to the session,
+   * or null when it could not be acquired (e.g. the editor was torn down first). */
+  open(
+    getText: () => string,
+    onDiagnostics: (raw: LspDiagnostic[]) => void,
+  ): Promise<LspSession | null>;
+  /** Push the document's new full text. */
+  change(version: number, text: string): void;
+  /** Close the document and release the session. */
+  close(): void;
+}
+
 export interface LspOptions {
   path: string;
   languageId: string;
   root: string;
+  /** Overrides how the document is synced; defaults to `textDocument/*` (see
+   * {@link DocumentBinding}). */
+  binding?: DocumentBinding;
   /** The buffer's source URI (`workspace-file:<path>`) — the key the diagnostics
    * store and the by-URI client registry use, so the agent tools can target this
    * buffer by the same URI the edit tools use. */
@@ -687,20 +864,71 @@ export interface LspOptions {
   indexedSymbols?: boolean;
 }
 
+/**
+ * The default binding: one file, synced as a plain `textDocument`. Resolves the
+ * Python environment first (interpreter + project root), because both key the
+ * session pool — buffers share a server only when they would analyze identically.
+ */
+function textDocumentBinding(
+  opts: LspOptions,
+  env: { packages?: Record<string, string> },
+): DocumentBinding {
+  let session: LspSession | null = null;
+  // The environment fetch means `open` is async, so a buffer torn down during it
+  // would otherwise acquire a session nobody ever releases: `close` can legitimately
+  // run first. Every binding owes this check.
+  let closed = false;
+  const uri = pathToUri(opts.path);
+  return {
+    uri,
+    async open(getText, onDiagnostics) {
+      let root = opts.root;
+      let interpreter: string | undefined;
+      if (opts.languageId === 'python') {
+        const resolved = await fetchPythonEnv(dirOf(opts.path));
+        env.packages = resolved.packages;
+        root = resolved.root || opts.root;
+        interpreter = opts.pythonPathOverride || resolved.interpreter || undefined;
+      }
+      if (closed) return null;
+      session = acquireSession(
+        `${opts.languageId}::${root}::${interpreter ?? ''}`,
+        opts.languageId,
+        root,
+        interpreter,
+      );
+      session.openDocument(uri, opts.languageId, getText, { onDiagnostics });
+      return session;
+    },
+    change(version, text) {
+      session?.didChange(uri, version, text);
+    },
+    close() {
+      closed = true;
+      if (!session) return;
+      // Close this document; the session stops the server when its last doc closes.
+      session.closeDocument(uri);
+      releaseSession(session);
+      session = null;
+    },
+  };
+}
+
 /** Build the LSP extension for one buffer. Manages a server session for its
  * lifetime: start → initialize → didOpen, debounced didChange, didClose on
  * destroy, plus completion, hover, and go-to-definition. Stays quiet if the
  * backend has no server for the language. */
 export function lspExtension(opts: LspOptions): Extension {
-  const uri = pathToUri(opts.path);
   const sep = opts.path.includes('\\') ? '\\' : '/';
   // The completion source is configured once (below) but must reach the *live*
   // plugin instance to issue requests — share it through this ref.
   const ref: { plugin: LspClient | null } = { plugin: null };
   // Installed framework versions for this file's interpreter, populated async once the
   // plugin resolves the environment — the framework-import source gates/annotates on them.
-  // (The interpreter itself keys the shared session; see `connect`.)
+  // (The interpreter itself keys the shared session; see the default binding.)
   const env: { packages?: Record<string, string> } = {};
+  const binding = opts.binding ?? textDocumentBinding(opts, env);
+  const uri = binding.uri;
 
   const plugin = ViewPlugin.fromClass(
     class implements LspClient {
@@ -728,30 +956,15 @@ export function lspExtension(opts: LspOptions): Extension {
         void this.connect();
       }
 
-      /** Resolve the environment (Python), then join — or start — the shared session for
-       * this interpreter+project and open this document on it. */
+      /** Open this document through its binding (which resolves the environment and
+       * joins the shared session) and start syncing. */
       async connect(): Promise<void> {
-        let root = opts.root;
-        let interpreter: string | undefined;
-        if (opts.languageId === 'python') {
-          const resolved = await fetchPythonEnv(dirOf(opts.path));
-          env.packages = resolved.packages;
-          root = resolved.root || opts.root;
-          // The setting override wins over the auto-detected interpreter; both key the
-          // pool, so buffers only share a server when they'd analyze identically.
-          interpreter = opts.pythonPathOverride || resolved.interpreter || undefined;
-        }
-        if (this.disposed) return; // torn down while the env fetch was in flight
-        const session = acquireSession(
-          `${opts.languageId}::${root}::${interpreter ?? ''}`,
-          opts.languageId,
-          root,
-          interpreter,
+        const session = await binding.open(
+          () => this.view.state.doc.toString(),
+          (raw) => this.applyDiagnostics(raw),
         );
+        if (this.disposed || !session) return; // torn down while the env fetch was in flight
         this.session = session;
-        session.openDocument(uri, opts.languageId, () => this.view.state.doc.toString(), {
-          onDiagnostics: (raw) => this.applyDiagnostics(raw),
-        });
         // The moment the server is usable, re-open the completion list if the user is
         // sitting in this buffer mid-word. Waiting on `warmupMs` covers a request made
         // *during* the cold start; this covers the popup the user already dismissed —
@@ -1146,7 +1359,7 @@ export function lspExtension(opts: LspOptions): Extension {
         if (!this.session?.ready()) return;
         // The document moved on — every cached result described the old version.
         this.clearCaches();
-        this.session.didChange(uri, ++this.version, this.view.state.doc.toString());
+        binding.change(++this.version, this.view.state.doc.toString());
       }
 
       clearCaches(): void {
@@ -1158,11 +1371,7 @@ export function lspExtension(opts: LspOptions): Extension {
       destroy(): void {
         this.disposed = true;
         if (this.changeTimer !== undefined) window.clearTimeout(this.changeTimer);
-        if (this.session) {
-          // Close this document; the session stops the server when its last doc closes.
-          this.session.closeDocument(uri);
-          releaseSession(this.session);
-        }
+        binding.close();
         this.unregisterClient();
         ref.plugin = null;
       }

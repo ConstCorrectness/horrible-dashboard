@@ -23,9 +23,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from contextlib import AsyncExitStack
 from typing import Any
 
-from backend.modules.evals import store
+from backend.modules.evals import llama_target, store
 from backend.modules.evals.models import (
     CaseResult,
     EvalCase,
@@ -73,7 +74,15 @@ def _resolve_target(target: RunTarget) -> tuple[Any, str]:
         info = PROVIDERS.get(target.provider)
         if info is None:
             raise ValueError(f"unknown provider {target.provider!r}")
-        return info, (target.endpoint or info.default_endpoint)
+        if target.endpoint:
+            return info, target.endpoint
+        # Not `info.default_endpoint`: a spawned llama-server takes an ephemeral
+        # port when 8080 is occupied, so the default points at nothing while the
+        # real server sits elsewhere. `_endpoint_for` asks the live manager first —
+        # the same reason it exists for the agent.
+        from backend.modules.agent.routes import _endpoint_for
+
+        return info, _endpoint_for(info, None)
 
     config = _load_config()
     if config is None:
@@ -133,40 +142,60 @@ async def _run_one_target(
                 {"runId": run.id, "note": f"benchmark cases will fail: {exc}"},
             )
 
-    async with _target_semaphore:
-        for index, case in enumerate(cases):
-            result: CaseResult
-            if case.type == "hf_benchmark":
-                result = await _run_benchmark_case(
-                    case, project, endpoint, target.model, run.id
+    async with AsyncExitStack() as stack:
+        # A llama.cpp target names a GGUF, and the server holds one model at a time,
+        # so the weights are loaded for the length of this target and the user's own
+        # server is put back afterwards (see evals/llama_target.py). The endpoint is
+        # whatever the load produced — the port is picked at spawn.
+        if target.provider == "llamacpp" and target.model_path:
+            try:
+                endpoint = await stack.enter_async_context(
+                    llama_target.serving(target.model_path)
                 )
-            else:
-                result = await run_case(
-                    case,
-                    agent_tools,
-                    provider=info,
-                    endpoint=endpoint,
-                    model=target.model,
-                    temperature=target.temperature
-                    if target.temperature is not None
-                    else 0.0,
+            except Exception as exc:  # noqa: BLE001
+                # Same reasoning as an unresolvable target: "the weights never
+                # loaded" and "this model gets everything wrong" must not look
+                # alike on a scoreboard.
+                store.update_run(
+                    run.id, status="failed", error=str(exc), finished_at=_now()
                 )
-            # Stamped here rather than in the runners: both of them produce a
-            # result and neither should have to remember. What it pins is that a
-            # later comparison is between the same questions, not just the same
-            # case ids.
-            result.case_hash = case.content_hash()
-            store.save_result(run.id, result)
-            tracker.log(index, result)
-            await _emit(
-                "case_done",
-                {
-                    "runId": run.id,
-                    "index": index,
-                    "total": len(cases),
-                    "result": result.model_dump(),
-                },
-            )
+                await _emit("run_failed", {"runId": run.id, "error": str(exc)})
+                return store.get_run(run.id) or run
+
+        async with _target_semaphore:
+            for index, case in enumerate(cases):
+                result: CaseResult
+                if case.type == "hf_benchmark":
+                    result = await _run_benchmark_case(
+                        case, project, endpoint, target.model, run.id
+                    )
+                else:
+                    result = await run_case(
+                        case,
+                        agent_tools,
+                        provider=info,
+                        endpoint=endpoint,
+                        model=target.model,
+                        temperature=target.temperature
+                        if target.temperature is not None
+                        else 0.0,
+                    )
+                # Stamped here rather than in the runners: both of them produce a
+                # result and neither should have to remember. What it pins is that a
+                # later comparison is between the same questions, not just the same
+                # case ids.
+                result.case_hash = case.content_hash()
+                store.save_result(run.id, result)
+                tracker.log(index, result)
+                await _emit(
+                    "case_done",
+                    {
+                        "runId": run.id,
+                        "index": index,
+                        "total": len(cases),
+                        "result": result.model_dump(),
+                    },
+                )
 
     finished = store.get_run(run.id) or run
     store.update_run(run.id, status="done", finished_at=_now())

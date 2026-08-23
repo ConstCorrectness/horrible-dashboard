@@ -65,6 +65,21 @@ const PANEL: [f32; 4] = [0.05, 0.07, 0.09, 0.45];
 /// overscanning display or a window manager's shadow eats.
 const MARGIN: f32 = 5.0;
 
+/// One line of the scoreboard.
+///
+/// A flattened row rather than a `&PlayerRow`, because the scoreboard shows one
+/// thing the snapshot does not carry — which row is *you* — and because sorting
+/// borrowed rows out of the live roster would tie the HUD to the roster's
+/// lifetime for the sake of avoiding four `String` clones a keypress.
+pub struct ScoreRow {
+    pub name: String,
+    pub kills: i32,
+    pub deaths: i32,
+    pub team: i32,
+    pub bot: bool,
+    pub you: bool,
+}
+
 /// One line of the kill feed, already phrased.
 #[derive(Debug, Clone)]
 pub struct KillNote {
@@ -108,6 +123,24 @@ pub struct HudView<'a> {
     /// releasing the pointer is not a menu here, and a world drawn with no HUD
     /// in it reads as a client that half-loaded.
     pub playing: bool,
+    /// The scoreboard, when it is being held open. `None` is not "an empty
+    /// match" — it is "not asked for", and the two must not draw the same.
+    ///
+    /// Sorted by the caller: what "winning" means is a game-mode question, and
+    /// the painter has no business having an opinion about it.
+    pub scoreboard: Option<&'a [ScoreRow]>,
+    /// Team scores, as the snapshot carries them. Drawn above the roster, which
+    /// is the only place the *match* score appears — the per-player columns are
+    /// a different question from who is winning.
+    pub scores: &'a [i32],
+    /// Round-trip time in ms, or `None` when nothing has been measured yet —
+    /// Train, or the first second of a match.
+    ///
+    /// The distinction matters and is why this is an `Option`: drawing `0 MS`
+    /// for "not measured" is a claim of a perfect link, and a player judging
+    /// whether a lost duel was theirs or the network's would be reading a
+    /// number the client made up. Absent is drawn as absent.
+    pub rtt: Option<f32>,
     /// The player's own reticle. Every number here is theirs, and the one thing
     /// that is *not* is the opening with spread — the gap setting is the floor
     /// the cone opens from, never a cap on it. A crosshair that could be
@@ -272,6 +305,11 @@ impl Hud {
         paint_weapon(&mut p, view, u);
         self.paint_center(&mut p, view, u);
         paint_movement(&mut p, view, u);
+        // Last, so it covers the rest: a scoreboard is a thing you hold *over*
+        // the game, and one the ammo counter shows through reads as a bug.
+        if let Some(rows) = view.scoreboard {
+            paint_scoreboard(&mut p, rows, view.scores, u);
+        }
     }
 
     fn paint_feed(&self, p: &mut Painter, u: f32) {
@@ -417,6 +455,12 @@ fn paint_movement(p: &mut Painter, view: &HudView, u: f32) {
     if !view.on_ground {
         line.push_str(" - AIRBORNE");
     }
+    // The link, on the same line rather than in a corner of its own: it is read
+    // in the same glance as "why did that not land", and a second block would be
+    // one more thing between the crosshair and the edge of the screen.
+    if let Some(rtt) = view.rtt {
+        line.push_str(&format!(" - {} MS", rtt.round() as i32));
+    }
     // Over the run speed means a chained jump landed, which is the one thing in
     // this movement model you cannot feel without being told.
     let color = if view.speed > view.move_speed + 0.5 {
@@ -425,6 +469,86 @@ fn paint_movement(p: &mut Painter, view: &HudView, u: f32) {
         DIM
     };
     p.text(u * 6.0, y, scale, color, &line);
+}
+
+/// The roster, held open.
+///
+/// Columns rather than a sentence per player: kills and deaths are *figures*,
+/// and figures in a row you are scanning under fire have to line up. The name is
+/// left-aligned and the numbers are right-aligned against fixed offsets from the
+/// panel's right edge, which is what makes a column a column in a bitmap font
+/// with no proportional metrics to fight.
+fn paint_scoreboard(p: &mut Painter, rows: &[ScoreRow], scores: &[i32], u: f32) {
+    let scale = u * 0.85;
+    let line = 7.0 * scale + u * 2.0;
+    let width = (p.width * 0.52).max(u * 90.0);
+    let header = line * 2.0;
+    let height = header + line * (rows.len().max(1) as f32) + u * 4.0;
+    let x = (p.width - width) * 0.5;
+    let y = (p.height - height) * 0.35;
+
+    // Opaque enough to read against a bright map. The scrim is the panel, not a
+    // full-screen dim: the game keeps happening while this is held open, and
+    // hiding all of it would make the key a liability.
+    p.rect(x, y, width, height, [0.04, 0.05, 0.07, 0.86]);
+    // A rule under the header, and a 2px accent along the top edge — the same
+    // structural motif the rest of this HUD uses instead of a border all round.
+    p.rect(x, y, width, u * 0.4, [0.42, 0.72, 0.98, 0.9]);
+    p.rect(
+        x,
+        y + header - u * 0.3,
+        width,
+        u * 0.25,
+        [1.0, 1.0, 1.0, 0.18],
+    );
+
+    let pad = u * 3.0;
+    let right = x + width - pad;
+    let head_y = y + u * 2.0;
+    let title = if scores.len() >= 2 {
+        format!("SCORE {} - {}", scores[0], scores[1])
+    } else {
+        "SCOREBOARD".to_string()
+    };
+    p.text(x + pad, head_y, scale, WHITE, &title);
+    p.text_right(right, head_y, scale * 0.8, DIM, "K   D");
+
+    for (i, row) in rows.iter().enumerate() {
+        let ry = y + header + line * i as f32;
+        let color = if row.you {
+            AMBER
+        } else if row.bot {
+            DIM
+        } else {
+            WHITE
+        };
+        let mut name = row.name.to_uppercase();
+        if row.bot {
+            name.push_str(" (BOT)");
+        }
+        // The team stripe: the one piece of colour in the row, and the only
+        // thing that says which side a name is on without spending a column.
+        p.rect(
+            x + pad * 0.4,
+            ry,
+            u * 0.6,
+            7.0 * scale,
+            if row.team == 0 {
+                [0.85, 0.35, 0.25, 0.9]
+            } else {
+                [0.30, 0.55, 0.90, 0.9]
+            },
+        );
+        p.text(x + pad, ry, scale, color, &name);
+        p.text_right(
+            right - text_width("   D", scale * 0.8),
+            ry,
+            scale,
+            color,
+            &row.kills.to_string(),
+        );
+        p.text_right(right, ry, scale, DIM, &row.deaths.to_string());
+    }
 }
 
 /// A name to draw, falling back to the id when the server sent none.
@@ -920,6 +1044,9 @@ mod tests {
             on_ground: true,
             crouching: false,
             playing: true,
+            rtt: None,
+            scoreboard: None,
+            scores: &[],
         }
     }
 
@@ -1064,6 +1191,59 @@ mod tests {
         hud.build(&view(Some(&you)), &mut out);
         assert!(without > 0, "no crosshair in training");
         assert!(out.len() > without, "health and ammo were not drawn");
+    }
+
+    #[test]
+    fn a_held_scoreboard_stays_on_screen_with_a_full_room() {
+        // Same trap as the layout test above: clip space is -1..1 with no
+        // scissor, so a panel sized for four players and handed twelve does not
+        // overflow visibly — it silently draws rows nobody can see.
+        let rows: Vec<ScoreRow> = (0..12)
+            .map(|i| ScoreRow {
+                name: format!("a-very-long-player-name-{i}"),
+                kills: i * 3,
+                deaths: i,
+                team: i % 2,
+                bot: i % 3 == 0,
+                you: i == 4,
+            })
+            .collect();
+        let mut v = view(None);
+        v.scoreboard = Some(&rows);
+        v.scores = &[7, 4];
+        let mut out = Vec::new();
+        Hud::default().build(&v, &mut out);
+        assert!(!out.is_empty());
+        for vert in &out {
+            assert!(
+                vert.position[0] >= -1.001 && vert.position[0] <= 1.001,
+                "x off screen: {:?}",
+                vert.position
+            );
+            assert!(
+                vert.position[1] >= -1.001 && vert.position[1] <= 1.001,
+                "y off screen: {:?}",
+                vert.position
+            );
+        }
+    }
+
+    #[test]
+    fn a_scoreboard_that_was_not_asked_for_is_not_an_empty_one() {
+        // `None` means the key is not held; an empty slice means a match with
+        // nobody in it. Drawing the panel for both would put a scoreboard on
+        // screen permanently.
+        let mut with = Vec::new();
+        let mut v = view(None);
+        v.scoreboard = Some(&[]);
+        Hud::default().build(&v, &mut with);
+
+        let mut without = Vec::new();
+        Hud::default().build(&view(None), &mut without);
+        assert!(
+            with.len() > without.len(),
+            "an empty roster still draws a panel"
+        );
     }
 
     #[test]

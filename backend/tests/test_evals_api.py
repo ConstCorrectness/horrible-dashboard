@@ -303,3 +303,37 @@ def test_an_unknown_field_in_a_case_is_an_error_not_silence(client):
     )
     assert r.status_code == 422
     assert "nonsense" in json.dumps(r.json())
+
+
+def test_targets_offers_ggufs_not_builds(client, tmp_path, monkeypatch):
+    """The picker lists local **models**, managed first.
+
+    It used to list llama.cpp *installs* — builds — each with an empty `model`, so
+    the one target that matters after a fine-tune (the GGUF you just converted) was
+    the one you could not select. Managed sorts first because that is the directory
+    this node writes conversions into.
+    """
+    from backend.modules.llamacpp import catalog
+
+    def _model(name: str, origin: str) -> catalog.ModelFile:
+        return catalog.ModelFile(
+            path=tmp_path / f"{name}.gguf", origin=origin, name=name, size_bytes=4096
+        )
+
+    monkeypatch.setattr(
+        catalog,
+        "list_models",
+        lambda *a, **k: [_model("zzz-from-ollama", "ollama"), _model("my-ft", "managed")],
+    )
+
+    targets = client.get("/api/evals/targets").json()["targets"]
+    local = [t for t in targets if t["source"] == "llamacpp"]
+    assert [t["model"] for t in local] == ["my-ft", "zzz-from-ollama"]
+    # Every one names a real file: the sweep loads the GGUF, and an alias alone
+    # would score whatever the server happened to have open.
+    assert all(t["modelPath"] for t in local)
+    assert all(t["provider"] == "llamacpp" for t in local)
+    # Architecture rides along so the picker can show that the `nomic-bert` in the
+    # same directory is an embedder. Reported, never filtered on: an unparsed
+    # header is not evidence that a model is unusable.
+    assert all("architecture" in t for t in local)

@@ -679,11 +679,33 @@ async def launch_native_client(
         )
         t.start()
 
+        # Which build ran, and how old it is.
+        #
+        # `pick_binary` already takes the newest of the candidates, so this is not
+        # guarding against a stale release being preferred — that trap is closed.
+        # It answers the question that comes *after* editing the client: "is the
+        # window I am looking at the code I just compiled?" Nothing else on this
+        # path says, and the failure it disambiguates is silent by nature — the
+        # game runs perfectly, simply without the change in it.
+        built = "age unknown"
+        try:
+            age = time.time() - Path(bin_path).stat().st_mtime
+            if age < 120:
+                built = "built just now"
+            elif age < 3600:
+                built = f"built {int(age // 60)}m ago"
+            else:
+                built = f"built {age / 3600:.1f}h ago"
+        except OSError:
+            pass
         return LaunchNativeResponse(
             launched=True,
             pid=proc.pid,
             connect_args=connect_args,
-            message=f"Launched native FPS client (PID: {proc.pid})",
+            message=(
+                f"Launched native FPS client (PID: {proc.pid}) "
+                f"from {Path(bin_path).parent.name}/, {built}"
+            ),
         )
     except Exception as exc:
         return LaunchNativeResponse(

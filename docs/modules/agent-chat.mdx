@@ -316,6 +316,7 @@ sessions. Built-ins (`backend/modules/agent/roster.py`):
 | `dba`        | database, symbols                            | database           | session mode  |
 | `researcher` | browser, search, library, github, google, research, arxiv, records | research, library, arxiv | session mode  |
 | `intake`     | records, browser, research, library           | records, research  | session mode  |
+| `trainer`    | training, evals, localtrack, editor, files    | training           | session mode  |
 
 Two of `researcher`'s groups are load-bearing for the workspaces it backs, and both
 were **dead buttons** before: Research and Web Ops dock the Review pane (`records` —
@@ -323,6 +324,14 @@ it could display a proposal but not file one), and Web Ops docks the search pane
 (`search` — the pane's own results were unreachable to the agent beside it). A
 docked pane whose agent lacks the matching group is the failure mode to watch for
 when adding a preset.
+
+`trainer` backs the [fine-tuning workspace](training.mdx#the-fine-tuning-workspace)
+and shows the *other* half of that trap. It scopes to `training`/`evals`/`localtrack`
+and pointedly **not** to `llamacpp` or `hardware`, even though the workspace docks a
+llama.cpp pane: a group is a tool name's prefix (`_group_of`), and those two
+namespaces hold settings keys rather than tools, so naming one would permit nothing
+at all and say nothing about it. Check that a group you list has tools under it, not
+just a module with that name.
 
 There is deliberately **no `crm` agent**. It existed to enrich contacts and deals
 from the open web, which is what `researcher` already does now that it carries

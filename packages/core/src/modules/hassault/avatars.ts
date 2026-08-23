@@ -9,6 +9,7 @@
  */
 import type * as THREE from 'three';
 
+import { currentHitbox } from './hitbox';
 import type { PlayerRow } from './net';
 import { CROUCH_HEIGHT, STANDING_HEIGHT } from './player';
 import { PLAYER_EYE_HEIGHT, PLAYER_RADIUS } from './world';
@@ -31,8 +32,25 @@ const CROUCH_SCALE = CROUCH_HEIGHT / STANDING_HEIGHT;
 /** CLA sand, RVSF blue — AssaultCube's two teams, at a glance. */
 const TEAM_COLORS = [0xd9a441, 0x4c8fd4];
 
+/**
+ * The debug hitbox, and the band inside it that takes the head multiplier.
+ *
+ * Deliberately not team colours: this is a measuring tool, and one that changes
+ * colour depending on who you are looking at is one you cannot compare two
+ * readings with.
+ */
+const HITBOX_COLOR = 0x33f2d9;
+const HEAD_BAND_COLOR = 0xffc740;
+
 interface Avatar {
   group: THREE.Group;
+  dispose: () => void;
+}
+
+interface Hitbox {
+  group: THREE.Group;
+  body: THREE.LineSegments;
+  head: THREE.LineSegments;
   dispose: () => void;
 }
 
@@ -67,11 +85,112 @@ function makeLabelTexture(three: typeof THREE, name: string): THREE.CanvasTextur
  */
 export class AvatarPool {
   private avatars = new Map<string, Avatar>();
+  /**
+   * The debug hitboxes, if they are on.
+   *
+   * A pool of its own rather than a child of each avatar group, and that is
+   * load-bearing: the avatar group is **scaled on Y** to animate a crouch, so a
+   * head band parented to it would be squashed by the same factor and would stop
+   * being the band the server actually uses. These are positioned and sized in
+   * world units per frame instead.
+   */
+  private hitboxes = new Map<string, Hitbox>();
+  private showHitboxes = false;
 
   constructor(
     private readonly three: typeof THREE,
     private readonly scene: THREE.Scene,
   ) {}
+
+  /**
+   * Draw (or stop drawing) the exact volume a shot is resolved against.
+   *
+   * This exists because "is the body drawn where it can be hit?" was a question
+   * with no way to ask it. The failure it catches is invisible in play: you
+   * simply miss slightly more often in some situations than others, and blame
+   * the netcode.
+   */
+  setHitboxes(on: boolean): void {
+    if (this.showHitboxes === on) return;
+    this.showHitboxes = on;
+    if (!on) {
+      for (const box of this.hitboxes.values()) box.dispose();
+      this.hitboxes.clear();
+    }
+  }
+
+  private createHitbox(): Hitbox {
+    const three = this.three;
+    const group = new three.Group();
+    // A unit box scaled per frame, so a crouch is a scale change rather than a
+    // geometry rebuild sixty times a second.
+    const unit = new three.BoxGeometry(1, 1, 1);
+    const edges = new three.EdgesGeometry(unit);
+    // `depthTest` stays on, like the nameplates: a hitbox visible through a wall
+    // is a wall hack, whatever it is labelled. The honest picture is a box that
+    // the wall hides, which is also the picture that tells you about cover.
+    const bodyMat = new three.LineBasicMaterial({ color: HITBOX_COLOR });
+    const headMat = new three.LineBasicMaterial({ color: HEAD_BAND_COLOR });
+    const body = new three.LineSegments(edges, bodyMat);
+    const head = new three.LineSegments(edges, headMat);
+    group.add(body);
+    group.add(head);
+    this.scene.add(group);
+    return {
+      group,
+      body,
+      head,
+      dispose: () => {
+        this.scene.remove(group);
+        unit.dispose();
+        edges.dispose();
+        bodyMat.dispose();
+        headMat.dispose();
+      },
+    };
+  }
+
+  /**
+   * Put each hitbox where the server would rewind a shot to.
+   *
+   * Every number here comes from `currentHitbox()` — the spec the server pushed
+   * in at join time — and none of them is recomputed locally. A debug overlay
+   * drawn from a second copy of the numbers would agree with itself and with
+   * nothing else, which is the exact failure it is meant to detect.
+   */
+  private syncHitboxes(rows: PlayerRow[], seen: Set<string>): void {
+    const spec = currentHitbox();
+    // A shape this renderer does not know how to draw. Drawing a box for it
+    // would be a confident picture of the wrong body.
+    const drawable = spec.shape === 'cylinder';
+    for (const row of rows) {
+      if (!drawable || row.alive === false) continue;
+      let box = this.hitboxes.get(row.id);
+      if (!box) {
+        box = this.createHitbox();
+        this.hitboxes.set(row.id, box);
+      }
+      const crouch = row.crouch ?? 0;
+      const height = spec.standingHeight + (spec.crouchHeight - spec.standingHeight) * crouch;
+      const width = spec.radius * 2;
+      // Cube (x, y, height) → three (x, height, z), the same mapping the avatar
+      // group uses. The box is centred, so it sits half a height above the feet.
+      box.group.position.set(row.x, row.z, row.y);
+      box.body.scale.set(width, height, width);
+      box.body.position.y = height / 2;
+      // Measured **down from the top**, so it follows a crouch instead of
+      // floating above it — which is why the server defines it that way, and
+      // the one thing about a hitbox worth being able to see.
+      const band = Math.min(spec.headBand, height);
+      box.head.scale.set(width, band, width);
+      box.head.position.y = height - band / 2;
+    }
+    for (const [id, box] of this.hitboxes) {
+      if (seen.has(id)) continue;
+      box.dispose();
+      this.hitboxes.delete(id);
+    }
+  }
 
   private create(row: PlayerRow): Avatar {
     const three = this.three;
@@ -164,11 +283,14 @@ export class AvatarPool {
       avatar.dispose();
       this.avatars.delete(id);
     }
+    if (this.showHitboxes) this.syncHitboxes(rows, seen);
   }
 
   dispose(): void {
     for (const avatar of this.avatars.values()) avatar.dispose();
     this.avatars.clear();
+    for (const box of this.hitboxes.values()) box.dispose();
+    this.hitboxes.clear();
   }
 
   get size(): number {

@@ -120,7 +120,21 @@ export class SessionStore {
   }
 
   onError(message: string, code?: string): void {
-    this.set({ error: message, errorCode: code ?? null });
+    // An error before `opened` ever arrived is the **open** failing, and the kernel
+    // status has to go with it: it starts at `starting` and only `opened` or a
+    // `kernel_status` event ever moved it, so a failed open left the badge reading
+    // "● starting" *beside* the error — a pane claiming to be coming up and
+    // explaining why it didn't, at the same time.
+    //
+    // Scoped to that case on purpose. The same `error` event also carries recoverable
+    // ones on a live session (a rejected `cells` op), and calling the kernel dead for
+    // those would be its own lie.
+    const openFailed = this.state.sessionKey === null;
+    this.set({
+      error: message,
+      errorCode: code ?? null,
+      ...(openFailed ? { kernel: 'dead' as const } : {}),
+    });
   }
 
   // --- local mutations (optimistic; backend doc is authoritative) -----------

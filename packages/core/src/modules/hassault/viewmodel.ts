@@ -246,6 +246,32 @@ interface Built extends Shape {
  * `setWeapon` is idempotent, so the render loop can call it every frame with
  * whatever the server last said we are holding and only pay for real changes.
  */
+/**
+ * How long one inspect takes, in seconds.
+ *
+ * Long enough to read the weapon, short enough to be over before it costs a
+ * gunfight — and it is interruptible anyway, so this is a maximum rather than a
+ * commitment. Shared with the native client's `INSPECT_DURATION`, which runs the
+ * same pose: the two clients drawing the same weapon differently is the drift
+ * this module's shape exists to avoid.
+ */
+export const INSPECT_DURATION = 1.35;
+
+/**
+ * The inspect pose's weight over its own duration: ease in, hold, ease out.
+ *
+ * Smoothstepped at both ends rather than linear. A linear ramp reverses
+ * direction instantly at the hold, which reads as the animation being cut off
+ * and restarted — the one thing a "look at this weapon" flourish must not do.
+ */
+export function inspectEnvelope(t: number): number {
+  const RISE = 0.28;
+  const FALL = 0.42;
+  const out = INSPECT_DURATION - FALL;
+  const x = clamp(t < RISE ? t / RISE : t > out ? 1 - (t - out) / FALL : 1, 0, 1);
+  return x * x * (3 - 2 * x);
+}
+
 export class WeaponViewModel {
   /** The pivot everything hangs off: animation moves this, never the model. */
   private readonly pivot: THREE.Group;
@@ -269,6 +295,14 @@ export class WeaponViewModel {
   /** Smoothed walk factor: the *input* is a step function, and a bob that snaps
    * to full amplitude on the frame W goes down looks like a glitch, not a stride. */
   private walk = 0;
+  /**
+   * Seconds into the inspect animation, or `null` when it is not running.
+   *
+   * A *duration* rather than a flag plus a separate clock: the pose is a
+   * function of how far in it is, and every frame of it — including the fact
+   * that it has finished — falls out of one number.
+   */
+  private inspectT: number | null = null;
 
   // Built with the model rather than shared, because they now carry the skin:
   // two weapons in one match are two different guns, and a material shared
@@ -352,6 +386,32 @@ export class WeaponViewModel {
     // shake, not to a weapon behind the player's ear.
     this.kick = Math.min(1, this.kick + 0.8);
     this.flashAge = 0;
+    // Firing cancels an inspect, and has to: the pose swings the barrel away
+    // from the crosshair, so a shot fired mid-animation would be drawn leaving a
+    // weapon pointed at the floor. The server resolved it against the real view
+    // angles, which is what the crosshair is still showing.
+    this.inspectT = null;
+  }
+
+  /**
+   * Start the inspect animation — the weapon turned over in the hands.
+   *
+   * Purely cosmetic and purely local, the same concession client-side recoil
+   * makes: it changes nothing about where a shot goes or what anyone else sees,
+   * which is exactly what makes it safe to interrupt on any frame. That in turn
+   * is what makes it usable in a match rather than a state you have to wait out.
+   *
+   * Pressing again while it runs restarts it rather than queueing a second pass:
+   * the key means "show me the gun", and it should answer every press.
+   */
+  inspect(): void {
+    if (this.built) this.inspectT = 0;
+  }
+
+  /** Whether the animation is running, so the HUD can name what the weapon is
+   * doing instead of the player wondering why it moved. */
+  get inspecting(): boolean {
+    return this.inspectT !== null;
   }
 
   /**
@@ -369,6 +429,9 @@ export class WeaponViewModel {
       this.bobPhase = 0;
       this.lastYaw = null;
       this.walk = 0;
+      // Dying mid-inspect must not resume it on respawn: the animation is
+      // something you asked for, not a state of the weapon.
+      this.inspectT = null;
       return;
     }
 
@@ -393,19 +456,40 @@ export class WeaponViewModel {
     const reloadTarget = frame.reloading ? 1 : 0;
     this.reloadT += (reloadTarget - this.reloadT) * Math.min(1, dt * RELOAD_RATE);
 
+    // A reload takes the weapon away for an animation of its own, and two poses
+    // fighting over one pivot is a weapon that looks broken. The reload wins,
+    // because it is the one the *server* is actually doing.
+    if (frame.reloading) this.inspectT = null;
+    // Advanced before it is read, so the frame it completes on is the frame the
+    // weapon is back at rest rather than one after.
+    let inspect = 0;
+    if (this.inspectT !== null) {
+      const t = this.inspectT + dt;
+      if (t >= INSPECT_DURATION) {
+        this.inspectT = null;
+      } else {
+        this.inspectT = t;
+        inspect = inspectEnvelope(t);
+      }
+    }
+
     const bobX = Math.cos(this.bobPhase * 0.5) * 0.05 * bobAmount;
     const bobY = Math.abs(Math.sin(this.bobPhase)) * -0.055 * bobAmount;
 
+    // Where the inspect pose takes the weapon: in towards the centre of the
+    // screen, up, and rolled most of the way over so the side of the receiver —
+    // which is where a skin's pattern lives — faces the camera. A pose that only
+    // lifted the gun would show the face it already shows.
     this.pivot.position.set(
-      HOME.x + bobX + this.swayX,
-      HOME.y + bobY + this.swayY - this.reloadT * 0.55,
+      HOME.x + bobX + this.swayX - inspect * 0.3,
+      HOME.y + bobY + this.swayY - this.reloadT * 0.55 + inspect * 0.16,
       // Recoil is mostly backwards: a gun that only rotates looks hinged.
-      HOME.z + this.kick * 0.28,
+      HOME.z + this.kick * 0.28 + inspect * 0.2,
     );
     this.pivot.rotation.set(
-      this.kick * -0.16 + this.reloadT * 0.7 + bobY * 0.4,
-      this.swayX * 0.7 + this.reloadT * 0.25,
-      this.swayX * 0.5 + bobX * 0.6,
+      this.kick * -0.16 + this.reloadT * 0.7 + bobY * 0.4 + inspect * 0.34,
+      this.swayX * 0.7 + this.reloadT * 0.25 - inspect * 0.95,
+      this.swayX * 0.5 + bobX * 0.6 + inspect * 2.15,
     );
 
     if (this.flash) {

@@ -263,6 +263,31 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    // The body every hit is resolved against. Fetched rather than held, for the
+    // reason `HitboxSpec` gives: the local copy this replaced drew a crouched
+    // player four percent shorter than the server could hit them, all of it at
+    // the top, which is where the head band is.
+    //
+    // A node that cannot answer falls back to the shipped body and says so. That
+    // is wrong only if somebody has tuned the hitbox; drawing against nothing is
+    // wrong always.
+    let hitbox = match node.hitbox() {
+        Ok(spec) => {
+            eprintln!("hassault: hitbox {} ({})", spec.spec_id, spec.shape);
+            if !spec.drawable() {
+                eprintln!(
+                    "hassault: warning — this build cannot draw a '{}' body; nobody will be drawn",
+                    spec.shape
+                );
+            }
+            spec
+        }
+        Err(e) => {
+            eprintln!("hassault: warning — no hitbox served ({e}); using the shipped body");
+            Default::default()
+        }
+    };
+
     // The armoury, which is cosmetic by definition: a node that cannot answer
     // gets a weapon in its default colours, never a refusal to play.
     let skins = match node.skins() {
@@ -296,7 +321,7 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             args.map
         );
         let event_loop = EventLoop::new()?;
-        let mut app = App::new(world, mesh, None, settings, writer, weapons, skins);
+        let mut app = App::new(world, mesh, None, settings, writer, weapons, skins, hitbox);
         event_loop.run_app(&mut app)?;
         return Ok(());
     }
@@ -326,7 +351,16 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let event_loop = EventLoop::new()?;
-    let mut app = App::new(world, mesh, Some(socket), settings, writer, weapons, skins);
+    let mut app = App::new(
+        world,
+        mesh,
+        Some(socket),
+        settings,
+        writer,
+        weapons,
+        skins,
+        hitbox,
+    );
     if args.mode == Mode::Host {
         // Queued, not sent: `add_bot` needs the room the welcome names, and it is
         // host-only on the channel — which is why the launcher only ever sends a
@@ -375,6 +409,9 @@ fn run_headless(socket: &mut MatchSocket) -> Result<(), Box<dyn std::error::Erro
                     }
                     return Ok(());
                 }
+                // Headless never pings, so this only arrives if something else
+                // on the socket did. Nothing to report.
+                Incoming::Event(Event::Pong(_)) => {}
                 Incoming::Event(Event::Other(name)) => eprintln!("hassault: (ignored {name})"),
                 Incoming::Closed(why) => {
                     eprintln!("hassault: connection closed: {why}");

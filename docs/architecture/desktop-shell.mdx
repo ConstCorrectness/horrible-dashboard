@@ -173,7 +173,7 @@ the same kind of thing to the desktop, and a plugin should be able to add one.
 | `aurora` | **The default.** Three blurred CSS gradients drifting on a long keyframe, built from theme tokens.                  |
 | `grid`   | Canvas: a drifting grid with a scanline sweep. Pairs with `hud`.                                                    |
 | `image`  | A wallpaper the user uploaded. `params: { url, fit, dim }`.                                                         |
-| `splash` | The old home screen — avatar, ask bar, connector tiles — with windows over the top.                                 |
+| `splash` | The old home screen — avatar, ask bar, connector tiles — with windows over the top. Collapses to a docked ask bar; see below. |
 | `pulse`  | Canvas: one ripple per request through this node, read from the same `telemetryStore` the observability panel uses. |
 | `board`  | Widgets laid straight onto the desktop.                                                                             |
 
@@ -194,6 +194,40 @@ wallpaper is not a reason to lose the windows on top of it.
 The switch commands (`desktop.backdrop:<id>`) are **synthesized by the registry**,
 one per registered provider, exactly as the pane openers are — so a plugin's
 backdrop gets its command without a second list that can fall out of step.
+
+### The home screen minimizes
+
+`splash` was the one surface in the app with no way to get it out of the way. It
+is a backdrop, so it has no title bar to hang a control on and no taskbar button
+to restore it from, and it is `interactive`, so it takes pointer events across the
+whole desktop. The only escape was knowing that the desktop's right-click menu can
+swap the backdrop entirely — which is also the wrong verb: swapping throws the ask
+bar away in order to hide the greeting.
+
+So it collapses instead, to a strip at the bottom holding the ask bar and nothing
+else. Everything the collapse drops is *landing screen* — a greeting and an avatar
+are worth seeing when you arrive and worth nothing when you are working over the
+top of them — and the ask bar is the reason to keep the surface at all.
+
+The flag lives in the **backdrop's own `params`** (`{ collapsed: true }`), so it is
+per-desktop and persisted with the rest of the layout: a desktop you work in stays
+collapsed and one you land on stays open, with no global setting for the two to
+disagree about. `setHomeCollapsed` merges into the existing params rather than
+replacing them, because `setBackdrop` takes a whole `BackdropRef`.
+
+Three ways in, because a control nobody finds is a control that does not exist: a
+**Minimize** button on the home column itself, `desktop.toggleHome` in the command
+palette, and an entry in the desktop's right-click menu — which appears **only on a
+desktop actually showing the home screen**, since an item that silently switched
+you to the home screen in order to collapse it would be a trap.
+
+:::warning The collapsed surface must stop eating clicks
+`splash` is registered `interactive`, so its layer takes pointer events over the
+entire desktop. That is right when the home screen fills it and completely wrong
+when it is a strip: the desktop underneath would stop responding while *looking*
+like it should. `.os-backdrop-splash[data-collapsed]` is `pointer-events: none`
+and only the strip and its answer panel take clicks back.
+:::
 
 ### Canvas backdrops
 

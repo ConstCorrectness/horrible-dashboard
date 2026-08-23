@@ -37,8 +37,18 @@ export function Desktop() {
     // backdrop's content — a board widget, the ask bar — belongs to that
     // content, and swallowing it would take away the browser's own menu on a
     // text field for no gain.
+    // `os-desktop-backdrop` counts as empty desktop, and only ever becomes the
+    // target for an *interactive* backdrop whose own content declined the
+    // pointer — the collapsed home screen, which is `pointer-events: none`
+    // everywhere except its strip. Without it, collapsing the home screen leaves
+    // most of the desktop with no right-click menu at all, including the item
+    // that brings it back.
     const target = e.target as HTMLElement;
-    if (target !== e.currentTarget && !target.classList.contains('os-desktop-surface')) return;
+    const empty =
+      target === e.currentTarget ||
+      target.classList.contains('os-desktop-surface') ||
+      target.classList.contains('os-desktop-backdrop');
+    if (!empty) return;
     if (openContextMenu(e, { kind: 'desktop' })) e.preventDefault();
   }, []);
 

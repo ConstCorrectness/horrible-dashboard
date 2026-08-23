@@ -184,6 +184,78 @@ pub struct WeaponSpec {
     pub zoom_levels: Vec<f32>,
 }
 
+/// The body a shot is resolved against, as `GET /api/hassault/hitbox` serves it.
+///
+/// **Fetched, never held locally.** This client used to draw bodies from three
+/// constants in `world.rs` and a fourth (`CROUCH_SCALE`) in `bodies.rs`, and the
+/// fourth was wrong: it was 0.75, which is the scale applied to the *eye*, while
+/// a crouched body's total height is `(eye × 0.75 + above_eye) / standing` —
+/// 0.784. Four percent, and it is four percent at the top of the body, which is
+/// where the head band is. Aiming at the drawn head of a crouching player and
+/// missing is exactly what a client-owned copy of a served number buys you.
+///
+/// Every derived value is served computed for the same reason: two
+/// implementations of `crouch_height` is two chances to round it differently.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HitboxSpec {
+    /// Content hash of the hit-deciding dimensions. Shown in the debug overlay,
+    /// so what is being drawn can be checked against what the server simulates.
+    #[serde(rename = "specId", default)]
+    pub spec_id: String,
+    /// Only `cylinder` exists today. Carried so this client can decline to draw
+    /// a shape it does not understand rather than drawing the wrong one.
+    #[serde(default)]
+    pub shape: String,
+    #[serde(default)]
+    pub radius: f32,
+    #[serde(rename = "eyeHeight", default)]
+    pub eye_height: f32,
+    #[serde(rename = "aboveEye", default)]
+    pub above_eye: f32,
+    #[serde(rename = "standingHeight", default)]
+    pub standing_height: f32,
+    #[serde(rename = "crouchHeight", default)]
+    pub crouch_height: f32,
+    /// Top band of the body that takes the weapon's head multiplier. Drawn as a
+    /// separate ring in the debug overlay — it is the one part of a hitbox worth
+    /// being able to see, because it is the only part that changes the damage.
+    #[serde(rename = "headBand", default)]
+    pub head_band: f32,
+}
+
+impl Default for HitboxSpec {
+    /// AssaultCube's `entity.h` defaults — the same numbers `hitbox.py` ships.
+    ///
+    /// Used only when the route could not be reached. Drawing against the
+    /// shipped body is wrong only if somebody has tuned it; drawing against
+    /// nothing does not work at all.
+    fn default() -> HitboxSpec {
+        HitboxSpec {
+            spec_id: String::new(),
+            shape: "cylinder".into(),
+            radius: 1.1,
+            eye_height: 4.5,
+            above_eye: 0.7,
+            standing_height: 5.2,
+            crouch_height: 4.075,
+            head_band: 1.0,
+        }
+    }
+}
+
+impl HitboxSpec {
+    /// Body height at a crouch fraction of 0..1 — the server's `height_at`.
+    pub fn height_at(&self, crouch: f32) -> f32 {
+        self.standing_height + (self.crouch_height - self.standing_height) * crouch.clamp(0.0, 1.0)
+    }
+
+    /// Whether this is a shape this client knows how to draw. A body drawn as
+    /// the wrong shape is worse than one not drawn: it teaches an aim.
+    pub fn drawable(&self) -> bool {
+        self.shape == "cylinder"
+    }
+}
+
 /// One skin definition, as `skins.py` serves it.
 ///
 /// Trimmed to what a weapon made of boxes can express: two colours and a layout.
@@ -312,6 +384,13 @@ impl NodeApi {
             Err(ureq::Error::Status(code, _)) => Err(ApiError::Status(code, key.to_string())),
             Err(e) => Err(ApiError::Http(e.to_string())),
         }
+    }
+
+    /// The served body. See `HitboxSpec`.
+    pub fn hitbox(&self) -> Result<HitboxSpec, ApiError> {
+        self.get("/api/hassault/hitbox")?
+            .into_json()
+            .map_err(|e| ApiError::Decode(e.to_string()))
     }
 
     pub fn weapons(&self) -> Result<Vec<WeaponSpec>, ApiError> {

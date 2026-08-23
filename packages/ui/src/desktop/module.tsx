@@ -33,6 +33,7 @@ import {
 } from '@horrible/core';
 
 import { BUILTIN_BACKDROPS } from './backdrops';
+import { isHomeCollapsed, SPLASH_BACKDROP_ID, toggleHomeCollapsed } from './backdrops/Splash';
 
 /** The four directions, in the order the frame's own bindings use. */
 const NAVS = ['left', 'right', 'up', 'down'] as const;
@@ -78,6 +79,14 @@ export const desktopModule: ModuleManifest = {
       id: 'desktop.floating',
       title: 'Desktop: Convert this desktop to floating windows — sizes are not preserved',
       run: () => void setDesktopMode('floating'),
+    },
+    {
+      // The home screen is a backdrop, so `window.minimize` cannot see it: that
+      // command walks the window list, and the one surface people most want out
+      // of the way is not in it.
+      id: 'desktop.toggleHome',
+      title: 'Desktop: Minimize / restore the home screen',
+      run: () => void toggleHomeCollapsed(),
     },
     {
       id: 'desktop.cascade',
@@ -408,6 +417,19 @@ function desktopMenuItems(): ContextMenuItem[] {
   const hasWindows = frame.windows.length > 0;
   return [
     { id: 'desktop.backdrop', label: 'Backdrop', run: () => {}, submenu: backdropMenuItems() },
+    // Only on a desktop actually showing the home screen. On any other backdrop
+    // there is nothing to minimize, and an item that silently switches you to
+    // the home screen in order to collapse it would be a trap.
+    ...(frame.backdrop.id === SPLASH_BACKDROP_ID
+      ? [
+          {
+            id: 'desktop.toggleHome',
+            label: isHomeCollapsed() ? 'Show the home screen' : 'Minimize the home screen',
+            detail: 'Leaves the ask bar docked at the bottom',
+            run: () => void toggleHomeCollapsed(),
+          },
+        ]
+      : []),
     // The whole item is dropped, not disabled and not left as an empty submenu,
     // when there are no windows: there is no state in which "arrange nothing"
     // becomes meaningful from here, and a parent whose submenu is dropped is a

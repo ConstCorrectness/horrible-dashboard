@@ -13,7 +13,7 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 
-import { equippedSkins, WeaponViewModel } from '../viewmodel';
+import { equippedSkins, INSPECT_DURATION, inspectEnvelope, WeaponViewModel } from '../viewmodel';
 
 function item(
   weaponId: string,
@@ -175,5 +175,81 @@ describe('WeaponViewModel skins', () => {
     const hexes = colors(vm, camera);
     expect(hexes.length).toBeGreaterThan(0);
     expect(hexes.every((hex) => Number.isInteger(hex) && hex >= 0)).toBe(true);
+  });
+});
+
+describe('inspect', () => {
+  const frame = {
+    speed: 0,
+    onGround: true,
+    reloading: false,
+    yaw: 0,
+    pitch: 0,
+    visible: true,
+  };
+
+  it('runs for its duration and then stops on its own', () => {
+    const { vm } = stand();
+    vm.setWeapon('assault');
+    expect(vm.inspecting).toBe(false);
+    vm.inspect();
+    expect(vm.inspecting).toBe(true);
+    // Just short of the end it is still running…
+    for (let t = 0; t < INSPECT_DURATION - 0.1; t += 0.05) vm.update(0.05, frame);
+    expect(vm.inspecting).toBe(true);
+    // …and past it, it has put itself away. A pose that needed cancelling would
+    // be one you could get stuck in.
+    for (let t = 0; t < 0.3; t += 0.05) vm.update(0.05, frame);
+    expect(vm.inspecting).toBe(false);
+  });
+
+  it('is cancelled by firing', () => {
+    // The pose swings the barrel away from the crosshair, so a shot drawn
+    // mid-animation leaves a weapon pointing at the floor — a picture of a shot
+    // that did not happen, since the server resolved it against the real angles.
+    const { vm } = stand();
+    vm.setWeapon('assault');
+    vm.inspect();
+    vm.fire();
+    expect(vm.inspecting).toBe(false);
+  });
+
+  it('is cancelled by a reload, which is the animation the server is doing', () => {
+    const { vm } = stand();
+    vm.setWeapon('assault');
+    vm.inspect();
+    vm.update(0.05, { ...frame, reloading: true });
+    expect(vm.inspecting).toBe(false);
+  });
+
+  it('does not resume after a death', () => {
+    const { vm } = stand();
+    vm.setWeapon('assault');
+    vm.inspect();
+    vm.update(0.05, { ...frame, visible: false });
+    expect(vm.inspecting).toBe(false);
+  });
+
+  it('never starts without a weapon to look at', () => {
+    const { vm } = stand();
+    vm.inspect();
+    expect(vm.inspecting).toBe(false);
+  });
+
+  it('has an envelope that starts and ends at rest', () => {
+    // Both ends matter: a pose that does not start at zero snaps into place on
+    // the first frame, and one that does not end at zero leaves the weapon a few
+    // degrees off home for the rest of the match.
+    expect(inspectEnvelope(0)).toBeCloseTo(0, 5);
+    expect(inspectEnvelope(INSPECT_DURATION)).toBeCloseTo(0, 5);
+    expect(inspectEnvelope(INSPECT_DURATION / 2)).toBeCloseTo(1, 5);
+  });
+
+  it('never leaves its envelope, so the weapon cannot be flung off screen', () => {
+    for (let t = -0.5; t < INSPECT_DURATION + 0.5; t += 0.01) {
+      const w = inspectEnvelope(t);
+      expect(w).toBeGreaterThanOrEqual(0);
+      expect(w).toBeLessThanOrEqual(1);
+    }
   });
 });

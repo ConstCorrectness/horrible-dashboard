@@ -7,6 +7,20 @@ export {
 } from './capabilities';
 export { ApiError, apiDelete, apiGet, apiPost, apiPut } from './api';
 export { CopyableLink } from './CopyableLink';
+/** The shared list-row design system. See DataList.tsx — modules compose rows
+ * from these rather than styling their own, so "a record with a verdict and
+ * some figures" looks the same everywhere it appears. */
+export {
+  DataList,
+  DataRow,
+  PickRow,
+  RollingNumber,
+  RowMark,
+  STAGGER_CAP,
+  staggerIndex,
+  type DataRowProps,
+  type RowKind,
+} from './DataList';
 export {
   installExternalLinkBridge,
   isDesktopShell,

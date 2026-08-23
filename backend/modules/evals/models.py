@@ -277,6 +277,11 @@ class RunTarget(BaseModel):
     provider: str = ""
     endpoint: str = ""
     model: str
+    #: For `llamacpp`: the GGUF this target scores. The server holds one model at a
+    #: time, so naming the *file* rather than an alias is what lets a sweep load the
+    #: right weights — and it is the whole of "eval the checkpoint I just converted",
+    #: which used to be unexpressible because the picker offered builds, not models.
+    model_path: str = ""
     #: What the scoreboard column is called. Defaults to the model name; set it
     #: when you are comparing a base against its own fine-tune, where the model
     #: names are unhelpfully similar.

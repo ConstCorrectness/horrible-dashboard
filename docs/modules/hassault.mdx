@@ -2331,6 +2331,286 @@ fog, which is the more visible difference anyway. The support list is not the
 guarantee.
 :::
 
+### What "the netcode feels laggy" actually was
+
+Four separate faults, none of them in the protocol, and all four with the same
+symptom: bodies snapping about, shots that should have landed not landing, and
+your own player being pulled backwards. Worth writing down together, because
+"rubber-banding" is a symptom people diagnose as one thing.
+
+**1. The native client did not interpolate remote players at all.** It drew
+`self.players` — the newest snapshot — verbatim. The server broadcasts at 20 Hz,
+so every other player in the match moved in fifty-millisecond jumps, with
+ordinary jitter landing on top of those jumps and pushing bodies backwards and
+forwards around where they really were. The browser client has had
+`SnapshotBuffer` since the beginning; the native one never got the port.
+
+`interp.rs` is that port, deliberately field-for-field with
+`packages/core/src/modules/hassault/net.ts`. Bodies are drawn
+`INTERP_DELAY_MS` (100 ms, two snapshot intervals) **in the past**, between two
+snapshots that have both already arrived — so the position shown is an
+interpolation rather than an extrapolation. Past the newest snapshot it **holds**
+rather than guessing: a brief freeze is honest, and a guess is a body drawn where
+nobody is and at worst inside a wall.
+
+The clock is the subtle part, and the tests pin it. Server `t` and this process's
+clock are unrelated, so rather than synchronising them the buffer tracks the
+**smallest** `local_arrival − server_t` ever seen. The minimum is the sample that
+queued least — the best estimate available without a clock-sync protocol, and,
+more importantly, *stable*. An average would wander with the network and drag
+every body on screen with it.
+
+:::warning A monotonic clock, not a wall clock
+`App::clock_ms` is process-relative. The *base* is arbitrary — the buffer only
+ever differences it against the server's stamp — but it must not step, which is
+exactly what a wall clock does when NTP corrects it. A jump there moves every
+interpolated body at once and puts a `viewT` on the wire pointing at a moment the
+server's position history never covered.
+:::
+
+**2. The native client never sent `viewT`.** The field existed on `Command` and
+was never set, so every shot from the native client was resolved against the
+target's *current* server position while the client was rendering that target
+100 ms in the past. Hitting a moving player meant leading them by a body width,
+for no reason the player could see. It is now stamped from
+`SnapshotBuffer::render_time` — the same number the browser sends — and left
+**absent** before the first snapshot rather than defaulted, because a fabricated
+render time asks the server to rewind to a moment that never existed.
+
+**3. The native client flushed the socket every frame.** It runs deliberately
+without a frame cap, so that was several hundred WebSocket text frames a second
+per player, each a JSON parse on the backend's single event loop — the same loop
+running the 20 Hz match tick for everybody in the room. The tick slipped,
+snapshots arrived in lumps, and the prediction was corrected in lumps: rubber
+banding produced entirely by the client's own send rate. `flush` now rate-limits
+itself to `SEND_INTERVAL` (33 ms, the browser's `SEND_INTERVAL_MS`), which costs
+nothing — a command carries its own `dt` and sequence number, so a batch of eight
+is exactly as simulable as eight messages of one.
+
+**4. The server dropped overflowed commands silently.** `MatchRoom.enqueue`
+bounds the queue at `MAX_QUEUED_COMMANDS` and drops the oldest, which is right.
+But `ack` only moves when a command is *simulated*, so a dropped command was
+never acknowledged — and the client replays every unacknowledged command on top
+of each correction. Its prediction then sat permanently ahead of the server, which
+is precisely what the bound exists to prevent. The drop now advances `ack` past
+the discarded command: "this one is not coming back." Monotonic by construction,
+since the dropped sequence is lower than anything still queued behind it.
+
+**5. Input was produced per frame, and `dt` had a floor.** The two remaining
+halves of the same mistake, and both were silent.
+
+`send_input` clamped the frame time with `dt.clamp(0.001, MAX_DT)`. That lower
+bound is the problem: this client runs uncapped on purpose (`Immediate` present
+mode, `hassault.video.vsync` off by default), so `about_to_wait` iterates
+thousands of times a second and *every* iteration shorter than a millisecond
+claimed a millisecond. At 4000 iterations a second the client asked the server to
+simulate **four seconds for every real one**. The server spends client-supplied
+`dt` from a budget replenishing at 1.1× real time, so it granted a fraction of
+what the client had already predicted; the prediction sat permanently ahead and every snapshot
+dragged it back. Reported — reasonably — as "I hold forward and can't move", which
+is what a constant backward correction feels like from inside.
+
+Compounding it, `flush` carries at most `MAX_COMMANDS_PER_MESSAGE` (64) per 33 ms
+window, so above ~1940 iterations a second the surplus was trimmed *after*
+`push_command` had numbered it and `Prediction::predict` had already moved the
+body on it. The client was walking on commands the server would never see.
+
+**Input is now produced on its own clock** (`INPUT_HZ`, 250 Hz), with the real
+elapsed time banked in `input_accum` between commands. The sum of the `dt`s on the
+wire is therefore exactly the wall-clock time that passed, however fast the loop
+spins, and a flush window carries 8.25 commands rather than 132. 250 Hz is above
+any display refresh rate and the mouse is unaffected — `look` still runs per
+device event, so aim keeps the full input rate the client exists to deliver. The
+`MAX_DT` upper clamp stays: a stall longer than that is time the server would
+refuse anyway, and banking it would spend the next second paying it back.
+
+Four cases in `app::tests` pin it, and all four fail against the old code: the
+claimed time for one real second at 60 / 144 / 500 / 1000 / 4000 / 20 000 fps
+(4.000 s at 4000 before), a mixed-rate loop where bursts must contribute the
+microseconds they actually took, the per-flush command count against the 64 cap
+(132 before), and that a loop slower than `INPUT_HZ` still sends one command per
+frame — the accumulator refuses to round time up, it never withholds time that has
+passed. `flush` also says so now if the backlog ever overflows again, once rather
+than per flush.
+
+**6. The native client reconciled onto its own momentum.** The one that survived
+everything above, and the one that made a *match* feel elastic while Train felt
+perfect — Train never reconciles, so it could not show.
+
+`Prediction::reconcile` built its replay base as the server's position with
+`..self.settled` for everything else, on the stated reasoning that "the snapshot
+sends a position but not a velocity". It sends both.
+`MatchPlayer.private_view` has carried a `move` block — velocity, time in air,
+crouch, `crouchedInAir`, `sinceLanded` — since movement became velocity-based, and
+the browser's `reconcile` has read it since. The native client never parsed it.
+
+That is not a small drift. Movement here is a velocity integrated against AC's
+friction constants, so **the velocity is the state**: a position alone does not
+describe a body that is still sliding. Replaying the unacknowledged tail on the
+client's own velocity re-runs the exact number the correction exists to fix, so
+the error compounds instead of settling — the prediction runs away, the next
+snapshot drags it back, twenty times a second. Measured in
+`prediction::tests`, with a ten-command tail and a server reporting a body at
+rest: the replay lands **3.66 cubes** past the acknowledged position instead of
+**1.82**. Just under `SNAP_DISTANCE`, so it is *eased* rather than snapped, which
+is what makes it read as an elastic pull rather than as a teleport.
+
+The same call also passed `on_ground: false` unconditionally, with a comment
+saying the support state is not on the wire. It is — `ground` is on the shared
+row and the browser reads it. A replay that starts airborne converges on the wish
+direction at `AIR_RESPONSE` rather than `GROUND_RESPONSE` (five times slower),
+takes a frame of gravity, and refuses a jump.
+
+Both are now read off the snapshot. A server too old to send the `move` block
+leaves the predicted momentum alone — the best guess available, rather than a
+lie.
+
+:::warning `sinceLanded` is a duration, not a timestamp
+The client's simulated clock and the server's are unrelated, so only "how long
+ago" transfers. It is converted against the client's own `t` as it is applied;
+adopting the server's timestamp would open the chain-jump window at an arbitrary
+moment.
+:::
+
+**7. The native client sent its view angles in degrees.** The one underneath all
+of the above, and the reason a match felt wrong in a way Train never did.
+
+The wire carries yaw and pitch in **radians**. Nothing declares that, and nothing
+can check it: the server assigns `player.state.yaw = command.yaw` and takes its
+sine, so there is no range to validate and no value that looks wrong. The browser
+sends `player.yaw` straight off the physics state, which is radians, so the
+convention was only ever recorded in the two clients that agreed with it.
+
+`camera.rs` works in **degrees** — reasonably, it is a view. Every seam in
+`app.rs` converted at the boundary: `place_offline`, `try_fire`, the respawn
+reset, and the `prediction.predict` call. The line that built the outgoing
+command did not. So the server received a heading of 315 and read it as 315
+radians — 48 degrees — and walked the body away from where the player was aiming:
+
+| camera yaw | client predicts | server actually walks | error |
+| --- | --- | --- | --- |
+| 0° | 0° | 0.0° | +0.0° |
+| 45° | 45° | 58.3° | +13.3° |
+| 90° | 90° | 116.6° | +26.6° |
+| 180° | 180° | 233.2° | +53.2° |
+| 315° | 315° | 48.2° | **+93.2°** |
+
+Past 90° the forward key carries a backward component, which is why it presented
+as "sometimes W goes backwards" rather than as a units bug. Below that it is a
+slide — you travel at an angle to your aim, the snapshot corrects you onto the
+server's path, and you are pulled sideways twenty times a second.
+
+Three things hid it. The error is **exactly zero at yaw 0**, and every test in the
+crate aims along +x. **Train sends no command at all** — it steps the physics
+directly off `to_radians()` — so the one mode with no server was the one mode with
+the conversion right, which pointed the investigation at the netcode. And the
+shared conformance fixture cannot see it: `physics-vectors.json` pins the
+simulation, and this was never a disagreement about the simulation.
+
+The fix is structural rather than a third `to_radians()`: `App::view_angles`
+returns the angles in the simulation's units, and the command and the prediction
+both read that one expression. Two sites eighteen lines apart that had to agree
+are now one site. `walking_forward_goes_where_the_camera_points` replays eight
+headings and asserts the bearing travelled is the bearing asked for; it fails at
+45° against the old code.
+
+Two more units bugs fell out of the same audit:
+
+- **`interp.rs` wrapped headings on 360.** A `PlayerRow`'s yaw is radians, so a
+  difference never exceeds 2π and neither wrap branch could fire — a remote body
+  turning past ±π took the long way round between snapshots. It wraps on 2π now,
+  and the helper's name no longer claims degrees.
+- **`SelfState` declared `x`/`y`/`z` that the server never sends.** `private_view`
+  carries no position; the authoritative one is in the shared row, which is where
+  reconciliation and the browser both read it. With `#[serde(default)]` the three
+  fields deserialized to `0.0` in silence, and the respawn path reset the body to
+  the world origin — inside the solid border every map has, where `step` finds
+  itself enclosed and holds still. Every death parked the player in rock until the
+  next snapshot reconciled them out. The fields are gone and respawn reads the
+  row.
+
+The native client also **pings** now (`MatchSocket::ping`, once a second, echoed
+by the channel's existing `pong`) and shows the round trip on the HUD. It is an
+`Option<f32>`: drawing `0 MS` for "not measured yet" is a claim of a perfect
+link, and someone judging whether a lost duel was theirs or the network's would
+be reading a number the client made up.
+
+### Seeing the hitbox
+
+`hassault.debug.hitboxes` draws the exact volume a shot is resolved against
+around every body, with the head band marked in a second colour. It works in both
+clients and is one node setting, which is the point — the question it answers is
+"is what I am shooting at where it is drawn?", and an overlay you can only turn on
+in one client cannot be used to compare them.
+
+It exists because that question had no way to be asked, and the first thing it
+found was a real bug. The native client's `bodies.rs` carried
+`const CROUCH_SCALE: f32 = 0.75` — which is the scale applied to the **eye**, not
+to the body. A crouched body's height is `(eye × 0.75 + above_eye) / standing` =
+**0.784**. Four percent short, all of it at the top, which is where the head band
+is: you aimed at the drawn head of a crouching player and missed, slightly more
+often than chance, and blamed the netcode. The file's own comment said "a body
+drawn larger than its hitbox teaches you to miss" and then got the number wrong.
+
+The fix is the rule the rest of this module already follows: the native client now
+**fetches** `GET /api/hassault/hitbox` at startup, next to the loadout, and holds
+no dimensions of its own. Every derived height is served computed —
+`crouch_height`, `standing_height` — because two implementations of
+`crouch_height` is two chances to round it differently.
+
+Two things about how the overlay is drawn:
+
+- **It is depth-tested.** The wireframes go into the same vertex stream as the
+  bodies, so a hitbox behind a wall is hidden by the wall. Drawn in an
+  always-on-top pass it would be a wall hack, whatever it is labelled.
+- **In the pane it is a pool of its own, not a child of the avatar group.** The
+  avatar group is *scaled on Y* to animate a crouch, so a head band parented to it
+  would be squashed by the same factor and would stop being the band the server
+  actually uses — which is the exact class of error the overlay exists to catch.
+
+A spec whose `shape` this build does not know how to draw yields **no bodies at
+all** rather than boxes. A capsule drawn as a box is a confident picture of the
+wrong body, and an aim learned against it is wrong everywhere the two differ.
+
+### Inspect, and the scoreboard
+
+**Inspect (`F`)** was declared in `controls.ts` — label, note, default binding —
+and consumed by nothing. It now runs a weapon-inspect animation in both clients:
+the gun comes in towards the centre of the screen, lifts, and rolls most of the
+way over so the side of the receiver — where a skin's pattern lives — faces the
+camera. A pose that only lifted the gun would show the face it already shows.
+
+It is **purely local and never on the wire**, the same concession client-side
+recoil makes. That is what makes it safe to interrupt on any frame, which in turn
+is what makes it usable in a match rather than a state you have to wait out.
+Firing cancels it — the pose swings the barrel away from the crosshair, and a shot
+drawn out of a weapon pointing at the floor is a picture of a shot that did not
+happen — and so does a reload, because the reload is the animation the *server* is
+doing. Dying drops it, since it is something you asked for rather than a state of
+the weapon.
+
+The envelope is smoothstepped at both ends (`inspectEnvelope`). A linear ramp
+reverses direction instantly at the hold, which reads as the animation being cut
+off and restarted: the one thing a "look at this weapon" flourish must not do.
+
+**The scoreboard** is new in the native client (`Tab`, held). Names, kills, deaths
+and a team stripe, with the match score above them; ranked most kills first then
+fewest deaths, matching the browser, because two clients ranking the same match
+differently is a thing people notice and nobody can explain. Sorting happens in
+`app.rs` rather than in the painter — what "winning" means is a game-mode question.
+
+Held rather than toggled, like every shooter: you read the scores during a lull,
+and a toggle is a scoreboard you leave up by accident and then die behind. It
+reads the **authoritative roster**, never the interpolated copy, which is a
+tenth of a second old and deliberately excludes you.
+
+:::note `None` is not an empty match
+`HudView.scoreboard` is an `Option`. `None` means the key is not held; an empty
+slice means a match with nobody in it. Drawing the panel for both would put a
+scoreboard on screen permanently — pinned by
+`a_scoreboard_that_was_not_asked_for_is_not_an_empty_one`.
+:::
+
 ### Testing a third implementation
 
 `physics-vectors.json` is now replayed by **three** suites — the server's

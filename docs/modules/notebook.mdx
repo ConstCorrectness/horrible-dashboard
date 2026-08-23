@@ -230,9 +230,21 @@ into an inline panel under the cell.
 
 A cell asks `kernel` first and gets an answer about the object that **actually
 exists in its namespace**, which is strictly better than anything a language
-server could say — and it drops `lsp` from its chain entirely, since a cell has no
-language server and leaving it in would spend a step on a resolver that is never
-registered.
+server could say.
+
+Cells now also carry a **language server** — completion, hover and diagnostics, with
+names resolving across cells, described in
+[Notebook cells get the same language server](editor.mdx#notebook-cells-get-the-same-language-server).
+The two do not compete: when a cell has a server attached, its docs chain narrows to
+`kernel` alone, because the LSP extension runs its own hover with the same index/web
+fallback behind it and keeping those here too would render two tooltips saying the
+same thing. `lsp` is never in the cell's own chain either way — that branch belongs to
+the extension, and re-entering it would ask the same server the same question twice.
+
+The pane hands the coordinator an **absolute** path, joining the notebook root from
+`GET /api/notebook/files` to the pane's relative `path`. The language server resolves
+its interpreter and project root by walking *up* from the file, so a relative path
+would silently resolve some other directory's environment.
 
 The kernel side is `KernelSession.inspect`, and the care it needs (worker-thread
 affinity, routing shell replies by parent msg_id so an execute reply and an

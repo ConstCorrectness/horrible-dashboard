@@ -270,3 +270,51 @@ def test_unparseable_result_json_says_so(tmp_path):
         sys.executable, script, str(tmp_path), lambda _l: None
     )
     assert "unparseable result" in payload["error"]
+
+
+def test_benchmark_projects_are_marked_as_ours(tmp_path, monkeypatch):
+    """`ensure_project` stamps `owner`, so the training pane can tell working storage
+    from a project you author in.
+
+    It matters because this path goes straight to `create_project`, which makes the
+    directory but **not** a notebook — the create *route* scaffolds that from a
+    provider. So the project has no `main.ipynb`, and its venv gets only
+    `requirements_for(cases)` (no `ipykernel`). Unmarked, the training pane offered it
+    an "Open notebook" button whose only possible outcome was an error.
+    """
+    import json
+    import os
+
+    from backend.modules.training import projects
+
+    settings = Path(os.environ["HORRIBLE_DATA_DIR"]) / "settings.json"
+    settings.write_text(json.dumps({"training.projectsRoot": str(tmp_path / "projects")}))
+
+    created = runner_project.ensure_project("starter")
+    assert created.owner == runner_project.OWNER
+    # The thing that makes the mark necessary, asserted rather than assumed.
+    assert not (Path(created.root) / projects.DEFAULT_NOTEBOOK).exists()
+
+    # Reused rather than remade, and the mark survives the round trip through disk.
+    again = runner_project.ensure_project("starter")
+    assert again.id == created.id
+    assert projects.get_project(created.id).owner == runner_project.OWNER
+
+
+def test_an_older_unmarked_benchmark_project_gets_stamped(tmp_path, monkeypatch):
+    """Projects made before `owner` existed are back-filled on the next sweep —
+    otherwise the dead notebook button stays for everyone who already ran one."""
+    import json
+    import os
+
+    from backend.modules.training import projects
+
+    settings = Path(os.environ["HORRIBLE_DATA_DIR"]) / "settings.json"
+    settings.write_text(json.dumps({"training.projectsRoot": str(tmp_path / "projects2")}))
+
+    legacy = projects.create_project("evals-legacy", [], "3.12")
+    assert legacy.owner == ""
+
+    found = runner_project.ensure_project("legacy")
+    assert found.id == legacy.id
+    assert projects.get_project(legacy.id).owner == runner_project.OWNER

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 
+import { ModelDesigner } from './designer/ModelDesigner';
+
 import {
   interpretabilityStore,
   type AttentionSpec,
@@ -235,7 +237,11 @@ function kvCacheBytes(arch: ModelArchitecture, ctx: number): number | null {
   return 2 * arch.layers * kv * dim * ctx * 2; // K and V, 2 bytes/element (F16)
 }
 
-export function ModelExplorer() {
+/**
+ * Inspect mode: the loaded model's weights, unchanged. See the wrapper below for
+ * why it is now one of two modes rather than the whole pane.
+ */
+function ModelInspector() {
   const arch = useArchitecture();
   const tensors = useTensors();
   const [selection, setSelection] = useState<Selection>({ stage: 'model', layer: null });
@@ -664,6 +670,44 @@ export function ModelExplorer() {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The pane's two modes: the model that exists, and the one you are drawing.
+ *
+ * They share a pane rather than getting one each because of the bridge between
+ * them. Inspect answers "what is this model"; Design answers "what if it were
+ * different" — and the obvious way to start a design is from the thing you are
+ * currently reading. Splitting them into two panes would put a workspace switch
+ * between a question and its follow-up.
+ */
+export function ModelExplorer() {
+  const [mode, setMode] = useState<'inspect' | 'design'>('inspect');
+  return (
+    <div className="mx-pane">
+      <div className="mx-modes" role="tablist" aria-label="Model explorer mode">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === 'inspect'}
+          className={`mx-mode${mode === 'inspect' ? ' mx-mode-on' : ''}`}
+          onClick={() => setMode('inspect')}
+        >
+          Inspect
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === 'design'}
+          className={`mx-mode${mode === 'design' ? ' mx-mode-on' : ''}`}
+          onClick={() => setMode('design')}
+        >
+          Design
+        </button>
+      </div>
+      <div className="mx-mode-body">{mode === 'inspect' ? <ModelInspector /> : <ModelDesigner />}</div>
     </div>
   );
 }

@@ -57,11 +57,25 @@ export const CROUCH_TOGGLE_KEY = 'hassault.crouchToggle';
  *
  * A setting rather than a per-press choice: which client you play in is a
  * standing preference, and putting it on every button would put a decision in
- * front of somebody who wanted to press Play. Off by default — the native client
- * has no HUD, no weapon model and no sound, so the pane is still the complete
- * game and the honest default.
+ * front of somebody who wanted to press Play. On by default: the native client
+ * has its own HUD, weapon model, sound and scoreboard now, and it is the one
+ * with raw mouse input and no frame cap.
  */
 export const NATIVE_CLIENT_KEY = 'hassault.nativeClient';
+
+/**
+ * Draw the served hitbox around every body.
+ *
+ * Shared with the native client (`settings::KEY_SHOW_HITBOXES`), which is the
+ * point of it being a node setting rather than a flag in either client: the
+ * question it answers — "is what I am shooting at where it is drawn?" — has to
+ * be askable in whichever one you are playing, and the answers have to be
+ * comparable.
+ *
+ * Off by default. A permanent wireframe is a worse picture of the game than the
+ * game is.
+ */
+export const SHOW_HITBOXES_KEY = 'hassault.debug.hitboxes';
 
 // ---- settings ---------------------------------------------------------------
 
@@ -134,6 +148,7 @@ export function SettingsPanel() {
   const volume = useSetting<number>(VOLUME_KEY) ?? 0.7;
   const crouchToggle = useSetting<boolean>(CROUCH_TOGGLE_KEY) ?? false;
   const nativeClient = useSetting<boolean>(NATIVE_CLIENT_KEY) ?? true;
+  const showHitboxes = useSetting<boolean>(SHOW_HITBOXES_KEY) ?? false;
 
   return (
     <div style={styles.rows}>
@@ -215,6 +230,35 @@ export function SettingsPanel() {
               style={{
                 ...styles.choice,
                 ...(nativeClient === option.on ? styles.choiceActive : null),
+              }}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div style={styles.row}>
+        <div style={styles.rowMain}>
+          <span>Show hitboxes</span>
+          <span style={styles.dim}>
+            Draws the exact volume a shot is resolved against around every body, with the head band
+            marked. It is the served spec, not a second copy — which is the point: a body drawn a
+            few percent off its hitbox costs you shots you were sure of and looks like lag. Works in
+            both clients.
+          </span>
+        </div>
+        <div style={{ display: 'flex', gap: '0.25rem' }}>
+          {[
+            { on: false, label: 'Off' },
+            { on: true, label: 'On' },
+          ].map((option) => (
+            <button
+              key={option.label}
+              onClick={() => void setSetting(SHOW_HITBOXES_KEY, option.on)}
+              style={{
+                ...styles.choice,
+                ...(showHitboxes === option.on ? styles.choiceActive : null),
               }}
             >
               {option.label}

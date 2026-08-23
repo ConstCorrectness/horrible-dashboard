@@ -472,7 +472,17 @@ class MatchRoom:
         player.last_command_at = time.monotonic()
         player.queue.append(command)
         while len(player.queue) > MAX_QUEUED_COMMANDS:
-            player.queue.popleft()
+            # Overflow. Dropping the oldest is right — it is the most stale — but
+            # dropping it *silently* is not: `ack` only moves when a command is
+            # simulated, so a command discarded here would never be acknowledged
+            # and the client would replay it on top of every correction for the
+            # rest of the match. Its prediction then sits permanently ahead of
+            # the server, which is exactly the rubber-banding this queue exists
+            # to bound. Acknowledging it says "this one is not coming back".
+            #
+            # Monotonic by construction: the dropped sequence is lower than
+            # anything still queued behind it.
+            player.ack = max(player.ack, player.queue.popleft().seq)
 
     def simulate(self, elapsed: float) -> None:
         """Drain each player's queue, spending from their time budget."""

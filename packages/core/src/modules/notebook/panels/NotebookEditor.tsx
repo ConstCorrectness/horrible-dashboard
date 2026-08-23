@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { Extension } from '@codemirror/state';
 
 import { useAgentContext } from '../../../agent-context';
 import { usePaneParams } from '../../../panes';
 import { CellEditor } from '../../../notebook/CellEditor';
+import { useNotebookLsp } from '../../../notebook/useNotebookLsp';
+import { listNotebooks } from '../api';
 import { OutputRenderer } from '../../../notebook/OutputRenderer';
 import { renderMarkdown } from '../../../notebook/markdown';
 import {
@@ -37,6 +40,29 @@ export function NotebookEditor() {
   const store = useMemo(() => openNotebookSession(path), [path]);
   const state = useSession(store);
   const editTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  // A notebook is addressed *relative to the notebook root* everywhere in this
+  // module, but the language server resolves the interpreter and the project root by
+  // walking up from the file, so it needs the real path. `useNotebookLsp` turns
+  // itself off for a relative one rather than resolving some other directory's
+  // environment — but that would be a feature silently absent, so join it here.
+  const [nbRoot, setNbRoot] = useState('');
+  useEffect(() => {
+    let cancelled = false;
+    void listNotebooks()
+      .then((res) => {
+        if (!cancelled) setNbRoot(res.root);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const absPath = useMemo(() => {
+    if (!nbRoot || !path) return '';
+    const sep = nbRoot.includes('\\') ? '\\' : '/';
+    return `${nbRoot}${sep}${path.replace(/[\\/]/g, sep)}`;
+  }, [nbRoot, path]);
+  const lsp = useNotebookLsp(absPath, state.cells);
 
   useAgentContext(() => ({
     path,
@@ -221,6 +247,7 @@ export function NotebookEditor() {
             key={cell.id}
             cell={cell}
             notebookPath={path}
+            lspExtensions={lsp.cellExtensions(cell)}
             runState={state.runStates[cell.id]}
             diagnostics={diagByCell.get(cell.id)}
             widgetManager={widgetManager}
@@ -280,6 +307,7 @@ function Cell({
   onDelete,
   onAddBelow,
   notebookPath,
+  lspExtensions,
 }: {
   cell: NotebookCell;
   runState?: CellRunState;
@@ -291,6 +319,8 @@ function Cell({
   onAddBelow: (type: 'code' | 'markdown') => void;
   /** Threaded down so a cell's docs popup can ask this notebook's own kernel. */
   notebookPath?: string;
+  /** This cell's slice of the notebook's language server (empty for markdown). */
+  lspExtensions?: Extension[];
 }) {
   const [hover, setHover] = useState(false);
   const isCode = cell.cell_type === 'code';
@@ -335,6 +365,7 @@ function Cell({
             onChange={onChange}
             onRun={isCode ? onRun : () => setEditingMd(false)}
             notebookPath={notebookPath}
+            extraExtensions={lspExtensions}
           />
         ) : (
           <div

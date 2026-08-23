@@ -17,6 +17,35 @@ import { openTrainingNotebook, openTrainingRecipe } from '../open';
 
 const dim = { color: 'var(--text-dim)' } as const;
 
+/** The marker on a project another module owns. Same treatment as a read-only
+ * bundled eval suite: uppercase, bordered, muted — it explains why the authoring
+ * buttons beside it are off. */
+const ownedBadge = {
+  fontSize: 10,
+  fontWeight: 700,
+  letterSpacing: '0.08em',
+  textTransform: 'uppercase' as const,
+  color: 'var(--text-dim)',
+  border: '1px solid var(--border)',
+  borderRadius: 3,
+  padding: '1px 5px',
+};
+
+/**
+ * Why a project's authoring actions are disabled.
+ *
+ * These projects are working storage — `evals` builds one per suite to run Hugging
+ * Face benchmarks in — created straight through `create_project`, so they have no
+ * scaffolded `main.ipynb` and their venv holds only the benchmark's requirements
+ * (no `ipykernel`). Every authoring button was a button that could only fail.
+ */
+function ownedReason(owner: string): string {
+  return (
+    `Working storage for the ${owner} module — it has no notebook of its own ` +
+    `and its venv cannot run one. Delete it here if you want the disk back.`
+  );
+}
+
 /**
  * The training hub: search an environment provider (Kaggle / HF / Gymnasium /
  * plugins), create a project from a result, watch venv/data progress live, and
@@ -155,20 +184,39 @@ export function ProjectsPane() {
             <li key={p.id} style={{ padding: '0.4rem 0', borderBottom: '1px solid var(--border)' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                 <strong style={{ flex: 1, minWidth: 0, fontSize: '0.85rem' }}>{p.name}</strong>
+                {/* Marked, not hidden — the same call the bundled eval suites make.
+                    A project missing from this list is a directory eating disk that
+                    you can neither see nor delete; what it must not do is offer a
+                    notebook button that cannot work. */}
+                {p.owner && (
+                  <span style={ownedBadge} title={ownedReason(p.owner)}>
+                    {p.owner}
+                  </span>
+                )}
                 <span style={{ fontSize: '0.7rem', ...dim }}>
                   {p.venv_ready ? 'venv ✓' : 'venv…'} · {p.data_ready ? 'data ✓' : 'data…'}
                 </span>
-                <button onClick={() => openTrainingNotebook(p.id, 'main.ipynb')}>
+                <button
+                  disabled={!!p.owner}
+                  title={p.owner ? ownedReason(p.owner) : undefined}
+                  onClick={() => openTrainingNotebook(p.id, 'main.ipynb')}
+                >
                   Open notebook
                 </button>
                 <button
-                  title="Fine-tuning recipe: a typed form that writes cells into this project's notebook"
+                  disabled={!!p.owner}
+                  title={
+                    p.owner
+                      ? ownedReason(p.owner)
+                      : "Fine-tuning recipe: a typed form that writes cells into this project's notebook"
+                  }
                   onClick={() => openTrainingRecipe(p.id)}
                 >
                   🧪 Recipe
                 </button>
                 <button
-                  title="Push notebook to Kaggle kernels"
+                  disabled={!!p.owner}
+                  title={p.owner ? ownedReason(p.owner) : 'Push notebook to Kaggle kernels'}
                   onClick={() => {
                     setProgress((prog) => ({ ...prog, [p.id]: 'pushing to Kaggle…' }));
                     pushProject(p.id, 'kaggle')
@@ -186,7 +234,10 @@ export function ProjectsPane() {
                   ⇪ Kaggle
                 </button>
                 <button
-                  title="Push notebook to Google Colab (via Drive)"
+                  disabled={!!p.owner}
+                  title={
+                    p.owner ? ownedReason(p.owner) : 'Push notebook to Google Colab (via Drive)'
+                  }
                   onClick={() => {
                     setProgress((prog) => ({ ...prog, [p.id]: 'pushing to Colab…' }));
                     pushProject(p.id, 'colab')

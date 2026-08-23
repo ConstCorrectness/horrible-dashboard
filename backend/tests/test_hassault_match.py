@@ -135,6 +135,41 @@ def test_the_queue_is_bounded():
     assert len(player.queue) == MAX_QUEUED_COMMANDS
 
 
+def test_an_overflowed_command_is_acknowledged_rather_than_dropped_silently():
+    """A dropped command the client keeps replaying is permanent rubber-banding.
+
+    `ack` only moves when a command is *simulated*, so a command discarded by the
+    overflow bound would never be acknowledged — and the client replays every
+    unacknowledged command on top of each correction. Its prediction then sits
+    permanently ahead of the server, which is the exact symptom the bound exists
+    to prevent. Acknowledging the dropped one says "this is not coming back".
+    """
+    room = make_room()
+    player = room.add("a", None)
+    for seq in range(1, MAX_QUEUED_COMMANDS + 11):
+        room.enqueue(player, walk(seq))
+    assert len(player.queue) == MAX_QUEUED_COMMANDS
+    # Ten were dropped from the front, so the client must be told the tenth is
+    # done with — and nothing beyond it, which is still queued and still real.
+    assert player.ack == 10
+    assert player.queue[0].seq == 11
+
+
+def test_the_ack_never_goes_backwards_when_a_command_is_dropped():
+    """Monotonic by construction, and the client relies on it: a snapshot whose
+    `ack` moved backwards would resurrect commands already retired."""
+    room = make_room()
+    player = room.add("a", None)
+    for seq in range(1, 6):
+        room.enqueue(player, walk(seq))
+    room.simulate(1.0)
+    simulated = player.ack
+    assert simulated == 5
+    for seq in range(6, MAX_QUEUED_COMMANDS + 20):
+        room.enqueue(player, walk(seq))
+    assert player.ack >= simulated
+
+
 def test_simulating_moves_the_player_and_advances_the_ack():
     room = make_room()
     player = room.add("a", None)

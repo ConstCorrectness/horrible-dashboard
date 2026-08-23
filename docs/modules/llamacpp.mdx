@@ -271,6 +271,19 @@ its last log lines rather than a timeout.
   way. The app's lifespan stops the server on shutdown, or an orphan survives a
   reload holding gigabytes of mapped weights and a bound port.
 
+### How it was started is recorded, so it can be put back
+
+`spawn` stores a `SpawnSpec` — model path, alias, port, context size, GPU layers,
+threads, extra args — and `spawn_spec` hands it to anyone who has to restore the
+server. There is exactly one process and one model, so anything that wants to
+*borrow* it has to be able to give it back: [evals](evals.mdx#sweeping-a-local-gguf-the-server-is-borrowed-then-given-back)
+loads a GGUF to score it and then restores whatever was running.
+
+Restoring from the spec rather than from defaults is the whole point. Defaults
+would bring the user's server back with `gpu_layers` reset, `extra_args` gone and
+`context_size` shrunk to 4096 — a machine that is quietly slower afterwards, with
+nothing said. The same failure `hardware.defaults()` exists to prevent.
+
 ## Chat integration: four lines, not a new dialect
 
 `llama-server` speaks the OpenAI API, so this is one `PROVIDERS` entry with

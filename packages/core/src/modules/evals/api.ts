@@ -132,6 +132,15 @@ export interface SuggestedTarget {
   provider: string;
   endpoint: string;
   model: string;
+  /** For `llamacpp`: the GGUF to load. The server holds one model at a time, so a
+   * target names the file rather than trusting an alias to already be served. */
+  modelPath?: string;
+  /** Whether llama-server currently has this GGUF loaded. Purely informational —
+   * the sweep loads whatever it needs and restores what was there. */
+  loaded?: boolean;
+  /** From the GGUF header. Shown, not filtered on: it is what tells an embedder
+   * apart from a chat model when both live in the same directory. */
+  architecture?: string;
   label: string;
   source: string;
 }
@@ -175,7 +184,13 @@ export interface StartRunResult {
 
 export const startRun = (body: {
   suite_id: string;
-  targets: { provider?: string; endpoint?: string; model: string; label?: string }[];
+  targets: {
+    provider?: string;
+    endpoint?: string;
+    model: string;
+    model_path?: string;
+    label?: string;
+  }[];
   case_ids?: string[];
   localtrack_project?: string;
 }) => apiPost<StartRunResult>('/evals/runs', body);
