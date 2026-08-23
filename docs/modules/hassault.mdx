@@ -3312,18 +3312,18 @@ Every character carries a 3D weapon prop matching their active weapon slot:
 `CharacterAnimator` computes real-time joint rotations and offsets every frame based on player locomotion velocity, look pitch, crouch fraction, ground state, and combat actions:
 
 1. **Locomotion & Pendulum Leg Kinematics**:
-   - Derives movement velocity vector $(dx/dt, dy/dt)$ from consecutive snapshots.
+   - Derives movement velocity vector `(dx/dt, dy/dt)` from consecutive snapshots.
    - 2-phase forward/backward pendulum leg swing with knee flexion on the backswing.
    - Hip bobbing and vertical stride oscillation at twice the stride frequency.
 2. **Breathing Idle Sway**:
-   - Subtle sinusoidal chest and shoulder oscillation ($2.2\text{ Hz}$) when standing still.
+   - Subtle sinusoidal chest and shoulder oscillation (`2.2 Hz`) when standing still.
 3. **Smooth Crouch Compression**:
-   - Seamlessly interpolates hip descent from standing height ($5.2$) to crouch height ($4.075$).
+   - Seamlessly interpolates hip descent from standing height (`5.2`) to crouch height (`4.075`).
    - Knees bend forward and spine leans slightly into tactical posture while nameplates lower accordingly.
 4. **Airborne / Jump Tuck**:
    - When airborne (`ground === false`), legs tuck upward at the knees and arms spread for balance.
 5. **Aim Pitch Look (Up / Down Tracking)**:
-   - Pitch angle is distributed proportionally ($40\%$ spine, $60\%$ neck/head).
+   - Pitch angle is distributed proportionally (`40%` spine, `60%` neck/head).
    - Other players visually see exactly where an enemy is aiming in 3D world space.
 6. **Recoil Kickback**:
    - Triggering shots applies an instant rearward kick impulse on the weapon socket, decaying with exponential damping.
@@ -3347,7 +3347,7 @@ The skin system provides distinct faction styling and collectible operator skins
 
 > [!IMPORTANT]
 > **Strict Hitbox Invariance**:
-> Every operator skin and attachment is strictly bounded within the canonical collision cylinder ($r = 1.1, h = 5.2$) and head band ($1.0$) defined in `DEFAULT_HITBOX`. Hit registration remains strictly server-authoritative raycast vs canonical cylinder. Skins never alter hitboxes, movement speeds, or sight lines.
+> Every operator skin and attachment is strictly bounded within the canonical collision cylinder (`r = 1.1`, `h = 5.2`) and head band (`1.0`) defined in `DEFAULT_HITBOX`. Hit registration remains strictly server-authoritative raycast vs canonical cylinder. Skins never alter hitboxes, movement speeds, or sight lines.
 
 ---
 
