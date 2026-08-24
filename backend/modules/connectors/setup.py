@@ -25,7 +25,16 @@ from backend.sdk.registry import registry
 def register_connectors() -> None:
     """Register every built-in connector, its agent tools, and any file provider it
     mounts (Drive browses as a virtual root — see `drive_fs`)."""
-    for connector in (github.build(), google.build(), huggingface.build()):
+    # `streaming` lives in the share module rather than here: it is that module's
+    # credential, it unlocks no agent tools, and only the relay path uses it.
+    from backend.modules.share import streaming
+
+    for connector in (
+        github.build(),
+        google.build(),
+        huggingface.build(),
+        streaming.connector(),
+    ):
         registry.connectors[connector.id] = connector
     github_tools.register_agent_tools()
     google_tools.register_agent_tools()

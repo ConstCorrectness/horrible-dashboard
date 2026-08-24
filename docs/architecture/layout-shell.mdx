@@ -199,6 +199,17 @@ gracefully:
 | `chrome.workspaceTabs` | no (the frame renders its own tab strip) | **yes** (undecorated window; the tab strip is the titlebar) |
 | `shortcuts.global`     | no                                 | **yes** (`global: true` bindings registered with the OS) |
 | `tray`                 | no                                 | yes                              |
+| `media.displayCapture` | **yes**                            | **Windows/Linux only** — WKWebView on macOS exposes `getDisplayMedia` and rejects it |
+
+`media.displayCapture` is the one row that is **not** uniform across the desktop,
+which is why the shell calls `desktopCapabilities(platform)` rather than handing
+over the flat `DESKTOP_CAPABILITIES` list. It is also the one capability that
+exists *because* feature detection cannot answer the question: WKWebView exposes
+`navigator.mediaDevices.getDisplayMedia` and then rejects the call with
+`NotAllowedError` — byte-identical to the host dismissing the picker — so a probe
+would report "available", the share would fail, and the UI would correctly stay
+silent about what it read as a cancel. Everything else about capture is still
+feature-detected; see [the share module](../modules/share.mdx).
 
 The `window.*`/`chrome.*` **phase-2** rows are the contract for the native
 shell (workspace-per-OS-window, native chrome hosting the workspace tab strip,

@@ -50,6 +50,10 @@ export const terminalModule: ModuleManifest = {
       role: 'tool',
       editor: true,
       icon: '❯',
+      // A guest sees that a terminal is open and where. Scrollback needs
+      // the `terminal` grant and a content protocol, both of which land
+      // with co-editing — declaring `mirror` now does not leak a byte of it.
+      share: { mode: 'mirror' },
       defaultDock: 'bottom',
       agentTools: terminalAgentTools,
       // Not a singleton: each open is its own PTY.

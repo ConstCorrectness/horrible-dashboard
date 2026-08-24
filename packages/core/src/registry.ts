@@ -13,6 +13,7 @@ import type {
   AgentToolDecl,
   BackdropDecl,
   CollabDecl,
+  PaneShareDecl,
   CommandDecl,
   DockSide,
   ExplorerSourceDecl,
@@ -36,6 +37,7 @@ export type {
   AgentToolDecl,
   BackdropDecl,
   CollabDecl,
+  PaneShareDecl,
   CommandDecl,
   DockSide,
   ExplorerSourceDecl,
@@ -447,6 +449,17 @@ class ModuleRegistry {
    * lists views can match and label with this, so no module has to rename its
    * panes to be findable.
    */
+  /**
+   * One view's declaration, panel or widget.
+   *
+   * Exists for the share redactor, which has to ask "may this pane be seen, and
+   * what is its *manifest* title" for every pane in a frame. Doing that by
+   * scanning `panels`/`widgets` at each call would rebuild both arrays per pane.
+   */
+  view(viewId: string): PanelDecl | WidgetDecl | undefined {
+    return this.allViews.find((v) => v.id === viewId);
+  }
+
   viewOwner(viewId: string): string | undefined {
     for (const m of this.modules.values()) {
       const declared =

@@ -17,6 +17,9 @@ export const agentModule: ModuleManifest = {
       component: ChatWidget,
       role: 'tool',
       icon: '🤖',
+      // The transcript itself is not shared here; a guest only learns the
+      // agent pane is open. Sharing what was said needs the `agent` grant.
+      share: { mode: 'mirror' },
       defaultDock: 'right',
       // Chat needs more room than a tree/outline tool; the user's own resize
       // overrides this permanently once they drag it.

@@ -115,6 +115,9 @@ flowchart TB
   sequence diagrams of the websocket protocols across situations (one user/two tabs,
   two users direct, via a relay intermediary, collaborative panes, agent-to-agent,
   peer chat) and the proposed **lobby** (P2P + intermediary + discovery) design.
+- [Share relay](architecture/share-relay.mdx) — the public half of screen sharing:
+  WHIP ingest, SFU fan-out, WHEP playback, link tokens, and why the ingest URL
+  never reaches a guest.
 - [Game server hosting](architecture/game-server-hosting.mdx) — deploying the central
   game server as a hosted service: the always-on/single-instance/persistent-disk
   constraints, config + secrets, the **Fly.io** path (root `fly.toml` +

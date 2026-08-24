@@ -18,7 +18,7 @@ import { subscribeChannel, type WsMessage } from '../../ws';
 import { getMixerState, resetMixerState, saveMixerState } from './api';
 import { listInputs, listOutputs, resolveDeviceId } from './devices';
 import { mixer } from './engine';
-import type { MixerState, StripState } from './types';
+import { SHARE_SINK_DEVICE, type MixerState, type StripState } from './types';
 
 let state: MixerState | null = null;
 let outputs: MediaDeviceInfo[] = [];
@@ -211,6 +211,80 @@ export async function addBus(label: string, deviceId: string): Promise<void> {
   });
   for (const strip of next.strips) strip.sends[`A${index}`] = false;
   await commit(next);
+}
+
+/**
+ * The id of the bus that feeds a shared session's viewers. Fixed rather than
+ * allocated like `A1`/`A2`, because the share module has to find it again.
+ */
+export const SHARE_BUS_ID = 'VIEWERS';
+
+/**
+ * Make sure the viewers' bus exists, and return its id — or `null` if the mixer
+ * document could not be established at all.
+ *
+ * Starts with **nothing routed to it**, the same rule `addBus` follows and for a
+ * stronger reason: this output is another person's ears. Defaulting it to carry
+ * whatever the host is playing would make starting a screen share silently
+ * broadcast their music, their notifications and anything else already on a
+ * strip. The share pane says so, so silence reads as a choice rather than a bug.
+ *
+ * `ensureLoaded` is awaited rather than assumed: sharing a screen can be the
+ * first thing in a session to want a bus, and nothing on that path mounts the
+ * mixer pane. Returning early on an unloaded document — as this used to — left
+ * the bus uncreated and the stream went out with no audio path whatsoever,
+ * while the pane told the host to route a strip into a bus that did not exist.
+ */
+export async function ensureShareBus(): Promise<string | null> {
+  await ensureLoaded();
+  // Also subscribe to the `audio` channel. `ensureLoaded` only fetches the
+  // document once; without this, a share started with no mixer pane open never
+  // hears about a routing made from the agent, a phone on the fabric or a second
+  // window, and reports "no audio" for a stream that is carrying sound.
+  connectAudio();
+  if (!state) return null;
+  if (state.buses.some((b) => b.id === SHARE_BUS_ID)) return SHARE_BUS_ID;
+  const next = structuredClone(state);
+  next.buses.push({
+    id: SHARE_BUS_ID,
+    label: 'Viewers',
+    deviceId: SHARE_SINK_DEVICE,
+    deviceLabel: '',
+    gain: 0,
+    muted: false,
+    // Not a virtual cable: `virtual` labels a bus that feeds another *application*
+    // on this machine, and this one feeds people on other machines entirely.
+    virtual: false,
+  });
+  for (const strip of next.strips) strip.sends[SHARE_BUS_ID] = false;
+  await commit(next);
+  return SHARE_BUS_ID;
+}
+
+/**
+ * Whether anything is actually routed into a bus.
+ *
+ * Deliberately not "does the bus have an audio track". A
+ * `MediaStreamAudioDestinationNode` always carries exactly one track, silent or
+ * not, so track-counting reports every share as "screen + audio" the moment the
+ * viewers' bus exists — which, now that `ensureShareBus` always creates it, is
+ * always. Reading the routing document instead is the only way to tell sound
+ * from silence, and a share that claims audio it is not sending is the bug the
+ * share pane's hint exists to prevent.
+ *
+ * Pure and state-passed so it can be tested without a Web Audio implementation.
+ */
+export function busHasSource(mixerState: MixerState | null, busId: string): boolean {
+  if (!mixerState) return false;
+  // A muted strip is still a routing the host made; it is one click from
+  // audible, and the mixer already shows it as muted. Only an off send means
+  // nothing is going there.
+  return mixerState.strips.some((strip) => strip.sends[busId] === true);
+}
+
+/** Whether anything is routed to the viewers' bus right now. */
+export function shareBusHasSource(): boolean {
+  return busHasSource(state, SHARE_BUS_ID);
 }
 
 export async function removeBus(busId: string): Promise<void> {

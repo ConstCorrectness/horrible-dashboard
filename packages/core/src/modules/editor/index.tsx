@@ -138,6 +138,12 @@ export const editorModule: ModuleManifest = {
       role: 'document',
       editor: true,
       icon: '✎',
+      // Visible to a guest as a pane, with no content protocol yet — a
+      // buffer's text arrives when the editor grows a collab room. The
+      // params allowlist stays empty on purpose: a buffer's params carry
+      // the file path, which is exactly the kind of thing a guest should
+      // not learn from the fact that a pane is open.
+      share: { mode: 'mirror' },
       // The code-workbench satellites as regions: panes that only mean something
       // *relative to the active buffer*. Outline and Symbol Search follow the
       // editor cursor via the shared code locus; Provenance is blame+history of

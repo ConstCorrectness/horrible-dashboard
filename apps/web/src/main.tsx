@@ -7,7 +7,7 @@ import {
   codeModule,
   commonsModule,
   dashboardModule,
-  DESKTOP_CAPABILITIES,
+  desktopCapabilities,
   editorModule,
   filesModule,
   flowModule,
@@ -49,6 +49,8 @@ import {
   networkModule,
   peopleModule,
   socialModule,
+  shareModule,
+  initShare,
   hassaultModule,
   recordsModule,
   browserModule,
@@ -132,10 +134,14 @@ async function boot(): Promise<void> {
   // The keymap has to know its host and platform before any binding resolves:
   // `mod+1..9` is workspace switching on the desktop and unreachable browser tab
   // switching in a tab, so the two ship different defaults for the same command.
-  initKeymapHost({ platform: detectPlatform(), host: isTauri() ? 'desktop' : 'browser' });
+  const platform = detectPlatform();
+  initKeymapHost({ platform, host: isTauri() ? 'desktop' : 'browser' });
 
   if (isTauri()) {
-    initCapabilities(DESKTOP_CAPABILITIES);
+    // Per-platform, not the flat desktop list: WKWebView cannot capture a screen
+    // while WebView2 and WebKitGTK can, and the difference is invisible to
+    // feature detection.
+    initCapabilities(desktopCapabilities(platform));
     setWindowControl(createTauriWindowControl());
     setGlobalShortcuts(createTauriGlobalShortcuts());
     // The webview can't spawn browser windows (window.open / target="_blank" are
@@ -205,6 +211,9 @@ async function boot(): Promise<void> {
     // **no panes** — People is where all three surface.
     registry.register(networkModule);
     registry.register(socialModule);
+    // Share: sessions over the fabric. After social — a session invite is
+    // addressed to a person, so the roster has to be registered first.
+    registry.register(shareModule);
     registry.register(notificationsModule);
     registry.register(commonsModule);
     registry.register(peopleModule);
@@ -255,6 +264,10 @@ async function boot(): Promise<void> {
     // online") has to reach you while you are doing something else, or it is not a
     // notification.
     initSocial();
+    // Same reason as initSocial: an invitation to somebody's session arrives while
+    // you are doing something else by definition, and a channel that only starts
+    // when the share pane mounts would drop it on the floor.
+    initShare();
     initNotifications();
     // Same reason as initSocial, and the same bug it fixed: the records watch used to
     // start only when a records pane mounted, so an agent proposal filed while you

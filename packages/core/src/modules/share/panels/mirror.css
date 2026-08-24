@@ -1,0 +1,269 @@
+/* The session mirror: the host's workspace drawn as a map.
+ *
+ * The geometry is the message, so the tiles are deliberately plain — a split is
+ * a flex row, an area is a tile, and the proportions come straight from the
+ * host's own `sizes`. What carries meaning is the *ground*: a shared tile is a
+ * clean raised surface, a redacted one is hatched and quiet, and the pane the
+ * host is looking at is the only thing wearing the accent. A guest should be able
+ * to tell those three apart from across the room.
+ */
+
+.share-mirror {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  height: 100%;
+  padding: var(--space-6);
+  overflow: auto;
+  color: var(--text);
+}
+
+.share-mirror-note {
+  margin: 0;
+  max-width: 62ch;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+.share-mirror-note strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* -- structure ----------------------------------------------------------- */
+
+.share-workspace {
+  display: flex;
+  gap: var(--space-3);
+  flex: 1;
+  min-height: 16rem;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+}
+
+.share-center {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  flex: 1;
+  min-width: 0;
+}
+
+.share-split {
+  display: flex;
+  gap: var(--space-3);
+  height: 100%;
+  min-height: 0;
+}
+
+.share-split[data-orientation='column'] {
+  flex-direction: column;
+}
+
+.share-split-child {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
+.share-area {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.share-dock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: 8.5rem;
+  flex: none;
+}
+
+.share-dock[data-horizontal='true'] {
+  flex-direction: row;
+  width: auto;
+  height: 4.5rem;
+}
+
+/* -- tabs ---------------------------------------------------------------- */
+
+.share-tabs {
+  display: flex;
+  gap: var(--space-1);
+  overflow: hidden;
+}
+
+.share-tab {
+  padding: 2px var(--space-3);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: var(--bg);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 8rem;
+}
+
+.share-tab[data-active='true'] {
+  background: var(--bg-raised);
+  color: var(--text-dim);
+}
+
+/* -- tile ---------------------------------------------------------------- */
+
+.share-tile {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--space-2);
+  flex: 1;
+  min-width: 0;
+  min-height: 3rem;
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease-standard),
+    background var(--dur-fast) var(--ease-standard);
+}
+
+.share-tile:hover {
+  background: var(--bg-hover);
+}
+
+.share-tile:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* A shared tile is deliberately plain: a clean raised surface with a hairline.
+   It carried an accent leading rule until the hatch below turned out to do the
+   whole job of separating the two states — which left the accent saying two
+   different things on one surface. It now says exactly one: `data-focused` is
+   what the host is looking at, and nothing else in this pane is accented. */
+
+/* Redacted: a hatched ground and quiet type, no rule. It should read as a
+   closed door rather than as a pane that failed to load. */
+.share-tile[data-tone='redacted'] {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--bg-raised),
+    var(--bg-raised) 5px,
+    var(--bg) 5px,
+    var(--bg) 10px
+  );
+  color: var(--text-faint);
+}
+
+.share-tile[data-tone='empty'] {
+  background: transparent;
+  border-style: dashed;
+  cursor: default;
+}
+
+.share-tile[data-minimized='true'] {
+  opacity: 0.5;
+}
+
+/* What the host is looking at. */
+.share-tile[data-focused='true'] {
+  border-color: var(--accent);
+}
+
+.share-tile[data-selected='true']:not([data-focused='true']) {
+  border-color: var(--border-strong);
+}
+
+.share-tile-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.share-tile-mode {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
+/* -- the host's screen ---------------------------------------------------- */
+
+/* Black ground rather than the surface token: this is video, and letterbox bars
+   that are nearly-but-not-quite the page colour read as a rendering fault. */
+.share-video {
+  width: 100%;
+  flex: 1;
+  min-height: 12rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: #000;
+  object-fit: contain;
+}
+
+/* The stage the guest's pointer is measured against. Position:relative so an
+   overlaid cursor can be placed in its box. */
+.share-mirror__stage {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+/* A guest's pointer, drawn on the host's session pane.
+   `pointer-events: none` throughout: this is a picture of where somebody else
+   is looking, and a host must never find their own clicks landing on it. */
+.share-cursors {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.share-cursor {
+  position: absolute;
+  transform: translate(-2px, -2px);
+  transition: left 90ms linear, top 90ms linear;
+  pointer-events: none;
+}
+
+.share-cursor__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--bg);
+}
+
+.share-cursor__label {
+  position: absolute;
+  left: 13px;
+  top: 4px;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--accent);
+  color: var(--bg);
+}

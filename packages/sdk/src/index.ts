@@ -15,6 +15,7 @@ export type {
   BackdropDecl,
   Capability,
   CollabDecl,
+  PaneShareDecl,
   CommandDecl,
   DockSide,
   JSONSchema,

@@ -1,6 +1,7 @@
 export {
   BROWSER_CAPABILITIES,
   DESKTOP_CAPABILITIES,
+  desktopCapabilities,
   hasCapability,
   initCapabilities,
   type Capability,
@@ -438,6 +439,15 @@ export { marketplaceModule } from './modules/marketplace';
 export { settingsModule } from './modules/settings';
 export { initKeymapPreset, keymapModule } from './modules/keymap';
 export { hassaultModule } from './modules/hassault';
+export {
+  shareModule,
+  initShare,
+  getShareSnapshot,
+  subscribeShare,
+  type GrantLevel,
+  type Participant,
+  type ShareSession,
+} from './modules/share';
 export {
   socialModule,
   initSocial,

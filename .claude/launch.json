@@ -31,6 +31,12 @@
       "runtimeExecutable": "uv",
       "runtimeArgs": ["run", "uvicorn", "backend.games_server.app:app", "--port", "9200"],
       "port": 9200
+    },
+    {
+      "name": "share-relay",
+      "runtimeExecutable": "uv",
+      "runtimeArgs": ["run", "uvicorn", "backend.share_relay.app:app", "--port", "9100"],
+      "port": 9100
     }
   ]
 }

@@ -46,6 +46,7 @@ dependencies = [
     # most sessions never open the karaoke pane.
     "yt-dlp>=2025.1.15",
     "gguf>=0.19",
+    "playwright>=1.61.0",
 ]
 
 [project.optional-dependencies]

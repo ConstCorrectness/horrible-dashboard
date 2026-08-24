@@ -1,0 +1,64 @@
+# Fly.io deployment for the public share relay (backend/share_relay).
+#
+# Lives at the repo ROOT for the same reason fly.toml does: flyctl resolves the build
+# context and Dockerfile path relative to the config file's directory, and the image
+# needs repo-root files (pyproject.toml, uv.lock, backend/). Deploy from the root:
+#   fly deploy -c fly.share.toml
+# One-time setup and the operational notes are in docs/architecture/share-relay.mdx.
+#
+# Unlike `horrible-games` (a single always-on authority), this app MAY scale out: it
+# holds no shared state, only per-stream state. The constraint is different and just
+# as strict -- a given stream must be *sticky* to one machine, because the registry
+# and the live tracks are in that machine's memory. `fly-replay` on the share token
+# is what enforces it; the relay emits `fly-replay-src` on every WHIP/WHEP response.
+
+app = 'horrible-share'
+primary_region = 'iad'
+
+[build]
+  dockerfile = 'deploy/share-relay/Dockerfile'
+
+[env]
+  # The origin viewers reach this relay on. Baked in rather than a secret: it appears
+  # verbatim in every link the relay mints, so it is public by construction.
+  SHARE_RELAY_PUBLIC_URL = 'https://horrible-share.fly.dev'
+
+# SHARE_RELAY_KEY is NOT here. It gates minting, so it is a real secret:
+#   fly secrets set SHARE_RELAY_KEY=... -a horrible-share
+# Without it any stranger who can reach the relay can mint streams on it and use the
+# service as free video hosting. The app logs a warning at boot when it is unset.
+
+[http_service]
+  internal_port = 9100
+  force_https = true
+  # Scale to zero is safe here and genuinely wanted: a relay with no live stream is
+  # doing nothing, and a cold start costs the host a second on the first mint. The
+  # media path itself never cold-starts -- WHIP only happens after a successful mint.
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    interval = '15s'
+    timeout = '2s'
+    grace_period = '10s'
+    method = 'GET'
+    path = '/health'
+
+# UDP for the media itself. WebRTC carries RTP over UDP, and a relay reachable only
+# over TCP/443 falls back to TURN-over-TCP at best and simply fails at worst -- the
+# kind of thing that works perfectly in a local test and never in production.
+[[services]]
+  protocol = 'udp'
+  internal_port = 9100
+
+  [[services.ports]]
+    port = 9100
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  # 512mb is enough for the SFU path: frames are forwarded, never decoded. Raise it
+  # before raising the viewer ceiling, not after.
+  memory = '512mb'
+  cpus = 1
+  memory_mb = 512

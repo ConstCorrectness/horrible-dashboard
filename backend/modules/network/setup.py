@@ -61,9 +61,6 @@ async def start_network() -> None:
     peer_hub.register_handler(
         protocol.AGENT_CANCEL, agent_bridge.handle_remote_agent_cancel
     )
-    from backend.modules.network import remote_view
-
-    peer_hub.register_handler(protocol.VIEW_REQUEST, remote_view.handle_view_request)
     peer_hub.register_handler(protocol.COLLAB_OP, collab.handle_peer_collab_op)
     peer_hub.register_handler(protocol.PEER_CHAT, chat.handle_peer_chat)
     from backend.modules.network import remote_control
@@ -90,6 +87,12 @@ async def start_network() -> None:
 
     register_notifications()
     register_notification_tools()
+    # Share sessions: invites, joins, grants, and the SDP/ICE pass-through for
+    # the browser-to-browser media link. After social, because an invite is
+    # addressed to a person rather than to a machine.
+    from backend.modules.share import register_share
+
+    register_share(peer_hub)
     # HorribleAssault: match invites, and playing in a friend's match on their
     # node. Registered after social because an invite is addressed to a person.
     from backend.modules.hassault import fabric as hassault_fabric

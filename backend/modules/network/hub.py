@@ -162,7 +162,7 @@ class PeerHub:
         # Advertised to every peer during the handshake, so a friend's UI can
         # offer only what this node can actually accept — a match invite to a
         # node with no `hassault` is a dead button.
-        return ["agent", "collab", "hassault"]
+        return ["agent", "collab", "hassault", "share"]
 
     def list_peers(self) -> list[PeerInfo]:
         return [s.info for s in self.peers.values()]

@@ -189,3 +189,37 @@ dependency for nine entry points would put a Windows-only concern into
   source.
 - **Fabric audio.** The phone is already a peer; carrying a bus to it (or a strip
   from it) would make any paired device a speaker or a microphone.
+
+## The `Viewers` bus
+
+A shared session's guests are an output like any other. The
+[share module](share.mdx) adds a bus whose `deviceId` is the sentinel
+`horrible:viewers` and whose output is a `MediaStreamDestination` rather than a
+device, so "what the viewers hear" is an ordinary column in the matrix — karaoke
+to the viewers but not to your headphones, or your microphone to both, are one
+checkbox each.
+
+Two things about it are deliberate:
+
+- **Nothing is routed to it when it appears.** The same rule `addBus` follows, for
+  a stronger reason: this output is another person's ears, and defaulting it to
+  carry whatever is playing would make starting a screen share silently broadcast
+  the host's music and notifications.
+- **It has no `<audio>` element.** Every other bus plays locally; this one must
+  not, or the host hears every sound twice and their own microphone echoes back.
+
+- **The sentinel never goes through `resolveDeviceId`.** `horrible:viewers` is not
+  a device id, so looking it up in the OS device list fails and returns `''` —
+  "system default". A bus resolved that way connects to `ctx.destination` and
+  builds no `MediaStreamDestination` at all, which breaks the two rules above at
+  once: guests get silence, and the host hears the viewer mix out of their own
+  speakers. `resolveTarget` short-circuits the sentinel for exactly this reason.
+
+`mixer.busStream(id)` is how the share module reads it. Going through the mixer
+rather than opening its own context is this module's central rule: a private
+`AudioContext` is a module the mixer cannot see, and nothing on screen would
+say so.
+
+Note that a bus **always carries exactly one audio track** once its sink exists,
+silent or not, so track-counting cannot answer "is anything being sent". That
+question is answered from the routing document by `busHasSource`.

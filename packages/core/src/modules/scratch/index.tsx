@@ -130,6 +130,9 @@ export const scratchModule: ModuleManifest = {
       // Network-aware: declares the shared collab room it syncs through, so the
       // shell knows this pane participates in the peer fabric.
       collab: { room: 'shared', key: 'scratch:shared' },
+      // Already collaborative, so a guest gets real editable content for
+      // free — the collab room is the content protocol the mirror lacks.
+      share: { mode: 'collab' },
     },
   ],
   commands: [

@@ -122,6 +122,9 @@ forwarder mapping `node_id → connection`, routing frames by `dst`.
 - **Agent-to-agent**: a remote turn runs under a forced, read-only-by-default mode
   and with no actuating tools, plus an `origin_chain` cycle guard and a hop cap —
   see [Agent chat](../modules/agent-chat.mdx).
+- **Shared sessions**: trust is only the *first* gate. A friend reaching this node
+  says nothing about what they may do inside a session on it, so every guest action
+  passes a per-participant grant ladder — see [Module: share](../modules/share.mdx).
 - **Lifecycle**: the hub is started/stopped by the app lifespan; tests construct
   fresh hubs (with an explicit signer) rather than importing the global so two nodes
   can coexist in one process.

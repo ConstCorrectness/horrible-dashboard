@@ -132,6 +132,8 @@ from backend.modules.network.setup import start_network, stop_network
 from backend.modules.network.transport.direct import ServerPeerLink
 from backend.modules.hassault import handle_hassault_message, hassault_on_disconnect
 from backend.modules.hassault import router as hassault_router
+from backend.modules.share import handle_share_message
+from backend.modules.share import router as share_router
 from backend.modules.social import handle_social_message, subscribe_social_conn
 from backend.modules.social import router as social_router
 from backend.modules.notebook import handle_notebook_message, notebook_manager
@@ -313,6 +315,7 @@ app.include_router(secrets_router, prefix="/api")
 app.include_router(flow_router, prefix="/api")
 app.include_router(network_router, prefix="/api")
 app.include_router(social_router, prefix="/api")
+app.include_router(share_router, prefix="/api")
 app.include_router(hassault_router, prefix="/api")
 app.include_router(training_router, prefix="/api")
 app.include_router(lsp_router, prefix="/api")
@@ -512,6 +515,8 @@ async def ws(websocket: WebSocket) -> None:
                 await handle_chat_message(conn, msg)
             elif channel == "social":
                 await handle_social_message(conn, msg)
+            elif channel == "share":
+                await handle_share_message(conn, msg)
             elif channel == "hassault":
                 await handle_hassault_message(conn, msg)
             else:

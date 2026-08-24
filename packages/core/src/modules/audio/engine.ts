@@ -39,7 +39,13 @@
  */
 
 import { canChooseOutput, resolveDeviceId } from './devices';
-import type { BusConfig, MixerState, StripDecl, StripHandle } from './types';
+import {
+  SHARE_SINK_DEVICE,
+  type BusConfig,
+  type MixerState,
+  type StripDecl,
+  type StripHandle,
+} from './types';
 
 /** dB → linear amplitude. -60 dB is the fader floor and is treated as silence. */
 export function dbToGain(db: number): number {
@@ -280,16 +286,27 @@ class MixerEngine {
 
   // -- buses -------------------------------------------------------------
 
+  /**
+   * The device a bus should end at.
+   *
+   * `SHARE_SINK_DEVICE` is a **sentinel, not a device id**, so it must never go
+   * through `resolveDeviceId` — that looks the id up in the OS device list,
+   * fails to find it, and returns `''` for "system default". The viewers' bus
+   * then connected to `ctx.destination` and produced no `MediaStream` at all:
+   * guests got silence while the host heard the viewer mix out of their own
+   * speakers, which is precisely the doubling-and-echo this bus exists to avoid.
+   */
+  private resolveTarget(config: BusConfig): string {
+    if (config.deviceId === SHARE_SINK_DEVICE) return SHARE_SINK_DEVICE;
+    return resolveDeviceId(config.deviceId, config.deviceLabel, this.devices);
+  }
+
   private ensureBus(config: BusConfig): void {
     const existing = this.buses.get(config.id);
-    const target = resolveDeviceId(config.deviceId, config.deviceLabel, this.devices);
+    const target = this.resolveTarget(config);
 
     if (existing) {
-      const currentTarget = resolveDeviceId(
-        existing.config.deviceId,
-        existing.config.deviceLabel,
-        this.devices,
-      );
+      const currentTarget = this.resolveTarget(existing.config);
       existing.config = config;
       // Only rebuild the output when the *resolved* device changed. Rebuilding
       // on every apply would click audibly on every fader move.
@@ -315,6 +332,17 @@ class MixerEngine {
     bus.gain.disconnect();
     this.teardownElement(bus);
     bus.fellBack = false;
+
+    // The viewers' bus ends in a stream, not a speaker. Deliberately **no**
+    // `<audio>` element: this is what other people hear, and playing it locally
+    // too would double every sound the host is already listening to — and echo
+    // their own microphone back at them.
+    if (deviceId === SHARE_SINK_DEVICE) {
+      const sink = ctx.createMediaStreamDestination();
+      bus.gain.connect(sink);
+      bus.sink = sink;
+      return;
+    }
 
     if (!deviceId || !canChooseOutput()) {
       bus.gain.connect(ctx.destination);
@@ -363,6 +391,19 @@ class MixerEngine {
   private teardownBus(bus: LiveBus): void {
     bus.gain.disconnect();
     this.teardownElement(bus);
+  }
+
+  /**
+   * The live `MediaStream` of a bus that ends in one, or null.
+   *
+   * Only the viewers' bus has one; every other bus ends at a device. Read by the
+   * share module when it builds the outgoing track set — going through the mixer
+   * rather than opening its own context is the rule this whole module exists to
+   * enforce: a private `AudioContext` is a module the mixer cannot see, and
+   * nothing on screen would say so.
+   */
+  busStream(busId: string): MediaStream | null {
+    return this.buses.get(busId)?.sink?.stream ?? null;
   }
 
   /** Buses whose audio is not going where the config says. */

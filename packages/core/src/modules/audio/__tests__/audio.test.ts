@@ -12,6 +12,8 @@ import { describe, expect, it } from 'vitest';
 
 import { hasDeviceLabels, isVirtualDevice, resolveDeviceId } from '../devices';
 import { dbToGain } from '../engine';
+import { busHasSource, SHARE_BUS_ID } from '../store';
+import type { MixerState, StripState } from '../types';
 
 function device(deviceId: string, label: string): MediaDeviceInfo {
   return {
@@ -104,5 +106,52 @@ describe('dbToGain', () => {
 
   it('allows boost above unity', () => {
     expect(dbToGain(6)).toBeGreaterThan(1);
+  });
+});
+
+function strip(id: string, sends: Record<string, boolean>): StripState {
+  return { id, label: id, gain: 0, muted: false, sends };
+}
+
+function mixerState(strips: StripState[]): MixerState {
+  return { version: 1, buses: [], strips, inputDeviceId: '', inputDeviceLabel: '' };
+}
+
+describe('busHasSource', () => {
+  // The reason this exists rather than counting tracks: a
+  // MediaStreamAudioDestinationNode always carries exactly one audio track,
+  // silent or not. Once `ensureShareBus` started actually creating the viewers'
+  // bus, track-counting reported every share as "screen + audio" — a stream
+  // claiming to send sound it was not sending.
+  it('is false when the bus exists but nothing is routed to it', () => {
+    const state = mixerState([strip('mic', { [SHARE_BUS_ID]: false })]);
+    expect(busHasSource(state, SHARE_BUS_ID)).toBe(false);
+  });
+
+  it('is true as soon as one strip sends to it', () => {
+    const state = mixerState([
+      strip('mic', { [SHARE_BUS_ID]: false }),
+      strip('karaoke', { [SHARE_BUS_ID]: true }),
+    ]);
+    expect(busHasSource(state, SHARE_BUS_ID)).toBe(true);
+  });
+
+  it('counts a muted strip as routed', () => {
+    // Muted is one click from audible and the mixer already shows it as muted.
+    // Treating it as "nothing routed" would tell the host to make a routing they
+    // already made.
+    const state = mixerState([{ ...strip('mic', { [SHARE_BUS_ID]: true }), muted: true }]);
+    expect(busHasSource(state, SHARE_BUS_ID)).toBe(true);
+  });
+
+  it('ignores sends to other buses', () => {
+    const state = mixerState([strip('mic', { A1: true })]);
+    expect(busHasSource(state, SHARE_BUS_ID)).toBe(false);
+  });
+
+  it('is false before the mixer document has loaded', () => {
+    // The unloaded case is the one that used to be silent: no document meant no
+    // bus, and the pane blamed the host for not routing a strip.
+    expect(busHasSource(null, SHARE_BUS_ID)).toBe(false);
   });
 });

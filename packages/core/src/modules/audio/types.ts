@@ -37,6 +37,20 @@ export interface StripDecl {
   defaultSends?: string[];
 }
 
+/**
+ * The `deviceId` of the bus that feeds a shared session's viewers.
+ *
+ * A sentinel rather than a real device id, because there is no device: the bus
+ * ends in a `MediaStreamDestination` that a WebRTC sender reads. It lives in the
+ * matrix as an ordinary output so that "what the viewers hear" is a column the
+ * user can route any strip into — which is the whole reason this module has a
+ * matrix instead of an output setting. Karaoke to the viewers but not to your
+ * headphones, or your microphone to both, are one checkbox each.
+ *
+ * Namespaced with a scheme a real `MediaDeviceInfo.deviceId` cannot collide with.
+ */
+export const SHARE_SINK_DEVICE = 'horrible:viewers';
+
 /** An output. A bus with no `deviceId` is the system default. */
 export interface BusConfig {
   id: string;

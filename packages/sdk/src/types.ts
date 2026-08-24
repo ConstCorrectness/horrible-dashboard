@@ -29,7 +29,14 @@ export type Capability =
   // Desktop-only (Tauri multi-webview). Distinct from `browser.nativeWindow`, which
   // pops a page out to a separate OS window: this one stays inside the pane, at the
   // cost of compositing above the HTML layer — see src-tauri/src/webview.rs.
-  | 'browser.nativeWebview';
+  | 'browser.nativeWebview'
+  // `getDisplayMedia` actually works here. Granted in every browser and on the
+  // Windows/Linux desktop, and **withheld on the macOS desktop**: WKWebView
+  // exposes the function and then rejects it with `NotAllowedError`, which is
+  // indistinguishable from the host dismissing the picker. Feature detection
+  // therefore cannot see this one — the API is present and lying — so it has to
+  // be a capability the shell asserts from what it knows about its own platform.
+  | 'media.displayCapture';
 
 /**
  * Minimal JSON Schema subset used to describe an agent tool's arguments to the
@@ -130,6 +137,37 @@ export interface CollabDecl {
 }
 
 /**
+ * How a pane appears to a **guest** in a shared session.
+ *
+ * Absent means **redacted**, and that default is the whole point. A guest sees a
+ * pane only if the pane said it may be seen, so the panes that render secrets —
+ * `settings` (which draws secret-shaped values), `connectors` (account state) —
+ * are invisible by construction rather than by anyone remembering to exclude
+ * them. A pane written next year that forgets to declare leaks nothing; the cost
+ * is one line per pane, paid once, in the direction it is safe to be wrong.
+ *
+ * The host's own browser applies this before anything reaches the wire, so an
+ * undeclared pane is not merely unrendered by the guest — its view id, its params
+ * and its instance title never leave the machine. See docs/modules/share.mdx.
+ */
+export interface PaneShareDecl {
+  /**
+   * - `collab` — live and editable through the pane's existing `collab` room.
+   * - `mirror` — live, read-only, structured (terminal scrollback, a transcript).
+   * - `pixels` — no structured protocol; visible only in the video stream.
+   */
+  mode: 'collab' | 'mirror' | 'pixels';
+  /**
+   * Params keys a guest may see. **Everything not named here is stripped**, the
+   * same deny-by-default rule one level down — a pane's params routinely carry
+   * the very thing worth hiding (a file path, a URL, a row id), so an allowlist
+   * is the only safe shape. Omit and the guest gets no params at all, which is
+   * the right answer for a pane whose identity is enough.
+   */
+  params?: string[];
+}
+
+/**
  * Declaration of a Panel View. A Panel is a multi-instance view (e.g. terminals,
  * editor buffers) by default. Each time it is opened, a new Pane instance is
  * created, unless `singleton` is set to true.
@@ -198,6 +236,8 @@ export interface PanelDecl {
   agentTools?: AgentToolDecl[];
   /** When set, this pane is network-aware: it syncs over the `collab` channel. */
   collab?: CollabDecl;
+  /** How this pane appears to a guest in a shared session. Absent = redacted. */
+  share?: PaneShareDecl;
   /**
    * @deprecated Alias for `capture: { mode: 'keyboard', escape: 'passthrough' }`.
    * Means "this view needs the plain-letter keys (t, n, b) for itself".
@@ -292,6 +332,8 @@ export interface WidgetDecl {
   agentTools?: AgentToolDecl[];
   /** When set, this pane is network-aware: it syncs over the `collab` channel. */
   collab?: CollabDecl;
+  /** How this pane appears to a guest in a shared session. Absent = redacted. */
+  share?: PaneShareDecl;
   /**
    * @deprecated Alias for `capture: { mode: 'keyboard', escape: 'passthrough' }`.
    * Means "this view needs the plain-letter keys (t, n, b) for itself".

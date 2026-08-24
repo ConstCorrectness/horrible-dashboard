@@ -66,6 +66,16 @@ _STREAMING_CONTENT_TYPES = ("text/event-stream", "application/x-ndjson")
 # that carries these very events — recording it would feed back on itself.
 _SKIP_WS_CHANNELS = ("telemetry",)
 
+# Individual `channel/event` pairs that are not recorded, for a channel that is
+# otherwise worth watching. `share/signal` is a WebRTC SDP blob relayed verbatim
+# between two browsers: kilobytes of codec lines this node never interprets, and
+# a session negotiates one per participant. `share/mirror` and its outbound twin
+# are the redacted workspace projection — a few KB of structure republished on
+# every layout change, throttled to ~2.5/s but still the largest repeated payload
+# here. The rest of the `share` channel is small and genuinely useful in the
+# panel, so the channel-level skip would be a blunt instrument.
+_SKIP_WS_EVENTS = ("share/signal", "share/mirror", "share/remote_mirror")
+
 
 def capture_headers(headers: object) -> dict[str, str]:
     """Lowercased header map, values captured raw (no redaction)."""
@@ -259,6 +269,8 @@ def record_ws_frame(direction: str, data: object) -> None:
         return
     event_name = data.get("event") or data.get("type")
     target = f"{channel}/{event_name}" if event_name else channel
+    if target in _SKIP_WS_EVENTS:
+        return
     try:
         compact = json.dumps(data, separators=(",", ":"), default=str)
         pretty = json.dumps(data, indent=2, default=str)
