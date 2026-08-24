@@ -213,11 +213,32 @@ arguments, a card with no snippet) instead of leaving a gap where a border was.
 
 ### One control height
 
-`--control-h` (30px) is imposed in `primitives.css` on inputs, selects, textareas
-*and* buttons alike. Those four have four different intrinsic heights, so a form row
+`--control-h` (30px) is imposed in `controls.css` at the **element** level — on
+`input`, `select` and `button` themselves, not only on `.hd-field` — as well as in
+`primitives.css`. Those four have four different intrinsic heights, so a form row
 built from a select, a text input and a small button is ragged unless one number is
 imposed on all of them — and a row of controls that do not share a baseline is the
 single loudest sign of an unfinished form.
+
+The element-level rule matters because most of this app is not built from the
+primitives: 701 raw `<button>` against 74 `<Button>`, and `--control-h` was
+referenced in exactly four places, all inside `primitives.css` and
+`resourcecard.css`. A form built from bare elements therefore had three intrinsic
+heights in a row and never lined up, which is the mechanism behind the observation
+that two panes docked side by side never agreed.
+
+It is a fixed `height` with the vertical padding removed, not a `min-height`: with
+padding left in, an input settled at 34px while a `<select>` settled at 36px
+(native rendering reserves room for its own arrow), so a row containing both was
+still 2px ragged — exactly the defect the rule exists to prevent. `textarea` is the
+one shape excluded, since it has to grow; it keeps its padding and floors at two
+control-heights.
+
+`select` additionally takes `min-width: 0`. A select sizes to its longest option
+string unless told otherwise, and `min-width: auto` is the flex default — which is
+how the Settings "Model override" select measured 413px inside a 348px pane,
+escaping its container with no way to scroll to it. Panes here are user-resized
+down to ~320px, so no control may derive its width from its content.
 
 It sits with the scale rather than with a theme, for the scale's reason: how tall a
 text box is does not change when you change how the app looks.
@@ -269,6 +290,34 @@ That is the failure mode worth naming: a missing token does not look like a bug.
 looks like a theme nobody likes. Nothing throws, nothing warns, the pane just
 quietly ignores the switcher — and the fallback makes it *look* deliberate.
 
+### The other half: literals
+
+The token guard cannot see the opposite failure — a literal `#161b22` in an inline
+style object, which names no token at all and so is invisible to the switcher by
+construction. That half was the larger one. Whole modules were painted in other
+products' palettes (GitHub Primer dark, Tailwind defaults), and one had hardcoded
+the app's *own* midnight values, which is the worst case: it looks correct in the
+default theme and silently ignores the other five. Switching to `daylight` rendered
+one pane light and the pane beside it fully dark.
+
+`packages/core/src/__tests__/no-hex-literals.test.ts` is the ratchet for it. It
+counts hex literals in `.ts`/`.tsx` across three buckets and fails when any bucket
+grows:
+
+| Bucket     | What it is                                                                  |
+| ---------- | --------------------------------------------------------------------------- |
+| `rest`     | Code that is supposed to be theme-driven. The number that should fall.       |
+| `excluded` | `games`, `hassault`, `clubhouse` — held out by an explicit scope decision.   |
+| `canvas`   | Call sites that genuinely cannot read a custom property.                     |
+
+Two things are worth being honest about. The excluded modules hold the three worst
+files in the app, so this guard protects new and recently-cleaned code rather than
+retroactively cleaning them — the ratchet only stops them getting worse. And the
+`canvas` bucket is small: "it has to be a literal because it is drawn to a canvas"
+turns out to explain almost none of the hardcoded colour here.
+
+### The guard's mechanics
+
 The test collects declarations from three spellings, because all three are in use
 and missing one turns a legitimate local variable into a false failure:
 
@@ -280,6 +329,24 @@ and missing one turns a legitimate local variable into a false failure:
 
 When it fails, the fix is usually to add the name to the alias block — most
 offenders are another spelling of a token that already exists.
+
+## Icons
+
+`packages/core/src/glyphs.tsx` is the shared icon set: drawn vectors on a 16x16 box
+at a 1.5 stroke, inheriting `currentColor`, sized from `--icon-size` (13px — the
+size that sits on the cap height of `--fs-label`, which is the type an icon almost
+always appears beside).
+
+DESIGN.md's rule has always been that an in-pane icon is a drawn vector and never a
+native emoji — the one documented exception being a pane manifest's `icon:` field,
+which is the activity rail's own convention. The rule was widely broken for a
+boring reason: there was nowhere to get an icon from, so every pane reached for the
+glyph on its keyboard. A rule with no supply is a rule that loses.
+
+It lives in `core` rather than `ui` because core modules need it and `core -> ui`
+would be an import cycle. Sizing is done in CSS (`.hd-icon`), not on the `width`
+and `height` attributes: a `var()` is not valid in an SVG geometry attribute and
+fails silently to the 300x150 replaced-element default.
 
 ## Controls
 

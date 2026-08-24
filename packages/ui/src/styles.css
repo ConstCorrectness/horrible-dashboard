@@ -1954,11 +1954,17 @@ body {
 
 .settings-title {
   margin: 0;
-  font-family: var(--font-display);
-  font-size: 1.75rem;
-  font-weight: 400;
-  line-height: 1.1;
-  letter-spacing: 0.01em;
+  /* Was `--font-display` (Instrument Serif, 28px/400) — the app's only editorial
+     headline, on its most utilitarian page. DESIGN.md reserves that face for
+     ceremony type (a games hero, a result announcement) and says its scarcity is
+     the point; spending it on Settings is what made it stop meaning anything.
+     This is identity type instead: uppercase, tracked, on the ramp. */
+  font-family: var(--font-sans);
+  font-size: var(--fs-display);
+  font-weight: var(--fw-bold);
+  line-height: 1.2;
+  letter-spacing: var(--tracking-display);
+  text-transform: uppercase;
 }
 
 .settings-search {
@@ -2041,7 +2047,7 @@ body {
   scroll-margin-top: 1rem;
 }
 
-.settings-group h3 {
+.settings-group h2 {
   margin: 0 0 0.15rem;
   color: var(--text-strong);
   font-size: 1.05rem;
@@ -2217,7 +2223,7 @@ body {
   }
 
   .settings-title {
-    font-size: 1.35rem;
+    font-size: var(--fs-lead);
   }
 
   .settings-search {
@@ -2759,7 +2765,11 @@ body {
   margin-left: 0.4rem;
   background: var(--bg-hover);
   border: 1px solid var(--border);
-  color: var(--text-dim);
+  /* `--text-dim` is the telemetry tone and measured 4.49:1 here against
+     `--bg-hover` in midnight and 4.2:1 in daylight — under 4.5:1 in both. It is
+     the right colour for a muted *figure* and the wrong one for the label of a
+     button you are meant to click. */
+  color: var(--text);
   border-radius: 0.3rem;
   padding: 0.1rem 0.45rem;
   cursor: pointer;
@@ -3078,6 +3088,40 @@ body {
   border-color: var(--accent, #6ea8fe);
 }
 
+/* A literal the user must transcribe. The recessed well plus the mono treatment
+   is the app's existing signal for "this is a value, not prose". */
+.copyable-value {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+.copyable-value-label {
+  font-size: var(--fs-micro);
+  font-family: var(--font-mono);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-badge);
+  text-transform: uppercase;
+  color: var(--text-dim);
+  width: 100%;
+}
+
+.copyable-value-code {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-meta);
+  color: var(--text);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
 .integration-form {
   display: flex;
   flex-direction: column;
@@ -3324,7 +3368,10 @@ kbd {
 }
 
 .widget-error {
-  color: #f08c8c;
+  /* Was a literal `#f08c8c`, which measured 2.4:1 on white in the light theme —
+     the single worst contrast in the app, on the text that reports failures.
+     `--danger` is the token that already means this and follows the theme. */
+  color: var(--danger);
 }
 
 .dashboard-empty,
@@ -3343,11 +3390,117 @@ kbd {
 .mk-banner {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  padding: 0.5rem 0.75rem;
-  margin: 0.5rem 0;
-  border: 1px solid var(--border, #444);
-  border-radius: 6px;
+  gap: var(--space-5);
+  padding: var(--space-4) var(--space-5);
+  margin: var(--space-4) 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.mk-banner-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.mk-banner-title {
+  display: block;
+  font-size: var(--fs-label);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-display);
+  text-transform: uppercase;
+}
+
+.mk-banner-body {
+  margin: var(--space-2) 0 0;
+  font-size: var(--fs-body);
+  line-height: 1.45;
+  color: var(--text-dim);
+  max-width: 60ch;
+}
+
+/* The one sentence on this pane that carries real risk. It gets the warn colour
+   and the alert glyph so it cannot be mistaken for the muted description text
+   it used to share a class with. */
+.mk-trust {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-body);
+  line-height: 1.35;
+  color: var(--warn);
+}
+
+/* A pane-level alert. Same construction as the agent readiness banner — the 9px
+   notch and a 2px leading rail — because they are the same kind of object and a
+   reader should not have to learn two. */
+.mk-alert {
+  position: relative;
+  margin: var(--space-4) 0;
+  padding: var(--space-4) var(--space-5);
+  padding-left: var(--space-6);
+  clip-path: polygon(9px 0, 100% 0, 100% 100%, 0 100%, 0 9px);
+  background: color-mix(in srgb, var(--hd-alert-accent) 12%, var(--bg-raised));
+  border: 1px solid color-mix(in srgb, var(--hd-alert-accent) 40%, var(--border));
+}
+
+.mk-alert[data-kind='fail'] {
+  --hd-alert-accent: var(--danger);
+}
+.mk-alert[data-kind='warn'] {
+  --hd-alert-accent: var(--warn);
+}
+
+.mk-alert::before {
+  content: '';
+  position: absolute;
+  inset: 9px auto 0 0;
+  width: 2px;
+  background: var(--hd-alert-accent);
+}
+
+.mk-alert-title {
+  display: block;
+  font-size: var(--fs-label);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-display);
+  text-transform: uppercase;
+  /* Same reason as `.agent-readiness-title`: the rail is the verdict. */
+  color: var(--text-strong);
+}
+
+.mk-alert-body {
+  margin: var(--space-3) 0 var(--space-4);
+  font-size: var(--fs-body);
+  line-height: 1.45;
+  color: var(--text);
+  max-width: 60ch;
+}
+
+.mk-alert-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mk-alert-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  font-size: var(--fs-meta);
+  font-family: var(--font-mono);
+}
+
+.mk-alert-id {
+  color: var(--text);
+}
+
+.mk-alert-reason {
+  color: var(--text-dim);
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .mk-list {
@@ -3509,6 +3662,160 @@ kbd {
 
 .agent-chat-input button {
   border-radius: 999px;
+}
+
+/* ------------------------------------------------ agent empty transcript --
+ *
+ * Three clickable openers instead of one grey sentence. They are rows, not
+ * cards: square, hairline-bordered, taking the 9px notch and shifting 2px right
+ * on hover exactly as `hd-row` does, so the first thing a new user meets is
+ * already speaking the app's own vocabulary.
+ */
+.agent-chat-starters {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-6) var(--space-2);
+}
+
+.agent-chat-starters-lead {
+  margin: 0;
+  font-size: var(--fs-body);
+  line-height: 1.45;
+  color: var(--text);
+  max-width: 46ch;
+}
+
+.agent-chat-starter-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.agent-chat-starter {
+  display: block;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  padding: var(--space-3) var(--space-5);
+  clip-path: polygon(9px 0, 100% 0, 100% 100%, 0 100%, 0 9px);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  color: var(--text);
+  font-family: inherit;
+  font-size: var(--fs-body);
+  line-height: 1.45;
+  transition:
+    background var(--dur-fast) var(--ease-standard),
+    border-color var(--dur-fast) var(--ease-standard),
+    transform var(--dur-fast) var(--ease-standard);
+}
+
+.agent-chat-starter:hover {
+  background: var(--bg-hover);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  transform: translateX(2px);
+}
+
+.agent-chat-starter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.agent-chat-starters-foot {
+  margin: 0;
+  font-size: var(--fs-meta);
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-chat-starter {
+    transition: none;
+  }
+  .agent-chat-starter:hover {
+    transform: none;
+  }
+}
+
+/* ---------------------------------------------------- agent readiness --
+ *
+ * The banner that replaced "Agent not ready" as an input placeholder. It is
+ * built as a row, not as a card: the 9px clipped top-left corner and a 2px
+ * leading rail carrying the verdict colour, so it reads in the same vocabulary
+ * as every other verdict in the app. The rail is a pseudo-element inset past
+ * the notch rather than a `border-left`, because a clipped border loses its
+ * own corner.
+ */
+.agent-readiness {
+  position: relative;
+  margin: var(--space-4) var(--space-4) 0;
+  padding: var(--space-4) var(--space-5);
+  padding-left: var(--space-6);
+  clip-path: polygon(9px 0, 100% 0, 100% 100%, 0 100%, 0 9px);
+  background: color-mix(in srgb, var(--hd-readiness-accent) 12%, var(--bg-raised));
+  border: 1px solid color-mix(in srgb, var(--hd-readiness-accent) 40%, var(--border));
+  color: var(--text);
+}
+
+.agent-readiness[data-kind='warn'] {
+  --hd-readiness-accent: var(--warn);
+}
+.agent-readiness[data-kind='fail'] {
+  --hd-readiness-accent: var(--danger);
+}
+.agent-readiness[data-kind='info'] {
+  --hd-readiness-accent: var(--accent);
+}
+
+.agent-readiness::before {
+  content: '';
+  position: absolute;
+  inset: 9px auto 0 0;
+  width: 2px;
+  background: var(--hd-readiness-accent);
+}
+
+.agent-readiness-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--hd-readiness-accent);
+}
+
+/* Identity type: uppercase and tracked, the same job a row title does. */
+.agent-readiness-title {
+  font-size: var(--fs-label);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--tracking-display);
+  text-transform: uppercase;
+  min-width: 0;
+  /* The rail and the glyph carry the verdict colour; the title does not. Tinting
+     11px bold type with `--warn` measured 4.42:1 on the banner's own tinted
+     ground in daylight — and the Leading Edge Rule already says colour rides the
+     edge rather than the type. */
+  color: var(--text-strong);
+}
+
+/* The body is the sentence that says what to do. Full-strength text rather than
+   dim: it is the only instruction on screen at the moment it appears. */
+.agent-readiness-body {
+  margin: var(--space-3) 0 0;
+  font-size: var(--fs-body);
+  line-height: 1.45;
+  color: var(--text);
+  max-width: 46ch;
+}
+
+.agent-readiness-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
 }
 
 .agent-session-bar {
@@ -7045,4 +7352,43 @@ kbd {
 
 .llama-picker-text {
   font-family: var(--font-mono, monospace);
+}
+
+/* ------------------------------------------------ focus, where it went missing --
+ *
+ * `outline: none` appears throughout this stylesheet, and on a bordered input it
+ * is correct and documented: the outline is removed and the *border* becomes the
+ * accent, so the control still says it has focus.
+ *
+ * These four had the removal without the replacement, so keyboard focus was
+ * simply invisible on them — in an app whose stated north star is keyboard-first.
+ * Each gets the treatment its shape allows: a border swap where there is a
+ * border, a ring where there is not.
+ *
+ * `:focus-visible`, never `:focus`, so a mouse click does not leave a ring behind.
+ */
+
+/* Bordered: the border carries it, per the house pattern. */
+.agent-chat-input input:focus-visible {
+  border-color: var(--accent);
+}
+
+/* Borderless input inside a bordered shell — the shell takes the ring, because
+   ringing a transparent input draws a box around nothing. */
+.ask-bar:focus-within {
+  border-color: var(--accent);
+}
+
+/* A textarea that fills its pane: an inset ring, so it is not clipped by the
+   pane edge the way an outset one would be. */
+.scratch:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* A roving-focus list container. Without this, arrow-keying through the file
+   tree moved a selection nothing on screen reported. */
+.file-tree-rows:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }

@@ -1,0 +1,20 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "design-system-color",
+        "value": "#000080",
+        "createdAt": "2026-08-24T00:33:47.823Z",
+        "reason": "retro theme's Win95 active-titlebar primitive; themes.css is the one file where literals are the contract"
+      },
+      {
+        "rule": "design-system-color",
+        "value": "#1084d0",
+        "createdAt": "2026-08-24T00:33:47.903Z",
+        "reason": "retro theme's Win95 active-titlebar primitive; themes.css is the one file where literals are the contract"
+      }
+    ]
+  }
+}

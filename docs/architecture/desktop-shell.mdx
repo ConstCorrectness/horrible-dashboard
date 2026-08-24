@@ -170,10 +170,10 @@ the same kind of thing to the desktop, and a plugin should be able to add one.
 | id       | What it is                                                                                                          |
 | -------- | ------------------------------------------------------------------------------------------------------------------- |
 | `none`   | Flat `--bg`.                                                                                                        |
-| `aurora` | **The default.** Three blurred CSS gradients drifting on a long keyframe, built from theme tokens.                  |
+| `aurora` | Three blurred CSS gradients drifting on a long keyframe, built from theme tokens.                                   |
 | `grid`   | Canvas: a drifting grid with a scanline sweep. Pairs with `hud`.                                                    |
 | `image`  | A wallpaper the user uploaded. `params: { url, fit, dim }`.                                                         |
-| `splash` | The old home screen — avatar, ask bar, connector tiles — with windows over the top. Collapses to a docked ask bar; see below. |
+| `splash` | **The default.** The home screen — avatar, ask bar, connector tiles — with windows over the top. Collapses to a docked ask bar; see below. |
 | `pulse`  | Canvas: one ripple per request through this node, read from the same `telemetryStore` the observability panel uses. |
 | `board`  | Widgets laid straight onto the desktop.                                                                             |
 
@@ -186,6 +186,20 @@ A decorative one stays `pointer-events: none` and a transparent catcher over it
 collects the clicks, so the desktop's right-click menu works across the whole
 surface. That catcher is skipped entirely for an interactive backdrop, which would
 otherwise be sealed behind it.
+
+### The default must be an interactive backdrop
+
+`DEFAULT_BACKDROP` (`packages/core/src/layout/types.ts`) is `splash`, and that is a
+product decision rather than a cosmetic one. `HomeView` — the avatar, ask bar,
+connector tiles and first-run `SetupCard` — is rendered by **exactly one thing in
+the app**, the `splash` backdrop. While the default was `aurora`, a clean install
+opened on a wallpaper and a taskbar, and the whole tier-1 entry surface (the one
+PRODUCT.md says must work for someone who never opens a terminal) was unreachable
+unless the user happened to pick "Home" out of a list of seven wallpapers.
+
+`packages/core/src/__tests__/front-door.test.ts` enforces this: the default must be
+a backdrop declared `interactive`, and that backdrop must still mount `HomeView`.
+It is the reachability invariant the panes already have, applied to a *surface*.
 
 **An unregistered backdrop id falls back rather than blanking the desktop.** A
 plugin can be uninstalled while a saved workspace still names its backdrop; losing a
@@ -449,8 +463,30 @@ filtered exactly as the palette's openers are — an embedded view lives inside 
 pane, and a launcher entry would present it as a second, competing home.
 
 It is **grouped by the owning module** (`registry.viewOwner`) — Browser, Library,
-Games — with headings alphabetical and an `Other` bucket, for a view whose module
-declares no title, pinned last.
+Games — with headings alphabetical and an **All panes** bucket pinned last.
+
+That bucket holds two things: a view whose module declares no title, and **every
+module contributing only one pane**. A heading above a single row groups nothing
+while costing the same vertical space as a row that does — 22 of the 38 module
+headings owned exactly one pane, so over half the height of the launcher was spent
+on labels the reader could already see. Collapsing them takes the menu from 38
+headings to 10.
+
+Above the groups sits a **Recent** band: the last six panes opened, most recent
+first, from `layout/recents.ts`. It is recorded in `registry.openPanel`, so every
+route to a pane — launcher, command palette, spotlight, an agent tool — feeds one
+history. It lives in `localStorage` rather than settings deliberately: it is a
+per-device convenience, it changes on every open (a settings PUT per launch would
+be absurd), and `GET /api/settings` hands the whole bag to the browser. Ids are
+resolved against the live registry on read, so a renamed or uninstalled pane drops
+out instead of offering a dead entry. The band is absent until something has been
+opened — an empty "Recent" heading is a promise the launcher has not kept — and it
+is hidden while searching, where it would compete with the results.
+
+Workspace names are made unique on create and rename (`uniqueWorkspaceName`),
+because this menu shows a desktop by name and nothing else: two rows both reading
+"Workspace" make switching a coin flip, and the user finds out which they picked
+only after the layout has been replaced.
 
 The grouping used to be by **`PaneRole`**: Documents / Tools / Widgets. Sixty-odd
 entries in one alphabetical run did say nothing, but the role answers a question

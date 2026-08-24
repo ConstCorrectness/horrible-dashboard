@@ -3,6 +3,7 @@
 import type { ComponentType } from 'react';
 
 import { frameCommandHandler } from './layout/frame-bus';
+import { noteViewOpened } from './layout/recents';
 import type { FramePreset } from './layout/presets';
 import type { ContextMenuProvider } from './overlay/context-menu';
 
@@ -478,6 +479,11 @@ class ModuleRegistry {
   }
 
   openPanel(panelId: string, opts?: OpenPaneOptions): void {
+    // Recorded here rather than at each call site, so every route to a pane —
+    // the launcher, the command palette, spotlight, an agent tool — feeds the
+    // same history. Only a real open counts: with no opener installed there is
+    // no shell yet, and remembering a pane the user never saw would be a lie.
+    if (this.panelOpener) noteViewOpened(panelId);
     this.panelOpener?.(panelId, opts);
   }
 

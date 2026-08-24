@@ -6,7 +6,20 @@ export {
   type Capability,
 } from './capabilities';
 export { ApiError, apiDelete, apiGet, apiPost, apiPut } from './api';
-export { CopyableLink } from './CopyableLink';
+export { CopyableLink, CopyableValue } from './CopyableLink';
+/** The shared icon set. Drawn vectors inheriting `currentColor` — the
+ *  alternative every pane reached for was a native emoji. */
+export {
+  IconAlert,
+  IconCheck,
+  IconChevron,
+  IconClock,
+  IconPlus,
+  IconRetry,
+  IconSearch,
+  IconSend,
+  IconTrash,
+} from './glyphs';
 /** The shared list-row design system. See DataList.tsx — modules compose rows
  * from these rather than styling their own, so "a record with a verdict and
  * some figures" looks the same everywhere it appears. */
@@ -90,6 +103,8 @@ export { onSocketOpen, sendChannel, subscribeChannel, type WsMessage } from './w
 // The frame layout engine (packages/ui renders it; modules go through the
 // registry / controller, never the store directly).
 export { layoutStore } from './layout/store';
+/** Recently opened panes — the Start menu's Recent band. */
+export { MAX_RECENTS, recentViewIds, subscribeRecents } from './layout/recents';
 export type { LayoutAction } from './layout/actions';
 export {
   findArea,

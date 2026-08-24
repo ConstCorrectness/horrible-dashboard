@@ -24,8 +24,10 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'reac
 import {
   layoutStore,
   openContextMenu,
+  recentViewIds,
   registry,
   resolveViewIcon,
+  subscribeRecents,
   useWorkspaces,
   type PanelDecl,
   type WidgetDecl,
@@ -53,8 +55,15 @@ export function StartButton({ showLabels }: { showLabels: boolean }) {
 
 type View = PanelDecl | WidgetDecl;
 
-/** Where a pane with no owning module is filed. Last, and named for what it is. */
-const UNGROUPED = 'Other';
+/**
+ * The catch-all band, pinned last.
+ *
+ * It holds panes with no owning module *and* every module that contributes just
+ * one pane — for that pane, the module name is a heading over a single row, which
+ * tells the reader nothing they cannot see. Named for what it is to someone
+ * browsing, not for the registry condition that fills it.
+ */
+const UNGROUPED = 'All panes';
 
 /**
  * The views, bucketed by owning module and sorted for browsing.
@@ -71,16 +80,30 @@ function groupByOwner(views: View[]): { label: string; views: View[] }[] {
     if (bucket) bucket.push(v);
     else buckets.set(owner, [v]);
   }
-  return [...buckets.entries()]
-    .map(([label, group]) => ({
-      label,
-      views: [...group].sort((a, b) => a.title.localeCompare(b.title)),
-    }))
-    .sort((a, b) => {
-      if (a.label === UNGROUPED) return 1;
-      if (b.label === UNGROUPED) return -1;
-      return a.label.localeCompare(b.label);
+
+  // A heading above a single row is not structure, it is noise that doubles the
+  // height of the list: 22 of the 38 module headings owned exactly one pane, so
+  // more than half the vertical space in the launcher was spent on labels that
+  // grouped nothing. Those panes are gathered into one band instead, which is
+  // also where an unowned pane already went.
+  const grouped: { label: string; views: View[] }[] = [];
+  const singles: View[] = [];
+  for (const [label, group] of buckets) {
+    if (label !== UNGROUPED && group.length > 1) {
+      grouped.push({ label, views: [...group].sort((a, b) => a.title.localeCompare(b.title)) });
+    } else {
+      singles.push(...group);
+    }
+  }
+
+  grouped.sort((a, b) => a.label.localeCompare(b.label));
+  if (singles.length) {
+    grouped.push({
+      label: UNGROUPED,
+      views: singles.sort((a, b) => a.title.localeCompare(b.title)),
     });
+  }
+  return grouped;
 }
 
 function StartMenu({ onClose }: { onClose: () => void }) {
@@ -156,6 +179,11 @@ function StartMenu({ onClose }: { onClose: () => void }) {
         {/* A search that has narrowed to a handful does not need headings, and
             grouping four results under three labels reads as more structure
             than there is content. Groups are for browsing. */}
+        {/* Recent first, and only while browsing: a search already knows what you
+            are looking for, and a Recent band above the results would compete
+            with them. Absent entirely until something has been opened, because
+            an empty "Recent" heading is a promise the launcher has not kept. */}
+        {!searching && <RecentGroup views={views} onLaunch={launch} />}
         {searching
           ? matches.map((v) => <StartItem key={v.id} view={v} onLaunch={launch} />)
           : groups.map(({ label, views: group }) => (
@@ -207,6 +235,32 @@ function StartMenu({ onClose }: { onClose: () => void }) {
           <span aria-hidden="true">◐</span> Theme
         </button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The panes you opened most recently.
+ *
+ * The launcher's answer to its own size. Fifty-one openers is a taxonomy, and a
+ * taxonomy is the right structure for finding something the first time and the
+ * wrong one for the fourth — most sessions reach for the same handful.
+ *
+ * Ids are resolved against the live `views` list rather than trusted: a pane can
+ * be renamed, or come from a plugin that is no longer installed, and a Recent
+ * entry that opens nothing is worse than no Recent entry.
+ */
+function RecentGroup({ views, onLaunch }: { views: View[]; onLaunch: (id: string) => void }) {
+  const ids = useSyncExternalStore(subscribeRecents, recentViewIds, recentViewIds);
+  const byId = useMemo(() => new Map(views.map((v) => [v.id, v])), [views]);
+  const recent = ids.map((id) => byId.get(id)).filter((v): v is View => Boolean(v));
+  if (!recent.length) return null;
+  return (
+    <div className="os-start-group">
+      <h3 className="os-start-group-head">Recent</h3>
+      {recent.map((v) => (
+        <StartItem key={v.id} view={v} onLaunch={onLaunch} />
+      ))}
     </div>
   );
 }

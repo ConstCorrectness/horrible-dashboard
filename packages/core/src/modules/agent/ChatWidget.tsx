@@ -14,7 +14,10 @@
 import { Fragment, useEffect, useRef, useState, type FormEvent } from 'react';
 
 import { Avatar3D, DEFAULT_AVATAR_MOOD, DEFAULT_AVATAR_MOODS } from '../../Avatar3D';
+import { dialogs } from '../../dialogs';
+import { IconPlus, IconSend, IconTrash } from '../../glyphs';
 import { useSetting } from '../../settings';
+import { AgentReadiness } from './AgentReadiness';
 import { getAgentRoster, getAgentStatus, type AgentStatus, type RosterAgent } from './api';
 import { compactHistory, MAX_HISTORY_TURNS } from './history';
 import { askAgent } from './orchestrator-client';
@@ -36,6 +39,14 @@ import { agentForWorkspace, setWorkspaceAgent } from '../../layout/persistence';
 import { useWorkspaces } from '../../workspace-store';
 
 const AVATAR_MOODS = Object.keys(DEFAULT_AVATAR_MOODS);
+
+/** Opening prompts for an empty transcript. Each one exercises a different half of
+ *  what makes this agent unlike a chat box: layout control, pane reading, editing. */
+const AGENT_STARTERS = [
+  'Open the terminal and the file explorer side by side',
+  'What is on screen right now?',
+  'Summarise the file open in the editor',
+];
 
 interface ChatTurn {
   role: 'user' | 'assistant' | 'system';
@@ -177,6 +188,15 @@ export function ChatWidget() {
   const [workspaceFiles, setWorkspaceFiles] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  /** Re-ask the node for its agent status. The readiness banner's Retry runs this,
+   *  so a user who just started their model server can recover without a reload. */
+  const refreshStatus = () => {
+    setStatus('loading');
+    getAgentStatus()
+      .then(setStatus)
+      .catch(() => setStatus('backend-down'));
+  };
+
   useEffect(() => {
     getAgentStatus()
       .then(setStatus)
@@ -295,6 +315,27 @@ export function ChatWidget() {
     } catch {
       /* leave current */
     }
+  };
+
+  /**
+   * Ask before destroying a transcript.
+   *
+   * There is no undo behind `deleteSession`, and the control sits beside "New
+   * chat", so the cost of a misclick is a conversation gone with no way back.
+   * The dialog names the conversation rather than saying "this chat", because
+   * the whole risk is having the wrong one selected.
+   */
+  const confirmRemoveSession = async () => {
+    const id = activeIdRef.current;
+    if (!id) return;
+    const title = sessions.find((s) => s.id === id)?.title;
+    const ok = await dialogs.confirm({
+      title: title ? `Delete “${title}”?` : 'Delete this chat?',
+      message: 'The transcript is removed from this node. This cannot be undone.',
+      confirmLabel: 'Delete',
+      danger: true,
+    });
+    if (ok) await removeSession(id);
   };
 
   // Lazily create a session on the first real message, titled from the prompt.
@@ -535,16 +576,27 @@ export function ChatWidget() {
             </option>
           ))}
         </select>
-        <button type="button" title="New chat" onClick={() => void newSession()}>
-          ＋
+        {/* Both were unlabelled emoji (＋ and 🗑) sitting 24px apart, and the
+            destructive one fired immediately. Now they are drawn glyphs with
+            accessible names, and deleting names the conversation it is about to
+            destroy — there is no undo behind it. */}
+        <button
+          type="button"
+          title="New chat"
+          aria-label="New chat"
+          onClick={() => void newSession()}
+        >
+          <IconPlus />
         </button>
         <button
           type="button"
-          title="Delete chat"
+          title="Delete this chat"
+          aria-label="Delete this chat"
+          className="agent-session-delete"
           disabled={!activeId}
-          onClick={() => activeId && void removeSession(activeId)}
+          onClick={() => void confirmRemoveSession()}
         >
-          🗑
+          <IconTrash />
         </button>
       </div>
       {animateAvatar && (
@@ -554,10 +606,35 @@ export function ChatWidget() {
       )}
       <div className="agent-chat-log" ref={scrollRef}>
         {turns.length === 0 && (
-          <p className="dashboard-hint">
-            Ask me about your layout or a widget&apos;s contents, or tell me to arrange panes or
-            edit an open buffer. Type <code>/help</code> for commands.
-          </p>
+          // An empty transcript says what this agent can do that a chat box can't
+          // — it drives the layout and reads the panes. Three real prompts do that
+          // faster than a sentence describing it, and they are clickable, so the
+          // first turn costs no typing.
+          <div className="agent-chat-starters">
+            <p className="agent-chat-starters-lead">
+              I can see your open panes and rearrange them, read what a widget is showing, and edit
+              an open buffer.
+            </p>
+            <ul className="agent-chat-starter-list">
+              {AGENT_STARTERS.map((s) => (
+                <li key={s}>
+                  <button
+                    type="button"
+                    className="agent-chat-starter"
+                    onClick={() => {
+                      setPrompt(s);
+                      inputRef.current?.focus();
+                    }}
+                  >
+                    {s}
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <p className="agent-chat-starters-foot">
+              Type <code>/help</code> for commands.
+            </p>
+          </div>
         )}
         {turns.map((turn, i) => (
           <Fragment key={i}>
@@ -639,24 +716,20 @@ export function ChatWidget() {
           })}
         </ul>
       )}
+      <AgentReadiness status={status} onRetry={refreshStatus} />
       <form className="agent-chat-input" onSubmit={(e) => void send(e)}>
         <input
           ref={inputRef}
           value={prompt}
           onChange={(e) => handleInputChange(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={
-            ready ? 'Ask the agent…  (/ for commands)' : 'Agent not ready — / for commands'
-          }
+          placeholder="Ask the agent…  (/ for commands)"
           disabled={busy}
         />
-        <button type="submit" disabled={!canSend}>
-          {busy ? '…' : '➤'}
+        <button type="submit" disabled={!canSend} aria-label={busy ? 'Sending' : 'Send'}>
+          {busy ? '…' : <IconSend />}
         </button>
       </form>
-      {status === 'backend-down' && (
-        <p className="widget-error">Backend unreachable — is it running on port 8000?</p>
-      )}
     </div>
   );
 }

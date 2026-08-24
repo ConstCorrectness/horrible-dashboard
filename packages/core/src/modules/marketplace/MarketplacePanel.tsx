@@ -2,7 +2,11 @@ import { useCallback, useEffect, useState } from 'react';
 
 import type { PluginPackageManifest } from '@horribledashboard/sdk';
 
+import { CopyableValue } from '../../CopyableLink';
+import { openExternal } from '../../external';
+import { IconAlert, IconRetry } from '../../glyphs';
 import { pluginLoadErrors, type InstalledPlugin } from '../../plugins/loader';
+import { Button, EmptyState } from '../../Primitives';
 import {
   getInstalledPlugins,
   getPluginCatalog,
@@ -15,6 +19,15 @@ interface Row {
   id: string;
   catalog: PluginPackageManifest | null;
   installed: InstalledPlugin | null;
+}
+
+/** The published plugin guide. The empty state's one way forward, so it goes
+ *  through `openExternal`, which reports a failure the browser swallows. */
+const PLUGIN_GUIDE_URL =
+  'https://constcorrectness.github.io/horrible-dashboard/architecture/plugin-sdk';
+
+function openPluginDocs(): Promise<boolean> {
+  return openExternal(PLUGIN_GUIDE_URL);
 }
 
 function mergeRows(catalog: PluginPackageManifest[], installed: InstalledPlugin[]): Row[] {
@@ -79,37 +92,82 @@ export function MarketplacePanel() {
     <div className="mk-panel">
       <div className="dashboard-toolbar">
         <h2>Marketplace</h2>
-        <span className="dashboard-hint">
-          Plugins are trusted code — install only what you trust.
+        {/* A security statement, not filler. It used to share `.dashboard-hint`
+            with empty-state copy and descriptions, which made the one sentence
+            carrying real risk look like the least important text on the pane. */}
+        <span className="mk-trust">
+          <IconAlert />
+          Plugins run unsandboxed, with the same access the app has. Install only what you trust.
         </span>
       </div>
 
       {dirty && (
         <div className="mk-banner">
-          Plugin changes apply after a reload.
-          <button className="primary" onClick={() => window.location.reload()}>
+          {/* Reloading discards live pane state — a terminal's PTY, a notebook
+              kernel, an open match. The banner says so rather than presenting a
+              full page reload as a routine confirmation. */}
+          <div className="mk-banner-text">
+            <span className="mk-banner-title">Reload to apply plugin changes</span>
+            <p className="mk-banner-body">
+              Reloading restarts the interface. Panes holding live sessions — terminals, notebook
+              kernels, running matches — will be closed.
+            </p>
+          </div>
+          <Button intent="primary" size="sm" onClick={() => window.location.reload()}>
             Reload now
-          </button>
+          </Button>
         </div>
       )}
 
-      {error && <div className="widget-error">{error}</div>}
+      {error && (
+        <div className="mk-alert" data-kind="fail" role="alert">
+          <span className="mk-alert-title">Couldn’t read the catalog</span>
+          <p className="mk-alert-body">{error}</p>
+          <Button intent="primary" size="sm" icon={<IconRetry />} onClick={() => void refresh()}>
+            Try again
+          </Button>
+        </div>
+      )}
 
       {pluginLoadErrors.length > 0 && (
-        <div className="widget-error">
-          {pluginLoadErrors.map((e) => (
-            <div key={e.pluginId}>
-              {e.pluginId} failed to load: {e.message}
-            </div>
-          ))}
+        <div className="mk-alert" data-kind="warn" role="alert">
+          <span className="mk-alert-title">
+            {pluginLoadErrors.length === 1
+              ? '1 installed plugin failed to load'
+              : `${pluginLoadErrors.length} installed plugins failed to load`}
+          </span>
+          <p className="mk-alert-body">
+            They are installed but not running. The rest of the app is unaffected.
+          </p>
+          <ul className="mk-alert-list">
+            {pluginLoadErrors.map((e) => (
+              <li key={e.pluginId}>
+                <span className="mk-alert-id">{e.pluginId}</span>
+                <span className="mk-alert-reason">{e.message}</span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
       {rows.length === 0 && !error && (
-        <p className="dashboard-hint">
-          No plugins in the catalog. Point HORRIBLE_PLUGIN_CATALOG at a directory of plugin
-          packages.
-        </p>
+        // First use and "the catalog is empty" are the same screen here, so it
+        // says what a catalog *is* and hands over the exact value to set —
+        // selectable, with a copy button, rather than a name to retype.
+        <EmptyState
+          title="No plugins yet"
+          actions={
+            <Button intent="primary" size="sm" onClick={() => void openPluginDocs()}>
+              Read the plugin guide
+            </Button>
+          }
+        >
+          <p>
+            A catalog is a directory of plugin packages this node can install from. Point the
+            backend at one and reopen this pane.
+          </p>
+          <CopyableValue label="Environment variable" value="HORRIBLE_PLUGIN_CATALOG" />
+        </EmptyState>
       )}
 
       <ul className="mk-list">

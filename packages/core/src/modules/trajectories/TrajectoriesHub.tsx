@@ -59,8 +59,8 @@ const S = {
     flexDirection: 'column' as const,
     height: '100%',
     overflow: 'hidden',
-    background: 'var(--bg-primary, #0d1117)',
-    color: 'var(--text-primary, #c9d1d9)',
+    background: 'var(--bg-primary)',
+    color: 'var(--text-primary)',
     fontSize: 13,
   },
   bar: {
@@ -68,7 +68,7 @@ const S = {
     alignItems: 'center',
     gap: 8,
     padding: '8px 12px',
-    borderBottom: '1px solid var(--border, #30363d)',
+    borderBottom: '1px solid var(--border)',
     flexShrink: 0,
   },
   heading: {
@@ -76,33 +76,33 @@ const S = {
     fontWeight: 700,
     letterSpacing: '0.14em',
     textTransform: 'uppercase' as const,
-    color: 'var(--text-secondary, #8b949e)',
+    color: 'var(--text-secondary)',
   },
   mono: {
     fontFamily: 'var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace)',
     fontSize: 11,
-    color: 'var(--text-secondary, #8b949e)',
+    color: 'var(--text-secondary)',
   },
   body: { flex: 1, overflow: 'auto', minHeight: 0 },
   split: { display: 'flex', height: '100%', minHeight: 0 },
   list: {
     width: 340,
     flexShrink: 0,
-    borderRight: '1px solid var(--border, #30363d)',
+    borderRight: '1px solid var(--border)',
     overflow: 'auto',
   },
   detail: { flex: 1, overflow: 'auto', padding: 16, minWidth: 0 },
   input: {
-    background: 'var(--bg-secondary, #161b22)',
-    border: '1px solid var(--border, #30363d)',
+    background: 'var(--bg-secondary)',
+    border: '1px solid var(--border)',
     color: 'inherit',
     borderRadius: 4,
     padding: '4px 8px',
     fontSize: 12,
   },
   button: {
-    background: 'var(--bg-secondary, #161b22)',
-    border: '1px solid var(--border, #30363d)',
+    background: 'var(--bg-secondary)',
+    border: '1px solid var(--border)',
     color: 'inherit',
     borderRadius: 4,
     padding: '4px 10px',
@@ -115,24 +115,24 @@ const S = {
   empty: {
     padding: 32,
     textAlign: 'center' as const,
-    color: 'var(--text-secondary, #8b949e)',
+    color: 'var(--text-secondary)',
     fontSize: 12,
     lineHeight: 1.7,
   },
   card: {
-    border: '1px solid var(--border, #30363d)',
-    borderTop: '2px solid var(--accent, #58a6ff)',
+    border: '1px solid var(--border)',
+    borderTop: '2px solid var(--accent)',
     borderRadius: 3,
     padding: 12,
-    background: 'var(--bg-secondary, #161b22)',
+    background: 'var(--bg-secondary)',
   },
 };
 
 const OUTCOME_COLOR: Record<string, string> = {
-  success: 'var(--success, #3fb950)',
-  failure: 'var(--danger, #f85149)',
-  partial: 'var(--warning, #d29922)',
-  unknown: 'var(--text-secondary, #8b949e)',
+  success: 'var(--success)',
+  failure: 'var(--danger)',
+  partial: 'var(--warning)',
+  unknown: 'var(--text-secondary)',
 };
 
 function outcomeColor(outcome: string | null): string {
@@ -208,8 +208,8 @@ function Json({ value }: { value: unknown }) {
         ...S.mono,
         margin: '4px 0 0',
         padding: 8,
-        background: 'var(--bg-primary, #0d1117)',
-        border: '1px solid var(--border, #30363d)',
+        background: 'var(--bg-primary)',
+        border: '1px solid var(--border)',
         borderRadius: 3,
         maxHeight: 220,
         overflow: 'auto',
@@ -230,7 +230,7 @@ function StepRow({ step, index }: { step: TrajectoryStep; index: number }) {
   return (
     <div
       style={{
-        borderLeft: `2px solid ${failed ? 'var(--danger, #f85149)' : 'var(--border, #30363d)'}`,
+        borderLeft: `2px solid ${failed ? 'var(--danger)' : 'var(--border)'}`,
         paddingLeft: 10,
         marginBottom: 8,
         // Staggered entrance, capped so a 200-step run does not take 20 seconds
@@ -239,7 +239,7 @@ function StepRow({ step, index }: { step: TrajectoryStep; index: number }) {
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <span style={{ color: failed ? 'var(--danger, #f85149)' : 'inherit' }}>
+        <span style={{ color: failed ? 'var(--danger)' : 'inherit' }}>
           <StepIcon step={step} />
         </span>
         <span style={{ ...S.mono, minWidth: 26 }}>{step.seq}</span>
@@ -247,7 +247,7 @@ function StepRow({ step, index }: { step: TrajectoryStep; index: number }) {
         {step.role ? <span style={S.mono}>{step.role}</span> : null}
         <span style={{ flex: 1 }} />
         {step.gated ? (
-          <span style={{ ...S.mono, color: 'var(--warning, #d29922)' }}>GATED</span>
+          <span style={{ ...S.mono, color: 'var(--warning)' }}>GATED</span>
         ) : null}
         <span style={S.mono}>{ms(step.duration_ms)}</span>
         {step.args != null || step.result != null ? (
@@ -262,7 +262,7 @@ function StepRow({ step, index }: { step: TrajectoryStep; index: number }) {
         </div>
       ) : null}
       {step.error ? (
-        <div style={{ ...S.mono, color: 'var(--danger, #f85149)', marginTop: 4 }}>{step.error}</div>
+        <div style={{ ...S.mono, color: 'var(--danger)', marginTop: 4 }}>{step.error}</div>
       ) : null}
       {open ? (
         <div style={{ marginTop: 4 }}>
@@ -315,7 +315,7 @@ function RunDetail({ run, onChanged }: { run: TrajectoryDetail; onChanged: () =>
           </div>
         ) : null}
         {run.error ? (
-          <div style={{ ...S.mono, color: 'var(--danger, #f85149)', marginTop: 6 }}>
+          <div style={{ ...S.mono, color: 'var(--danger)', marginTop: 6 }}>
             {run.error}
           </div>
         ) : null}
@@ -413,7 +413,7 @@ function RunsSection() {
         </button>
       </div>
       {error ? (
-        <div style={{ ...S.mono, color: 'var(--danger, #f85149)', padding: 8 }}>{error}</div>
+        <div style={{ ...S.mono, color: 'var(--danger)', padding: 8 }}>{error}</div>
       ) : null}
       <div style={{ ...S.body, ...S.split }}>
         <div style={S.list}>
@@ -430,12 +430,17 @@ function RunsSection() {
               key={run.id}
               onClick={() => void open(run.id)}
               style={{
-                padding: '8px 12px',
-                borderBottom: '1px solid var(--border, #30363d)',
-                borderLeft: `3px solid ${outcomeColor(run.outcome)}`,
+                // The verdict rail: a 2px leading edge, not a 3px `border-left`.
+                // DESIGN.md's Leading Edge Rule sizes it at 2px, and the wider
+                // one-sided border is the pattern the design detector flags —
+                // `box-shadow: inset` draws it without occupying a border slot,
+                // which matters because this row already uses `borderBottom`.
+                padding: '8px 12px 8px 14px',
+                borderBottom: '1px solid var(--border)',
+                boxShadow: `inset 2px 0 0 ${outcomeColor(run.outcome)}`,
                 cursor: 'pointer',
                 background:
-                  selected?.id === run.id ? 'var(--bg-secondary, #161b22)' : 'transparent',
+                  selected?.id === run.id ? 'var(--bg-secondary)' : 'transparent',
                 animation: `traj-in 200ms ease-out ${Math.min(index, 15) * 18}ms both`,
               }}
             >
@@ -542,7 +547,7 @@ function DatasetsSection() {
         </button>
       </div>
       {error ? (
-        <div style={{ ...S.mono, color: 'var(--danger, #f85149)', padding: 8 }}>{error}</div>
+        <div style={{ ...S.mono, color: 'var(--danger)', padding: 8 }}>{error}</div>
       ) : null}
       <div style={{ ...S.body, padding: 16 }}>
         {stats ? (
@@ -575,10 +580,10 @@ function DatasetsSection() {
               alignItems: 'center',
               gap: 10,
               padding: '8px 0',
-              borderBottom: '1px solid var(--border, #30363d)',
+              borderBottom: '1px solid var(--border)',
             }}
           >
-            <span style={{ color: dataset.capture ? 'var(--danger, #f85149)' : 'inherit' }}>
+            <span style={{ color: dataset.capture ? 'var(--danger)' : 'inherit' }}>
               <RecordIcon />
             </span>
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -597,11 +602,11 @@ function DatasetsSection() {
         {stats && stats.tools.length ? (
           stats.tools.map((tool) => (
             <div key={tool.name} style={{ display: 'flex', gap: 12, padding: '4px 0', ...S.mono }}>
-              <span style={{ flex: 1, color: 'var(--text-primary, #c9d1d9)' }}>{tool.name}</span>
+              <span style={{ flex: 1, color: 'var(--text-primary)' }}>{tool.name}</span>
               <span>{tool.calls} calls</span>
               <span
                 style={{
-                  color: tool.failures ? 'var(--danger, #f85149)' : 'inherit',
+                  color: tool.failures ? 'var(--danger)' : 'inherit',
                   minWidth: 70,
                   textAlign: 'right',
                 }}
@@ -610,7 +615,7 @@ function DatasetsSection() {
               </span>
               <span
                 style={{
-                  color: tool.gated ? 'var(--warning, #d29922)' : 'inherit',
+                  color: tool.gated ? 'var(--warning)' : 'inherit',
                   minWidth: 70,
                   textAlign: 'right',
                 }}
@@ -681,7 +686,7 @@ function HarnessSection() {
         </button>
       </div>
       {error ? (
-        <div style={{ ...S.mono, color: 'var(--danger, #f85149)', padding: 8 }}>{error}</div>
+        <div style={{ ...S.mono, color: 'var(--danger)', padding: 8 }}>{error}</div>
       ) : null}
       <div style={{ ...S.body, padding: 16 }}>
         {!report ? (
@@ -696,8 +701,8 @@ function HarnessSection() {
               style={{
                 ...S.card,
                 borderTopColor: report.comparable
-                  ? 'var(--success, #3fb950)'
-                  : 'var(--warning, #d29922)',
+                  ? 'var(--success)'
+                  : 'var(--warning)',
                 marginBottom: 16,
               }}
             >
@@ -735,7 +740,7 @@ function HarnessSection() {
 
             {report.regressions.length ? (
               <div style={{ marginBottom: 14 }}>
-                <div style={{ ...S.heading, color: 'var(--danger, #f85149)' }}>
+                <div style={{ ...S.heading, color: 'var(--danger)' }}>
                   Regressions — baseline did these, candidate does not
                 </div>
                 {report.regressions.map((goal) => (
@@ -748,7 +753,7 @@ function HarnessSection() {
 
             {report.fixes.length ? (
               <div style={{ marginBottom: 14 }}>
-                <div style={{ ...S.heading, color: 'var(--success, #3fb950)' }}>
+                <div style={{ ...S.heading, color: 'var(--success)' }}>
                   Fixed — candidate does these, baseline does not
                 </div>
                 {report.fixes.map((goal) => (
@@ -762,7 +767,7 @@ function HarnessSection() {
             <div style={{ ...S.heading, marginBottom: 6 }}>Tool calls per run</div>
             {report.toolDelta.map((row) => (
               <div key={row.name} style={{ display: 'flex', gap: 12, ...S.mono, padding: '3px 0' }}>
-                <span style={{ flex: 1, color: 'var(--text-primary, #c9d1d9)' }}>{row.name}</span>
+                <span style={{ flex: 1, color: 'var(--text-primary)' }}>{row.name}</span>
                 <span style={{ minWidth: 60, textAlign: 'right' }}>{row.a}</span>
                 <span style={{ minWidth: 60, textAlign: 'right' }}>{row.b}</span>
                 <span
@@ -771,9 +776,9 @@ function HarnessSection() {
                     textAlign: 'right',
                     color:
                       row.delta > 0
-                        ? 'var(--warning, #d29922)'
+                        ? 'var(--warning)'
                         : row.delta < 0
-                          ? 'var(--accent, #58a6ff)'
+                          ? 'var(--accent)'
                           : 'inherit',
                   }}
                 >

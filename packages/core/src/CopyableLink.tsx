@@ -73,3 +73,43 @@ export function CopyableLink({
     </a>
   );
 }
+
+/**
+ * A literal value the user has to put somewhere else — an environment variable
+ * name, a config key, a path.
+ *
+ * The sibling of {@link CopyableLink}, and it exists for the same reason: when a
+ * name appears inside a sentence, the only thing a user can do with it is retype
+ * it, and retyping is where the typo comes from. So the value gets the recessed
+ * well and the mono treatment that marks it as a literal, plus the one control
+ * that makes it actionable.
+ */
+export function CopyableValue({
+  value,
+  label,
+  className,
+}: {
+  value: string;
+  /** What the value *is*, so the well is not an unlabelled string. */
+  label?: string;
+  className?: string;
+}) {
+  const [copied, setCopied] = useState<boolean | null>(null);
+
+  const copy = () => {
+    void navigator.clipboard
+      .writeText(value)
+      .then(() => setCopied(true))
+      .catch(() => setCopied(false));
+  };
+
+  return (
+    <span className={`copyable-value${className ? ` ${className}` : ''}`}>
+      {label && <span className="copyable-value-label">{label}</span>}
+      <code className="copyable-value-code">{value}</code>
+      <button type="button" className="copyable-link-btn" onClick={copy}>
+        {copied === true ? 'Copied' : copied === false ? 'Select and copy' : 'Copy'}
+      </button>
+    </span>
+  );
+}

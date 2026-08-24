@@ -291,6 +291,29 @@ export async function switchWorkspace(id: string): Promise<void> {
 }
 
 /**
+ * Make a workspace name unique among the ones that already exist.
+ *
+ * Two desktops called "Workspace" are two rows in the Start menu that a user
+ * cannot tell apart, and switching desktops becomes a coin flip — the launcher
+ * shows the name and nothing else distinguishing. Suffixing is used rather than
+ * rejecting the name, because both entry points are non-blocking (a command that
+ * takes a default, and an agent tool) and failing them over a collision would be
+ * worse than quietly numbering.
+ *
+ * Comparison is case-insensitive and trimmed: "Work" and "work " read as the
+ * same name in a menu, so they collide for this purpose.
+ */
+export function uniqueWorkspaceName(name: string, existing: readonly string[]): string {
+  const taken = new Set(existing.map((n) => n.trim().toLowerCase()));
+  const base = name.trim() || 'Workspace';
+  if (!taken.has(base.toLowerCase())) return base;
+  for (let i = 2; ; i++) {
+    const candidate = `${base} ${i}`;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
+}
+
+/**
  * Prompt-free create, shared by the workspace.new commands and the agent tool.
  *
  * `mode` is the desktop's paradigm and belongs to the workspace, not to a global
@@ -308,7 +331,13 @@ export async function createNamedWorkspace(
 ): Promise<{ id: string; name: string }> {
   const current = layoutStore.getSnapshot().frame;
   await flush();
-  const ws = await apiCreateWorkspace(name);
+  const existing = await getWorkspaces();
+  const ws = await apiCreateWorkspace(
+    uniqueWorkspaceName(
+      name,
+      existing.workspaces.map((w) => w.name),
+    ),
+  );
   const state = await getWorkspaces();
   publish(state.workspaces, ws.id);
   const seed = fromCurrent
@@ -328,7 +357,10 @@ export async function listWorkspaces(): Promise<{
 }
 
 export async function renameWorkspace(id: string, name: string): Promise<void> {
-  await saveWorkspace(id, { name });
+  const state = await getWorkspaces();
+  // Its own current name is not a collision with itself.
+  const others = state.workspaces.filter((w) => w.id !== id).map((w) => w.name);
+  await saveWorkspace(id, { name: uniqueWorkspaceName(name, others) });
   const s = await getWorkspaces();
   publish(s.workspaces, layoutStore.getSnapshot().workspaceId);
 }

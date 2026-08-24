@@ -288,6 +288,7 @@ export function DesktopWindow({
             <button
               className="os-window-btn"
               title="Dock back into the frame"
+              aria-label="Dock back into the frame"
               onPointerDown={(e) => e.stopPropagation()}
               onClick={() => active && setPaneWindowed(active.instanceId, false)}
             >
@@ -297,6 +298,7 @@ export function DesktopWindow({
           <button
             className="os-window-btn"
             title="Minimize"
+            aria-label="Minimize"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => toggleWindowMinimized(win.id)}
           >
@@ -305,6 +307,7 @@ export function DesktopWindow({
           <button
             className="os-window-btn"
             title={maximized ? 'Restore' : 'Maximize'}
+            aria-label={maximized ? 'Restore' : 'Maximize'}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => toggleWindowMaximized(win.id)}
           >
@@ -318,6 +321,7 @@ export function DesktopWindow({
             <button
               className="os-window-btn"
               title={presented ? 'Leave fullscreen (Esc)' : 'Fullscreen'}
+              aria-label={presented ? 'Leave fullscreen (Esc)' : 'Fullscreen'}
               aria-pressed={presented}
               onPointerDown={(e) => e.stopPropagation()}
               onClick={() => presentPane(presented ? null : (active?.instanceId ?? null))}
@@ -328,6 +332,7 @@ export function DesktopWindow({
           <button
             className="os-window-btn os-window-btn--close"
             title="Close"
+            aria-label="Close"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => active && void closePaneGuarded(active.instanceId)}
           >

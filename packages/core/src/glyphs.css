@@ -1,0 +1,17 @@
+/**
+ * Sizing for the shared icon set (`glyphs.tsx`).
+ *
+ * The size is a custom property rather than a prop so a container can set the
+ * scale for everything inside it — a row's action slot, a banner's heading —
+ * and an icon never has to be told its own size at the call site.
+ *
+ * `flex: none` matters: these sit inside flex rows next to text that is allowed
+ * to shrink, and without it an icon is the thing that collapses first.
+ */
+.hd-icon {
+  width: var(--icon-size, 13px);
+  height: var(--icon-size, 13px);
+  flex: none;
+  /* Pull the optical centre onto the text baseline it sits beside. */
+  vertical-align: -0.12em;
+}

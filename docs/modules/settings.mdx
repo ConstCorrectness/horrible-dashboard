@@ -141,7 +141,21 @@ entry from the same array. See
 Some configuration is too rich for the declarative `SettingDecl` controls
 (string/number/boolean/enum). A module may also contribute a
 `settingsSections` entry — `{ id, title, component }` on its `ModuleManifest` —
-and the page renders the component as its own group after the declared settings.
+and the page renders the component as its own group.
+
+**A section whose title matches its module's group is merged into that group**
+rather than added beside it. A module that both declares settings and contributes
+a section — `hardware` and `updates` both do — otherwise produced two nav entries
+with byte-identical labels ("Hardware" above "Hardware"), with nothing to say which
+one held the control you wanted. They are one subject, so they render as one group.
+
+Within a merged group the **section comes first and the declared settings below
+it**, because the section is the *reading* and the settings are the overrides. The
+`hardware` group is the case that names the rule: its section reports what the
+probe found — including "could not ask", which is not the same as "nothing" — and
+the accelerator override sits underneath it. Asking someone to override a
+measurement printed below the control is how that picker came to offer six options
+without saying which one was actually detected.
 The first consumer is the agent's **Agent permissions** section
 (`PermissionsSettings`): a default-mode picker plus editable allow/ask/deny rule
 lists that read/write `agent.permissions.*` through `/api/settings` directly (rule

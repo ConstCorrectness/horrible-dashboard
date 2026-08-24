@@ -65,8 +65,8 @@ const S = {
     flexDirection: 'column' as const,
     height: '100%',
     overflow: 'hidden',
-    background: 'var(--bg, #14161a)',
-    color: 'var(--text, #d7dae0)',
+    background: 'var(--bg)',
+    color: 'var(--text)',
     fontSize: 13,
   },
   bar: {
@@ -74,7 +74,7 @@ const S = {
     alignItems: 'center',
     gap: 8,
     padding: '8px 12px',
-    borderBottom: '1px solid var(--border, #2e333d)',
+    borderBottom: '1px solid var(--border)',
     flexShrink: 0,
   },
   // Headings: uppercase with heavy tracking; metadata and numbers monospace and
@@ -84,18 +84,18 @@ const S = {
     fontWeight: 700,
     letterSpacing: '0.12em',
     textTransform: 'uppercase' as const,
-    color: 'var(--text-dim, #8a909c)',
+    color: 'var(--text-dim)',
   },
   mono: {
     fontFamily: 'var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace)',
     fontSize: 11,
-    color: 'var(--text-dim, #8a909c)',
+    color: 'var(--text-dim)',
   },
   scroll: { flex: 1, overflowY: 'auto' as const, padding: 12 },
   input: {
-    background: 'var(--bg, #14161a)',
-    border: '1px solid var(--border, #2e333d)',
-    color: 'var(--text, #d7dae0)',
+    background: 'var(--bg)',
+    border: '1px solid var(--border)',
+    color: 'var(--text)',
     borderRadius: 4,
     padding: '4px 8px',
     fontSize: 12,
@@ -108,8 +108,8 @@ const S = {
     fontWeight: 700,
     letterSpacing: '0.08em',
     textTransform: 'uppercase' as const,
-    color: 'var(--text-dim, #8a909c)',
-    border: '1px solid var(--border, #2e333d)',
+    color: 'var(--text-dim)',
+    border: '1px solid var(--border)',
     borderRadius: 3,
     padding: '1px 5px',
   },
@@ -128,22 +128,22 @@ const S = {
     fontWeight: 700,
     letterSpacing: '0.1em',
     textTransform: 'uppercase' as const,
-    color: 'var(--text-dim, #8a909c)',
+    color: 'var(--text-dim)',
     marginBottom: 3,
   },
   button: {
-    background: 'var(--bg-raised, #1d2026)',
-    border: '1px solid var(--border, #2e333d)',
-    color: 'var(--text, #d7dae0)',
+    background: 'var(--bg-raised)',
+    border: '1px solid var(--border)',
+    color: 'var(--text)',
     borderRadius: 4,
     padding: '4px 10px',
     fontSize: 12,
     cursor: 'pointer',
   },
   select: {
-    background: 'var(--bg-raised, #1d2026)',
-    border: '1px solid var(--border, #2e333d)',
-    color: 'var(--text, #d7dae0)',
+    background: 'var(--bg-raised)',
+    border: '1px solid var(--border)',
+    color: 'var(--text)',
     borderRadius: 4,
     padding: '4px 8px',
     fontSize: 12,
@@ -151,8 +151,8 @@ const S = {
   // A left border accent rather than a full glowing perimeter: the colour marks
   // the verdict without turning every row into a card.
   row: (passed: boolean) => ({
-    borderLeft: `2px solid ${passed ? 'var(--success, #3fb950)' : 'var(--danger, #e06c75)'}`,
-    background: 'var(--bg-raised, #1d2026)',
+    borderLeft: `2px solid ${passed ? 'var(--success)' : 'var(--danger)'}`,
+    background: 'var(--bg-raised)',
     padding: '8px 10px',
     marginBottom: 6,
   }),
@@ -352,7 +352,7 @@ function BenchmarkFields({
       </div>
 
       {peekError && (
-        <div style={{ ...S.mono, color: 'var(--warn, #e2c08d)' }}>
+        <div style={{ ...S.mono, color: 'var(--warn)' }}>
           {peekError} — the fields still work, you just have to know the columns.
         </div>
       )}
@@ -484,8 +484,8 @@ function BenchmarkFields({
       {peek && (
         <div
           style={{
-            border: '1px solid var(--border, #2e333d)',
-            borderTop: '2px solid var(--accent, #58a6ff)',
+            border: '1px solid var(--border)',
+            borderTop: '2px solid var(--accent)',
             padding: '8px 10px',
             marginBottom: 8,
           }}
@@ -506,7 +506,7 @@ function BenchmarkFields({
                   key={p}
                   style={{
                     ...S.mono,
-                    color: 'var(--warn, #e2c08d)',
+                    color: 'var(--warn)',
                     marginBottom: 4,
                   }}
                 >
@@ -541,7 +541,7 @@ function Cmp({ label, value, dim }: { label: string; value: string; dim?: boolea
       <td
         style={{
           ...S.mono,
-          color: dim ? 'var(--text-dim, #8a909c)' : 'var(--text, #d7dae0)',
+          color: dim ? 'var(--text-dim)' : 'var(--text)',
           wordBreak: 'break-word',
         }}
       >
@@ -637,8 +637,8 @@ function Compare({ selected }: { selected: string }) {
       {board.universalFailures.length > 0 && (
         <div
           style={{
-            border: '1px solid var(--border, #2e333d)',
-            borderLeft: '2px solid var(--warn, #e2c08d)',
+            border: '1px solid var(--border)',
+            borderLeft: '2px solid var(--warn)',
             padding: '8px 10px',
             marginBottom: 16,
           }}
@@ -652,7 +652,7 @@ function Compare({ selected }: { selected: string }) {
             this as a model problem.
           </div>
           {board.universalFailures.map((id) => (
-            <div key={id} style={{ ...S.mono, color: 'var(--warn, #e2c08d)' }}>
+            <div key={id} style={{ ...S.mono, color: 'var(--warn)' }}>
               {id}
             </div>
           ))}
@@ -725,12 +725,12 @@ function RankRow({ run, place }: { run: BoardRun; place: number }) {
       <td style={{ padding: '3px 8px', width: '40%' }}>
         {/* A bar rather than a number alone: the gap between 42% and 67% is the
             thing being read, and a column of percentages does not show it. */}
-        <div style={{ background: 'var(--bg, #14161a)', height: 6 }}>
+        <div style={{ background: 'var(--bg)', height: 6 }}>
           <div
             style={{
               width: `${Math.round(run.rate * 100)}%`,
               height: '100%',
-              background: 'var(--success, #3fb950)',
+              background: 'var(--success)',
             }}
           />
         </div>
@@ -752,22 +752,22 @@ function Diff({ diff }: { diff: RunDiff }) {
         {dropped > 0 && ` · ${dropped} attempted by only one of them, and left out`}
       </div>
       {diff.hashesUnknown && (
-        <div style={{ ...S.mono, color: 'var(--warn, #e2c08d)', marginBottom: 6 }}>
+        <div style={{ ...S.mono, color: 'var(--warn)', marginBottom: 6 }}>
           ⚠ these runs predate case hashing, so a case that was edited between them cannot be told
           apart from one the model got better at.
         </div>
       )}
       <HarnessBanner harness={diff.harness} />
-      <DiffGroup label="Fixed" tone="var(--success, #3fb950)" items={diff.fixed} />
-      <DiffGroup label="Broke" tone="var(--danger, #e06c75)" items={diff.broken} />
+      <DiffGroup label="Fixed" tone="var(--success)" items={diff.fixed} />
+      <DiffGroup label="Broke" tone="var(--danger)" items={diff.broken} />
       <DiffGroup
         label="Case edited — not a fix or a regression"
-        tone="var(--warn, #e2c08d)"
+        tone="var(--warn)"
         items={diff.changed}
       />
       <DiffGroup
         label="Errored — something other than the model broke"
-        tone="var(--warn, #e2c08d)"
+        tone="var(--warn)"
         items={diff.errored}
       />
       {diff.fixed.length === 0 &&
@@ -793,7 +793,7 @@ function Diff({ diff }: { diff: RunDiff }) {
 function HarnessBanner({ harness }: { harness: RunDiff['harness'] }) {
   if (harness.unknown) {
     return (
-      <div style={{ ...S.mono, color: 'var(--text-dim, #8b949e)', marginBottom: 6 }}>
+      <div style={{ ...S.mono, color: 'var(--text-dim)', marginBottom: 6 }}>
         The tool catalog was not recorded for one of these runs, so a skill or MCP server
         toggled between them cannot be ruled out.
       </div>
@@ -804,8 +804,8 @@ function HarnessBanner({ harness }: { harness: RunDiff['harness'] }) {
     <div
       style={{
         ...S.mono,
-        color: 'var(--warn, #e2c08d)',
-        borderLeft: '2px solid var(--warn, #e2c08d)',
+        color: 'var(--warn)',
+        borderLeft: '2px solid var(--warn)',
         paddingLeft: 8,
         marginBottom: 8,
       }}
@@ -855,7 +855,7 @@ function MatrixRow({ row, runs }: { row: BoardCase; runs: BoardRun[] }) {
         style={{
           ...S.mono,
           padding: '3px 8px 3px 0',
-          color: row.universalFailure ? 'var(--warn, #e2c08d)' : 'var(--text, #d7dae0)',
+          color: row.universalFailure ? 'var(--warn)' : 'var(--text)',
           whiteSpace: 'nowrap',
         }}
         title={row.edited ? 'this case was edited between these runs' : undefined}
@@ -874,11 +874,11 @@ function MatrixRow({ row, runs }: { row: BoardCase; runs: BoardRun[] }) {
             {/* Three states, not two: a run that did not attempt a case has not
                 failed it, and rendering both as a cross would invent regressions. */}
             {verdict === undefined ? (
-              <span style={{ color: 'var(--text-dim, #8a909c)' }}>·</span>
+              <span style={{ color: 'var(--text-dim)' }}>·</span>
             ) : verdict ? (
-              <span style={{ color: 'var(--success, #3fb950)' }}>✓</span>
+              <span style={{ color: 'var(--success)' }}>✓</span>
             ) : (
-              <span style={{ color: 'var(--danger, #e06c75)' }}>✕</span>
+              <span style={{ color: 'var(--danger)' }}>✕</span>
             )}
           </td>
         );
@@ -910,7 +910,7 @@ function CaseEditor({
   const [bench, setBench] = useState<HfBenchmark>(() => initial.benchmark ?? emptyBenchmark());
 
   return (
-    <div style={{ ...S.row(true), borderLeftColor: 'var(--accent, #58a6ff)' }}>
+    <div style={{ ...S.row(true), borderLeftColor: 'var(--accent)' }}>
       <div style={S.field}>
         <label style={S.label}>Case id</label>
         <input
@@ -1017,7 +1017,7 @@ function CaseEditor({
         <label style={S.label}>Note — why this case exists</label>
         <input style={S.input} value={draft.note} onChange={(e) => set({ note: e.target.value })} />
       </div>
-      {error && <div style={{ ...S.mono, color: 'var(--danger, #e06c75)' }}>{error}</div>}
+      {error && <div style={{ ...S.mono, color: 'var(--danger)' }}>{error}</div>}
       <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
         <button
           style={S.button}
@@ -1462,7 +1462,7 @@ function Run({ suites, selected }: { suites: EvalSuite[]; selected: string }) {
               metaTone={r.error ? 'fail' : undefined}
               footnotes={
                 r.error ? (
-                  <div style={{ ...S.mono, color: 'var(--danger, #e06c75)' }}>{r.error}</div>
+                  <div style={{ ...S.mono, color: 'var(--danger)' }}>{r.error}</div>
                 ) : undefined
               }
             />
@@ -1561,7 +1561,7 @@ function Results({ selected }: { selected: string }) {
                     </div>
                   )}
                   {r.tools_dropped.length > 0 && (
-                    <div style={{ ...S.mono, color: 'var(--warn, #e2c08d)' }}>
+                    <div style={{ ...S.mono, color: 'var(--warn)' }}>
                       {r.tools_dropped.length} tool(s) dropped by the budget — this model never saw{' '}
                       {r.tools_dropped.slice(0, 3).join(', ')}
                     </div>
@@ -1575,7 +1575,7 @@ function Results({ selected }: { selected: string }) {
                       way to get from a puzzling row to what the model was actually
                       given. */}
                   {r.turn_id && (
-                    <div style={{ ...S.mono, color: 'var(--text-dim, #8b949e)' }}>
+                    <div style={{ ...S.mono, color: 'var(--text-dim)' }}>
                       turn {r.turn_id}
                     </div>
                   )}

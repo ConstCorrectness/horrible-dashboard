@@ -385,6 +385,13 @@
   display: flex;
   align-items: center;
   gap: 4px;
+  /* The status zone must never wrap or shrink. It is a fixed set of small
+     controls next to a window list that *is* allowed to shrink, and without
+     these the whole zone reflowed at ~800px: "M-x" broke onto two lines as
+     "M-"/"x", "Backend online" split in half, and the date became
+     "Sun, Aug" / "23". The window list is the flexible thing here, not this. */
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .os-tray-btn {
@@ -409,6 +416,8 @@
   display: flex;
   align-items: center;
   gap: 5px;
+  flex: 0 0 auto;
+  white-space: nowrap;
   padding: 0 6px;
   font-size: 11px;
   color: var(--text-dim);
@@ -463,7 +472,12 @@
 
 .os-taskbar-date {
   color: var(--text-dim);
-  font-size: 10px;
+  /* Was a literal 10px: off the type ramp and below the 11px floor for text a
+     user actually reads. `--fs-label` rather than `--fs-meta` (10.5px) because
+     both are on the ramp but only this one clears the floor — and DESIGN.md's
+     rule against rounding the measured sizes protects the row metrics, not this
+     one-off in the chrome. */
+  font-size: var(--fs-label);
 }
 
 /* A dot rather than a badge count — see the comment at its use site. */

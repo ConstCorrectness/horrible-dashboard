@@ -1,7 +1,8 @@
 /**
  * First-run setup, before the desktop.
  *
- * Three steps: who you are, what it looks like, and what it can reach. The third
+ * Four steps: who you are, how the desktop starts, what it looks like, and what
+ * it can reach. The last
  * is the **existing** `SetupCard` rather than a second copy of it — model,
  * account and connectors already had one flow with a carefully argued shape (the
  * account and the connectors are deliberately two steps, see SetupCard), and a
@@ -10,10 +11,11 @@
  * Every step is skippable. A setup wizard you cannot leave is a setup wizard
  * people close the app to escape, and each of these has a home in settings.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import {
   applyTheme,
   getAgentStatus,
+  layoutStore,
   registry,
   setBackdrop,
   setSetting,
@@ -28,8 +30,10 @@ import { getUserName, setUserName } from '../home/constants';
 import { SetupCard } from '../home/SetupCard';
 import { OOBE_COMPLETE_KEY } from './constants';
 
-type Step = 'welcome' | 'look' | 'setup';
-const ORDER: Step[] = ['welcome', 'look', 'setup'];
+type Step = 'welcome' | 'start' | 'look' | 'setup';
+/** `start` sits before `look` on purpose: what the desktop *is* is decided
+ *  before what it looks like. */
+const ORDER: Step[] = ['welcome', 'start', 'look', 'setup'];
 
 export function Oobe({ onDone }: { onDone: () => void }) {
   const [step, setStep] = useState<Step>('welcome');
@@ -74,13 +78,14 @@ export function Oobe({ onDone }: { onDone: () => void }) {
         </ol>
 
         {step === 'welcome' && <Welcome name={name} onName={setName} />}
+        {step === 'start' && <StartStep />}
         {step === 'look' && <Look />}
         {step === 'setup' && <SetupStep />}
 
         <footer className="os-oobe-actions">
           {/* "Skip setup" all the way out, not just past this step: someone who
               knows they want none of this should not have to click through
-              three screens to say so. */}
+              every screen to say so. */}
           <button type="button" className="os-oobe-skip" onClick={finish}>
             Skip setup
           </button>
@@ -125,9 +130,74 @@ function Welcome({ name, onName }: { name: string; onName: (name: string) => voi
   );
 }
 
+/** The id of the backdrop this desktop is currently showing. */
+function useBackdropId(): string {
+  const { frame } = useSyncExternalStore(layoutStore.subscribe, layoutStore.getSnapshot);
+  return frame.backdrop.id;
+}
+
+/**
+ * What the desktop opens on.
+ *
+ * Its own step, deliberately separated from "Pick a look". This is a structural
+ * choice — whether the app has a front door at all — and it used to sit fifth of
+ * seven in a list of wallpapers, weighted identically to a decorative gradient.
+ * A user picking a pretty backdrop had no way to know they were also switching
+ * off the avatar, the ask bar and the connector tiles.
+ *
+ * The options are the two `interactive` backdrops (the ones that render the
+ * node's own state and can be worked in) plus "nothing", which then hands over
+ * to the cosmetic step. Decoration is chosen later, once this is settled.
+ */
+function StartStep() {
+  const current = useBackdropId();
+  const backdrops = registry.backdrops;
+  const interactive = backdrops.filter((b) => b.interactive);
+  // "Just a wallpaper" is any non-interactive backdrop. Landing on the previous
+  // default keeps the old behaviour available in one click.
+  const plain = current === 'none' || !interactive.some((b) => b.id === current);
+
+  return (
+    <section className="os-oobe-step">
+      <h1>How should the desktop start?</h1>
+      <p>
+        Windows open on top either way. You can change this whenever you like by right-clicking the
+        desktop.
+      </p>
+
+      <div className="os-oobe-choices">
+        {interactive.map((b) => (
+          <button
+            key={b.id}
+            type="button"
+            className={`os-oobe-choice${b.id === current ? ' is-active' : ''}`}
+            aria-pressed={b.id === current}
+            onClick={() => setBackdrop({ id: b.id })}
+          >
+            <strong>{b.title}</strong>
+            <span>{b.description}</span>
+          </button>
+        ))}
+        <button
+          type="button"
+          className={`os-oobe-choice${plain ? ' is-active' : ''}`}
+          aria-pressed={plain}
+          onClick={() => setBackdrop({ id: 'aurora' })}
+        >
+          <strong>Just a wallpaper</strong>
+          <span>An empty desktop. Everything opens from the Start menu.</span>
+        </button>
+      </div>
+    </section>
+  );
+}
+
 function Look() {
   const themeId = useThemeId();
-  const backdrops = registry.backdrops;
+  const current = useBackdropId();
+  // The structural backdrops were promoted to their own step, so this one is
+  // only decoration — which is what "Pick a look" always implied it was.
+  const decorative = registry.backdrops.filter((b) => !b.interactive);
   return (
     <section className="os-oobe-step">
       <h1>Pick a look</h1>
@@ -143,6 +213,7 @@ function Look() {
             key={t.id}
             type="button"
             className={`os-oobe-choice${t.id === themeId ? ' is-active' : ''}`}
+            aria-pressed={t.id === themeId}
             // Applied immediately as well as saved: picking a theme in a setup
             // flow and seeing nothing change until you finish is indistinguishable
             // from the button not working.
@@ -158,12 +229,18 @@ function Look() {
       </div>
 
       <h2>Desktop backdrop</h2>
+      {/* These carried no selected state at all: `is-active` was applied to the
+          theme buttons and simply forgotten here, so clicking one confirmed
+          nothing and the wizard covers the desktop you would otherwise see
+          change. Choosing something and being unable to tell whether it took is
+          the worst possible outcome on the screen that teaches the app. */}
       <div className="os-oobe-choices">
-        {backdrops.map((b) => (
+        {decorative.map((b) => (
           <button
             key={b.id}
             type="button"
-            className="os-oobe-choice"
+            className={`os-oobe-choice${b.id === current ? ' is-active' : ''}`}
+            aria-pressed={b.id === current}
             onClick={() => setBackdrop({ id: b.id })}
           >
             <strong>{b.title}</strong>

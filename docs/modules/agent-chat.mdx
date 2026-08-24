@@ -42,6 +42,42 @@ Per-widget `agentTools` + `getAgentContext` widget interop ship (see
 [agent tools & permissions](../architecture/agent-tools.mdx)). Remaining design:
 a fuller chat/inspector cockpit.
 
+## Readiness: four states, not one
+
+`AgentStatus` carries two independent booleans — `configured` (has a provider and
+model been chosen?) and `reachable` (is that provider answering right now?) — and
+two more failure modes live outside the payload: the backend not answering at all,
+and the status not having resolved yet.
+
+Those are four different problems with four different remedies, and the pane used
+to render every one of them as the same grey input placeholder, `Agent not ready`.
+That is the inversion of this product's own rule that a capability check reports
+what it found, what it looked for and failed to find, and what it could not ask.
+
+`AgentReadiness` (`modules/agent/AgentReadiness.tsx`) maps the status to one
+banner above the input:
+
+| State                       | Says                       | Offers                        |
+| --------------------------- | -------------------------- | ----------------------------- |
+| unresolved                  | Checking the agent         | nothing — it is not a verdict |
+| backend unreachable         | Backend not answering      | Retry                         |
+| `configured: false`         | No model selected          | Choose a model → Settings     |
+| `reachable: false`          | Can't reach `<provider>`   | Retry · Change provider       |
+| ready                       | nothing                    | —                             |
+
+The endpoint appears only in the `reachable: false` case, as telemetry in mono:
+nothing was tried yet when no model is configured, so naming an endpoint there
+would be inventing a cause. `planFor` is exported and tested
+(`__tests__/readiness.test.ts`) because the distinction between those states is
+the whole point of the component, and collapsing them does not error — it just
+tells everyone the least useful true thing.
+
+An empty transcript carries **three clickable opening prompts** rather than one
+grey sentence, each exercising a different half of what makes this agent unlike a
+chat box: layout control, pane reading, buffer editing. Deleting a conversation
+goes through a confirm that **names the conversation** — there is no undo behind
+it, and the control sits beside "New chat".
+
 ## Sessions (persistence)
 
 Chat transcripts persist server-side as named **sessions** — a small `chat` backend

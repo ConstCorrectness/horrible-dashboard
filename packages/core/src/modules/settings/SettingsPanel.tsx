@@ -123,7 +123,13 @@ interface Group {
   id: string;
   title: string;
   decls: SettingDecl[];
-  /** Set for a contributed section; `decls` is empty in that case. */
+  /**
+   * A contributed section's component, when the module contributed one.
+   *
+   * `decls` is empty for a section-only group, but **not** when a module both
+   * declares settings and contributes a section — those merge into one group
+   * rather than appearing twice in the nav under the same name.
+   */
   Section?: React.ComponentType;
 }
 
@@ -177,8 +183,20 @@ export function SettingsPanel() {
     // search *inside* it — it can only be matched by its own title. Filtering it
     // out on any other term is the honest behaviour: claiming to have searched
     // content we cannot read would hide settings that are really there.
+    // A section is **merged into its module's group when they share a title**,
+    // not appended as a sibling. A module that declares settings *and*
+    // contributes a section (hardware and updates both do) produced two nav
+    // entries with byte-identical labels — "Hardware" above "Hardware" — with no
+    // way to tell which one held the control you wanted. They are one subject,
+    // so they are one group: the declared settings render first, the contributed
+    // component below them.
     for (const section of sections) {
       if (needle && !section.title.toLowerCase().includes(needle)) continue;
+      const sibling = out.find((g) => g.title === section.title && !g.Section);
+      if (sibling) {
+        sibling.Section = section.component;
+        continue;
+      }
       out.push({
         id: `section:${section.id}`,
         title: section.title,
@@ -267,12 +285,26 @@ export function SettingsPanel() {
                   else groupRefs.current.delete(group.id);
                 }}
               >
-                <h3>{group.title}</h3>
-                {Section ? (
+                {/* h2, not h3: the page heading is h1 and there is no level
+                    between them, so h3 left a hole in the outline that a
+                    screen-reader user navigating by heading falls straight
+                    through. The visual size comes from the class, not the
+                    tag. */}
+                <h2>{group.title}</h2>
+                {/* A section and declared settings are rendered together, not
+                    either/or: a module that contributes both (hardware, updates)
+                    would otherwise have its declared settings silently dropped.
+                    The section comes first because it is the *reading* — what the
+                    probe found — and the settings below it are the overrides.
+                    Being asked to override a measurement printed underneath the
+                    control is how the accelerator picker came to offer six
+                    options without saying which one was actually detected. */}
+                {Section && (
                   <div className="settings-card settings-card--section">
                     <Section />
                   </div>
-                ) : (
+                )}
+                {group.decls.length > 0 && (
                   <div className="settings-card">
                     {basic.map((decl) => (
                       <SettingRow key={decl.key} decl={decl} />

@@ -9,6 +9,15 @@ The intro page's **"Get set up"** flow — three labelled steps that cover every
 a fresh node needs before it can do anything: a local model, an account, and the
 connectors your agent reaches through.
 
+The first-run wizard around it (`packages/ui/src/desktop/Oobe.tsx`) is **four
+steps**: welcome, *how the desktop starts*, look, setup. "How should the desktop
+start?" is deliberately its own step ahead of "Pick a look": choosing between the
+home surface, a widget board and a plain wallpaper decides whether the app has a
+front door at all, and it used to sit fifth of seven in a list of wallpapers,
+weighted identically to a decorative gradient. Backdrop choices in both steps now
+carry a selected state — they had none, so clicking one confirmed nothing on the
+one screen whose job is to teach the app.
+
 **Status: implemented.** `packages/ui/src/home/SetupCard.tsx`, rendered from
 `HomeView`. The sign-in half is `packages/core/src/SignInCard.tsx`; shared state is
 `packages/core/src/account-store.ts` and `packages/core/src/connectors/store.ts`.

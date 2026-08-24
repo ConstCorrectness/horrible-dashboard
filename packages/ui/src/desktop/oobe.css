@@ -105,7 +105,7 @@
 }
 
 .os-boot-steps li.is-error {
-  color: var(--warning, #d29922);
+  color: var(--warning);
   opacity: 1;
 }
 

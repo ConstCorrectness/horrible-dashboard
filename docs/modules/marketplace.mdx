@@ -22,7 +22,21 @@ backend in `backend/modules/plugins/`. The repo ships one sample plugin
 - **Widgets / keybindings:** none.
 
 Lifecycle changes apply **on reload** (the module registry has no unregister);
-the panel shows a "Reload now" banner after any change.
+the panel shows a "Reload now" banner after any change. That banner says what a
+reload costs — panes holding live sessions (terminals, notebook kernels, running
+matches) are closed by it — because `window.location.reload()` is not a routine
+confirmation in an app whose panes own long-lived resources.
+
+The trust warning is styled as a **warning, not as filler**. It previously shared
+`.dashboard-hint` with empty-state copy and plugin descriptions, which made the one
+sentence on the pane carrying real risk look like the least important text on it.
+
+The empty state distinguishes nothing-installed from a failed read: a catalog error
+names the failure and offers a retry, while an empty catalog explains what a catalog
+*is* and hands over `HORRIBLE_PLUGIN_CATALOG` as a selectable value with a copy
+button, plus a link to the plugin guide. This is the surface where the "built-ins
+use exactly the contract plugins get" claim is either demonstrated or falsified, so
+an env-var name dropped into a sentence for the reader to retype is not good enough.
 
 ## Backend surface
 

@@ -197,8 +197,17 @@ export interface BackdropRef {
  * A model-layer constant, not the registry's: the reducer and the deserializer
  * must be able to name it without knowing which providers are registered — and
  * an unregistered id already falls back gracefully at render time.
+ *
+ * It is `splash` — the home surface — and that is a product decision, not a
+ * cosmetic one. `HomeView` (avatar, ask bar, connector tiles, first-run setup
+ * card) is rendered by exactly one thing in the app: the `splash` backdrop. With
+ * a decorative default, the entire tier-1 entry surface was unreachable on a
+ * clean install: the app opened on a wallpaper and a taskbar, and the person the
+ * home view was designed for — someone who never opens a terminal — met an empty
+ * screen. A backdrop that is only decoration must never be the default while one
+ * of them carries the front door.
  */
-export const DEFAULT_BACKDROP = 'aurora';
+export const DEFAULT_BACKDROP = 'splash';
 
 /** Everything one workspace shows. Serialized as the workspace's layout blob. */
 export interface FrameState {

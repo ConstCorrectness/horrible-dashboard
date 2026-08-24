@@ -531,6 +531,13 @@
      comfortable to hit, still dense enough for a form inside a docked pane. */
   --control-h: 30px;
 
+  /* Icon size for the shared glyph set (`core/src/glyphs.tsx`). Theme-independent
+     for the same reason the type scale is: a theme changes how the app looks, not
+     how big a control is. 13px is the size that sits on the cap height of
+     `--fs-label`, which is the type an icon almost always appears beside; a
+     container that wants a different scale sets this rather than sizing the SVG. */
+  --icon-size: 13px;
+
   /* -------------------------------------------------- OS chrome (--win-*) --
    *
    * Windows, the taskbar and the snap preview read ONLY these. They are derived

@@ -41,15 +41,15 @@ export function RunDetailsModal() {
     >
       <div
         style={{
-          background: 'var(--bg-primary, #0d1117)',
-          border: '1px solid var(--border-dim, #30363d)',
+          background: 'var(--bg-primary)',
+          border: '1px solid var(--border-dim)',
           borderRadius: 8,
           width: '90vw',
           maxWidth: 1080,
           height: '85vh',
           display: 'flex',
           flexDirection: 'column',
-          boxShadow: '0 16px 48px rgba(0,0,0,0.7)',
+          boxShadow: 'var(--elev-2)',
           overflow: 'hidden',
         }}
       >
@@ -57,15 +57,15 @@ export function RunDetailsModal() {
         <div
           style={{
             padding: '14px 20px',
-            borderBottom: '1px solid var(--border-dim, #30363d)',
+            borderBottom: '1px solid var(--border-dim)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            background: 'var(--bg-secondary, #161b22)',
+            background: 'var(--bg-secondary)',
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary, #c9d1d9)' }}>
+            <span style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' }}>
               {run.name}
             </span>
             <span
@@ -77,21 +77,21 @@ export function RunDetailsModal() {
                 textTransform: 'uppercase',
                 background:
                   run.status === 'running'
-                    ? 'rgba(46, 204, 113, 0.2)'
+                    ? 'color-mix(in srgb, var(--success) 20%, transparent)'
                     : run.status === 'failed'
-                    ? 'rgba(231, 76, 60, 0.2)'
-                    : 'rgba(52, 152, 219, 0.2)',
+                    ? 'color-mix(in srgb, var(--danger) 20%, transparent)'
+                    : 'color-mix(in srgb, var(--accent) 20%, transparent)',
                 color:
                   run.status === 'running'
-                    ? '#2ecc71'
+                    ? 'var(--success)'
                     : run.status === 'failed'
-                    ? '#e74c3c'
-                    : '#3498db',
+                    ? 'var(--danger)'
+                    : 'var(--accent)',
               }}
             >
               {run.status}
             </span>
-            <span style={{ fontSize: 12, color: 'var(--text-dim, #8b949e)' }}>
+            <span style={{ fontSize: 12, color: 'var(--text-dim)' }}>
               ID: {run.id}
             </span>
           </div>
@@ -101,7 +101,7 @@ export function RunDetailsModal() {
             style={{
               background: 'none',
               border: 'none',
-              color: 'var(--text-dim, #8b949e)',
+              color: 'var(--text-dim)',
               fontSize: 18,
               cursor: 'pointer',
             }}
@@ -115,9 +115,9 @@ export function RunDetailsModal() {
           style={{
             display: 'flex',
             gap: 2,
-            borderBottom: '1px solid var(--border-dim, #30363d)',
+            borderBottom: '1px solid var(--border-dim)',
             padding: '0 20px',
-            background: 'var(--bg-secondary, #161b22)',
+            background: 'var(--bg-secondary)',
           }}
         >
           {([
@@ -131,8 +131,8 @@ export function RunDetailsModal() {
               style={{
                 background: 'none',
                 border: 'none',
-                borderBottom: activeTab === tab.key ? '2px solid var(--accent, #58a6ff)' : '2px solid transparent',
-                color: activeTab === tab.key ? 'var(--text-primary, #c9d1d9)' : 'var(--text-dim, #8b949e)',
+                borderBottom: activeTab === tab.key ? '2px solid var(--accent)' : '2px solid transparent',
+                color: activeTab === tab.key ? 'var(--text-primary)' : 'var(--text-dim)',
                 padding: '10px 16px',
                 fontSize: 13,
                 fontWeight: 600,
@@ -165,33 +165,33 @@ export function RunDetailsModal() {
               {/* General Metadata */}
               <div
                 style={{
-                  background: 'var(--bg-secondary, #161b22)',
-                  border: '1px solid var(--border-dim, #30363d)',
+                  background: 'var(--bg-secondary)',
+                  border: '1px solid var(--border-dim)',
                   borderRadius: 8,
                   padding: 16,
                 }}
               >
-                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary, #c9d1d9)', marginBottom: 12 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 12 }}>
                   Run Metadata
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, fontSize: 12 }}>
                   <div>
-                    <span style={{ color: 'var(--text-dim, #8b949e)' }}>Project: </span>
-                    <span style={{ color: 'var(--text-primary, #c9d1d9)', fontWeight: 500 }}>{run.project_id}</span>
+                    <span style={{ color: 'var(--text-dim)' }}>Project: </span>
+                    <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{run.project_id}</span>
                   </div>
                   <div>
-                    <span style={{ color: 'var(--text-dim, #8b949e)' }}>Start Time: </span>
-                    <span style={{ color: 'var(--text-primary, #c9d1d9)', fontWeight: 500 }}>{run.start_time || 'N/A'}</span>
+                    <span style={{ color: 'var(--text-dim)' }}>Start Time: </span>
+                    <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{run.start_time || 'N/A'}</span>
                   </div>
                   <div>
-                    <span style={{ color: 'var(--text-dim, #8b949e)' }}>Duration: </span>
-                    <span style={{ color: 'var(--text-primary, #c9d1d9)', fontWeight: 500 }}>
+                    <span style={{ color: 'var(--text-dim)' }}>Duration: </span>
+                    <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>
                       {run.duration_seconds > 0 ? `${Math.round(run.duration_seconds)}s` : 'In progress'}
                     </span>
                   </div>
                   <div>
-                    <span style={{ color: 'var(--text-dim, #8b949e)' }}>Tags: </span>
-                    <span style={{ color: 'var(--text-primary, #c9d1d9)', fontWeight: 500 }}>
+                    <span style={{ color: 'var(--text-dim)' }}>Tags: </span>
+                    <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>
                       {run.tags.length ? run.tags.join(', ') : 'None'}
                     </span>
                   </div>
@@ -201,17 +201,17 @@ export function RunDetailsModal() {
               {/* Hyperparameters Config Table */}
               <div
                 style={{
-                  background: 'var(--bg-secondary, #161b22)',
-                  border: '1px solid var(--border-dim, #30363d)',
+                  background: 'var(--bg-secondary)',
+                  border: '1px solid var(--border-dim)',
                   borderRadius: 8,
                   padding: 16,
                 }}
               >
-                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary, #c9d1d9)', marginBottom: 12 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 12 }}>
                   Logged Hyperparameters (config)
                 </div>
                 {Object.keys(run.config).length === 0 ? (
-                  <div style={{ color: 'var(--text-dim, #8b949e)', fontSize: 12 }}>No configuration logged.</div>
+                  <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>No configuration logged.</div>
                 ) : (
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 8 }}>
                     {Object.entries(run.config).map(([k, v]) => (
@@ -222,13 +222,13 @@ export function RunDetailsModal() {
                           justifyContent: 'space-between',
                           padding: '6px 10px',
                           borderRadius: 4,
-                          background: 'rgba(255,255,255,0.02)',
-                          border: '1px solid rgba(255,255,255,0.04)',
+                          background: 'color-mix(in srgb, var(--text) 2%, transparent)',
+                          border: '1px solid color-mix(in srgb, var(--text) 4%, transparent)',
                           fontSize: 12,
                         }}
                       >
-                        <span style={{ color: 'var(--text-secondary, #8b949e)', fontWeight: 500 }}>{k}</span>
-                        <span style={{ color: 'var(--text-primary, #c9d1d9)', fontFamily: 'monospace', fontWeight: 600 }}>
+                        <span style={{ color: 'var(--text-secondary)', fontWeight: 500 }}>{k}</span>
+                        <span style={{ color: 'var(--text-primary)', fontFamily: 'monospace', fontWeight: 600 }}>
                           {typeof v === 'object' ? JSON.stringify(v) : String(v)}
                         </span>
                       </div>
@@ -241,13 +241,13 @@ export function RunDetailsModal() {
               {Object.keys(run.system_info).length > 0 && (
                 <div
                   style={{
-                    background: 'var(--bg-secondary, #161b22)',
-                    border: '1px solid var(--border-dim, #30363d)',
+                    background: 'var(--bg-secondary)',
+                    border: '1px solid var(--border-dim)',
                     borderRadius: 8,
                     padding: 16,
                   }}
                 >
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary, #c9d1d9)', marginBottom: 12 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 12 }}>
                     Hardware & System Info
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 8 }}>
@@ -259,12 +259,12 @@ export function RunDetailsModal() {
                           justifyContent: 'space-between',
                           padding: '6px 10px',
                           borderRadius: 4,
-                          background: 'rgba(255,255,255,0.02)',
+                          background: 'color-mix(in srgb, var(--text) 2%, transparent)',
                           fontSize: 12,
                         }}
                       >
-                        <span style={{ color: 'var(--text-secondary, #8b949e)' }}>{k}</span>
-                        <span style={{ color: 'var(--text-primary, #c9d1d9)', fontWeight: 500 }}>{String(v)}</span>
+                        <span style={{ color: 'var(--text-secondary)' }}>{k}</span>
+                        <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{String(v)}</span>
                       </div>
                     ))}
                   </div>
@@ -277,20 +277,20 @@ export function RunDetailsModal() {
           {activeTab === 'files' && (
             <div
               style={{
-                background: 'var(--bg-secondary, #161b22)',
-                border: '1px solid var(--border-dim, #30363d)',
+                background: 'var(--bg-secondary)',
+                border: '1px solid var(--border-dim)',
                 borderRadius: 8,
                 padding: 16,
               }}
             >
-              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary, #c9d1d9)', marginBottom: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 12 }}>
                 Run Artifacts & Outputs
               </div>
 
               {loadingFiles ? (
-                <div style={{ color: 'var(--text-dim, #8b949e)', fontSize: 12 }}>Loading files...</div>
+                <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>Loading files...</div>
               ) : artifacts.length === 0 ? (
-                <div style={{ color: 'var(--text-dim, #8b949e)', fontSize: 12 }}>
+                <div style={{ color: 'var(--text-dim)', fontSize: 12 }}>
                   No artifacts saved for this run (e.g. config.json, trainer_state.json).
                 </div>
               ) : (
@@ -303,18 +303,18 @@ export function RunDetailsModal() {
                         alignItems: 'center',
                         justifyContent: 'space-between',
                         padding: '10px 14px',
-                        background: 'rgba(255,255,255,0.02)',
-                        border: '1px solid rgba(255,255,255,0.05)',
+                        background: 'color-mix(in srgb, var(--text) 2%, transparent)',
+                        border: '1px solid color-mix(in srgb, var(--text) 5%, transparent)',
                         borderRadius: 6,
                       }}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                         <span style={{ fontSize: 16 }}>📄</span>
                         <div style={{ display: 'flex', flexDirection: 'column' }}>
-                          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary, #c9d1d9)' }}>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>
                             {art.filename}
                           </span>
-                          <span style={{ fontSize: 11, color: 'var(--text-dim, #8b949e)' }}>
+                          <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>
                             {art.size_bytes} bytes · {art.content_type} · {art.created_at}
                           </span>
                         </div>
@@ -326,8 +326,12 @@ export function RunDetailsModal() {
                         target="_blank"
                         rel="noreferrer"
                         style={{
-                          background: 'var(--accent, #1f6feb)',
-                          color: '#fff',
+                          background: 'var(--accent)',
+                          // Not white: `--accent` is a light blue in several
+                          // themes and inverts in daylight, so white-on-accent is
+                          // how this label disappears. `--accent-contrast` is the
+                          // one token defined to be legible *on* the accent.
+                          color: 'var(--accent-contrast)',
                           padding: '6px 12px',
                           borderRadius: 4,
                           fontSize: 12,

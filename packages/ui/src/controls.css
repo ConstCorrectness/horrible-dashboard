@@ -165,8 +165,39 @@ select {
   color: var(--text);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
-  padding: 0.35rem 0.6rem;
+  padding: 0 0.6rem;
   font: inherit;
+  /* The One Height Rule, finally applied at the element level. `--control-h` was
+     referenced in exactly four places, all of them inside `primitives.css` and
+     `resourcecard.css` — so a form built from bare elements (which is most of
+     them, at 701 raw `<button>` against 74 `<Button>`) had three intrinsic
+     heights in a row and never lined up. This is the mechanism behind DESIGN.md's
+     own diagnosis that "two panes docked side by side never lined up".
+     A fixed `height` rather than `min-height`, and vertical padding removed:
+     with padding left in, an input settled at 34px and a `<select>` at 36px
+     (native rendering reserves space for its own arrow), so a row containing
+     both was still 2px ragged — which is exactly the defect the rule names.
+     `box-sizing` is border-box app-wide, so this is the outer height for both. */
+  height: var(--control-h);
+}
+
+/* A select sizes to its longest option unless told otherwise, and `min-width:
+   auto` is the flex default — which is how the Settings "Model override" select
+   measured 413px inside a 348px pane, escaping its own container with no way to
+   scroll to it. Panes here are user-resized down to ~320px, so no control may
+   derive its width from its content. */
+select {
+  min-width: 0;
+  max-width: 100%;
+}
+
+textarea {
+  /* The one shape the fixed height must not apply to: it has to grow. Restores
+     its own vertical padding, and floors at two control-heights to match
+     `.hd-field textarea`. */
+  height: auto;
+  padding-block: 0.35rem;
+  min-height: calc(var(--control-h) * 2);
 }
 
 input[type='text']:focus-visible,
@@ -190,7 +221,10 @@ select:disabled {
 }
 
 ::placeholder {
-  color: var(--text-faint);
+  /* `--text-faint` measures ~2.9:1 on the page ground — fine for a decorative
+     hint, not for placeholder text, which is real copy a user reads to know what
+     a field wants. */
+  color: var(--text-dim);
 }
 
 /* A select with the native arrow replaced by our own, for the places that want the
