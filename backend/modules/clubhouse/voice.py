@@ -172,11 +172,27 @@ class VoiceConfig:
     speak: bool = True
     post_to_chat: bool = True
     robot_emoji_prefix: bool = False
+    tts_voice: str = "en-US-ChristopherNeural"
+    tts_rate: str = "+0%"
+    tts_pitch: str = "+0Hz"
+    # Conversational flow and human-like timing
+    turn_eagerness: Literal["fast", "normal", "patient"] = "normal"
+    endpointing_delay_ms: int = 750
+    thinking_filler: bool = True
+    silence_timeout_s: float = 0.0
+    allow_barge_in: bool = True
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> VoiceConfig:
         base = cls()
         words = raw.get("wake_words") or raw.get("wakeWords")
+        eagerness = raw.get("turn_eagerness") or raw.get("turnEagerness") or base.turn_eagerness
+        endpointing = int(raw.get("endpointing_delay_ms", raw.get("endpointingDelayMs", base.endpointing_delay_ms)))
+        if eagerness == "fast" and "endpointing_delay_ms" not in raw and "endpointingDelayMs" not in raw:
+            endpointing = 400
+        elif eagerness == "patient" and "endpointing_delay_ms" not in raw and "endpointingDelayMs" not in raw:
+            endpointing = 1200
+
         return cls(
             enabled=bool(raw.get("enabled", base.enabled)),
             posture=raw.get("posture") or base.posture,
@@ -208,6 +224,14 @@ class VoiceConfig:
             robot_emoji_prefix=bool(
                 raw.get("robot_emoji_prefix", raw.get("robotEmojiPrefix", False))
             ),
+            tts_voice=str(raw.get("tts_voice", raw.get("ttsVoice", base.tts_voice))),
+            tts_rate=str(raw.get("tts_rate", raw.get("ttsRate", base.tts_rate))),
+            tts_pitch=str(raw.get("tts_pitch", raw.get("ttsPitch", base.tts_pitch))),
+            turn_eagerness=eagerness,  # type: ignore[arg-type]
+            endpointing_delay_ms=endpointing,
+            thinking_filler=bool(raw.get("thinking_filler", raw.get("thinkingFiller", base.thinking_filler))),
+            silence_timeout_s=float(raw.get("silence_timeout_s", raw.get("silenceTimeoutS", base.silence_timeout_s))),
+            allow_barge_in=bool(raw.get("allow_barge_in", raw.get("allowBargeIn", base.allow_barge_in))),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -228,7 +252,17 @@ class VoiceConfig:
             "speak": self.speak,
             "postToChat": self.post_to_chat,
             "robotEmojiPrefix": self.robot_emoji_prefix,
+            "ttsVoice": self.tts_voice,
+            "ttsRate": self.tts_rate,
+            "ttsPitch": self.tts_pitch,
+            "turnEagerness": self.turn_eagerness,
+            "endpointingDelayMs": self.endpointing_delay_ms,
+            "thinkingFiller": self.thinking_filler,
+            "silenceTimeoutS": self.silence_timeout_s,
+            "allowBargeIn": self.allow_barge_in,
         }
+
+
 
 
 @dataclass

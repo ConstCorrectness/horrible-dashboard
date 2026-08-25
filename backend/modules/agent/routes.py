@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -25,6 +26,7 @@ from backend.modules.telemetry.instrument import instrumented_client, tee_stream
 from backend import paths
 
 router = APIRouter(prefix="/agent", tags=["agent"])
+logger = logging.getLogger(__name__)
 
 
 def _config_path() -> Path:
@@ -315,7 +317,12 @@ def tool_groups() -> dict[str, Any]:
 
 
 @router.get("/tts")
-async def tts(text: str) -> Response:
+async def tts(
+    text: str,
+    voice: str = "en-US-ChristopherNeural",
+    rate: str = "+0%",
+    pitch: str = "+0Hz",
+) -> Response:
     """Speak ``text`` as MP3 audio.
 
     Lazy-imported and 503s rather than 500s when the ``voice`` extra is missing:
@@ -329,12 +336,25 @@ async def tts(text: str) -> Response:
             detail="Text-to-speech unavailable — install it with `uv sync --extra voice`",
         ) from exc
 
-    audio_bytes = await edge_tts_service.generate_audio(text)
+    audio_bytes = await edge_tts_service.generate_audio(
+        text, voice=voice, rate=rate, pitch=pitch
+    )
     return Response(content=audio_bytes, media_type="audio/mpeg")
 
 
+@router.get("/tts/voices")
+async def list_tts_voices() -> list[dict[str, Any]]:
+    """List available TTS neural voices."""
+    try:
+        from backend.modules.agent.edge_tts_service import edge_tts_service
+        return await edge_tts_service.list_voices()
+    except ImportError:
+        from backend.modules.agent.edge_tts_service import POPULAR_VOICES
+        return POPULAR_VOICES
+
+
 @router.post("/stt")
-async def stt(file: UploadFile) -> dict[str, str]:
+async def stt(file: UploadFile, language: str | None = None) -> dict[str, str]:
     """Transcribe an uploaded audio chunk (WebM/Opus) to text.
 
     Same optionality as :func:`tts` — Whisper pulls in torch, which is far too
@@ -347,5 +367,10 @@ async def stt(file: UploadFile) -> dict[str, str]:
             detail="Speech-to-text unavailable — install it with `uv sync --extra voice`",
         ) from exc
 
-    audio_bytes = await file.read()
-    return {"text": await stt_service.transcribe(audio_bytes)}
+    try:
+        audio_bytes = await file.read()
+        return {"text": await stt_service.transcribe(audio_bytes)}
+    except Exception as exc:
+        logger.warning("STT transcription error: %s", exc)
+        return {"text": ""}
+

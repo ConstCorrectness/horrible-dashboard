@@ -11,6 +11,8 @@ import { apiUrl } from '../../origin';
 export type VoicePosture = 'addressed' | 'conversational' | 'always';
 export type RetrievalMode = 'off' | 'command' | 'auto';
 
+export type TurnEagerness = 'fast' | 'normal' | 'patient';
+
 export interface VoiceAgentConfig {
   enabled: boolean;
   posture: VoicePosture;
@@ -27,6 +29,14 @@ export interface VoiceAgentConfig {
   speak: boolean;
   postToChat: boolean;
   robotEmojiPrefix: boolean;
+  ttsVoice: string;
+  ttsRate: string;
+  ttsPitch: string;
+  turnEagerness: TurnEagerness;
+  endpointingDelayMs: number;
+  thinkingFiller: boolean;
+  silenceTimeoutS: number;
+  allowBargeIn: boolean;
 }
 
 export const DEFAULT_VOICE_CONFIG: VoiceAgentConfig = {
@@ -46,7 +56,17 @@ export const DEFAULT_VOICE_CONFIG: VoiceAgentConfig = {
   speak: true,
   postToChat: true,
   robotEmojiPrefix: false,
+  ttsVoice: 'en-US-ChristopherNeural',
+  ttsRate: '+0%',
+  ttsPitch: '+0Hz',
+  turnEagerness: 'normal',
+  endpointingDelayMs: 750,
+  thinkingFiller: true,
+  silenceTimeoutS: 0,
+  allowBargeIn: true,
 };
+
+
 
 /** One member of the room as the pane currently sees them. */
 export interface VoiceRoomMember {
@@ -74,6 +94,7 @@ export interface VoiceTurnResult {
   reply: string;
   notice: string | null;
   retrieved: boolean;
+  filler?: string | null;
 }
 
 export interface VoiceStateTurn {
@@ -128,8 +149,15 @@ export function pushVoiceConfig(channel: string, config: VoiceAgentConfig): Prom
   return post('/api/clubhouse/voice/config', { channel, config });
 }
 
-export function resetVoiceMemory(channel: string): Promise<unknown> {
-  return post('/api/clubhouse/voice/reset', { channel });
+export function resetVoiceMemory(
+  channel: string,
+  options?: { resetPersona?: boolean; persona?: string },
+): Promise<{ cleared: boolean; persona?: string }> {
+  return post<{ cleared: boolean; persona?: string }>('/api/clubhouse/voice/reset', {
+    channel,
+    reset_persona: options?.resetPersona ?? false,
+    persona: options?.persona,
+  });
 }
 
 export async function getVoiceState(
@@ -141,3 +169,4 @@ export async function getVoiceState(
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
 }
+

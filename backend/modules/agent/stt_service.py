@@ -55,14 +55,32 @@ class SttService:
         async with self._lock:
             return await asyncio.to_thread(self._transcribe_sync, audio_bytes)
 
-    def _transcribe_sync(self, audio_bytes: bytes) -> str:
-        self._load_model()
+    def _decode_audio(self, audio_bytes: bytes) -> bytes:
+        if not audio_bytes or len(audio_bytes) < 32:
+            return b""
 
-        # `-f webm` is passed explicitly: the browser sends MediaRecorder chunks
-        # over a pipe, which is unseekable, so ffmpeg cannot probe the container.
-        process = subprocess.Popen(
+        # Try auto-probe first (WAV, MP4, AAC, OGG, WebM), fallback to explicit WebM format
+        for cmd in (
             [
                 "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                "pipe:0",
+                "-f",
+                "f32le",
+                "-ac",
+                "1",
+                "-ar",
+                str(SAMPLE_RATE),
+                "pipe:1",
+            ],
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
                 "-f",
                 "webm",
                 "-i",
@@ -75,28 +93,52 @@ class SttService:
                 str(SAMPLE_RATE),
                 "pipe:1",
             ],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        raw_audio, stderr = process.communicate(input=audio_bytes)
-        if process.returncode != 0 or not raw_audio:
-            raise ValueError(
-                f"ffmpeg failed to decode the audio stream: {stderr.decode()[:500]}"
-            )
+        ):
+            try:
+                process = subprocess.Popen(
+                    cmd,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                raw_audio, _ = process.communicate(input=audio_bytes)
+                if process.returncode == 0 and raw_audio:
+                    return raw_audio
+            except Exception as err:
+                logger.debug("ffmpeg decoding attempt failed: %s", err)
+        return b""
 
-        data = np.frombuffer(raw_audio, dtype=np.float32)
-        features = self.processor(
-            data, sampling_rate=SAMPLE_RATE, return_tensors="pt"
-        ).input_features.to(self.device)
-        predicted_ids = self.model.generate(features)
-        text = self.processor.batch_decode(predicted_ids, skip_special_tokens=True)[
-            0
-        ].strip()
-
-        if text.strip(" .").lower() in _SILENCE_HALLUCINATIONS:
+    def _transcribe_sync(self, audio_bytes: bytes) -> str:
+        if not audio_bytes or len(audio_bytes) < 32:
             return ""
-        return text
+
+        raw_audio = self._decode_audio(audio_bytes)
+        if not raw_audio or len(raw_audio) < 1600 * 4:  # less than 100ms of audio
+            return ""
+
+        self._load_model()
+        if self.processor is None or self.model is None:
+            return ""
+
+        try:
+            data = np.frombuffer(raw_audio, dtype=np.float32)
+            if data.size == 0:
+                return ""
+            data = np.nan_to_num(data)
+            features = self.processor(
+                data, sampling_rate=SAMPLE_RATE, return_tensors="pt"
+            ).input_features.to(self.device)
+            predicted_ids = self.model.generate(features)
+            text = self.processor.batch_decode(
+                predicted_ids, skip_special_tokens=True
+            )[0].strip()
+
+            if text.strip(" .").lower() in _SILENCE_HALLUCINATIONS:
+                return ""
+            return text
+        except Exception as err:
+            logger.warning("Whisper transcription failed: %s", err)
+            return ""
 
 
 stt_service = SttService()

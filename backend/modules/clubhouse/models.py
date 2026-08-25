@@ -132,3 +132,112 @@ class UpdateTopicRequest(BaseModel):
 
 class ChatSettingsRequest(BaseModel):
     enable_chat: bool
+
+
+class UninviteSpeakerRequest(BaseModel):
+    user_id: int
+
+
+class MakeModeratorRequest(BaseModel):
+    user_id: int
+
+
+class BlockChannelUserRequest(BaseModel):
+    user_id: int
+
+
+class RejectSpeakerInviteRequest(BaseModel):
+    user_id: int
+
+
+class OnlineFriendUser(BaseModel):
+    user_id: int | None = None
+    name: str | None = None
+    username: str | None = None
+    photo_url: str | None = None
+    channel: str | None = None
+    topic: str | None = None
+    is_speaker: bool | None = None
+    last_active_minutes: int | None = None
+
+
+class OnlineFriendsList(BaseModel):
+    users: list[OnlineFriendUser] = []
+
+
+class ClubDetails(BaseModel):
+    club_id: int | None = None
+    name: str | None = None
+    description: str | None = None
+    photo_url: str | None = None
+    num_members: int | None = None
+    num_followers: int | None = None
+    is_member: bool | None = None
+    is_admin: bool | None = None
+    is_community: bool | None = None
+
+
+class ClubMemberUser(BaseModel):
+    user_id: int | None = None
+    name: str | None = None
+    username: str | None = None
+    photo_url: str | None = None
+    bio: str | None = None
+    is_admin: bool | None = None
+
+
+class ClubMemberList(BaseModel):
+    users: list[ClubMemberUser] = []
+
+
+class ClubhouseEvent(BaseModel):
+    event_id: int | None = None
+    name: str | None = None
+    description: str | None = None
+    time_start_epoch: int | None = None
+    channel: str | None = None
+    club: Club | None = None
+    hosts: list[ChannelUser] = []
+
+
+class EventList(BaseModel):
+    events: list[ClubhouseEvent] = []
+
+
+class CreateEventRequest(BaseModel):
+    name: str
+    time_start_epoch: int
+    description: str = ""
+    club_id: int | None = None
+    user_ids: list[int] = []
+    is_member_only: bool = False
+
+
+class NotificationItem(BaseModel):
+    notification_id: int | None = None
+    message: str | None = None
+    time_created: str | None = None
+    type: int | None = None
+    user_profile: ChannelUser | None = None
+    channel: str | None = None
+
+
+class NotificationsList(BaseModel):
+    notifications: list[NotificationItem] = []
+
+
+class UpdateBioRequest(BaseModel):
+    bio: str
+
+
+class UpdateNameRequest(BaseModel):
+    name: str
+
+
+class UpdateUsernameRequest(BaseModel):
+    username: str
+
+
+class UpdateSkintoneRequest(BaseModel):
+    skintone: int
+

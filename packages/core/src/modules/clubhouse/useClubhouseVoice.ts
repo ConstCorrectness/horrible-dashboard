@@ -1,6 +1,7 @@
 import { apiUrl } from '../../origin';
-import { useCallback, useSyncExternalStore } from 'react';
+import { useCallback, useRef, useSyncExternalStore } from 'react';
 import AgoraRTC from 'agora-rtc-sdk-ng';
+
 import PubNub from 'pubnub';
 
 import { usePaneSession } from '../../layout/use-pane-session';
@@ -40,14 +41,18 @@ export interface UseClubhouseVoiceProps {
   onLiveUsersChange?: (users: LiveUserState[]) => void;
   onCommentsChange?: (comments: ChatComment[]) => void;
   onSpeakingVolumesChange?: (volumes: Record<number, number>) => void;
-  onTranscribe?: (text: string) => void;
+  onTranscribe?: (text: string, speakerName?: string, speakerId?: number | null) => void;
   onBargeIn?: () => void;
   onSpeakerInvite?: (invite: SpeakerInvite) => void;
   onHandRaise?: (userId: number, userName: string) => void;
   /** Speech pipeline failed (missing `voice` extra, backend down, decode error). */
   onVoiceError?: (message: string) => void;
   sttChunkIntervalMs?: number;
+  endpointingDelayMs?: number;
+  allowBargeIn?: boolean;
 }
+
+
 
 export interface PubNubRoomMessage {
   action?: string;
@@ -130,6 +135,9 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     voiceError,
   } = state;
 
+  const propsRef = useRef(props);
+  propsRef.current = props;
+
   // Callbacks are read through the session so the long-lived connection always
   // calls the *current* mount's handlers rather than the ones from the render that
   // opened the room.
@@ -141,6 +149,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
     onVoiceError: props?.onVoiceError,
   };
   session.chunkIntervalMs = props?.sttChunkIntervalMs || 5000;
+
 
   const reportVoiceError = useCallback(
     (message: string) => session.reportVoiceError(message, session.handlers.onVoiceError),
@@ -301,11 +310,13 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
 
         let silenceTicks = 0;
         let isSpeaking = false;
+        let activeSpeakerUidDuringSpeech: number | null = null;
 
-        const startRecordingChunk = () => {
+        const startRecordingChunk = (speakerUidForChunk: number | null = null) => {
           if (!session.sttDest) return;
           const recorder = new MediaRecorder(session.sttDest.stream);
           session.sttRecorder = recorder;
+          const boundSpeakerId = speakerUidForChunk ?? activeSpeakerUidDuringSpeech;
 
           recorder.ondataavailable = async (e) => {
             if (e.data.size > 0 && session.handlers.onTranscribe) {
@@ -334,9 +345,10 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
                   reportVoiceError(`Speech-to-text unavailable: ${detail}`);
                   return;
                 }
+                session.clearVoiceError();
                 const json = await res.json();
                 if (session.handlers.onTranscribe && json.text && json.text.trim()) {
-                  session.handlers.onTranscribe(json.text.trim());
+                  session.handlers.onTranscribe(json.text.trim(), undefined, boundSpeakerId);
                 }
               } catch (err) {
                 console.error('STT failed:', err);
@@ -360,6 +372,21 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
           const avgVolume = sum / dataArray.length;
 
           if (avgVolume > 5) {
+            // Track loudest speaker UID across live volumes
+            const vols = session.getState().speakingVolumes || {};
+            let highestVol = 0;
+            let loudestUid: number | null = null;
+            for (const [uidStr, vol] of Object.entries(vols)) {
+              const v = Number(vol);
+              if (v > highestVol && v > 5) {
+                highestVol = v;
+                loudestUid = Number(uidStr);
+              }
+            }
+            if (loudestUid != null) {
+              activeSpeakerUidDuringSpeech = loudestUid;
+            }
+
             // Human is speaking
             if (!isSpeaking && session.handlers.onBargeIn) {
               session.handlers.onBargeIn();
@@ -368,7 +395,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
             silenceTicks = 0;
 
             // Barge-in: Stop agent if it's currently speaking
-            if (session.isAgentSpeaking) {
+            if (session.isAgentSpeaking && propsRef.current?.allowBargeIn !== false) {
               console.log('BARGE-IN DETECTED! Stopping agent audio.');
               if (session.agentAudioSource) {
                 try {
@@ -390,19 +417,27 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
             // Silence
             if (isSpeaking) {
               silenceTicks++;
-              if (silenceTicks > 15) {
-                // ~750ms of silence at 50ms interval
+              const requiredSilenceTicks = Math.max(
+                4,
+                Math.round((propsRef.current?.endpointingDelayMs || 750) / 50),
+              );
+              if (silenceTicks >= requiredSilenceTicks) {
                 isSpeaking = false;
                 silenceTicks = 0;
+                const completedSpeakerUid = activeSpeakerUidDuringSpeech;
+                activeSpeakerUidDuringSpeech = null;
                 // End of speech detected, send chunk!
                 if (session.sttRecorder && session.sttRecorder.state !== 'inactive') {
                   session.sttRecorder.stop();
-                  startRecordingChunk();
+                  startRecordingChunk(completedSpeakerUid);
                 }
               }
             }
           }
+
         }, 50);
+
+
       } catch (err) {
         console.error('Failed to start VAD STT recorder:', err);
       }
@@ -820,7 +855,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
    * boundary and drops the queue, instead of killing one monolithic buffer.
    */
   const playAgentAudio = useCallback(
-    async (text: string) => {
+    async (text: string, voiceOptions?: { voice?: string; rate?: string; pitch?: string }) => {
       const ctx = session.audioCtx;
       if (!ctx || !session.agentAudioDest || !session.localAudioTrack) return;
       const chunks = splitForSpeech(text);
@@ -830,9 +865,15 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
       session.agentTtsAbort = abort;
       session.isAgentSpeaking = true;
 
+      const voice = voiceOptions?.voice || 'en-US-ChristopherNeural';
+      const rate = voiceOptions?.rate || '+0%';
+      const pitch = voiceOptions?.pitch || '+0Hz';
+
       /** Fetch + decode one chunk. Returns null if it was aborted or unavailable. */
       const render = async (chunk: string): Promise<AudioBuffer | null> => {
-        const url = apiUrl(`/api/agent/tts?text=${encodeURIComponent(chunk)}`);
+        const url = apiUrl(
+          `/api/agent/tts?text=${encodeURIComponent(chunk)}&voice=${encodeURIComponent(voice)}&rate=${encodeURIComponent(rate)}&pitch=${encodeURIComponent(pitch)}`,
+        );
         const res = await fetch(url, { signal: abort.signal });
         if (!res.ok) {
           let detail = `HTTP ${res.status}`;
@@ -847,6 +888,7 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         // `decodeAudioData` detaches the buffer, so each chunk is decoded exactly once.
         return ctx.decodeAudioData(await res.arrayBuffer());
       };
+
 
       // Unmuted once around the whole utterance, not per chunk: toggling the channel
       // between sentences would clip the start of each one and spam the API.

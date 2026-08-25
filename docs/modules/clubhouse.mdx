@@ -499,6 +499,33 @@ and a suspended context is silent in the quietest possible way: the graph is wir
 The hook now resumes it explicitly after joining.
 :::
 
+### Enhanced In-Room Moderation, Social & Voice Customization
+
+The Clubhouse client integrates reverse-engineered endpoints providing comprehensive room and social management:
+
+- **Room Moderation & Stage Management:**
+  - `POST /channels/{channel}/uninvite_speaker`: Demote speaker back to audience.
+  - `POST /channels/{channel}/make_moderator`: Promote speaker to moderator.
+  - `POST /channels/{channel}/block`: Remove and block a user from the room.
+  - `POST /channels/{channel}/end`: End the room for everyone.
+  - `POST /channels/{channel}/make_public` & `POST /channels/{channel}/make_social`: Dynamically alter room visibility.
+  - `POST /channels/{channel}/reject_speaker`: Decline invitation to speak on stage.
+- **Social & Presence:**
+  - `GET /online_friends`: List online friends and rooms they are currently active in.
+  - `GET /users/{user_id}/followers`: Paginated follower discovery.
+  - `GET /notifications`: Retrieve recent activity notifications.
+- **Clubs & Events:**
+  - `GET /clubs/{club_id}` & `GET /clubs/{club_id}/members`: Query club metadata and member rosters.
+  - `POST /clubs/{club_id}/follow` & `/unfollow`: Follow and unfollow clubs.
+  - `GET /events`, `POST /events`, `DELETE /events/{event_id}`: Schedule, browse, and delete calendar events.
+- **Profile Updates:**
+  - `POST /me/bio`, `/me/name`, `/me/username`, `/me/skintone`: Update bio, display name, handle, and emoji skin tone.
+- **TTS Voice & Pitch Customization:**
+  - `GET /api/agent/tts/voices`: Catalog of Microsoft Edge neural voices.
+  - `GET /api/agent/tts?text=...&voice=...&rate=...&pitch=...`: Customizable voice, speed multiplier, and pitch tuning.
+- **Real-Time Speaker Attribution:**
+  - Correlates Agora RTC audio volume indicator metrics with active room participant rosters during VAD speech windows, passing speaker name and user ID directly to the agent's turn loop.
+
 ---
 
 ## Contributions to the Layout Shell
@@ -515,3 +542,4 @@ The account widget exposes its connection status using `useAgentContext()`.
 
 - **State:** `loading`, `backend-down`, or connection state properties: `{ connected: boolean, name: string | null, username: string | null }`. While disconnected it also reports the chosen onboarding `method` (`sms` / `code` / `token`) and, for `sms`, the `step`.
 - **Reference:** See the [Agent Tools Documentation](../architecture/agent-tools.mdx#reading-widget-state-getagentcontext).
+

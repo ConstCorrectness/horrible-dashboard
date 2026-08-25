@@ -147,3 +147,28 @@ def test_complete_prompt_includes_lsp_grounding(
     # The grounding (in-scope symbols + cursor type) is fed into the prompt.
     assert "name, email" in prompt
     assert "User.name: string" in prompt
+
+
+def test_stt_handles_empty_or_corrupt_audio(client: TestClient) -> None:
+    # The STT route lazy-imports torch/transformers and answers 503 without them,
+    # so this asserts nothing on a node that has not run `uv sync --extra voice`.
+    # Skipped rather than asserted-around, the same way the playwright, aiortc and
+    # torch tests here already do it -- a test that fails on a fresh clone trains
+    # people to ignore a red suite.
+    pytest.importorskip("torch")
+    pytest.importorskip("transformers")
+
+    res = client.post(
+        "/api/agent/stt",
+        files={"file": ("empty.webm", b"", "audio/webm")},
+    )
+    assert res.status_code == 200
+    assert res.json() == {"text": ""}
+
+    res = client.post(
+        "/api/agent/stt",
+        files={"file": ("corrupt.webm", b"garbage-bytes-12345", "audio/webm")},
+    )
+    assert res.status_code == 200
+    assert res.json() == {"text": ""}
+

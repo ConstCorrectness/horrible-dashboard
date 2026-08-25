@@ -47,11 +47,19 @@ class TurnResponse(BaseModel):
     # agent speaking: command confirmations, failures, "found nothing".
     notice: str | None = None
     retrieved: bool = False
+    filler: str | None = None
 
 
 class ConfigRequest(BaseModel):
     channel: str
     config: dict[str, Any] = Field(default_factory=dict)
+
+
+class ResetRequest(BaseModel):
+    channel: str
+    reset_persona: bool = False
+    persona: str | None = None
+
 
 
 @router.post("/turn", response_model=TurnResponse)
@@ -120,6 +128,7 @@ async def turn(req: TurnRequest) -> TurnResponse:
         reply=str(result.get("reply", "")),
         notice=result.get("notice"),
         retrieved=bool(result.get("retrieved")),
+        filler=result.get("filler"),
     )
 
 
@@ -159,10 +168,13 @@ def state(channel: str) -> dict[str, Any]:
 
 
 @router.post("/reset")
-def reset(req: ConfigRequest) -> dict[str, Any]:
-    """Forget the conversation but keep the settings."""
+def reset(req: ResetRequest) -> dict[str, Any]:
+    """Forget the conversation and optionally reset persona."""
     session = V.session_for(req.channel)
     session.history.clear()
     session.spoken.clear()
     session.last_reply_ts = None
-    return {"cleared": True}
+    if req.reset_persona:
+        session.config.persona = req.persona or V.DEFAULT_PERSONA
+    return {"cleared": True, "persona": session.config.persona}
+

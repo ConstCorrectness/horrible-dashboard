@@ -335,12 +335,18 @@ async def run_turn(
     session.remember(Turn(role="agent", text=reply))
     session.spoken.append(reply)
     session.last_reply_ts = time.time()
+    filler_text: str | None = None
+    if config.thinking_filler and retrieval is not None:
+        filler_text = "Hmm, let me check that..."
+
     return {
         "spoke": True,
         "reason": "replied",
         "reply": reply,
         "retrieved": retrieval is not None,
+        "filler": filler_text,
     }
+
 
 
 async def run_command(

@@ -13,6 +13,12 @@ import {
   unfollowClubhouseUser,
   inviteToClubhouseChannel,
   inviteClubhouseSpeaker,
+  uninviteClubhouseSpeaker,
+  makeClubhouseModerator,
+  blockFromClubhouseChannel,
+  endClubhouseChannel,
+  getClubhouseOnlineFriends,
+  getAgentTtsVoices,
   updateClubhouseTopic,
   updateClubhouseHandraiseSettings,
   updateClubhouseChatSettings,
@@ -28,6 +34,8 @@ import {
   type SearchUserResult,
   type FollowUser,
   type PersonMemory,
+  type OnlineFriendUser,
+  type TtsVoiceOption,
 } from './api';
 import { MediaInsightsModal } from './MediaInsightsModal';
 import { useClubhouseVoice } from './useClubhouseVoice';
@@ -96,7 +104,8 @@ export function RoomsPanel() {
   // a deliberate silence and a broken pipeline are indistinguishable without it.
   const [agentReason, setAgentReason] = useState<string | null>(null);
   const [agentMemory, setAgentMemory] = useState<VoiceStateTurn[]>([]);
-  const [sttChunkMs, setSttChunkMs] = useState(5000);
+  const [sttChunkMs] = useState(5000);
+
   const [agentPromptPresets, setAgentPromptPresets] = useState<{ name: string; prompt: string }[]>(
     () => {
       try {
@@ -177,6 +186,11 @@ export function RoomsPanel() {
   const [peopleMemoryLoading, setPeopleMemoryLoading] = useState(false);
   const [newNoteInputs, setNewNoteInputs] = useState<{ [uid: number]: string }>({});
 
+  const [ttsVoices, setTtsVoices] = useState<TtsVoiceOption[]>([]);
+  const [onlineFriends, setOnlineFriends] = useState<OnlineFriendUser[]>([]);
+  const [showOnlineFriendsModal, setShowOnlineFriendsModal] = useState(false);
+  const [loadingOnlineFriends, setLoadingOnlineFriends] = useState(false);
+
   const refreshPeopleMemory = async (q = peopleMemoryQuery) => {
     setPeopleMemoryLoading(true);
     try {
@@ -189,10 +203,24 @@ export function RoomsPanel() {
     }
   };
 
+  const loadOnlineFriends = async () => {
+    setLoadingOnlineFriends(true);
+    try {
+      const res = await getClubhouseOnlineFriends();
+      setOnlineFriends(res.users ?? []);
+    } catch (e) {
+      console.error('Failed to fetch online friends:', e);
+    } finally {
+      setLoadingOnlineFriends(false);
+    }
+  };
+
   useEffect(() => {
     void getAgentStatus().then(setAgentEngineStatus).catch(() => {});
     void refreshPeopleMemory();
+    void getAgentTtsVoices().then(setTtsVoices).catch(() => {});
   }, []);
+
 
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [followingUsers, setFollowingUsers] = useState<FollowUser[]>([]);
@@ -403,7 +431,7 @@ export function RoomsPanel() {
             </div>
           </div>
 
-          <div className="ch-profile-actions">
+          <div className="ch-profile-actions" style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
             {!isCurrentUser &&
               activeChannel &&
               (() => {
@@ -413,36 +441,117 @@ export function RoomsPanel() {
                 const isTheySpeaker =
                   liveUsers.find((u) => u.userId === selectedUser.user_id)?.isSpeaker ??
                   activeRoomInfo?.users.find((u) => u.user_id === selectedUser.user_id)?.is_speaker;
+                const isTheyMod = activeRoomInfo?.users.find(
+                  (u) => u.user_id === selectedUser.user_id,
+                )?.is_moderator;
 
-                if (amIMod && !isTheySpeaker) {
-                  return (
+                if (!amIMod) return null;
+
+                return (
+                  <>
+                    {!isTheySpeaker ? (
+                      <button
+                        className="ch-btn-action"
+                        onClick={async () => {
+                          try {
+                            await inviteClubhouseSpeaker(activeChannel, selectedUser.user_id);
+                            toastsStore.add(
+                              'success',
+                              'Invite Sent',
+                              `Invited ${selectedUser.name} to speak.`,
+                            );
+                            setSelectedUser(null);
+                          } catch (err) {
+                            toastsStore.add(
+                              'error',
+                              'Failed',
+                              err instanceof Error ? err.message : 'Could not invite speaker',
+                            );
+                          }
+                        }}
+                      >
+                        🎤 Invite to Stage
+                      </button>
+                    ) : (
+                      <button
+                        className="ch-btn-action"
+                        onClick={async () => {
+                          try {
+                            await uninviteClubhouseSpeaker(activeChannel, selectedUser.user_id);
+                            toastsStore.add(
+                              'success',
+                              'Moved to Audience',
+                              `Moved ${selectedUser.name} to audience.`,
+                            );
+                            setSelectedUser(null);
+                          } catch (err) {
+                            toastsStore.add(
+                              'error',
+                              'Failed',
+                              err instanceof Error ? err.message : 'Could not demote speaker',
+                            );
+                          }
+                        }}
+                      >
+                        ⬇️ Move to Audience
+                      </button>
+                    )}
+
+                    {!isTheyMod && (
+                      <button
+                        className="ch-btn-action"
+                        onClick={async () => {
+                          try {
+                            await makeClubhouseModerator(activeChannel, selectedUser.user_id);
+                            toastsStore.add(
+                              'success',
+                              'Promoted',
+                              `Made ${selectedUser.name} a moderator.`,
+                            );
+                            setSelectedUser(null);
+                          } catch (err) {
+                            toastsStore.add(
+                              'error',
+                              'Failed',
+                              err instanceof Error ? err.message : 'Could not make moderator',
+                            );
+                          }
+                        }}
+                      >
+                        ⭐ Make Moderator
+                      </button>
+                    )}
+
                     <button
                       className="ch-btn-action"
+                      style={{ color: '#f87171', borderColor: 'rgba(239, 68, 68, 0.4)' }}
                       onClick={async () => {
-                        try {
-                          await inviteClubhouseSpeaker(activeChannel, selectedUser.user_id);
-                          toastsStore.add(
-                            'success',
-                            'Invite Sent',
-                            `Invited ${selectedUser.name} to speak.`,
-                          );
-                          setSelectedUser(null);
-                        } catch (err) {
-                          toastsStore.add(
-                            'error',
-                            'Failed',
-                            err instanceof Error ? err.message : 'Could not invite speaker',
-                          );
+                        if (confirm(`Are you sure you want to remove and block ${selectedUser.name} from this room?`)) {
+                          try {
+                            await blockFromClubhouseChannel(activeChannel, selectedUser.user_id);
+                            toastsStore.add(
+                              'success',
+                              'Removed User',
+                              `Removed ${selectedUser.name} from room.`,
+                            );
+                            setSelectedUser(null);
+                          } catch (err) {
+                            toastsStore.add(
+                              'error',
+                              'Failed',
+                              err instanceof Error ? err.message : 'Could not remove user',
+                            );
+                          }
                         }
                       }}
                     >
-                      🎤 Invite to Stage
+                      🚫 Remove from Room
                     </button>
-                  );
-                }
-                return null;
+                  </>
+                );
               })()}
           </div>
+
 
           <div className="ch-profile-stats">
             <div className="ch-profile-stat">
@@ -486,9 +595,13 @@ export function RoomsPanel() {
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   const chatScrollTopRef = useRef<number | null>(null);
   const isNearBottomRef = useRef<boolean>(true);
-  const enqueueUtteranceRef = useRef<(text: string, source: 'voice' | 'chat', force?: boolean) => void>(() => {});
+  const lastRoomActivityTsRef = useRef<number>(Date.now());
+  const enqueueUtteranceRef = useRef<
+    (text: string, source: 'voice' | 'chat', force?: boolean, speakerName?: string, speakerId?: number | null) => void
+  >(() => {});
 
   const {
+
     joined,
     activeChannel,
     isMuted,
@@ -513,28 +626,36 @@ export function RoomsPanel() {
     sendReaction,
     getNetworkInsights,
   } = useClubhouseVoice({
+
     sttChunkIntervalMs: sttChunkMs,
+    endpointingDelayMs: agentConfig.endpointingDelayMs || 750,
+    allowBargeIn: agentConfig.allowBargeIn !== false,
     onBargeIn: () => {
       if (agentAbortControllerRef.current) {
         agentAbortControllerRef.current.abort();
         agentAbortControllerRef.current = null;
       }
+      agentQueueRef.current = [];
       setIsAgentSpeaking(false);
     },
-    onTranscribe: (text) => {
-      // Every transcript is offered to the agent, even when it is disabled or busy:
-      // the *backend* decides whether to answer, and it wants to hear the room
-      // either way so it can follow a conversation it is staying out of.
-      if (text.trim().length > 0) enqueueUtteranceRef.current(text.trim(), 'voice');
+    onTranscribe: (text, _speakerName, speakerId) => {
+      lastRoomActivityTsRef.current = Date.now();
+      // Resolve actual speaker name from room user roster
+      let resolvedName: string | undefined;
+      if (speakerId != null) {
+        const userInDetails = activeRoomInfoRef.current?.users?.find((u) => u.user_id === speakerId);
+        if (userInDetails?.name) resolvedName = userInDetails.name;
+        else if (speakerId === myUserId) resolvedName = myProfileName || 'Me';
+      }
+      if (text.trim().length > 0)
+        enqueueUtteranceRef.current(text.trim(), 'voice', false, resolvedName, speakerId);
     },
+
     onVoiceError: (message) => {
       toastsStore.add('warning', 'Voice', message);
     },
     onSpeakerInvite: (invite) => {
       toastsStore.add('info', 'Speaker Invite', `${invite.moderatorName} wants you to speak!`);
-      // `Notification` is absent in some webviews (and the Tauri shell is one of the
-      // places this pane runs), where an unguarded read throws inside the callback
-      // and takes the rest of the invite handling with it.
       if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
         new Notification('Speaker Invite', { body: `${invite.moderatorName} wants you to speak!` });
       }
@@ -548,7 +669,6 @@ export function RoomsPanel() {
       }
     },
     onHandRaise: (_userId, userName) => {
-      // Check if current user is a moderator
       const amIMod = activeRoomInfo?.users.find((u) => u.user_id === myUserId)?.is_moderator;
       if (amIMod) {
         toastsStore.add('info', 'Hand Raised', `${userName} wants to come up on stage.`);
@@ -562,6 +682,7 @@ export function RoomsPanel() {
       }
     },
   });
+
 
   const load = async () => {
     setState('loading');
@@ -708,7 +829,15 @@ export function RoomsPanel() {
    * asked it. A room does not pause for the agent, so the utterances are held and
    * processed in order instead.
    */
-  const agentQueueRef = useRef<{ text: string; source: 'voice' | 'chat'; force?: boolean }[]>([]);
+  const agentQueueRef = useRef<
+    {
+      text: string;
+      source: 'voice' | 'chat';
+      force?: boolean;
+      speakerName?: string;
+      speakerId?: number | null;
+    }[]
+  >([]);
   const agentBusyRef = useRef(false);
   const agentSentTextsRef = useRef<Set<string>>(new Set());
 
@@ -724,7 +853,8 @@ export function RoomsPanel() {
           const result = await takeVoiceTurn({
             channel,
             text: item.text,
-            speaker: item.source === 'chat' ? 'Someone in chat' : 'A speaker',
+            speaker: item.speakerName || (item.source === 'chat' ? 'Someone in chat' : 'A speaker'),
+            speakerId: item.speakerId,
             source: item.source,
             force: item.force,
             room: buildRoomSnapshot(),
@@ -751,12 +881,21 @@ export function RoomsPanel() {
               agentSentTextsRef.current.add(result.reply.trim());
               await sendComment(textToSend).catch(() => {});
             }
-            // Speaking aloud requires being on stage; in the audience the reply
-            // reaches the room as text only (the backend's room brief says so too,
-            // so the agent writes for the medium it actually has).
             const onStage = liveUsers.find((u) => u.userId === myUserId)?.isSpeaker;
             if (agentConfigRef.current.speak && onStage) {
-              await playAgentAudio(result.reply);
+              // If backend provided a natural thinking filler, speak it first
+              if (result.filler && agentConfigRef.current.thinkingFiller) {
+                await playAgentAudio(result.filler, {
+                  voice: agentConfigRef.current.ttsVoice,
+                  rate: agentConfigRef.current.ttsRate,
+                  pitch: agentConfigRef.current.ttsPitch,
+                });
+              }
+              await playAgentAudio(result.reply, {
+                voice: agentConfigRef.current.ttsVoice,
+                rate: agentConfigRef.current.ttsRate,
+                pitch: agentConfigRef.current.ttsPitch,
+              });
             }
             setIsAgentSpeaking(false);
           }
@@ -771,16 +910,55 @@ export function RoomsPanel() {
     }
   };
 
-  const enqueueUtterance = (text: string, source: 'voice' | 'chat', force = false) => {
+  const enqueueUtterance = (
+    text: string,
+    source: 'voice' | 'chat',
+    force = false,
+    speakerName?: string,
+    speakerId?: number | null,
+  ) => {
     if (!activeChannelRef.current) return;
-    agentQueueRef.current.push({ text, source, force });
-    // Bound the backlog: if the model is slower than the room, the oldest utterances
-    // are the least worth answering by the time it catches up.
+    lastRoomActivityTsRef.current = Date.now();
+    agentQueueRef.current.push({ text, source, force, speakerName, speakerId });
     if (agentQueueRef.current.length > 6)
       agentQueueRef.current.splice(0, agentQueueRef.current.length - 6);
     void drainAgentQueue();
   };
   enqueueUtteranceRef.current = enqueueUtterance;
+
+  // Silence Floor Probing: Proactively break long silences in conversational mode
+  useEffect(() => {
+    if (
+      !activeChannel ||
+      !agentEnabled ||
+      agentConfig.posture !== 'conversational' ||
+      !agentConfig.silenceTimeoutS ||
+      agentConfig.silenceTimeoutS <= 0
+    )
+      return;
+
+    const interval = setInterval(() => {
+      const elapsedSec = (Date.now() - lastRoomActivityTsRef.current) / 1000;
+      if (
+        elapsedSec >= agentConfig.silenceTimeoutS &&
+        !isAgentSpeaking &&
+        agentQueueRef.current.length === 0
+      ) {
+        lastRoomActivityTsRef.current = Date.now();
+        enqueueUtterance(
+          'The room has been quiet. Please make a brief, natural remark or conversational observation to keep things moving.',
+          'voice',
+          false,
+          'Room Atmosphere',
+          null,
+        );
+      }
+    }, 2500);
+
+    return () => clearInterval(interval);
+  }, [activeChannel, agentEnabled, agentConfig.posture, agentConfig.silenceTimeoutS, isAgentSpeaking]);
+
+
 
   // Refs so the queue drain reads current values without being re-created (and
   // without the stale closures the old `useEffect`-driven version captured).
@@ -2258,9 +2436,26 @@ export function RoomsPanel() {
                 flex: 'none',
                 background: 'rgba(255, 255, 255, 0.05)',
               }}
+              onClick={() => {
+                setShowOnlineFriendsModal(true);
+                void loadOnlineFriends();
+              }}
+            >
+              👥 Online Friends
+            </button>
+            <button
+              className="ch-btn-action"
+              style={{
+                padding: '0.4rem 0.8rem',
+                borderRadius: '20px',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+                flex: 'none',
+                background: 'rgba(255, 255, 255, 0.05)',
+              }}
               onClick={handleOpenInvite}
             >
-              ➕ Invite Friends
+              ➕ Invite
             </button>
             {(() => {
               const amIMod = activeRoomInfo?.users.find(
@@ -2268,20 +2463,49 @@ export function RoomsPanel() {
               )?.is_moderator;
               if (amIMod) {
                 return (
-                  <button
-                    className="ch-btn-action"
-                    style={{
-                      padding: '0.4rem 0.8rem',
-                      borderRadius: '20px',
-                      fontSize: '0.75rem',
-                      fontWeight: 600,
-                      flex: 'none',
-                      background: 'rgba(255, 255, 255, 0.05)',
-                    }}
-                    onClick={handleOpenRoomSettings}
-                  >
-                    ⚙ Settings
-                  </button>
+                  <>
+                    <button
+                      className="ch-btn-action"
+                      style={{
+                        padding: '0.4rem 0.8rem',
+                        borderRadius: '20px',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        flex: 'none',
+                        background: 'rgba(255, 255, 255, 0.05)',
+                      }}
+                      onClick={handleOpenRoomSettings}
+                    >
+                      ⚙ Settings
+                    </button>
+                    <button
+                      className="ch-btn-action"
+                      style={{
+                        padding: '0.4rem 0.8rem',
+                        borderRadius: '20px',
+                        fontSize: '0.75rem',
+                        fontWeight: 600,
+                        flex: 'none',
+                        background: 'rgba(239, 68, 68, 0.15)',
+                        color: '#f87171',
+                        borderColor: 'rgba(239, 68, 68, 0.3)',
+                      }}
+                      onClick={async () => {
+                        if (confirm('Are you sure you want to end this room for everyone?')) {
+                          try {
+                            await endClubhouseChannel(activeChannel);
+                            toastsStore.add('success', 'Room Ended', 'You ended the room.');
+                            void leaveRoom(activeChannel);
+                          } catch (err) {
+                            toastsStore.add('error', 'Failed', err instanceof Error ? err.message : 'Could not end room');
+                          }
+                        }
+                      }}
+                      title="End room for everyone"
+                    >
+                      🛑 End Room
+                    </button>
+                  </>
                 );
               }
               return null;
@@ -2320,6 +2544,7 @@ export function RoomsPanel() {
             >
               🤖 {showAgentSidebar ? 'Agent Panel (Open)' : 'Agent Panel'}
             </button>
+
           </div>
 
           <div className="ch-room-title-section">
@@ -2822,10 +3047,21 @@ export function RoomsPanel() {
                           <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>
                             System Prompt / Persona:
                           </span>
-                          <div style={{ display: 'flex', gap: '0.5rem' }}>
+                          <div style={{ display: 'flex', gap: '0.4rem' }}>
                             <select
                               onChange={(e) => {
-                                if (e.target.value) patchAgentConfig({ persona: e.target.value });
+                                if (e.target.value) {
+                                  const p = agentPromptPresets.find((pr) => pr.prompt === e.target.value);
+                                  patchAgentConfig({ persona: e.target.value });
+                                  if (activeChannel) {
+                                    void resetVoiceMemory(activeChannel, { resetPersona: true, persona: e.target.value }).then(() => {
+                                      setAgentMemory([]);
+                                      agentQueueRef.current = [];
+                                      agentSentTextsRef.current.clear();
+                                      toastsStore.add('success', 'Persona Applied', `Applied "${p?.name || 'Preset'}" and cleared context window.`);
+                                    });
+                                  }
+                                }
                               }}
                               style={{
                                 padding: '0.2rem',
@@ -2859,6 +3095,23 @@ export function RoomsPanel() {
                             >
                               Save
                             </button>
+                            <button
+                              className="ch-btn-action"
+                              style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem', background: '#374151' }}
+                              onClick={() => {
+                                patchAgentConfig({ persona: DEFAULT_VOICE_CONFIG.persona });
+                                if (activeChannel) {
+                                  void resetVoiceMemory(activeChannel, { resetPersona: true, persona: DEFAULT_VOICE_CONFIG.persona }).then(() => {
+                                    setAgentMemory([]);
+                                    agentQueueRef.current = [];
+                                    agentSentTextsRef.current.clear();
+                                    toastsStore.add('info', 'Persona Reset', 'Restored default persona and cleared context window.');
+                                  });
+                                }
+                              }}
+                            >
+                              Reset Persona
+                            </button>
                           </div>
                         </div>
                         <textarea
@@ -2879,38 +3132,60 @@ export function RoomsPanel() {
                         />
                       </div>
 
+                      {/* Conversational Flow: Turn Eagerness & Floor Probing */}
                       <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-                        <div
-                          style={{
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: '0.4rem',
-                            flex: 1,
-                            minWidth: '120px',
-                          }}
-                        >
-                          <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>
-                            Pause Detection:
-                          </span>
+                        <div style={agentFieldStyle}>
+                          <span style={agentLabelStyle}>Turn Eagerness (Response Speed):</span>
                           <select
-                            style={{
-                              width: '100%',
-                              padding: '0.5rem',
-                              fontSize: '0.8rem',
-                              background: '#1d2026',
-                              color: '#f1f5f9',
-                              border: '1px solid #2e333d',
-                              borderRadius: '4px',
+                            style={agentInputStyle}
+                            value={agentConfig.turnEagerness || 'normal'}
+                            onChange={(e) => {
+                              const eagerness = e.target.value as 'fast' | 'normal' | 'patient';
+                              const delay = eagerness === 'fast' ? 400 : eagerness === 'patient' ? 1200 : 750;
+                              patchAgentConfig({ turnEagerness: eagerness, endpointingDelayMs: delay });
                             }}
-                            value={sttChunkMs}
-                            onChange={(e) => setSttChunkMs(Number(e.target.value))}
                           >
-                            <option value={2000}>Fast (2s pause)</option>
-                            <option value={5000}>Normal (5s pause)</option>
-                            <option value={8000}>Patient (8s pause)</option>
+                            <option value="fast">⚡ Fast (400ms pause - High Eagerness)</option>
+                            <option value="normal">⚖️ Normal (750ms pause - Balanced)</option>
+                            <option value="patient">🧘 Patient (1200ms pause - Relaxed)</option>
                           </select>
                         </div>
+                        <div style={agentFieldStyle}>
+                          <span style={agentLabelStyle}>Take Turn After Silence:</span>
+                          <select
+                            style={agentInputStyle}
+                            value={agentConfig.silenceTimeoutS || 0}
+                            onChange={(e) => patchAgentConfig({ silenceTimeoutS: Number(e.target.value) })}
+                          >
+                            <option value={0}>Disabled</option>
+                            <option value={15}>After 15s quiet</option>
+                            <option value={30}>After 30s quiet</option>
+                            <option value={60}>After 60s quiet</option>
+                          </select>
+                        </div>
+                      </div>
 
+                      {/* Natural Flow & Interruption Toggles */}
+                      <div style={{ display: 'flex', gap: '1.2rem', flexWrap: 'wrap', padding: '0.2rem 0' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.78rem', color: '#cbd5e1', cursor: 'pointer' }}>
+                          <input
+                            type="checkbox"
+                            checked={agentConfig.thinkingFiller !== false}
+                            onChange={(e) => patchAgentConfig({ thinkingFiller: e.target.checked })}
+                          />
+                          Soft thinking audio feedback ("Hmm, let me check...")
+                        </label>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.78rem', color: '#cbd5e1', cursor: 'pointer' }}>
+                          <input
+                            type="checkbox"
+                            checked={agentConfig.allowBargeIn !== false}
+                            onChange={(e) => patchAgentConfig({ allowBargeIn: e.target.checked })}
+                          />
+                          Allow users to interrupt agent while speaking (Barge-in)
+                        </label>
+                      </div>
+
+                      <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
                         <div
                           style={{
                             display: 'flex',
@@ -3010,6 +3285,66 @@ export function RoomsPanel() {
                         </div>
                       </div>
 
+                      {/* TTS Neural Voice, Speed, and Pitch */}
+                      <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+                        <div style={{ ...agentFieldStyle, flex: 2, minWidth: '180px' }}>
+                          <span style={agentLabelStyle}>TTS Voice:</span>
+                          <select
+                            style={agentInputStyle}
+                            value={agentConfig.ttsVoice || 'en-US-ChristopherNeural'}
+                            onChange={(e) => patchAgentConfig({ ttsVoice: e.target.value })}
+                          >
+                            {ttsVoices.length > 0 ? (
+                              ttsVoices.map((v) => (
+                                <option key={v.name} value={v.name}>
+                                  {v.label || v.name}
+                                </option>
+                              ))
+                            ) : (
+                              <>
+                                <option value="en-US-ChristopherNeural">Christopher (US Male)</option>
+                                <option value="en-US-JennyNeural">Jenny (US Female)</option>
+                                <option value="en-US-GuyNeural">Guy (US Male)</option>
+                                <option value="en-US-AriaNeural">Aria (US Female)</option>
+                                <option value="en-GB-RyanNeural">Ryan (UK Male)</option>
+                                <option value="en-GB-SoniaNeural">Sonia (UK Female)</option>
+                              </>
+                            )}
+                          </select>
+                        </div>
+                        <div style={agentFieldStyle}>
+                          <span style={agentLabelStyle}>Speed:</span>
+                          <select
+                            style={agentInputStyle}
+                            value={agentConfig.ttsRate || '+0%'}
+                            onChange={(e) => patchAgentConfig({ ttsRate: e.target.value })}
+                          >
+                            <option value="-20%">0.8x (Slow)</option>
+                            <option value="-10%">0.9x</option>
+                            <option value="+0%">1.0x (Normal)</option>
+                            <option value="+10%">1.1x (Fast)</option>
+                            <option value="+20%">1.2x (Very Fast)</option>
+                            <option value="+30%">1.3x</option>
+                          </select>
+                        </div>
+                        <div style={agentFieldStyle}>
+                          <span style={agentLabelStyle}>Pitch:</span>
+                          <select
+                            style={agentInputStyle}
+                            value={agentConfig.ttsPitch || '+0Hz'}
+                            onChange={(e) => patchAgentConfig({ ttsPitch: e.target.value })}
+                          >
+                            <option value="-10Hz">-10Hz (Deeper)</option>
+                            <option value="-5Hz">-5Hz</option>
+                            <option value="+0Hz">Default Pitch</option>
+                            <option value="+5Hz">+5Hz</option>
+                            <option value="+10Hz">+10Hz (Higher)</option>
+                          </select>
+                        </div>
+                      </div>
+
+
+
                       {/* Why it did or didn't speak, and what it currently remembers. */}
                       <div
                         style={{
@@ -3021,8 +3356,27 @@ export function RoomsPanel() {
                           gap: '0.5rem',
                         }}
                       >
-                        <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>
-                          Last turn: <span style={{ color: '#f1f5f9' }}>{agentReason ?? '—'}</span>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>
+                            Last turn: <span style={{ color: '#f1f5f9' }}>{agentReason ?? '—'}</span>
+                          </div>
+                          <button
+                            className="ch-btn-action"
+                            style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem', background: '#374151' }}
+                            onClick={() => {
+                              if (activeChannel) {
+                                void resetVoiceMemory(activeChannel).then(() => {
+                                  setAgentMemory([]);
+                                  agentQueueRef.current = [];
+                                  agentSentTextsRef.current.clear();
+                                  stopAgentAudio();
+                                  toastsStore.add('success', 'Context Cleared', 'Reset LLM conversation memory.');
+                                });
+                              }
+                            }}
+                          >
+                            🧹 Clear Context Window
+                          </button>
                         </div>
                         {speechError && (
                           <div style={{ fontSize: '0.75rem', color: '#fbbf24' }}>
@@ -3063,6 +3417,7 @@ export function RoomsPanel() {
                             </div>
                           </details>
                         )}
+
 
                         {/* People Knowledge & Profile Memory */}
                         <div
@@ -4127,6 +4482,90 @@ export function RoomsPanel() {
           </div>
         </div>
       )}
+
+      {showOnlineFriendsModal && (
+        <div className="ch-modal-overlay" onClick={() => setShowOnlineFriendsModal(false)}>
+          <div className="ch-modal-card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '480px' }}>
+            <div className="ch-modal-header">
+              <h3 className="ch-modal-title">👥 Online Friends</h3>
+              <button className="ch-modal-close" onClick={() => setShowOnlineFriendsModal(false)}>
+                ✕
+              </button>
+            </div>
+            <div style={{ maxHeight: '350px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.5rem' }}>
+              {loadingOnlineFriends ? (
+                <div style={{ textAlign: 'center', padding: '1.5rem', color: '#94a3b8' }}>
+                  <div className="ch-spinner" style={{ margin: '0 auto 0.5rem' }} />
+                  Finding active friends...
+                </div>
+              ) : onlineFriends.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '1.5rem', color: '#94a3b8' }}>
+                  No friends currently online or in active rooms.
+                </div>
+              ) : (
+                onlineFriends.map((f, i) => (
+                  <div
+                    key={f.user_id || i}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '0.6rem',
+                      borderRadius: '8px',
+                      background: '#1d2026',
+                      border: '1px solid #2e333d',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                      <div
+                        style={{
+                          width: '36px',
+                          height: '36px',
+                          borderRadius: '50%',
+                          background: '#334155',
+                          overflow: 'hidden',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        {f.photo_url ? (
+                          <img src={f.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        ) : (
+                          <span style={{ fontSize: '0.9rem', color: '#f1f5f9' }}>{f.name?.[0] || '?'}</span>
+                        )}
+                      </div>
+                      <div>
+                        <div style={{ fontSize: '0.85rem', fontWeight: 600, color: '#f1f5f9' }}>{f.name}</div>
+                        <div style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
+                          {f.channel ? `In room: ${f.topic || f.channel}` : 'Active now'}
+                        </div>
+                      </div>
+                    </div>
+                    {activeChannel && f.user_id && (
+                      <button
+                        className="ch-btn-action"
+                        style={{ padding: '0.3rem 0.6rem', fontSize: '0.72rem' }}
+                        onClick={async () => {
+                          try {
+                            await inviteToClubhouseChannel(activeChannel, f.user_id!);
+                            toastsStore.add('success', 'Ping Sent', `Pinged ${f.name} to join!`);
+                          } catch (err) {
+                            toastsStore.add('error', 'Failed', err instanceof Error ? err.message : 'Could not ping friend');
+                          }
+                        }}
+                      >
+                        🔔 Ping to Room
+                      </button>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+

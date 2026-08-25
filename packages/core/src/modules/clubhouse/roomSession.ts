@@ -122,12 +122,13 @@ export class ClubhouseRoomSession {
    * of whatever is mounted now, and calls nothing when nothing is.
    */
   handlers: {
-    onTranscribe?: (text: string) => void;
+    onTranscribe?: (text: string, speakerName?: string, speakerId?: number | null) => void;
     onBargeIn?: () => void;
     onSpeakerInvite?: (invite: SpeakerInvite) => void;
     onHandRaise?: (userId: number, userName: string) => void;
     onVoiceError?: (message: string) => void;
   } = {};
+
 
   chunkIntervalMs = 5000;
   /** Distinct speech-pipeline failures already reported, so a per-chunk failure
@@ -182,6 +183,13 @@ export class ClubhouseRoomSession {
     this.reportedVoiceErrors.add(message);
     this.patch({ voiceError: message });
     notify?.(message);
+  }
+
+  clearVoiceError(): void {
+    if (this.state.voiceError != null || this.reportedVoiceErrors.size > 0) {
+      this.reportedVoiceErrors.clear();
+      this.patch({ voiceError: null });
+    }
   }
 
   /**

@@ -21,22 +21,38 @@ from fastapi import APIRouter, HTTPException
 
 from backend.modules.clubhouse.models import (
     AcceptSpeakerInviteRequest,
+    BlockChannelUserRequest,
     Channel,
     ChannelList,
+    ClubDetails,
+    ClubMemberList,
+    ClubhouseEvent,
     ClubhouseStatus,
     CompleteAuthRequest,
     CreateChannelRequest,
+    CreateEventRequest,
+    EventList,
     FollowingList,
     HandRequest,
+    HandraiseSettingsRequest,
     InviteUserRequest,
     JoinChannelResult,
+    MakeModeratorRequest,
     MuteRequest,
+    NotificationItem,
+    NotificationsList,
+    OnlineFriendsList,
+    RejectSpeakerInviteRequest,
+    SendChannelMessageRequest,
     StartAuthRequest,
     StartAuthResult,
     TokenConnectRequest,
-    SendChannelMessageRequest,
-    HandraiseSettingsRequest,
+    UninviteSpeakerRequest,
+    UpdateBioRequest,
+    UpdateNameRequest,
+    UpdateSkintoneRequest,
     UpdateTopicRequest,
+    UpdateUsernameRequest,
     ChatSettingsRequest,
 )
 from backend.modules.telemetry.instrument import instrumented_client
@@ -355,75 +371,108 @@ async def connect_with_token(body: TokenConnectRequest) -> ClubhouseStatus:
     return status()
 
 
+def _parse_channel_data(ch_raw: dict[str, Any]) -> dict[str, Any] | None:
+    """Safely extracts normalized room structure from a raw channel dict."""
+    if not isinstance(ch_raw, dict):
+        return None
+    channel_id = ch_raw.get("channel") or ch_raw.get("channel_id")
+    if not channel_id:
+        return None
+
+    # Map club
+    club_data = None
+    if ch_raw.get("social_club") and isinstance(ch_raw["social_club"], dict):
+        club_data = {"name": ch_raw["social_club"].get("name")}
+    elif ch_raw.get("club") and isinstance(ch_raw["club"], dict):
+        club_data = {"name": ch_raw["club"].get("name")}
+
+    # Map users
+    users_list = []
+    for u in ch_raw.get("users", []) or []:
+        if isinstance(u, dict):
+            users_list.append(
+                {
+                    "user_id": u.get("user_id"),
+                    "name": u.get("name"),
+                    "username": u.get("username"),
+                    "photo_url": u.get("photo_url"),
+                    "is_speaker": u.get("is_speaker"),
+                    "is_moderator": u.get("is_moderator", False),
+                }
+            )
+
+    return {
+        "channel": str(channel_id),
+        "topic": ch_raw.get("topic"),
+        "num_speakers": ch_raw.get("num_speakers") or len([u for u in users_list if u.get("is_speaker")]),
+        "num_all": ch_raw.get("num_all") or len(users_list),
+        "club": club_data,
+        "users": users_list,
+    }
+
+
 @router.get("/channels", response_model=ChannelList)
 async def channels() -> dict[str, Any]:
     """Live rooms right now (Clubhouse POST /get_feed_v3)."""
     auth = _require_auth()
 
-    channels_list = []
+    channels_list: list[dict[str, Any]] = []
     cursor = None
-    seen_channels = set()
+    seen_channels: set[str] = set()
 
-    # Fetch up to 4 pages to get a good number of live rooms
-    for _ in range(4):
-        payload = {}
+    # Fetch up to 6 pages to get comprehensive feed of live rooms
+    for _ in range(6):
+        payload: dict[str, Any] = {}
         if cursor:
             payload["cursor"] = cursor
 
-        raw = await _ch_authed_post(
-            "/get_feed_v3",
-            payload,
-            auth["auth_token"],
-            auth["user_id"],
-            auth.get("device_id"),
-        )
+        try:
+            raw = await _ch_authed_post(
+                "/get_feed_v3",
+                payload,
+                auth["auth_token"],
+                auth["user_id"],
+                auth.get("device_id"),
+            )
+        except Exception:
+            break
 
         items = raw.get("items", []) or []
         for item in items:
-            if "channel" in item and item["channel"]:
-                ch_raw = item["channel"]
-                channel_id = ch_raw.get("channel")
+            if not isinstance(item, dict):
+                continue
 
-                # Prevent duplicates across pages
-                if not channel_id or channel_id in seen_channels:
-                    continue
-                seen_channels.add(channel_id)
+            # 1. Direct channel item
+            if "channel" in item and isinstance(item["channel"], dict):
+                parsed = _parse_channel_data(item["channel"])
+                if parsed and parsed["channel"] not in seen_channels:
+                    seen_channels.add(parsed["channel"])
+                    channels_list.append(parsed)
 
-                # Map social_club to club
-                club_data = None
-                if ch_raw.get("social_club"):
-                    club_data = {"name": ch_raw["social_club"].get("name")}
+            # 2. Carousel / Topic shelf with multiple channels (item['channels'])
+            if "channels" in item and isinstance(item["channels"], list):
+                for sub_ch in item["channels"]:
+                    parsed = _parse_channel_data(sub_ch)
+                    if parsed and parsed["channel"] not in seen_channels:
+                        seen_channels.add(parsed["channel"])
+                        channels_list.append(parsed)
 
-                # Map users
-                users_list = []
-                for u in ch_raw.get("users", []):
-                    users_list.append(
-                        {
-                            "user_id": u.get("user_id"),
-                            "name": u.get("name"),
-                            "username": u.get("username"),
-                            "photo_url": u.get("photo_url"),
-                            "is_speaker": u.get("is_speaker"),
-                            "is_moderator": u.get("is_moderator", False),
-                        }
-                    )
-
-                channels_list.append(
-                    {
-                        "channel": channel_id,
-                        "topic": ch_raw.get("topic"),
-                        "num_speakers": ch_raw.get("num_speakers"),
-                        "num_all": ch_raw.get("num_all"),
-                        "club": club_data,
-                        "users": users_list,
-                    }
-                )
+            # 3. Nested items
+            if "items" in item and isinstance(item["items"], list):
+                for sub_item in item["items"]:
+                    if isinstance(sub_item, dict):
+                        if "channel" in sub_item and isinstance(sub_item["channel"], dict):
+                            parsed = _parse_channel_data(sub_item["channel"])
+                            if parsed and parsed["channel"] not in seen_channels:
+                                seen_channels.add(parsed["channel"])
+                                channels_list.append(parsed)
 
         cursor = raw.get("next_cursor") or raw.get("cursor")
         if not cursor:
             break
 
     return {"channels": channels_list}
+
 
 
 @router.get("/following", response_model=FollowingList)
@@ -783,6 +832,318 @@ async def update_chat_settings(
         auth["user_id"],
         auth.get("device_id"),
     )
+
+
+@router.post("/channels/{channel}/uninvite_speaker")
+async def uninvite_speaker(channel: str, body: UninviteSpeakerRequest) -> dict[str, Any]:
+    """Move a speaker back to the audience (Clubhouse POST /uninvite_speaker)."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/uninvite_speaker",
+        {"channel": channel, "user_id": body.user_id},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+@router.post("/channels/{channel}/make_moderator")
+async def make_moderator(channel: str, body: MakeModeratorRequest) -> dict[str, Any]:
+    """Promote a speaker to moderator (Clubhouse POST /make_moderator)."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/make_moderator",
+        {"channel": channel, "user_id": body.user_id},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+@router.post("/channels/{channel}/block")
+async def block_from_channel(
+    channel: str, body: BlockChannelUserRequest
+) -> dict[str, Any]:
+    """Remove and block a user from the room (Clubhouse POST /block_from_channel)."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/block_from_channel",
+        {"channel": channel, "user_id": body.user_id},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+@router.post("/channels/{channel}/end")
+async def end_channel(channel: str) -> dict[str, Any]:
+    """End the room for everyone (Clubhouse POST /end_channel)."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/end_channel",
+        {"channel": channel},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+@router.post("/channels/{channel}/make_public")
+async def make_channel_public(channel: str) -> dict[str, Any]:
+    """Make the room open to everyone (Clubhouse POST /make_channel_public)."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/make_channel_public",
+        {"channel": channel},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+@router.post("/channels/{channel}/make_social")
+async def make_channel_social(channel: str) -> dict[str, Any]:
+    """Make the room open to followed users (Clubhouse POST /make_channel_social)."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/make_channel_social",
+        {"channel": channel},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+@router.post("/channels/{channel}/reject_speaker")
+async def reject_speaker_invite(
+    channel: str, body: RejectSpeakerInviteRequest
+) -> dict[str, Any]:
+    """Reject an invitation to speak (Clubhouse POST /reject_speaker_invite)."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/reject_speaker_invite",
+        {"channel": channel, "user_id": auth["user_id"]},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+# --- Social, Online Presence, and Followers ---
+
+
+@router.get("/online_friends", response_model=OnlineFriendsList)
+async def get_online_friends() -> dict[str, Any]:
+    """List active online friends (Clubhouse POST /get_online_friends)."""
+    auth = _require_auth()
+    res = await _ch_authed_post(
+        "/get_online_friends",
+        {},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+    return {"users": res.get("users", []) or []}
+
+
+@router.get("/users/{user_id}/followers")
+async def get_followers(user_id: int, page_size: int = 50, page: int = 1) -> dict[str, Any]:
+    """List followers of a user (Clubhouse GET /get_followers)."""
+    auth = _require_auth()
+    return await _ch_authed_get(
+        "/get_followers",
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+        params={"user_id": user_id, "page_size": page_size, "page": page},
+    )
+
+
+@router.get("/notifications")
+async def get_notifications(page_size: int = 25, page: int = 1) -> dict[str, Any]:
+    """Get recent notifications (Clubhouse GET /get_notifications)."""
+    auth = _require_auth()
+    return await _ch_authed_get(
+        "/get_notifications",
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+        params={"page_size": page_size, "page": page},
+    )
+
+
+# --- Events & Calendar ---
+
+
+@router.get("/events")
+async def get_events(is_filtered: bool = True, page_size: int = 25, page: int = 1) -> dict[str, Any]:
+    """Get list of upcoming scheduled events (Clubhouse GET /get_events)."""
+    auth = _require_auth()
+    return await _ch_authed_get(
+        "/get_events",
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+        params={
+            "is_filtered": "true" if is_filtered else "false",
+            "page_size": page_size,
+            "page": page,
+        },
+    )
+
+
+@router.post("/events")
+async def create_event(body: CreateEventRequest) -> dict[str, Any]:
+    """Create or schedule an event (Clubhouse POST /edit_event)."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/edit_event",
+        {
+            "name": body.name,
+            "time_start_epoch": body.time_start_epoch,
+            "description": body.description,
+            "club_id": body.club_id,
+            "user_ids": body.user_ids or [auth["user_id"]],
+            "is_member_only": body.is_member_only,
+        },
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+@router.delete("/events/{event_id}")
+async def delete_event(event_id: int) -> dict[str, Any]:
+    """Delete a scheduled event (Clubhouse POST /delete_event)."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/delete_event",
+        {"event_id": event_id},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+# --- Clubs ---
+
+
+@router.get("/clubs/{club_id}")
+async def get_club(club_id: int) -> dict[str, Any]:
+    """Get details for a club (Clubhouse POST /get_club)."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/get_club",
+        {"club_id": club_id},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+@router.get("/clubs/{club_id}/members")
+async def get_club_members(
+    club_id: int, return_followers: bool = False, return_members: bool = True, page_size: int = 50, page: int = 1
+) -> dict[str, Any]:
+    """List members of a club (Clubhouse GET /get_club_members)."""
+    auth = _require_auth()
+    return await _ch_authed_get(
+        "/get_club_members",
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+        params={
+            "club_id": club_id,
+            "return_followers": int(return_followers),
+            "return_members": int(return_members),
+            "page_size": page_size,
+            "page": page,
+        },
+    )
+
+
+@router.post("/clubs/{club_id}/follow")
+async def follow_club(club_id: int) -> dict[str, Any]:
+    """Follow a club (Clubhouse POST /follow_club)."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/follow_club",
+        {"club_id": club_id},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+@router.post("/clubs/{club_id}/unfollow")
+async def unfollow_club(club_id: int) -> dict[str, Any]:
+    """Unfollow a club (Clubhouse POST /unfollow_club)."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/unfollow_club",
+        {"club_id": club_id},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+# --- Profile Management ---
+
+
+@router.post("/me/bio")
+async def update_bio(body: UpdateBioRequest) -> dict[str, Any]:
+    """Update profile bio (Clubhouse POST /update_bio)."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/update_bio",
+        {"bio": body.bio},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+@router.post("/me/name")
+async def update_name(body: UpdateNameRequest) -> dict[str, Any]:
+    """Update display name (Clubhouse POST /update_name)."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/update_name",
+        {"name": body.name},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+@router.post("/me/username")
+async def update_username(body: UpdateUsernameRequest) -> dict[str, Any]:
+    """Update handle username (Clubhouse POST /update_username)."""
+    auth = _require_auth()
+    return await _ch_authed_post(
+        "/update_username",
+        {"username": body.username},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
+
+@router.post("/me/skintone")
+async def update_skintone(body: UpdateSkintoneRequest) -> dict[str, Any]:
+    """Update emoji hand skin tone 1-5 (Clubhouse POST /update_skintone)."""
+    auth = _require_auth()
+    if not 1 <= body.skintone <= 5:
+        raise HTTPException(status_code=400, detail="Skintone must be between 1 and 5")
+    return await _ch_authed_post(
+        "/update_skintone",
+        {"skintone": body.skintone},
+        auth["auth_token"],
+        auth["user_id"],
+        auth.get("device_id"),
+    )
+
 
 
 # --- People Knowledge & Profile Memory Endpoints ---
