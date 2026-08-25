@@ -8,11 +8,12 @@
 import type {
   AutocompleteItem,
   CVarDefinition,
+  CVarValue,
   ConCommandDefinition,
   MacroRecord,
 } from './types';
 
-type CVarListener = (name: string, value: any, prev: any) => void;
+type CVarListener = (name: string, value: CVarValue, prev: CVarValue) => void;
 
 class ClientConsoleRegistry {
   readonly cvars = new Map<string, CVarDefinition>();
@@ -213,19 +214,41 @@ class ClientConsoleRegistry {
     }
   }
 
-  get(name: string): any {
+  get(name: string): CVarValue | undefined {
     return this.cvars.get(name)?.current_value;
   }
 
-  set(name: string, value: any): boolean {
+  /**
+   * Typed reads for the two kinds a UI actually binds to.
+   *
+   * `get` cannot know which of the three a name holds, so every caller used to
+   * launder it through `any` and a `??` default — which silently accepted a string
+   * where a boolean was meant. These coerce instead, and take the fallback the
+   * caller would have written anyway.
+   */
+  getBool(name: string, fallback = false): boolean {
+    const value = this.get(name);
+    return value === undefined ? fallback : Boolean(value);
+  }
+
+  getNumber(name: string, fallback = 0): number {
+    const value = this.get(name);
+    if (value === undefined) return fallback;
+    const num = typeof value === 'number' ? value : Number(value);
+    return Number.isNaN(num) ? fallback : num;
+  }
+
+  set(name: string, value: CVarValue): boolean {
     const cvar = this.cvars.get(name);
     if (!cvar) return false;
-    let coerced = value;
+    let coerced: CVarValue = value;
     if (cvar.type === 'boolean') {
       coerced = typeof value === 'string' ? ['1', 'true', 'yes', 'on'].includes(value.toLowerCase()) : Boolean(value);
     } else if (cvar.type === 'number') {
       let num = typeof value === 'string' ? parseFloat(value) : Number(value);
-      if (Number.isNaN(num)) num = cvar.default_value;
+      // A number CVar's default is a number, but the type is the union — fall to 0
+      // rather than assert, so a mistyped registration cannot put NaN on screen.
+      if (Number.isNaN(num)) num = typeof cvar.default_value === 'number' ? cvar.default_value : 0;
       if (cvar.min_value != null) num = Math.max(num, cvar.min_value);
       if (cvar.max_value != null) num = Math.min(num, cvar.max_value);
       coerced = num;

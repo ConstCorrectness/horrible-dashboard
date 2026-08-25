@@ -78,7 +78,12 @@ const CANVAS_EXEMPT = [
  * hardcoded colour landed in code that is supposed to be theme-driven.
  */
 const BASELINE: Record<string, number> = {
-  excluded: 801,
+  // 811 → 793 when the clubhouse room-moderation work's ten new literals were
+  // converted to tokens (`#1d2026` and `#2e333d` in it were the app's *own*
+  // `--bg-raised` and `--border`, the case this file calls the worst of all), and
+  // the eight around them went with them. Lowered rather than left at 801: a
+  // ratchet that keeps slack lets the next regression back in unnoticed.
+  excluded: 793,
   canvas: 6,
   rest: 221,
 };

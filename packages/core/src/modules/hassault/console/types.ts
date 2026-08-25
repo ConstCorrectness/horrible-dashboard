@@ -3,14 +3,24 @@
  */
 
 export type CVarType = 'boolean' | 'number' | 'string' | 'enum';
+
+/**
+ * What a CVar can hold. Not `any`: `_coerce_cvar_value` in
+ * `backend/modules/hassault/console.py` returns exactly bool, int/float or str for
+ * the four `CVarType`s (an enum is one of its string members), so this is the whole
+ * set rather than a convenient shrug. The backend models these as `Any` because
+ * Pydantic has no reason to narrow them; the client does, because every consumer
+ * has to decide how to render one.
+ */
+export type CVarValue = boolean | number | string;
 export type CVarFlag = 'cheat' | 'server' | 'client' | 'replicated' | 'archived' | 'readonly';
 
 export interface CVarDefinition {
   name: string;
   namespace: string;
   type: CVarType;
-  default_value: any;
-  current_value: any;
+  default_value: CVarValue;
+  current_value: CVarValue;
   min_value?: number | null;
   max_value?: number | null;
   enum_values?: string[] | null;
@@ -22,7 +32,7 @@ export interface CVarDefinition {
 export interface ConCommandParameter {
   name: string;
   type: string;
-  default?: any;
+  default?: CVarValue | null;
   description: string;
   required: boolean;
   enum_values?: string[] | null;
@@ -63,16 +73,18 @@ export interface ConsoleExecResult {
   command: string;
   output: string[];
   error?: string | null;
-  affected_cvars: Record<string, any>;
-  result_data?: any;
+  affected_cvars: Record<string, CVarValue>;
+  /** Whatever the command chose to return — genuinely arbitrary per command, so
+   *  `unknown` rather than `any`: a caller must narrow it before use. */
+  result_data?: unknown;
 }
 
 export interface AutocompleteItem {
   name: string;
   kind: 'cvar' | 'command' | 'macro';
   type?: string;
-  currentValue?: any;
-  defaultValue?: any;
+  currentValue?: CVarValue;
+  defaultValue?: CVarValue;
   signature?: string;
   description: string;
   flags?: string[];

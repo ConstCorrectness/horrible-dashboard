@@ -474,7 +474,14 @@ export class CharacterModel {
     const ctx = canvas.getContext('2d');
     if (ctx) {
       ctx.fillStyle = 'rgba(10, 14, 20, 0.65)';
-      ctx.roundRect ? ctx.roundRect(8, 8, 240, 48, 6) : ctx.fillRect(8, 8, 240, 48);
+      // `roundRect` is recent enough that the square fallback still earns its
+      // keep. A ternary evaluated for its side effects reads as a value that was
+      // meant to go somewhere, so this says plainly that it is a branch.
+      if (ctx.roundRect) {
+        ctx.roundRect(8, 8, 240, 48, 6);
+      } else {
+        ctx.fillRect(8, 8, 240, 48);
+      }
       ctx.fill();
 
       // Top indicator stripe
@@ -516,7 +523,10 @@ export class CharacterModel {
     for (const d of this.disposables) {
       try {
         d.dispose();
-      } catch {}
+      } catch {
+        // Dispose everything else regardless: one geometry that objects to being
+        // freed twice must not strand the rest of the model's GPU resources.
+      }
     }
     this.disposables = [];
   }

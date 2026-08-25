@@ -27,7 +27,11 @@ export class ConsoleExecutor {
     try {
       const rawHist = localStorage.getItem(HISTORY_STORAGE_KEY);
       if (rawHist) this.history = JSON.parse(rawHist);
-    } catch {}
+    } catch {
+      // Unreadable or corrupt storage: start with an empty history. Console
+      // recall is a convenience, and refusing to open the console because last
+      // session's history will not parse would be the worse failure.
+    }
 
     try {
       const rawBinds = localStorage.getItem(BINDS_STORAGE_KEY);
@@ -35,7 +39,9 @@ export class ConsoleExecutor {
         const obj = JSON.parse(rawBinds);
         for (const [k, v] of Object.entries(obj)) this.binds.set(k, String(v));
       }
-    } catch {}
+    } catch {
+      // Same: lost binds are re-bindable, an unopenable console is not.
+    }
 
     try {
       const rawAliases = localStorage.getItem(ALIASES_STORAGE_KEY);
@@ -43,27 +49,36 @@ export class ConsoleExecutor {
         const obj = JSON.parse(rawAliases);
         for (const [k, v] of Object.entries(obj)) this.aliases.set(k, String(v));
       }
-    } catch {}
+    } catch {
+      // Same again for aliases.
+    }
   }
 
   private persistHistory(): void {
     try {
       localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(this.history.slice(-MAX_HISTORY)));
-    } catch {}
+    } catch {
+      // Quota exceeded, or storage denied (private mode, embedded webview). The
+      // in-memory history still works for this session; only persistence is lost.
+    }
   }
 
   private persistBinds(): void {
     try {
       const obj = Object.fromEntries(this.binds.entries());
       localStorage.setItem(BINDS_STORAGE_KEY, JSON.stringify(obj));
-    } catch {}
+    } catch {
+      // As above — the bind is live, it just will not survive a reload.
+    }
   }
 
   private persistAliases(): void {
     try {
       const obj = Object.fromEntries(this.aliases.entries());
       localStorage.setItem(ALIASES_STORAGE_KEY, JSON.stringify(obj));
-    } catch {}
+    } catch {
+      // As above.
+    }
   }
 
   recordHistory(cmd: string): void {
@@ -185,7 +200,10 @@ export class ConsoleExecutor {
         const valStr = tokens.length === 3 ? tokens[2] : tokens[1];
         const ok = consoleRegistry.set(targetCvar.name, valStr);
         if (ok) {
-          const newVal = consoleRegistry.get(targetCvar.name);
+          // `set` coerces in place, so the definition already holds the new value —
+          // reading it back through `get` only reintroduced an `undefined` that
+          // cannot happen on this branch.
+          const newVal = targetCvar.current_value;
           return {
             ok: true,
             command: line,
@@ -230,12 +248,12 @@ export class ConsoleExecutor {
       }
 
       return data;
-    } catch (err: any) {
+    } catch (err) {
       return {
         ok: false,
         command: line,
         output: [],
-        error: `Network Error: ${err?.message || err}`,
+        error: `Network Error: ${err instanceof Error ? err.message : String(err)}`,
         affected_cvars: {},
       };
     }

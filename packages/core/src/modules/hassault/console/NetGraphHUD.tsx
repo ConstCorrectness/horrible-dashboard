@@ -17,9 +17,9 @@ interface NetGraphHUDProps {
 }
 
 export function NetGraphHUD({ rttMs, level: propLevel, style }: NetGraphHUDProps) {
-  const [level, setLevel] = useState<number>(propLevel ?? consoleRegistry.get('net.graph') ?? 0);
-  const [simLag, setSimLag] = useState<number>(consoleRegistry.get('net.simulate_lag') ?? 0);
-  const [simLoss, setSimLoss] = useState<number>(consoleRegistry.get('net.simulate_loss') ?? 0);
+  const [level, setLevel] = useState<number>(propLevel ?? consoleRegistry.getNumber('net.graph'));
+  const [simLag, setSimLag] = useState<number>(consoleRegistry.getNumber('net.simulate_lag'));
+  const [simLoss, setSimLoss] = useState<number>(consoleRegistry.getNumber('net.simulate_loss'));
   const [fps, setFps] = useState(60);
   const [frameTimeMs, setFrameTimeMs] = useState(16.6);
 

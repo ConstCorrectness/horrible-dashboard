@@ -524,7 +524,7 @@ export function RoomsPanel() {
 
                     <button
                       className="ch-btn-action"
-                      style={{ color: '#f87171', borderColor: 'rgba(239, 68, 68, 0.4)' }}
+                      style={{ color: 'var(--danger)', borderColor: 'color-mix(in srgb, var(--danger) 40%, transparent)' }}
                       onClick={async () => {
                         if (confirm(`Are you sure you want to remove and block ${selectedUser.name} from this room?`)) {
                           try {
@@ -2487,7 +2487,7 @@ export function RoomsPanel() {
                         fontWeight: 600,
                         flex: 'none',
                         background: 'rgba(239, 68, 68, 0.15)',
-                        color: '#f87171',
+                        color: 'var(--danger)',
                         borderColor: 'rgba(239, 68, 68, 0.3)',
                       }}
                       onClick={async () => {
@@ -3097,7 +3097,7 @@ export function RoomsPanel() {
                             </button>
                             <button
                               className="ch-btn-action"
-                              style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem', background: '#374151' }}
+                              style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem', background: 'var(--bg-elevated)' }}
                               onClick={() => {
                                 patchAgentConfig({ persona: DEFAULT_VOICE_CONFIG.persona });
                                 if (activeChannel) {
@@ -3167,7 +3167,7 @@ export function RoomsPanel() {
 
                       {/* Natural Flow & Interruption Toggles */}
                       <div style={{ display: 'flex', gap: '1.2rem', flexWrap: 'wrap', padding: '0.2rem 0' }}>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.78rem', color: '#cbd5e1', cursor: 'pointer' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.78rem', color: 'var(--text)', cursor: 'pointer' }}>
                           <input
                             type="checkbox"
                             checked={agentConfig.thinkingFiller !== false}
@@ -3175,7 +3175,7 @@ export function RoomsPanel() {
                           />
                           Soft thinking audio feedback ("Hmm, let me check...")
                         </label>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.78rem', color: '#cbd5e1', cursor: 'pointer' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.78rem', color: 'var(--text)', cursor: 'pointer' }}>
                           <input
                             type="checkbox"
                             checked={agentConfig.allowBargeIn !== false}
@@ -3357,12 +3357,12 @@ export function RoomsPanel() {
                         }}
                       >
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <div style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>
-                            Last turn: <span style={{ color: '#f1f5f9' }}>{agentReason ?? '—'}</span>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', fontWeight: 600 }}>
+                            Last turn: <span style={{ color: 'var(--text-strong)' }}>{agentReason ?? '—'}</span>
                           </div>
                           <button
                             className="ch-btn-action"
-                            style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem', background: '#374151' }}
+                            style={{ padding: '0.2rem 0.5rem', fontSize: '0.7rem', background: 'var(--bg-elevated)' }}
                             onClick={() => {
                               if (activeChannel) {
                                 void resetVoiceMemory(activeChannel).then(() => {
@@ -3516,7 +3516,7 @@ export function RoomsPanel() {
                                               width: '20px',
                                               height: '20px',
                                               borderRadius: '6px',
-                                              background: '#334155',
+                                              background: 'var(--bg-elevated)',
                                               fontSize: '0.6rem',
                                               display: 'flex',
                                               alignItems: 'center',
@@ -3527,7 +3527,7 @@ export function RoomsPanel() {
                                             {p.name.slice(0, 1).toUpperCase()}
                                           </div>
                                         )}
-                                        <span style={{ fontSize: '0.78rem', fontWeight: 600, color: '#f1f5f9' }}>
+                                        <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-strong)' }}>
                                           {p.name}
                                         </span>
                                         {p.username && (
@@ -4494,12 +4494,12 @@ export function RoomsPanel() {
             </div>
             <div style={{ maxHeight: '350px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.5rem' }}>
               {loadingOnlineFriends ? (
-                <div style={{ textAlign: 'center', padding: '1.5rem', color: '#94a3b8' }}>
+                <div style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-dim)' }}>
                   <div className="ch-spinner" style={{ margin: '0 auto 0.5rem' }} />
                   Finding active friends...
                 </div>
               ) : onlineFriends.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '1.5rem', color: '#94a3b8' }}>
+                <div style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-dim)' }}>
                   No friends currently online or in active rooms.
                 </div>
               ) : (
@@ -4512,8 +4512,8 @@ export function RoomsPanel() {
                       justifyContent: 'space-between',
                       padding: '0.6rem',
                       borderRadius: '8px',
-                      background: '#1d2026',
-                      border: '1px solid #2e333d',
+                      background: 'var(--bg-raised)',
+                      border: '1px solid var(--border)',
                     }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
@@ -4522,7 +4522,7 @@ export function RoomsPanel() {
                           width: '36px',
                           height: '36px',
                           borderRadius: '50%',
-                          background: '#334155',
+                          background: 'var(--bg-elevated)',
                           overflow: 'hidden',
                           display: 'flex',
                           alignItems: 'center',
@@ -4532,12 +4532,12 @@ export function RoomsPanel() {
                         {f.photo_url ? (
                           <img src={f.photo_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                         ) : (
-                          <span style={{ fontSize: '0.9rem', color: '#f1f5f9' }}>{f.name?.[0] || '?'}</span>
+                          <span style={{ fontSize: '0.9rem', color: 'var(--text-strong)' }}>{f.name?.[0] || '?'}</span>
                         )}
                       </div>
                       <div>
-                        <div style={{ fontSize: '0.85rem', fontWeight: 600, color: '#f1f5f9' }}>{f.name}</div>
-                        <div style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
+                        <div style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-strong)' }}>{f.name}</div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>
                           {f.channel ? `In room: ${f.topic || f.channel}` : 'Active now'}
                         </div>
                       </div>

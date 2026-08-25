@@ -967,7 +967,12 @@ export function useClubhouseVoice(props?: UseClubhouseVoiceProps) {
         sendBytes = stats.SendBytes ?? 0;
         recvBytes = stats.RecvBytes ?? 0;
         bw = Math.round((stats.OutgoingAvailableBandwidth ?? 0) / 1000);
-      } catch {}
+      } catch {
+        // The RTC client reports no stats until the peer connection is up, and
+        // throws rather than returning empty. The zeros initialised above are the
+        // honest reading for "not connected yet"; a thrown stats poll must not take
+        // the whole voice session down with it.
+      }
     }
 
     return {

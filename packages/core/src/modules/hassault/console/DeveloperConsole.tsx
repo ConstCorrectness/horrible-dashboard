@@ -50,12 +50,12 @@ export function DeveloperConsole({
   const [selectedSugIdx, setSelectedSugIdx] = useState(0);
 
   // Quick toggle mirrors
-  const [hitboxes, setHitboxes] = useState<boolean>(consoleRegistry.get('draw.hitboxes') ?? false);
-  const [wireframe, setWireframe] = useState<boolean>(consoleRegistry.get('draw.wireframe') ?? false);
-  const [netGraph, setNetGraph] = useState<number>(consoleRegistry.get('net.graph') ?? 0);
-  const [cheats, setCheats] = useState<boolean>(consoleRegistry.get('server.cheats') ?? false);
-  const [timescale, setTimescale] = useState<number>(consoleRegistry.get('server.timescale') ?? 1.0);
-  const [godMode, setGodMode] = useState<boolean>(consoleRegistry.get('player.god') ?? false);
+  const [hitboxes, setHitboxes] = useState<boolean>(consoleRegistry.getBool('draw.hitboxes'));
+  const [wireframe, setWireframe] = useState<boolean>(consoleRegistry.getBool('draw.wireframe'));
+  const [netGraph, setNetGraph] = useState<number>(consoleRegistry.getNumber('net.graph'));
+  const [cheats, setCheats] = useState<boolean>(consoleRegistry.getBool('server.cheats'));
+  const [timescale, setTimescale] = useState<number>(consoleRegistry.getNumber('server.timescale', 1.0));
+  const [godMode, setGodMode] = useState<boolean>(consoleRegistry.getBool('player.god'));
 
   const logEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
