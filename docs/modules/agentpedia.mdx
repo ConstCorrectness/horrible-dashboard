@@ -17,9 +17,11 @@ were not designed together:
 Reading one turn meant three panes and a lot of matching by timestamp. Agentpedia is
 what happens when you put the three beside each other and scrub them together.
 
-**It owns no store.** Every field it serves is joined at read time from a module that
-already owns it, and if this module ever needs to *write* something, that is a sign
-the recording end is missing a field and the fix belongs there.
+**It owns one table and no more.** Every field the stepper serves is joined at read
+time from a module that already owns it; the single exception is the **fork edge**
+(which turn is a counterfactual of which, produced by which edits), because nothing
+else records that and there is nowhere honest to put it — see
+[Where the edge lives](#where-the-edge-lives).
 
 The name is the point of comparison. A Neuronpedia feature page gives a *feature* a
 permanent address you can cite and compare against. A **harness** — the prompt, the
@@ -27,8 +29,7 @@ tools, the sampling settings, everything that decides how an agent behaves minus
 task itself — deserves the same, instead of being an untracked implementation detail
 of whichever run happened to use it.
 
-**Status: the stepper and the harness pages are implemented.** Forks are not — see
-[Forks](#forks).
+**Status: implemented** — the stepper, the harness pages, and forks.
 
 ## What made it possible
 
@@ -45,6 +46,10 @@ running at once into a transcript that reads as one agent behaving erratically.
   **Runs** (`r`), **Harness** (`h`), **Forks** (`f`). One pane rather than three, per
   the pane-consolidation rule: these are three views of one object.
 - **Commands:** `agentpedia.open`, `agentpedia.prevRound`, `agentpedia.nextRound`.
+- **Agent tools** (grouped under `agentpedia`, so they cost nothing until loaded):
+  `agentpedia.step`, `agentpedia.harness`, `agentpedia.fork` (gated),
+  `agentpedia.diff`. The agent reading — and re-running — its own last turn is the
+  exploratory payoff of the whole module.
 - **Keybindings:** `←` / `→` scrub rounds, scoped to the pane **and** guarded with
   `!textInput` — unguarded, an arrow key pressed in a filter box moves the round out
   from under the cursor. The section keys are declared on the sections themselves;
@@ -139,13 +144,159 @@ reach into each other's internals.
 
 ## Forks
 
-Not built. Re-running a recorded turn with one thing changed — a tool dropped, the
-system prompt edited, a different model — and diffing the two. The section exists and
-says so rather than being hidden, because the empty state is the honest description of
-where the module is.
+Re-run a recorded turn with one thing changed, and diff the two decisions.
 
-The ordering is deliberate: a fork is only meaningful once you can see exactly what
+The ordering was deliberate: a fork is only meaningful once you can see exactly what
 the original turn was given and what it did with it, which is what the stepper is.
+
+It is also the same intervention the [lens](llamacpp.mdx#the-lens--a-trace-read-as-words) performs on a
+trace, one altitude up. There the edit is a token and the readout is a logit; here
+the edit is the context and the readout is what the agent decided to do. One
+vocabulary — `derived_from`, `edits`, `diff` — at the token level and at the context
+level, which is the whole reason the two shipped as one project.
+
+Open a turn in **Runs**, scrub to the round you want to branch at, and press **Fork
+this round**. The button carries the _round_, not just the turn: a fork branches at
+the context the model was holding there, and forking from round 0 while reading
+round 3 would replay a different question.
+
+### The eight edits
+
+| Op                 | Changes                                        |
+| ------------------ | ---------------------------------------------- |
+| `drop_tool`        | One tool leaves the catalog                    |
+| `drop_group`       | Every tool in a group leaves the catalog       |
+| `set_system`       | Replace the system prompt                      |
+| `edit_message`     | Replace one message's text, by index           |
+| `truncate_history` | Keep only the newest N history messages        |
+| `set_model`        | Run the same context against a different model |
+| `set_provider`     | …on a different provider                       |
+| `set_temperature`  | …at a different temperature                    |
+
+`truncate_history` is applied **last**, whatever order the edits were typed in:
+`edit_message` addresses a message by index, and an index resolved against a list
+that has already had three messages removed would edit whatever slid into the slot.
+
+### No second loop
+
+The fork runs `run_agent_loop` — the same function a chat turn runs — which is the
+rule [evals](evals.mdx) already follows and the only way the result means anything.
+What is under test is _this app's_ catalog assembly, budget cap, progressive
+disclosure and permission gate. A replay that built its own message list and called
+the provider directly would be measuring a harness nobody ships.
+
+The browser stand-in it needs already existed as `evals/runner_agent.EvalConnection`.
+It now lives at `backend/modules/agent/offline_conn.py` as `OfflineConnection`, with
+evals aliasing the name it earned: agentpedia importing evals' internals would break
+the rule that modules do not reach into each other, so the one proven copy moved to
+where both can import it.
+
+### Nothing acts, by default
+
+A tool call can act through **three** legs, and answering only the first would have
+been a comfortable illusion:
+
+1. the browser leg — a fixture resolves the pending future the way a real pane would;
+2. backend tools (`agent.delegate`, `agent.ask_peer`) — resolved server-side, they
+   never touch a connection at all;
+3. backend-plugin tools — likewise.
+
+So `run_agent_loop` grew a `simulate` hook that stands in for all three, at the one
+point after the gate where a call would otherwise act. `OfflineConnection`'s fixtures
+alone would have let a replayed turn delegate, or reach a peer, a second time.
+
+`live: true` removes the hook — and then the fork runs on the **real browser
+connection**, so the tools genuinely run and the orchestrator's own permission gate
+prompts the user exactly as it would in a chat turn. There is no path where a tool
+acts and nobody was asked. It is a confirm-then-run button in the pane, and the agent
+tool cannot reach it at all: a live fork prompts a human per acting call, which is
+not a conversation the agent can have on the user's behalf.
+
+`deny_tools` is the loop's other new parameter, and it is needed _with_ the catalog
+filter rather than instead of it. Under progressive disclosure the tool list is
+rebuilt every round from the live registry, so removing a tool once would see it
+reappear next round — and `_dispatch_call` forgivingly loads a group for any tool it
+recognizes. A denied tool the model names anyway comes back as
+`tool X is not available in this run`, which is usually the interesting half of the
+counterfactual.
+
+### The rebuild is the honest part
+
+`agent_turns` was written to be read by a human: block previews are clipped at 4000
+characters and an assistant's tool calls are folded into its message text so their
+context cost is counted. A fork needs the opposite — the message list the provider
+was handed. `rebuild.py` inverts that, and reports every place it could not:
+
+- **Tool calls** are recovered by parsing the JSON array off the tail of the block.
+  Left folded, the model would be reading its own previous calls as _prose_ — a
+  transcript of a conversation it did not have, with nothing to say so.
+- **`tool_call_id`** was never recorded, so each tool result is paired with the calls
+  of the assistant block above it, in order. Both `tool_call_id` and `tool_name` are
+  written, because which one the provider reads depends on the dialect the _fork_
+  runs against, and changing the provider is one of the edits. A tool result with no
+  call above it is **reported, not given an invented id**.
+- **The system prompt** is restored to its full text when the live agent's prompt
+  _starts with_ the recorded preview — a verified restoration, not a guess. Anything
+  still clipped is named, and the pane shows `context rebuilt approximately`.
+
+That banner is the point. A fork that quietly ran a truncated prompt would answer
+differently _for a reason that is not the edit_, which is the worst failure available
+here: indistinguishable from a finding.
+
+The same rule covers edits themselves. An edit that matched nothing — a `drop_tool`
+naming a tool that was never offered, an `edit_message` past the end — is **rejected
+loudly** rather than skipped. "I dropped the tool and it still answered the same way"
+and "I dropped a tool whose name I misspelled and it still answered the same way" are
+the same sentence with the meaning removed, and nothing else on the screen would tell
+the two apart.
+
+**Tool drift** is reported for the same reason: the snapshot records tool _names_, not
+schemas, so the fork's catalog is rebuilt from the live registry for the round's
+active groups. That is the right call — a schema pinned from a snapshot would be a
+fork of a tool that no longer exists — but a fork taken after a plugin was installed
+or a pane was closed is not a clean comparison, and the pane says how many tools are
+no longer available.
+
+### Where the edge lives
+
+The fork itself is an ordinary turn: it runs through the ordinary loop, so
+`agent_turns` records what it was shown, the telemetry ring records what it sent, and
+`traj_runs` records what it did — all under the fork's own `turn_id`. It opens in the
+stepper like any other turn, and nothing is duplicated.
+
+What nothing else records is the **edge**: that this turn is a counterfactual of that
+one, produced by these edits. Two obvious homes were both wrong:
+
+- `TurnSnapshot.parentTurnId` already means _delegated from_. A fork parked there
+  would join the delegation tree — hidden by `roots_only`, counted as a sub-agent by
+  `get_children` — which is a different claim about what happened.
+- `traj_runs.meta` is the right shape, and was the plan's answer, but trajectory
+  capture is **off by default and dataset-scoped**. A fork taken on a node that never
+  turned capture on would leave no edge at all, and the Forks section would be empty
+  for the ordinary user.
+
+So `agentpedia_forks` in `app.db`: three real columns and a JSON blob, written
+swallow-and-log like every other recorder here. Losing the edge costs a row in a
+list; it must never cost the fork you just waited for.
+
+### The diff
+
+The parent is read at `from_round` and the fork at round 0 — the same instant, since
+the fork's first round _is_ the parent's branch round with the edits applied.
+Comparing round 0 to round 0 would line the fork's opening move up against a decision
+the parent made several rounds earlier.
+
+The **decision** — what each side reached for first, once it had its context — is read
+off the _next_ round's blocks rather than from the trajectory steps. That works
+identically on both sides and needs no trajectory capture, which is what makes the two
+halves comparable rather than merely adjacent. An empty decision means the model
+answered without calling anything, and is rendered as that sentence rather than as a
+blank.
+
+One asymmetry is unavoidable and is labelled rather than hidden: the **parent's final
+answer** is in no snapshot, because the last assistant message is appended after the
+last round was captured. It comes from the trajectory store when capture was on, and
+otherwise reads `not recorded`.
 
 ## Backend surface
 
@@ -153,6 +304,11 @@ the original turn was given and what it did with it, which is what the stepper i
 | --- | --- | --- |
 | GET | `/api/agentpedia/turns` | The timeline — stored turn summaries joined to their runs (`limit`, `agent_id`, `since`, `roots_only`) |
 | GET | `/api/agentpedia/turns/{turn_id}` | One turn, joined: shown / wire / did / cost per round |
+| POST | `/api/agentpedia/fork/preview` | What a fork would run — rebuilt messages, catalog, drift — without running it |
+| POST | `/api/agentpedia/fork` | Run the fork. Tools simulated unless `live` |
+| GET | `/api/agentpedia/forks` | The fork edges, newest first (`limit`, `parent`) |
+| GET | `/api/agentpedia/forks/{fork_turn_id}/diff` | Parent beside fork at the branch round |
+| DELETE | `/api/agentpedia/forks/{fork_turn_id}` | Forget the edge; the fork's own turn stays |
 
 `GET /turns` reads the **durable** `agent_turns` table, not the 25-turn ring: a
 stepper whose history ends 25 turns ago cannot answer "what was the agent doing this
@@ -169,6 +325,11 @@ already returns them, and a second aggregate would be the one that drifts.
 | --- | --- | --- |
 | Stepper, harness pages | Yes | Yes |
 | Live turns | Yes | Yes |
+| Simulated forks | Yes | Yes |
+| Live forks | Yes | Yes |
 
-Nothing here touches a native capability: it is a reader over three backend stores, so
-both layouts behave identically.
+Nothing here touches a native capability, so both layouts behave identically. A
+**live** fork is the one thing that needs a browser attached at all — not because of
+the layout, but because it runs the tools the browser owns and prompts through the
+permission gate the browser renders. With no window open it refuses and says so,
+rather than silently running against backend tools only.

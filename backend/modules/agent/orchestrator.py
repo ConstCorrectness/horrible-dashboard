@@ -785,6 +785,12 @@ _GROUP_DESCRIPTIONS: dict[str, str] = {
         "token's rank climbs through the layers, and what changing a prompt token "
         "does to all of it. Needs a trace — `llamacpp.trace` records one."
     ),
+    "agentpedia": (
+        "Read this node's own recorded agent turns: what a turn was shown round by "
+        "round, which tools it was offered and what they cost, and which harness it "
+        "ran under. Also forks a recorded turn — re-runs it with a tool dropped or "
+        "the prompt changed, tools simulated — and diffs the two decisions."
+    ),
     "files": "Browse, read, search, create, and edit files in the workspace.",
     "editor": "Inspect and modify open editor buffers (read, propose edits, format, rename).",
     "terminal": "Run shell commands and manage terminal sessions.",
@@ -1756,6 +1762,15 @@ def _coerce_group_list(raw: Any) -> list[str]:
     return [text]
 
 
+#: Stand in for every tool that *acts*, so a caller can run the real loop without
+#: the real consequences. Answering the browser's leg alone is not enough: backend
+#: tools (`agent.delegate`, `agent.ask_peer`) and backend-plugin tools are resolved
+#: server-side and never reach a connection at all, so `OfflineConnection`'s
+#: fixtures would not have stopped a replayed turn from delegating or reaching a
+#: peer for a second time. This is the one hook that covers all three legs.
+Simulate = Callable[[str, dict[str, Any]], Awaitable[Any]]
+
+
 async def _dispatch_call(
     conn: WsConnection,
     turn_id: str,
@@ -1763,12 +1778,18 @@ async def _dispatch_call(
     active_groups: set[str],
     spec: AgentSpec | None = None,
     mode_override: permissions.Mode | None = None,
+    simulate: Simulate | None = None,
 ) -> Any:
     """Resolve one tool call under progressive disclosure. The meta tools mutate
     `active_groups` (so the next round presents more tools); a known dynamic tool
     whose group isn't active yet is auto-loaded (forgiving); everything else is gated,
     then run in the backend or relayed to the browser. A scoped agent's `spec`
-    restricts the catalog/auto-load to its allowed groups."""
+    restricts the catalog/auto-load to its allowed groups.
+
+    `simulate` replaces the **actuating** step only — the meta tools still run for
+    real, because what they do is shape the catalog, and a fork whose `load_tools`
+    returned a fixture would be exercising a different catalog than the turn it
+    claims to be a counterfactual of."""
     allowed = set(spec.tool_groups) if spec and spec.tool_groups is not None else None
     name = call.name
     # Malformed arguments are reported, never run. Executing a call whose payload
@@ -1843,6 +1864,8 @@ async def _dispatch_call(
 
     if not await _gate(conn, turn_id, call, mode_override):
         return {"error": "denied by permission policy"}
+    if simulate is not None:
+        return await simulate(name, call.arguments)
     from backend.sdk.registry import registry as _plugins
 
     if name in _plugins.agent_tools:
@@ -1952,6 +1975,8 @@ async def run_agent_loop(
     spec: AgentSpec | None = None,
     mode_override: permissions.Mode | None = None,
     parent_turn_id: str | None = None,
+    simulate: Simulate | None = None,
+    deny_tools: set[str] | None = None,
 ) -> str:
     """The shared tool-calling loop: stream the provider, relay each gated tool call
     to the frontend, and repeat until the model returns a final answer (no tool
@@ -1967,10 +1992,22 @@ async def run_agent_loop(
     When `active_groups` is given, the loop runs **progressive disclosure**: the tool
     list is recomputed each round from the active groups (`_select_tools`) and calls
     route through `_dispatch_call` (meta tools + auto-load). Otherwise the fixed
-    `tools` list is used with direct dispatch — the path flow Agent nodes use."""
+    `tools` list is used with direct dispatch — the path flow Agent nodes use.
+
+    `simulate` and `deny_tools` exist for **replay** (agentpedia's fork): the first
+    answers every actuating call instead of running it, the second takes named tools
+    out of the catalog and refuses them if the model reaches for one anyway. Both
+    are needed together — under progressive disclosure the tool list is rebuilt
+    every round, so removing a tool once would see it reappear on the next."""
     progressive = active_groups is not None
     forced_retry_used = False
     agent_id = spec.id if spec else "main"
+    denied = deny_tools or set()
+    if denied:
+        # The fixed-list path filters once here; the progressive path re-filters
+        # every round, below, because `_select_tools` rebuilds the list from the
+        # live catalog and would hand the tool straight back.
+        tools = [t for t in tools if t["function"]["name"] not in denied]
     # Record what the agent *does*, beside the `_capture_context` call that records
     # what it was *shown*. Both are keyed by `turn_id`; both are self-swallowing.
     # `None` whenever trajectory capture is off, which is the default.
@@ -2007,6 +2044,10 @@ async def run_agent_loop(
                 tool_stats: dict[str, Any] = {}
                 if progressive:
                     tools = _select_tools(conn, active_groups, spec, tool_stats)
+                    if denied:
+                        tools = [
+                            t for t in tools if t["function"]["name"] not in denied
+                        ]
                 # Snapshot the exact context this round before it goes out, for the
                 # interpretability pane. Read-only and self-swallowing — a failed
                 # capture must never cost the user their turn (see recorder.py).
@@ -2082,12 +2123,30 @@ async def run_agent_loop(
                     return answer
                 for call in result.tool_calls:
                     started = time.monotonic()
-                    if progressive:
+                    if call.name in denied:
+                        # Not offered this round, but the model can still name a
+                        # tool it remembers from the conversation — and under
+                        # progressive disclosure `_dispatch_call` would forgivingly
+                        # load the group and run it. Said plainly so the transcript
+                        # shows the model reaching for the removed tool, which is
+                        # usually the interesting half of the counterfactual.
+                        tool_result = {
+                            "error": f"tool {call.name} is not available in this run"
+                        }
+                    elif progressive:
                         tool_result = await _dispatch_call(
-                            conn, turn_id, call, active_groups, spec, mode_override
+                            conn,
+                            turn_id,
+                            call,
+                            active_groups,
+                            spec,
+                            mode_override,
+                            simulate,
                         )
                     elif not await _gate(conn, turn_id, call, mode_override):
                         tool_result = {"error": "denied by permission policy"}
+                    elif simulate is not None:
+                        tool_result = await simulate(call.name, call.arguments)
                     elif call.name in BACKEND_TOOL_NAMES:
                         # Resolved in the backend (peer fabric), not relayed to the UI.
                         tool_result = await _run_backend_tool(conn, turn_id, call)

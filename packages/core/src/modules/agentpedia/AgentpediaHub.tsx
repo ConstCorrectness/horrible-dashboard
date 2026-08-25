@@ -27,6 +27,7 @@ import { BlockRow, CompositionBar, fmtTokens, TokenizerBadge, ToolList } from '.
 import { IconAlert, IconCheck, IconChevron, IconClock, IconRetry } from '../../glyphs';
 import { usePaneSection } from '../../layout/use-sections';
 import { bindStepper } from './actions';
+import { ForksSection, type ForkTarget } from './ForksSection';
 import {
   getTurn,
   harnessTools,
@@ -362,10 +363,12 @@ function Stepper({
   turn,
   captureOn,
   onBack,
+  onFork,
 }: {
   turn: TurnView;
   captureOn: boolean;
   onBack: () => void;
+  onFork: (round: number) => void;
 }) {
   const [index, setIndex] = useState(0);
   const round = turn.rounds[Math.min(index, turn.rounds.length - 1)];
@@ -456,6 +459,13 @@ function Stepper({
         <span style={{ ...S.mono, marginLeft: 'auto' }}>
           round {index + 1} of {turn.rounds.length}
         </span>
+        {/* The verb the whole module builds toward. It carries the round, not just
+            the turn: a fork branches at the context the model was holding *here*,
+            and forking from round 0 when you are reading round 3 would replay a
+            different question. */}
+        <button style={S.ghostButton} onClick={() => onFork(round.round)}>
+          ⑂ Fork this round
+        </button>
       </div>
 
       <div
@@ -475,7 +485,7 @@ function Stepper({
   );
 }
 
-function RunsSection() {
+function RunsSection({ onFork }: { onFork: (turnId: string, round: number) => void }) {
   const [index, setIndex] = useState<TurnIndexEntry[]>([]);
   const [captureOn, setCaptureOn] = useState(false);
   const [open, setOpen] = useState<TurnView | null>(null);
@@ -503,7 +513,14 @@ function RunsSection() {
   }, []);
 
   if (open) {
-    return <Stepper turn={open} captureOn={captureOn} onBack={() => setOpen(null)} />;
+    return (
+      <Stepper
+        turn={open}
+        captureOn={captureOn}
+        onBack={() => setOpen(null)}
+        onFork={(round) => onFork(open.turn_id, round)}
+      />
+    );
   }
 
   return (
@@ -666,34 +683,32 @@ function HarnessSection() {
   );
 }
 
-// ── Forks ────────────────────────────────────────────────────────────────────
-
-function ForksSection() {
-  return (
-    <div style={S.empty}>
-      <div style={{ ...S.heading, marginBottom: 8 }}>Forks</div>
-      Re-running a recorded turn with one thing changed — a tool dropped, the system prompt edited,
-      a different model — and diffing the two.
-      <br />
-      <br />
-      Not built yet. The stepper had to come first: a fork is only meaningful once you can see
-      exactly what the original turn was given and what it did with it.
-    </div>
-  );
-}
-
 // ── The pane ─────────────────────────────────────────────────────────────────
 
 export function AgentpediaHub() {
-  const { section } = usePaneSection();
+  const { section, setSection } = usePaneSection();
+  // Which round a fork would branch at, handed from Runs to Forks. Held here
+  // rather than in a module singleton because the sections are siblings and this
+  // is the one value they share — and `setSection` is what moves the tab strip,
+  // the keyboard and the pane's own buttons together.
+  const [forkTarget, setForkTarget] = useState<ForkTarget | null>(null);
+
+  const startFork = useCallback(
+    (turnId: string, round: number) => {
+      setForkTarget({ turnId, round });
+      setSection('forks');
+    },
+    [setSection],
+  );
+
   return (
     <div style={S.pane}>
       {section === 'harness' ? (
         <HarnessSection />
       ) : section === 'forks' ? (
-        <ForksSection />
+        <ForksSection target={forkTarget} onClearTarget={() => setForkTarget(null)} />
       ) : (
-        <RunsSection />
+        <RunsSection onFork={startFork} />
       )}
     </div>
   );
