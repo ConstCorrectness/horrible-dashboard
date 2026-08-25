@@ -108,6 +108,33 @@ class TurnListResponse(BaseModel):
     turns: list[TurnSnapshot] = Field(default_factory=list)
 
 
+class TurnSummary(BaseModel):
+    """One stored turn without its context blocks — the shape `store.list_turns`
+    returns, and the shape a listing is allowed to carry (no prompt text, no tool
+    results; a caller that wants content asks for one turn by id).
+
+    Deliberately *not* a `TurnSnapshot` with an empty `rounds` list: `rounds` here
+    is a count, and a summary wearing a snapshot's clothes would invite reading
+    "0 rounds" off a turn that had ten.
+    """
+
+    turnId: str
+    parentTurnId: str | None = None
+    agentId: str = "main"
+    agentName: str = ""
+    kind: str = "local"
+    model: str = ""
+    provider: str = ""
+    startedAt: float = 0.0
+    rounds: int = 0
+    totalTokens: int = 0
+    peerId: str | None = None
+
+
+class TurnHistoryResponse(BaseModel):
+    turns: list[TurnSummary] = Field(default_factory=list)
+
+
 class AttentionSpec(BaseModel):
     """The attention block's shape. `kind` is derived from the head counts and is
     the single biggest driver of KV-cache size, which is why it's called out."""

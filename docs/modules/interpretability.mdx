@@ -87,10 +87,31 @@ flowchart LR
     Rec --> Tok["tokenizer.Counter"]
     Tok -->|"tokenizer.json"| HF[("Hugging Face Hub")]
     Rec --> Ring[("25-turn ring")]
+    Rec --> Store[("agent_turns table")]
     Rec -->|"/ws interpretability"| Pane["Context window pane"]
     Ring -->|"GET /api/interpretability/turns"| Pane
+    Store -->|"GET /api/interpretability/turns/history"| Pane
     Loop --> Provider["provider chat_stream"]
+    Loop -->|"turn_id + round"| Io[("IoEvent ring")]
+    Loop -->|"at the end: window.context_length"| Rec
 ```
+
+### Two rings and a table
+
+The ring is what the pane opens on: 25 turns, in process, gone on restart. The
+`agent_turns` table behind it is what makes a turn answerable tomorrow — 5000 rows,
+each the full snapshot. Both are written by the same `capture_round`; they differ
+only in how long they last, so `GET /turns/{turn_id}` tries the ring and then falls
+back to the table. Without that fallback every turn older than the ring lists in the
+history and 404s when opened.
+
+The third ring in the diagram is the telemetry one, and it is a different kind of
+record: `IoEvent` is *what went over the wire*, where a `RoundSnapshot` is *what the
+model was shown*. `run_agent_loop` stamps every request it makes with `turn_id` and
+`round` (`telemetry/turn.py`, a contextvar rather than a parameter — the recording
+happens in httpx's response hook, several layers below the loop that knows the
+answer), which is what lets the two be lined up without matching them by timestamp.
+A sub-turn restores its parent's stamp when it leaves rather than clearing it.
 
 Two invariants hold the design together, both enforced in tests:
 
@@ -594,8 +615,9 @@ read and work in, not tiles you glance at.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| GET | `/api/interpretability/turns` | Recent captured turns, newest first |
-| GET | `/api/interpretability/turns/{turn_id}` | One turn; 404 if evicted |
+| GET | `/api/interpretability/turns` | Recent captured turns from the ring, newest first |
+| GET | `/api/interpretability/turns/history` | Turn *summaries* from the durable table (`limit`, `agent_id`, `since`, `roots_only`) |
+| GET | `/api/interpretability/turns/{turn_id}` | One turn in full — ring first, then the table |
 | DELETE | `/api/interpretability/turns` | Clear the ring |
 | GET | `/api/interpretability/model` | Model metadata + true context length |
 | GET | `/api/interpretability/architecture` | Normalized model structure (the description) |
@@ -607,10 +629,42 @@ read and work in, not tiles you glance at.
 | POST | `/api/interpretability/graph/probe` | Build and run the module in a training project's venv |
 | GET/PUT/DELETE | `/api/interpretability/graph/{name}` | A saved design |
 
+`/turns/history` is declared **before** `/turns/{turn_id}`: FastAPI matches routes in
+declaration order, and the other way round `history` resolves as a turn id — a 404 on
+a route that exists. A summary carries no context blocks, only metadata and a round
+*count*; content is fetched one turn at a time, which is also the boundary the MCP
+export redacts at.
+
 `/api/interpretability/model` reads Ollama's `/api/show`. The OpenAI dialect (LM
 Studio, vLLM) has no equivalent, so it returns an `error` the pane renders as
 "context length unknown" rather than guessing a number the budget bar would then
 be wrong about.
+
+### The window a turn actually ran under
+
+`requestedNumCtx` is what we ask for; `modelContextLength` is what the model has, and
+the gap between them is the difference between "my prompt fit" and "my prompt was
+silently truncated". Only the server knows, so `run_agent_loop` asks once as the turn
+closes (`window.context_length` → `recorder.finish_turn`) and stamps it on the turn.
+
+Every server reports it somewhere different, so the probe branches on the provider
+**kind**, not just the dialect — asking `/api/show` alone would have made this dead on
+an LM Studio box, which is the common local setup here:
+
+| kind | asked | read |
+| --- | --- | --- |
+| `ollama` | `POST /api/show` | the `*.context_length` metadata key |
+| `llamacpp` | `GET /props` | `default_generation_settings.n_ctx` |
+| `lmstudio` | `GET /api/v0/models/{id}` | `loaded_context_length`, else `max_context_length` |
+| `vllm` | `GET /v1/models` | that model's `max_model_len` |
+
+A hosted `litellm` provider is not probed at all: no endpoint of ours reports a remote
+model's window, and a guess here would be rendered as a measurement. The probe runs in
+the loop's `finally` on **every** turn, so it is capped at a 2s timeout and cached for
+five minutes — negative answers included, since a server without that endpoint will not
+grow one. It is cached rather than permanent because reloading a model at a different
+`n_ctx` is a normal thing to do, and a stale denominator is the exact lie this is here
+to stop telling.
 
 The live path is the `interpretability` `/ws` channel, which pushes a `round`
 event per round as it happens; the HTTP routes back-fill the pane on open.

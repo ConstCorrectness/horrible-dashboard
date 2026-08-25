@@ -47,6 +47,12 @@ class IoEvent(BaseModel):
     # cipher, issuer, subject and SAN list. `timing` is the phase breakdown in
     # milliseconds (dns/connect/tls/send/wait/receive), which is what makes a
     # waterfall possible.
+    # Which agent turn and round this I/O happened inside, stamped from the
+    # contextvar in `telemetry/turn.py` rather than passed by the caller. None for
+    # the vast majority of events — no agent asked for them. Two fields is the
+    # whole cost of being able to step a turn at the wire level.
+    turn_id: str | None = None
+    round: int | None = None
     remote_ip: str | None = None
     remote_port: int | None = None
     http_protocol: str | None = None

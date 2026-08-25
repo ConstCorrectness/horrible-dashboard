@@ -4,6 +4,7 @@ import time
 from collections import deque
 from typing import Any
 
+from backend.modules.telemetry import turn
 from backend.modules.telemetry.models import IoEvent
 
 _MAXLEN = 500
@@ -22,6 +23,12 @@ class Recorder:
         self._ids = itertools.count(1)
 
     def record(self, **fields: Any) -> IoEvent:
+        mark = turn.current()
+        if mark is not None:
+            # setdefault, not assignment: a caller that knows its own turn — a
+            # replayed or forked one, say — must win over the ambient stamp.
+            fields.setdefault("turn_id", mark[0])
+            fields.setdefault("round", mark[1])
         event = IoEvent(id=next(self._ids), ts=time.time(), **fields)
         self._buffer.append(event)
         self._notify(event)

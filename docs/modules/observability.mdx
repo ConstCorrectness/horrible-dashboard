@@ -44,6 +44,18 @@ Docker daemon already seeing all container I/O). Five sources feed one stream:
 So a single user action reads end to end: `client GET /agent/status` →
 `inbound /api/agent/status` → `outbound GET …/api/tags` (Ollama).
 
+### Which turn an event belongs to
+
+An event recorded while an agent turn is running also carries `turn_id` and `round`,
+stamped from a contextvar `run_agent_loop` sets (`telemetry/turn.py`) rather than
+passed by the caller — recording happens in httpx's response hook and the `/ws` pump,
+layers that have no business knowing what an agent turn is. Both fields are `None` for
+the vast majority of events, which is the honest answer: most I/O this node does is
+nobody's turn. Together with the
+[interpretability capture](./interpretability.mdx) — which records what the model was
+*shown* — this is what lets a request be put beside the context that produced it
+instead of being matched up by timestamp.
+
 ```mermaid
 flowchart LR
     UI["Module UI"] --> API["api.ts request()"]

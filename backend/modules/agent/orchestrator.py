@@ -23,6 +23,7 @@ import httpx
 from backend.modules.agent import permission_store, permissions
 from backend.modules.agent import providers as P
 from backend.modules.agent.routes import _load_config
+from backend.modules.telemetry import turn as telemetry_turn
 from backend.modules.telemetry.instrument import instrumented_client
 from backend.modules.ws import WsConnection
 from backend.sdk.types import AgentSpec
@@ -1868,6 +1869,28 @@ async def _capture_context(conn: WsConnection, **fields: Any) -> None:
         logger.debug("interpretability capture skipped", exc_info=True)
 
 
+async def _finish_capture(turn_id: str, info: Any, endpoint: str, model: str) -> None:
+    """Close the interpretability capture for this turn and stamp the model's real
+    context window.
+
+    `modelContextLength` is the denominator of the pane's budget bar — the
+    difference between "my prompt fit" and "my prompt was silently truncated" — and
+    only the server can answer it, so it lands once at the end rather than per
+    round. The probe is cached and short-timeout (see `window.py`); a provider that
+    cannot answer leaves the field None, which the pane already renders as unknown
+    rather than guessing. Same lazy import and same swallow-everything contract as
+    `_capture_context`: an observer that can break the thing it observes is a bug.
+    """
+    try:
+        from backend.modules.interpretability import recorder, window
+
+        recorder.finish_turn(
+            turn_id, await window.context_length(info, endpoint, model)
+        )
+    except Exception:
+        logger.debug("interpretability finish skipped", exc_info=True)
+
+
 def _begin_trajectory(**fields: Any) -> Any:
     """Open a trajectory recording for this turn, or return None.
 
@@ -1971,9 +1994,15 @@ async def run_agent_loop(
         },
     )
     answer = "(stopped after too many steps)"
+    # Stamp every request this turn makes with the turn it belongs to, so the wire
+    # can be lined up against what the model was shown (telemetry/turn.py). Entered
+    # outside the client so the provider calls, the tool calls they trigger, and any
+    # egress a backend tool performs all carry it.
+    turn_token = telemetry_turn.enter(turn_id)
     try:
         async with instrumented_client(timeout=120) as client:
             for round_no in range(MAX_ROUNDS):
+                telemetry_turn.mark_round(turn_id, round_no)
                 # Under progressive disclosure, inject the groups loaded last round.
                 tool_stats: dict[str, Any] = {}
                 if progressive:
@@ -2085,6 +2114,8 @@ async def run_agent_loop(
     finally:
         if rec:
             rec.finish(answer)
+        telemetry_turn.leave(turn_token)
+        await _finish_capture(turn_id, info, endpoint, model)
 
 
 async def run_agent_turn(

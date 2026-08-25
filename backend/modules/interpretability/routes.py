@@ -22,8 +22,10 @@ from backend.modules.interpretability.models import (
     ModelInfoResponse,
     ModelTensorsResponse,
     TensorEntry,
+    TurnHistoryResponse,
     TurnListResponse,
     TurnSnapshot,
+    TurnSummary,
 )
 from backend.modules.interpretability.tokenizer import (
     context_length_from_show,
@@ -51,9 +53,43 @@ def list_turns(limit: int = recorder.MAX_TURNS) -> TurnListResponse:
     return TurnListResponse(turns=recorder.recent_turns(limit))
 
 
+@router.get("/turns/history", response_model=TurnHistoryResponse)
+def turn_history(
+    limit: int = 50,
+    agent_id: str | None = None,
+    since: float | None = None,
+    roots_only: bool = False,
+) -> TurnHistoryResponse:
+    """Turn summaries from the durable table, newest first.
+
+    `GET /turns` above reads the in-process ring — 25 turns, gone on restart, which
+    is everything the pane needs to open and nothing older. This reads the 5000-row
+    `agent_turns` table, which until now had no HTTP surface at all: the turns were
+    being written and were unreachable. A stepper that can only see 25 turns is not
+    a stepper.
+
+    Declared **before** `/turns/{turn_id}`, because FastAPI matches routes in
+    declaration order and would otherwise resolve `history` as a turn id — a 404
+    on a route that exists.
+    """
+    # Imported here, like `recorder._persist` does, so the module keeps serving its
+    # live surface if the app database is unavailable.
+    from backend.modules.interpretability import store
+
+    rows = store.list_turns(
+        limit, agent_id=agent_id, since=since, roots_only=roots_only
+    )
+    return TurnHistoryResponse(turns=[TurnSummary.model_validate(r) for r in rows])
+
+
 @router.get("/turns/{turn_id}", response_model=TurnSnapshot)
 def get_turn(turn_id: str) -> TurnSnapshot:
-    turn = recorder.get_turn(turn_id)
+    """One turn in full. The ring first, then the table — a turn scrubbed to from
+    the history is by definition one the ring has already dropped, so without the
+    fallback every stored turn opens as a 404."""
+    from backend.modules.interpretability import store
+
+    turn = recorder.get_turn(turn_id) or store.get_turn(turn_id)
     if turn is None:
         raise HTTPException(status_code=404, detail=f"No captured turn {turn_id!r}")
     return turn

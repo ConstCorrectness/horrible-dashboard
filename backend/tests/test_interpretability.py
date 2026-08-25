@@ -439,3 +439,179 @@ def test_model_route_reports_error_without_a_provider(client: TestClient, monkey
     monkeypatch.setattr(agent_routes, "_load_config", lambda: None)
     body = client.get("/api/interpretability/model").json()
     assert body["error"] and body["contextLength"] is None
+
+
+# ── The durable history surface ──────────────────────────────────────────────
+# `capture_round` persists through to the `agent_turns` table as well as the ring.
+# These cover the half that was written but unreachable: the table had no routes,
+# so a turn older than the ring's 25 existed and could not be opened.
+
+
+def test_history_route_reads_the_durable_table_not_the_ring(
+    client: TestClient, estimating
+):
+    import anyio
+
+    anyio.run(lambda: _capture(FakeConn()))
+    # Clearing the ring is exactly what a restart does — and what makes the
+    # difference between the two surfaces visible.
+    recorder.clear()
+
+    assert client.get("/api/interpretability/turns").json() == {"turns": []}
+    turns = client.get("/api/interpretability/turns/history").json()["turns"]
+    assert [t["turnId"] for t in turns] == ["t1"]
+    # A summary is metadata: a round *count*, and no context blocks anywhere in it.
+    assert turns[0]["rounds"] == 1
+    assert "blocks" not in str(turns[0])
+
+
+def test_history_is_not_swallowed_by_the_turn_id_route(client: TestClient):
+    """`/turns/history` must not resolve as a turn called "history" — the failure
+    is a 404 on a route that exists, and it depends only on declaration order."""
+    assert client.get("/api/interpretability/turns/history").status_code == 200
+
+
+def test_get_turn_falls_back_to_the_store(client: TestClient, estimating):
+    import anyio
+
+    anyio.run(lambda: _capture(FakeConn()))
+    recorder.clear()
+
+    body = client.get("/api/interpretability/turns/t1").json()
+    assert body["turnId"] == "t1" and len(body["rounds"]) == 1
+    assert client.get("/api/interpretability/turns/nope").status_code == 404
+
+
+def test_history_filters_pass_through(client: TestClient, estimating):
+    import anyio
+
+    anyio.run(lambda: _capture(FakeConn()))
+    anyio.run(lambda: _capture(FakeConn(), turn_id="t2", parent_turn_id="t1"))
+
+    both = client.get("/api/interpretability/turns/history").json()["turns"]
+    assert {t["turnId"] for t in both} == {"t1", "t2"}
+    roots = client.get(
+        "/api/interpretability/turns/history", params={"roots_only": True}
+    ).json()["turns"]
+    assert [t["turnId"] for t in roots] == ["t1"]
+
+
+# ── The model's true context window ──────────────────────────────────────────
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("kind", "dialect", "path", "payload", "expected"),
+    [
+        (
+            "ollama",
+            "ollama",
+            "/api/show",
+            {"model_info": {"llama.context_length": 8192}},
+            8192,
+        ),
+        (
+            "llamacpp",
+            "openai",
+            "/props",
+            {"default_generation_settings": {"n_ctx": 4096}},
+            4096,
+        ),
+        (
+            "lmstudio",
+            "openai",
+            "/api/v0/models/m",
+            {"loaded_context_length": 2048, "max_context_length": 32768},
+            2048,
+        ),
+        (
+            "vllm",
+            "openai",
+            "/v1/models",
+            {"data": [{"id": "m", "max_model_len": 16384}]},
+            16384,
+        ),
+        # Reached the server, server declined to say. None, never a guess.
+        ("lmstudio", "openai", "/api/v0/models/m", {}, None),
+        ("openrouter", "litellm", "", {}, None),
+    ],
+)
+async def test_context_window_probe_per_provider(
+    kind, dialect, path, payload, expected, monkeypatch
+):
+    """Every server reports the window somewhere different. Asking Ollama alone —
+    the shape the `/model` route has — answers None on an LM Studio box, which is
+    the most common local setup here."""
+    import httpx
+
+    from backend.modules.interpretability import window
+
+    window.reset_cache()
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if request.url.path != path:
+            return httpx.Response(404)
+        return httpx.Response(200, json=payload)
+
+    # `window.httpx` IS the httpx module, so the replacement has to close over the
+    # real class — referring to `httpx.AsyncClient` inside it recurses.
+    real = httpx.AsyncClient
+    monkeypatch.setattr(
+        window.httpx,
+        "AsyncClient",
+        lambda **kw: real(transport=httpx.MockTransport(handler)),
+    )
+    info = type("Info", (), {"kind": kind, "dialect": dialect})()
+    assert await window.context_length(info, "http://x", "m") == expected
+    if dialect == "litellm":
+        assert seen == []  # a hosted model's window is not ours to guess at
+
+
+@pytest.mark.anyio
+async def test_context_window_probe_is_cached_and_never_raises(monkeypatch):
+    """It runs in `run_agent_loop`'s finally on every turn: an unreachable server
+    must cost one timeout, not one per turn, and must never surface as an error."""
+    import httpx
+
+    from backend.modules.interpretability import window
+
+    window.reset_cache()
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        raise httpx.ConnectError("refused")
+
+    # `window.httpx` IS the httpx module, so the replacement has to close over the
+    # real class — referring to `httpx.AsyncClient` inside it recurses.
+    real = httpx.AsyncClient
+    monkeypatch.setattr(
+        window.httpx,
+        "AsyncClient",
+        lambda **kw: real(transport=httpx.MockTransport(handler)),
+    )
+    info = type("Info", (), {"kind": "ollama", "dialect": "ollama"})()
+    assert await window.context_length(info, "http://x", "m") is None
+    assert await window.context_length(info, "http://x", "m") is None
+    assert calls == 1  # the negative answer is cached too
+
+
+def test_finish_turn_stamps_the_window(estimating):
+    """`finish_turn` was defined and called nowhere, so `modelContextLength` was
+    always None — the budget bar had no denominator."""
+    import anyio
+
+    anyio.run(lambda: _capture(FakeConn()))
+    assert recorder.recent_turns()[0].modelContextLength is None
+
+    recorder.finish_turn("t1", 8192)
+    assert recorder.recent_turns()[0].modelContextLength == 8192
+
+    from backend.modules.interpretability import store
+
+    assert (
+        store.get_turn("t1").modelContextLength == 8192
+    )  # re-persisted, not just live

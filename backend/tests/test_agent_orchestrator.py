@@ -997,3 +997,52 @@ def test_the_carry_is_bounded_and_drops_the_oldest() -> None:
     # the oldest survivor (`files`) is what goes.
     assert {"database", "library"} <= carried
     assert "files" not in carried
+
+
+def _answer_once(_request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200, json={"message": {"role": "assistant", "content": "done"}}
+    )
+
+
+def test_turn_stamps_its_io_and_closes_the_capture(monkeypatch) -> None:
+    """The two halves of correlating a turn to its wire: every request the loop
+    makes carries the turn and round, and the capture is closed out at the end with
+    the model's real context window.
+
+    `instrumented_client` is used for real here — the mock transport goes
+    *underneath* it — because the stamping happens in the recorder it wraps, and a
+    test that patched the client away would prove nothing.
+    """
+    from backend.modules.interpretability import recorder as interp
+    from backend.modules.telemetry import turn as telemetry_turn
+    from backend.modules.telemetry.recorder import recorder as io
+
+    _configure(monkeypatch)
+    real_client = orchestrator.instrumented_client
+    monkeypatch.setattr(
+        orchestrator,
+        "instrumented_client",
+        lambda **kw: real_client(transport=httpx.MockTransport(_answer_once), **kw),
+    )
+
+    async def fake_window(*_args: Any, **_kw: Any) -> int:
+        return 8192
+
+    from backend.modules.interpretability import window
+
+    monkeypatch.setattr(window, "context_length", fake_window)
+
+    io.clear()
+    interp.clear()
+    asyncio.run(orchestrator.run_agent_turn(FakeConn(), "t-stamp", "hi"))
+
+    provider_calls = [e for e in io.recent() if e.source == "outbound"]
+    assert provider_calls, "the provider round trip was not recorded at all"
+    assert all(e.turn_id == "t-stamp" for e in provider_calls)
+    assert provider_calls[0].round == 0
+
+    # The window landed on the turn, and the ambient stamp did not outlive the loop.
+    [turn] = [t for t in interp.recent_turns() if t.turnId == "t-stamp"]
+    assert turn.modelContextLength == 8192
+    assert telemetry_turn.current() is None

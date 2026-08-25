@@ -302,3 +302,60 @@ def test_outbound_body_truncation_respects_setting(tmp_path, monkeypatch) -> Non
     assert last.response_body.endswith("… [truncated]")
     # 20 captured chars + the truncation marker — far short of the 200-char bodies.
     assert len(last.response_body) < 50
+
+
+# ── Correlating the wire to the turn ─────────────────────────────────────────
+
+
+def test_events_carry_no_turn_by_default():
+    """Most I/O this node does belongs to no agent, and must not claim to."""
+    recorder.clear()
+    event = recorder.record(source="inbound", method="GET", target="/ok", status=200)
+    assert event.turn_id is None and event.round is None
+
+
+def test_events_are_stamped_with_the_current_turn_and_round():
+    from backend.modules.telemetry import turn
+
+    recorder.clear()
+    token = turn.enter("t-42")
+    try:
+        first = recorder.record(source="outbound", method="POST", target="/api/chat")
+        turn.mark_round("t-42", 3)
+        later = recorder.record(source="outbound", method="POST", target="/api/chat")
+    finally:
+        turn.leave(token)
+
+    assert (first.turn_id, first.round) == ("t-42", 0)
+    assert (later.turn_id, later.round) == ("t-42", 3)
+    # And the stamp is gone once the turn is over.
+    assert recorder.record(source="inbound", method="GET", target="/x").turn_id is None
+
+
+def test_leave_restores_the_parent_turn():
+    """A delegated sub-turn runs inside its parent's loop. On the way out the
+    parent's stamp must come back, not be cleared — otherwise every request the
+    parent makes after a delegation looks like it belonged to no turn."""
+    from backend.modules.telemetry import turn
+
+    parent = turn.enter("parent")
+    turn.mark_round("parent", 2)
+    child = turn.enter("child")
+    turn.leave(child)
+    assert turn.current() == ("parent", 2)
+    turn.leave(parent)
+    assert turn.current() is None
+
+
+def test_an_explicit_turn_beats_the_ambient_one():
+    from backend.modules.telemetry import turn
+
+    recorder.clear()
+    token = turn.enter("ambient")
+    try:
+        event = recorder.record(
+            source="outbound", method="GET", target="/x", turn_id="explicit", round=9
+        )
+    finally:
+        turn.leave(token)
+    assert (event.turn_id, event.round) == ("explicit", 9)
