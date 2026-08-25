@@ -118,11 +118,25 @@ browser was blocked — this was found by driving an actual share, not by the su
 
 ## Scaling, and the ceiling
 
-Unlike the games server (a single always-on authority), the relay holds no shared
-state and **may** scale out. The constraint is different and just as strict: a
-given stream is **sticky to one machine**, because its registry entry and its
-live tracks are in that machine's memory. `fly-replay` keyed on the share token
-enforces it, and the relay emits `fly-replay-src` on every WHIP and WHEP response.
+**Run one machine.** Like the games server, though for a different reason: the
+games server is a single authority, while this one simply keeps each stream's
+registry entry and live tracks in one machine's memory. Fly load-balances across
+machines, so with more than one a mint lands on machine A and a viewer's WHEP
+lands on machine B, which has never heard of that token.
+
+That is not hypothetical — it was observed on the first real deploy. Four
+machines were running, the node reported the stream live, and `/health` answered
+`streams: 0` because the health check hit a third machine. `max_machines_running
+= 1` in `fly.share.toml` is what prevents it; `fly scale count 1` cleans up
+machines that already exist.
+
+Scaling out is possible but not implemented. It needs genuine session affinity:
+the app must return a **`fly-replay: instance=<machine>` response header** to
+bounce a request to the machine that owns the token, which in turn means the
+token has to record which machine minted it. An earlier version of this file
+claimed `fly-replay-src` did that job. It does not — that is the header Fly
+*adds to* a request it has already replayed, inbound and informational. It was
+emitted on every WHIP/WHEP response, looked like affinity, and provided none.
 
 Fan-out uses `MediaRelay`, so the host uploads **one** copy of the stream no
 matter how many people watch. That is the bandwidth win and the reason a public

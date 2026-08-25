@@ -267,12 +267,17 @@ def _sdp_response(
     `text/plain; charset=utf-8, application/sdp` -- malformed, and rejected by any
     client that actually checks the type it was handed.
 
-    The `fly-replay-src` header pins this token's traffic to this machine. It is
-    harmless anywhere else (an unknown header is ignored), which is why it is set
-    unconditionally rather than behind an "am I on Fly" check that would be wrong
-    in exactly one direction.
+    No stickiness header is emitted, and that is deliberate rather than an
+    omission. An earlier version set `fly-replay-src`, which does nothing: that
+    is the header Fly *adds to* a request it has already replayed, not one an app
+    sends to steer routing. Steering requires returning `fly-replay:
+    instance=<machine>`, which this app cannot do yet because a token does not
+    record which machine minted it. Until it does the app runs on **one machine**
+    (see fly.share.toml) -- and a wrong header that looks like it pins traffic is
+    worse than none, because it invites exactly the multi-machine deploy that
+    silently breaks.
     """
-    headers = {"fly-replay-src": f"share-token={token[:16]}"}
+    headers: dict[str, str] = {}
     headers.update(extra or {})
     return Response(
         content=answer, media_type="application/sdp", status_code=201, headers=headers

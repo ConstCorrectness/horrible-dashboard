@@ -6,11 +6,17 @@
 #   fly deploy -c fly.share.toml
 # One-time setup and the operational notes are in docs/architecture/share-relay.mdx.
 #
-# Unlike `horrible-games` (a single always-on authority), this app MAY scale out: it
-# holds no shared state, only per-stream state. The constraint is different and just
-# as strict -- a given stream must be *sticky* to one machine, because the registry
-# and the live tracks are in that machine's memory. `fly-replay` on the share token
-# is what enforces it; the relay emits `fly-replay-src` on every WHIP/WHEP response.
+# KEEP THIS AT ONE MACHINE until token-based session affinity is implemented.
+#
+# The registry and the live tracks are in one machine's memory, and Fly load-balances
+# across machines -- so with more than one, a mint lands on machine A, the viewer's
+# WHEP lands on machine B, and B has never heard of that token. Observed exactly that
+# with 4 machines: the node reported the stream live while /health said `streams: 0`.
+#
+# Scaling out needs real affinity: the app must return a `fly-replay: instance=<id>`
+# RESPONSE header to bounce a request to the machine that owns the token (which means
+# the token has to carry that machine id). Note `fly-replay-src` is the header Fly
+# ADDS TO a replayed request -- inbound, informational, and no use for steering.
 
 app = 'horrible-share'
 primary_region = 'iad'
@@ -37,6 +43,9 @@ primary_region = 'iad'
   auto_stop_machines = 'stop'
   auto_start_machines = true
   min_machines_running = 0
+  # One machine, for the reason at the top of this file. Fly will not add a second
+  # on its own with this set, and `fly scale count 1` cleans up any that exist.
+  max_machines_running = 1
 
   [[http_service.checks]]
     interval = '15s'

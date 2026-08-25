@@ -86,9 +86,12 @@ async def test_whip_then_whep_pairs_offers_with_answers(client) -> None:
         assert res.status_code == 201
         assert res.text.startswith("v=")
         assert res.headers["content-type"].startswith("application/sdp")
-        # The stickiness header must be on the ingest too, not just playback:
-        # the host's machine is the one every viewer has to be routed back to.
-        assert res.headers["fly-replay-src"].startswith("share-token=")
+        # No `fly-replay-src`: that header is what Fly adds to a request it has
+        # replayed, not something an app sends to steer routing. Emitting it
+        # looked like session affinity and provided none -- which invited a
+        # multi-machine deploy where a viewer's WHEP lands on a machine that has
+        # never heard of the token.
+        assert "fly-replay-src" not in res.headers
 
         status = (await client.get(f"/streams/{token}")).json()
         assert status["live"] is True
