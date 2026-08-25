@@ -49,6 +49,7 @@ from pydantic import BaseModel
 from backend.share_relay import viewer
 from backend.share_relay.chat import Chat
 from backend.share_relay.chat import parse as parse_chat
+from backend.share_relay import ice
 from backend.share_relay.fanout import Rooms
 from backend.share_relay.restream import Restreams, ffmpeg_available
 from backend.share_relay.tokens import Registry, Stream
@@ -86,6 +87,17 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         logger.warning(
             "SHARE_RELAY_KEY is unset: anyone who can reach this relay can mint a "
             "stream on it. Set it before exposing this service publicly."
+        )
+    if not ice.stun_server():
+        logger.warning(
+            "No STUN configured (SHARE_RELAY_STUN): this relay will gather host "
+            "candidates only, which are private addresses on a hosting platform. "
+            "Signaling will succeed and no media will flow."
+        )
+    if ice.turn_is_incomplete():
+        logger.warning(
+            "SHARE_RELAY_TURN_URL is set without SHARE_RELAY_TURN_USER/PASS, so "
+            "TURN is being ignored. Viewers behind a symmetric NAT will not connect."
         )
     yield
     await restreams.stop_all()
@@ -171,6 +183,11 @@ class RelayInfo(BaseModel):
     #: glance that they left it open.
     gated: bool = False
     max_viewers_per_stream: int = 0
+    #: STUN/TURN presence, never the credential. Reported because a relay that
+    #: gathers only host candidates answers every WHIP offer perfectly and then
+    #: carries no media -- so "is ICE configured" has to be answerable without
+    #: reproducing the failure.
+    ice: dict = {}
 
 
 @app.get("/health", response_model=RelayInfo)
@@ -182,6 +199,7 @@ async def health() -> RelayInfo:
         can_restream=ffmpeg_available(),
         gated=bool(_ingest_key()),
         max_viewers_per_stream=registry.max_viewers_per_stream,
+        ice=ice.describe(),
     )
 
 
@@ -280,7 +298,7 @@ async def whip(token: str, request: Request) -> Response:
     stream = _resolve(token)
     offer = await _sdp_body(request)
     room = rooms.get_or_create(token)
-    answer = await room.publish(offer)
+    answer = await room.publish(offer, ice.ice_servers())
     stream.live = True
     return _sdp_response(answer, token, extra={"Location": f"/whip/{token}"})
 
@@ -318,7 +336,7 @@ async def whep(
         raise HTTPException(status_code=503, detail="this stream is full")
 
     offer = await _sdp_body(request)
-    answer = await room.subscribe(offer)
+    answer = await room.subscribe(offer, ice.ice_servers())
     stream.viewers = room.viewers
     return _sdp_response(answer, token)
 

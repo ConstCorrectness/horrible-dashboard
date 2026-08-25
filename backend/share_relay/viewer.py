@@ -15,6 +15,8 @@ from __future__ import annotations
 import html
 import json
 
+from backend.share_relay import ice
+
 _STYLE = """
 :root {
   color-scheme: dark;
@@ -355,10 +357,11 @@ def render(
         "found": found,
         "needsPassphrase": needs_passphrase,
         "live": live,
-        # STUN only. A public viewer is a stranger, and handing every stranger a
-        # TURN credential would make the relay's bandwidth free for anyone who
-        # opened a link.
-        "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}],
+        # From the relay's own config, so the two ends of the connection agree.
+        # STUN only unless the operator opts in: a public viewer is a stranger,
+        # and a TURN credential in a page anyone can open makes the operator's
+        # bandwidth free for the whole internet. See `ice.viewer_ice`.
+        "iceServers": ice.viewer_ice(),
     }
     return _page(body, _SCRIPT, config)
 

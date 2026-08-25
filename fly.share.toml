@@ -45,20 +45,32 @@ primary_region = 'iad'
     method = 'GET'
     path = '/health'
 
-# UDP for the media itself. WebRTC carries RTP over UDP, and a relay reachable only
-# over TCP/443 falls back to TURN-over-TCP at best and simply fails at worst -- the
-# kind of thing that works perfectly in a local test and never in production.
-[[services]]
-  protocol = 'udp'
-  internal_port = 9100
-
-  [[services.ports]]
-    port = 9100
+# NOTE ON MEDIA (read before assuming video works).
+#
+# There is deliberately no `[[services]] protocol = 'udp'` block here. An earlier
+# version declared UDP on 9100, which was wrong twice over: 9100 is the HTTP port,
+# and aiortc allocates **ephemeral** high UDP ports for RTP, so no fixed port
+# declaration corresponds to where the media actually lands.
+#
+# What makes media work is ICE, not a port mapping. The relay must gather a
+# server-reflexive candidate, which needs `SHARE_RELAY_STUN` (defaulted, so this
+# works out of the box) -- without it the relay offers only host candidates,
+# which on Fly are private addresses. Signaling then succeeds perfectly and no
+# video ever arrives, which is the failure this comment exists to prevent.
+#
+# If STUN is not enough (either end behind a symmetric NAT), the answer is TURN:
+#   fly secrets set \
+#     SHARE_RELAY_TURN_URL=turn:host:3478 \
+#     SHARE_RELAY_TURN_USER=user \
+#     SHARE_RELAY_TURN_PASS=pass -a horrible-share
+# Set SHARE_RELAY_TURN_FOR_VIEWERS=1 only if viewers need it too -- that hands a
+# TURN credential to every stranger who opens a link, along with your bandwidth.
 
 [[vm]]
   size = 'shared-cpu-1x'
-  # 512mb is enough for the SFU path: frames are forwarded, never decoded. Raise it
-  # before raising the viewer ceiling, not after.
+  # The ceiling here is CPU, not memory: aiortc decodes the inbound stream once and
+  # re-encodes it per viewer, so watch CPU before raising `max_viewers_per_stream`.
+  # Restreaming adds an ffmpeg process on top of that.
   memory = '512mb'
   cpus = 1
   memory_mb = 512

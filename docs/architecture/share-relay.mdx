@@ -209,6 +209,52 @@ audience" today by handing that problem to a platform that has already solved it
 available live-ingest API — RTMP endpoints are issued per-account through a
 partner programme — so no amount of effort here would produce one.
 
+## ICE, and the failure with no symptom
+
+The relay's own peer connections need STUN. Without it aiortc gathers **host
+candidates only**, which on a hosting platform are private addresses — so a
+browser on the public internet has nothing dialable and the connection never
+completes. Nothing reports this: WHIP returns a valid SDP answer, `/streams`
+says the stream is live, the viewer page sits on "connecting", and no log line
+anywhere mentions ICE. It works perfectly on one machine, where a host candidate
+is exactly the right answer, which is precisely what makes it easy to ship.
+
+Measured, before and after configuring it:
+
+| | Candidate types the relay offers |
+| --- | --- |
+| No ICE servers | `host` |
+| `SHARE_RELAY_STUN` set (the default) | `host`, `srflx` |
+
+Configuration is env-only, like everything else here:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SHARE_RELAY_STUN` | `stun.l.google.com:19302` | `host:port`; the scheme is added. Empty disables STUN. |
+| `SHARE_RELAY_TURN_URL` | — | Full URL (`turn:host:3478`) |
+| `SHARE_RELAY_TURN_USER` / `_PASS` | — | Both required; an incomplete TURN entry is dropped rather than offered, because a malformed entry can take the whole configuration down with it |
+| `SHARE_RELAY_TURN_FOR_VIEWERS` | off | Whether the **viewer page** also gets the TURN credential |
+
+The semantics match `buildIceConfig` on the frontend and `_ice_servers` in
+`network/transport/webrtc.py` — STUN is a bare `host:port`, TURN is a full URL.
+Three readers of one idea that disagreed about whether the scheme is included
+would fail as "ICE just does not connect".
+
+TURN is **off for viewers by default** and that is a real trade, not an
+oversight: a TURN credential in a page anyone can open makes the operator's
+relay bandwidth free for the whole internet, while a viewer behind a symmetric
+NAT cannot connect without one. The decision belongs to whoever runs the relay.
+
+`/health` reports whether STUN and TURN are configured — presence only, never the
+credential — so "is ICE set up" is answerable without reproducing the failure.
+
+### There is no UDP service block
+
+An earlier version of `fly.share.toml` declared `protocol = 'udp'` on port 9100.
+That was wrong twice: 9100 is the HTTP port, and aiortc allocates **ephemeral**
+high UDP ports for RTP, so no fixed port declaration corresponds to where media
+actually lands. What makes media work here is ICE, not a port mapping.
+
 ## Peer connections are closed under a timeout
 
 `RTCPeerConnection.close()` waits on the DTLS transport, and a peer that never
