@@ -105,6 +105,9 @@ only in how long they last, so `GET /turns/{turn_id}` tries the ring and then fa
 back to the table. Without that fallback every turn older than the ring lists in the
 history and 404s when opened.
 
+Both halves are read together by [agentpedia](agentpedia.mdx), which steps one turn
+through what it was shown, what it sent, and what it did.
+
 The third ring in the diagram is the telemetry one, and it is a different kind of
 record: `IoEvent` is *what went over the wire*, where a `RoundSnapshot` is *what the
 model was shown*. `run_agent_loop` stamps every request it makes with `turn_id` and

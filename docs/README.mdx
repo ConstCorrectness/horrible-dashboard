@@ -145,6 +145,11 @@ layout shell and how it behaves in the browser vs the desktop app:
   a selectable structure tree backed by the model's own GGUF tensor directory, so the
   shape shown is measured rather than described. Ships its own "Interpretability"
   workspace (inspector centre, agent chat docked right).
+- [Agentpedia](modules/agentpedia.mdx) — **Implemented (stepper + harness pages).**
+  One agent turn, steppable: what the model was shown, what actually went over the
+  wire, what the agent did, and what it cost, scrubbed round by round. Owns no store —
+  it joins `agent_turns`, the telemetry ring and `traj_steps`, which became possible
+  once every request carried a `turn_id`. Forks are not built yet.
 - [Lab](modules/lab.mdx) — **Implemented.** The umbrella workspace for building and
   studying models: the notebook and editor beside the model explorer, the context
   inspector, and a Hugging Face browser. Composes the other modules' panes at the

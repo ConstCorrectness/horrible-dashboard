@@ -7392,3 +7392,30 @@ kbd {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
+
+/* Agentpedia's staggered row entrance. One keyframe rather than a per-row
+   transition: the delay is what makes a list read as arriving in order, and it is
+   capped in `stagger()` so a long timeline still finishes in a quarter second.
+   `prefers-reduced-motion` collapses it to a plain fade — the order is decoration,
+   the arrival is not. */
+@keyframes agentpedia-rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  @keyframes agentpedia-rise {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+}

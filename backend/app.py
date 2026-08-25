@@ -91,6 +91,7 @@ from backend.modules.trajectories import (
     register_agent_tools as register_trajectories_tools,
 )
 from backend.modules.trajectories import router as trajectories_router
+from backend.modules.agentpedia import router as agentpedia_router
 from backend.modules.karaoke import register_agent_tools as register_karaoke_tools
 from backend.modules.karaoke import router as karaoke_router
 from backend.modules.library import router as library_router
@@ -291,6 +292,7 @@ app.include_router(research_router, prefix="/api")
 app.include_router(search_router, prefix="/api")
 app.include_router(arxiv_router, prefix="/api")
 app.include_router(interpretability_router, prefix="/api")
+app.include_router(agentpedia_router, prefix="/api")
 app.include_router(hardware_router, prefix="/api")
 app.include_router(audio_router, prefix="/api")
 app.include_router(llamacpp_router, prefix="/api")

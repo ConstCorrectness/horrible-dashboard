@@ -1,12 +1,16 @@
 import { useMemo, useState, useSyncExternalStore } from 'react';
 
 import {
+  BlockRow,
+  CompositionBar,
+  fmtTokens,
+  TokenizerBadge,
+  ToolList,
+} from '../../ContextBlocks';
+import {
   agentsIn,
   buildTurnTree,
   interpretabilityStore,
-  type ContextBlock,
-  type RoundSnapshot,
-  type ToolEntry,
   type TurnSnapshot,
 } from './store';
 
@@ -16,10 +20,6 @@ function useTurns(): TurnSnapshot[] {
 
 function useModelInfo() {
   return useSyncExternalStore(interpretabilityStore.subscribe, interpretabilityStore.getModelInfo);
-}
-
-function fmtTokens(n: number): string {
-  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 }
 
 function fmtTime(ts: number): string {
@@ -34,161 +34,6 @@ function fmtTime(ts: number): string {
  */
 function effectiveWindow(turn: TurnSnapshot, modelCtx: number | null): number | null {
   return turn.modelContextLength ?? modelCtx ?? turn.requestedNumCtx;
-}
-
-/** Stacked bar showing what the context is made of, by real token share. */
-function CompositionBar({ round }: { round: RoundSnapshot }) {
-  const segments = useMemo(() => {
-    const byKind = new Map<string, number>();
-    for (const b of round.blocks) byKind.set(b.kind, (byKind.get(b.kind) ?? 0) + b.tokens);
-    if (round.toolTokens > 0) byKind.set('tools', round.toolTokens);
-    return [...byKind.entries()].filter(([, tokens]) => tokens > 0).sort((a, b) => b[1] - a[1]);
-  }, [round]);
-
-  const total = round.totalTokens || 1;
-  return (
-    <div className="interp-composition">
-      <div className="interp-bar" role="img" aria-label="Context composition by token share">
-        {segments.map(([kind, tokens]) => (
-          <div
-            key={kind}
-            className={`interp-seg interp-kind-${kind}`}
-            style={{ width: `${(tokens / total) * 100}%` }}
-            title={`${kind}: ${tokens} tokens (${((tokens / total) * 100).toFixed(1)}%)`}
-          />
-        ))}
-      </div>
-      <div className="interp-legend">
-        {segments.map(([kind, tokens]) => (
-          <span key={kind} className="interp-legend-item">
-            <i className={`interp-swatch interp-kind-${kind}`} />
-            {kind} <b>{fmtTokens(tokens)}</b>
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function BlockRow({ block }: { block: ContextBlock }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="interp-block">
-      <button className="interp-block-head" onClick={() => setOpen((v) => !v)}>
-        <span className={`interp-chip interp-kind-${block.kind}`}>{block.label}</span>
-        <span className="interp-dim">{block.role}</span>
-        <span className="interp-tokens">{fmtTokens(block.tokens)} tok</span>
-        <span className="interp-caret">{open ? '▾' : '▸'}</span>
-      </button>
-      {open && (
-        <pre className="interp-content">
-          {block.content}
-          {block.clipped && (
-            <span className="interp-dim">
-              {`\n\n… preview clipped (${block.fullChars.toLocaleString()} chars total; ` +
-                `the token count above is for the full text)`}
-            </span>
-          )}
-        </pre>
-      )}
-    </div>
-  );
-}
-
-/** Tool schemas for the round, grouped — usually the largest single block of context. */
-function ToolList({ round }: { round: RoundSnapshot }) {
-  const groups = useMemo(() => {
-    const map = new Map<string, ToolEntry[]>();
-    for (const t of round.tools) {
-      const list = map.get(t.group) ?? [];
-      list.push(t);
-      map.set(t.group, list);
-    }
-    return [...map.entries()]
-      .map(([group, tools]) => ({
-        group,
-        tools: tools.sort((a, b) => b.tokens - a.tokens),
-        tokens: tools.reduce((sum, t) => sum + t.tokens, 0),
-      }))
-      .sort((a, b) => b.tokens - a.tokens);
-  }, [round]);
-
-  const dropped = round.toolsSelected - round.toolBudget;
-  return (
-    <div className="interp-tools">
-      <div className="interp-subhead">
-        Tools this round: <b>{round.tools.length}</b> · {fmtTokens(round.toolTokens)} tok
-        {round.activeGroups.length > 0 && (
-          <span className="interp-dim"> · groups: {round.activeGroups.join(', ')}</span>
-        )}
-      </div>
-      {round.toolsTruncated && (
-        <div className="interp-warn">
-          ⚠ Tool budget exceeded — <b>{dropped}</b> tool{dropped === 1 ? '' : 's'} dropped before
-          this prompt was sent ({round.toolsSelected} selected, budget {round.toolBudget}). The
-          model cannot call what it was never shown.
-        </div>
-      )}
-      {groups.map(({ group, tools, tokens }) => (
-        <div key={group} className="interp-tool-group">
-          <div className="interp-tool-group-head">
-            <span className="interp-chip interp-kind-tools">{group || 'core'}</span>
-            <span className="interp-dim">{tools.length} tools</span>
-            <span className="interp-tokens">{fmtTokens(tokens)} tok</span>
-          </div>
-          {tools.map((t) => (
-            <div key={t.name} className="interp-tool-row">
-              <code>{t.name}</code>
-              <span className="interp-tokens">{t.tokens}</span>
-            </div>
-          ))}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/**
- * How much the token counts can be trusted. Three states, not two: a same-family
- * tokenizer of the wrong generation (Gemma 2's vocab for a Gemma 3/4 model) yields
- * numbers that *look* precise and are quietly wrong, so it gets its own label
- * rather than being folded in with a genuine match.
- */
-function TokenizerBadge({ turn }: { turn: TurnSnapshot }) {
-  if (turn.tokenizerSource === 'family') {
-    return (
-      <span
-        className="interp-approx-chip"
-        title={
-          `Counted with ${turn.tokenizerRepo} — the right model family, but not ` +
-          'necessarily the right generation, and vocabularies change between them. ' +
-          'Treat these as close, not authoritative. Set interpretability.tokenizerRepo ' +
-          "to this model's own tokenizer repo to make them exact."
-        }
-      >
-        approx
-      </span>
-    );
-  }
-  if (!turn.exact) {
-    return (
-      <span
-        className="interp-warn-chip"
-        title={
-          'No tokenizer available for this model, so counts are chars/4 estimates. ' +
-          'Set interpretability.tokenizerRepo, or connect Hugging Face if the ' +
-          "model's tokenizer repo is gated."
-        }
-      >
-        estimated
-      </span>
-    );
-  }
-  return turn.tokenizerRepo ? (
-    <span className="interp-dim" title={`Counted with ${turn.tokenizerRepo}`}>
-      exact
-    </span>
-  ) : null;
 }
 
 /**
@@ -266,7 +111,11 @@ function TurnHeader({ turn }: { turn: TurnSnapshot }) {
         <span className="interp-model">{turn.model || modelInfo?.model || 'unknown model'}</span>
         {modelInfo?.parameters && <span className="interp-dim">{modelInfo.parameters}</span>}
         <span className="interp-dim">{turn.provider || modelInfo?.provider}</span>
-        <TokenizerBadge turn={turn} />
+        <TokenizerBadge
+          exact={turn.exact}
+          repo={turn.tokenizerRepo}
+          source={turn.tokenizerSource}
+        />
       </div>
       <div className="interp-budget">
         <div className="interp-budget-bar">

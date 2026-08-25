@@ -60,6 +60,7 @@ import {
   updatesModule,
   interpretabilityModule,
   evalsModule,
+  agentpediaModule,
   trajectoriesModule,
   labModule,
   llamacppModule,
@@ -178,6 +179,10 @@ async function boot(): Promise<void> {
     // After evals: an eval case runs through the same orchestrator loop, so a
     // trajectory is what an eval result is a grade *of*.
     registry.register(trajectoriesModule);
+    // After trajectories: agentpedia owns no store and joins that one, plus
+    // `agent_turns` and the telemetry ring. Registering it earlier would put a
+    // reader of three modules ahead of the modules it reads.
+    registry.register(agentpediaModule);
     // The Lab is where you look at a model; this is where the node runs one.
     registry.register(llamacppModule);
     registry.register(observabilityModule);
