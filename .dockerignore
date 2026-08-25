@@ -11,3 +11,11 @@ logs
 **/__pycache__
 .venv
 *.db
+
+# JVM heap/crash dumps (a Gradle OOM building apps/mobile-android drops a
+# multi-hundred-MB java_pid*.hprof here). Already in .gitignore, but Docker does
+# not read that file -- so without this they are uploaded to the builder on every
+# deploy. One of them made the share-relay build context 853MB.
+*.hprof
+hs_err_pid*.log
+replay_pid*.log
