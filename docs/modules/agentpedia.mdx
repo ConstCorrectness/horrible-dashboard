@@ -204,6 +204,9 @@ been a comfortable illusion:
 So `run_agent_loop` grew a `simulate` hook that stands in for all three, at the one
 point after the gate where a call would otherwise act. `OfflineConnection`'s fixtures
 alone would have let a replayed turn delegate, or reach a peer, a second time.
+[Evals](evals.mdx#tools-are-simulated-never-executed) had the same hole and now
+passes the same hook — its suites were only safe because they happen to exercise UI
+tools.
 
 `live: true` removes the hook — and then the fork runs on the **real browser
 connection**, so the tools genuinely run and the orchestrator's own permission gate

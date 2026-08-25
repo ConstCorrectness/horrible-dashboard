@@ -44,17 +44,25 @@ sequenceDiagram
     participant L as run_agent_loop
     participant P as provider
     participant C as EvalConnection
+    participant S as simulate hook
     R->>L: messages + tools (from _select_tools)
     L->>P: chat_stream
     P-->>L: tool_calls
-    L->>C: send_json(tool_call) — after registering pending[callId]
-    C->>C: record the call, look up the case fixture
-    C-->>L: resolve pending[callId] with the fixture
+    L->>C: send_json(approval_request) — for a gated tool
+    C-->>L: allow_once, and record that a gate fired
+    L->>S: simulate(name, args) — instead of acting
+    S->>S: record the call, look up the case fixture
+    S-->>L: the fixture, as the tool result
     L->>P: chat_stream (with the tool result)
     P-->>L: final answer
     L-->>R: answer
     R->>R: grade recorded calls against expect
 ```
+
+The connection is still the browser stand-in the loop needs — it owns
+`pending`, `pending_approvals` and the tool manifest, and it is what answers the
+gate. What it no longer does is decide the tool result: that moved to the hook, for
+the reason below.
 
 `EvalConnection` is now an alias: the class itself lives at
 `backend/modules/agent/offline_conn.py` as `OfflineConnection`, because
@@ -73,12 +81,26 @@ A tool with no fixture returns a bland `{"ok": true}` rather than an error —
 otherwise the model's next move is a reaction to a broken tool, and the case ends
 up measuring error handling.
 
-One caveat this module inherited and agentpedia had to close: fixtures cover the
-**browser** leg only. Backend tools and backend-plugin tools are resolved
-server-side and never reach a connection, so a case that calls one still runs it.
-`run_agent_loop` now takes a `simulate` hook that stands in for all three legs (see
-[agentpedia](agentpedia.mdx#nothing-acts-by-default)); a suite whose cases can reach
-an acting backend tool should pass it.
+**The connection alone did not guarantee any of that**, and for a while this module
+believed it did. A tool call can act through three legs and only the first passes
+through a connection: browser tools are relayed, but backend tools
+(`agent.delegate`, `agent.ask_peer`) and backend-plugin tools are resolved
+server-side and never touch one. A case whose model reached for `agent.delegate`
+really did delegate. It went unnoticed because the shipped suites happen to exercise
+UI tools — which is the worst shape a destructive bug can take in a measurement
+harness: it fires only on the runs where a model happens to make that choice, so the
+models that trigger it are exactly the ones whose scores you cannot trust.
+
+A run now passes `run_agent_loop`'s `simulate` hook (see
+[agentpedia](agentpedia.mdx#nothing-acts-by-default)), which stands in for all three
+legs at the single point after the permission gate where a call would otherwise act.
+The meta tools — `list_tool_groups`, `load_tools`, `use_skill` — deliberately still
+run for real: what they do is shape the catalog, and progressive disclosure is
+precisely what this module exists to measure.
+
+That also makes the hook, not the connection, the **graded record**: it is the one
+place that sees every call whichever leg it would have taken. `gated` still comes
+from the connection, because the gate fires before the hook does.
 
 ### The permission mode is forced
 

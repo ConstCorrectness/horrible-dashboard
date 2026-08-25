@@ -291,3 +291,50 @@ async def test_rounds_and_offered_tools_are_recorded(scripted):
     assert result.rounds == 3
     assert result.tools_offered > 0
     assert result.duration_ms >= 0
+
+
+@pytest.mark.anyio
+async def test_a_backend_plugin_tool_is_graded_but_never_executed(scripted):
+    """The leg the fixtures never covered.
+
+    A browser tool is relayed over the connection, so the fake connection was
+    enough to stop it. A backend-plugin tool (and `agent.delegate`, and
+    `agent.ask_peer`) is resolved server-side and never touches one — so a case
+    whose model reached for it really ran it, silently, and only on the runs where
+    the model happened to call it. `run_agent_loop`'s `simulate` hook is what closes
+    that, and it is also what makes the recorded call list complete.
+    """
+    from backend.sdk.registry import registry
+    from backend.sdk.types import AgentTool
+
+    ran: list[str] = []
+
+    async def handler(args):
+        ran.append("yes")
+        return {"ok": True}
+
+    registry.agent_tools["ui.plugin_action"] = AgentTool(
+        name="ui.plugin_action",
+        description="acts on the world",
+        handler=handler,
+        parameters={},
+        required=[],
+        group="ui",
+    )
+    try:
+        scripted([[("ui.plugin_action", {})], "done"])
+        case = EvalCase(
+            id="plugin",
+            prompt="do the thing",
+            expose=Expose(mode="explicit", preload=["ui"]),
+            expect=Expect(grade="name_only", calls=[ToolCall(name="ui.plugin_action")]),
+            fixtures={"ui.plugin_action": {"pretended": True}},
+        )
+        result = await run(case, [tool_decl("ui.noop")])
+    finally:
+        registry.agent_tools.pop("ui.plugin_action", None)
+
+    assert ran == [], "the plugin tool actually ran"
+    # Still graded: the hook is the record, so a simulated call is a call.
+    assert result.passed, result.detail
+    assert [c.name for c in result.actual] == ["ui.plugin_action"]

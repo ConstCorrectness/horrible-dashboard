@@ -27,6 +27,24 @@ result would depend on what is open), and slow. What is being graded is the
 *choice*, and the fixture is what lets the conversation continue past it so a
 multi-step case can be graded at all.
 
+**The connection is not enough to guarantee that.** A tool call can act through
+three legs and only the first passes through a connection: browser tools are
+relayed, but backend tools (`agent.delegate`, `agent.ask_peer`) and backend-plugin
+tools are resolved server-side and never touch one. So a case whose model reached
+for `agent.delegate` really did delegate, and a plugin tool in the catalog really
+ran — silently, and only on the runs where the model happened to call it, which is
+the worst shape a destructive bug can take in a measurement harness.
+
+The fix is `run_agent_loop`'s `simulate` hook, which stands in for all three legs at
+the single point after the permission gate where a call would otherwise act. The
+meta tools (`list_tool_groups`, `load_tools`, `use_skill`) deliberately still run for
+real: what they do is shape the catalog, and progressive disclosure is precisely what
+this module exists to measure.
+
+That also makes the hook, not the connection, the **graded record** — it is the one
+place that sees every call whichever leg it would have taken. `conn.gated` still
+comes from the connection, because the gate fires before the hook does.
+
 ## Why the permission mode is forced
 
 A gated tool prompts, and a prompt in a headless run either hangs or is denied —
@@ -165,6 +183,15 @@ async def run_case(
         if reasoning:
             conn.reasoning.append(reasoning)
 
+    #: Every tool call the model made, in order — the graded record. Collected here
+    #: rather than off the connection because backend and plugin tools never reach
+    #: one; see the module docstring.
+    observed: list[ToolCall] = []
+
+    async def simulate(name: str, args: dict[str, Any]) -> Any:
+        observed.append(ToolCall(name=name, arguments=args))
+        return conn.fixture_for(name)
+
     started = time.monotonic()
     answer = ""
     error = ""
@@ -185,6 +212,8 @@ async def run_case(
                 # Forced, not inherited: see the module docstring. A case must not
                 # score the permission rules of whoever happens to run it.
                 mode_override=Mode.AUTONOMOUS,
+                # Nothing acts — and not only on the leg a connection can see.
+                simulate=simulate,
             ),
             timeout=CASE_TIMEOUT_S,
         )
@@ -209,10 +238,7 @@ async def run_case(
 
     result = result_for(
         case,
-        # `OfflineConnection` records plain `CallRecord`s — it is in the agent
-        # module and must not import an evals model. The grader's shape is this
-        # module's business, so the conversion is here.
-        [ToolCall(name=c.name, arguments=c.arguments) for c in conn.calls],
+        observed,
         answer,
         rounds=rounds,
         tools_offered=offered,
