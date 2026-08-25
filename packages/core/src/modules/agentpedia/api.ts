@@ -16,7 +16,7 @@
  * trajectories module's client. An HTTP route is a public surface; another module's
  * `api.ts` is an internal.
  */
-import { apiGet } from '../../api';
+import { apiDelete, apiGet, apiPost } from '../../api';
 import type { RoundView as ShownRound } from '../../ContextBlocks';
 
 export type WireStatus = 'live' | 'aged_out' | 'unrecorded';
@@ -166,5 +166,137 @@ export function listHarnesses(limit = 100): Promise<{ harnesses: Harness[] }> {
 export function harnessTools(fingerprint: string): Promise<{ tools: ToolStat[] }> {
   return apiGet<{ tools: ToolStat[] }>(
     `/trajectories/tools?harness=${encodeURIComponent(fingerprint)}&limit=50`,
+  );
+}
+// ── Forks ────────────────────────────────────────────────────────────────────
+//
+// The one half of agentpedia that writes. `fork` runs a real model turn, so the
+// preview call exists to answer the cheap half of the question — does this
+// context rebuild cleanly, which tools does this drop — before spending one.
+
+export type ForkOp =
+  | "drop_tool"
+  | "drop_group"
+  | "set_system"
+  | "edit_message"
+  | "set_model"
+  | "set_provider"
+  | "set_temperature"
+  | "truncate_history";
+
+export interface ForkEdit {
+  op: ForkOp;
+  name?: string | null;
+  content?: string | null;
+  index?: number | null;
+  value?: number | null;
+  keep?: number | null;
+}
+
+export interface RebuildReport {
+  messages: number;
+  /** False when something was lost rebuilding the parent's context — a clipped
+   *  block, or a tool result with no call to pair against. The pane must say so:
+   *  a fork that ran a truncated prompt answers differently for a reason that is
+   *  not the edit, which is indistinguishable from a finding. */
+  exact: boolean;
+  clipped: string[];
+  restored: string[];
+  tool_calls_recovered: number;
+  unlinked_tool_results: number;
+  applied: string[];
+  /** Edits that matched nothing. Shown in red beside the fork, because "the tool I
+   *  dropped changed nothing" and "the tool name I misspelled changed nothing" are
+   *  the same sentence with the meaning removed. */
+  rejected: string[];
+}
+
+export interface ToolDrift {
+  added: string[];
+  missing: string[];
+  denied: string[];
+}
+
+export interface ForkRecord {
+  fork_turn_id: string;
+  parent_turn_id: string;
+  from_round: number;
+  created_at: number;
+  edits: ForkEdit[];
+  live: boolean;
+  status: string;
+  error: string | null;
+  answer: string;
+  model: string;
+  provider: string;
+  rebuild: RebuildReport;
+  drift: ToolDrift;
+  calls: string[];
+}
+
+export interface ForkPreview {
+  turn_id: string;
+  from_round: number;
+  messages: { role: string; content: string }[];
+  rebuild: RebuildReport;
+  drift: ToolDrift;
+  tools: string[];
+  model: string;
+  provider: string;
+  temperature: number | null;
+}
+
+export interface SideDiff {
+  turn_id: string;
+  model: string;
+  provider: string;
+  rounds: number;
+  total_tokens: number;
+  tools_offered: number;
+  calls: string[];
+  decision: string[];
+  answer: string;
+}
+
+export interface ForkDiff {
+  fork: ForkRecord;
+  a: SideDiff;
+  b: SideDiff;
+  tools_removed: string[];
+  tools_added: string[];
+  same_decision: boolean;
+  token_delta: number;
+}
+
+export interface ForkRequest {
+  turn_id: string;
+  from_round?: number;
+  edits: ForkEdit[];
+  live?: boolean;
+  fixtures?: Record<string, unknown>;
+}
+
+export function previewFork(req: ForkRequest): Promise<ForkPreview> {
+  return apiPost<ForkPreview>("/agentpedia/fork/preview", req);
+}
+
+export function runFork(req: ForkRequest): Promise<ForkRecord> {
+  return apiPost<ForkRecord>("/agentpedia/fork", req);
+}
+
+export function listForks(parent?: string): Promise<{ forks: ForkRecord[] }> {
+  const query = parent ? `?parent=${encodeURIComponent(parent)}` : "";
+  return apiGet<{ forks: ForkRecord[] }>(`/agentpedia/forks${query}`);
+}
+
+export function forkDiff(forkTurnId: string): Promise<ForkDiff> {
+  return apiGet<ForkDiff>(
+    `/agentpedia/forks/${encodeURIComponent(forkTurnId)}/diff`,
+  );
+}
+
+export function deleteFork(forkTurnId: string): Promise<{ deleted: boolean }> {
+  return apiDelete<{ deleted: boolean }>(
+    `/agentpedia/forks/${encodeURIComponent(forkTurnId)}`,
   );
 }

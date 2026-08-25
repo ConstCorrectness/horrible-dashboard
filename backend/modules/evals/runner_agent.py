@@ -15,8 +15,9 @@ its own tool list would be measuring a catalog nobody ever ships.
 `_call_frontend_tool` registers a future in `conn.pending[call_id]` and *then*
 awaits `conn.send_json`. So a connection object whose `send_json` resolves that
 future is a complete stand-in for a browser, with no monkeypatching of orchestrator
-internals and nothing to keep in sync. `EvalConnection` does exactly that, and
-records every call on the way past.
+internals and nothing to keep in sync. `OfflineConnection` does exactly that, and
+records every call on the way past — it is aliased here as `EvalConnection`, which
+is the name it earned.
 
 ## Why tools are simulated, never executed
 
@@ -42,6 +43,7 @@ import time
 import uuid
 from typing import Any
 
+from backend.modules.agent.offline_conn import OfflineConnection
 from backend.modules.evals.models import EvalCase, ToolCall
 
 logger = logging.getLogger(__name__)
@@ -53,83 +55,12 @@ logger = logging.getLogger(__name__)
 CASE_TIMEOUT_S = 300.0
 
 
-class EvalConnection:
-    """A `WsConnection` stand-in that answers tool calls from a case's fixtures.
-
-    Duck-typed rather than a subclass: `WsConnection.__init__` wants a live
-    websocket, and everything the orchestrator touches on it is here —
-    `pending`, `pending_approvals`, `agent_tools`, `send_json`.
-
-    Also the recorder. Everything the loop would have told a browser comes through
-    `send_json`, which makes this the one place that sees the tool calls, the
-    approvals, the reasoning and the answer.
-    """
-
-    def __init__(
-        self,
-        agent_tools: list[dict[str, Any]],
-        fixtures: dict[str, Any],
-        *,
-        approve: bool = True,
-    ) -> None:
-        self.pending: dict[str, asyncio.Future[dict[str, Any]]] = {}
-        self.pending_approvals: dict[str, asyncio.Future[dict[str, Any]]] = {}
-        self.agent_tools = agent_tools
-        self._fixtures = fixtures
-        self._approve = approve
-
-        #: Every tool call the model made, in order. The graded record.
-        self.calls: list[ToolCall] = []
-        #: Tools that were gated. Not a failure — worth knowing that a case only
-        #: passed because approval was automatic.
-        self.gated: list[str] = []
-        self.reasoning: list[str] = []
-        self.events: list[dict[str, Any]] = []
-
-    async def send_json(self, data: dict[str, Any]) -> None:
-        self.events.append(data)
-        if data.get("channel") != "agent":
-            return
-        event = data.get("event")
-        payload = data.get("data") or {}
-
-        if event == "tool_call":
-            name = str(payload.get("name") or "")
-            args = payload.get("args") or {}
-            self.calls.append(ToolCall(name=name, arguments=args))
-            self._resolve(
-                self.pending,
-                payload.get("callId"),
-                {"ok": True, "result": self._fixture_for(name)},
-            )
-        elif event == "approval_request":
-            self.gated.append(str(payload.get("tool") or ""))
-            self._resolve(
-                self.pending_approvals,
-                payload.get("approvalId"),
-                {"decision": "allow_once" if self._approve else "deny"},
-            )
-
-    def _fixture_for(self, name: str) -> Any:
-        """What a tool returns. A tool with no fixture returns a bland success:
-        the alternative is an error, and an error would make the model's *next*
-        move a reaction to a broken tool rather than to the task."""
-        if name in self._fixtures:
-            return self._fixtures[name]
-        return {"ok": True}
-
-    @staticmethod
-    def _resolve(
-        table: dict[str, asyncio.Future[dict[str, Any]]],
-        key: Any,
-        value: dict[str, Any],
-    ) -> None:
-        fut = table.pop(str(key), None)
-        # `done()` guards the race where the loop timed out and moved on: setting a
-        # result on a cancelled future raises, and an exception raised inside
-        # `send_json` would surface as a broken turn rather than as a slow tool.
-        if fut is not None and not fut.done():
-            fut.set_result(value)
+#: The browser stand-in. It used to be defined here; it now lives in
+#: `agent/offline_conn.py` because agentpedia's fork needs the identical object,
+#: and agentpedia importing this module's internals would break the rule that
+#: modules do not reach into each other. The name is kept because it is what the
+#: evals suite and the export path call it.
+EvalConnection = OfflineConnection
 
 
 def _tools_for_case(
@@ -278,7 +209,10 @@ async def run_case(
 
     result = result_for(
         case,
-        conn.calls,
+        # `OfflineConnection` records plain `CallRecord`s — it is in the agent
+        # module and must not import an evals model. The grader's shape is this
+        # module's business, so the conversion is here.
+        [ToolCall(name=c.name, arguments=c.arguments) for c in conn.calls],
         answer,
         rounds=rounds,
         tools_offered=offered,

@@ -91,6 +91,9 @@ from backend.modules.trajectories import (
     register_agent_tools as register_trajectories_tools,
 )
 from backend.modules.trajectories import router as trajectories_router
+from backend.modules.agentpedia import (
+    register_agent_tools as register_agentpedia_tools,
+)
 from backend.modules.agentpedia import router as agentpedia_router
 from backend.modules.karaoke import register_agent_tools as register_karaoke_tools
 from backend.modules.karaoke import router as karaoke_router
@@ -379,6 +382,11 @@ register_evals_tools()
 # free when unloaded). `search` is the continual-learning read path: the agent
 # looks up how a similar task went before.
 register_trajectories_tools()
+# Agentpedia's own tools (grouped under `agentpedia`): the agent stepping through
+# the turn it just took, and forking it to ask what it would have done without a
+# tool. `fork` is gated — a simulated fork cannot act, but it spends a real model
+# turn, and re-running your own history is a step worth seeing.
+register_agentpedia_tools()
 
 # Register the `audio` agent tools. Grouped, and backend-side because the routing
 # is server state: "put the video through my microphone" works from the ask bar

@@ -56,6 +56,12 @@ sequenceDiagram
     R->>R: grade recorded calls against expect
 ```
 
+`EvalConnection` is now an alias: the class itself lives at
+`backend/modules/agent/offline_conn.py` as `OfflineConnection`, because
+[agentpedia](agentpedia.mdx#no-second-loop)'s fork needs the identical browser
+stand-in and importing this module's internals would break the rule that modules do
+not reach into each other. One proven copy, two callers.
+
 ### Tools are simulated, never executed
 
 A case supplies `fixtures`: what each tool returns. Running the real tool would
@@ -66,6 +72,13 @@ the *choice*; the fixture is what lets a multi-step case continue past it.
 A tool with no fixture returns a bland `{"ok": true}` rather than an error —
 otherwise the model's next move is a reaction to a broken tool, and the case ends
 up measuring error handling.
+
+One caveat this module inherited and agentpedia had to close: fixtures cover the
+**browser** leg only. Backend tools and backend-plugin tools are resolved
+server-side and never reach a connection, so a case that calls one still runs it.
+`run_agent_loop` now takes a `simulate` hook that stands in for all three legs (see
+[agentpedia](agentpedia.mdx#nothing-acts-by-default)); a suite whose cases can reach
+an acting backend tool should pass it.
 
 ### The permission mode is forced
 

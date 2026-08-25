@@ -359,19 +359,13 @@ async def cancel_sweep(key: str) -> dict[str, Any]:
 def _live_agent_tools() -> list[dict[str, Any]]:
     """The richest tool manifest any connected browser has pushed.
 
-    Richest rather than first: a second window that has not finished registering
-    its panes would otherwise be able to hand the sweep a shorter catalog than the
-    one the user is actually looking at, and the same suite would score differently
-    depending on which socket answered.
+    A one-line forward to `agent.offline_conn.live_agent_tools`, which is where the
+    helper moved when agentpedia's fork needed the same answer. The name stays
+    because several call sites in this module use it.
     """
-    from backend.modules.ws import _active_connections
+    from backend.modules.agent.offline_conn import live_agent_tools
 
-    best: list[dict[str, Any]] = []
-    for conn in list(_active_connections):
-        tools = getattr(conn, "agent_tools", None) or []
-        if len(tools) > len(best):
-            best = list(tools)
-    return best
+    return live_agent_tools()
 
 
 @router.get("/targets")
