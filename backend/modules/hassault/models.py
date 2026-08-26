@@ -321,6 +321,17 @@ class LaunchNativeResponse(BaseModel):
     pid: int | None = None
     connect_args: list[str] = []
     message: str | None = None
+    #: Whether the route compiled the client before starting it, and how long
+    #: that took. Served rather than inferred from the message text, because the
+    #: pane greys its buttons for the duration and a build is the one launch that
+    #: takes minutes.
+    rebuilt: bool = False
+    build_seconds: float | None = None
+    #: The built client was older than its own source and was started anyway —
+    #: only reachable with `hassault.autoBuildNative` off. The pane says so in
+    #: place of a launch message, because this is the exact failure that reads as
+    #: "my change did not work" rather than as "an old build ran".
+    stale: bool = False
 
 
 class HitboxOut(BaseModel):

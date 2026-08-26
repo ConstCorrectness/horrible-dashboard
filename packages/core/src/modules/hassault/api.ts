@@ -263,6 +263,15 @@ export interface LaunchNativeResult {
   pid?: number;
   connect_args: string[];
   message?: string;
+  /** The route compiled the client before starting it, and how long that took.
+   * Served rather than read out of `message`: the pane is unresponsive for the
+   * duration and a build is the one launch measured in minutes. */
+  rebuilt?: boolean;
+  build_seconds?: number;
+  /** It started a build older than its own source — only reachable with
+   * `hassault.autoBuildNative` off. Worth saying loudly: this is the failure
+   * that reads as "my change did not work". */
+  stale?: boolean;
 }
 
 export function listMatches(): Promise<MatchSummary[]> {

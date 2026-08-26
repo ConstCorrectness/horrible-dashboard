@@ -1680,7 +1680,10 @@ export function HorribleAssaultPanel() {
   const launchNative = useCallback(
     async (opts: Omit<LaunchNativeOptions, 'map_name'> & { map_name?: string }) => {
       sessionRef.current?.leave();
-      setNativeStatus('Starting the native client…');
+      // Not just "starting": when the client has been edited since it was last
+      // built, this request compiles it first and does not answer for minutes.
+      // A status that only said "starting" for that long reads as a hang.
+      setNativeStatus('Starting the native client (rebuilding it if you have edited it)…');
       try {
         const res = await launchNativeFps({ map_name: mapName, max_fps: 240, ...opts });
         setNativeStatus(res.message ?? (res.launched ? 'Launched' : 'It did not start'));

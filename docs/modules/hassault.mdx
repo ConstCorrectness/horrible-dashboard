@@ -2405,6 +2405,33 @@ candidate; a named `hassault.nativeBinaryPath` still wins outright, because that
 is somebody naming the binary they mean.
 :::
 
+:::warning A build older than its own source is rebuilt, not launched
+`pick_binary` closed half of this. The other half outlived it: **the newest build
+on disk is still older than the source the moment you edit the client.** The
+launch then succeeds, the window opens, the game runs perfectly — and simply does
+not contain the change, which reads as a change that did not work rather than as
+a build that never happened.
+
+So the route now compares the binary's mtime against the newest of
+`apps/native-fps/{src/**, Cargo.toml, Cargo.lock}` and, when it is behind, runs
+`cargo build` **before** starting it — in the profile already on disk, so a
+developer iterating with debug builds is not handed a minutes-long optimised
+build every launch. A build that fails **refuses the launch** and returns
+cargo's last lines; falling back to the binary known to be stale would restore
+the exact silence this closes. `tests/` is deliberately not in that glob: a test
+edit changes nothing the binary contains.
+
+Two exemptions, for the same reason in both cases — there is nothing to be stale
+against. A named `hassault.nativeBinaryPath` is the user pointing at the build
+they mean, and a packaged install ships the binary with no crate beside it, where
+`newest_source_mtime` returns `None`.
+
+`hassault.autoBuildNative` (**on**) turns the build off. That is a choice to run
+what is on disk, not a licence to say nothing about it: the launch still happens,
+but the response carries `stale: true` and the message says in words that this
+build predates your last change.
+:::
+
 :::danger The client never inherits the backend's stdio
 A launch that reported a pid and opened nothing was not a graphics problem. The
 client was spawned with `subprocess.Popen([bin])`, inheriting this process's
@@ -3155,6 +3182,10 @@ against, and nothing to be MVP of.
   `hassault.nativeBinaryPath` — where that binary is, when it is not in the usual
   build output. Both are declared rows: the path was read by the launch route and
   named in its own error message long before it was editable anywhere.
+  `hassault.autoBuildNative` (**on**) — compile the client before launching it
+  when it is older than its own source; see
+  [the launch path](#playing-in-the-native-client) for why launching it anyway is
+  a silent failure.
 - **Agent tools** (group `hassault`): `list_maps`, `list_matches`, `host`,
   `invite`, `status`, `surroundings`, `add_bot`, `remove_bot`, `console_exec`,
   `run_macro`.

@@ -209,6 +209,18 @@ export const hassaultModule: ModuleManifest = {
       default: '',
     },
     {
+      // The launch path's guard against the silent failure that outlived the
+      // `pick_binary` fix: the newest build on disk is still older than the
+      // source the moment the client is edited, and a game that starts and runs
+      // perfectly without the change in it reads as a change that did not work.
+      key: 'hassault.autoBuildNative',
+      title: 'Rebuild the native client before launching',
+      description:
+        'When the built client is older than its own source, compile it before starting it. On means a first launch after editing the client takes as long as a cargo build; off means it starts immediately and says, on the launch itself, that it predates your change. Ignored when `hassault.nativeBinaryPath` names a binary — that is you naming the build you mean — and on an install with no crate beside the binary there is nothing to be stale against.',
+      type: 'boolean',
+      default: true,
+    },
+    {
       key: 'hassault.installPath',
       title: 'AssaultCube install path',
       description:

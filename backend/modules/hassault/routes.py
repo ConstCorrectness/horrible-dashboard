@@ -490,6 +490,103 @@ def pick_binary(custom: str, candidates: list[str]) -> str | None:
     return next((c for c in candidates if c and shutil.which(c)), None)
 
 
+#: What makes a built native client stale. `tests/` is deliberately absent: a
+#: test edit changes nothing the game runs, and rebuilding on one would charge a
+#: player minutes of `wgpu` compile for a file the binary does not contain.
+_NATIVE_SOURCE_GLOBS = ("src/**/*", "Cargo.toml", "Cargo.lock")
+
+#: A cold `cargo build --release` of this crate is minutes (it builds `wgpu`), so
+#: the ceiling is generous. It exists at all so a build that wedges — a held
+#: `target/` lock, a cargo waiting on a network registry — fails with a message
+#: instead of hanging the request forever.
+_BUILD_TIMEOUT_SECONDS = 900.0
+
+
+def newest_source_mtime(crate_root: Path) -> float | None:
+    """When the native client's source was last touched, or `None` off a checkout.
+
+    `None` is a real answer and not a failure: a packaged install ships the binary
+    with no crate beside it, and there is nothing to be stale *against* there. It
+    is the reason this returns an option rather than `0.0` — a zero would compare
+    as "the source is ancient", which is a different claim from "there is no
+    source".
+    """
+    newest: float | None = None
+    for pattern in _NATIVE_SOURCE_GLOBS:
+        for path in crate_root.glob(pattern):
+            try:
+                if not path.is_file():
+                    continue
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            if newest is None or mtime > newest:
+                newest = mtime
+    return newest
+
+
+def build_native_client(crate_root: Path, profile: str) -> tuple[bool, str]:
+    """Compile the native client, returning success and something to show.
+
+    Blocking on purpose — the caller runs it on a thread. `subprocess.run` rather
+    than asyncio's spawn because `uvicorn --reload` puts a `SelectorEventLoop`
+    under this backend on Windows, where asyncio cannot spawn a subprocess at all.
+
+    The profile is **the one already built**, not always release: a developer who
+    has been iterating with `cargo build` (debug) would otherwise be handed a
+    minutes-long optimised build they did not ask for, every time they changed a
+    line.
+    """
+    import subprocess
+
+    argv = ["cargo", "build", "--manifest-path", str(crate_root / "Cargo.toml")]
+    if profile == "release":
+        argv.insert(2, "--release")
+
+    log_path = data_dir() / "hassault" / "native-build.log"
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+
+    try:
+        proc = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=_BUILD_TIMEOUT_SECONDS,
+            cwd=str(crate_root),
+        )
+    except FileNotFoundError:
+        return False, (
+            "cargo is not on PATH, so the client cannot be rebuilt. Install Rust "
+            "(https://rustup.rs), or point 'hassault.nativeBinaryPath' at a binary "
+            "you build yourself."
+        )
+    except subprocess.TimeoutExpired:
+        return False, (
+            f"The build did not finish within {int(_BUILD_TIMEOUT_SECONDS // 60)} "
+            "minutes and was given up on."
+        )
+
+    output = (proc.stdout or "") + (proc.stderr or "")
+    try:
+        log_path.write_text(output, encoding="utf-8", errors="replace")
+    except OSError:
+        pass
+
+    if proc.returncode == 0:
+        return True, ""
+    # cargo puts the diagnosis in the last lines, and the first are "Compiling"
+    # noise for every dependency in the graph.
+    tail = "\n".join(line for line in output.strip().splitlines() if line.strip())
+    tail = "\n".join(tail.splitlines()[-6:])
+    return False, (
+        f"The native client failed to compile (cargo exited {proc.returncode}).\n"
+        f"{tail}\nFull output: {log_path}"
+    )
+
+
 def _account_id() -> str:
     """The signed-in account, or the local stand-in.
 
@@ -654,6 +751,59 @@ async def launch_native_client(
 
     bin_path = pick_binary(custom_bin, candidate_bins[1:])
 
+    # **The binary is checked against its own source before it is launched.**
+    #
+    # `pick_binary` takes the newest of the builds on disk, which closed one trap
+    # — a stale `release` preferred over a fresh `debug` — but not this one: the
+    # newest build on disk is still older than the source the moment anybody edits
+    # the client. Nothing said so. The game started, ran perfectly, and simply did
+    # not contain the change, which reads as a change that did not work rather
+    # than as a build that never happened.
+    #
+    # An explicit `hassault.nativeBinaryPath` is exempt, and so is a machine with
+    # no crate beside the binary (a packaged install): in the first somebody named
+    # the binary they mean, and in the second there is no source to be stale
+    # against.
+    crate_root = repo_root / "apps" / "native-fps"
+    rebuilt = False
+    build_seconds: float | None = None
+    stale = False
+    if not custom_bin:
+        src_mtime = newest_source_mtime(crate_root)
+        built_at = 0.0
+        if bin_path:
+            try:
+                built_at = Path(bin_path).stat().st_mtime
+            except OSError:
+                built_at = 0.0
+        if src_mtime is not None and built_at < src_mtime:
+            auto_build = bool(get_value("hassault.autoBuildNative", True))
+            if auto_build:
+                # The profile already on disk, so a debug iteration loop is not
+                # silently upgraded into an optimised build every launch.
+                profile = "debug" if bin_path and Path(bin_path).parent.name == "debug" else "release"
+                started = time.monotonic()
+                ok, detail = await asyncio.to_thread(
+                    build_native_client, crate_root, profile
+                )
+                build_seconds = round(time.monotonic() - started, 1)
+                if not ok:
+                    return LaunchNativeResponse(
+                        launched=False,
+                        connect_args=[],
+                        rebuilt=False,
+                        build_seconds=build_seconds,
+                        message=detail,
+                    )
+                rebuilt = True
+                # Re-resolved: the build just changed which binary is newest, and
+                # a first-ever build created one where `pick_binary` found none.
+                bin_path = pick_binary("", candidate_bins[1:])
+            else:
+                # Auto-build is off, so this is somebody running what is on disk on
+                # purpose — launched, but never silently.
+                stale = True
+
     # A remote room is the one combination that cannot work: the channel refuses a
     # join carrying a host and no room ("a remote match needs a room id"), and the
     # refusal would arrive inside a window that had already opened. Caught here,
@@ -782,12 +932,11 @@ async def launch_native_client(
 
         # Which build ran, and how old it is.
         #
-        # `pick_binary` already takes the newest of the candidates, so this is not
-        # guarding against a stale release being preferred — that trap is closed.
-        # It answers the question that comes *after* editing the client: "is the
-        # window I am looking at the code I just compiled?" Nothing else on this
-        # path says, and the failure it disambiguates is silent by nature — the
-        # game runs perfectly, simply without the change in it.
+        # Both stale-build traps are closed above — `pick_binary` takes the newest
+        # candidate, and a binary older than its source is rebuilt first — so this
+        # is no longer the only defence. It is the receipt: "is the window I am
+        # looking at the code I just compiled?" answered on the launch itself,
+        # because the failure it disambiguates is silent by nature.
         built = "age unknown"
         try:
             age = time.time() - Path(bin_path).stat().st_mtime
@@ -799,13 +948,24 @@ async def launch_native_client(
                 built = f"built {age / 3600:.1f}h ago"
         except OSError:
             pass
+        note = ""
+        if rebuilt:
+            note = f", rebuilt in {build_seconds:.0f}s"
+        elif stale:
+            note = (
+                " — WARNING: this build predates your latest source change, and "
+                "'hassault.autoBuildNative' is off, so it does not contain it"
+            )
         return LaunchNativeResponse(
             launched=True,
             pid=proc.pid,
             connect_args=connect_args,
+            rebuilt=rebuilt,
+            build_seconds=build_seconds,
+            stale=stale,
             message=(
                 f"Launched native FPS client (PID: {proc.pid}) "
-                f"from {Path(bin_path).parent.name}/, {built}"
+                f"from {Path(bin_path).parent.name}/, {built}{note}"
             ),
         )
     except Exception as exc:

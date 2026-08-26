@@ -21,6 +21,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app import app
+from backend.modules.hassault import routes
 
 
 class FakeProc:
@@ -264,3 +265,107 @@ def test_the_client_never_inherits_this_process_stdio(tmp_path, monkeypatch) -> 
     assert seen["stdout"] is not subprocess.DEVNULL
     assert seen["stderr"] == subprocess.STDOUT
     assert seen["stdin"] == subprocess.DEVNULL
+
+
+# --- A build older than its own source -------------------------------------
+#
+# The trap these close is the one that survived `pick_binary`: that function
+# takes the *newest build on disk*, which is still older than the source the
+# moment anybody edits the client. The launch then succeeds, the game runs
+# perfectly, and simply does not contain the change — a silent failure that
+# reads as "my change did not work" rather than "an old binary ran".
+
+
+@pytest.fixture
+def stale_build(tmp_path, monkeypatch):
+    """A checkout whose binary predates its source, with cargo stubbed out."""
+    binary = tmp_path / "hassault-native.exe"
+    binary.write_text("")
+    calls: list[tuple[str, str]] = []
+
+    monkeypatch.setenv("HORRIBLE_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(subprocess, "Popen", FakeProc)
+    monkeypatch.setattr(routes, "pick_binary", lambda custom, candidates: str(binary))
+    # Newer than the binary by an hour, whatever the developer's tree looks like.
+    monkeypatch.setattr(
+        routes, "newest_source_mtime", lambda root: binary.stat().st_mtime + 3600
+    )
+    monkeypatch.setattr(
+        routes,
+        "build_native_client",
+        lambda root, profile: (calls.append((str(root), profile)), (True, ""))[1],
+    )
+    return calls
+
+
+def settings_returning(**values):
+    return lambda key, default=None: values.get(key, default)
+
+
+def test_a_binary_older_than_its_source_is_rebuilt_first(
+    stale_build, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        "backend.modules.settings.routes.get_value", settings_returning()
+    )
+    res = TestClient(app).post(
+        "/api/hassault/launch_native", json={"map_name": "hd_pit", "mode": "train"}
+    )
+    body = res.json()
+    assert body["launched"] is True
+    assert body["rebuilt"] is True
+    assert body["stale"] is False
+    assert len(stale_build) == 1
+    # The profile already on disk — a debug iteration loop is not silently
+    # upgraded into a minutes-long optimised build on every launch.
+    assert stale_build[0][1] == "release"
+
+
+def test_a_failed_build_refuses_to_launch_the_old_one(stale_build, monkeypatch) -> None:
+    """The whole point: never fall back to the binary that is known to be stale."""
+    monkeypatch.setattr(
+        "backend.modules.settings.routes.get_value", settings_returning()
+    )
+    monkeypatch.setattr(
+        routes, "build_native_client", lambda root, profile: (False, "error[E0277]: no")
+    )
+    res = TestClient(app).post(
+        "/api/hassault/launch_native", json={"map_name": "hd_pit", "mode": "train"}
+    )
+    body = res.json()
+    assert body["launched"] is False
+    assert "E0277" in (body["message"] or "")
+
+
+def test_auto_build_off_launches_but_says_it_is_stale(stale_build, monkeypatch) -> None:
+    """Turning the build off is a choice to run what is on disk — not a licence
+    to say nothing about which build that is."""
+    monkeypatch.setattr(
+        "backend.modules.settings.routes.get_value",
+        settings_returning(**{"hassault.autoBuildNative": False}),
+    )
+    res = TestClient(app).post(
+        "/api/hassault/launch_native", json={"map_name": "hd_pit", "mode": "train"}
+    )
+    body = res.json()
+    assert body["launched"] is True
+    assert body["stale"] is True
+    assert body["rebuilt"] is False
+    assert stale_build == []
+    assert "predates" in (body["message"] or "")
+
+
+def test_a_named_binary_is_never_rebuilt(stale_build, tmp_path, monkeypatch) -> None:
+    """`hassault.nativeBinaryPath` is somebody naming the build they mean; a
+    crate in this checkout says nothing about it."""
+    monkeypatch.setattr(
+        "backend.modules.settings.routes.get_value",
+        settings_returning(
+            **{"hassault.nativeBinaryPath": str(tmp_path / "hassault-native.exe")}
+        ),
+    )
+    res = TestClient(app).post(
+        "/api/hassault/launch_native", json={"map_name": "hd_pit", "mode": "train"}
+    )
+    assert res.json()["launched"] is True
+    assert stale_build == []
