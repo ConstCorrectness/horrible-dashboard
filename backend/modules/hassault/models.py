@@ -334,6 +334,42 @@ class LaunchNativeResponse(BaseModel):
     stale: bool = False
 
 
+class ClientInstallRequest(BaseModel):
+    """Which client build to download. Empty means this node's own version."""
+
+    version: str = ""
+
+
+class ClientRemoveRequest(BaseModel):
+    version: str = ""
+
+
+class NativeClientStatus(BaseModel):
+    """Where the native client would come from if it were launched right now.
+
+    `source` is the whole point of this route: three tiers resolve the binary and
+    which one won is invisible from the outside, so a developer whose `target/`
+    build is being used and a player running a download look identical until
+    something behaves differently.
+    """
+
+    #: `setting`, `build`, `download`, or `none`.
+    source: str
+    binary: str | None = None
+    #: This node's version — the release a download is taken from.
+    version: str
+    #: A client is installed under the data dir for this version.
+    installed: bool = False
+    #: Whether GitHub published a digest for the asset that was installed. False on
+    #: an install that could not be verified, and meaningless when `installed` is
+    #: False — the same honesty `binaries.Install` carries.
+    verified: bool = False
+    installed_size_bytes: int | None = None
+    #: A checkout is present, so building is an option and a download is a
+    #: convenience rather than the only route.
+    has_crate: bool = False
+
+
 class HitboxOut(BaseModel):
     """The body a shot is resolved against, served so no client holds a copy.
 

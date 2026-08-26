@@ -247,6 +247,26 @@ pub struct SelfState {
     /// older than the field sends none, and replaying on the local velocity is
     /// the best guess available then — it is only *wrong* to prefer it when the
     /// authoritative number is right there.
+    /// What we are carrying, keyed by grenade id. Private, like `ammo`.
+    #[serde(default)]
+    pub nades: std::collections::HashMap<String, i32>,
+    /// How blind a flashbang has left **us**, 0..1.
+    ///
+    /// Resolved per player on the server, because it depends on where we were
+    /// looking and whether a wall was in the way. A client that computed its own
+    /// would make not being blinded a setting.
+    #[serde(default)]
+    pub flash: f32,
+    /// Enemy ids our team can currently see, for the radar.
+    ///
+    /// Teammates are deliberately *not* in this list — they are always shown, so
+    /// saying so every tick would be a per-player id list that never changes.
+    /// Which enemies appear is `MatchRoom.spotted_by`, resolved on the server
+    /// because only the server holds the two things the answer depends on: the
+    /// level's geometry and the smoke standing in it. A client that decided for
+    /// itself would be a wall hack with extra steps.
+    #[serde(default)]
+    pub spotted: Vec<String>,
     #[serde(rename = "move", default)]
     pub movement: Option<MoveState>,
 }
@@ -395,6 +415,68 @@ pub struct Snapshot {
     /// these and nothing else.
     #[serde(default)]
     pub fx: Vec<Fx>,
+    /// Grenades in the air. **Public**, unlike the noise envelope: a grenade is
+    /// a thing on everybody's screen, and hiding it would make the one cue that
+    /// lets you leave a room a matter of who was looking.
+    #[serde(default)]
+    pub nades: Vec<NadeRow>,
+    /// Smoke and fire standing in a place.
+    #[serde(default)]
+    pub zones: Vec<ZoneRow>,
+}
+
+/// A grenade in the air.
+///
+/// Every field here is the server's. Nothing in this client simulates the arc,
+/// predicts the bounce or decides the fuse — the browser makes the same promise
+/// in `nades.ts`, and for the same reason: a client-side arc is a second
+/// implementation of the bounce whose only job is to occasionally disagree with
+/// the first.
+#[derive(Debug, Deserialize, Clone, Default)]
+#[allow(dead_code)]
+pub struct NadeRow {
+    #[serde(default)]
+    pub id: String,
+    /// `he` | `flash` | `smoke` | `fire`.
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub owner: String,
+    #[serde(default)]
+    pub team: i32,
+    #[serde(default)]
+    pub x: f32,
+    #[serde(default)]
+    pub y: f32,
+    #[serde(default)]
+    pub z: f32,
+    /// Seconds of fuse left, for the tick that gets louder as it runs out.
+    #[serde(default)]
+    pub fuse: f32,
+}
+
+/// A smoke cloud or a patch of fire: an effect that persists in a place.
+#[derive(Debug, Deserialize, Clone, Default)]
+#[allow(dead_code)]
+pub struct ZoneRow {
+    #[serde(default)]
+    pub id: String,
+    /// `smoke` | `fire`.
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub x: f32,
+    #[serde(default)]
+    pub y: f32,
+    #[serde(default)]
+    pub z: f32,
+    #[serde(default)]
+    pub r: f32,
+    /// Seconds left, so a cloud can thin as it dies rather than vanishing.
+    #[serde(default)]
+    pub left: f32,
+    #[serde(default)]
+    pub duration: f32,
 }
 
 /// The server's answer to a `ping`.

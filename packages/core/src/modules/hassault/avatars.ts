@@ -10,7 +10,7 @@
 import type * as THREE from 'three';
 
 import { currentHitbox } from './hitbox';
-import { CharacterAnimator, CharacterModel } from './models';
+import { CharacterAnimator, CharacterModel, loadOperator, type OperatorAsset } from './models';
 import type { PlayerRow } from './net';
 
 /**
@@ -48,10 +48,40 @@ export class AvatarPool {
   private hitboxes = new Map<string, Hitbox>();
   private showHitboxes = false;
 
+  /**
+   * The operator GLB, once it has arrived.
+   *
+   * Avatars cannot be built before it does, so `sync` draws none until it
+   * resolves and then picks up on the next frame. A match that starts while the
+   * model is still downloading is missing its bodies for a moment rather than
+   * throwing — and hitboxes, which need no asset, keep drawing throughout.
+   */
+  private asset: OperatorAsset | null = null;
+  private assetFailed = false;
+
   constructor(
     private readonly three: typeof THREE,
     private readonly scene: THREE.Scene,
-  ) {}
+  ) {
+    loadOperator()
+      .then((asset) => {
+        this.asset = asset;
+      })
+      .catch((err) => {
+        this.assetFailed = true;
+        console.error('hassault: operator model failed to load; players will not be drawn', err);
+      });
+  }
+
+  /** Whether the operator model is in hand. Surfaced for the boot overlay. */
+  get ready(): boolean {
+    return this.asset !== null;
+  }
+
+  /** Whether the model gave up loading, so a caller can say so rather than wait. */
+  get failed(): boolean {
+    return this.assetFailed;
+  }
 
   /**
    * Draw (or stop drawing) the exact volume a shot is resolved against.
@@ -126,19 +156,16 @@ export class AvatarPool {
     }
   }
 
-  private create(row: PlayerRow): Avatar {
-    const model = new CharacterModel(this.three, row.team, row.name);
-    const animator = new CharacterAnimator(model);
+  private create(row: PlayerRow, asset: OperatorAsset): Avatar {
+    // Meshes receive shadow but never cast: the scene's shadow map is rendered
+    // once per map and holds static world geometry only (see
+    // `HorribleAssaultPanel`), so a casting avatar would leave its shadow
+    // standing where it used to be — whereas *receiving* against a static map is
+    // exact, and is what stops a player crossing a shaded doorway staying lit
+    // like a cutout. `instantiateOperator` sets the flag as it walks the clone.
+    const model = new CharacterModel(this.three, asset, row.team, row.name);
+    const animator = new CharacterAnimator(this.three, model, asset);
     const group = model.rootGroup;
-    // Receives shadow, never casts. The scene's shadow map is rendered once per
-    // map and holds static world geometry only (see `HorribleAssaultPanel`), so
-    // a casting avatar would leave its shadow standing where it used to be —
-    // whereas *receiving* against a static map is exact, and is what stops a
-    // player crossing a shaded doorway staying lit like a cutout.
-    group.traverse((obj) => {
-      const mesh = obj as THREE.Mesh;
-      if (mesh.isMesh) mesh.receiveShadow = true;
-    });
     this.scene.add(group);
 
     return {
@@ -147,6 +174,7 @@ export class AvatarPool {
       animator,
       dispose: () => {
         this.scene.remove(group);
+        animator.dispose();
         model.dispose();
       },
     };
@@ -154,17 +182,21 @@ export class AvatarPool {
 
   sync(rows: PlayerRow[], dt = 0.016): void {
     const seen = new Set<string>();
+    const asset = this.asset;
     for (const row of rows) {
       seen.add(row.id);
+      if (!asset) continue;
+
       let avatar = this.avatars.get(row.id);
       if (!avatar) {
-        avatar = this.create(row);
+        avatar = this.create(row, asset);
         this.avatars.set(row.id, avatar);
       }
 
-      // Hide or show
-      avatar.group.visible = row.alive !== false;
-      if (!avatar.group.visible) continue;
+      // A dead player stays drawn so the death animation can play out. The rig
+      // this replaced had no death clip to run, so hiding the body on the frame
+      // it died was all there was; now hiding it would cut the kill short.
+      avatar.group.visible = true;
 
       // Position in Three.js coordinates: Cube (x, y, height) -> Three (x, height, z)
       avatar.group.position.set(row.x, row.z, row.y);
@@ -172,18 +204,8 @@ export class AvatarPool {
       // Facing yaw: Three's default forward is -Z
       avatar.group.rotation.y = -row.yaw - Math.PI / 2;
 
-      // Update skeletal animation engine
+      // Clip selection, crossfades, aim pitch, weapon and stale fade.
       avatar.animator.update(dt, row);
-
-      // Lagging / stale player translucency
-      avatar.group.traverse((obj) => {
-        const mesh = obj as THREE.Mesh;
-        const material = mesh.material as THREE.Material | undefined;
-        if (material && 'opacity' in material) {
-          material.transparent = true;
-          material.opacity = row.stale ? 0.35 : 1;
-        }
-      });
     }
 
     for (const [id, avatar] of this.avatars) {
@@ -193,6 +215,18 @@ export class AvatarPool {
     }
 
     if (this.showHitboxes) this.syncHitboxes(rows, seen);
+  }
+
+  /**
+   * A shot left this player's weapon.
+   *
+   * Driven from the snapshot's `fx`, which is the only place a client learns
+   * that somebody else fired — `PlayerRow` carries no trigger state, because a
+   * shot is an event and a row is a position. Silently ignores an id with no
+   * avatar: our own shots arrive here too and we do not draw ourselves.
+   */
+  fired(id: string): void {
+    this.avatars.get(id)?.animator.triggerRecoil();
   }
 
   dispose(): void {

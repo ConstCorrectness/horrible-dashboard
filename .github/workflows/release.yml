@@ -110,6 +110,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # The backend the app ships. Built before `tauri-action` because it lands in
+      # `src-tauri/backend-runtime`, which `bundle.resources` picks up — run it after,
+      # and the installer is built around an empty directory and every packaged app
+      # reports "no backend found". The step is ~1 GB of interpreter and wheels, which
+      # is what makes the app work offline on a machine with no Python.
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Build the bundled backend runtime
+        run: node scripts/build-backend-runtime.mjs
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -132,14 +143,105 @@ jobs:
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }}
 
+  # The hassault native client. A separate job from `build` on purpose: that one is
+  # `tauri-action` end to end, while this crate needs its own toolchain targets and a
+  # completely different set of Linux system libraries — winit/wgpu/cpal want X11,
+  # Wayland and ALSA headers, not webkit and gtk.
+  #
+  # These assets are **not** in the signed updater manifest. They are fetched by the
+  # backend (`backend/modules/hassault/client_install.py`), verified against the
+  # sha256 GitHub publishes for the asset, and installed under `$HORRIBLE_DATA_DIR` —
+  # which an update is never allowed to touch.
+  build-native:
+    needs: create-release
+    strategy:
+      # Same reasoning as `build`: a macOS failure must not throw away a finished
+      # Windows client. A player on the platform that did build gets their client.
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            target: ''
+            binary: hassault-native.exe
+            asset: hassault-native-win-x64.exe
+          - platform: ubuntu-22.04
+            target: ''
+            binary: hassault-native
+            asset: hassault-native-linux-x64
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            binary: hassault-native
+            asset: hassault-native-macos-x64
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            binary: hassault-native
+            asset: hassault-native-macos-arm64
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/native-fps
+
+      # winit needs X11 + Wayland, cpal needs ALSA. Nothing here overlaps with the
+      # webkit/gtk set the Tauri job installs, which is why the two jobs cannot share
+      # a step: a missing header here fails the link with an error naming a C library,
+      # not a Rust crate.
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxkbcommon-dev libxcursor-dev \
+            libxi-dev libxrandr-dev libwayland-dev libasound2-dev
+
+      - name: Build the client
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARGS=""
+          if [ -n "${{ matrix.target }}" ]; then ARGS="--target ${{ matrix.target }}"; fi
+          cargo build --release --manifest-path apps/native-fps/Cargo.toml $ARGS
+
+      # The asset name is a contract with `client_install.asset_name`, which computes
+      # it rather than matching loosely — these are names we control, so a rename here
+      # should be a clear miss on the client rather than a wrong download.
+      # `backend/tests/test_hassault_client_install.py` reads this file and pins it.
+      - name: Upload the client to the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [ -n "${{ matrix.target }}" ]; then
+            BUILT="apps/native-fps/target/${{ matrix.target }}/release/${{ matrix.binary }}"
+          else
+            BUILT="apps/native-fps/target/release/${{ matrix.binary }}"
+          fi
+          cp "$BUILT" "${{ matrix.asset }}"
+          gh release upload "$TAG" "${{ matrix.asset }}" --clobber
+
   # `tauri-action` writes `latest.json` onto the release it just built, whose tag
   # moves with every version. The app reads from a *fixed* tag instead (see
   # MANIFEST_BASE in updater.rs), so the finished manifest is copied there under
   # the channel's filename once every platform has uploaded its share — a manifest
   # published before the last platform finishes would offer an update that 404s
   # on the platform still building.
+  # `needs` both builds: a manifest is what makes a release reachable, and a
+  # release reachable before its client assets exist is one where every install
+  # button answers "publishes no client for your platform".
   publish-manifest:
-    needs: build
+    needs: [build, build-native]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

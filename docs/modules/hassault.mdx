@@ -2033,6 +2033,15 @@ reshaping the roster of a match you are only visiting.
 
 ## The native client (Rust + `wgpu`)
 
+:::info Two clients, one game
+This module has **two** clients that must agree — this one and the browser pane —
+and keeping them in step is its own concern. See
+[HorribleAssault's two clients](../architecture/hassault-two-clients.mdx) for
+what is duplicated between them, which duplications are pinned by a shared
+fixture and which are maintained by hand, what the native client still lacks, and
+the checklist to walk when adding a feature to either.
+:::
+
 The browser client is the game. This is a second one, native, for the half of a
 shooter a browser cannot give you: raw mouse input rather than accumulated cursor
 deltas, an uncapped present mode, and no compositor between the frame and the
@@ -2383,13 +2392,55 @@ picker, the server browser, friends and invites, settings and controls, the
 post-match card, and watching.
 
 Turning the setting off plays in the pane instead. That path is kept rather than
-deleted for two reasons: it is the fallback while the native client has not been
-built (`cargo build --release`), and the pane is one of the **three
-implementations of the movement rules** that `physics-vectors.json` pins — a
-client nobody can run is a client that drifts.
+deleted for two reasons: it is the fallback while no native client has been
+resolved, and the pane is one of the **three implementations of the movement
+rules** that `physics-vectors.json` pins — a client nobody can run is a client
+that drifts.
 
-`hassault.nativeBinaryPath` says where the binary is when it is not in the usual
-build output.
+#### Where the binary comes from: three tiers
+
+1. **`hassault.nativeBinaryPath`** — somebody naming the binary they mean.
+2. **A local build** under `apps/native-fps/target/**`, newest wins
+   (`_local_client_candidates` + `pick_binary`), rebuilt from source when stale.
+3. **A downloaded client**, fetched from the GitHub release matching this app's
+   version into `$HORRIBLE_DATA_DIR/hassault/bin/<version>/` — the **Install**
+   button in the game's main menu, or `POST /api/hassault/client/install`.
+
+Tier 3 exists because `hassault.nativeClient` is on by default, which made the
+way into the game a Rust toolchain: the launch route's only answer to a missing
+binary was `cargo build --release`, which is not an instruction a player can
+follow. It is a **download** rather than something bundled in the installer for
+the same reason llama.cpp builds are — and for one more: the desktop shell does
+not package the backend yet (`apps/desktop/src-tauri/src/backend.rs`), so a
+client bundled into the installer today would sit beside an app with no route to
+launch it. See [releases](../architecture/releases.mdx).
+
+:::warning Tier 3 must never compete on mtime
+The download is deliberately **not** another entry in `pick_binary`'s candidate
+list, and the reason is the warning directly below this one. `pick_binary` takes
+the *newest* build on disk — the right rule among build outputs, and exactly the
+wrong one here: a client downloaded today beats a developer's `target/debug` from
+an hour ago, so the first launch after an install would silently run the release
+instead of the edit under test. That is the same class of bug `pick_binary` was
+written to end, arriving through a different door.
+
+So `launch_native` resolves tiers 1–2 first and only *then* looks in the data dir
+(`client_install.installed_binary()`). A checkout's own build always wins. The
+downloaded client is also exempt from the staleness rebuild: it is not a build
+output and has no source to be stale against, so without that exemption a
+checkout with a cleaned `target/` would answer an install by starting a surprise
+`cargo build` — minutes, on the machine least likely to have a toolchain at all.
+`backend/tests/test_hassault_client_install.py` pins both halves.
+:::
+
+The install verifies the sha256 GitHub publishes for the asset; a mismatch aborts
+and removes the whole directory (a half-downloaded binary that is launched anyway
+is worse than no binary, and the launch route cannot tell them apart by looking).
+An asset GitHub publishes no digest for installs as `verified: false` rather than
+dressing a self-computed hash up as verification — the same honesty as
+[`llamacpp`'s installs](llamacpp.mdx). `GET /api/hassault/client/status` reports
+which tier would answer, which is the only thing that distinguishes a developer
+running their own build from a player running a download.
 
 Quick Play does not branch twice: it either launches a `join` at the match it
 found, or calls `host`, which decides for itself what hosting means.
@@ -3407,7 +3458,7 @@ hAssault supports two client execution targets that speak the exact same backend
    - Built in Rust using `wgpu` (DirectX 12 / Vulkan / Metal), `winit`, and `cpal`.
    - Runs as a standalone external OS window for maximum performance and ultra-low input latency.
    - Shares the same authoritative `/ws` wire, collision hitboxes, and physics models.
-   - Renders articulated operator models with multi-part joint rigs, 3D weapon props, procedural walk/run cycles, and crouch compression.
+   - Renders the **same skinned operator GLB the browser client does**, GPU-skinned, with the 23 Mixamo clips and procedural weapon props. See [The operator in the native client](#the-operator-in-the-native-client).
    - Includes in-game CS:GO-style NetGraph HUD (FPS, Ping, Loss, Variance) toggled with `F3`.
 
 ## The Developer Console and Macro System
@@ -3562,65 +3613,316 @@ The console is fully exposed to AI pair-programming agents via two structured to
 
 ---
 
-## Articulated Character Models, Skeletal Animations & Skin System
+## The operator: a skinned character, and 23 Mixamo clips
 
-`packages/core/src/modules/hassault/models/*` + `packages/core/src/modules/hassault/avatars.ts`.
+`packages/core/src/modules/hassault/models/*` +
+`packages/core/src/modules/hassault/avatars.ts`, built from
+`assets/horribleAssault/` by `scripts/build_hassault_character.mjs`
+(`pnpm build:hassault-character`).
 
-Remote players and AI bots are rendered using full-featured articulated humanoid operator models
-driven by a 60fps procedural skeletal animation engine. This replaces placeholder capsules
-with expressive, tactical 3D characters while guaranteeing **100% competitive hitbox invariance**.
+Remote players and bots are a **rigged, skinned character** playing recorded
+animation clips. This replaced a rig assembled in code from 48 box primitives
+parented into hand-written joint groups, whose motion was computed every frame in
+trigonometry — the walk cycle was literally `Math.sin(walkPhase)` driving thigh
+rotations.
 
-### Humanoid Joint Hierarchy & Weapon Rig
+That rig could be _posed_ but never _deformed_: each limb was a rigid box
+pivoting about a `Group`, with no vertex weights, so an elbow could bend but no
+surface bent with it. It is also why the clips could not simply be dropped in —
+a Mixamo clip addresses `mixamorig:LeftForeArm`, and there was nothing of that
+name to bind to.
 
-Each character is constructed from optimized procedural geometric primitives arranged in a hierarchical bone tree:
+### The build is the interesting half
 
+The asset is one GLB — `apps/web/public/hassault-operator.glb`, 7.9 MB, 30k
+triangles, 23 clips — so a match costs one fetch however many players are in it,
+and every clip arrives already bound to the skeleton that renders it. Four
+things the build script has to get right, each of which fails **silently**:
+
+- **Units.** Mixamo exports centimetres and the world is in cubes. The character
+  is measured and scaled to `DEFAULT_HITBOX.standingHeight`, on the _root node_
+  rather than on the position tracks, so bone-local translations inherit it and
+  clip data is never rewritten.
+- **Root motion.** A clip downloaded without Mixamo's "In Place" box walks the
+  hips across the floor. The server owns position here, so that translation
+  fights it and the body skates away from where it is. Horizontal hip movement
+  is zeroed; the vertical component — bob, and the rise of a jump — is kept,
+  because that belongs to the animation.
+- **One skeleton, not nine.** `FBXLoader` gives each skinned mesh its own `Bone`
+  objects even when the FBX describes a single skeleton, so the character
+  arrives as nine meshes bound to nine partial copies — 87 bone objects for 34
+  distinct names. Both the exporter and the runtime mixer resolve a track's bone
+  by name through `PropertyBinding.findNode`, which returns the **first
+  depth-first match**, so the clips drive one copy and eight meshes are bound to
+  copies nothing animates. Untreated, the shirt walks while the body, head and
+  boots stand in a T-pose. Every skin is rebound onto that same first match, and
+  bind poses are compared rather than assumed — a duplicate sitting elsewhere in
+  the hierarchy would deform the mesh instead of animating it.
+- **Alpha.** glTF has no alpha-map slot, so an FBX `map_d` reaches the exporter
+  as an `alphaMap` it drops. Opacity is folded into the base colour's alpha
+  channel and the mode is _measured_: four of the seven maps are solid white and
+  become `OPAQUE`, the body's cutout mask becomes `MASK` (it is what stops bare
+  torso poking through clothing), and genuinely translucent eyewear and shoes
+  stay `BLEND`. `FBXLoader` marks all seven `transparent`, which would have cost
+  seven depth-sorted draws per player for nothing.
+
+Textures are downscaled and re-encoded once by sharp on the way through — 33.9 MB
+of PNG becomes 2.9 MB of webp at 1024px — and the FBX-to-glTF V-axis flip is
+baked into the pixels rather than left to the exporter's canvas transform.
+
+### Choosing a clip
+
+`models/clips.ts` is deliberately three-free and side-effect-free, the same way
+`world.ts` and `player.ts` are: picking a clip is a decision about game state, so
+it is unit tested headless rather than eyeballed in a match. A wrong clip is not
+a crash — it is an enemy who appears to walk forward while retreating.
+
+Velocity is projected onto the player's own facing, and the dominant axis picks
+the clip rather than blending two: two walk cycles at half weight each land both
+feet in the wrong place, whereas one cycle played whole keeps its foot contacts.
+Speed is smoothed, and there is an idle floor (`IDLE_SPEED`), because
+interpolated remote positions jitter by a fraction of a cube at rest and without
+one that jitter drives the walk cycle — an idle enemy pacing on the spot.
+
+Death and airborne are checked before direction, because both override it
+entirely: a player killed mid-strafe is dying, not strafing. A dead player now
+stays drawn so the death clip can play out; the old rig had no death animation
+to run, so hiding the body on the frame it died was all there was.
+
+### Two things a clip cannot know
+
+Both are applied **after** `mixer.update()`, never before — `AnimationMixer`
+overwrites bone transforms wholesale every update, so anything set beforehand is
+discarded without warning.
+
+- **Aim pitch.** Every Mixamo clip looks at the horizon, so without this an enemy
+  firing down from a balcony appears to be aiming straight ahead, which misreads
+  their attention entirely. Spread across spine, chest and head — all of it in
+  the neck snaps the head off the shoulders — and applied as a delta on the posed
+  rotation so the clip's own spine motion survives.
+- **Upper-body actions.** Firing and reloading have to layer over whatever the
+  legs are doing. `AnimationMixer` blends overlapping actions by weighted
+  _average_ rather than letting one win, so a fire clip played over a walk comes
+  out as a half-shrug. The layering therefore works by making the track sets
+  **disjoint**: the action clip is filtered to the arms, chest and head, and
+  neither layer has an opinion about the other's bones.
+
+Firing is driven from the snapshot's `fx`, which is the only place a client
+learns somebody else pulled a trigger — `PlayerRow` carries no trigger state,
+because a shot is an event and a row is a position.
+
+### Per player, not per asset
+
+Two things are cloned rather than shared, and both are silent when missed:
+
+- **`SkeletonUtils.clone`, never `Object3D.clone`.** A plain clone copies the
+  mesh and the bones but leaves every copy's `SkinnedMesh` bound to the
+  _original_ skeleton, so all eight players in a match share one pose and animate
+  in lockstep.
+- **Materials.** The GLB's materials are shared across every clone, so the
+  stale-player fade — which sets `opacity` on whatever material it finds — would
+  fade every player on the server the moment one of them lagged. Restoring a
+  fade returns each material to its _own_ blend mode rather than to opaque, or
+  the measured `MASK`/`BLEND` classification above would be undone on recovery.
+
+Geometry stays shared and is never disposed per player; freeing it with one
+avatar would blank every other body on the field.
+
+### The operator in the native client
+
+`apps/native-fps/src/{character,clips,animator,characters_gpu,held}.rs` +
+`src/skin.wgsl`.
+
+The native client draws the **same GLB**, and for a while it did not: it kept the
+box rig above long after the browser had replaced it, so the two clients showed
+different games. Its walk cycle was `(x * 3.5 + y * 3.5).sin()` — a function of
+_position_, not speed, so a player strafing on the spot animated at full stride
+and a player sprinting along a wall of constant `x + y` stood still.
+
+The asset is **compiled into the binary** (`include_bytes!`). Every other read
+this client makes goes to the node over HTTP because the server owns the numbers;
+a character is not a number, and fetching it would make the client refuse to draw
+players whenever the web layout's static directory was not where it expected.
+Same rule as the bundled maps: our content ships, AssaultCube's never does.
+
+Four things differ from the browser, all forced:
+
+- **Skinning is on the GPU.** The obvious port keeps building vertices on the CPU
+  each frame like every other mesh here. It does not survive the asset: 90,093
+  vertices per operator is ~720k to transform *and re-upload* every frame at
+  eight players, around 26 MB/frame across the bus to avoid writing one shader.
+  The geometry is uploaded once; what changes per frame is 34 matrices per player,
+  in a storage buffer selected by a dynamic offset.
+- **`EXT_texture_webp` is folded away before parsing.** The operator's fourteen
+  maps are webp, which is not a core glTF format, so the exporter declares the
+  extension as *required* — and a conforming parser must refuse a file whose
+  required extensions it does not implement. `normalise_glb` promotes each
+  texture's webp source to the core `source` field and drops the requirement, in
+  memory. Deliberately narrow: any other required extension is still refused,
+  because silently stripping requirements renders a file wrong instead of failing
+  to render it.
+- **`JOINTS_0` is remapped per skin.** Each of the nine primitives indexes into
+  *its own* skin's joint list (lengths 1, 24, 18, 1, 3, 8, 10, 21, 1), and the
+  union is one 34-bone rig. Uploaded unremapped, the shoes bind to the spine's
+  matrices — no error, the character just turns inside out.
+- **No back-face culling on the character**, unlike the world. The mesher can cull
+  because it emits every surface once facing the space you can stand in; a
+  character's kit is single-sided sheets — straps, pouch flaps, the cut edges of a
+  vest — and culling them makes a limb vanish when the camera crosses its plane.
+
+Two more that produce no error at all:
+
+- **Global transforms are computed for every node, not just the joints.** The
+  build script's scale-to-5.2-cubes lands *above* the armature, on a node that is
+  not itself a joint, so walking only the joint hierarchy silently yields a
+  character of the wrong size — and wrong size means the drawn body disagrees with
+  the capsule a shot is resolved against. `character.rs` has a test asserting the
+  bind pose is 5.2 cubes tall for exactly this reason.
+- **The rig's internal unit is ~1/35th of a cube.** Mixamo authors in centimetres,
+  so a bone's world matrix carries a scale of 0.0285 and anything parented to it
+  inherits it. A weapon prop stated in cubes therefore renders 35× too small — a
+  sub-pixel speck, and the character simply looks empty-handed. `held.rs` takes
+  the hand's position and orientation and **drops its scale**, stating the weapon
+  in the units it is actually measured in.
+
+One deliberate omission: **no stale fade.** The browser dims a player whose
+updates have stopped arriving; the native client has no equivalent notion of a
+stale row, and inventing one in the animator would put a question that belongs to
+`interp.rs` in the wrong module.
+
+Clip selection is duplicated in `clips.rs`, and the duplication is made safe the
+way the physics is: both clients replay
+`packages/core/src/modules/hassault/__tests__/clip-vectors.json`. The fixture
+pins **agreement**; each side's own unit tests pin correctness. It covers the
+`crouch > 0.5` and `speed > IDLE_SPEED` boundaries, the strafe-dominance
+tie-break, and the three ways glTF export writes Mixamo's bone prefix.
+
+#### Lighting, and why the two clients stopped matching
+
+`apps/native-fps/src/{lighting.wgsl.inc,detail.rs}`.
+
+Porting the character exposed a wider divergence: the same map rendered in the
+two clients did not look like the same game. The native side lit everything with
+a **single hardcoded direction over a flat 0.55 ambient floor**, with no tone
+curve and no surface detail, so every surface in every map came out at nearly the
+same value — a pale, flat world the browser never had.
+
+It is **not** a colour-space bug, which is the first thing it looks like. Both
+clients write linear values to an sRGB target and let the GPU encode on write,
+which is correct and always was. What the native side was missing was *shape*:
+
+- **The browser's light rig**, ported verbatim — hemisphere (cool sky, warm
+  ground) plus a warm sun and a cool fill from behind. The fill is what stops a
+  surface facing away from the sun reading as a hole rather than as a wall in
+  shade.
+- **Lambert's own normalisation.** three's `MeshLambertMaterial` shades as
+  `albedo / PI * irradiance`. Leaving the divide out is not a subtle exposure
+  difference once a tone curve is in front of it: ACES compresses hard above 1.0,
+  so an over-bright albedo lands in the shoulder, the *light's* colour starts to
+  dominate the surface's, and a muted tint comes out as saturated teal and hot
+  pink. It reads as the palette being wrong rather than the exposure.
+- **ACES tone mapping** at the browser's 1.15 exposure. The sun plus a hemisphere
+  light puts lit floors above 1.0, and clipping flattens everything past that
+  into the same white — exactly where a bright surface loses the grain.
+- **The surface grain** (`detail.rs`, a port of `surfaces.ts`): one small
+  seamless tile of value noise and cube seams, generated at runtime from nothing
+  and used as a multiplier over the vertex tints. Its UVs are in **cube units**,
+  so its edge seam draws the cube lattice the map is actually built on. The
+  native side derives those UVs in the shader by projecting world position on the
+  face's dominant axis rather than carrying a vertex attribute — the map is
+  axis-aligned cubes, so for this geometry the two are identical.
+
+Two things are shared rather than copied, because a character lit differently
+from the room it stands in reads as a sprite pasted over the world: the lighting
+lives in `lighting.wgsl.inc`, concatenated ahead of **both** shaders at build
+time (WGSL has no `include`), and the detail tile's bind group layout is built by
+one function both the renderer and the offscreen preview call.
+
+One value is sRGB and one is not, and the difference is about where each came
+from rather than what type it is. The world's vertex tints are raw floats the
+browser hands three as a `BufferAttribute`, which three uses **as linear** — so
+decoding them natively would render every map darker and more saturated than the
+browser renders the same map. The operator's team wash is a hex colour someone
+picked, so that one *is* decoded, matching three's `Color`.
+
+#### Sun shadows
+
+`apps/native-fps/src/{shadow.rs,shadow.wgsl}`.
+
+One depth pass, rendered **once per map**. The browser sets
+`shadowMap.autoUpdate = false` and renders the map exactly once; this does the
+same, for the same reason — the geometry is static and so is the sun, so a
+per-frame shadow pass pays sixty times a second for a picture that never
+changes. It is the whole reason real shadows are affordable here.
+
+**Only the static world casts.** Players do not, which matches the browser rather
+than cutting a corner: with `autoUpdate` off, an avatar added to the scene never
+appears in a map rendered before it existed. Players still *receive*, which is
+the half that matters — an operator standing in a building's shadow should be
+dark, and a cast shadow tracking a body interpolated between 20 Hz snapshots
+would be a lie about where that body is anyway.
+
+Four things are load-bearing:
+
+- **Front faces only** — the single line that makes shadows possible in a Cube
+  world. A Cube 1 map is a sealed box, so every open cell emits a *ceiling* quad
+  facing down. Render back faces into the shadow map and the sky lid catches all
+  the light, putting the whole level in shadow — which reads as the lighting
+  being broken rather than as a culling bug. three spells this
+  `material.shadowSide = FrontSide`; here it is `cull_mode: Back`, because the
+  mesher winds every quad counter-clockwise as seen from the open side.
+- **Only the sun is shadowed.** The hemisphere is ambient — a surface in shadow
+  is still lit by the sky above it — and attenuating that too makes every
+  shadowed face uniformly black, which is the thing real shadows exist to avoid.
+- **Outside the light frustum is lit, not shadowed.** The opposite default puts
+  everything beyond the fitted box in darkness, which on a large map is a black
+  border round the edge of the world. `shadow.rs` has a test asserting all eight
+  corners of a 256-cube map fall inside the frustum, because a corner that falls
+  out casts nothing and is lit when it should not be.
+- **Slope-scaled bias, not a constant one.** These are large flat quads at every
+  angle to the sun, and a constant bias big enough to stop acne on a floor lit
+  head-on detaches the shadow from the foot of every wall.
+
+The sun's direction is declared twice — once in `shadow.rs` to build the light
+camera and once in `lighting.wgsl.inc` to shade with. A test pins them equal: a
+shadow cast from one direction and a Lambert term computed from another gives
+surfaces lit from one side and shadowed from the other, which looks like broken
+geometry rather than a mismatched constant.
+
+#### Looking at it
+
+The character is the one part of this client a unit test cannot check. The tests
+prove the rig is 34 bones, that every joint index is in range and that the bind
+pose is the right height — all of which stay true while the character is drawn
+facing backwards, inside out, or in the wrong colour. Those are properties of a
+picture, so there is one:
+
+```bash
+cargo run --manifest-path apps/native-fps/Cargo.toml --example operator_preview -- operator.png
 ```
-RootGroup (World Coordinate Anchor)
- └── Pelvis (Hips & Tactical Belt)
-      ├── Spine (Torso & Tactical Plate Carrier Vest)
-      │    ├── Neck & Head (Balaclava, Ballistic Helmet, Tactical Visor)
-      │    ├── Left Arm: Shoulder → Upper Arm → Forearm → Support Hand
-      │    └── Right Arm: Shoulder → Upper Arm → Forearm → Trigger Hand
-      │         └── Weapon Socket (Active 3D Weapon Prop + Muzzle Flash Point)
-      ├── Left Leg: Hip → Thigh → Knee Pad → Shin → Tactical Boot
-      └── Right Leg: Hip → Thigh → Knee Pad → Shin → Tactical Boot
-```
 
-Every character carries a 3D weapon prop matching their active weapon slot:
-- **Slot 0 (Knife)**: Combat blade with handle and bevelled edge.
-- **Slot 1 (Pistol)**: Semi-automatic handgun with slide, grip, and barrel.
-- **Slot 2 (Carbine / Assault Rifle)**: Tactical rifle with receiver, stock, magazine, barrel, and optic rail.
-- **Slot 3 (Shotgun)**: Heavy pump-action combat shotgun with ribbed pump and barrel.
-- **Slot 4 (Sniper Rifle)**: Long-range precision rifle with extended barrel, scope cylinder, and stock.
-- **Muzzle Flash**: Dynamically triggered on trigger pull and rapidly decayed over 2 frames.
+It renders five operators, one per clip, matching the browser's own
+`apps/web/operator-check.html` so the two can be compared side by side. An
+`examples/` binary rather than a test because it needs a real GPU adapter, and a
+suite that fails on a machine without one gets ignored.
+
+The **facing** convention is the exception — it is pinned in code rather than by
+eye, because one operator at one yaw cannot tell a correct rotation from a
+mirrored one: both look right head-on and disagree everywhere else. The test
+walks the full circle and compares against the forward vector `bodies.rs`
+derives, which is the definition the rest of the client already agrees with.
+
+### The weapon props stay procedural
+
+The five weapon props and the muzzle flash are still built from primitives, and
+they hang off the `RightHand` **bone** rather than off the root — so the skeleton
+carries the grip through every clip for free, which is precisely the hand-written
+work this rewrite removed. They stay procedural because the FBX weapon downloads
+in `assets/horribleAssault/` are third-party models with unverified licences, and
+the module's standing rule is that other people's content is supported, never
+bundled. These boxes ship.
 
 ---
-
-### Procedural Skeletal Animation Engine
-
-`CharacterAnimator` computes real-time joint rotations and offsets every frame based on player locomotion velocity, look pitch, crouch fraction, ground state, and combat actions:
-
-1. **Locomotion & Pendulum Leg Kinematics**:
-   - Derives movement velocity vector `(dx/dt, dy/dt)` from consecutive snapshots.
-   - 2-phase forward/backward pendulum leg swing with knee flexion on the backswing.
-   - Hip bobbing and vertical stride oscillation at twice the stride frequency.
-2. **Breathing Idle Sway**:
-   - Subtle sinusoidal chest and shoulder oscillation (`2.2 Hz`) when standing still.
-3. **Smooth Crouch Compression**:
-   - Seamlessly interpolates hip descent from standing height (`5.2`) to crouch height (`4.075`).
-   - Knees bend forward and spine leans slightly into tactical posture while nameplates lower accordingly.
-4. **Airborne / Jump Tuck**:
-   - When airborne (`ground === false`), legs tuck upward at the knees and arms spread for balance.
-5. **Aim Pitch Look (Up / Down Tracking)**:
-   - Pitch angle is distributed proportionally (`40%` spine, `60%` neck/head).
-   - Other players visually see exactly where an enemy is aiming in 3D world space.
-6. **Recoil Kickback**:
-   - Triggering shots applies an instant rearward kick impulse on the weapon socket, decaying with exponential damping.
-7. **Elimination / Death Slump**:
-   - When eliminated (`alive === false`), the model gracefully slumps to the ground with sprawl kinematics.
-
----
-
 ### Cosmetic Skins & Hitbox Invariance Guarantee
 
 The skin system provides distinct faction styling and collectible operator skins without ever altering the collision volume or giving competitive advantages:
@@ -3641,6 +3943,24 @@ The skin system provides distinct faction styling and collectible operator skins
 ---
 
 ## Known limitations
+
+- **The native client still has the old box rig.** `apps/native-fps` renders its
+  own operators from primitives with a procedural walk cycle; the skinned GLB and
+  its clips are browser-only. The two share the wire, so a match mixing clients
+  is consistent about *where* everybody is and inconsistent about what they look
+  like doing it.
+- **Roughness is flat.** `FBXLoader` does not support the `ShininessExponent`
+  channel, so the Fuse gloss maps are dropped and everything exports at
+  `roughness: 1`. The data is real and varied — gloves `0-30`, shoes `0-255` — so
+  restoring it is the difference between matte fabric and shiny boots. It needs
+  the build script to read the original `textures/` folder, since the maps
+  embedded in the FBX do not survive the drop.
+- **The operator sits 0.05 cubes low.** The model origin is not exactly at the
+  sole, so feet sink about 5cm into the floor.
+- **Reload is never triggered.** `CharacterAnimator.triggerReload` exists and
+  works, but nothing on the wire says a player started reloading — `PlayerRow`
+  carries no reload state and there is no `ReloadFx`. Adding one is a server
+  change, not a renderer one.
 
 - **Grenades are browser-only.** The native client (`apps/native-fps`) does not
   draw them, throw them, or render a smoke — it shares the wire, so a grenade

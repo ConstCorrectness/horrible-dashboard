@@ -140,6 +140,7 @@ Everything under `$HORRIBLE_DATA_DIR` is versioned independently of the app:
 | Thing                             | Keyed by                        | Cost to re-fetch |
 | --------------------------------- | ------------------------------- | ---------------- |
 | `llamacpp/bin/<tag>-<variant>/`   | an upstream llama.cpp tag       | minutes, ~100 MB |
+| `hassault/bin/<version>/`         | this app's own version          | seconds, ~20 MB  |
 | managed GGUFs                     | repo + filename                 | tens of GB       |
 | activation traces                 | `llamaBuild` + `modelSha`       | not reproducible |
 | libraries, LanceDB, `secrets.db`  | nothing — they are the user's   | irreplaceable    |
@@ -149,6 +150,92 @@ pointed at that directory. This is a property of *where the data lives* rather
 than something the updater enforces, which is exactly why it is written down.
 The Fernet master key is a step further out — `~/.horrible/secrets.key`, outside
 the data dir entirely — so neither an update nor a data-dir copy touches it.
+
+## The bundled backend runtime
+
+The desktop shell has always *supervised* the backend but never *carried* it: without a
+repo checkout `backend.rs` reported `unavailable` — "packaged builds don't bundle the
+backend yet" — which made a packaged install an app with no brain. A release now ships
+one.
+
+`scripts/build-backend-runtime.mjs` builds it, in CI before `tauri-action` runs (after,
+and the installer is built around an empty directory). The output lands in
+`apps/desktop/src-tauri/backend-runtime/` and is picked up by `bundle.resources`:
+
+```
+backend-runtime/
+  python/        relocatable CPython + every locked dependency in its site-packages
+  backend/       the backend source tree, verbatim
+  pyproject.toml
+  runtime.json   what was built
+```
+
+**A real interpreter, not a frozen binary.** PyInstaller and friends freeze the import
+graph at build time, and this backend's import graph is not knowable at build time:
+[`backend/sdk/loader.py`](backend-plugin-sdk.mdx) discovers plugins from bundled dirs,
+`HORRIBLE_PLUGINS_DIR` **and pip entry points**, the training module spawns notebook
+kernels, and `dash` execs user scripts. Freezing breaks all of that *quietly* — the app
+starts and third-party plugins simply never appear. Shipping an ordinary relocatable
+CPython means nothing about import resolution differs between a checkout and a package,
+which is the property worth ~1 GB.
+
+Dependencies come from `uv export --frozen --no-dev` — the lockfile's exact versions,
+no extras. Extras are opt-in by design (torch alone is ~460 MB), every one of them is
+lazy-imported, and each answers with an install hint rather than a 500.
+
+:::warning Three spellings of one path
+`BUNDLED_RUNTIME_DIR` in `backend.rs`, the `--out` default in
+`build-backend-runtime.mjs`, and the `bundle.resources` glob in `tauri.conf.json` are
+the same path written three times. Only the first reports anything if they drift, and
+what it reports is "no backend found" — which reads like a build that failed rather
+than a name that moved.
+:::
+
+The runtime is resolved **after** a repo checkout, never before. A developer running the
+packaged app from their own tree wants their edits; a bundled runtime is by definition
+the code as it was at release time, and silently preferring it is how you spend an
+afternoon debugging a change that was never running. `Runtime::bundled_in` also checks
+for `backend/app.py` *and* the interpreter rather than just the directory: an interrupted
+install leaves a folder that exists and cannot run, and "no backend found" points at the
+install while a Python `ModuleNotFoundError` points at nothing useful.
+
+Two consequences worth knowing. The runtime carries **no `.git`**, so
+[`paths.repo_root()`](data-directories.mdx) returns `None` and user data resolves to the
+per-OS location instead of into the installation directory — which on Windows is under
+Program Files. And the installer grows: the Windows NSIS
+setup measures **233 MB** against 10 MB before, for **1.00 GB** unpacked. Bundling
+~50,000 files also makes the compression step slow — makensis spends several minutes
+of CPU on it, which is worth knowing before assuming a release build has hung.
+
+:::note What a packaged install still cannot do
+Features that shell out to `uv` at runtime — the training module's project venvs
+(`envs.install`) and the notebook kernels built on them — need `uv` on `PATH`, which a
+packaged install does not provide. They degrade to an error rather than working; giving
+them the shipped interpreter is a separate change.
+:::
+
+## Assets that ride the release but are not in the manifest
+
+The `build-native` job builds the [hassault native client](../modules/hassault.mdx)
+for all four targets and uploads `hassault-native-{win,macos,linux}-{x64,arm64}` to
+the same release. Those assets are **not** in the signed manifest and are not
+touched by an update: the backend fetches the one matching this app's version
+(`backend/modules/hassault/client_install.py`), verifies it against the sha256
+GitHub publishes for the asset, and installs it under `$HORRIBLE_DATA_DIR` — where,
+per the table above, an installer never reaches.
+
+Two things follow that are easy to get wrong. `publish-manifest` needs
+**both** build jobs: a manifest is what makes a release reachable, and a release
+reachable before its client assets exist is one where every Install button answers
+"publishes no client for your platform". And the asset names are a contract with
+`client_install.asset_name`, which *computes* the name rather than matching loosely
+— these are names we control, so a rename should be a clear miss rather than a
+wrong download. `backend/tests/test_hassault_client_install.py` reads the workflow
+file and pins them.
+
+The client is a download rather than a bundled `externalBin` because the shell does
+not package the **backend** yet, and the route that launches the client is a backend
+route — a bundled client would sit beside an app with no way to start it.
 
 ## Bundle targets
 

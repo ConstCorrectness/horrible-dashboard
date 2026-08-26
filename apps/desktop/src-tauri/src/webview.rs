@@ -200,6 +200,32 @@ pub async fn close_browser_webview(
     }
 }
 
+/// Destroy every overlay this process is holding.
+///
+/// The frontend owns each surface through a pane session, and a **page reload wipes
+/// every one of those owners** while the OS window — and its child webviews — live
+/// on. What is left is a webview composited over the app that no pane will ever
+/// claim, hide or close again: a page frozen in mid-air, unreachable by any UI.
+/// The frontend calls this once at boot, before any pane mounts. Nothing of value
+/// is lost: a pane that is still in the restored layout re-creates its surface on
+/// mount, and one that isn't should never have had a surface at all.
+#[tauri::command]
+pub async fn close_all_browser_webviews(state: State<'_, BrowserWebviews>) -> Result<(), String> {
+    let webviews: Vec<Webview> = {
+        let mut registry = state
+            .0
+            .lock()
+            .map_err(|_| "browser webview registry poisoned".to_string())?;
+        registry.drain().map(|(_, webview)| webview).collect()
+    };
+    // Best effort per surface: one that is already gone must not stop the rest from
+    // being swept, or a single stale handle leaves live overlays on screen.
+    for webview in webviews {
+        let _ = webview.close();
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

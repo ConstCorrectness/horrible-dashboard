@@ -183,12 +183,15 @@ from backend.modules.ws import WsConnection, set_ws_send_observer
 from backend.sdk import load_plugins
 from backend.sdk import registry as plugin_registry
 from backend.modules.tasks import queue
+from backend.version import app_version
 
 # Observe every outbound `/ws` frame for the observability panel (inbound frames
 # are recorded in the receive loop below). One global observer covers all sockets.
 set_ws_send_observer(record_ws_frame)
 
-APP_VERSION = "0.1.0"
+#: Resolved from `pyproject.toml`, not restated here — this literal had already
+#: drifted a minor version behind it. See `backend/version.py`.
+APP_VERSION = app_version()
 
 
 @asynccontextmanager

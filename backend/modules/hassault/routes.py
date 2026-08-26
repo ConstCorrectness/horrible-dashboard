@@ -10,16 +10,28 @@ planes** the browser adopts directly as typed arrays — one copy, no parsing.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from backend.paths import data_dir
-from backend.modules.hassault import assets, console, fabric, hitbox, lore, mapsource, weapons
+from backend.version import app_version
+from backend.modules.hassault import (
+    assets,
+    client_install,
+    fabric,
+    hitbox,
+    lore,
+    mapsource,
+    weapons,
+)
 from backend.modules.hassault.cgz import PLANE_ORDER, CgzError, write_cgz
 from backend.modules.hassault.console import (
     ConsoleDefinitionsResponse,
@@ -47,8 +59,11 @@ from backend.modules.hassault.models import (
     SessionInfo,
     TacticalOut,
     WeaponOut,
+    ClientInstallRequest,
+    ClientRemoveRequest,
     LaunchNativeRequest,
     LaunchNativeResponse,
+    NativeClientStatus,
 )
 
 logger = logging.getLogger(__name__)
@@ -464,6 +479,28 @@ async def list_tacticals() -> list[TacticalOut]:
     return [TacticalOut(**g.to_dict()) for g in grenades.GRENADES]
 
 
+def _local_client_candidates(repo_root: Path) -> list[str]:
+    """Every place a *locally built* native client can be, newest wins.
+
+    One list, because `launch_native` and `/client/status` both need it and two
+    copies would disagree the first time a build output moved — the status route
+    would then offer to download a client that the launch route is about to find
+    on disk.
+
+    Deliberately excludes the downloaded install under `$HORRIBLE_DATA_DIR`: see
+    the tier-3 note in `launch_native` for why that must not compete on mtime.
+    """
+    crate = repo_root / "apps" / "native-fps"
+    return [
+        str(crate / "target" / "release" / "hassault-native.exe"),
+        str(crate / "target" / "release" / "hassault-native"),
+        str(crate / "target" / "debug" / "hassault-native.exe"),
+        str(crate / "target" / "debug" / "hassault-native"),
+        str(crate / "bin" / "hassault.exe"),
+        str(crate / "bin" / "hassault"),
+    ]
+
+
 def pick_binary(custom: str, candidates: list[str]) -> str | None:
     """Which native binary to launch.
 
@@ -723,33 +760,24 @@ async def launch_native_client(
 
     repo_root = Path(__file__).resolve().parents[3]
     custom_bin = str(get_value("hassault.nativeBinaryPath", "") or "").strip()
-    candidate_bins = [
-        custom_bin,
-        str(
-            repo_root
-            / "apps"
-            / "native-fps"
-            / "target"
-            / "release"
-            / "hassault-native.exe"
-        ),
-        str(
-            repo_root / "apps" / "native-fps" / "target" / "release" / "hassault-native"
-        ),
-        str(
-            repo_root
-            / "apps"
-            / "native-fps"
-            / "target"
-            / "debug"
-            / "hassault-native.exe"
-        ),
-        str(repo_root / "apps" / "native-fps" / "target" / "debug" / "hassault-native"),
-        str(repo_root / "apps" / "native-fps" / "bin" / "hassault.exe"),
-        str(repo_root / "apps" / "native-fps" / "bin" / "hassault"),
-    ]
+    local_bins = _local_client_candidates(repo_root)
 
-    bin_path = pick_binary(custom_bin, candidate_bins[1:])
+    bin_path = pick_binary(custom_bin, local_bins)
+
+    # **Tier 3: the downloaded client, and only when the first two found nothing.**
+    #
+    # It is deliberately *not* another entry in `local_bins`. `pick_binary`
+    # takes the **newest** build on disk — which is the right rule among build
+    # outputs and exactly the wrong one here: a client downloaded today beats a
+    # developer's `target/debug` from an hour ago, so the first launch after an
+    # install would silently run the release instead of the edit being worked on.
+    # That is the same class of bug `pick_binary` was written to end, arriving by
+    # a different door. A checkout's own build always wins; the download is what
+    # a machine with no toolchain gets.
+    downloaded = None
+    if not bin_path:
+        installed = client_install.installed_binary()
+        downloaded = str(installed) if installed else None
 
     # **The binary is checked against its own source before it is launched.**
     #
@@ -768,7 +796,12 @@ async def launch_native_client(
     rebuilt = False
     build_seconds: float | None = None
     stale = False
-    if not custom_bin:
+    # `not downloaded` as well as `not custom_bin`: a downloaded client is not a
+    # build output and has no source to be stale against. Without it, a checkout
+    # whose `target/` has been cleaned would look infinitely stale and answer an
+    # install by starting a surprise `cargo build` — minutes, on the machine least
+    # likely to have a toolchain at all.
+    if not custom_bin and not downloaded:
         src_mtime = newest_source_mtime(crate_root)
         built_at = 0.0
         if bin_path:
@@ -781,7 +814,11 @@ async def launch_native_client(
             if auto_build:
                 # The profile already on disk, so a debug iteration loop is not
                 # silently upgraded into an optimised build every launch.
-                profile = "debug" if bin_path and Path(bin_path).parent.name == "debug" else "release"
+                profile = (
+                    "debug"
+                    if bin_path and Path(bin_path).parent.name == "debug"
+                    else "release"
+                )
                 started = time.monotonic()
                 ok, detail = await asyncio.to_thread(
                     build_native_client, crate_root, profile
@@ -798,7 +835,7 @@ async def launch_native_client(
                 rebuilt = True
                 # Re-resolved: the build just changed which binary is newest, and
                 # a first-ever build created one where `pick_binary` found none.
-                bin_path = pick_binary("", candidate_bins[1:])
+                bin_path = pick_binary("", local_bins)
             else:
                 # Auto-build is off, so this is somebody running what is on disk on
                 # purpose — launched, but never silently.
@@ -845,14 +882,23 @@ async def launch_native_client(
         # "Player" — a placeholder that never reaches anything is just noise.
         connect_args.append(f"--name={req.username}")
 
+    bin_path = bin_path or downloaded
     if not bin_path:
+        # Two different failures, and telling somebody to run `cargo` when they
+        # have no toolchain is the one that reads as "this game is not for you".
+        # The message names the button that fixes it in both cases; the cargo line
+        # survives only for the checkout, where it is the faster answer.
+        has_crate = (crate_root / "Cargo.toml").is_file()
+        install_hint = "Install it from the main menu's Native client row"
         return LaunchNativeResponse(
             launched=False,
             connect_args=connect_args,
             message=(
-                "The native client is not built. Run "
-                "`cargo build --release --manifest-path apps/native-fps/Cargo.toml`, "
-                "or set 'hassault.nativeBinaryPath' in Settings."
+                f"The native client is not built. {install_hint}, run `cargo build "
+                "--release --manifest-path apps/native-fps/Cargo.toml`, or set "
+                "'hassault.nativeBinaryPath' in Settings."
+                if has_crate
+                else f"The native client is not installed. {install_hint}."
             ),
         )
 
@@ -974,6 +1020,65 @@ async def launch_native_client(
             connect_args=connect_args,
             message=f"Could not launch native client: {exc}",
         )
+
+
+@router.get("/client/status", response_model=NativeClientStatus)
+async def native_client_status() -> NativeClientStatus:
+    """Which of the three tiers would answer a launch right now.
+
+    Served rather than inferred by the pane, because the tiers are resolved in
+    Python and a second copy of the ordering in TypeScript is a second chance to
+    get it backwards — the browser would then offer to install a client over a
+    local build that is about to win anyway.
+    """
+    from backend.modules.settings.routes import get_value
+
+    repo_root = Path(__file__).resolve().parents[3]
+    crate_root = repo_root / "apps" / "native-fps"
+    custom_bin = str(get_value("hassault.nativeBinaryPath", "") or "").strip()
+    version = app_version()
+    install = client_install.read_install(version)
+
+    local = pick_binary(custom_bin, _local_client_candidates(repo_root))
+    if custom_bin and local == custom_bin:
+        source, binary = "setting", local
+    elif local:
+        source, binary = "build", local
+    elif install:
+        source, binary = "download", str(install.binary)
+    else:
+        source, binary = "none", None
+
+    return NativeClientStatus(
+        source=source,
+        binary=binary,
+        version=version,
+        installed=install is not None,
+        verified=bool(install and install.verified),
+        installed_size_bytes=install.size_bytes if install else None,
+        has_crate=(crate_root / "Cargo.toml").is_file(),
+    )
+
+
+@router.post("/client/install")
+async def install_native_client(req: ClientInstallRequest) -> StreamingResponse:
+    """Download the prebuilt client, streaming progress as NDJSON.
+
+    Streamed for the same reason `llamacpp/install` is: this is tens of megabytes
+    over somebody's connection, and a request that simply takes a minute to return
+    is indistinguishable from one that has hung.
+    """
+
+    async def gen() -> AsyncIterator[str]:
+        async for event in client_install.install_client(req.version or None):
+            yield json.dumps(event) + "\n"
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
+
+
+@router.post("/client/remove")
+def remove_native_client(req: ClientRemoveRequest) -> dict[str, bool]:
+    return {"removed": client_install.remove_install(req.version or app_version())}
 
 
 @router.get("/match/process_status")
@@ -1205,4 +1310,3 @@ async def delete_console_macro(name: str) -> dict[str, bool]:
     if not ok:
         raise HTTPException(status_code=404, detail="Macro not found or is builtin")
     return {"ok": True}
-

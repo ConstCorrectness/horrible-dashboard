@@ -60,6 +60,10 @@ flowchart TB
   files, resolved once in `backend/paths.py` per launcher and per OS. Read before
   adding storage: the old inline `.data` default was relative to the *cwd*, so it
   silently meant a different directory depending on who started the backend.
+- [HorribleAssault's two clients](architecture/hassault-two-clients.mdx) — the
+  browser pane and the native Rust client render the same game from the same
+  server: what is duplicated, how each duplication is pinned, and the checklist
+  for adding a feature to one without silently leaving the other behind
 - [Releases and remote updates](architecture/releases.mdx) — bundling, the signed
   update manifest, stable/beta channels, and why an update never touches
   `$HORRIBLE_DATA_DIR`. Read before generating the signing key: losing it means no

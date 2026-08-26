@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>operator check</title>
+    <style>
+      body {
+        margin: 0;
+        background: #16181d;
+        color: #e2e8f0;
+        font:
+          13px ui-monospace,
+          monospace;
+      }
+      #hud {
+        position: fixed;
+        top: 8px;
+        left: 8px;
+        white-space: pre;
+        z-index: 2;
+        text-shadow: 0 1px 2px #000;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="hud">loading…</div>
+    <script type="module">
+      import * as THREE from 'three';
+      import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+      import { clone } from 'three/examples/jsm/utils/SkeletonUtils.js';
+
+      const hud = document.getElementById('hud');
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x16181d);
+      scene.add(new THREE.HemisphereLight(0xffffff, 0x334155, 2.2));
+      const key = new THREE.DirectionalLight(0xffffff, 2.0);
+      key.position.set(4, 8, 6);
+      scene.add(key);
+      scene.add(new THREE.GridHelper(40, 40, 0x334155, 0x1e293b));
+
+      const camera = new THREE.PerspectiveCamera(38, innerWidth / innerHeight, 0.1, 200);
+      camera.position.set(0, 3.4, 24);
+      camera.lookAt(0, 2.6, 0);
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(innerWidth, innerHeight);
+      renderer.setPixelRatio(1);
+      document.body.appendChild(renderer.domElement);
+
+      // Which clip each copy plays, so one screenshot covers idle, locomotion,
+      // crouch, action and death rather than needing five.
+      const SHOWCASE = [
+        'rifle_aiming_idle',
+        'standard_walk',
+        'crouch_walking',
+        'firing_rifle',
+        'dying',
+      ];
+
+      const gltf = await new GLTFLoader().loadAsync('/hassault-operator.glb');
+      const mixers = [];
+      const lines = [];
+
+      const box = new THREE.Box3().setFromObject(gltf.scene);
+      lines.push(`clips        ${gltf.animations.length}`);
+      lines.push(`height       ${(box.max.y - box.min.y).toFixed(3)} cubes (want 5.200)`);
+      lines.push(`feet at y    ${box.min.y.toFixed(3)}`);
+
+      SHOWCASE.forEach((name, i) => {
+        const root = clone(gltf.scene);
+        root.position.x = (i - (SHOWCASE.length - 1) / 2) * 3.4;
+        scene.add(root);
+        const mixer = new THREE.AnimationMixer(root);
+        const clip = gltf.animations.find((a) => a.name === name);
+        mixer.clipAction(clip).play();
+        // Different phase per copy so a walk and a crouch-walk are not in lockstep.
+        mixer.update(0.35 + i * 0.21);
+        mixers.push(mixer);
+      });
+
+      // Count how many distinct meshes actually moved off the bind pose. This is
+      // the check that matters: the skeleton-duplication bug left the shirt
+      // animating while the body, head and boots stayed in a T-pose.
+      const probe = clone(gltf.scene);
+      const bind = new Map();
+      probe.traverse((o) => {
+        if (o.isBone) bind.set(o, o.quaternion.clone());
+      });
+      const probeMixer = new THREE.AnimationMixer(probe);
+      probeMixer.clipAction(gltf.animations.find((a) => a.name === 'standard_walk')).play();
+      probeMixer.update(0.4);
+      let moved = 0;
+      for (const [bone, q] of bind) if (bone.quaternion.angleTo(q) > 1e-4) moved += 1;
+      lines.push(`bones moved  ${moved} / ${bind.size}`);
+
+      const meshStates = [];
+      probe.traverse((o) => {
+        if (!o.isSkinnedMesh) return;
+        const animated = o.skeleton.bones.filter((b) => {
+          const q = bind.get(b);
+          return q && b.quaternion.angleTo(q) > 1e-4;
+        }).length;
+        meshStates.push(`${o.name}:${animated}/${o.skeleton.bones.length}`);
+      });
+      lines.push(`per mesh     ${meshStates.join('  ')}`);
+      hud.textContent = lines.join('\n');
+
+      renderer.render(scene, camera);
+      // Held still rather than looped: a screenshot of a moving target is not a
+      // check of anything.
+      window.__operatorCheck = { lines, ready: true };
+    </script>
+  </body>
+</html>

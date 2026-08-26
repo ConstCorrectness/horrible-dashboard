@@ -154,6 +154,9 @@ pub struct Renderer {
     /// Kept so the pipelines can be rebuilt when the sample count changes.
     shader: wgpu::ShaderModule,
     camera_layout: wgpu::BindGroupLayout,
+    detail_layout: wgpu::BindGroupLayout,
+    detail_bind_group: wgpu::BindGroup,
+    shadow: crate::shadow::ShadowMap,
     video: Video,
     /// Where the world is drawn: a texture at `render_scale` of the window, and
     /// multisampled at the quality level's count. The swapchain never sees the
@@ -163,6 +166,10 @@ pub struct Renderer {
     blit_layout: wgpu::BindGroupLayout,
     blit_bind_group: wgpu::BindGroup,
     sampler: wgpu::Sampler,
+    /// The skinned operator. `None` only if the asset failed to parse, which is
+    /// reported once at startup and then falls back to `bodies.rs` rather than
+    /// leaving the match with invisible players.
+    characters: Option<crate::characters_gpu::Characters>,
 }
 
 /// The offscreen target the world is rendered into.
@@ -276,7 +283,15 @@ impl Renderer {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("hassault-shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                // Concatenated rather than imported: WGSL has no include, and the
+                // lighting has to be one copy shared with the other shader.
+                concat!(
+                    include_str!("lighting.wgsl.inc"),
+                    include_str!("shader.wgsl")
+                )
+                .into(),
+            ),
         });
 
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -312,11 +327,39 @@ impl Renderer {
             }],
         });
 
+        // The surface grain. Generated, uploaded once, and never touched again:
+        // it is the same tile for every map, because it is a *material* rather
+        // than a map's artwork. Built before the pipeline layout, which needs it.
+        let detail_layout = crate::detail::bind_group_layout(&device);
+        let detail_bind_group = crate::detail::bind_group(&device, &queue, &detail_layout);
+
+        let vertices = mesh_vertices(mesh);
+        let world_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("world"),
+            contents: bytemuck::cast_slice(&vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
+        // Rendered here, once, from the map that was just uploaded. The sun and
+        // the geometry are both static, so this never has to happen again — see
+        // `shadow.rs`.
+        let shadow = crate::shadow::ShadowMap::new(
+            &device,
+            &queue,
+            &world_buffer,
+            vertices.len() as u32,
+            crate::shadow::bounds_of(&vertices),
+        );
+
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("hassault-layout"),
             // wgpu 30 takes optional slots, so an unused group can be a hole
             // rather than forcing every layout to be contiguous.
-            bind_group_layouts: &[Some(&camera_layout)],
+            bind_group_layouts: &[
+                Some(&camera_layout),
+                Some(&detail_layout),
+                Some(&shadow.layout),
+            ],
             immediate_size: 0,
         });
 
@@ -327,13 +370,6 @@ impl Renderer {
             format,
             video.quality.samples(),
         );
-
-        let vertices = mesh_vertices(mesh);
-        let world_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("world"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
 
         let body_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("bodies"),
@@ -516,13 +552,50 @@ impl Renderer {
             adapter,
             shader,
             camera_layout,
+            detail_layout,
+            detail_bind_group,
+            shadow,
             video,
             scene,
             blit_pipeline,
             blit_layout,
             blit_bind_group,
             sampler,
+            characters: None,
         })
+    }
+
+    /// Upload the operator's geometry, textures and materials.
+    ///
+    /// Separate from `new` so the asset is **parsed once**: the CPU side needs
+    /// the same `Operator` to pose from, and having the renderer load its own
+    /// copy would mean two parses of an 8 MB file and two decodes of fourteen
+    /// textures, one of each thrown away.
+    pub fn install_characters(&mut self, operator: &crate::character::Operator) {
+        self.characters = Some(crate::characters_gpu::Characters::new(
+            &self.device,
+            &self.queue,
+            operator,
+            &self.camera_layout,
+            &self.shadow.layout,
+            self.config.format,
+            self.video.quality.samples(),
+        ));
+    }
+
+    /// Whether the skinned operator is available this run.
+    ///
+    /// The caller uses it to decide whether to also build the old box bodies —
+    /// drawing both would put two overlapping characters on every player.
+    pub fn has_characters(&self) -> bool {
+        self.characters.is_some()
+    }
+
+    /// Upload this frame's operator poses.
+    pub fn set_characters(&mut self, poses: &[crate::animator::ActorPose]) {
+        if let Some(characters) = self.characters.as_mut() {
+            characters.prepare(&self.queue, poses);
+        }
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -688,11 +761,19 @@ impl Renderer {
 
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            pass.set_bind_group(1, &self.detail_bind_group, &[]);
+            pass.set_bind_group(2, &self.shadow.bind_group, &[]);
             pass.set_vertex_buffer(0, self.world_buffer.slice(..));
             pass.draw(0..self.world_verts, 0..1);
             if self.body_verts > 0 {
                 pass.set_vertex_buffer(0, self.body_buffer.slice(..));
                 pass.draw(0..self.body_verts, 0..1);
+            }
+            // After the world and the untextured bodies, into the same depth
+            // buffer: an operator behind a wall is hidden by the wall, and the
+            // hitbox wireframes still overlay it.
+            if let Some(characters) = self.characters.as_ref() {
+                characters.draw(&mut pass, &self.camera_bind_group, &self.shadow.bind_group);
             }
         }
 
@@ -729,6 +810,11 @@ impl Renderer {
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.viewmodel_bind_group, &[]);
+            // The same pipeline, so the same layout: group 1 must be bound even
+            // though the weapon in your hands is one flat colour per face and
+            // the grain on it is invisible at that scale.
+            pass.set_bind_group(1, &self.detail_bind_group, &[]);
+            pass.set_bind_group(2, &self.shadow.bind_group, &[]);
             pass.set_vertex_buffer(0, self.viewmodel_buffer.slice(..));
             pass.draw(0..self.viewmodel_verts, 0..1);
         }
@@ -836,7 +922,7 @@ impl Renderer {
                 .device
                 .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("hassault-layout"),
-                    bind_group_layouts: &[Some(&self.camera_layout)],
+                    bind_group_layouts: &[Some(&self.camera_layout), Some(&self.detail_layout)],
                     immediate_size: 0,
                 });
             self.pipeline = world_pipeline(
@@ -846,6 +932,18 @@ impl Renderer {
                 self.config.format,
                 video.quality.samples(),
             );
+            // The character pass draws into the same attachment, so its
+            // multisample state has to move with it — a pipeline left at the old
+            // count is a validation error on the next frame, not a soft failure.
+            if let Some(characters) = self.characters.as_mut() {
+                characters.rebuild(
+                    &self.device,
+                    &self.camera_layout,
+                    &self.shadow.layout,
+                    self.config.format,
+                    video.quality.samples(),
+                );
+            }
         }
         if vsync_changed {
             let caps = self.surface.get_capabilities(&self.adapter);

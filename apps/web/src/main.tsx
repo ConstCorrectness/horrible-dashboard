@@ -144,7 +144,15 @@ async function boot(): Promise<void> {
     // while WebView2 and WebKitGTK can, and the difference is invisible to
     // feature detection.
     initCapabilities(desktopCapabilities(platform));
-    setWindowControl(createTauriWindowControl());
+    const control = createTauriWindowControl();
+    setWindowControl(control);
+    // A reload wiped every pane session that owned a native browser overlay, but
+    // the OS window (and its child webviews) survived it. Sweep before any pane
+    // mounts: whatever is left over has no owner, and a pane in the restored
+    // layout re-creates its surface for itself.
+    void control.browserWebview?.closeAll().catch(() => {
+      // Nothing to sweep, or the shell predates the command — not worth a toast.
+    });
     setGlobalShortcuts(createTauriGlobalShortcuts());
     // The webview can't spawn browser windows (window.open / target="_blank" are
     // silent no-ops), so route external-link clicks to the system browser.

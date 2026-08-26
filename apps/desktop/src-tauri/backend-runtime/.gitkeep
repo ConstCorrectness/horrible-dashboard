@@ -1,0 +1,14 @@
+The bundled Python backend is built into this directory by
+`node scripts/build-backend-runtime.mjs`, and everything it writes here is
+git-ignored — it is roughly a gigabyte of interpreter and site-packages.
+
+This placeholder is committed so `bundle.resources` in tauri.conf.json always
+matches at least one file. Without it, a developer who has never built the
+runtime gets a bundler error about a resource glob that matches nothing, on a
+build that had no intention of shipping a backend. The build script clears this
+directory and then writes the placeholder back, so it survives a build too.
+
+An app bundled with only this file present still starts: `Runtime::bundled_in`
+(src/backend.rs) checks for `backend/app.py` and the interpreter, not for the
+directory, so an incomplete runtime reports "no backend found" rather than
+spawning something that cannot import itself.

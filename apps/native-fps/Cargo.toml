@@ -15,7 +15,9 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 wgpu = "30.0.0"
 winit = "0.30.13"
-glam = "0.33.4"
+# `bytemuck` so a `Mat4` can be written straight into the bone buffer; without
+# it every upload would need a copy through a `[[f32; 4]; 4]` for no reason.
+glam = { version = "0.33.4", features = ["bytemuck"] }
 bytemuck = "1.25.2"
 pollster = "1.0.1"
 # Audio output, and only output: every sound this client makes is synthesized in
@@ -23,6 +25,22 @@ pollster = "1.0.1"
 # *files*, and there are no files here — AssaultCube's sounds are its copyright,
 # so the game generates its own, exactly as it paints its maps from JSON brushes.
 cpal = "0.18.2"
+# glTF parsing for the operator character. Default features off: the `import`
+# feature pulls the `image` crate in to decode textures for us, and it does not
+# handle the webp the GLB actually carries — so images are decoded below
+# instead, and this stays a document+buffer parser.
+gltf = { version = "1.4", default-features = false, features = ["utils", "names"] }
+# Texture decoding, webp only. The operator's 14 maps are all webp, and every
+# other format this crate can read is dead weight in a binary that ships exactly
+# one asset.
+image = { version = "0.25", default-features = false, features = ["webp"] }
+
+
+[dev-dependencies]
+# PNG encoding for the `operator_preview` example only. Deliberately not a
+# feature on `image` above: features unify across a build, so enabling `png`
+# there would put an encoder nobody calls into the shipped client.
+png = "0.18"
 
 [profile.release]
 opt-level = 3

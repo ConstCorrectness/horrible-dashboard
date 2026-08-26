@@ -33,3 +33,9 @@ identifier = "allow-close-browser-webview"
 description = "Enables the close_browser_webview custom command"
 [permission.commands]
 allow = ["close_browser_webview"]
+
+[[permission]]
+identifier = "allow-close-all-browser-webviews"
+description = "Enables the close_all_browser_webviews custom command"
+[permission.commands]
+allow = ["close_all_browser_webviews"]

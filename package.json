@@ -10,7 +10,9 @@
     "dev:desktop": "node scripts/dev-desktop.mjs",
     "build": "pnpm --filter @horrible/web build",
     "build:desktop": "pnpm --filter @horrible/desktop build",
+    "build:backend-runtime": "node scripts/build-backend-runtime.mjs",
     "build:icons": "node scripts/build_icons.mjs",
+    "build:hassault-character": "node scripts/build_hassault_character.mjs",
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint .",
     "format": "prettier --write ."

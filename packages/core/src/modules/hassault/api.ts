@@ -310,6 +310,119 @@ export function launchNativeFps(opts: LaunchNativeOptions): Promise<LaunchNative
   return apiPost<LaunchNativeResult>('/hassault/launch_native', opts);
 }
 
+// ---- the native client's own installation ------------------------------------
+
+/**
+ * Where the native client would come from if it were launched right now.
+ *
+ * Mirrors `models.NativeClientStatus`. `source` is served rather than worked out
+ * here on purpose: the three tiers are resolved in Python, and a second copy of
+ * that ordering in TypeScript is a second chance to get it backwards — which
+ * would show an install button over a local build that is about to win anyway.
+ */
+export interface NativeClientStatus {
+  /** `setting` | `build` | `download` | `none`. */
+  source: 'setting' | 'build' | 'download' | 'none';
+  binary: string | null;
+  version: string;
+  installed: boolean;
+  /** Whether GitHub published a digest for the installed asset. Meaningless when
+   * `installed` is false — an unverified install is a fact worth showing, not an
+   * error. */
+  verified: boolean;
+  installed_size_bytes?: number | null;
+  /** A checkout is present, so building is an option too. */
+  has_crate: boolean;
+}
+
+export function nativeClientStatus(): Promise<NativeClientStatus> {
+  return apiGet<NativeClientStatus>('/hassault/client/status');
+}
+
+export function removeNativeClient(version = ''): Promise<{ removed: boolean }> {
+  return apiPost<{ removed: boolean }>('/hassault/client/remove', { version });
+}
+
+/** One progress event from `client_install.install_client`. */
+export interface ClientInstallEvent {
+  status?: 'resolving' | 'downloading' | 'verifying' | 'done';
+  error?: string;
+  asset?: string;
+  total?: number;
+  completed?: number;
+  version?: string;
+  verified?: boolean;
+}
+
+/**
+ * Download the prebuilt client, reporting progress as it goes.
+ *
+ * NDJSON rather than a plain POST for the same reason `llamacpp/install` is: this
+ * is tens of megabytes over somebody's connection, and a request that merely takes
+ * a minute to return is indistinguishable from one that has hung.
+ *
+ * Resolves with the terminal event. A stream that ends with neither `done` nor an
+ * `error` is reported as one rather than resolving quietly — a truncated install
+ * that says nothing is exactly the state `install_client` deletes its directory to
+ * avoid leaving behind.
+ */
+export async function installNativeClient(
+  onEvent: (event: ClientInstallEvent) => void,
+  version = '',
+): Promise<ClientInstallEvent> {
+  const res = await fetch(apiUrl('/api/hassault/client/install'), {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ version }),
+  });
+  if (!res.ok || !res.body) {
+    throw new Error(`could not start the client install: ${res.status}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  // A holder rather than a bare `let`: every write happens inside `consume`, and
+  // TypeScript's control-flow analysis cannot see through the closure — it narrows
+  // a plain local to `null` and then to `never` at the check below.
+  const seen: { last: ClientInstallEvent | null } = { last: null };
+
+  const consume = (line: string) => {
+    const text = line.trim();
+    if (!text) return;
+    let event: ClientInstallEvent;
+    try {
+      event = JSON.parse(text) as ClientInstallEvent;
+    } catch {
+      // A half-written line is normal mid-stream; the loop below only calls this
+      // on complete ones, so anything unparseable here is genuinely malformed and
+      // is worth skipping rather than killing the install over.
+      return;
+    }
+    seen.last = event;
+    onEvent(event);
+  };
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    // The last element is whatever came after the final newline: a partial line,
+    // or '' when the chunk ended cleanly. Either way it is not ready yet.
+    buffer = lines.pop() ?? '';
+    for (const line of lines) consume(line);
+  }
+  consume(buffer);
+
+  const terminal = seen.last;
+  if (!terminal || (!terminal.error && terminal.status !== 'done')) {
+    return { error: 'the install ended without finishing' };
+  }
+  return terminal;
+}
+
 export interface SkinDefinition {
   id: string;
   name: string;

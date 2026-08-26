@@ -11,11 +11,17 @@
 //!
 //! See `physics.rs` for what the three implementations are and why.
 
+pub mod animator;
 pub mod api;
 pub mod audio;
 pub mod bodies;
 pub mod camera;
+pub mod character;
+pub mod characters_gpu;
+pub mod clips;
+pub mod detail;
 pub mod geometry;
+pub mod held;
 pub mod hud;
 pub mod interp;
 pub mod menu;
@@ -25,6 +31,7 @@ pub mod prediction;
 pub mod protocol;
 pub mod renderer;
 pub mod settings;
+pub mod shadow;
 pub mod trace;
 pub mod training;
 pub mod viewmodel;

@@ -1145,6 +1145,9 @@ export function HorribleAssaultPanel() {
                 TEAM_COLORS[teamOf.get(fx.id) ?? 0] ?? 0xffffff,
                 fx.id === session.state.playerId,
               );
+              // Flash and kick the shooter's own avatar. Our body is not drawn
+              // (we are inside it), so this only ever lands on someone else.
+              avatars.fired(fx.id);
             }
             session.pendingShots = [];
           }

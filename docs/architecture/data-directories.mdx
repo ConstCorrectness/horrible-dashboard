@@ -119,12 +119,22 @@ Nothing moves. In a checkout every path resolves to exactly where it did before,
 only absolute instead of relative — which is what `mcp/author.py` already had to
 work around, since a project's venv is used from a process with a different cwd.
 
-The per-OS branch is currently **unreachable in practice**: `backend.rs` reports
-`"packaged builds don't bundle the backend yet"` and refuses to start without a
-checkout, so today the backend either runs from a repo or from Docker with the env
-set. This is the groundwork for packaging, not a migration — which also means there
-is no migration code, and none is owed. If data ever *does* need to move, that is a
-one-time step to write then, with both locations known.
+The per-OS branch used to be **unreachable in practice** — `backend.rs` reported
+`"packaged builds don't bundle the backend yet"` and refused to start without a
+checkout. It is now the packaged app's normal path: the shell ships a
+[bundled backend runtime](releases.mdx#the-bundled-backend-runtime), and that
+runtime deliberately carries **no `.git`**, so `repo_root()` returns `None` and every
+root resolves per-OS.
+
+That is the whole reason `repo_root()` tests for `.git` rather than for
+`pyproject.toml` alone. A packaged runtime ships `pyproject.toml` beside `backend/`
+(the version is read from it), and a `pyproject.toml`-only check would therefore
+resolve the data dir *into the installation directory* — under Program Files on
+Windows, inside the read-only `.app` on macOS. The check is not about detecting a
+checkout for its own sake; it is about not writing user data into an install.
+
+There is still no migration code and none is owed: a checkout and a packaged install
+are different installs with different data, not the same one moving.
 
 ## The settings section
 

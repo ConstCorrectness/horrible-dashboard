@@ -535,10 +535,16 @@ an overlay that stops compiling is better than one that quietly changes behaviou
 the frontend draws, and no z-index reaches it. That is the defining property of the
 approach, not a bug to be fixed, and it drives the whole design:
 
-- Geometry must be **pushed, not inherited** — a `ResizeObserver` plus capture-phase
-  `scroll`/`resize` listeners keep the native surface glued to the placeholder
-  (`ResizeObserver` fires on size, but an ancestor scrolling or a sibling pane
-  collapsing *moves* the element without resizing it).
+- Geometry must be **pushed, not inherited**, and *position* is the half with no
+  event to listen for. `ResizeObserver` fires on size; `scroll`/`resize` fire on the
+  viewport. Dragging a desktop window moves the placeholder without any of them — the
+  rect changes every frame and nothing announces it — which left the overlay parked
+  where the window used to be while the pane slid out from under it. So the geometry
+  watcher **samples** the rect instead: an animation-frame loop while anything is
+  moving (woken by the observers *and* by any pointer gesture, so tracking starts on
+  the drag's first frame), backing off to a 250 ms poll once it has been still for
+  ~20 frames. The poll is the backstop for movement no event covers at all — a layout
+  written straight to the store, or a pane moved by an agent tool.
 - Anything drawing over that region must **claim suppression** via
   `suppressNativeOverlays()` (`packages/core/src/modules/browser/overlay.ts`), which
   hides the overlay for as long as it's held. The command palette does this; **any new
@@ -546,7 +552,12 @@ approach, not a bug to be fixed, and it drives the whole design:
   reference-counted so a dropdown closing inside a modal doesn't un-hide it early.
 - **Invisible is not unmounted.** A pane on a non-visible workspace still owns its
   native surface, which would otherwise float over whatever replaced it — so an
-  `IntersectionObserver` and `visibilitychange` hide it as well.
+  `IntersectionObserver` and `visibilitychange` hide it as well, and **unmounting the
+  component hides it too**. That last one is not the same as closing it (the page and
+  its session survive — see the lifetime note below): the component unmounts while its
+  pane lives on whenever the pane switches to reader mode or another engine, and a
+  surface left visible then floats over its replacement, which reads exactly like a
+  frozen page that cannot be closed.
 
 Lifetime is the **pane's**, not the component's. A workspace switch unmounts panes (see
 [`unmount-is-not-close`](../architecture/layout-shell.mdx)), and destroying the webview
@@ -554,8 +565,14 @@ there would drop the user's page, scroll position and logged-in state — so
 `usePaneSession` ties `close_browser_webview` to the pane actually closing, and
 `create_browser_webview` is idempotent so a remount re-points the existing surface.
 
+The one path with no owner is a **frontend reload**: it destroys every pane session
+while the OS window and its children live on, leaving overlays composited over the app
+that no pane will ever hide or close again. `close_all_browser_webviews` sweeps them,
+called once at boot before any pane mounts (`apps/web/src/main.tsx`). Nothing is lost —
+a pane still in the restored layout re-creates its own surface on mount.
+
 Only `http`/`https` URLs load, enforced in Rust: a child webview steered at
-`file:`/`tauri:` would run against local resources with app privileges. All five commands
+`file:`/`tauri:` would run against local resources with app privileges. All six commands
 are `async` because `add_child` dispatches to the main thread and blocks on the reply —
 a sync command already runs there and would deadlock the app.
 

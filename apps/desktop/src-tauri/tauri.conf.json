@@ -28,7 +28,8 @@
     "active": true,
     "targets": ["nsis", "app", "dmg", "appimage", "deb"],
     "createUpdaterArtifacts": true,
-    "icon": ["icons/icon.png"]
+    "icon": ["icons/icon.png"],
+    "resources": ["backend-runtime/**/*"]
   },
   "plugins": {
     "updater": {

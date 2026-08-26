@@ -22,7 +22,6 @@ fn main() {
     }
 
     let supervisor = Arc::new(backend::BackendSupervisor::new());
-    backend::start(Arc::clone(&supervisor));
 
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build());
@@ -40,6 +39,20 @@ fn main() {
     }
 
     builder
+        // The backend starts in `setup` rather than before the builder, because a
+        // packaged build's backend lives in the resource directory and only the app
+        // handle can resolve where that is on each platform. It is still the first
+        // thing that happens — `setup` runs before any window is shown, and `start`
+        // returns immediately — so the backend still boots alongside the UI rather
+        // than after it.
+        .setup({
+            let supervisor = Arc::clone(&supervisor);
+            move |app| {
+                let resource_dir = app.path().resource_dir().ok();
+                backend::start(Arc::clone(&supervisor), resource_dir);
+                Ok(())
+            }
+        })
         .manage(supervisor)
         .manage(webview::BrowserWebviews::default())
         .invoke_handler(tauri::generate_handler![
@@ -64,7 +77,8 @@ fn main() {
             webview::update_browser_webview_bounds,
             webview::set_browser_webview_visible,
             webview::navigate_browser_webview,
-            webview::close_browser_webview
+            webview::close_browser_webview,
+            webview::close_all_browser_webviews
         ])
         .build(tauri::generate_context!())
         .expect("error while building horrible-dashboard")

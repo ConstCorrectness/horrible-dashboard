@@ -21,6 +21,7 @@
     "allow-set-browser-webview-visible",
     "allow-navigate-browser-webview",
     "allow-close-browser-webview",
+    "allow-close-all-browser-webviews",
     "allow-open-external",
     "allow-open-path",
     "allow-updater-check",

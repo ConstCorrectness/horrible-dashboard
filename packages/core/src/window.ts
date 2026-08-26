@@ -54,6 +54,16 @@ export interface BrowserWebviewControl {
   navigate(id: string, url: string): Promise<void>;
   /** Destroy the overlay. */
   close(id: string): Promise<void>;
+  /**
+   * Destroy every overlay the shell is holding.
+   *
+   * Each surface is owned by a pane session, and a frontend reload destroys every
+   * one of those owners while the OS window and its children survive — leaving a
+   * page composited over the app that nothing can hide or close. Called once at
+   * boot, before any pane mounts; a pane still in the restored layout re-creates
+   * its own surface on mount.
+   */
+  closeAll(): Promise<void>;
 }
 
 export interface WindowControl {

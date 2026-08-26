@@ -1,0 +1,157 @@
+---
+title: HorribleAssault's two clients
+description: The browser pane and the native Rust client render the same game from the same server. What is duplicated between them, how each duplication is pinned, and what to do when you add a feature.
+---
+
+# HorribleAssault's two clients
+
+HorribleAssault has **two clients**, and they are not two views of one renderer:
+
+| | |
+| --- | --- |
+| **Browser** | `packages/core/src/modules/hassault/**` — TypeScript + three.js, inside the dashboard pane |
+| **Native** | `apps/native-fps/**` — Rust + `wgpu`, a standalone OS window |
+
+Both talk to the same backend over the same `hassault` `/ws` channel, read the
+same served numbers, and render the same maps and the same character asset.
+Neither is a port *of* the other in the sense of being generated from it: they
+are two independent implementations that must agree.
+
+This page exists because that agreement does not maintain itself. A feature added
+to one and not the other does not fail — it just makes the game different
+depending on which client you launched, and the person who notices is a player,
+not a test.
+
+:::danger The failure mode
+Every divergence on this page was found by **looking at a screenshot**, not by a
+failing build. The native client kept a rig of hand-posed boxes for a long time
+after the browser had a skinned character; its world was lit by a single
+hardcoded direction long after the browser had a light rig, a tone curve and
+surface grain. Both compiled. Both passed their tests.
+:::
+
+## The two reference directions
+
+Confusion about which client is "right" is the root of most drift, so it is worth
+stating plainly, because the answer is different for different questions:
+
+- **The server is the reference for rules.** Anything that decides an outcome —
+  the hitbox, weapon numbers, `plane_order`, spawn placement, what is spotted,
+  how much a fall hurts — is **served**, and a client that hardcodes a copy has
+  created a divergence that produces no error. Neither client gets a vote.
+- **The browser is the reference for look and feel.** It is where the rendering
+  work has historically landed first, so when the two disagree about how
+  something *looks*, the browser is the target and the native client is behind
+  until shown otherwise.
+
+The second rule has one important exception, and it is worth internalising
+because it burned an afternoon: **the browser being the reference does not mean
+copying three.js's numbers without its conventions.** three treats a raw vertex
+colour attribute as already-linear, applies `1/π` inside its Lambert BRDF, and
+converts a `Color` from sRGB on the way in. Port the light intensities without
+the `1/π` and every surface comes out π times too bright; add an sRGB decode
+three does not do and every map comes out darker and more saturated. Both look
+like the *palette* is wrong rather than the exposure.
+
+## What is duplicated, and how it is pinned
+
+Some duplication is unavoidable — a Rust client cannot import a TypeScript
+module. What matters is whether the duplication is **pinned by a shared fixture**
+that both sides replay, or merely asserted in a comment.
+
+### Pinned
+
+| Logic | Implementations | Fixture |
+| --- | --- | --- |
+| Movement, collision, spawn placement | `world.ts` + `player.ts`, `physics.py`, `physics.rs` | `__tests__/physics-vectors.json` (`cases`, `spawns`) |
+| Shot geometry | `trace.ts`, `weapons.py`, `trace.rs` | same fixture (`traces`, `bodies`) |
+| Operator clip selection | `models/clips.ts`, `clips.rs` | `__tests__/clip-vectors.json` |
+| Signed envelope + node id | Python, Kotlin (the Android companion) | `backend/tests/test_network_mobile_conformance.py` |
+
+The contract in every case is the same: **the fixture pins agreement, each side's
+own unit tests pin correctness.** A fixture is not a substitute for testing that
+the rules are right; it is insurance that three implementations of a right rule
+stay the same rule.
+
+Physics is duplicated *three* times rather than two, because the authoritative
+match server has to simulate as well.
+
+### Not pinned — maintain by hand
+
+These are duplicated with nothing checking that they agree. Each is a live
+maintenance hazard, listed so that changing one sends you to the other:
+
+| Logic | Implementations | What drift looks like |
+| --- | --- | --- |
+| Surface tint per texture id | `geometry.ts` `texColor`, `geometry.rs` `tex_color` | The same map is a different colour in each client |
+| Surface detail tile | `surfaces.ts`, `detail.rs` | Different grain, or a seam in one and not the other |
+| Light rig, tone curve | `HorribleAssaultPanel.tsx`, `lighting.wgsl.inc` | The two clients stop looking like the same game |
+| Faction colours | `skins.ts`, `bodies.rs` + `animator.rs` | Teams read differently depending on the client |
+| Grip transform for held weapons | `CharacterModel.ts`, `held.rs` | A rifle in the wrist rather than the hand |
+
+The tint and the detail tile are the two most worth pinning next: both are pure
+functions of small integer inputs, so a vectors file is cheap, and both decide
+what the whole world looks like.
+
+:::note One duplication that is *not* a hazard
+The sun's direction appears in both `shadow.rs` and `lighting.wgsl.inc` — a
+shadow map cast from one vector and a Lambert term computed from another gives
+surfaces lit from one side and shadowed from the other. That one **is** pinned,
+by a test in `shadow.rs` that reads the shader source.
+:::
+
+## What the native client still lacks
+
+Accurate as of the shadow work. Everything here exists in the browser and does
+not exist natively — not as a stub, not as a partial: the code is absent.
+
+| Feature | Browser | Notes |
+| --- | --- | --- |
+| Radar / minimap | `panels/Radar.tsx` | The wire half now parses natively (`spotted`), the drawing does not exist |
+| Grenades in flight, smoke and fire | `nades.ts`, `utility.ts` | `nades`/`zones` now parse natively; nothing renders them |
+| Tracers and impacts | `effects.ts` | |
+| Through-wall reveal | `reveal.ts` | Patches the lit material via `onBeforeCompile` |
+| Voice comms | `voice.ts`, `panels/VoiceCommsPanel.tsx` | |
+| Match companion, post-match debrief, armoury | `panels/*.tsx` | Native has an in-match HUD (`hud.rs`) and a pause menu only |
+| Boot/backdrop scenery | `backdrop.ts` | Deliberately not ported: it is boot-sequence scenery, faded to zero once you deploy, and the native client goes straight into the map |
+
+And in the other direction, so the list is honest: the native client has a
+**developer console**, a **NetGraph** (`F3`), and a **trace/conformance harness**
+that the browser pane does not.
+
+## Adding a feature: the checklist
+
+When you add something to either client, walk this list. It is short on purpose.
+
+1. **Does it decide an outcome?** Then it belongs on the server and is *served*
+   to both clients. Do not implement it twice — implement the fetch twice.
+2. **Does it have to be computed identically in both?** Then it needs a shared
+   fixture in `packages/core/src/modules/hassault/__tests__/`, replayed by both
+   suites. Add the vectors before the second implementation, not after.
+3. **Does it need a wire field?** Check `protocol.rs` actually declares it. The
+   native client silently ignored `nades`, `zones`, `spotted` and `flash` for as
+   long as they existed, because an undeclared field in serde is not an error.
+4. **Is it visual?** Then it will not be caught by any test. Render it and look:
+   `cargo run --example operator_preview` for the character offscreen, or launch
+   the client against a local node. Put the picture next to the browser's.
+5. **Update this page**, specifically the "still lacks" table. A feature that
+   lands in one client and is not recorded here is one nobody will remember is
+   missing from the other.
+
+## Verifying by eye, repeatably
+
+Two things exist to make "look at it" less ad hoc than it sounds:
+
+- **`apps/web/operator-check.html`** — loads the operator GLB in the browser and
+  reports clip count, height, and how many bones move per mesh. Reachable at
+  `/operator-check.html` under `pnpm dev`.
+- **`apps/native-fps/examples/operator_preview.rs`** — renders the same character
+  offscreen to a PNG, in the same five clips, with no window and no match.
+
+They pose the *same five clips* so the two pictures can be put side by side. That
+is the only comparison that catches a character facing backwards, inside out, or
+in the wrong colour — all of which stay true while every unit test passes.
+
+For the world, launch the native client against a running node and compare
+against the browser pane's Train on the same map. There is no automated version
+of this yet, and it is where every divergence on this page was actually found.

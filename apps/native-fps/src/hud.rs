@@ -595,7 +595,10 @@ fn paint_net_graph(p: &mut Painter, view: &HudView, u: f32) {
         }
     };
 
-    let max_w = lines.iter().map(|l| text_width(l, scale)).fold(0.0f32, f32::max);
+    let max_w = lines
+        .iter()
+        .map(|l| text_width(l, scale))
+        .fold(0.0f32, f32::max);
     let box_w = max_w + pad * 2.0;
     let box_h = line_h * lines.len() as f32 + pad * 1.5;
     let x = p.width - box_w - u * 6.0;

@@ -34,11 +34,13 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
+use hassault_native::animator::Squad;
 use hassault_native::api::{HitboxSpec, WeaponSpec};
 use hassault_native::audio::GameAudio;
 use hassault_native::bodies;
 use hassault_native::camera::Camera;
 use hassault_native::geometry::MeshData;
+use hassault_native::held;
 use hassault_native::hud::{Hud, HudView, OverlayVertex, ScoreRow};
 use hassault_native::interp::{PingTracker, SnapshotBuffer};
 use hassault_native::menu::{self, Action, Menu, Page};
@@ -104,6 +106,11 @@ const STRIDE_DISTANCE: f32 = 4.2;
 pub struct App {
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
+    /// The skinned operator and every drawn player's animation state.
+    ///
+    /// `None` when the asset failed to parse, which falls back to the old box
+    /// bodies rather than to a match of invisible players.
+    squad: Option<Squad>,
     mesh: MeshData,
     world: World,
     /// The match, when there is one. **Train has none** — it is one player on a
@@ -284,6 +291,16 @@ impl App {
             self_id: String::new(),
             joined: false,
             was_dead: false,
+            // Parsed up front rather than on the first body: decoding fourteen
+            // textures mid-match is a visible hitch, and the first body tends to
+            // appear at the least convenient moment for one.
+            squad: match Squad::load() {
+                Ok(squad) => Some(squad),
+                Err(error) => {
+                    eprintln!("hassault: the operator model could not be loaded: {error}");
+                    None
+                }
+            },
             last_frame: Instant::now(),
             input_accum: 0.0,
             frames: 0,
@@ -463,6 +480,21 @@ impl App {
     /// Advance the HUD and the weapon in the hands by one frame.
     fn animate(&mut self, dt: f32) {
         self.hud.update(dt);
+        // Advanced here rather than at draw time so every player's clip runs on
+        // the same clock the weapon and the HUD do. The poses are uploaded later
+        // in the frame — see `poses()`.
+        {
+            let dummies;
+            let rows: &[PlayerRow] = if self.socket.is_none() {
+                dummies = self.range.rows();
+                &dummies
+            } else {
+                &self.drawn
+            };
+            if let Some(squad) = self.squad.as_mut() {
+                squad.update(dt, rows, &self.self_id);
+            }
+        }
         let weapon = self.held().map(|w| w.id.clone()).unwrap_or_default();
         if weapon != self.viewmodel.weapon() {
             // A weapon swap drops the scope: the step is an index into *this*
@@ -710,6 +742,11 @@ impl App {
                         // server refused for rate limiting, an empty magazine, or
                         // being dead.
                         if let Fx::Shot { id, .. } = fx {
+                            // Every shooter's upper body kicks, not just ours —
+                            // the animation is how a shot reads from the outside.
+                            if let Some(squad) = self.squad.as_mut() {
+                                squad.note_shot(id);
+                            }
                             if id == &self.self_id {
                                 self.viewmodel.fire();
                                 // Our own gun, in its own voice. The browser
@@ -1295,6 +1332,10 @@ impl ApplicationHandler for App {
                     renderer.backend, renderer.adapter_name, self.mesh.triangles
                 );
                 self.renderer = Some(renderer);
+                if let (Some(renderer), Some(squad)) = (self.renderer.as_mut(), self.squad.as_ref())
+                {
+                    renderer.install_characters(squad.operator());
+                }
             }
             Err(e) => {
                 eprintln!("hassault: {e}");
@@ -1424,7 +1465,14 @@ impl ApplicationHandler for App {
                     // where they should be shown this frame.
                     &self.drawn
                 };
-                let mut verts = bodies::build(rows, &self.self_id, &self.hitbox);
+                // The box rig is the fallback, not a second layer: drawing both
+                // puts two overlapping characters on every player. The skinned
+                // path still contributes here — the operator carries no weapon,
+                // so the prop in its hand rides the untextured stream.
+                let mut verts = match self.squad.as_ref() {
+                    Some(squad) => held::build(squad.poses()),
+                    None => bodies::build(rows, &self.self_id, &self.hitbox),
+                };
                 if self.settings.show_hitboxes {
                     // Appended to the same stream, so the wireframes are depth
                     // tested against the world like everything else: a hitbox
@@ -1500,6 +1548,9 @@ impl ApplicationHandler for App {
                     return;
                 };
                 renderer.set_bodies(&verts);
+                if let Some(squad) = self.squad.as_ref() {
+                    renderer.set_characters(squad.poses());
+                }
                 renderer.set_viewmodel(&self.weapon_verts);
                 renderer.set_overlay(&self.overlay);
                 // `Ok(false)` is a frame that did not happen — minimised,

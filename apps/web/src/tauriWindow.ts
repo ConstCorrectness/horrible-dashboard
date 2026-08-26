@@ -32,6 +32,7 @@ export function createTauriWindowControl(): WindowControl {
       setVisible: (id, visible) => invoke<void>('set_browser_webview_visible', { id, visible }),
       navigate: (id, url) => invoke<void>('navigate_browser_webview', { id, url }),
       close: (id) => invoke<void>('close_browser_webview', { id }),
+      closeAll: () => invoke<void>('close_all_browser_webviews'),
     },
   };
 }

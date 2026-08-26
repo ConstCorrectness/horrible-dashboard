@@ -1,0 +1,334 @@
+{
+  "comment": "Shared vectors for operator clip selection, replayed by both clients. The browser's selectLocomotion/selectDeath/fadeFor/isOneShot (models/clips.ts) and the native client's crate::clips (apps/native-fps/src/clips.rs) are two implementations of one decision, the same way the physics is three. This fixture pins that they AGREE; each side's own tests pin that it is correct. A case added here must be added nowhere else.",
+  "locomotion": [
+    {
+      "why": "death overrides direction entirely - killed mid-strafe is dying, not strafing",
+      "state": {
+        "alive": false,
+        "ground": true,
+        "crouch": 0,
+        "speed": 8,
+        "forward": 0,
+        "strafe": 1,
+        "hurt": false
+      },
+      "clip": "death_from_the_front"
+    },
+    {
+      "why": "airborne beats direction too, and is checked after death",
+      "state": {
+        "alive": true,
+        "ground": false,
+        "crouch": 0,
+        "speed": 12,
+        "forward": 1,
+        "strafe": 0,
+        "hurt": false
+      },
+      "clip": "running_jump"
+    },
+    {
+      "why": "a dead player in the air is dead, not jumping",
+      "state": {
+        "alive": false,
+        "ground": false,
+        "crouch": 0,
+        "speed": 12,
+        "forward": 1,
+        "strafe": 0,
+        "hurt": false
+      },
+      "clip": "death_from_the_front"
+    },
+    {
+      "why": "crouched and moving",
+      "state": {
+        "alive": true,
+        "ground": true,
+        "crouch": 1,
+        "speed": 3,
+        "forward": 1,
+        "strafe": 0,
+        "hurt": false
+      },
+      "clip": "crouch_walking"
+    },
+    {
+      "why": "crouched and still - there is no crouched idle, so the kneel stands in",
+      "state": {
+        "alive": true,
+        "ground": true,
+        "crouch": 1,
+        "speed": 0,
+        "forward": 0,
+        "strafe": 0,
+        "hurt": false
+      },
+      "clip": "rifle_crouch_walk_to_kneel"
+    },
+    {
+      "why": "crouch is a fraction, and 0.5 is NOT crouched - the boundary both sides must agree on",
+      "state": {
+        "alive": true,
+        "ground": true,
+        "crouch": 0.5,
+        "speed": 3,
+        "forward": 1,
+        "strafe": 0,
+        "hurt": false
+      },
+      "clip": "standard_walk"
+    },
+    {
+      "why": "just above the crouch boundary",
+      "state": {
+        "alive": true,
+        "ground": true,
+        "crouch": 0.51,
+        "speed": 3,
+        "forward": 1,
+        "strafe": 0,
+        "hurt": false
+      },
+      "clip": "crouch_walking"
+    },
+    {
+      "why": "below IDLE_SPEED is standing still, however the jitter reads",
+      "state": {
+        "alive": true,
+        "ground": true,
+        "crouch": 0,
+        "speed": 0.59,
+        "forward": 1,
+        "strafe": 0,
+        "hurt": false
+      },
+      "clip": "rifle_aiming_idle"
+    },
+    {
+      "why": "exactly IDLE_SPEED is still - the test is strictly greater",
+      "state": {
+        "alive": true,
+        "ground": true,
+        "crouch": 0,
+        "speed": 0.6,
+        "forward": 1,
+        "strafe": 0,
+        "hurt": false
+      },
+      "clip": "rifle_aiming_idle"
+    },
+    {
+      "why": "just over IDLE_SPEED is walking",
+      "state": {
+        "alive": true,
+        "ground": true,
+        "crouch": 0,
+        "speed": 0.61,
+        "forward": 1,
+        "strafe": 0,
+        "hurt": false
+      },
+      "clip": "standard_walk"
+    },
+    {
+      "why": "strafe dominates forward, to the right",
+      "state": {
+        "alive": true,
+        "ground": true,
+        "crouch": 0,
+        "speed": 5,
+        "forward": 0.3,
+        "strafe": 0.9,
+        "hurt": false
+      },
+      "clip": "right_strafe_walking"
+    },
+    {
+      "why": "strafe dominates forward, to the left",
+      "state": {
+        "alive": true,
+        "ground": true,
+        "crouch": 0,
+        "speed": 5,
+        "forward": 0.3,
+        "strafe": -0.9,
+        "hurt": false
+      },
+      "clip": "strafing"
+    },
+    {
+      "why": "equal magnitudes are NOT a strafe - the comparison is strictly greater, so a diagonal walks",
+      "state": {
+        "alive": true,
+        "ground": true,
+        "crouch": 0,
+        "speed": 5,
+        "forward": 0.7,
+        "strafe": 0.7,
+        "hurt": false
+      },
+      "clip": "standard_walk"
+    },
+    {
+      "why": "backwards, when forward dominates and is negative",
+      "state": {
+        "alive": true,
+        "ground": true,
+        "crouch": 0,
+        "speed": 5,
+        "forward": -0.9,
+        "strafe": 0.2,
+        "hurt": false
+      },
+      "clip": "walking_backwards"
+    },
+    {
+      "why": "backwards wins over hurt and over speed",
+      "state": {
+        "alive": true,
+        "ground": true,
+        "crouch": 0,
+        "speed": 14,
+        "forward": -1,
+        "strafe": 0,
+        "hurt": true
+      },
+      "clip": "walking_backwards"
+    },
+    {
+      "why": "over RUN_SPEED and hurt enough for the limp to be information",
+      "state": {
+        "alive": true,
+        "ground": true,
+        "crouch": 0,
+        "speed": 12,
+        "forward": 1,
+        "strafe": 0,
+        "hurt": true
+      },
+      "clip": "injured_run"
+    },
+    {
+      "why": "hurt but not fast enough - the limp needs the run",
+      "state": {
+        "alive": true,
+        "ground": true,
+        "crouch": 0,
+        "speed": 5,
+        "forward": 1,
+        "strafe": 0,
+        "hurt": true
+      },
+      "clip": "standard_walk"
+    },
+    {
+      "why": "exactly RUN_SPEED is still the walk - strictly greater again",
+      "state": {
+        "alive": true,
+        "ground": true,
+        "crouch": 0,
+        "speed": 9,
+        "forward": 1,
+        "strafe": 0,
+        "hurt": true
+      },
+      "clip": "standard_walk"
+    },
+    {
+      "why": "over RUN_SPEED and unhurt",
+      "state": {
+        "alive": true,
+        "ground": true,
+        "crouch": 0,
+        "speed": 12,
+        "forward": 1,
+        "strafe": 0,
+        "hurt": false
+      },
+      "clip": "rifle_walk"
+    }
+  ],
+  "death": [
+    { "headshot": true, "fromBehind": true, "clip": "death_from_back_headshot" },
+    { "headshot": true, "fromBehind": false, "clip": "death_from_the_front" },
+    { "headshot": false, "fromBehind": true, "clip": "dying" },
+    { "headshot": false, "fromBehind": false, "clip": "dying" }
+  ],
+  "fade": [
+    {
+      "why": "death does not ease - the snap into a slump is the point",
+      "clip": "dying",
+      "seconds": 0.05
+    },
+    { "clip": "death_from_the_front", "seconds": 0.05 },
+    { "clip": "death_from_back_headshot", "seconds": 0.05 },
+    { "clip": "running_jump", "seconds": 0.08 },
+    { "clip": "standard_walk", "seconds": 0.18 },
+    { "clip": "rifle_aiming_idle", "seconds": 0.18 },
+    { "clip": "reloading", "seconds": 0.18 }
+  ],
+  "oneShot": [
+    { "clip": "dying", "once": true },
+    { "clip": "death_from_the_front", "once": true },
+    { "clip": "death_from_back_headshot", "once": true },
+    { "clip": "reloading", "once": true },
+    { "clip": "firing_rifle", "once": true },
+    { "clip": "running_jump", "once": true },
+    { "clip": "standard_walk", "once": false },
+    { "clip": "crouch_walking", "once": false },
+    { "clip": "rifle_aiming_idle", "once": false },
+    { "clip": "walking_backwards", "once": false }
+  ],
+  "boneKeys": [
+    {
+      "why": "the colon form Mixamo writes",
+      "name": "mixamorig:Hips",
+      "key": "Hips",
+      "upper": false
+    },
+    {
+      "why": "the underscore form glTF export sanitises it to",
+      "name": "mixamorig_Spine2",
+      "key": "Spine2",
+      "upper": true
+    },
+    {
+      "why": "the bare concatenation some exporters emit",
+      "name": "mixamorigHead",
+      "key": "Head",
+      "upper": true
+    },
+    {
+      "why": "a uniquifier added where a name collided across the nine skins",
+      "name": "mixamorig:RightHand_1",
+      "key": "RightHand",
+      "upper": true
+    },
+    {
+      "why": "a trailing word must survive - HeadTop_End is not HeadTop with a suffix",
+      "name": "mixamorig:HeadTop_End",
+      "key": "HeadTop_End",
+      "upper": true
+    },
+    {
+      "why": "a finger rides its hand into the upper body",
+      "name": "mixamorig:RightHandIndex1",
+      "key": "RightHandIndex1",
+      "upper": true
+    },
+    {
+      "why": "legs are never an upper-body bone, which is what makes layering work",
+      "name": "mixamorig:LeftUpLeg",
+      "key": "LeftUpLeg",
+      "upper": false
+    },
+    { "name": "mixamorig:LeftFoot", "key": "LeftFoot", "upper": false },
+    {
+      "why": "Spine is deliberately NOT in the set - the aim pitch drives it instead",
+      "name": "mixamorig:Spine",
+      "key": "Spine",
+      "upper": false
+    }
+  ]
+}

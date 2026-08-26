@@ -204,7 +204,7 @@ export const hassaultModule: ModuleManifest = {
       key: 'hassault.nativeBinaryPath',
       title: 'Native client binary',
       description:
-        'Path to the native client executable. Blank looks in the usual build outputs under apps/native-fps — build it with `cargo build --release --manifest-path apps/native-fps/Cargo.toml`.',
+        'Path to the native client executable, when you want a specific one. Blank resolves three tiers in order: your own build under apps/native-fps/target, then a prebuilt client downloaded from the release matching this app version (the Install button in the game’s main menu). A local build always wins over a download — otherwise installing once would silently start running the release instead of the change you are working on.',
       type: 'string',
       default: '',
     },

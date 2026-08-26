@@ -96,6 +96,15 @@ buffers, terminal + file explorer.
   knob is `HORRIBLE_DEV_HOST`, set by `scripts/dev-desktop.mjs` and read by both
   `vite.config.ts` and `bind_host()` in `backend.rs`, whose fallback stays loopback
   so a packaged build is never LAN-exposed.
+- `node scripts/build-backend-runtime.mjs` — build the **bundled backend runtime** a
+  packaged desktop app ships: a relocatable CPython (python-build-standalone, the
+  distribution `uv` manages) with every locked dependency in its own `site-packages`
+  and the `backend/` tree beside it, written to
+  `apps/desktop/src-tauri/backend-runtime/` where `bundle.resources` picks it up. ~1 GB
+  and a few minutes; git-ignored, and only needed to *package* — `pnpm dev:desktop`
+  runs the checkout. A real interpreter rather than PyInstaller because the import
+  graph isn't knowable at build time (backend plugins come from pip entry points), and
+  freezing it breaks that silently. See docs/architecture/releases.mdx.
 - `pnpm typecheck`, `pnpm lint` — whole workspace, from the root
 - `cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml` — Rust check
 - **Android companion:** open `apps/mobile-android/` in Android Studio and run `app`.

@@ -1,0 +1,100 @@
+{
+  "source": "apps/web/public/hassault-operator.glb",
+  "generatedFrom": "assets/horribleAssault/animations",
+  "targetHeight": 5.2,
+  "rootMotion": "strip",
+  "clips": [
+    {
+      "name": "crouch_to_standing_with_rifle",
+      "duration": 1.1
+    },
+    {
+      "name": "crouch_walking",
+      "duration": 1.1667
+    },
+    {
+      "name": "crouched_to_standing",
+      "duration": 0.6333
+    },
+    {
+      "name": "death_from_back_headshot",
+      "duration": 3.7
+    },
+    {
+      "name": "death_from_the_front",
+      "duration": 3.4333
+    },
+    {
+      "name": "dying",
+      "duration": 4.4
+    },
+    {
+      "name": "firing_rifle",
+      "duration": 1.1667
+    },
+    {
+      "name": "injured_run",
+      "duration": 0.6333
+    },
+    {
+      "name": "reloading",
+      "duration": 3.3
+    },
+    {
+      "name": "rifle_aiming_idle",
+      "duration": 3.1
+    },
+    {
+      "name": "rifle_crouch_walk_to_kneel",
+      "duration": 2.7333
+    },
+    {
+      "name": "rifle_side_step",
+      "duration": 1.1667
+    },
+    {
+      "name": "rifle_turn",
+      "duration": 1.4667
+    },
+    {
+      "name": "rifle_walk",
+      "duration": 1.3
+    },
+    {
+      "name": "right_strafe_walking",
+      "duration": 1.0333
+    },
+    {
+      "name": "running_jump",
+      "duration": 0.9
+    },
+    {
+      "name": "running_up_stairs",
+      "duration": 0.6
+    },
+    {
+      "name": "standard_walk",
+      "duration": 1.1667
+    },
+    {
+      "name": "strafing",
+      "duration": 1.2333
+    },
+    {
+      "name": "turn_90_left",
+      "duration": 1
+    },
+    {
+      "name": "walk_crouching_forward",
+      "duration": 1
+    },
+    {
+      "name": "walk_forward_right",
+      "duration": 1
+    },
+    {
+      "name": "walking_backwards",
+      "duration": 0.8667
+    }
+  ]
+}

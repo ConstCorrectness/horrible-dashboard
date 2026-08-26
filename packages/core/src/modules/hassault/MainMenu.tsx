@@ -19,10 +19,17 @@
  *
  * See docs/modules/hassault.mdx.
  */
-import { useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 
-import type { Invitee, MapSummary, MatchInvite, SessionInfo } from './api';
-import { launchNativeFps } from './api';
+import type {
+  ClientInstallEvent,
+  Invitee,
+  MapSummary,
+  MatchInvite,
+  NativeClientStatus,
+  SessionInfo,
+} from './api';
+import { installNativeClient, launchNativeFps, nativeClientStatus } from './api';
 import { describeControls, type Bindings } from './controls';
 import {
   ControlsPanel,
@@ -192,45 +199,101 @@ export function MainMenu(props: MainMenuProps) {
 // ---- the native client ------------------------------------------------------
 
 /**
- * The experimental native client, and an honest description of it.
+ * The native client, an honest description of it, and how to get one.
  *
  * It used to sit in **Play**, next to Train and Host, advertising "native C++ /
  * Vulkan, 1,000Hz+ raw input, sub-tick UDP networking directly to this match
- * server", while being a software framebuffer walking a hardcoded 16×16 grid with
- * no map loading and no networking at all.
+ * server", while being a software framebuffer walking a hardcoded 16x16 grid with
+ * no map loading and no networking at all. The copy that replaced it then
+ * *understated* it for just as long — "no HUD, no weapon model and no sound" long
+ * after `hud.rs`, `viewmodel.rs` and `audio.rs` were written, which reads as a
+ * prototype not worth launching. A row that once overstated has to be corrected in
+ * both directions, not permanently pessimistic.
  *
- * It is now real as far as it goes, and this copy tracks exactly how far: same
- * maps, same matches, a `wgpu` renderer, raw mouse input and client-side
- * prediction — and no HUD, no weapon view model and no sound. A row that
- * overstated it once has to keep understating it: somebody who launches this
- * expecting the finished client files a bug against the game, not the stage.
+ * The other half of this row is **where the binary comes from**, which used to be
+ * "wherever `cargo build` put it" and nowhere else. `hassault.nativeClient` is on
+ * by default, so that made the way in a Rust toolchain — an instruction a player
+ * cannot follow. The three tiers are resolved by the backend and reported by
+ * `/client/status`; nothing here re-derives them, because a second copy of that
+ * ordering would eventually offer to download a client over a local build that is
+ * about to win anyway.
  *
  * See docs/modules/hassault.mdx.
  */
 function NativeClientRow(props: MainMenuProps) {
   const [launching, setLaunching] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  const [client, setClient] = useState<NativeClientStatus | null>(null);
+  const [installing, setInstalling] = useState(false);
+  const [progress, setProgress] = useState<ClientInstallEvent | null>(null);
+
+  const refresh = useCallback(() => {
+    nativeClientStatus()
+      .then(setClient)
+      .catch(() => setClient(null));
+  }, []);
+
+  useEffect(refresh, [refresh]);
+
+  const install = async () => {
+    setInstalling(true);
+    setStatus(null);
+    setProgress(null);
+    try {
+      const done = await installNativeClient(setProgress);
+      setStatus(
+        done.error
+          ? done.error
+          : done.verified
+            ? 'Installed and verified.'
+            : 'Installed. GitHub published no digest for this asset, so it could not be verified.',
+      );
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : 'The install failed.');
+    } finally {
+      setInstalling(false);
+      setProgress(null);
+      refresh();
+    }
+  };
+
+  const pct =
+    progress?.status === 'downloading' && progress.total
+      ? Math.round(((progress.completed ?? 0) / progress.total) * 100)
+      : null;
 
   return (
     <div style={{ marginTop: '1rem' }}>
-      <h4 style={panel.heading}>Native client (experimental)</h4>
+      <h4 style={panel.heading}>Native client</h4>
       <div style={panel.row}>
         <div style={panel.rowMain}>
           <span>Launch the native client</span>
           <span style={panel.dim}>
-            A separate window: same maps, same match, rendered on the GPU with raw mouse input and
-            no frame cap. It has no HUD, no weapon model and no sound yet, so this pane is still the
-            complete game.
+            A separate window: the same maps and the same match, rendered on the GPU with raw mouse
+            input and no frame cap, with its own HUD, weapon view model and synthesized sound.
           </span>
+          <span style={{ ...panel.dim, fontFamily: 'var(--font-mono, ui-monospace, monospace)' }}>
+            {describeClientSource(client)}
+          </span>
+          {progress && (
+            <span style={{ ...panel.dim, marginTop: '0.2rem' }}>
+              {progress.status === 'downloading'
+                ? `Downloading${pct === null ? '' : ` ${pct}%`}`
+                : progress.status === 'verifying'
+                  ? 'Verifying'
+                  : 'Resolving'}
+            </span>
+          )}
           {status && (
             <span
               style={{
                 fontSize: '0.72rem',
                 // A pid is the one unambiguous signal it really started; anything
                 // else the route returns is a reason it didn't.
-                color: status.includes('PID')
-                  ? 'var(--success, #4ade80)'
-                  : 'var(--danger, #f87171)',
+                color:
+                  status.includes('PID') || status.startsWith('Installed')
+                    ? 'var(--success, #4ade80)'
+                    : 'var(--danger, #f87171)',
                 marginTop: '0.2rem',
               }}
             >
@@ -238,38 +301,70 @@ function NativeClientRow(props: MainMenuProps) {
             </span>
           )}
         </div>
-        <button
-          onClick={async () => {
-            setLaunching(true);
-            setStatus(null);
-            try {
-              const res = await launchNativeFps({
-                // The room we are actually in, or none — the client asks the node
-                // for a match on this map. `'session_host'` used to go here, which
-                // named no room that has ever existed.
-                // Explicitly a join, because this row is "open it once and see",
-                // not "change how I play". Train and Host reach the same route
-                // with their own mode when the setting above is on.
-                mode: 'join',
-                room_id: props.room,
-                map_name: props.mapName,
-                username: props.account?.username || undefined,
-                max_fps: 240,
-              });
-              setStatus(res.message || (res.launched ? 'Launched' : 'Binary not found'));
-            } catch (err) {
-              setStatus(err instanceof Error ? err.message : 'Launch failed');
-            } finally {
-              setLaunching(false);
-            }
-          }}
-          disabled={launching}
-        >
-          {launching ? 'Launching…' : 'Launch'}
-        </button>
+        <div style={{ display: 'flex', gap: '0.4rem' }}>
+          {/* Offered whenever a prebuilt one could be fetched, not only when
+              nothing resolves: an install is also how somebody on a checkout
+              without a toolchain gets unstuck after deleting `target/`. */}
+          <button onClick={install} disabled={installing || launching}>
+            {installing ? 'Installing…' : client?.installed ? 'Reinstall' : 'Install'}
+          </button>
+          <button
+            onClick={async () => {
+              setLaunching(true);
+              setStatus(null);
+              try {
+                const res = await launchNativeFps({
+                  // The room we are actually in, or none — the client asks the node
+                  // for a match on this map. `'session_host'` used to go here, which
+                  // named no room that has ever existed.
+                  // Explicitly a join, because this row is "open it once and see",
+                  // not "change how I play". Train and Host reach the same route
+                  // with their own mode when the setting above is on.
+                  mode: 'join',
+                  room_id: props.room,
+                  map_name: props.mapName,
+                  username: props.account?.username || undefined,
+                  max_fps: 240,
+                });
+                setStatus(res.message || (res.launched ? 'Launched' : 'Binary not found'));
+              } catch (err) {
+                setStatus(err instanceof Error ? err.message : 'Launch failed');
+              } finally {
+                setLaunching(false);
+              }
+            }}
+            disabled={launching || installing}
+          >
+            {launching ? 'Launching…' : 'Launch'}
+          </button>
+        </div>
       </div>
     </div>
   );
+}
+
+/**
+ * Which of the three tiers is about to answer a launch.
+ *
+ * Worth a line of its own because the tiers are invisible from the outside: a
+ * developer running their own build and a player running a download look
+ * identical right up until one of them behaves differently, and "which binary is
+ * this" is the first question either of them ends up asking.
+ */
+function describeClientSource(client: NativeClientStatus | null): string {
+  if (!client) return 'Client: checking…';
+  switch (client.source) {
+    case 'setting':
+      return 'Client: the binary named in Settings';
+    case 'build':
+      return 'Client: your local build (a checkout always wins over a download)';
+    case 'download':
+      return `Client: downloaded v${client.version}${client.verified ? '' : ' (unverified)'}`;
+    default:
+      return client.has_crate
+        ? 'Client: none built. Install the prebuilt one, or run cargo build.'
+        : 'Client: not installed yet.';
+  }
 }
 
 // ---- play -------------------------------------------------------------------
