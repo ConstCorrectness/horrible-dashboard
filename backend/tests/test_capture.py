@@ -10,6 +10,7 @@ import pytest
 from backend.modules.research import service
 from backend.modules.research.capture import (
     IMAGE_KIND,
+    SCRIPT_KIND,
     STYLESHEET_KIND,
     build_page,
     filename_for_title,
@@ -43,9 +44,13 @@ def test_list_resources_resolves_and_filters() -> None:
     plan = list_resources(HTML, BASE)
     assert plan["https://example.com/img/photo.png"] == IMAGE_KIND
     assert plan["https://example.com/styles/main.css"] == STYLESHEET_KIND
-    # data: URIs and scripts are not fetchable subresources.
+    # data: URIs are not fetchable subresources, and a script is only fetched when
+    # the caller has said it intends to keep it.
     assert all(not u.startswith("data:") for u in plan)
     assert not any(u.endswith("app.js") for u in plan)
+
+    with_scripts = list_resources(HTML, BASE, include_scripts=True)
+    assert with_scripts["https://example.com/app.js"] == SCRIPT_KIND
 
 
 def test_list_css_urls_resolves_against_stylesheet() -> None:
@@ -105,6 +110,74 @@ def test_build_page_respects_caps() -> None:
 def test_keep_scripts_keeps_scripts() -> None:
     out = build_page(HTML, BASE, {}, keep_scripts=True)
     assert "<script" in out
+
+
+def test_kept_scripts_are_inlined_as_data_uris() -> None:
+    """Keeping the tag is not enough — its bytes have to come with it.
+
+    An archive whose `<script src>` still points at the network fails silently: it
+    renders its server HTML, never hydrates, and every tab and menu looks present
+    while doing nothing. That is the bug this test exists for.
+
+    A `data:` URI rather than an inline body, because an inline script has no
+    `defer`: turning a deferred head bundle into an inline one runs it before the
+    body exists.
+    """
+    body = b"console.log('hydrated')"
+    out = build_page(
+        HTML,
+        BASE,
+        {"https://example.com/app.js": (body, "application/javascript")},
+        keep_scripts=True,
+    )
+    encoded = base64.b64encode(body).decode("ascii")
+    assert encoded in out
+    assert "https://example.com/app.js" not in out
+
+
+def test_unfetched_script_keeps_an_absolute_url() -> None:
+    out = build_page(HTML, BASE, {}, keep_scripts=True)
+    assert 'src="https://example.com/app.js"' in out
+
+
+def test_scripted_capture_shims_storage() -> None:
+    """The shim is what makes a scripted archive actually work.
+
+    In the opaque origin the archive is served into, *reading* `localStorage` throws
+    a SecurityError rather than returning null, and every docs theme reads it near
+    the top of its init. Without the shim the throw aborts that script and the page
+    hydrates nothing — indistinguishable, from the outside, from scripts having been
+    stripped. Verified against real captures: Sphinx/furo and Docusaurus both die
+    exactly there.
+    """
+    out = build_page(HTML, BASE, {}, keep_scripts=True)
+    assert "localStorage" in out
+    assert "sessionStorage" in out
+    # It has to run before the page's own scripts, so it belongs in <head>.
+    assert out.index("memoryStorage") < out.index('src="https://example.com/app.js"')
+
+
+def test_sanitized_capture_has_no_shim() -> None:
+    """No scripts to rescue means no shim: a sanitized archive stays byte-for-byte
+    the inert thing the research module has always produced."""
+    out = build_page(HTML, BASE, {})
+    assert "memoryStorage" not in out
+
+
+def test_sanitized_capture_never_inlines_scripts() -> None:
+    """The default path is unchanged: a `research` capture drops the tags, so the
+    bytes must not ride along even when they were fetched."""
+    out = build_page(
+        HTML,
+        BASE,
+        {
+            "https://example.com/app.js": (
+                b"console.log(1)",
+                "application/javascript",
+            )
+        },
+    )
+    assert "<script" not in out
 
 
 def test_filename_for_title_windows_safe() -> None:

@@ -3,7 +3,21 @@
 `GET /api/artifacts/{id}` is the node's only byte-serving route — the PDF and
 page viewers load stored blobs from here. Captured pages are served with a
 sandboxing CSP on top of the viewer's iframe ``sandbox`` attribute: the stored
-HTML is third-party content and gets no scripts and no origin, ever.
+HTML is third-party content and never gets an origin.
+
+Whether it gets *scripts* depends on how it was captured, and that is the one
+security decision on this route. A `research` capture is sanitized at build time
+(`build_page` drops every `<script>`) and served inert. A `docviewer` doc-set
+capture keeps its scripts — a documentation page whose tabs, collapsibles and
+client-side search are all JS reads as broken without them — and declares
+`meta.scripts`, which unlocks `sandbox allow-scripts` here.
+
+`allow-scripts` is only safe because `allow-same-origin` is absent: the document
+lands in a **unique opaque origin**, so its script can hydrate and animate the
+page but cannot reach our DOM, our storage, our cookies, or `/api`. The two
+directives together would void the sandbox entirely. `default-src 'none'` then
+denies the page any network of its own, so nothing that was not inlined at
+capture time can be fetched.
 """
 
 from __future__ import annotations
@@ -21,6 +35,7 @@ from backend.modules.artifacts.models import (
     UploadResponse,
 )
 from backend.modules.artifacts import store
+from backend.modules.artifacts.store import page_csp
 
 router = APIRouter(prefix="/artifacts", tags=["artifacts"])
 
@@ -64,10 +79,11 @@ def serve_artifact(artifact_id: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="artifact blob missing")
     headers = {"X-Content-Type-Options": "nosniff"}
     if artifact["kind"] == "page":
-        # Defense in depth: the page viewer's iframe already has sandbox="", but
-        # anything that loads this URL directly gets the same no-script, no-origin
-        # treatment.
-        headers["Content-Security-Policy"] = "sandbox; default-src 'self' data:"
+        # Defense in depth: the viewing iframe already carries a `sandbox`
+        # attribute, but anything that loads this URL directly gets the same
+        # treatment. See the module docstring for why `allow-scripts` without
+        # `allow-same-origin` is the whole containment.
+        headers["Content-Security-Policy"] = page_csp(artifact)
     return FileResponse(
         path,
         media_type=artifact["mime"],

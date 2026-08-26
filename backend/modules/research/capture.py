@@ -38,6 +38,10 @@ TOTAL_CAP = 25_000_000
 # Kinds a caller may want to fetch differently (content-type allowlists).
 IMAGE_KIND = "image"
 STYLESHEET_KIND = "stylesheet"
+# Only ever fetched when the caller asked to keep scripts (`docviewer`'s doc-set
+# capture). A sanitized capture drops the tags entirely, so fetching their sources
+# would be downloading bytes to throw away.
+SCRIPT_KIND = "script"
 
 _CSS_URL_RE = re.compile(r"url\(\s*(['\"]?)([^'\"\)]+)\1\s*\)", re.IGNORECASE)
 _ON_ATTR_RE = re.compile(r"^on", re.IGNORECASE)
@@ -70,8 +74,17 @@ def _abs(base_url: str, url: str) -> str | None:
     return resolved
 
 
-def list_resources(html: str, base_url: str) -> dict[str, str]:
-    """Pass 1: subresource URLs to fetch, as ``{url: kind}`` in document order."""
+def list_resources(
+    html: str, base_url: str, *, include_scripts: bool = False
+) -> dict[str, str]:
+    """Pass 1: subresource URLs to fetch, as ``{url: kind}`` in document order.
+
+    `include_scripts` pairs with `build_page`'s `keep_scripts`, and the two must
+    agree: keeping a `<script src>` tag whose source was never fetched leaves the
+    archive pointing at a URL it is not allowed to load, which fails **silently** —
+    the page renders its server HTML and simply never hydrates, so every tab and
+    menu looks present and does nothing.
+    """
     doc = _parse(html)
     out: dict[str, str] = {}
     for img in doc.iter("img"):
@@ -85,6 +98,11 @@ def list_resources(html: str, base_url: str) -> dict[str, str]:
         resolved = _abs(base_url, link.get("href") or "")
         if resolved is not None:
             out.setdefault(resolved, STYLESHEET_KIND)
+    if include_scripts:
+        for script in doc.iter("script"):
+            resolved = _abs(base_url, script.get("src") or "")
+            if resolved is not None:
+                out.setdefault(resolved, SCRIPT_KIND)
     return out
 
 
@@ -161,6 +179,95 @@ def _sanitize(doc: Any) -> None:
                 del attribs[name]
 
 
+# Injected as the first thing in <head> of a scripted archive.
+#
+# In an opaque origin — which is exactly what `sandbox allow-scripts` without
+# `allow-same-origin` produces, and what makes the archive safe — *reading*
+# `window.localStorage` throws a `SecurityError`. It does not return null; it
+# throws. Every documentation theme worth capturing reads it near the top of its
+# init (remembered theme, remembered sidebar state, remembered code-tab choice), so
+# the throw aborts that script and everything it was going to set up. The page then
+# renders its server HTML and hydrates nothing, which looks precisely like "scripts
+# were stripped" and is why this was worth chasing rather than accepting.
+#
+# The shim hands those scripts an in-memory Storage instead. Nothing persists
+# between page loads, which is the honest behaviour for an archive: a remembered
+# preference has nowhere to live in a sandbox with no origin. `document.cookie`
+# throws for the same reason and gets the same treatment.
+#
+# It only ever runs in a scripted archive. A sanitized capture has no scripts to
+# rescue, so it gets no shim.
+_STORAGE_SHIM = """
+(function () {
+  function memoryStorage() {
+    var data = Object.create(null);
+    return {
+      getItem: function (k) { k = String(k); return k in data ? data[k] : null; },
+      setItem: function (k, v) { data[String(k)] = String(v); },
+      removeItem: function (k) { delete data[String(k)]; },
+      clear: function () { data = Object.create(null); },
+      key: function (i) { var ks = Object.keys(data); return i < ks.length ? ks[i] : null; },
+      get length() { return Object.keys(data).length; }
+    };
+  }
+  ['localStorage', 'sessionStorage'].forEach(function (name) {
+    try { void window[name].length; return; } catch (err) {}
+    try {
+      Object.defineProperty(window, name, {
+        value: memoryStorage(), configurable: true
+      });
+    } catch (err) {}
+  });
+  try { void document.cookie; } catch (err) {
+    var jar = '';
+    try {
+      Object.defineProperty(document, 'cookie', {
+        configurable: true,
+        get: function () { return jar; },
+        set: function (v) { jar = jar ? jar + '; ' + v : String(v); }
+      });
+    } catch (err2) {}
+  }
+})();
+"""
+
+
+def _inline_scripts(
+    doc: Any,
+    base_url: str,
+    resources: Mapping[str, tuple[bytes, str]],
+    budget: _Budget,
+) -> None:
+    """Rewrite every external `<script src>` to a `data:` URI of its own bytes.
+
+    A **data: URI, not an inline `<script>` body**, and the reason is `defer`. A
+    deferred script runs after parsing; an inline script has no such thing and runs
+    where it sits. Turning a deferred head script into an inline one therefore
+    executes a bundle before the body it expects exists — which looks exactly like a
+    broken page and is not obviously a capture bug. A `src` keeps every attribute,
+    and with it the ordering.
+
+    A script that could not be fetched or does not fit the budget keeps an absolute
+    URL. It will not load from an archive, but the alternative — a relative path
+    against a `<base>` that no longer resolves — is not better, and the tag records
+    honestly what the page wanted.
+    """
+    for script in doc.iter("script"):
+        resolved = _abs(base_url, script.get("src") or "")
+        if resolved is None:
+            continue
+        fetched = resources.get(resolved)
+        if fetched is None or not budget.take(fetched[0]):
+            script.set("src", resolved)
+            continue
+        data, mime = fetched
+        # Servers disagree about the JavaScript media type, and a data: URI whose
+        # type is `text/html` is not executed as script. Normalize it.
+        if "javascript" not in (mime or "").lower():
+            mime = "text/javascript"
+        script.set("src", _data_uri(data, mime))
+
+
 def build_page(
     html: str,
     base_url: str,
@@ -179,6 +286,9 @@ def build_page(
 
     if not keep_scripts:
         _sanitize(doc)
+
+    if keep_scripts:
+        _inline_scripts(doc, base_url, resources, budget)
 
     for img in doc.iter("img"):
         resolved = _abs(base_url, img.get("src") or "")
@@ -219,6 +329,12 @@ def build_page(
         doc.insert(0, head)
     base = head.makeelement("base", {"href": base_url})
     head.insert(0, base)
+    if keep_scripts:
+        # First, before any of the page's own scripts: it exists to stop the very
+        # first one from throwing. See `_STORAGE_SHIM`.
+        shim = head.makeelement("script", {})
+        shim.text = _STORAGE_SHIM
+        head.insert(1, shim)
 
     saved_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     comment = f"<!-- saved from {base_url} at {saved_at} by horrible-dashboard -->\n"

@@ -262,6 +262,25 @@ class _Cmd:
         self.future: concurrent.futures.Future[Any] = concurrent.futures.Future()
 
 
+class _NullWebSocket:
+    """Stands in for the Starlette socket a `WsConnection` normally wraps."""
+
+    async def send_json(self, data: dict[str, Any]) -> None:
+        return None
+
+
+def sink_connection() -> WsConnection:
+    """A real `WsConnection` whose sends go nowhere.
+
+    `BrowserSession` streams frames and events to a panel's socket. A doc-set crawl
+    has no panel — it wants the same Chromium, the same egress guard and the same
+    capture path, with nothing to render to. Wrapping a null socket beats threading
+    an `Optional` connection through every emit site, and keeps the session's type
+    honest: it really does hold a `WsConnection`.
+    """
+    return WsConnection(_NullWebSocket())
+
+
 class BrowserSession:
     """One headless-Chromium context, driven from a worker thread, streamed to one WS.
 
@@ -270,9 +289,19 @@ class BrowserSession:
     each command's Future. Frames are pushed the other way via `run_coroutine_threadsafe`.
     """
 
-    def __init__(self, ws_conn: WsConnection, profile: str = "default"):
+    def __init__(
+        self,
+        ws_conn: WsConnection,
+        profile: str = "default",
+        *,
+        screencast: bool = True,
+    ):
         self.ws_conn = ws_conn
         self.profile = profile
+        # A crawl renders to nobody, and a screencast it never reads costs a JPEG
+        # encode per paint. Off here means `_loop_commands` takes the poll branch,
+        # which the idle-frame path already handles.
+        self._want_screencast = screencast
         self._queue: queue.Queue[_Cmd | None] = queue.Queue()
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -475,7 +504,8 @@ class BrowserSession:
             logger.info("CDP network instrumentation unavailable: %s", exc)
             self._cdp = None
             return
-        self._start_screencast()
+        if self._want_screencast:
+            self._start_screencast()
 
     # ---- frame stream (CDP screencast) --------------------------------------
 
@@ -716,10 +746,7 @@ class BrowserSession:
             try:
                 cmd = self._queue.get(timeout=wait)
             except queue.Empty:
-                if self._screencast:
-                    self._pump(page)
-                else:
-                    self._poll_frame(page)
+                self._idle_frame(page)
                 continue
             if cmd is None:
                 return
@@ -731,10 +758,22 @@ class BrowserSession:
             # Every op (human interaction or agent op) may have changed the view.
             # Under screencast Chromium will push the resulting paint by itself; the
             # pump only has to give the dispatcher a window to deliver it.
-            if self._screencast:
-                self._pump(page)
-            else:
-                self._poll_frame(page)
+            self._idle_frame(page)
+
+    def _idle_frame(self, page: Any) -> None:
+        """Produce (or wait for) one frame — unless nobody is watching.
+
+        A headless crawl has no viewer, so the poll branch would spend a full
+        screenshot per command on an image that is discarded. Skipping it is not an
+        optimisation detail: at 200 pages it is the difference between a crawl and a
+        slideshow.
+        """
+        if not self._want_screencast:
+            return
+        if self._screencast:
+            self._pump(page)
+        else:
+            self._poll_frame(page)
 
     def _pump(self, page: Any) -> None:
         """Give the CDP dispatcher a window to deliver frames, then ack them.
@@ -800,7 +839,11 @@ class BrowserSession:
         if op == "content":
             return self._content(page)
         if op == "capture":
-            return self._capture_page(page)
+            return self._capture_page(
+                page,
+                keep_scripts=bool(args.get("keep_scripts")),
+                store=bool(args.get("store", True)),
+            )
         if op == "snapshot":
             return page.evaluate(_SNAPSHOT_JS)
         if op == "media":
@@ -815,6 +858,12 @@ class BrowserSession:
             return {"result": page.evaluate(str(args.get("js", "")))}
         if op == "resize":
             return self._resize(page, args.get("width"), args.get("height"))
+        if op == "wait":
+            # Let the page settle (hydration, late CSS) before a capture. Capped:
+            # this blocks the worker, and an unbounded wait from a caller would
+            # wedge the session.
+            page.wait_for_timeout(min(float(args.get("ms", 250)), 10_000.0))
+            return None
         if op == "info":
             return {"url": page.url, "title": page.title()}
         raise ValueError(f"unknown browser op: {op}")
@@ -847,14 +896,27 @@ class BrowserSession:
             "text": article.text,
         }
 
-    def _capture_page(self, page: Any) -> dict[str, Any]:
-        """Capture the live page as one self-contained HTML artifact.
+    def _capture_page(
+        self, page: Any, *, keep_scripts: bool = False, store: bool = True
+    ) -> dict[str, Any]:
+        """Capture the live page as one self-contained HTML document.
 
         `page.content()` serializes the **post-JS** DOM (what the user actually
         sees, SPAs included); subresources are then fetched with the session's own
         cookies via the context's request API and inlined by `research.capture`.
         The artifact is stored server-side — shipping ~25 MB of HTML over `/ws`
         to the frontend and back would buy nothing.
+
+        Two knobs, both for `docviewer`'s doc-set crawl:
+
+        - `keep_scripts` preserves the page's JavaScript instead of sanitizing it
+          away. It is recorded as `meta.scripts` so the byte route knows to serve
+          the archive under `sandbox allow-scripts` (opaque origin, no network) —
+          see `backend/modules/artifacts/routes.py` for the containment.
+        - `store=False` returns the built HTML instead of filing it, because the
+          crawler rewrites intra-set links before the bytes are final and the
+          artifact store is content-addressed: storing first would mean storing
+          every page twice.
         """
         from backend.modules.artifacts.store import store_bytes
         from backend.modules.library.extract import extract_article
@@ -869,7 +931,9 @@ class BrowserSession:
         html = page.content()
         url = page.url
         resources: dict[str, tuple[bytes, str]] = {}
-        plan = list_resources(html, url)
+        # `include_scripts` must track `keep_scripts`: keeping a tag whose source
+        # was never fetched leaves an archive that renders and never hydrates.
+        plan = list_resources(html, url, include_scripts=keep_scripts)
         for res_url in plan:
             fetched = self._fetch_subresource(page, res_url)
             if fetched is not None:
@@ -885,24 +949,31 @@ class BrowserSession:
                     if fetched is not None:
                         resources[nested] = fetched
 
-        page_html = build_page(html, url, resources)
+        page_html = build_page(html, url, resources, keep_scripts=keep_scripts)
         article = extract_article(html, url)
         title = article.title or page.title() or url
+        result = {
+            "url": url,
+            "title": title,
+            "author": article.author,
+            "text": article.text,
+        }
+        if not store:
+            result["html"] = page_html
+            return result
+        meta = {"title": title, "engine": "chromium"}
+        if keep_scripts:
+            meta["scripts"] = True
         artifact = store_bytes(
             page_html.encode("utf-8"),
             kind="page",
             mime="text/html",
             filename=filename_for_title(title),
             origin_url=url,
-            meta={"title": title, "engine": "chromium"},
+            meta=meta,
         )
-        return {
-            "artifact_id": artifact["id"],
-            "url": url,
-            "title": title,
-            "author": article.author,
-            "text": article.text,
-        }
+        result["artifact_id"] = artifact["id"]
+        return result
 
     def _fetch_subresource(self, page: Any, url: str) -> tuple[bytes, str] | None:
         """Fetch one capture subresource with the session's cookies, under the same
@@ -1073,6 +1144,10 @@ class BrowserManager:
 
     def __init__(self) -> None:
         self.sessions: dict[WsConnection, BrowserSession] = {}
+        # Sessions with no socket behind them, keyed by an owner-chosen string (a
+        # crawl id). Kept apart from `sessions` because their lifetime is the
+        # owner's job, not a disconnect's — but `close_all` still reaps them.
+        self.headless: dict[str, BrowserSession] = {}
         self._lock = threading.Lock()
 
     async def handle(self, ws_conn: WsConnection, message: dict[str, Any]) -> None:
@@ -1166,6 +1241,31 @@ class BrowserManager:
         )
         return await session.submit(op, args)
 
+    async def open_headless(
+        self, key: str, profile: str = "default"
+    ) -> BrowserSession:
+        """Start a Chromium session with no viewer, owned by `key`.
+
+        Everything that makes the panel's session safe applies unchanged — the
+        `_route` egress guard, the per-request I/O records, the capture path — but
+        no frames are produced and no events are delivered. Callers **must** pair
+        this with `close_headless`; nothing else will notice the session is idle.
+        """
+        if not server_browser_enabled():
+            raise RuntimeError("browser engine not enabled")
+        existing = self.headless.get(key)
+        if existing is not None and not existing._closing:
+            return existing
+        session = BrowserSession(sink_connection(), profile, screencast=False)
+        self.headless[key] = session
+        await session.start()
+        return session
+
+    def close_headless(self, key: str) -> None:
+        session = self.headless.pop(key, None)
+        if session is not None:
+            session.stop()
+
     def stop_for(self, ws_conn: WsConnection) -> None:
         session = self.sessions.pop(ws_conn, None)
         if session is not None:
@@ -1174,6 +1274,8 @@ class BrowserManager:
     def close_all(self) -> None:
         for conn in list(self.sessions.keys()):
             self.stop_for(conn)
+        for key in list(self.headless.keys()):
+            self.close_headless(key)
 
 
 browser_manager = BrowserManager()

@@ -136,6 +136,24 @@ the agent are the same kind of source.
   and text-extracts.
 - **Images / videos** → `image` / `video` sources.
 
+The `capture` op now takes two flags, used only by the
+[doc viewer](./docviewer.mdx): `keep_scripts` preserves the page's JavaScript
+instead of sanitizing it away, and `store=False` returns the built HTML rather than
+filing it (the doc crawler rewrites intra-set links before the bytes are final, and
+the artifact store is content-addressed, so storing first would store every page
+twice). A scripted archive records `meta.scripts`, which is what makes the byte route
+serve it `sandbox allow-scripts` — an opaque origin with no network of its own. It
+also fetches and inlines every `<script src>` (a tag whose bytes were never fetched
+would point at a URL the archive is not allowed to load, and fail silently) and
+injects an in-memory storage shim, because reading `localStorage` in an origin-less
+document throws. A page saved from **this** pane is unaffected: Save leaves both
+flags off, so what it files stays inert.
+
+The same session type also backs that crawl headlessly:
+`browser_manager.open_headless(key)` starts a `BrowserSession` over a null socket
+with the screencast off, so a crawl gets this module's Chromium, egress guard and
+capture path without encoding frames for a viewer that does not exist.
+
 ### Why media is stored by reference and description
 
 The app's embedder is **text-only** (`backend/modules/database/embeddings.py` — a

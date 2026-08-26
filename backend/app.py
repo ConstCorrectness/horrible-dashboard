@@ -75,6 +75,11 @@ from backend.modules.search import router as search_router
 from backend.modules.search.broadcast import push_crawl_events
 from backend.modules.search.crawl import queue_handlers as _crawl_queue_handlers  # noqa: F401 — registers the crawl task handler on import (see its docstring)
 from backend.modules.library import push_library_events
+from backend.modules.docviewer import router as docviewer_router
+from backend.modules.docviewer.agent_tools import (
+    register_agent_tools as register_docviewer_tools,
+)
+from backend.modules.docviewer.broadcast import push_docviewer_events
 from backend.modules.library import queue_handlers as _library_queue_handlers  # noqa: F401 — registers the ingest task handlers on import (see its docstring)
 from backend.modules.audio import register_agent_tools as register_audio_tools
 from backend.modules.audio import router as audio_router
@@ -286,6 +291,7 @@ app.include_router(workspace_router, prefix="/api")
 app.include_router(desktop_router, prefix="/api")
 app.include_router(database_router, prefix="/api")
 app.include_router(library_router, prefix="/api")
+app.include_router(docviewer_router, prefix="/api")
 app.include_router(karaoke_router, prefix="/api")
 app.include_router(evals_router, prefix="/api")
 app.include_router(trajectories_router, prefix="/api")
@@ -375,6 +381,10 @@ register_symdex_tools()
 # the server, so these run the room with no karaoke pane open anywhere.
 register_karaoke_tools()
 
+# Register the docviewer agent tools (grouped under `docviewer`): a captured doc
+# set is searchable with no pane open, which is the point of having saved it.
+register_docviewer_tools()
+
 # Register the evals agent tools (grouped under `evals`): sweeps run detached on
 # the backend, so these read the scoreboard with no evals pane open.
 register_evals_tools()
@@ -459,6 +469,9 @@ async def ws(websocket: WebSocket) -> None:
     files_task = asyncio.create_task(push_file_events(conn))
     # Fan library ingestion status (queued→…→ready/failed) to this browser.
     library_task = asyncio.create_task(push_library_events(conn))
+    # Fan doc-set crawl progress (per-page captures) to this browser. A crawl
+    # runs detached for minutes, so this is the only way a pane learns of it.
+    docviewer_task = asyncio.create_task(push_docviewer_events(conn))
     # Fan record proposals + committed rows to this browser, so an open form shows
     # the agent's extraction the moment it files one.
     records_task = asyncio.create_task(push_records_events(conn))
@@ -544,6 +557,7 @@ async def ws(websocket: WebSocket) -> None:
         telemetry_task.cancel()
         files_task.cancel()
         library_task.cancel()
+        docviewer_task.cancel()
         records_task.cancel()
         research_task.cancel()
         crawl_task.cancel()

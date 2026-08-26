@@ -1,0 +1,243 @@
+---
+sidebar_position: 38
+sidebar_label: Doc viewer
+---
+
+# Module: documentation viewer
+
+Capture a whole documentation site once, then read it offline **with its real CSS and
+its real JavaScript** — tabs, collapsibles, client-side search and animations all
+working — with a page tree beside it and semantic search across the set.
+
+**Status: implemented.** Seed a URL, the module crawls the pages under that URL
+prefix in a real headless browser, stores each one as a self-contained archive, and
+indexes its text into a [library](library.mdx) so the set is searchable and the agent
+can quote it.
+
+Not to be confused with the [`docs` module](docs-popup.mdx), which despite the name is
+the symbol-hover popup in the editor and contributes no pane.
+
+## Why this is not the browser, the research capture, or the crawler
+
+Three neighbouring things already existed, and none of them is this:
+
+| Surface | What it does | Why it isn't enough |
+| --- | --- | --- |
+| [`browser.view`](browser.mdx) | Renders **live** pages at full fidelity | One URL at a time; needs the network every time; has no notion of "the React docs" as a thing you own |
+| [`research.pageViewer`](research.mdx) | Renders a **captured** page offline | Capture is deliberately inert — `_sanitize()` drops every `<script>` — so a JS-driven docs page reads as broken |
+| [search's focused crawler](search.mdx) | Indexes docs sites into `webindex` | Stores **text chunks for retrieval**, not readable pages, and [refuses Chromium on purpose](search.mdx) |
+
+This module reuses all three rather than replacing any of them: the browser's engine
+and egress guard, research's capture pipeline, and the crawler's politeness and URL
+identity. `search/crawl/crawler.py` itself is untouched — its no-JavaScript stance is
+correct for what it does.
+
+## The security decision
+
+Storing third-party JavaScript and then executing it is the one genuinely risky part
+of this module, so the containment is explicit and small enough to check.
+
+The archive iframe carries `sandbox="allow-scripts"` and **never**
+`allow-same-origin`. That pairing is the whole thing: with `allow-scripts` alone the
+document lands in a **unique opaque origin**, so its script can hydrate and animate
+the page but cannot read the dashboard's DOM, its storage, its cookies, or call
+`/api`. The two directives together would void the sandbox entirely — the page would
+run in *our* origin — and must never appear on this frame.
+
+The response CSP matches, and is chosen by `artifacts.store.page_csp` so that the
+artifact byte route and this module's content route can never drift:
+
+```
+sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' data:;
+style-src 'unsafe-inline' data:; img-src data:; font-src data:; media-src data:
+```
+
+`default-src 'none'` leaves the page no network of its own, so nothing that was not
+inlined at capture time can be fetched — no analytics beacon, no CDN call, no
+exfiltration path.
+
+Both halves are checked from the browser, not inferred: the parent gets a
+`SecurityError` reading the frame's `document`, `location` and `origin`, and Chromium
+reports from inside that "the document is sandboxed and lacks the
+`allow-same-origin` flag".
+
+### What the opaque origin costs, and the shim that pays it
+
+An origin-less document cannot have storage, so **reading** `window.localStorage`
+throws a `SecurityError` — it does not return null, it throws. Every documentation
+theme worth capturing reads it near the top of its init (remembered theme, sidebar
+state, code-tab choice), so that throw aborts the script and everything it was about
+to set up. The page then renders its server HTML and hydrates nothing, which looks
+exactly like "the scripts were stripped".
+
+A scripted archive therefore gets a small first-in-`<head>` shim
+(`_STORAGE_SHIM` in `research/capture.py`) providing an in-memory `localStorage`,
+`sessionStorage` and `document.cookie`. Nothing persists between loads, which is the
+honest behaviour: a remembered preference has nowhere to live in a sandbox with no
+origin. A sanitized capture has no scripts to rescue and gets no shim.
+
+This was the single blocker in practice. Sphinx/furo and Docusaurus both died on
+exactly that line, and both survive it now.
+
+This is **opt-in per artifact**, keyed on `meta.scripts`. A `research` capture is
+sanitized at build time and keeps the old inert treatment; enabling scripts for doc
+sets does not retroactively enable them for every page ever saved. Because the
+artifact store is content-addressed, a scripted archive and a sanitized one of the
+same URL are never byte-identical, so the two cannot collide on one row.
+
+## Data model
+
+A **doc set** is one documentation site captured as a browsable unit. Two tables in
+`$HORRIBLE_DATA_DIR/app.db`, plus a `page` source per page in a library:
+
+```
+docviewer_sets  (app.db)              docviewer_pages  (app.db)
+  id          uuid                      id          sha256(set_id + canonical_url)[:32]
+  title                                 set_id, url, title
+  seed_url    where the crawl starts    status      pending | captured | failed
+  prefix      what bounds it            artifact_id  the stored archive
+  library     where the text goes       source_id    its library source
+  status      queued…ready|failed       parent_id, depth, ordinal   (the tree)
+  page_count, max_pages                 bytes
+```
+
+### Page ids are derived from the URL, and that is load-bearing
+
+Intra-set links are rewritten **at capture time** to
+`/api/docviewer/pages/<page_id>/content`, and at that moment the target page may not
+have been fetched yet. An artifact id could not be used here — not merely
+inconveniently, but impossibly: the artifact store is content-addressed, so a page's
+id is a hash of its bytes, which contain the links, which would contain the ids of
+pages that link back to it. Deriving the id from the URL breaks the circle.
+
+Two consequences follow from the opaque origin, both deliberate:
+
+- **The pane cannot intercept clicks inside the frame.** It doesn't need to — a
+  rewritten link navigates the frame to the sibling archive on its own, and the
+  sidebar uses the same URLs so the two agree.
+- **Out-of-scope links are inert.** There is no `allow-top-navigation`, so a link to
+  the open web does nothing. The way out of an archive is the pane's **Live** button,
+  which opens the real page in the browser pane.
+
+A link that points inside the prefix at a page the crawl never reached resolves to a
+small **HTML** stub — not a JSON error — with a 404 status, because it renders inside
+the frame and has to be readable there.
+
+## The crawl
+
+A bounded BFS from the seed, over URLs under `prefix` (which defaults to the seed's
+own directory — `https://x.dev/docs/start` bounds the set to `https://x.dev/docs/`).
+Each page is navigated in a **headless** `BrowserSession`: same Chromium, same
+`_route` egress guard, same I/O records as the browser pane, but with a null socket
+and the screencast off, so no frames are encoded for a viewer that does not exist.
+
+Then, per page: capture the post-JS DOM with `keep_scripts=True`, **fetch and inline
+every `<script src>`** as a `data:` URI, inject the storage shim, rewrite in-scope
+links, store the archive, and ingest it into the library.
+
+Script inlining is not optional: keeping a `<script src>` tag whose bytes were never
+fetched leaves the archive pointing at a URL the CSP forbids, and that fails
+silently. `list_resources(include_scripts=…)` and `build_page(keep_scripts=…)` must
+therefore always be passed the same value. The bytes go in as a `data:` URI rather
+than an inline `<script>` body because an inline script has no `defer`, and turning a
+deferred head bundle into an inline one runs it before the body it expects exists.
+
+Bounds and politeness, all of which are tested:
+
+- `max_pages` (default 200) and a total byte cap — a captured page inlines its own
+  CSS, fonts and images, so a set is a large folder.
+- `max_depth` (default 6) link levels from the seed.
+- `robots.txt` via the search crawler's own `RobotsCache`, and a per-host delay via
+  its `HostLimiter`. A site's own `Crawl-delay` can raise the configured delay but
+  never lower it.
+- The seed goes through the **same** egress check as browser navigation
+  (`_check_host_public`) — a second, laxer validator is exactly where an SSRF hole
+  appears.
+
+A crawl runs **detached, under a semaphore, deliberately off the shared task queue**:
+that queue is serial, and a 200-page crawl parked in it would hold up every library
+ingest behind it for ten minutes. The semaphore is 1 because two crawls means two
+Chromiums competing for the same cores.
+
+`ingest_source` never raises, so a page is only reported captured after its library
+row is read back and found to have chunks.
+
+## Contributions to the layout shell
+
+| Kind | Id | Notes |
+| --- | --- | --- |
+| Pane | `docviewer.browse` | Non-singleton; params `{ setId?, pageId? }`. Sidebar (sets, page tree, in-set search) plus the archive frame. |
+| Command | `docviewer.open` | Opens the pane. |
+| Keybinding | `mod+shift+d` | Bound to `docviewer.open`. |
+| Setting | `docviewer.crawlDelay` | Seconds between requests to one site. |
+| Setting | `docviewer.defaultMaxPages` | Page limit a new set is created with. |
+
+## Backend surface
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/docviewer/sets` | List doc sets. |
+| `POST /api/docviewer/sets` | Create a set and start crawling. Returns immediately. |
+| `GET /api/docviewer/sets/{id}` | One set. |
+| `POST /api/docviewer/sets/{id}/recrawl` | Capture the set again. 409 if one is running. |
+| `DELETE /api/docviewer/sets/{id}` | Delete the set, its archives and its library sources. 409 while crawling. |
+| `GET /api/docviewer/sets/{id}/pages` | The page tree. |
+| `POST /api/docviewer/sets/{id}/search` | Semantic search scoped to this set. |
+| `GET /api/docviewer/pages/{id}` | One page row. |
+| `GET /api/docviewer/pages/{id}/content` | The archive's bytes, under the CSP above. |
+
+The `docviewer` `/ws` channel carries `progress`, `page` and `set` events while a
+crawl runs — the only way a pane learns that page 40 of 200 just landed.
+
+### Agent tools
+
+Grouped under `docviewer`, so they cost nothing on a turn that never mentions
+documentation.
+
+| Tool | Purpose |
+| --- | --- |
+| `docviewer.listSets` | Which sets exist, and their ids. |
+| `docviewer.search` | Search one set; returns passages with the page they came from. |
+| `docviewer.openPage` | Put a page in front of the user. |
+
+Capturing a set is deliberately **not** a tool: it drives a real browser at a
+user-supplied URL for several minutes and fills a library, which is a decision with a
+form behind it rather than something to infer from a sentence.
+
+## Browser vs desktop
+
+| Capability | Browser | Desktop |
+| --- | --- | --- |
+| Read a captured set | ✅ | ✅ |
+| Search a set | ✅ | ✅ |
+| Capture a new set | Needs `HORRIBLE_ENABLE_SERVER_BROWSER=1` and the `browser-engine` extra on the node | Same |
+
+The crawl runs on the backend, so both layouts get the same behaviour from the same
+node; the requirement is the engine, not the shell.
+
+## Known limits
+
+**Runtime code-splitting does not survive.** An SPA that fetches route chunks by URL
+at runtime — Docusaurus is the reference case — cannot hydrate offline: those URLs
+appear nowhere in the captured DOM, so there is nothing to inline, and the archive's
+CSP blocks the request when webpack constructs it. Such a page still renders
+completely (server HTML plus full CSS) and its main bundle still runs; what stays
+inert are the widgets that live behind a lazy chunk. Verified: `attrs` (Sphinx/furo,
+one bundle) hydrates and its theme toggle works end to end; `docusaurus.io` renders
+but its sidebar toggles do not respond. This is the same limit every page archiver
+has, and closing it would mean rewriting a bundler's runtime.
+
+**Images not inlined stay remote.** `img-src data:` means an image that exceeded the
+capture budget is blocked rather than fetched from the live site. That is the correct
+trade — an archive that phones home is not an archive — but it shows as a missing
+image rather than a slow one.
+
+## Deferred
+
+- **No `llms.txt` fast path yet.** The search crawler prefers a publisher's own
+  `llms-full.txt` corpus over link-following; this crawl always walks links, because
+  the corpus is text and the archives are the product here.
+- **No incremental re-crawl.** `recrawl` re-captures every page rather than using
+  conditional GETs, since a 304 yields no DOM to render.
+- **No offline full-text search**, only semantic — the library is the index, and it
+  embeds rather than tokenizes.

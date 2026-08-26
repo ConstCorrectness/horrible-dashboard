@@ -87,6 +87,31 @@ def _row(r: Any) -> dict[str, Any]:
     }
 
 
+# A sanitized archive: no script survived capture, so deny script outright and
+# let it load whatever it inlined.
+_INERT_PAGE_CSP = "sandbox; default-src 'self' data:"
+
+# A scripted archive. `allow-scripts` WITHOUT `allow-same-origin` puts the page in
+# a unique opaque origin — never add `allow-same-origin` here, it would hand the
+# page our origin. `default-src 'none'` leaves it no network; everything it may
+# render was inlined as a data: URI at capture time.
+_SCRIPTED_PAGE_CSP = (
+    "sandbox allow-scripts; "
+    "default-src 'none'; "
+    "script-src 'unsafe-inline' data:; "
+    "style-src 'unsafe-inline' data:; "
+    "img-src data:; "
+    "font-src data:; "
+    "media-src data:"
+)
+
+
+def page_csp(artifact: dict) -> str:
+    """Pick a captured page's CSP from how it was captured, not from who asks."""
+    meta = artifact.get("meta") or {}
+    return _SCRIPTED_PAGE_CSP if meta.get("scripts") else _INERT_PAGE_CSP
+
+
 def store_bytes(
     data: bytes,
     *,
