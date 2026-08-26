@@ -452,8 +452,16 @@ async def download_map(name: str) -> Response:
 
 @router.get("/tacticals", response_model=list[TacticalOut])
 async def list_tacticals() -> list[TacticalOut]:
-    """Tactical utilities (smoke, flashbang, HE frag) and their tactical numbers."""
-    return [TacticalOut(**t.to_dict()) for t in weapons.TACTICALS]
+    """The four grenades, in slot order.
+
+    Reads `grenades.GRENADES` — the table the simulation actually runs on — and
+    not the old `weapons.TACTICALS`, which was numbers with nothing behind them:
+    a client that laid out its HUD from that list was showing a loadout the
+    server had never heard of.
+    """
+    from backend.modules.hassault import grenades
+
+    return [TacticalOut(**g.to_dict()) for g in grenades.GRENADES]
 
 
 def pick_binary(custom: str, candidates: list[str]) -> str | None:
@@ -930,16 +938,46 @@ async def equip_skin(instance_id: str) -> dict[str, bool]:
     return {"ok": ok}
 
 
+@router.get("/skins/drops")
+async def get_drop_status() -> dict[str, Any]:
+    """How many level-up drops are waiting, and what earns the next one.
+
+    Served rather than derived in the browser — the level and the ledger both
+    live here, and a client that computed "you have 3" from a level it had
+    would be a second opinion on the one thing the claim route enforces.
+    """
+    from backend.modules.hassault.skins import skin_manager
+
+    return skin_manager.drop_status(_account_id())
+
+
 @router.post("/skins/claim_drop")
 async def claim_level_up_drop() -> dict[str, Any]:
-    """Claim a weighted-RNG skin drop from a level-up or care package."""
+    """Spend one level-up entitlement on a weighted-RNG skin drop.
+
+    409 when there is nothing to spend. This used to roll unconditionally, which
+    made the banner's button an infinite skin dispenser: every press produced a
+    new item, the button never went away, and a Covert was a matter of clicking
+    for a minute.
+    """
     from backend.modules.hassault.skins import SKIN_DICT, skin_manager
 
     account_id = _account_id()
 
-    drop = skin_manager.roll_drop(account_id)
+    drop = skin_manager.claim_level_drop(account_id)
+    if drop is None:
+        status = skin_manager.drop_status(account_id)
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"No level-up drop available. You are level {status['level']}; "
+                f"{status['xpToNextDrop']} XP earns the next one."
+            ),
+        )
     await skin_manager.sync_to_atlas(account_id)
-    return drop.to_dict(SKIN_DICT.get(drop.skin_id))
+    payload = drop.to_dict(SKIN_DICT.get(drop.skin_id))
+    payload["remaining"] = skin_manager.drop_status(account_id)["available"]
+    return payload
 
 
 @router.post("/skins/tradeup")

@@ -6,7 +6,8 @@ Implements the CS / CS2 skin architecture:
 2. Float Wear Values: Factory New (0.00-0.07), Minimal Wear (0.07-0.15),
    Field-Tested (0.15-0.38), Well-Worn (0.38-0.45), Battle-Scarred (0.45-1.00).
 3. Pattern Seeds (1-1000) for texture shifting (e.g. Case Hardened / Fade).
-4. Level-Up Drops & Care Packages: Weighted RNG drops awarded upon leveling up.
+4. Level-Up Drops: one weighted-RNG drop **per level earned**, claimed against a
+   ledger (`hassault_drop_claims`) so the claim is a spend and not a button.
 5. Trade-Up Contracts: 10 skins of Tier N -> 1 skin of Tier N+1.
 6. Inventory & Loadout Management.
 """
@@ -391,6 +392,22 @@ class SkinInventoryManager:
             "CREATE INDEX IF NOT EXISTS idx_hassault_skins_account "
             "ON hassault_skins(account_id)"
         )
+        # One row per level whose drop has been taken. **The primary key is the
+        # entitlement**, not a counter this module remembers to decrement: two
+        # clicks that arrive together both compute "level 4 is unclaimed", and
+        # the second INSERT is the thing that fails. A count in a column would
+        # have let both of them win.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS hassault_drop_claims (
+                account_id  TEXT NOT NULL,
+                level       INTEGER NOT NULL,
+                instance_id TEXT,
+                claimed_at  REAL NOT NULL,
+                PRIMARY KEY (account_id, level)
+            )
+            """
+        )
         return conn
 
     def _load(self, account_id: str) -> list[SkinInstance] | None:
@@ -584,8 +601,96 @@ class SkinInventoryManager:
         self._save(account_id)
         return True
 
-    def roll_drop(self, account_id: str) -> SkinInstance:
-        """Roll a weighted rarity skin drop upon leveling up."""
+    # -- level-up drop entitlement -----------------------------------------
+
+    def _claimed_levels(self, account_id: str) -> set[int]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT level FROM hassault_drop_claims WHERE account_id = ?",
+                (account_id,),
+            ).fetchall()
+        return {int(r["level"]) for r in rows}
+
+    def drop_status(self, account_id: str) -> dict[str, Any]:
+        """What the care-package banner is allowed to say.
+
+        Everything here is **derived**: the level comes from `results.progression`
+        (itself a `SUM(xp)` over the matches), and what is left to claim is that
+        level minus the ledger. Nothing counts drops in a column, so there is no
+        second number that can disagree with the matches it came from.
+
+        Levels are worth one drop each from level 2 up — the drop is the reward
+        for *levelling*, and a player who has never finished a match has not
+        levelled.
+        """
+        from backend.modules.hassault import results
+
+        progress = results.progression(account_id)
+        level = int(progress["level"])
+        earned = max(0, level - 1)
+        claimed = len(self._claimed_levels(account_id))
+        total = int(progress["totalXp"])
+        return {
+            "level": level,
+            "totalXp": total,
+            "levelProgressPercent": int(progress["levelProgressPercent"]),
+            "dropsEarned": earned,
+            "dropsClaimed": claimed,
+            "available": max(0, earned - claimed),
+            "xpPerLevel": results.XP_PER_LEVEL,
+            # What the button says when there is nothing to press it for: a
+            # target, not "come back later".
+            "xpToNextDrop": results.XP_PER_LEVEL - (total % results.XP_PER_LEVEL),
+        }
+
+    def claim_level_drop(self, account_id: str) -> SkinInstance | None:
+        """Spend one level's entitlement, or `None` when there is none to spend.
+
+        The claim row is written **before** the skin lands in the inventory, and
+        its primary key is `(account_id, level)`. That ordering is the whole
+        guard: the old route rolled unconditionally, so the banner's button was
+        an infinite skin dispenser that could be held down. Two concurrent
+        claims both pick the same lowest unclaimed level, and exactly one of
+        them survives the INSERT.
+        """
+        status = self.drop_status(account_id)
+        if status["available"] <= 0:
+            return None
+
+        claimed = self._claimed_levels(account_id)
+        level = next(
+            (lv for lv in range(2, status["level"] + 1) if lv not in claimed), None
+        )
+        if level is None:
+            return None
+
+        instance = self._roll_instance()
+        import sqlite3
+
+        try:
+            with self._conn() as conn:
+                conn.execute(
+                    "INSERT INTO hassault_drop_claims "
+                    "(account_id, level, instance_id, claimed_at) VALUES (?, ?, ?, ?)",
+                    (account_id, level, instance.instance_id, time.time()),
+                )
+                conn.commit()
+        except sqlite3.IntegrityError:
+            # Somebody else took this level between the read and the write. The
+            # instance was only ever in memory, so nothing needs unwinding.
+            return None
+
+        self.get_inventory(account_id).append(instance)
+        self._save(account_id)
+        return instance
+
+    def _roll_instance(self) -> SkinInstance:
+        """One weighted-rarity roll, and nothing else.
+
+        Split out from `roll_drop` so a claim can reserve its entitlement first
+        and hand out the skin second — a roll that had already written to the
+        inventory could not be called back if the reservation lost the race.
+        """
         rarities = list(DROP_WEIGHTS.keys())
         weights = [DROP_WEIGHTS[r] for r in rarities]
         chosen_rarity = random.choices(rarities, weights=weights, k=1)[0]
@@ -603,7 +708,7 @@ class SkinInventoryManager:
         # 10% chance for StatTrak kill counter
         stat_trak = 0 if random.random() < 0.10 else None
 
-        instance = SkinInstance(
+        return SkinInstance(
             instance_id=str(uuid.uuid4()),
             skin_id=chosen_skin.id,
             float_value=float_val,
@@ -612,8 +717,15 @@ class SkinInventoryManager:
             stat_tracker_kills=stat_trak,
         )
 
-        inv = self.get_inventory(account_id)
-        inv.append(instance)
+    def roll_drop(self, account_id: str) -> SkinInstance:
+        """An **unconditional** drop, straight into the inventory.
+
+        This is the match-completion reward (`_watchdog_game_process`), which is
+        earned by the thing that just happened and needs no ledger. The banner's
+        button goes through `claim_level_drop` instead.
+        """
+        instance = self._roll_instance()
+        self.get_inventory(account_id).append(instance)
         self._save(account_id)
         return instance
 

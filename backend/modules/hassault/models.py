@@ -252,14 +252,30 @@ class CreateMatchRequest(BaseModel):
 
 
 class TacticalOut(BaseModel):
+    """One thrown grenade's numbers, served rather than duplicated in TypeScript.
+
+    The `interval` / `zoom_levels` / `plane_order` precedent: the HUD shows the
+    carry count and the name, and the renderer draws a cloud at `radius` — a
+    second copy of that number is a smoke drawn a different size from the one
+    actually blocking sight.
+
+    Note every field here has to be **added to this model as well as returned by
+    `to_dict`**: a Pydantic response model silently drops what it does not
+    declare, so a new field reaches the browser as `undefined` with nothing
+    saying why.
+    """
+
     id: str
     name: str
     type: str
     fuseTime: float
+    impact: bool = False
     radius: float
     duration: float
     maxDamage: float
+    damagePerSecond: float = 0.0
     bounceDamping: float = 0.55
+    carried: int = 1
 
 
 class LaunchNativeRequest(BaseModel):

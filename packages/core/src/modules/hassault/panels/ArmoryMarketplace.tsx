@@ -4,8 +4,10 @@ import {
   claimLevelUpDrop,
   equipSkin,
   executeTradeUp,
+  getDropStatus,
   getSkinInventory,
   listSkinCatalog,
+  type DropStatus,
   type SkinDefinition,
   type SkinInstance,
 } from '../api';
@@ -31,6 +33,10 @@ export function ArmoryMarketplace() {
   // Unboxing drop animation state
   const [claimingDrop, setClaimingDrop] = useState(false);
   const [latestDrop, setLatestDrop] = useState<SkinInstance | null>(null);
+  // The level-up ledger. `null` until it has been read once — which is not the
+  // same as zero, so the button says "Checking…" rather than telling a player
+  // with three drops waiting that they have none.
+  const [drops, setDrops] = useState<DropStatus | null>(null);
 
   // Trade-up contract selection (up to 10 instances)
   const [selectedTradeUpIds, setSelectedTradeUpIds] = useState<string[]>([]);
@@ -44,9 +50,14 @@ export function ArmoryMarketplace() {
     setLoading(true);
     setError(null);
     try {
-      const [inv, cat] = await Promise.all([getSkinInventory(), listSkinCatalog()]);
+      const [inv, cat, status] = await Promise.all([
+        getSkinInventory(),
+        listSkinCatalog(),
+        getDropStatus(),
+      ]);
       setInventory(inv);
       setCatalog(cat);
+      setDrops(status);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load armory data');
     } finally {
@@ -79,14 +90,23 @@ export function ArmoryMarketplace() {
   };
 
   const handleClaimDrop = async () => {
+    // Guarded here as well as on the server, so a double-click never sends the
+    // second request at all. The 409 is still what decides it: this count is a
+    // copy, and another surface (a match that just ended) can spend it too.
+    if (claimingDrop || (drops && drops.available <= 0)) return;
     setClaimingDrop(true);
     setLatestDrop(null);
+    setError(null);
     try {
       const drop = await claimLevelUpDrop();
       setLatestDrop(drop);
       await refreshData();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Drop claim failed');
+      // The reason a claim fails is almost always that there was nothing to
+      // claim, so re-read the ledger rather than leaving a button lit that the
+      // server has just refused.
+      void refreshData();
     } finally {
       setClaimingDrop(false);
     }
@@ -104,9 +124,18 @@ export function ArmoryMarketplace() {
     }
   };
 
+  // Whether there is anything to claim. `drops === null` is deliberately not
+  // ready: an unread ledger is not an empty one, but it is not a licence to
+  // press the button either.
+  const ready = drops !== null && drops.available > 0;
+
   const toggleTradeUpSelect = (instanceId: string) => {
     setSelectedTradeUpIds((prev) =>
-      prev.includes(instanceId) ? prev.filter((id) => id !== instanceId) : prev.length < 10 ? [...prev, instanceId] : prev,
+      prev.includes(instanceId)
+        ? prev.filter((id) => id !== instanceId)
+        : prev.length < 10
+          ? [...prev, instanceId]
+          : prev,
     );
   };
 
@@ -124,20 +153,40 @@ export function ArmoryMarketplace() {
       }}
     >
       {/* Top Header & Navigation Bar */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.6rem' }}>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: '0.6rem',
+        }}
+      >
         <div>
-          <h3 style={{ margin: 0, fontSize: '1.15rem', color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+          <h3
+            style={{
+              margin: 0,
+              fontSize: '1.15rem',
+              color: '#38bdf8',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+            }}
+          >
             🎖 Armory & Skin Marketplace
           </h3>
           <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.75rem', color: 'var(--text-dim)' }}>
-            Counter-Strike float wear (0.00–1.00), pattern seeds, trade-up contracts, and rare level-up drops.
+            Counter-Strike float wear (0.00–1.00), pattern seeds, trade-up contracts, and rare
+            level-up drops.
           </p>
         </div>
 
         <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
           <button
             type="button"
-            className={tab === 'inventory' ? 'games-town-toggle-btn active' : 'games-town-toggle-btn'}
+            className={
+              tab === 'inventory' ? 'games-town-toggle-btn active' : 'games-town-toggle-btn'
+            }
             onClick={() => setTab('inventory')}
           >
             🎒 My Armory ({inventory.length})
@@ -159,12 +208,17 @@ export function ArmoryMarketplace() {
         </div>
       </div>
 
-      {/* Level-Up Care Package Banner */}
+      {/* Level-Up Drop Banner — reads the ledger, and goes quiet when it is empty. */}
       <div
         style={{
-          background: 'linear-gradient(90deg, rgba(234, 179, 8, 0.12) 0%, rgba(220, 38, 38, 0.12) 100%)',
-          border: '1px solid rgba(234, 179, 8, 0.35)',
-          borderRadius: 8,
+          background: ready
+            ? 'linear-gradient(90deg, color-mix(in srgb, var(--warn) 12%, transparent) 0%, transparent 100%)'
+            : 'var(--bg-raised)',
+          border: `1px solid ${ready ? 'color-mix(in srgb, var(--warn) 35%, transparent)' : 'var(--border-dim)'}`,
+          // A 2px accent along the top rather than a glow around the whole
+          // perimeter: the banner should read as armed, not as neon.
+          borderTop: `2px solid ${ready ? 'var(--warn)' : 'var(--border-dim)'}`,
+          borderRadius: 6,
           padding: '0.75rem 1rem',
           display: 'flex',
           justifyContent: 'space-between',
@@ -173,20 +227,74 @@ export function ArmoryMarketplace() {
           gap: '0.6rem',
         }}
       >
-        <div>
-          <strong style={{ color: '#fbbf24', fontSize: '0.9rem' }}>🎁 Level-Up Weekly Care Package</strong>
-          <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '0.2rem' }}>
-            Earn XP in competitive matches to unlock rare drops. Weighted rarity RNG spanning Mil-Spec, Classified, Covert & Special ⭐ items.
+        <div style={{ display: 'flex', gap: '0.7rem', alignItems: 'center' }}>
+          <CrateIcon lit={ready} />
+          <div>
+            <strong
+              style={{
+                color: ready ? 'var(--warn)' : 'var(--text-secondary)',
+                fontSize: '0.8rem',
+                textTransform: 'uppercase',
+                letterSpacing: '0.14em',
+              }}
+            >
+              Level-Up Drop
+            </strong>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '0.2rem' }}>
+              {drops === null
+                ? 'Reading your progression…'
+                : ready
+                  ? `${drops.available} drop${drops.available === 1 ? '' : 's'} waiting from level ${drops.level}. Weighted rarity RNG — Mil-Spec through Special.`
+                  : `Level ${drops.level} · one drop per level earned. ${drops.xpToNextDrop.toLocaleString()} XP in competitive matches earns the next.`}
+            </div>
+            {/* The progress toward the next drop, because "come back later" is
+                not an answer a player can act on. */}
+            {drops !== null && !ready && (
+              <div
+                style={{
+                  height: 4,
+                  width: 200,
+                  maxWidth: '100%',
+                  marginTop: '0.4rem',
+                  background: 'var(--bg-tertiary)',
+                  borderRadius: 2,
+                  overflow: 'hidden',
+                }}
+              >
+                <div
+                  style={{
+                    height: '100%',
+                    width: `${drops.levelProgressPercent}%`,
+                    background:
+                      'linear-gradient(90deg, color-mix(in srgb, var(--warn) 55%, transparent), var(--warn))',
+                    transition: 'width 0.5s ease-out',
+                  }}
+                />
+              </div>
+            )}
           </div>
         </div>
         <button
           type="button"
           className="games-play-btn"
-          disabled={claimingDrop}
+          disabled={claimingDrop || !ready}
           onClick={handleClaimDrop}
-          style={{ background: '#d97706', borderColor: '#fbbf24' }}
+          style={{
+            background: ready ? 'color-mix(in srgb, var(--warn) 22%, transparent)' : 'transparent',
+            borderColor: ready ? 'var(--warn)' : 'var(--border-dim)',
+            color: ready ? 'var(--warn)' : 'var(--text-dim)',
+            cursor: ready ? 'pointer' : 'not-allowed',
+            height: 30,
+            borderRadius: 6,
+          }}
         >
-          {claimingDrop ? 'Unboxing Drop…' : '✨ Claim Level-Up Drop'}
+          {claimingDrop
+            ? 'Unboxing…'
+            : drops === null
+              ? 'Checking…'
+              : ready
+                ? `Claim Drop (${drops.available})`
+                : 'No Drops Earned'}
         </button>
       </div>
 
@@ -205,14 +313,23 @@ export function ArmoryMarketplace() {
           }}
         >
           <div>
-            <span style={{ fontSize: '0.7rem', textTransform: 'uppercase', fontWeight: 800, color: latestDrop.definition.rarityColor }}>
+            <span
+              style={{
+                fontSize: '0.7rem',
+                textTransform: 'uppercase',
+                fontWeight: 800,
+                color: latestDrop.definition.rarityColor,
+              }}
+            >
               🎉 Unboxed New {latestDrop.definition.rarity.replace('_', ' ')} Item!
             </span>
             <div style={{ fontSize: '1.05rem', fontWeight: 700, marginTop: '0.2rem' }}>
               {latestDrop.definition.name} ({latestDrop.definition.weaponId.toUpperCase()})
             </div>
             <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '0.2rem' }}>
-              Wear: <strong>{latestDrop.wearName}</strong> · Float: <code>{latestDrop.floatValue}</code> · Pattern Seed: <code>#{latestDrop.patternSeed}</code>
+              Wear: <strong>{latestDrop.wearName}</strong> · Float:{' '}
+              <code>{latestDrop.floatValue}</code> · Pattern Seed:{' '}
+              <code>#{latestDrop.patternSeed}</code>
             </div>
           </div>
           <button type="button" className="games-ghost-btn" onClick={() => setLatestDrop(null)}>
@@ -222,7 +339,15 @@ export function ArmoryMarketplace() {
       )}
 
       {error && (
-        <div style={{ color: '#f87171', fontSize: '0.8rem', background: 'rgba(239, 68, 68, 0.1)', padding: '0.5rem', borderRadius: 4 }}>
+        <div
+          style={{
+            color: '#f87171',
+            fontSize: '0.8rem',
+            background: 'rgba(239, 68, 68, 0.1)',
+            padding: '0.5rem',
+            borderRadius: 4,
+          }}
+        >
           {error}
         </div>
       )}
@@ -231,11 +356,21 @@ export function ArmoryMarketplace() {
       {tab === 'inventory' && (
         <div>
           {loading ? (
-            <div style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>Loading armory inventory…</div>
+            <div style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>
+              Loading armory inventory…
+            </div>
           ) : inventory.length === 0 ? (
-            <div style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>No skins in armory yet. Play matches or claim a level-up drop!</div>
+            <div style={{ color: 'var(--text-dim)', fontSize: '0.8rem' }}>
+              No skins in armory yet. Play matches or claim a level-up drop!
+            </div>
           ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: '0.6rem' }}>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))',
+                gap: '0.6rem',
+              }}
+            >
               {inventory.map((item) => {
                 const def = item.definition;
                 if (!def) return null;
@@ -254,26 +389,52 @@ export function ArmoryMarketplace() {
                       position: 'relative',
                     }}
                   >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: '0.68rem', fontWeight: 800, textTransform: 'uppercase', color: rarityColor }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: '0.68rem',
+                          fontWeight: 800,
+                          textTransform: 'uppercase',
+                          color: rarityColor,
+                        }}
+                      >
                         {def.rarity.replace('_', ' ')}
                       </span>
                       {item.isEquipped && (
-                        <span style={{ fontSize: '0.65rem', padding: '1px 5px', borderRadius: 3, background: '#38bdf8', color: '#0f172a', fontWeight: 800 }}>
+                        <span
+                          style={{
+                            fontSize: '0.65rem',
+                            padding: '1px 5px',
+                            borderRadius: 3,
+                            background: '#38bdf8',
+                            color: '#0f172a',
+                            fontWeight: 800,
+                          }}
+                        >
                           EQUIPPED
                         </span>
                       )}
                     </div>
 
                     <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>
-                      {def.name} <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>[{def.weaponId.toUpperCase()}]</span>
+                      {def.name}{' '}
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>
+                        [{def.weaponId.toUpperCase()}]
+                      </span>
                     </div>
 
                     <div
                       style={{
                         height: 70,
                         borderRadius: 4,
-                        background: 'radial-gradient(circle at center, rgba(255,255,255,0.06) 0%, rgba(0,0,0,0.4) 100%)',
+                        background:
+                          'radial-gradient(circle at center, rgba(255,255,255,0.06) 0%, rgba(0,0,0,0.4) 100%)',
                         border: '1px solid rgba(255,255,255,0.1)',
                         display: 'flex',
                         alignItems: 'center',
@@ -293,8 +454,13 @@ export function ArmoryMarketplace() {
                     </div>
 
                     <div style={{ fontSize: '0.7rem', color: 'var(--text-dim)' }}>
-                      <div>Wear: <strong style={{ color: '#ffffff' }}>{item.wearName}</strong></div>
-                      <div>Float: <code>{item.floatValue}</code> · Seed: <code>#{item.patternSeed}</code></div>
+                      <div>
+                        Wear: <strong style={{ color: '#ffffff' }}>{item.wearName}</strong>
+                      </div>
+                      <div>
+                        Float: <code>{item.floatValue}</code> · Seed:{' '}
+                        <code>#{item.patternSeed}</code>
+                      </div>
                       {item.statTrackerKills !== null && (
                         <div style={{ color: '#ea580c', fontWeight: 700, marginTop: '0.1rem' }}>
                           StatTrak™: {item.statTrackerKills} kills
@@ -334,7 +500,13 @@ export function ArmoryMarketplace() {
 
       {/* TAB 2: Collections Master Catalog */}
       {tab === 'catalog' && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '0.6rem' }}>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+            gap: '0.6rem',
+          }}
+        >
           {catalog.map((def) => (
             <div
               key={def.id}
@@ -348,22 +520,37 @@ export function ArmoryMarketplace() {
                 gap: '0.35rem',
               }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontSize: '0.68rem', fontWeight: 800, textTransform: 'uppercase', color: def.rarityColor }}>
+              <div
+                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+              >
+                <span
+                  style={{
+                    fontSize: '0.68rem',
+                    fontWeight: 800,
+                    textTransform: 'uppercase',
+                    color: def.rarityColor,
+                  }}
+                >
                   {def.rarity.replace('_', ' ')}
                 </span>
-                <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)' }}>{def.collection}</span>
+                <span style={{ fontSize: '0.68rem', color: 'var(--text-dim)' }}>
+                  {def.collection}
+                </span>
               </div>
 
               <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>
-                {def.name} <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>[{def.weaponId.toUpperCase()}]</span>
+                {def.name}{' '}
+                <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>
+                  [{def.weaponId.toUpperCase()}]
+                </span>
               </div>
 
               <div
                 style={{
                   height: 65,
                   borderRadius: 4,
-                  background: 'radial-gradient(circle at center, rgba(255,255,255,0.06) 0%, rgba(0,0,0,0.4) 100%)',
+                  background:
+                    'radial-gradient(circle at center, rgba(255,255,255,0.06) 0%, rgba(0,0,0,0.4) 100%)',
                   border: '1px solid rgba(255,255,255,0.1)',
                   display: 'flex',
                   alignItems: 'center',
@@ -380,9 +567,7 @@ export function ArmoryMarketplace() {
                 />
               </div>
 
-              <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>
-                {def.description}
-              </div>
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>{def.description}</div>
             </div>
           ))}
         </div>
@@ -402,9 +587,12 @@ export function ArmoryMarketplace() {
           }}
         >
           <div>
-            <h4 style={{ margin: 0, color: '#38bdf8' }}>⚗ Trade-Up Contract (10 Items → 1 Higher Rarity)</h4>
+            <h4 style={{ margin: 0, color: '#38bdf8' }}>
+              ⚗ Trade-Up Contract (10 Items → 1 Higher Rarity)
+            </h4>
             <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.75rem', color: 'var(--text-dim)' }}>
-              Select 10 skins of the exact same rarity tier. The forge will burn them and yield 1 skin of the next higher rarity tier with float computed from the inputs.
+              Select 10 skins of the exact same rarity tier. The forge will burn them and yield 1
+              skin of the next higher rarity tier with float computed from the inputs.
             </p>
           </div>
 
@@ -418,7 +606,11 @@ export function ArmoryMarketplace() {
               🔥 Sign & Forge Contract ({selectedTradeUpIds.length}/10 selected)
             </button>
             {selectedTradeUpIds.length > 0 && (
-              <button type="button" className="games-ghost-btn" onClick={() => setSelectedTradeUpIds([])}>
+              <button
+                type="button"
+                className="games-ghost-btn"
+                onClick={() => setSelectedTradeUpIds([])}
+              >
                 Clear Selection
               </button>
             )}
@@ -433,19 +625,32 @@ export function ArmoryMarketplace() {
                 padding: '0.8rem',
               }}
             >
-              <div style={{ color: tradeUpResult.definition.rarityColor, fontWeight: 800, fontSize: '0.8rem' }}>
+              <div
+                style={{
+                  color: tradeUpResult.definition.rarityColor,
+                  fontWeight: 800,
+                  fontSize: '0.8rem',
+                }}
+              >
                 ⭐ Trade-Up Success!
               </div>
               <div style={{ fontSize: '1.1rem', fontWeight: 700, marginTop: '0.2rem' }}>
                 {tradeUpResult.definition.name} ({tradeUpResult.definition.weaponId.toUpperCase()})
               </div>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
-                Wear: <strong>{tradeUpResult.wearName}</strong> · Float: <code>{tradeUpResult.floatValue}</code>
+                Wear: <strong>{tradeUpResult.wearName}</strong> · Float:{' '}
+                <code>{tradeUpResult.floatValue}</code>
               </div>
             </div>
           )}
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '0.5rem' }}>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+              gap: '0.5rem',
+            }}
+          >
             {inventory.map((item) => {
               const def = item.definition;
               if (!def) return null;
@@ -455,7 +660,9 @@ export function ArmoryMarketplace() {
                   key={item.instanceId}
                   onClick={() => toggleTradeUpSelect(item.instanceId)}
                   style={{
-                    background: isSelected ? 'rgba(56, 189, 248, 0.25)' : 'var(--bg-tertiary, #161b22)',
+                    background: isSelected
+                      ? 'rgba(56, 189, 248, 0.25)'
+                      : 'var(--bg-tertiary, #161b22)',
                     border: `1px solid ${isSelected ? '#38bdf8' : def.rarityColor}`,
                     borderRadius: 6,
                     padding: '0.5rem',
@@ -463,14 +670,23 @@ export function ArmoryMarketplace() {
                     opacity: selectedTradeUpIds.length === 10 && !isSelected ? 0.4 : 1,
                   }}
                 >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                    }}
+                  >
                     <span style={{ fontSize: '0.65rem', fontWeight: 700, color: def.rarityColor }}>
                       {def.rarity.toUpperCase()}
                     </span>
                     <input type="checkbox" checked={isSelected} readOnly />
                   </div>
                   <div style={{ fontWeight: 700, fontSize: '0.8rem', marginTop: '0.2rem' }}>
-                    {def.name} <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)' }}>[{def.weaponId}]</span>
+                    {def.name}{' '}
+                    <span style={{ fontSize: '0.65rem', color: 'var(--text-dim)' }}>
+                      [{def.weaponId}]
+                    </span>
                   </div>
                   <div style={{ fontSize: '0.68rem', color: 'var(--text-dim)' }}>
                     {item.wearName} (<code>{item.floatValue}</code>)
@@ -513,9 +729,19 @@ export function ArmoryMarketplace() {
           >
             {'definition' in inspectItem && inspectItem.definition ? (
               <>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ color: inspectItem.definition.rarityColor, fontWeight: 800, fontSize: '0.8rem', textTransform: 'uppercase' }}>
-                    {inspectItem.definition.rarity.replace('_', ' ')} · {inspectItem.definition.collection}
+                <div
+                  style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                >
+                  <span
+                    style={{
+                      color: inspectItem.definition.rarityColor,
+                      fontWeight: 800,
+                      fontSize: '0.8rem',
+                      textTransform: 'uppercase',
+                    }}
+                  >
+                    {inspectItem.definition.rarity.replace('_', ' ')} ·{' '}
+                    {inspectItem.definition.collection}
                   </span>
                   <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>
                     Seed <code>#{inspectItem.patternSeed}</code>
@@ -523,11 +749,10 @@ export function ArmoryMarketplace() {
                 </div>
 
                 <div>
-                  <h3 style={{ margin: 0, fontSize: '1.3rem' }}>
-                    {inspectItem.definition.name}
-                  </h3>
+                  <h3 style={{ margin: 0, fontSize: '1.3rem' }}>{inspectItem.definition.name}</h3>
                   <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)' }}>
-                    {inspectItem.definition.weaponId.toUpperCase()} · {inspectItem.wearName} (<code>{inspectItem.floatValue}</code>)
+                    {inspectItem.definition.weaponId.toUpperCase()} · {inspectItem.wearName} (
+                    <code>{inspectItem.floatValue}</code>)
                   </div>
                 </div>
 
@@ -536,7 +761,8 @@ export function ArmoryMarketplace() {
                   style={{
                     height: 140,
                     borderRadius: 8,
-                    background: 'radial-gradient(circle at center, rgba(56, 189, 248, 0.12) 0%, rgba(13, 17, 23, 0.95) 75%)',
+                    background:
+                      'radial-gradient(circle at center, rgba(56, 189, 248, 0.12) 0%, rgba(13, 17, 23, 0.95) 75%)',
                     border: '1px solid var(--border-dim, #30363d)',
                     display: 'flex',
                     alignItems: 'center',
@@ -574,11 +800,29 @@ export function ArmoryMarketplace() {
 
                 {/* Float Wear Meter */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem' }}>
-                    <span>Float Value: <code>{inspectItem.floatValue}</code></span>
-                    <strong style={{ color: inspectItem.definition.rarityColor }}>{inspectItem.wearName}</strong>
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      fontSize: '0.72rem',
+                    }}
+                  >
+                    <span>
+                      Float Value: <code>{inspectItem.floatValue}</code>
+                    </span>
+                    <strong style={{ color: inspectItem.definition.rarityColor }}>
+                      {inspectItem.wearName}
+                    </strong>
                   </div>
-                  <div style={{ height: 6, background: '#21262d', borderRadius: 3, position: 'relative', overflow: 'hidden' }}>
+                  <div
+                    style={{
+                      height: 6,
+                      background: '#21262d',
+                      borderRadius: 3,
+                      position: 'relative',
+                      overflow: 'hidden',
+                    }}
+                  >
                     <div
                       style={{
                         position: 'absolute',
@@ -591,11 +835,27 @@ export function ArmoryMarketplace() {
                         transform: 'translateX(-50%)',
                       }}
                     />
-                    <div style={{ height: '100%', width: '100%', background: 'linear-gradient(90deg, #22c55e 0%, #38bdf8 15%, #eab308 38%, #f97316 45%, #ef4444 100%)' }} />
+                    <div
+                      style={{
+                        height: '100%',
+                        width: '100%',
+                        background:
+                          'linear-gradient(90deg, #22c55e 0%, #38bdf8 15%, #eab308 38%, #f97316 45%, #ef4444 100%)',
+                      }}
+                    />
                   </div>
                 </div>
 
-                <div style={{ fontSize: '0.78rem', color: 'var(--text-dim)', fontStyle: 'italic', background: 'var(--bg-tertiary, #161b22)', padding: '0.6rem', borderRadius: 6 }}>
+                <div
+                  style={{
+                    fontSize: '0.78rem',
+                    color: 'var(--text-dim)',
+                    fontStyle: 'italic',
+                    background: 'var(--bg-tertiary, #161b22)',
+                    padding: '0.6rem',
+                    borderRadius: 6,
+                  }}
+                >
                   "{inspectItem.definition.description}"
                 </div>
               </>
@@ -607,5 +867,33 @@ export function ArmoryMarketplace() {
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * The supply-crate glyph on the drop banner.
+ *
+ * A stroke icon rather than 🎁: it takes its colour from the container, so
+ * "armed" and "nothing to claim" are the same drawing in two colours instead of
+ * an emoji that is always festive.
+ */
+function CrateIcon({ lit }: { lit: boolean }) {
+  return (
+    <svg
+      width="26"
+      height="26"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke={lit ? 'var(--warn)' : 'var(--text-dim)'}
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      style={{ flexShrink: 0, transition: 'stroke 0.3s ease' }}
+    >
+      <path d="M3 7.5 12 3l9 4.5v9L12 21l-9-4.5z" />
+      <path d="M3 7.5 12 12l9-4.5M12 12v9" />
+      {lit && <circle cx="12" cy="12" r="2.2" fill="var(--warn)" stroke="none" opacity="0.9" />}
+    </svg>
   );
 }

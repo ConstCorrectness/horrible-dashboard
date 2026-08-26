@@ -162,6 +162,27 @@ describe('WeaponViewModel skins', () => {
     expect(colors(vm, camera)).toEqual(before);
   });
 
+  it('draws a different gun for each pattern type', () => {
+    // `patternType` cannot be a texture on a weapon made of boxes, so it decides
+    // how the two colours are distributed across the parts instead. `patina` and
+    // `custom_art` used to fall through to the `solid` arrangement, which meant
+    // a Case Hardened and a Slate were the same object in two colours — with the
+    // armoury card promising otherwise.
+    const seen = new Map<string, string>();
+    for (const patternType of ['solid', 'camo', 'anodized', 'fade', 'patina', 'custom_art']) {
+      const { vm, camera } = stand();
+      vm.setWeapon('assault', {
+        baseColor: '#38bdf8',
+        accentColor: '#f43f5e',
+        patternType,
+        floatValue: 0.03,
+      });
+      const key = colors(vm, camera).join(',');
+      expect(seen.has(key), `${patternType} draws the same as ${seen.get(key)}`).toBe(false);
+      seen.set(key, patternType);
+    }
+  });
+
   it('falls back to the default palette for an unparseable colour', () => {
     // The catalogue is data, and a client that rendered `undefined` as black
     // would show a weapon nobody designed.

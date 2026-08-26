@@ -17,7 +17,9 @@ import {
   launchNativeFps,
   listInvitees,
   listMaps,
+  listTacticals,
   listWeapons,
+  type TacticalSpec,
   type BrowseMatch,
   type InstallStatus,
   type LaunchNativeOptions,
@@ -32,6 +34,7 @@ import { GameAudio } from './audio';
 import { AvatarPool } from './avatars';
 import { createBackdrop, type Backdrop } from './backdrop';
 import { MatchCompanion } from './panels/MatchCompanion';
+import { FlashOverlay, NadeTray, Radar } from './panels/Radar';
 import { PostMatchDebrief } from './panels/PostMatchDebrief';
 import {
   EMPTY_PROGRESS,
@@ -45,6 +48,7 @@ import { BootOverlay } from './BootOverlay';
 import { kickVector, NO_SHOT, ShotController } from './combat';
 import {
   codeMap,
+  NADE_ACTIONS,
   describeControls,
   keyLabel,
   parseControls,
@@ -82,6 +86,9 @@ import {
 import { installReveal, type Reveal } from './reveal';
 import { onJoinRequested, takePendingJoin } from './invite-notify';
 import { MatchSession, type SessionState } from './session';
+import { createDetailTexture, DETAIL_NEUTRAL } from './surfaces';
+import { NadePool } from './nades';
+import { GrenadeController } from './utility';
 import { TrainingRange } from './training';
 import { equippedSkins, WeaponViewModel, type WeaponSkin } from './viewmodel';
 import { World } from './world';
@@ -161,6 +168,11 @@ const OWN_STRIDE = 4.2;
 /** How long a heard noise stays on the direction ring. */
 const NOISE_TTL_MS = 900;
 /** How long a hitmarker and a damage flash stay on screen. */
+/** Stable empties: a fresh literal every render re-runs the radar's effect on
+ * frames where nothing actually changed. */
+const EMPTY_SPOTTED: readonly string[] = [];
+const EMPTY_COUNTS: Readonly<Record<string, number>> = {};
+
 const FLASH_MS = 220;
 /** Team tint used for tracers and the scoreboard: CLA sand, RVSF blue. */
 const TEAM_COLORS = [0xd9a441, 0x4c8fd4];
@@ -251,6 +263,8 @@ export function HorribleAssaultPanel() {
   const [net, setNet] = useState<SessionState>(EMPTY_SESSION);
   const [invitees, setInvitees] = useState<Invitee[]>([]);
   const [weapons, setWeapons] = useState<WeaponSpec[]>([]);
+  /** The grenades, in slot order. Served for the same reason the weapons are. */
+  const [tacticals, setTacticals] = useState<TacticalSpec[]>([]);
   /**
    * Why there is no loadout, when there is no loadout.
    *
@@ -424,6 +438,15 @@ export function HorribleAssaultPanel() {
   // Mutable simulation state, kept out of React: this updates every frame and
   // re-rendering the component 60 times a second would be absurd.
   const worldRef = useRef<World | null>(null);
+  /**
+   * The interpolated rows the last frame drew, for the radar.
+   *
+   * A ref rather than state: these change sixty times a second and the radar is
+   * a canvas, so pushing them through React would re-render the whole pane for a
+   * blip that moved two pixels. The radar's effect re-runs on `hud` — which does
+   * update per frame — and reads the newest rows from here.
+   */
+  const remoteRowsRef = useRef<PlayerRow[]>([]);
   const playerRef = useRef<PlayerState>(createPlayer(0, 0, 0));
   /** Held *actions*, not codes: the key handler resolves the binding once, and the
    * frame loop then never has to know which key produced a movement. */
@@ -437,6 +460,8 @@ export function HorribleAssaultPanel() {
   const sceneRef = useRef<SceneHandle | null>(null);
   const sessionRef = useRef<MatchSession | null>(null);
   const shotsRef = useRef<ShotController | null>(null);
+  /** Grenade selection and the throw edge. See `utility.ts`. */
+  const nadesRef = useRef<GrenadeController | null>(null);
   /** Offline stand-in for everything a match server would own. See `training.ts`. */
   const rangeRef = useRef<TrainingRange | null>(null);
   /** Last pushed training state, so the frame loop can tell what changed. */
@@ -451,6 +476,7 @@ export function HorribleAssaultPanel() {
   const pendingBotsRef = useRef<{ count: number; skill: string } | null>(null);
   if (sessionRef.current === null) sessionRef.current = new MatchSession();
   if (shotsRef.current === null) shotsRef.current = new ShotController();
+  if (nadesRef.current === null) nadesRef.current = new GrenadeController();
   if (rangeRef.current === null) rangeRef.current = new TrainingRange();
   if (audioRef.current === null) audioRef.current = new GameAudio();
 
@@ -560,6 +586,43 @@ export function HorribleAssaultPanel() {
         // up as a game where the trigger does nothing — a symptom that points
         // nowhere near its cause unless something says this happened.
         setLoadoutError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // The grenades, fetched for the same reason the weapons are: the HUD shows a
+  // carry count and the renderer draws a cloud at the served radius, and a
+  // hardcoded copy of either is a smoke drawn a different size from the one
+  // actually blocking sight on the server.
+  useEffect(() => {
+    let cancelled = false;
+    void listTacticals()
+      .then((specs) => {
+        if (cancelled) return;
+        setTacticals(specs);
+        nadesRef.current?.setSpecs(specs);
+        // The wire carries a *slot index*, so the served order is load-bearing:
+        // a reordering on the server would silently turn every smoke key into an
+        // HE. Checked rather than trusted, because the failure is invisible.
+        const drifted = NADE_ACTIONS.filter(
+          (entry, i) => specs[i] !== undefined && specs[i].id !== entry.id,
+        );
+        if (drifted.length > 0) {
+          console.warn(
+            '[hassault] grenade slots disagree with the server:',
+            specs.map((spec) => spec.id).join(','),
+            'expected',
+            NADE_ACTIONS.map((n) => n.id).join(','),
+          );
+        }
+      })
+      .catch(() => {
+        // Deliberately quiet, unlike the loadout: a backend older than this
+        // route leaves you with no grenades, which is a smaller game rather than
+        // a broken one — the trigger still works.
+        if (!cancelled) setTacticals([]);
       });
     return () => {
       cancelled = true;
@@ -677,14 +740,33 @@ export function HorribleAssaultPanel() {
       setProgress((p) => advance(p, { renderer: 1 }));
 
       const scene = new THREE.Scene();
-      scene.background = new THREE.Color(0x0d1117);
+      // Slightly blue and slightly lifted off black. Pure `#0d1117` made the fog
+      // read as the world dissolving into the panel's background rather than
+      // into air, and gave a distant wall nothing to sit against.
+      const HORIZON = 0x11161f;
+      scene.background = new THREE.Color(HORIZON);
       // Fog hides the far clip plane and, on a 256-cube map, is a big win: it
       // stops the whole world reading as flat untextured colour at distance.
-      scene.fog = new THREE.Fog(0x0d1117, 60, 320);
+      // Exponential rather than linear — linear fog has a visible start plane
+      // that sweeps across walls as you walk toward them, and `Exp2` is what
+      // reads as air.
+      scene.fog = new THREE.FogExp2(HORIZON, 0.0055);
 
       const camera = new THREE.PerspectiveCamera(75, 1, 0.1, 600);
       const renderer = new THREE.WebGLRenderer({ antialias: true });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      // ACES rather than the default clip: the sun plus a hemisphere light puts
+      // lit floors above 1.0, and `NoToneMapping` flattens everything past that
+      // into the same white — which is exactly where a bright surface loses the
+      // grain the detail texture was added to give it.
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.15;
+      // Static geometry and a static sun, so the shadow map is rendered **once
+      // per map** rather than once per frame (see `setMesh`). That is the whole
+      // reason real shadows are affordable here at all.
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFShadowMap;
+      renderer.shadowMap.autoUpdate = false;
       mountRef.current.appendChild(renderer.domElement);
       renderer.domElement.style.display = 'block';
       renderer.domElement.style.width = '100%';
@@ -693,19 +775,56 @@ export function HorribleAssaultPanel() {
 
       // Hemisphere light alone reads flat; the directional adds enough gradient
       // to tell walls from floors before real textures exist.
-      scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x33302c, 2.0));
-      const sun = new THREE.DirectionalLight(0xffffff, 1.1);
-      sun.position.set(0.6, 1, 0.35);
+      scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x33302c, 1.55));
+      const sun = new THREE.DirectionalLight(0xfff2dd, 1.75);
+      sun.castShadow = true;
+      sun.shadow.mapSize.set(2048, 2048);
+      // Normal bias, not just a constant one: these surfaces are large flat
+      // quads at every angle to the sun, and a constant bias big enough to stop
+      // acne on the floors detaches the shadows from the foot of every wall.
+      sun.shadow.bias = -0.0004;
+      sun.shadow.normalBias = 0.08;
       scene.add(sun);
+      scene.add(sun.target);
+      // A cool fill from behind, at a fraction of the sun's strength. Without
+      // it every surface facing away from the sun is lit only by the hemisphere
+      // and comes out the same value, which is what makes an unlit wall read as
+      // a hole rather than as a wall in shade.
+      const fill = new THREE.DirectionalLight(0x9fb6ff, 0.45);
+      fill.position.set(-0.5, 0.35, -0.7);
+      scene.add(fill);
 
       let mesh: import('three').Mesh | null = null;
-      const material = new THREE.MeshLambertMaterial({ vertexColors: true });
+      const detail = createDetailTexture(THREE, renderer.capabilities.getMaxAnisotropy());
+      const material = new THREE.MeshLambertMaterial({
+        vertexColors: true,
+        map: detail,
+        // The reciprocal of the tile's neutral value, so a pixel with no grain
+        // leaves the surface exactly as `geometry.ts` coloured it. Without this
+        // the detail map would darken the entire world by a quarter.
+        color: new THREE.Color().setScalar(1 / DETAIL_NEUTRAL),
+      });
+      // **The single line that makes sun shadows possible in a Cube world.**
+      //
+      // three defaults `shadowSide` to `BackSide` for a front-sided material, to
+      // hide the gap between a shadow and the object casting it. Here that is
+      // fatal: a Cube 1 map is a sealed box, every open cell emits a *ceiling*
+      // quad facing down, and rendering back faces into the shadow map means the
+      // sky lid catches all the light and the entire level sits in shadow. It
+      // reads as the lighting simply being broken.
+      //
+      // Front faces only means a surface casts when it faces the sun. Ceilings
+      // face away and drop out; walls and floors cast exactly as they should.
+      material.shadowSide = THREE.FrontSide;
       // Patched, not replaced: the build animation runs through the same lit
       // material the finished world uses, so nothing pops when it ends.
       const reveal = installReveal(material);
       const backdrop = createBackdrop(THREE, scene);
       const avatars = new AvatarPool(THREE, scene);
       const effects = new EffectsPool(THREE, scene);
+      // Grenades in the air and the smoke/fire they leave. A renderer only: what
+      // it draws is what the snapshot said, never anything it worked out.
+      const nadePool = new NadePool(THREE, scene);
       // The gun in your hands. Parented to the camera by the constructor, which
       // is also what puts the camera in the scene graph.
       const viewmodel = new WeaponViewModel(THREE, scene, camera);
@@ -720,8 +839,15 @@ export function HorribleAssaultPanel() {
         geo.setAttribute('position', new THREE.BufferAttribute(data.positions, 3));
         geo.setAttribute('normal', new THREE.BufferAttribute(data.normals, 3));
         geo.setAttribute('color', new THREE.BufferAttribute(data.colors, 3));
+        geo.setAttribute('uv', new THREE.BufferAttribute(data.uvs, 2));
         geo.computeBoundingSphere();
         mesh = new THREE.Mesh(geo, material);
+        // Both, and both matter: a wall has to cast onto the floor beside it and
+        // receive from the wall opposite. One-sided geometry means there are no
+        // back faces to produce the peter-panning a single-sided caster usually
+        // does.
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
         scene.add(mesh);
 
         // Frame on the geometry's own bounds, not on `ssize`. A map's grid is
@@ -738,6 +864,37 @@ export function HorribleAssaultPanel() {
         // reveal left completed would show the next map already assembled.
         reveal.fit([cx, cz], extent * 1.05, Math.max(extent * 0.6, 1));
         backdrop.fit([cx, cz], extent * 2);
+
+        // Aim the sun at *this* map and re-render the shadow map once. The
+        // frustum is fitted to the geometry's own bounds rather than to `ssize`
+        // for the same reason the camera is: a map's grid is mostly empty
+        // border, so a grid-sized shadow camera spends most of its texels on
+        // nothing and leaves the level itself blocky.
+        // Roughly 50 degrees up: high enough that a room is not half in shade,
+        // low enough that a wall throws a shadow long enough to see. A sun
+        // directly overhead casts almost nothing on a map made of vertical
+        // walls, which is the failure mode this angle is chosen against.
+        const reach = extent * 2;
+        sun.position.set(cx + reach * 0.55, reach * 0.82, cz + reach * 0.36);
+        sun.target.position.set(cx, 0, cz);
+        sun.target.updateMatrixWorld();
+        const cam = sun.shadow.camera;
+        cam.left = -extent * 1.1;
+        cam.right = extent * 1.1;
+        cam.top = extent * 1.1;
+        cam.bottom = -extent * 1.1;
+        // Fitted around the map rather than left at 1..far: the depth range is
+        // what the shadow's precision is spent on, and a near plane at 1 for a
+        // light 170 units away throws most of it away.
+        const distance = sun.position.distanceTo(sun.target.position);
+        cam.near = Math.max(1, distance - extent * 1.4);
+        cam.far = distance + extent * 1.4;
+        cam.updateProjectionMatrix();
+        // The world is static and so is the sun, so this is the only frame that
+        // pays for shadows. `autoUpdate` stays off; anything that moves — the
+        // avatars, the weapon in your hands — deliberately does not cast, since
+        // a moving caster would need a map that is never rebuilt.
+        renderer.shadowMap.needsUpdate = true;
         return data.triangles;
       };
 
@@ -841,7 +998,12 @@ export function HorribleAssaultPanel() {
             const kick = fired
               ? kickVector(shots.weapon, player.yaw, player.pitch, player.crouch > 0.5)
               : NO_KICK;
-            session.queue(session.predictor.record(world, player, input, dt, intent, kick));
+            // Resolved every frame, not only when a key was pressed: the
+            // controller also adopts the server's carry counts here, so a throw
+            // the server refused puts the number back on the HUD rather than
+            // leaving it one short until the next respawn.
+            const thrown = nadesRef.current?.frame(now, session.state.you ?? null);
+            session.queue(session.predictor.record(world, player, input, dt, intent, kick, thrown));
             session.predictor.decay(dt);
           } else {
             // Offline the training range plays the part of the server: it owns
@@ -860,6 +1022,11 @@ export function HorribleAssaultPanel() {
             // handed and show none of them.
             const self = range?.selfState() ?? null;
             const intent = shots?.frame(now, 0, self) ?? NO_SHOT;
+            // Training has no server to throw at, so the intent is drained and
+            // dropped. Draining it matters anyway: without it the press stays
+            // queued and the grenade comes out on the frame you deploy into a
+            // real match.
+            nadesRef.current?.frame(now, self);
             if (intent.reload) range?.requestReload();
             if (intent.weapon >= 0) range?.select(intent.weapon);
             fired = intent.fire;
@@ -960,6 +1127,13 @@ export function HorribleAssaultPanel() {
           // in force by the time it runs or the toggle lands a frame late.
           avatars.setHitboxes(showHitboxesRef.current);
           avatars.sync(remote, dt);
+          remoteRowsRef.current = remote;
+          // Straight off the newest snapshot rather than the interpolated
+          // sample: a grenade is not a player, it has no prediction to reconcile
+          // with, and `NadePool` does its own smoothing toward the last position
+          // it was told about.
+          const latest = session.snapshots.latest;
+          nadePool.sync(latest?.nades, latest?.zones);
           if (session.pendingShots.length > 0) {
             // Teams come from the roster, not from `remote` — that one excludes
             // us, and our own tracer needs a colour too.
@@ -973,6 +1147,18 @@ export function HorribleAssaultPanel() {
               );
             }
             session.pendingShots = [];
+          }
+          if (session.pendingBlasts.length > 0) {
+            const audio = audioRef.current;
+            for (const blast of session.pendingBlasts) {
+              effects.blast(blast.at, blast.radius, blast.nade);
+              // Played from here rather than through the noise envelope, because
+              // a detonation is not a noise you might not hear: it is a thing
+              // that visibly happened in front of you, and the envelope's job is
+              // deciding audibility for things you cannot see.
+              audio?.own(blast.nade === 'he' ? 'explosion' : `nade_${blast.nade}`, 1);
+            }
+            session.pendingBlasts = [];
           }
           if (session.pendingNoise.length > 0) {
             const audio = audioRef.current;
@@ -995,6 +1181,7 @@ export function HorribleAssaultPanel() {
           }
         }
         effects.update(dt);
+        nadePool.update(dt);
 
         const elapsed = (now - started) / 1000;
         backdrop.update(elapsed);
@@ -1098,10 +1285,12 @@ export function HorribleAssaultPanel() {
         observer.disconnect();
         avatars.dispose();
         effects.dispose();
+        nadePool.dispose();
         viewmodel.dispose();
         backdrop.dispose();
         if (mesh) mesh.geometry.dispose();
         material.dispose();
+        detail.dispose();
         renderer.dispose();
         renderer.domElement.remove();
         sceneRef.current = null;
@@ -1383,6 +1572,16 @@ export function HorribleAssaultPanel() {
       if (action.startsWith('weapon')) {
         shotsRef.current?.select(Number(action.slice(6)) - 1);
       }
+      // Selecting only readies a grenade; throwing is its own key, so picking one
+      // and choosing the moment are two decisions rather than one.
+      const nadeSlot = NADE_ACTIONS.findIndex((n) => n.action === action);
+      if (nadeSlot >= 0) nadesRef.current?.select(nadeSlot);
+      // Edge-triggered here, at the key, and not read from `keysRef` in the
+      // frame loop: `throw` rides on a movement command, so a held key read as a
+      // level would set the flag sixty times a second. `e.repeat` is already
+      // filtered above, which is what makes this one press.
+      if (action === 'throw') nadesRef.current?.press(false);
+      if (action === 'lob') nadesRef.current?.press(true);
       keysRef.current.add(action);
     };
     const onKeyUp = (e: KeyboardEvent) => {
@@ -1781,6 +1980,9 @@ export function HorribleAssaultPanel() {
   const you = online ? net.you : localYou;
   const weapon = you ? weapons[you.weapon] : undefined;
   const now = Date.now();
+  // Our own team, read off the roster rather than tracked separately — the row
+  // is already in `peers`, and a second copy is a copy that can be stale.
+  const myTeam = net.peers.find((p) => p.id === net.playerId)?.team ?? 0;
   const showHit = now - flash.hit < FLASH_MS;
   const showKilled = now - flash.killed < FLASH_MS * 2;
   const showHurt = now - flash.hurt < FLASH_MS * 2;
@@ -2250,6 +2452,29 @@ export function HorribleAssaultPanel() {
             </div>
 
             <NoiseRing heard={heard} yaw={hud.yaw} />
+
+            {/* The radar. Which enemies are on it is `you.spotted`, decided by
+                the server — see `MatchRoom.spotted_by`. */}
+            {online && (
+              <Radar
+                world={worldRef.current}
+                me={{ x: hud.x, y: hud.y, yaw: hud.yaw }}
+                myId={net.playerId}
+                myTeam={myTeam}
+                rows={remoteRowsRef.current}
+                spotted={you?.spotted ?? EMPTY_SPOTTED}
+              />
+            )}
+
+            <NadeTray
+              specs={tacticals}
+              counts={nadesRef.current?.carried ?? EMPTY_COUNTS}
+              selected={nadesRef.current?.selected ?? 0}
+            />
+
+            {/* Drawn last, over everything including the crosshair — a flash you
+                could aim through would not be a flash. */}
+            <FlashOverlay strength={you?.flash ?? 0} />
 
             {online && you && (you.fell ?? 0) > 0 && (
               <div

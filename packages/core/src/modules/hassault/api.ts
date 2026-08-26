@@ -207,15 +207,31 @@ export interface ServerBrowse {
   peers_answered: number;
 }
 
+/**
+ * One grenade's numbers, served rather than duplicated here.
+ *
+ * The `interval` / `zoomLevels` / `plane_order` precedent: the HUD reads the
+ * carry count and the name, and the renderer draws a cloud at `radius` — a
+ * hardcoded copy of that would be a smoke drawn a different size from the one
+ * actually blocking sight on the server.
+ *
+ * The list arrives in **slot order**, and the wire carries a slot index rather
+ * than an id, so the order is load-bearing: see `NADE_ACTIONS` in `controls.ts`.
+ */
 export interface TacticalSpec {
   id: string;
   name: string;
-  type: 'smoke' | 'flash' | 'he';
+  type: 'smoke' | 'flash' | 'he' | 'fire';
   fuseTime: number;
+  /** Detonates on contact instead of on the fuse — the incendiary. */
+  impact: boolean;
   radius: number;
   duration: number;
   maxDamage: number;
+  damagePerSecond: number;
   bounceDamping: number;
+  /** How many you spawn with. */
+  carried: number;
 }
 
 export interface LaunchNativeOptions {
@@ -333,8 +349,31 @@ export function equipSkin(instanceId: string): Promise<{ ok: boolean }> {
   );
 }
 
-export function claimLevelUpDrop(): Promise<SkinInstance> {
-  return apiPost<SkinInstance>('/hassault/skins/claim_drop', {});
+/** What the care-package banner is allowed to offer, straight from the ledger. */
+export interface DropStatus {
+  level: number;
+  totalXp: number;
+  levelProgressPercent: number;
+  dropsEarned: number;
+  dropsClaimed: number;
+  available: number;
+  xpPerLevel: number;
+  xpToNextDrop: number;
+}
+
+export function getDropStatus(): Promise<DropStatus> {
+  return apiGet<DropStatus>('/hassault/skins/drops');
+}
+
+/**
+ * Spend one level-up entitlement.
+ *
+ * Rejects with the server's reason when there is nothing to spend — the button
+ * is disabled on `available`, but the gate that matters is the 409, since the
+ * count the browser is holding is a copy.
+ */
+export function claimLevelUpDrop(): Promise<SkinInstance & { remaining: number }> {
+  return apiPost<SkinInstance & { remaining: number }>('/hassault/skins/claim_drop', {});
 }
 
 export function executeTradeUp(instanceIds: string[]): Promise<SkinInstance> {

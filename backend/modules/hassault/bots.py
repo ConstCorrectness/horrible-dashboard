@@ -194,7 +194,13 @@ class BotBrain:
         )
         # Half a cube of slack: the ray ends *at* the target, and a heightfield
         # cell it grazes on the way should not count as cover.
-        return reach >= length - 0.5
+        if reach < length - 0.5:
+            return False
+        # A smoke is cover too. Asked here rather than only in the renderer,
+        # because a cloud that only humans have to respect is not a mechanic —
+        # it is a handicap: a bot would keep shooting straight through the one
+        # thing a player threw to stop being shot.
+        return not room.smoked(eye, target)
 
     def _acquire(
         self, room: MatchRoom, me: MatchPlayer, dt: float

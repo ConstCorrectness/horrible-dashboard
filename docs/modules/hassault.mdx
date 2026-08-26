@@ -718,6 +718,27 @@ camera every frame is how it goes subtly wrong on the one frame the camera moves
 three only renders camera children when the camera itself is in the scene graph,
 which is why the constructor adds it there once.
 
+### Materials, not just colours
+
+The four weapon materials are `MeshPhongMaterial`, and that is most of what makes
+the models read as objects rather than as tinted boxes. Lambert has no specular
+term at all, so a steel barrel and a polymer grip painted the same colour *are*
+the same surface — every part of every gun was equally matte and only hue told
+them apart. A highlight that travels along a barrel as you turn is what says
+"this is metal and it is round", and it costs one extra term per fragment.
+
+Each of the four gets its own response: machined metal is the brightest and
+tightest highlight, blued metal is darker and softer, polymer and rubber have
+almost none (a grip that glints reads as wet plastic), and hardware and trim are
+the shiniest thing on the gun — which is what makes sights and bolts catch the
+eye at all. The float **dulls the shine as well as the colour**, so a
+Battle-Scarred weapon is not merely a darker Factory New one.
+
+They also carry the same procedural grain the world surfaces use
+(`surfaces.ts`), at per-face UV scale rather than per cube: a receiver is a third
+of a cube long, so world-scale grain would put a quarter of one noise cell across
+the entire gun.
+
 Animation is entirely local — walk bob, a turn-lag sway, recoil kick, a reload
 dip — the same concession `combat.ts`'s recoil already makes: view angles are
 client-owned, so how the gun waves about is nobody else's business. `setWeapon`
@@ -769,6 +790,80 @@ armoury is a different pane, so the gap between opening it and pressing Play is
 exactly the window in which what you are carrying can change without this pane
 hearing about it. The native client fetches once at startup, which is the same
 rule: that process is launched per match.
+
+### A drop is a spend, not a button
+
+The armoury's care-package banner used to call `POST /skins/claim_drop`, and that
+route rolled a skin every time it was asked. Nothing counted anything: the button
+never dimmed, never went away, and holding it down for a minute produced a
+Covert — in an economy whose entire premise is that a Covert is rare. The
+trade-up contract, which burns ten items to forge one, was arithmetic over a
+currency you could mint.
+
+Level-up drops are now an **entitlement spent against a ledger**:
+
+- **One drop per level, from level 2 up.** The level itself is already derived
+  (`results.progression` is a `SUM(xp)` over `hassault_matches`), so what is
+  claimable is a subtraction — `level - 1` earned, minus the rows in
+  `hassault_drop_claims` — and no column anywhere holds a drop count that could
+  disagree with the matches it is supposedly the sum of.
+- **The primary key is the guard, not the read.** `hassault_drop_claims` is keyed
+  `(account_id, level)` and the claim row is written *before* the skin reaches
+  the inventory. Two clicks that arrive together both compute "level 4 is
+  unclaimed" — that is what a race is — and the second `INSERT` is the thing that
+  fails. A counter decremented after a check would have let both of them win.
+- **Nothing to claim is a 409, not a quiet 200.** The refusal carries the reason
+  ("you are level 3; 600 XP earns the next one"), because a claim that silently
+  succeeds with no item is exactly what leaves somebody pressing the button
+  again.
+- **The banner reads the ledger** (`GET /skins/drops`) and disables itself when
+  the count is zero, showing the XP to the next drop and a progress bar instead
+  of an invitation. The disabled button is a convenience; the 409 is the gate,
+  since the browser is holding a copy of a number the server owns.
+
+**The match-completion drop is untouched.** `skin_manager.roll_drop` still hands
+out a skin unconditionally when a match ends, because that one is earned by the
+thing that just happened and needs no ledger. It is `claim_level_drop` — reserve,
+then roll — that the banner goes through. Keeping them separate is why a finished
+match does not quietly consume a level's entitlement.
+
+### The skin has to be visible before it is equipped
+
+`WeaponSilhouettes.tsx` is the armoury's product shot: the inventory card, the
+catalogue tile and the inspect viewport are one component at three sizes, and it
+is the only place a skin is seen *before* the decision to equip it. Three of the
+economy's numbers were being carried on the card as text while the drawing
+ignored them:
+
+- **`patternType` did nothing at all.** The `<pattern>` in `<defs>` was never
+  referenced by a single shape, so a Camo, a Fade and a Solid drew as the same
+  gun. Each type now paints an overlay of its own — blotches for camo, mottling
+  for patina, a line motif for custom art, vertical dye for anodized — and a fade
+  is carried by the gradient instead, since a repeating overlay on top of a fade
+  is a second pattern nobody asked for.
+- **`patternSeed` only went into an element id.** A seed is what makes two copies
+  of one skin different *items*; it now rotates the finish, phases the pattern
+  and places the wear, so seed #4 and seed #822 are visibly not the same gun.
+- **`floatValue` was a slightly lower opacity.** Wear is scratches: a small
+  deterministic generator, seeded by the pattern seed so an item's scuffs are
+  that item's scuffs on every render, drawing nothing below 0.07 — which is what
+  Factory New *means* — and a couple of dozen marks on a Battle-Scarred one.
+
+The silhouettes themselves went from a handful of rectangles to real parts: slide
+serrations and a rail on the pistol, an over-and-under barrel with a ribbed pump
+on the shotgun, both scope bells and a turned-down bolt on the sniper. Weapon
+furniture — polymer, steel, bore — is deliberately *not* themed, because a stock
+that turned white under the light theme reads as a different weapon rather than
+as a themed panel; the painted surfaces take the skin.
+
+`WeaponViewModel.build` got the same treatment in 3D, and for the same reason:
+these are still boxes and cylinders (see
+[Licensing](#licensing-whose-content-ships-and-whose-does-not)), but a magazine
+drawn as two raked segments has a visible curve, and a trigger guard drawn as
+three bars is a loop with a hole in it. `paletteFor` also grew branches for
+`patina` and `custom_art`, which had been falling through to the `solid`
+arrangement — so a Case Hardened and a Slate were one object in two colours,
+with the armoury card promising otherwise.
 
 ### The post-match card belongs to the pane
 
@@ -837,7 +932,7 @@ came for stay one click deep however much settings grow:
 | Section | What it answers |
 | --- | --- |
 | **Play** | Map, then **Quick play**, **Train** (alone, against dummies) or **Host** (a match here, with bots) |
-| **Armor & Skins** | Float wear, drops, trade-up contracts |
+| **Armor & Skins** | Float wear, level-up drops earned and unclaimed, trade-up contracts |
 | **Servers** | What is running — here, on the LAN, and on friends' machines |
 | **Friends** | Who is about, who has invited you, and how to add somebody |
 | **Settings** | Sensitivity, field of view, volume, crouch mode, voice, the native prototype |
@@ -1669,6 +1764,155 @@ of disagreement that makes a game feel dishonest. The movement block prediction
 rebases on (`you.move`) and the noises you can hear (`you.noise`) go in the private
 envelope with ammo, for the same two reasons: nobody else's business, and per-packet
 cost.
+
+## Thrown utility: smoke, flash, incendiary, HE
+
+`weapons.TACTICALS` used to be a table of grenade numbers served over
+`GET /api/hassault/tacticals` with **nothing behind it** — no throw, no fuse, no
+detonation, no effect. It was the same shape of bug the post-match card had
+before `results.py`: a description of a feature standing in for the feature. A
+client that laid out a HUD from that list was showing a loadout the server had
+never heard of.
+
+`backend/modules/hassault/grenades.py` is the simulation, and like `weapons.py`
+it is **server-side and authoritative**. Where a grenade lands decides a round, so
+a client that computed its own bounce would be a client that could decide one.
+
+### The four resolve differently, which is why each gets a branch
+
+They differ in *when* they resolve, not only in what they do:
+
+| | Resolves | Leaves behind |
+| --- | --- | --- |
+| **HE** | once, on a fuse | nothing |
+| **Flashbang** | once, on a fuse, **per victim** | nothing |
+| **Smoke** | continuously, for 15 s | a `Zone` that blocks sight |
+| **Incendiary** | on **impact**, then continuously for 8 s | a `Zone` that burns |
+
+A single "grenade with a radius and a damage number" would have had to special
+case all of that anyway, with the branches spread across the caller rather than
+collected in one place.
+
+The incendiary is the one that detonates on contact (`impact`), and that is its
+defining property rather than a detail: it is aimed at a *place*, so a throw that
+lands right must not then be spoiled by the grenade rolling somewhere else.
+Everything else cooks on a timer, which is what makes bouncing one round a corner
+work at all.
+
+### A throw is a flag on a movement command
+
+Exactly like firing, and for the same reason: the throw has to carry the yaw,
+pitch and velocity of the frame it left the hand on. A message of its own would
+arrive with none of them and the grenade would leave in a direction the player
+was no longer looking. It also meant the peer fabric — which forwards commands
+verbatim — carried grenades across the wire with no changes at all.
+
+Because `throw` rides on a command, two things are load-bearing:
+
+- **The client edge-triggers it.** `GrenadeController` (`utility.ts`) turns a key
+  press into exactly one flagged command. A key read as *held* would set it sixty
+  times a second, the server's cooldown would accept one and discard the rest,
+  and the player would see one grenade for a key they held with nothing to
+  explain where the others went.
+- **The server rate-limits it anyway.** `THROW_COOLDOWN` is spent from the same
+  simulated clock the fire rate uses, so a stuttering client cannot throw faster
+  than a smooth one.
+
+### What each player is told, and what they are not
+
+The same rule `noise.py` established, applied to utility:
+
+- **A grenade in the air and a cloud in a doorway are public.** They are things on
+  everybody's screen; withholding one somebody is looking at would be worse than
+  useless. They ride in the shared half of the snapshot as `nades` and `zones`.
+- **How much utility you have left is private**, exactly like your ammo. It sits
+  in `you.nades`.
+- **How blind you are is private**, and it has to be: a client told how blind
+  *everyone else* is could draw them through the flash.
+
+`grenades.flash_strength` is resolved **per victim on the server**, because only
+the server holds the three things the answer depends on — where that player was
+looking, how far away they were, and whether a wall was between them. Turning
+away is the counter every player knows, and it works here because it is the dot
+product between the view direction and the direction to the bang. Broadcasting
+"a flash went off at (x, y)" and letting each client decide would make not being
+blinded a client-side setting.
+
+### The rules that would be bugs if they were missed
+
+- **A blast checks line of sight.** A radius test without one kills people
+  through floors, and it is the single most common way a grenade system is
+  wrong. The ray is the same `raycast_world` a bullet uses, so a grenade, a
+  bullet and a bot's eye all agree about what a wall is.
+- **Smoke stops vision, not rounds.** Spraying into a smoke stays a real (and
+  punished) decision rather than a free wall.
+- **The bots have to respect the cloud too.** `MatchRoom.smoked` is asked by
+  `BotBrain._visible`, not only by the renderer. A smoke that only humans respect
+  is not a mechanic, it is a handicap — the bot would keep shooting through the
+  one thing you threw to stop being shot.
+- **Your own HE hurts you, and credits nobody.** A grenade at your own feet is
+  your own fault, so it goes through the same no-killer path as fall damage
+  (`_fall_damage`). Routing it through `_apply_damage` would award you a kill on
+  yourself and put you on your own scoreboard line. Teammates are unhurt —
+  friendly fire is off for bullets and a grenade cannot be the exception, or
+  every team fight is decided by whoever throws first.
+- **The projectile is stepped on the room's clock**, not on its thrower's
+  simulated time. Movement and fire rate are paced by a player's own commands
+  because they belong to that player; a grenade belongs to nobody once it is
+  thrown, and pacing it by its thrower would freeze it mid-air — fuse and all —
+  the moment their connection stuttered.
+- **Blindness fades on the room's clock too**, for the same reason: a blinded
+  player who stops sending input must still recover, or being flashed while
+  alt-tabbed is permanent.
+
+### Drawing it
+
+`nades.ts` is a renderer and nothing else — position, cloud centre and radius all
+arrive in the snapshot. Two decisions in it are worth keeping:
+
+- **A cloud is drawn as a sphere the same size as the one the server tests
+  against.** A particle billboard cloud looks better in a screenshot and is a lie
+  in a firefight: its visual edge is nowhere near the volume that actually blocks
+  sight, so players would learn a shape that does not match the rule.
+- **`DoubleSide` and `depthWrite: false`** are what make walking *into* a smoke
+  work. With front faces only, stepping inside puts the camera past the geometry
+  and the cloud disappears exactly when it should be blinding you.
+
+Grenades are **not predicted**. Unlike movement — where the client predicts
+because it cannot wait a round trip to know where its own feet are — nobody is
+holding a grenade after it leaves the hand, so there is nothing to feel laggy.
+Positions are interpolated toward the newest snapshot, which is cheap precisely
+*because* nothing is predicted: there is no correction to fight with.
+
+## The radar
+
+Teammates are shown unconditionally — that is a radio, and every team shooter
+works that way. An enemy has to have been **seen** by somebody on your side, and
+that decision is `MatchRoom.spotted_by` on the **server**, because only the server
+holds what the answer depends on: the level's geometry and the smoke standing in
+it. It arrives as `you.spotted`, per recipient, next to the noise envelope and
+for the same reason — a shared list would be one team's information sitting in
+the other team's packet.
+
+Three conditions, each a counter a player can use: range, facing (walking past
+somebody with your back turned does not paint them), and sight — which a wall
+stops and **so does a smoke**. That last one is most of the reason to throw one;
+a cloud that blocked eyes but not the minimap would be worth almost nothing.
+
+**It is a fairness rule, not an anti-cheat one, and it is worth being honest
+about which.** The shared rows already carry every player's position, because the
+renderer needs them the instant somebody steps into view. A modified client could
+always draw a full radar. What the spotting rule buys is that the radar the game
+ships shows the same thing to everyone, and that a smoke does the same job on it
+that it does on screen.
+
+The map outline is rasterised from the cube grid the client already downloaded,
+so the radar costs no extra request and no extra byte on the wire — and it is
+rasterised **once per map** into an offscreen canvas, because walking a 256×256
+grid sixty times a second to draw the same walls is how a minimap ends up costing
+more than the game. It is rotated so **up is where you are looking**: north-up is
+easier to draw and much harder to read under pressure, because it makes every
+glance a mental rotation before it is information.
 
 ## The training range
 
@@ -3366,6 +3610,18 @@ The skin system provides distinct faction styling and collectible operator skins
 ---
 
 ## Known limitations
+
+- **Grenades are browser-only.** The native client (`apps/native-fps`) does not
+  draw them, throw them, or render a smoke — it shares the wire, so a grenade
+  thrown by somebody else still hurts a native player, and they still go blind,
+  with nothing on screen to say why. Until it catches up, utility is a reason to
+  play in the pane.
+- **The bots do not throw.** They respect a smoke (`BotBrain._visible` asks
+  `MatchRoom.smoked`) but never use one, so utility is a purely human advantage
+  in a match against them.
+- **Smoke does not block a bullet's *tracer*, only sight.** That is deliberate
+  for the round itself, but the drawn tracer also passes through the cloud
+  unattenuated, which reads as the smoke being thinner than it is.
 
 
 - **Ranked is XP and a logged result, not a rating.** ELO applies to two seats

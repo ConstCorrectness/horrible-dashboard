@@ -130,6 +130,15 @@ export class AvatarPool {
     const model = new CharacterModel(this.three, row.team, row.name);
     const animator = new CharacterAnimator(model);
     const group = model.rootGroup;
+    // Receives shadow, never casts. The scene's shadow map is rendered once per
+    // map and holds static world geometry only (see `HorribleAssaultPanel`), so
+    // a casting avatar would leave its shadow standing where it used to be —
+    // whereas *receiving* against a static map is exact, and is what stops a
+    // player crossing a shaded doorway staying lit like a cutout.
+    group.traverse((obj) => {
+      const mesh = obj as THREE.Mesh;
+      if (mesh.isMesh) mesh.receiveShadow = true;
+    });
     this.scene.add(group);
 
     return {

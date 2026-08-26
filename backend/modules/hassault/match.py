@@ -47,7 +47,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from backend.modules.hassault import assets, noise, physics, weapons
+from backend.modules.hassault import assets, grenades, noise, physics, weapons
 from backend.modules.hassault.cgz import CgzError
 from backend.modules.hassault.noise import Noise
 from backend.modules.hassault.physics import MoveInput, PlayerState, World
@@ -109,6 +109,27 @@ MAX_PENDING_HITS = 24
 # pathological case turning into a per-recipient audibility sweep of unbounded size.
 MAX_NOISE_PER_TICK = 48
 
+#: Simulated seconds between throws. Long enough that a held key is one grenade
+#: rather than the whole pouch, short enough that a smoke-then-flash entry is
+#: still a thing you can do.
+THROW_COOLDOWN = 0.9
+
+#: Grenades allowed in the air per room, and zones alive at once. Both are the
+#: same kind of bound as `MAX_FX_PER_TICK`: the packet carries all of them, and
+#: eight players who all found the throw key should cost a bounded amount.
+MAX_LIVE_GRENADES = 24
+MAX_LIVE_ZONES = 16
+
+#: How far a player paints an enemy for their team's radar. Generous — the point
+#: of a radar is to share what somebody already saw, not to make spotting a skill
+#: of its own — but finite, so the far side of a big map is still dark.
+SPOT_RANGE = 90.0
+
+#: Half-angle of the cone that counts as looking at somebody. Wider than a screen
+#: (which is about 0.65 rad half-angle at 75° FOV) because peripheral awareness is
+#: real and a radar that only paints what is dead centre is a radar nobody trusts.
+SPOT_FOV = 1.35
+
 # How long an empty room is kept before it is retired. A room opened for a friend
 # who has not clicked the invite yet is empty and must survive; a room everyone
 # has left is ~590 KB of map planes and should not.
@@ -150,6 +171,20 @@ class Command:
     than believed. See `weapons.clamp_zoom`.
     """
     scoped: int = 0
+    """Throw the grenade in `nade` this frame.
+
+    A flag on a movement command for exactly the reason firing is one: a throw
+    has to carry the yaw, pitch and velocity of the frame it left the hand on, and
+    a separate message would arrive with none of them — the grenade would leave in
+    a direction the player was no longer looking. It also meant the peer fabric,
+    which forwards commands verbatim, carried grenades across the wire with no
+    changes at all.
+    """
+    throw: bool = False
+    """Which grenade slot the throw uses. `-1` is no selection."""
+    nade: int = -1
+    """Underhand: a short throw, for putting a smoke at your own feet."""
+    lob: bool = False
 
 
 @dataclass(slots=True)
@@ -210,6 +245,16 @@ class MatchPlayer:
     """Health the last landing cost, drained into that player's own envelope so
     the HUD can say why the number dropped."""
     last_fall: float = 0.0
+    #: What this player is carrying, per grenade slot.
+    nades: grenades.Inventory = field(default_factory=grenades.Inventory)
+    #: Simulated time of the last throw, so a held button does not empty the
+    #: whole pouch in one frame. On `sim_time` like the fire rate, and for the
+    #: same reason: commands arrive batched, and a wall clock would let a
+    #: stuttering client throw faster than a smooth one.
+    last_throw_at: float = -999.0
+    #: How blind this player currently is, 0..1, and how fast it is fading.
+    #: Per-player rather than a broadcast effect — see `grenades.flash_strength`.
+    flash: float = 0.0
     # Set for bot players. Also what distinguishes them from a human whose socket
     # happens to be `None` (which is every player in the unit tests).
     brain: BotBrain | None = None
@@ -228,6 +273,11 @@ class MatchPlayer:
         self.reserve = {i: w.reserve for i, w in enumerate(weapons.WEAPONS)}
         self.reload_until = -999.0
         self.last_fire_at = -999.0
+        self.nades.reset()
+        self.last_throw_at = -999.0
+        # Dying clears a flash. Being blinded through a respawn would be a
+        # punishment for having already been punished.
+        self.flash = 0.0
         self.protected_until = time.monotonic() + SPAWN_PROTECT
 
     @property
@@ -312,6 +362,12 @@ class MatchPlayer:
             "deaths": self.deaths,
             "mag": weapon.mag,
             "hits": hits,
+            # Private for the same reason ammo is: how much utility somebody has
+            # left is exactly the thing you would like to know about them.
+            "nades": self.nades.to_dict(),
+            # How blind *you* are. Never in the shared rows — a client that was
+            # told how blind everyone else is could draw them through the flash.
+            "flash": round(self.flash, 3),
         }
 
 
@@ -346,6 +402,17 @@ class MatchRoom:
         # every footstep's position would put the location of an enemy two rooms
         # away in the packet, which is a wall hack made of sound. See `noise.py`.
         self.noises: list[Noise] = []
+        # Grenades in the air, and the smoke/fire they leave behind. Both are
+        # **public**: a grenade you can see on your screen and a cloud standing in
+        # a doorway are visible to everyone, so unlike noise there is nothing to
+        # resolve per recipient. What a flashbang did to you is private, and lives
+        # in `MatchPlayer.flash` instead.
+        self.nades: list[grenades.Grenade] = []
+        self.zones: list[grenades.Zone] = []
+        # Monotonic per room, so an id is stable for a client to interpolate a
+        # grenade's arc against between snapshots.
+        self._nade_seq = 0
+        self._zone_seq = 0
         # Seeded per room rather than per shot: reproducible if you know the room
         # and the shot count, which is worth nothing to a cheat and worth a lot
         # when a test needs a shotgun to pattern the same way twice.
@@ -535,6 +602,8 @@ class MatchRoom:
                 # and a frozen ack makes it replay an ever-growing tail.
                 player.ack = command.seq
 
+        self._step_grenades(elapsed, now)
+
         self.history.record(
             now_ms,
             {
@@ -550,6 +619,251 @@ class MatchRoom:
                 if p.alive
             },
         )
+
+    # -- thrown utility -------------------------------------------------------
+
+    def _step_grenades(self, elapsed: float, now: float) -> None:
+        """Advance every grenade and zone, and resolve what that produced.
+
+        Ticked on the **room's** clock rather than on any player's simulated time,
+        unlike movement and fire rate. That is the right call here and the wrong
+        one there: a grenade belongs to nobody once it is thrown, so pacing it by
+        its thrower's command stream would freeze it mid-air the moment that
+        player's connection stuttered — and stop the fuse with it.
+        """
+        dt = min(elapsed, physics.MAX_STEP_DT)
+
+        # Detonations are collected and applied after the walk, not during it:
+        # an HE that kills somebody mutates the player table, and a zone created
+        # mid-iteration would be stepped in the same tick it was born.
+        spent: list[grenades.Grenade] = []
+        for nade in self.nades:
+            impact = grenades.step_grenade(self.world, nade, dt)
+            if nade.fuse <= 0 or (nade.spec.impact and impact):
+                nade.detonated = True
+                spent.append(nade)
+        if spent:
+            self.nades = [n for n in self.nades if not n.detonated]
+            for nade in spent:
+                self._detonate(nade, now)
+
+        if self.zones:
+            for zone in self.zones:
+                zone.remaining -= dt
+                if zone.damage_per_second > 0:
+                    self._burn(zone, dt, now)
+            self.zones = [z for z in self.zones if z.remaining > 0]
+
+        # The flash fades on the room's clock too, for the same reason: a blinded
+        # player who stops sending input must still recover.
+        for player in self.players.values():
+            if player.flash > 0:
+                player.flash = max(0.0, player.flash - dt / grenades.FLASH_MAX)
+
+    def _detonate(self, nade: grenades.Grenade, now: float) -> None:
+        """What a grenade does when its fuse runs out.
+
+        Four branches rather than one parameterised effect, because the four
+        genuinely resolve differently — see the module docstring in
+        `grenades.py`.
+        """
+        kind = nade.spec.kind
+        self.noises.append(
+            Noise(
+                kind="explosion" if kind == "he" else f"nade_{kind}",
+                source=nade.owner,
+                x=nade.x,
+                y=nade.y,
+                z=nade.z,
+                loudness=noise.EXPLOSION_LOUDNESS if kind == "he" else noise.LAND_LOUDNESS,
+            )
+        )
+        self._emit(
+            {
+                "kind": "detonate",
+                "nade": kind,
+                "id": nade.id,
+                "at": [round(nade.x, 2), round(nade.y, 2), round(nade.z, 2)],
+                "radius": nade.spec.radius,
+            }
+        )
+
+        if kind in ("smoke", "fire"):
+            if len(self.zones) >= MAX_LIVE_ZONES:
+                return
+            self._zone_seq += 1
+            self.zones.append(
+                grenades.Zone(
+                    id=f"{self.id}-z{self._zone_seq}",
+                    kind=kind,
+                    owner=nade.owner,
+                    team=nade.team,
+                    x=nade.x,
+                    y=nade.y,
+                    # Lifted off the floor by its own radius, so the cloud is a
+                    # ball resting on the ground rather than one half-buried in
+                    # it — half a smoke underground is half a smoke.
+                    z=nade.z + nade.spec.radius * 0.45,
+                    radius=nade.spec.radius,
+                    remaining=nade.spec.duration,
+                    duration=nade.spec.duration,
+                    damage_per_second=nade.spec.damage_per_second,
+                )
+            )
+            return
+
+        thrower = self.players.get(nade.owner)
+        if kind == "flash":
+            for player in self.players.values():
+                if not player.alive or player.protected:
+                    continue
+                strength = grenades.flash_strength(
+                    self.world,
+                    nade,
+                    player.state.x,
+                    player.state.y,
+                    player.state.z + physics.eye_height(player.state),
+                    player.state.yaw,
+                    player.state.pitch,
+                )
+                # Your own flash blinds you. It is the whole reason a flashbang
+                # is a skill rather than a free button, and exempting the thrower
+                # would make throwing one into your own doorway strictly correct.
+                if strength > player.flash:
+                    player.flash = strength
+            return
+
+        # HE. Targets are enemies plus the thrower — friendly fire stays off, as
+        # it is for bullets, but a grenade at your own feet is your own fault and
+        # the game says so.
+        targets: dict[str, tuple[float, float, float]] = {}
+        for other in self.players.values():
+            if not other.alive or other.protected:
+                continue
+            if other.id != nade.owner and other.team == nade.team:
+                continue
+            targets[other.id] = (
+                other.state.x,
+                other.state.y,
+                # Centre of mass, not the feet: a grenade level with somebody's
+                # ankles on the far side of a low wall would otherwise be traced
+                # to a point the wall covers and do nothing.
+                other.state.z + physics.body_height(other.state) * 0.5,
+            )
+        for hit in grenades.resolve_blast(self.world, nade, targets):
+            victim = self.players.get(hit.victim)
+            if victim is None or not victim.alive:
+                continue
+            if thrower is not None and victim.id != thrower.id:
+                self._apply_damage(
+                    victim, thrower, hit.damage, False, weapons.weapon_at(0), now
+                )
+            else:
+                # Blowing yourself up has no killer to credit, exactly like a
+                # fall. Routing it through `_apply_damage` would award you a kill
+                # on yourself and put you on your own scoreboard line.
+                self._fall_damage(victim, hit.damage, now)
+
+    def _burn(self, zone: grenades.Zone, dt: float, now: float) -> None:
+        """Damage over time from a fire, for anybody standing in it."""
+        owner = self.players.get(zone.owner)
+        for player in self.players.values():
+            if not player.alive or player.protected:
+                continue
+            if player.id != zone.owner and player.team == zone.team:
+                continue
+            # Feet, not centre: fire is on the floor, and testing a body's middle
+            # would let a player wade through the edge of one untouched.
+            if not zone.contains(player.state.x, player.state.y, player.state.z + 0.5):
+                continue
+            amount = zone.damage_per_second * dt
+            if owner is not None and player.id != owner.id:
+                self._apply_damage(
+                    player, owner, amount, False, weapons.weapon_at(0), now
+                )
+            else:
+                self._fall_damage(player, amount, now)
+
+    # -- what the radar is allowed to show ------------------------------------
+
+    def spotted_by(self, viewer: MatchPlayer) -> list[str]:
+        """Which enemies this player's team can currently see.
+
+        The radar shows teammates unconditionally — that is a radio, and every
+        team shooter works that way — but an enemy has to be **seen** by somebody
+        on your side. Resolved here rather than in the browser because only the
+        server holds the thing the answer depends on: the level's geometry, and
+        the smoke standing in it.
+
+        Three conditions, and each is a counter a player can actually use:
+
+        - **Range.** Beyond `SPOT_RANGE` nobody is spotting anybody.
+        - **Facing.** A teammate has to be looking roughly at them, so walking
+          past somebody with your back turned does not paint them for the team.
+        - **Sight.** A wall stops it, and so does a smoke — which is most of the
+          reason to throw one, and would be worth nothing if the cloud blocked
+          eyes but not the minimap.
+
+        Note this is a **fairness** rule, not an anti-cheat one, and it is worth
+        being honest about which: the shared rows already carry every player's
+        position, because the renderer needs them the instant somebody steps into
+        view. A modified client could always draw a full radar. What this buys is
+        that the radar the game ships shows the same thing to everyone, and that
+        a smoke does the same job on it that it does on screen.
+        """
+        seen: list[str] = []
+        allies = [
+            p
+            for p in self.players.values()
+            if p.team == viewer.team and p.alive
+        ]
+        for other in self.players.values():
+            if other.team == viewer.team or not other.alive:
+                continue
+            target = weapons.eye_position(
+                other.state.x,
+                other.state.y,
+                other.state.z,
+                physics.eye_height(other.state),
+            )
+            for ally in allies:
+                eye = weapons.eye_position(
+                    ally.state.x,
+                    ally.state.y,
+                    ally.state.z,
+                    physics.eye_height(ally.state),
+                )
+                dx = target[0] - eye[0]
+                dy = target[1] - eye[1]
+                dz = target[2] - eye[2]
+                distance = math.sqrt(dx * dx + dy * dy + dz * dz)
+                if distance > SPOT_RANGE:
+                    continue
+                if distance > 0.1:
+                    bearing = math.atan2(dy, dx)
+                    delta = abs(
+                        (bearing - ally.state.yaw + math.pi) % (2 * math.pi) - math.pi
+                    )
+                    if delta > SPOT_FOV:
+                        continue
+                    direction = (dx / distance, dy / distance, dz / distance)
+                    reach = weapons.raycast_world(self.world, eye, direction, distance)
+                    if reach < distance - 0.5:
+                        continue
+                if self.smoked(eye, target):
+                    continue
+                seen.append(other.id)
+                break
+        return seen
+
+    def smoked(self, a: tuple[float, float, float], b: tuple[float, float, float]) -> bool:
+        """Whether a smoke stands between two points.
+
+        Public because it is not only the renderer's business: the bots' vision
+        and the radar both have to ask, or a cloud would be something only humans
+        respect. See `grenades.sight_blocked_by`.
+        """
+        return grenades.sight_blocked_by(self.zones, a, b)
 
     # -- movement consequences ----------------------------------------------
 
@@ -688,6 +1002,60 @@ class MatchRoom:
             self._begin_reload(player)
         if command.fire:
             self._fire(player, command, now, now_ms)
+        if command.throw:
+            self._throw(player, command)
+
+    def _throw(self, player: MatchPlayer, command: Command) -> None:
+        """Put a grenade in the air, if this player has one and is allowed to.
+
+        The checks are all here rather than trusted from the client for the usual
+        reason — a client that decides whether it has a grenade left has infinite
+        grenades — but note the *rate* check in particular: `throw` is a flag on
+        a movement command, so a client sending 120 commands a second would throw
+        120 grenades in a second without it.
+        """
+        slot = command.nade
+        spec = grenades.spec_at(slot)
+        if spec is None:
+            return
+        if player.sim_time - player.last_throw_at < THROW_COOLDOWN:
+            return
+        if len(self.nades) >= MAX_LIVE_GRENADES:
+            return
+        if not player.nades.take(slot):
+            return
+        player.last_throw_at = player.sim_time
+        # Throwing forfeits spawn protection, exactly as firing does: a grenade
+        # from inside a shield is the same three-second licence.
+        player.protected_until = 0.0
+
+        state = player.state
+        origin = grenades.throw_origin(
+            state.x, state.y, state.z + physics.eye_height(state), command.yaw, command.pitch
+        )
+        velocity = grenades.throw_velocity(
+            command.yaw,
+            command.pitch,
+            command.lob,
+            (state.vel_x, state.vel_y, state.vel_z),
+        )
+        self._nade_seq += 1
+        self.nades.append(
+            grenades.Grenade(
+                id=f"{self.id}-n{self._nade_seq}",
+                spec=spec,
+                owner=player.id,
+                team=player.team,
+                x=origin[0],
+                y=origin[1],
+                z=origin[2],
+                vx=velocity[0],
+                vy=velocity[1],
+                vz=velocity[2],
+                fuse=spec.fuse,
+            )
+        )
+        self._noise(player, "throw", noise.JUMP_LOUDNESS * 0.8)
 
     def _begin_reload(self, player: MatchPlayer) -> None:
         weapon = weapons.weapon_at(player.weapon)
@@ -883,6 +1251,10 @@ class MatchRoom:
         # Resolved per recipient, here rather than in the shared rows, because
         # audibility is the whole mechanic: a shared list of noises with positions
         # in it would hand every client the location of everyone it cannot hear.
+        # Per recipient for the same reason the noise envelope is: it is a
+        # different answer for each team, and a shared list would be one team's
+        # information sitting in the other's packet.
+        you["spotted"] = self.spotted_by(player)
         you["noise"] = noise.envelope(
             self.world,
             weapons.eye_position(
@@ -907,6 +1279,12 @@ class MatchRoom:
                 "players": rows,
                 "you": you,
                 "scores": self.scores,
+                # Public, unlike the noise envelope above: a grenade in the air
+                # and a cloud in a doorway are things everybody can see, and
+                # withholding one somebody is looking at would be worse than
+                # useless.
+                "nades": [n.snapshot() for n in self.nades],
+                "zones": [z.snapshot() for z in self.zones],
                 # Copied, not aliased: `_broadcast` clears `self.fx` once everyone
                 # has been sent their copy, and handing out a reference to a list
                 # we are about to empty is the kind of thing that works until
@@ -924,6 +1302,8 @@ class MatchRoom:
             "snapshotHz": SNAPSHOT_HZ,
             "players": [p.snapshot(now) for p in self.players.values()],
             "scores": self.scores,
+            "nades": [n.snapshot() for n in self.nades],
+            "zones": [z.snapshot() for z in self.zones],
         }
 
 
@@ -1196,4 +1576,14 @@ def parse_command(raw: Any) -> Command | None:
         # it depends on the weapon this command turns out to be applied to, which
         # only the simulation knows — see `weapons.clamp_zoom`.
         scoped=max(0, int(_num(raw.get("scoped")))),
+        throw=bool(raw.get("throw")),
+        # `-1` for absent or out of range, which `grenades.spec_at` reads as "no
+        # grenade" — the same shape as `weapon`, and for the same reason: a
+        # nonsensical slot must do nothing rather than pick one.
+        nade=(
+            int(_clamp(_num(raw.get("nade"), -1.0), -1.0, float(len(grenades.GRENADES) - 1)))
+            if isinstance(raw.get("nade"), (int, float))
+            else -1
+        ),
+        lob=bool(raw.get("lob")),
     )

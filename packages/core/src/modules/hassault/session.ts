@@ -13,6 +13,7 @@ import {
   Predictor,
   SnapshotBuffer,
   type Command,
+  type DetonateFx,
   type Fx,
   type MoveState,
   type NoiseEvent,
@@ -125,6 +126,14 @@ export class MatchSession {
    * render-loop concern at 60 fps and React has no business in that path.
    */
   pendingShots: ShotFx[] = [];
+  /**
+   * Detonations since the last frame read them.
+   *
+   * Batched like the tracers rather than acted on as they arrive, and for the
+   * same reason: they are consumed by the render loop, which is the only thing
+   * holding a scene to put a light in.
+   */
+  pendingBlasts: DetonateFx[] = [];
   /**
    * Noises this player can hear, drained by the render loop.
    *
@@ -372,6 +381,10 @@ export class MatchSession {
       if (this.pendingShots.length < 64) this.pendingShots.push(fx);
       return;
     }
+    if (fx.kind === 'detonate') {
+      if (this.pendingBlasts.length < 16) this.pendingBlasts.push(fx);
+      return;
+    }
     if (fx.kind !== 'kill') return;
     const me = this.state.playerId;
     const mine = fx.killer === me || fx.victim === me;
@@ -483,6 +496,7 @@ export class MatchSession {
     this.pendingCorrection = null;
     this.pendingShots = [];
     this.pendingNoise = [];
+    this.pendingBlasts = [];
   }
 
   private emit(): void {

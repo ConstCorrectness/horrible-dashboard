@@ -77,6 +77,19 @@ export interface Command {
    * `backend/modules/hassault/weapons.py`.
    */
   scoped?: number;
+  /**
+   * Throw the grenade in `nade` on this frame.
+   *
+   * A flag on the movement command, exactly like `fire`, and for the same
+   * reason: the throw has to carry the yaw, pitch and velocity of the frame it
+   * left the hand on. A separate message would arrive with none of them and the
+   * grenade would leave in a direction we were no longer looking.
+   */
+  throw?: boolean;
+  /** Grenade slot to throw, or `-1`. */
+  nade?: number;
+  /** Underhand — a short throw, for putting a smoke at your own feet. */
+  lob?: boolean;
 }
 
 /** The combat half of a command, decided by `ShotController` rather than by keys. */
@@ -183,6 +196,51 @@ export interface SelfState {
   noise?: NoiseEvent[];
   /** Health lost to the last landing, so the HUD can say why. */
   fell?: number;
+  /** What we are carrying, keyed by grenade id. Private, like `ammo`. */
+  nades?: Record<string, number>;
+  /**
+   * How blind a flashbang has left *us*, 0..1.
+   *
+   * Resolved per player on the server, because it depends on where we were
+   * looking and whether a wall was in the way — see `grenades.flash_strength`.
+   * A client that computed its own would make not being blinded a setting.
+   */
+  flash?: number;
+  /**
+   * Enemy ids our team can currently see, for the radar.
+   *
+   * Teammates are deliberately *not* in this list: they are always shown, so
+   * saying so every tick would be a per-player id list that never changes.
+   */
+  spotted?: string[];
+}
+
+/** A grenade in the air. Public — it is a thing on everybody's screen. */
+export interface NadeRow {
+  id: string;
+  /** `he` | `flash` | `smoke` | `fire`. */
+  kind: string;
+  owner: string;
+  team: number;
+  x: number;
+  y: number;
+  z: number;
+  /** Seconds of fuse left, for the tick that gets louder as it runs out. */
+  fuse: number;
+}
+
+/** A smoke cloud or a patch of fire: an effect that persists in a place. */
+export interface ZoneRow {
+  id: string;
+  /** `smoke` | `fire`. */
+  kind: string;
+  x: number;
+  y: number;
+  z: number;
+  r: number;
+  /** Seconds left, so a cloud can thin as it dies rather than vanishing. */
+  left: number;
+  duration: number;
 }
 
 /** A shot somebody took, batched into the snapshot rather than sent as it happened. */
@@ -211,7 +269,17 @@ export interface SpawnFx {
   id: string;
 }
 
-export type Fx = ShotFx | KillFx | SpawnFx;
+/** A grenade going off. The client turns this into light, sound and debris. */
+export interface DetonateFx {
+  kind: 'detonate';
+  /** `he` | `flash` | `smoke` | `fire`. */
+  nade: string;
+  id: string;
+  at: [number, number, number];
+  radius: number;
+}
+
+export type Fx = ShotFx | KillFx | SpawnFx | DetonateFx;
 
 export interface Snapshot {
   room: string;
@@ -223,6 +291,10 @@ export interface Snapshot {
   you?: SelfState;
   scores?: number[];
   fx?: Fx[];
+  /** Grenades in the air. Public, unlike the noise envelope. */
+  nades?: NadeRow[];
+  /** Smoke and fire currently standing in the world. */
+  zones?: ZoneRow[];
 }
 
 /** A three-component offset, in cube units. */
@@ -284,6 +356,7 @@ export class Predictor {
     dt: number,
     shot?: ShotIntent,
     kick?: Vec3,
+    thrown?: { throw: boolean; nade: number; lob: boolean },
   ): Command {
     this.seq += 1;
     // The server clamps dt the same way; recording the unclamped value would
@@ -314,6 +387,14 @@ export class Predictor {
       }
       if (shot.reload) command.reload = true;
       if (shot.weapon >= 0) command.weapon = shot.weapon;
+    }
+    // Same rule as the combat fields: only on the frame it happened. A throw is
+    // an edge, so this is set on exactly one command however long the key is
+    // held — see `GrenadeController` in `utility.ts`.
+    if (thrown?.throw && thrown.nade >= 0) {
+      command.throw = true;
+      command.nade = thrown.nade;
+      if (thrown.lob) command.lob = true;
     }
     this.pending.push(command);
     step(world, player, input, clamped);
@@ -443,6 +524,19 @@ export class Predictor {
 export class SnapshotBuffer {
   private snapshots: Snapshot[] = [];
   private offset = Number.POSITIVE_INFINITY;
+
+  /**
+   * The newest packet, un-interpolated.
+   *
+   * For the things that are *not* players: grenades and zones have no
+   * prediction to reconcile against and no correction to fight, so the newest
+   * server truth is simply correct — and their renderer does its own smoothing
+   * toward it (`NadePool`). Sampling them through the interpolation buffer would
+   * hold a cloud 100 ms in the past for no benefit.
+   */
+  get latest(): Snapshot | null {
+    return this.snapshots.length > 0 ? this.snapshots[this.snapshots.length - 1] : null;
+  }
 
   push(snapshot: Snapshot, localNow: number): void {
     this.offset = Math.min(this.offset, localNow - snapshot.t);

@@ -36,7 +36,13 @@ export type GameAction =
   | 'weapon2'
   | 'weapon3'
   | 'weapon4'
-  | 'weapon5';
+  | 'weapon5'
+  | 'nadeHe'
+  | 'nadeFlash'
+  | 'nadeSmoke'
+  | 'nadeMolotov'
+  | 'throw'
+  | 'lob';
 
 /** Two keys per action: the one you expect, and the one somebody else expects. */
 export type Bindings = Record<GameAction, string[]>;
@@ -44,7 +50,7 @@ export type Bindings = Record<GameAction, string[]>;
 export interface ActionDoc {
   action: GameAction;
   label: string;
-  group: 'Movement' | 'Combat' | 'View';
+  group: 'Movement' | 'Combat' | 'Utility' | 'View';
   /** Shown where an action needs a caveat the label can't carry. */
   note?: string;
 }
@@ -85,6 +91,27 @@ export const ACTIONS: readonly ActionDoc[] = [
   { action: 'weapon3', label: 'Weapon 3', group: 'Combat' },
   { action: 'weapon4', label: 'Weapon 4', group: 'Combat' },
   { action: 'weapon5', label: 'Weapon 5', group: 'Combat' },
+  {
+    action: 'nadeHe',
+    label: 'Select HE Grenade',
+    group: 'Utility',
+    note: 'Selecting only readies it. Throw is a separate key, so you can pick one and choose the moment.',
+  },
+  { action: 'nadeFlash', label: 'Select Flashbang', group: 'Utility' },
+  { action: 'nadeSmoke', label: 'Select Smoke', group: 'Utility' },
+  { action: 'nadeMolotov', label: 'Select Incendiary', group: 'Utility' },
+  {
+    action: 'throw',
+    label: 'Throw',
+    group: 'Utility',
+    note: 'A full throw, where you are looking.',
+  },
+  {
+    action: 'lob',
+    label: 'Underhand throw',
+    group: 'Utility',
+    note: 'Short. This is how a smoke goes down at your own feet rather than across the room.',
+  },
   { action: 'scores', label: 'Scoreboard (hold)', group: 'View' },
   {
     action: 'noclip',
@@ -110,7 +137,33 @@ export const DEFAULT_CONTROLS: Bindings = {
   weapon3: ['Digit3'],
   weapon4: ['Digit4'],
   weapon5: ['Digit5'],
+  // The four sit on the number row after the weapons, which is where a hand
+  // already is. `KeyG` throws because that is where every shooter since
+  // Half-Life has put it, and the underhand shares it with a modifier-free key
+  // of its own rather than being Shift+G — a throw you have to hold two keys for
+  // is one you will fumble under fire.
+  nadeHe: ['Digit6'],
+  nadeFlash: ['Digit7'],
+  nadeSmoke: ['Digit8'],
+  nadeMolotov: ['Digit9'],
+  throw: ['KeyG'],
+  lob: ['KeyH'],
 };
+
+/**
+ * Grenade ids in slot order, matching `grenades.GRENADES` on the server.
+ *
+ * The *order* has to match — the wire carries a slot index, not a name — which
+ * is exactly the kind of thing that drifts silently. It is asserted against the
+ * served `/tacticals` list at runtime rather than trusted, so a reordering shows
+ * up as a warning instead of as a smoke that turns out to be an HE.
+ */
+export const NADE_ACTIONS: readonly { action: GameAction; id: string }[] = [
+  { action: 'nadeHe', id: 'he' },
+  { action: 'nadeFlash', id: 'flash' },
+  { action: 'nadeSmoke', id: 'smoke' },
+  { action: 'nadeMolotov', id: 'molotov' },
+];
 
 /** How many keys one action can hold. */
 export const SLOTS = 2;

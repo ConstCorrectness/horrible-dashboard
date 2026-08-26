@@ -67,6 +67,19 @@ const TIMBRES: Record<string, Timbre> = {
   reload: { frequency: 2400, q: 3.4, decay: 0.14, gain: 0.4, body: 0 },
   hurt: { frequency: 300, q: 2.2, decay: 0.3, gain: 0.7, body: 120 },
   die: { frequency: 220, q: 1.4, decay: 0.6, gain: 0.9, body: 55 },
+  // A grenade leaving the hand: a short soft rush, quieter than a footstep so it
+  // is a cue for the thrower rather than an announcement to the room.
+  throw: { frequency: 1100, q: 1.2, decay: 0.12, gain: 0.3, body: 0 },
+  // The four detonations, and they have to be tellable apart with your back
+  // turned — which is most of what a grenade is: information.
+  //
+  // **Low and long is an explosion; high and short is a bang.** The HE gets the
+  // longest decay and the most body in the room, the flash is a crack with no
+  // weight behind it, the smoke is a hiss, and fire is a low roar.
+  explosion: { frequency: 90, q: 0.5, decay: 0.9, gain: 1, body: 150 },
+  nade_flash: { frequency: 2600, q: 0.6, decay: 0.35, gain: 1, body: 30 },
+  nade_smoke: { frequency: 4200, q: 0.35, decay: 0.85, gain: 0.5, body: 0 },
+  nade_fire: { frequency: 210, q: 0.45, decay: 1.1, gain: 0.7, body: 70 },
 };
 
 const FALLBACK: Timbre = TIMBRES.step;

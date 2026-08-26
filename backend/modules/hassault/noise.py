@@ -60,6 +60,10 @@ RELOAD_LOUDNESS = 34.0
 HURT_LOUDNESS = 40.0
 DIE_LOUDNESS = 60.0
 # A shot's radius comes from the weapon: a knife is silent, a sniper rifle is not.
+#: An explosion, which is the loudest thing in the game and should be — an HE
+#: going off is information everybody in the building has earned.
+EXPLOSION_LOUDNESS = 160.0
+
 SHOT_LOUDNESS_BASE = 120.0
 
 # Cubes of travel between footsteps at a run. Roughly two strides per body length,

@@ -23,6 +23,17 @@ import type * as THREE from 'three';
 /** Tracer lifetime. Long enough to register, short enough not to draw a web. */
 const TRACER_LIFE = 0.075;
 const IMPACT_LIFE = 0.3;
+/** How long a detonation's light and debris shell last. */
+const BLAST_LIFE = 0.5;
+
+/** The colour a detonation throws. Smoke and fire are tinted like what they
+ * become, so the pop and the cloud that follows it read as one event. */
+const BLAST_TINT: Record<string, number> = {
+  he: 0xffa64d,
+  flash: 0xffffff,
+  smoke: 0xb9c2cc,
+  fire: 0xff7a2a,
+};
 /** Beyond this, older effects are dropped rather than queued. */
 const MAX_LIVE = 96;
 
@@ -40,6 +51,9 @@ export class EffectsPool {
   private live: Live[] = [];
   private tracerGeo: THREE.BufferGeometry;
   private impactGeo: THREE.BufferGeometry;
+  /** A unit sphere, grown to a blast's real radius. Low-poly on purpose: it is
+   * drawn as a wireframe and a dense one reads as a solid ball. */
+  private blastGeo: THREE.BufferGeometry;
 
   constructor(
     private readonly three: typeof THREE,
@@ -52,6 +66,7 @@ export class EffectsPool {
       new three.Vector3(0, 0, 1),
     ]);
     this.impactGeo = new three.SphereGeometry(0.16, 6, 4);
+    this.blastGeo = new three.SphereGeometry(1, 12, 8);
   }
 
   /**
@@ -60,6 +75,55 @@ export class EffectsPool {
    * Converted here rather than at the call site so every user of this class has
    * one fewer chance to get `three.z = cube.y` backwards.
    */
+  /**
+   * A grenade going off: a flash of light and a shell of debris.
+   *
+   * Purely a renderer, like everything else here — the server has already
+   * decided who it hurt and how blind it left anyone. What this owns is the half
+   * second where the room tells you it happened, and the two cues are chosen so
+   * a detonation reads from *outside* its radius too: a light you see reflected,
+   * and an expanding shell you can judge the size of.
+   *
+   * The shell is a wireframe sphere grown to the blast's real `radius` rather
+   * than an artistic one. A player has to be able to learn how far an HE
+   * reaches, and they can only learn that from something drawn at the distance
+   * the damage actually stops.
+   */
+  blast(at: [number, number, number], radius: number, kind: string): void {
+    const three = this.three;
+    // Cube (x, y, height) -> three (x, height, z).
+    const position = new three.Vector3(at[0], at[2], at[1]);
+    const tint = BLAST_TINT[kind] ?? BLAST_TINT.he;
+
+    const shellMat = new three.MeshBasicMaterial({
+      color: tint,
+      transparent: true,
+      opacity: 0.5,
+      wireframe: true,
+      depthWrite: false,
+    });
+    const shell = new three.Mesh(this.blastGeo, shellMat);
+    shell.position.copy(position);
+    // `add` grows an entry from 1 to `scale` over its life, so the shell is a
+    // unit sphere told to end up at the blast's real radius — it must not be
+    // pre-scaled here or the first frame of the animation would overwrite it.
+    this.add(shell, shellMat, BLAST_LIFE, radius);
+
+    // A smoke or a fire has no flash — the cloud it becomes is the event, and a
+    // white pop in front of it would read as a second explosion.
+    if (kind === 'he' || kind === 'flash') {
+      const coreMat = new three.MeshBasicMaterial({
+        color: kind === 'flash' ? 0xffffff : 0xffcf7a,
+        transparent: true,
+        opacity: 0.95,
+        depthWrite: false,
+      });
+      const core = new three.Mesh(this.blastGeo, coreMat);
+      core.position.copy(position);
+      this.add(core, coreMat, BLAST_LIFE * 0.45, Math.max(1.2, radius * 0.4));
+    }
+  }
+
   shot(
     origin: [number, number, number],
     ends: [number, number, number][],
@@ -143,6 +207,7 @@ export class EffectsPool {
     this.live = [];
     this.tracerGeo.dispose();
     this.impactGeo.dispose();
+    this.blastGeo.dispose();
   }
 
   get size(): number {
