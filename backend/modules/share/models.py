@@ -189,6 +189,33 @@ class LinkOut(BaseModel):
     error: str = ""
 
 
+class LinkStatusOut(BaseModel):
+    """What the relay says about the live link, for the host's own pane.
+
+    `state` carries four values and the pane must render all four:
+
+    - `live`   -- the relay is holding published media for this token.
+    - `idle`   -- the token is valid but no picture is arriving.
+    - `gone`   -- the relay answered and does not have this token. Everyone
+                  holding the URL is looking at a dead page; mint a new one.
+    - `unknown`-- we could not ask. **Not** the same as `gone`, and rendering it
+                  as either answer is the bug this field exists to prevent.
+
+    `viewers` is the relay's count of connected watchers, which is a different
+    number from `StreamState.peers` (fabric guests) and deliberately not merged
+    with it.
+    """
+
+    state: str = "unknown"
+    #: True only for `state == "live"`. Present so the pane can drive a chip
+    #: without re-deriving the ladder, never as the whole answer.
+    live: bool = False
+    viewers: int = 0
+    expires_at: float = 0.0
+    #: Something the host can act on, or empty when everything is fine.
+    detail: str = ""
+
+
 class RestreamIn(BaseModel):
     """Which configured destination to push to (`twitch`, `youtube`, `custom`)."""
 

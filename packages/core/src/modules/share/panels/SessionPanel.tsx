@@ -17,10 +17,17 @@ import {
   type RestreamState,
   type GrantLevel,
   type Invitee,
+  type RelayState,
 } from '../api';
 import { probeCapture } from '../capture';
 import type { Preflight } from '../preflight';
-import { getStreamState, startStream, stopStream, subscribeStream } from '../stream';
+import {
+  attachRelay,
+  getStreamState,
+  startStream,
+  stopStream,
+  subscribeStream,
+} from '../stream';
 import {
   dismissInviteViaChannel,
   getShareSnapshot,
@@ -61,6 +68,34 @@ const DESTINATION_LABEL: Record<string, string> = {
   twitch: 'Twitch',
   youtube: 'YouTube',
   custom: 'RTMP',
+};
+
+/** How each relay state reads on the chip.
+ *
+ *  Four entries, not two. `gone` and `unknown` look alike from here — no picture
+ *  is reaching viewers either way — but they need opposite reactions: `gone`
+ *  means the URL is dead and the fix is to mint another, while `unknown` means
+ *  we could not ask and the link is quite possibly fine. Showing one for the
+ *  other is exactly the lie this whole chip was fixed to stop telling. */
+const RELAY_CHIP: Record<RelayState, { label: string; kind: RowKind; title: string }> = {
+  live: { label: 'relaying', kind: 'ok', title: 'The relay is receiving this capture.' },
+  idle: {
+    label: 'no picture',
+    kind: 'warn',
+    title: 'The relay still has this link but is receiving nothing from it.',
+  },
+  gone: {
+    label: 'link dead',
+    kind: 'warn',
+    title:
+      'The relay no longer has this link — it expired, was revoked, or the relay ' +
+      'restarted. Anyone holding the URL sees an expired page. Mint a new one.',
+  },
+  unknown: {
+    label: 'relay unknown',
+    kind: 'idle',
+    title: 'Could not reach the relay to ask. The link may still be fine.',
+  },
 };
 
 const AUDIT_KIND: Record<string, RowKind> = {
@@ -223,7 +258,14 @@ export function SessionPanel() {
       // because "no relay configured" is a thing the host can fix and a 500 is not.
       const link = await mintLink({ passphrase: passphrase.trim() });
       if (link.error) setLinkError(link.error);
-      else setPassphrase('');
+      else {
+        setPassphrase('');
+        // A share that is already running has to be pushed to the link we just
+        // made. Minting is deliberately independent of sharing, so this is the
+        // ordinary "start sharing, then decide to make it public" order — and
+        // without this it silently produced a link nobody could ever watch.
+        await attachRelay();
+      }
     } catch (err) {
       setLinkError((err as Error).message);
     } finally {
@@ -455,11 +497,14 @@ export function SessionPanel() {
             )}
             {stream.live && hosting.link && (
               <Chip
-                kind={stream.relaying ? 'ok' : 'warn'}
+                kind={RELAY_CHIP[stream.relayState].kind}
                 dot
-                title={stream.relayError ?? 'Pushing the capture to the relay.'}
+                title={stream.relayError ?? RELAY_CHIP[stream.relayState].title}
               >
-                {stream.relaying ? 'relaying' : 'relay down'}
+                {RELAY_CHIP[stream.relayState].label}
+                {stream.relayState === 'live' && stream.relayViewers > 0
+                  ? ` · ${stream.relayViewers}`
+                  : ''}
               </Chip>
             )}
           </div>

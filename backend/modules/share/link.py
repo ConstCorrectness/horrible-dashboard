@@ -207,3 +207,85 @@ async def restream_status(token: str) -> dict[str, Any]:
         return res.json() if res.status_code < 400 else {"live": False}
     except httpx.HTTPError:
         return {"live": False}
+
+
+#: What the relay says about a token, from this node's point of view.
+#:
+#: Four states, not two, and the distinction is the whole point of this call. A
+#: relay we could not reach is **not** a relay that has forgotten the token: the
+#: first is our own network being unwell, the second means every viewer holding
+#: that URL is looking at a dead page. Collapsing them would swap one lie
+#: ("relaying") for another ("relay down") and the pane would still be wrong, so
+#: `unknown` exists to be rendered as "cannot tell" rather than as either answer.
+#: Same three-state rule the hardware probe and the audio providers follow.
+RelayState = str  # "live" | "idle" | "gone" | "unknown"
+
+
+async def stream_status(token: str) -> dict[str, Any]:
+    """Ask the relay whether it is still holding this stream.
+
+    The failure this exists to catch: the relay's registry is in this-process
+    memory, so an OOM kill, a redeploy or a crash takes every token with it while
+    the host's browser goes on believing its WHIP publish is still good. Nothing
+    on the media path reports that — WebRTC to a dead peer just stops — so the
+    node has to ask.
+
+    `live` here means the relay is holding published media for the token, which
+    is a stronger claim than "the token exists": a token whose publisher dropped
+    is `idle`, and telling a host "the link is fine, nothing is arriving" is a
+    different piece of advice from "the link is gone, mint a new one".
+    """
+    base = relay_base()
+    if not base or not token:
+        return {"state": "unknown", "live": False, "viewers": 0, "detail": ""}
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT_S) as client:
+            res = await client.get(f"{base}/streams/{token}", headers=_headers())
+    except httpx.HTTPError as exc:
+        # Could not ask. Explicitly not "gone": a flaky link here would otherwise
+        # tell the host to throw away a URL that is still perfectly good.
+        return {
+            "state": "unknown",
+            "live": False,
+            "viewers": 0,
+            "detail": f"Could not reach the share relay: {exc}",
+        }
+
+    if res.status_code == 404:
+        # The relay answered and does not have it. Unknown, revoked and expired
+        # are one answer by design (`Registry.get`), so this cannot say which.
+        return {
+            "state": "gone",
+            "live": False,
+            "viewers": 0,
+            "detail": (
+                "The relay no longer has this link — it expired, was revoked, or "
+                "the relay restarted. Mint a new one."
+            ),
+        }
+    if res.status_code == 401:
+        return {
+            "state": "unknown",
+            "live": False,
+            "viewers": 0,
+            "detail": "The relay rejected this node's key, so it will not say.",
+        }
+    if res.status_code >= 400:
+        return {
+            "state": "unknown",
+            "live": False,
+            "viewers": 0,
+            "detail": f"The relay answered {res.status_code}.",
+        }
+
+    body = res.json()
+    live = bool(body.get("live"))
+    return {
+        "state": "live" if live else "idle",
+        "live": live,
+        "viewers": int(body.get("viewers") or 0),
+        "expires_at": float(body.get("expires_at") or 0.0),
+        "detail": ""
+        if live
+        else "The relay holds this link but is receiving no picture from it.",
+    }

@@ -173,6 +173,33 @@ export function revokeLink(): Promise<ActionResult> {
 }
 
 /**
+ * What the relay says about the live link.
+ *
+ * Four states, and the pane renders all four. `unknown` is **not** a synonym for
+ * `gone`: the relay's registry is in one process's memory, so `gone` means every
+ * viewer holding the URL is on a dead page and the host should mint a new one,
+ * while `unknown` means we could not ask and the link may be perfectly fine.
+ * Collapsing them trades one wrong chip for another.
+ */
+export type RelayState = 'live' | 'idle' | 'gone' | 'unknown';
+
+export interface LinkStatus {
+  state: RelayState;
+  /** True only for `live`. A convenience for the chip, never the whole answer. */
+  live: boolean;
+  /** The relay's watcher count — a different number from `StreamState.peers`,
+   *  which counts fabric guests. Deliberately not merged with it. */
+  viewers: number;
+  expires_at: number;
+  /** Something the host can act on, or empty when all is well. */
+  detail: string;
+}
+
+export function getLinkStatus(): Promise<LinkStatus> {
+  return apiGet<LinkStatus>('/share/link/status');
+}
+
+/**
  * Whether the relay is pushing this stream to RTMP, and where it could.
  *
  * `label` is a name ("Twitch"), never the target URL — that URL embeds the

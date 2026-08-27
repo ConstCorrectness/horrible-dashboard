@@ -19,7 +19,8 @@ import { isClear, preflight, type Preflight } from './preflight';
 import { SharePublisher } from './rtc';
 import { parseSignal } from './signal';
 import { getShareSnapshot, onShareSignal, subscribeShare } from './ws';
-import { getLink } from './api';
+import { getLink, getLinkStatus, type LinkStatus, type RelayState } from './api';
+import { reconcileRelay } from './relay-status';
 import { WhipPublisher } from './whip';
 
 function lookup(viewId: string): ViewShareInfo | undefined {
@@ -47,6 +48,25 @@ export interface StreamState {
   /** Set when the relay leg specifically failed. */
   relayError: string | null;
   /**
+   * What the relay itself last said, as opposed to what our publish attempt
+   * returned.
+   *
+   * `relaying` used to be latched by a successful WHIP POST and never revisited,
+   * which made it a claim about the past. The relay holds its registry in one
+   * process's memory, so a crash, an OOM kill or a redeploy drops every token
+   * while our peer connection sits there believing it still has a peer — WebRTC
+   * to a dead relay does not raise, it just stops. The pane then said `relaying`
+   * over a link that served "this link has expired" to everyone who opened it.
+   *
+   * `unknown` is a real state and must not be rendered as either answer: we
+   * could not ask, which is different from being told the link is gone.
+   */
+  relayState: RelayState;
+  /** The relay's own count of people watching the public link. Distinct from
+   *  `peers`, which counts fabric guests — the two are different audiences and
+   *  merging them would misreport both. */
+  relayViewers: number;
+  /**
    * Set when there is no audio path at all, as opposed to an empty one.
    *
    * "Nothing is routed yet" and "the mixer never came up, so there is nothing to
@@ -65,6 +85,8 @@ let state: StreamState = {
   audioFault: null,
   relaying: false,
   relayError: null,
+  relayState: 'unknown',
+  relayViewers: 0,
 };
 const listeners = new Set<() => void>();
 
@@ -105,6 +127,12 @@ const whip = new WhipPublisher();
  * relay that is down or misconfigured must not stop friends on the fabric from
  * watching. The failure is reported on its own field rather than the shared
  * `error`, which the capture path already owns.
+ *
+ * Called from two places, and the second one is not optional: starting a share
+ * and *then* minting a link is an obvious order to do things in, and for as long
+ * as this ran only at stream start it left the relay holding a token nobody ever
+ * published to. Viewers got an endless 409 "not started yet" over a live share.
+ * See `attachRelay`.
  */
 async function startRelay(outgoing: MediaStream): Promise<void> {
   let ingest = '';
@@ -119,12 +147,86 @@ async function startRelay(outgoing: MediaStream): Promise<void> {
   try {
     await whip.publish(ingest, outgoing);
     state.relaying = true;
+    state.relayState = 'live';
     state.relayError = null;
+    // Only now: polling before there is anything to publish would report `idle`
+    // over a link that is merely waiting for us, which reads as a fault.
+    startRelayPoll();
   } catch (err) {
     state.relaying = false;
+    state.relayState = 'unknown';
     state.relayError = (err as Error).message;
   }
   emit();
+}
+
+/**
+ * Publish an already-running share to a link that has just been minted.
+ *
+ * The pane calls this after minting, because the two actions are deliberately
+ * independent — minting is never implicit, so a share can be live long before a
+ * link exists. Without it the ordering silently decides whether the feature
+ * works: mint-then-share published, share-then-mint did not, and nothing on
+ * either screen said so. The host saw `relaying`; every viewer sat on a 409.
+ *
+ * A no-op when nothing is being captured, and safe to call twice — `whip.publish`
+ * replaces its own connection.
+ */
+export async function attachRelay(): Promise<void> {
+  if (!state.live || !outgoing) return;
+  await startRelay(outgoing);
+}
+
+/**
+ * How often the node is asked what the relay says.
+ *
+ * Five seconds: the question is one small GET to our own backend, and the thing
+ * it catches — a relay that died under the stream — is worth noticing in seconds
+ * rather than whenever the host next looks at the viewer page themselves.
+ */
+const RELAY_POLL_MS = 5000;
+
+let relayPoll: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Reconcile `relaying` against what the relay actually reports.
+ *
+ * The whole point: a successful WHIP POST proves the relay accepted us *once*.
+ * It is not a subscription, and nothing on the media path reports the relay
+ * going away — so without this poll the chip is a claim about the past that
+ * never expires.
+ *
+ * `unknown` deliberately leaves `relaying` alone rather than clearing it. A
+ * momentary failure to reach our own backend is not evidence about the relay,
+ * and flipping the chip to "relay down" on it would replace a stale truth with a
+ * fresh lie.
+ */
+async function pollRelay(): Promise<void> {
+  if (!state.live) return;
+  let status: LinkStatus;
+  try {
+    status = await getLinkStatus();
+  } catch {
+    // Could not reach our own node. Same reasoning `reconcileRelay` applies to
+    // `unknown`: this says nothing about the relay, so change nothing rather
+    // than reporting a fault we have not observed.
+    return;
+  }
+  if (!state.live) return; // The stream stopped while we were asking.
+
+  Object.assign(state, reconcileRelay(state, status));
+  emit();
+}
+
+function startRelayPoll(): void {
+  stopRelayPoll();
+  relayPoll = setInterval(() => void pollRelay(), RELAY_POLL_MS);
+  void pollRelay();
+}
+
+function stopRelayPoll(): void {
+  if (relayPoll !== null) clearInterval(relayPoll);
+  relayPoll = null;
 }
 
 /**
@@ -227,6 +329,8 @@ export async function startStream(force = false): Promise<Preflight | null> {
     audioFault,
     relaying: false,
     relayError: null,
+    relayState: 'unknown',
+    relayViewers: 0,
   };
   emit();
 
@@ -247,6 +351,7 @@ export async function stopStream(): Promise<void> {
   unsubscribeSignal = null;
   unsubscribeMixer?.();
   unsubscribeMixer = null;
+  stopRelayPoll();
   // Only the capture's own tracks are stopped. The mixer's bus track belongs to
   // the shared `AudioContext` and is reused by the next stream; stopping it would
   // leave the Viewers bus permanently silent with nothing on screen to explain it.
@@ -262,6 +367,8 @@ export async function stopStream(): Promise<void> {
     audioFault: null,
     relaying: false,
     relayError: null,
+    relayState: 'unknown',
+    relayViewers: 0,
   };
   emit();
 }

@@ -483,7 +483,7 @@ silently published a screen to the open internet because somebody was looking fo
 a link would be the most surprising thing this module could do. The pane puts it
 on its own row with its own button, and an optional passphrase beside it.
 
-Three things about the link are worth knowing:
+Five things about the link are worth knowing:
 
 - **The view URL is public; the ingest URL is authority.** The session model
   carries only the first, because that model is broadcast verbatim to every
@@ -497,6 +497,53 @@ Three things about the link are worth knowing:
 - **Revoking is immediate and node-side.** It works with the pane closed, after a
   tab crash, and from the agent, because the token lives on the node — and
   stopping the session revokes the link rather than leaving it to expire.
+- **Minting attaches an already-running share.** Minting is deliberately
+  independent of sharing, so a share is often live before a link exists. The
+  relay publish used to happen only at stream start, which made the *order*
+  silently decide whether the feature worked: mint-then-share published,
+  share-then-mint produced a link nobody could ever watch. The host saw
+  `relaying`; every viewer sat on an endless 409 "not started yet". `makeLink`
+  now calls `attachRelay()`, which is a no-op when nothing is being captured.
+- **The relay is polled, because nothing else reports it dying.** A successful
+  WHIP POST proves the relay accepted us *once*; it is not a subscription. The
+  relay keeps its registry in **one process's memory**, so a crash, an OOM kill
+  or a redeploy drops every token while the host's peer connection sits there
+  believing it still has a peer — WebRTC to a dead relay does not raise, it just
+  stops. So `stream.ts` asks `GET /api/share/link/status` every 5s while it is
+  streaming, and that route asks the relay's `GET /streams/{token}`. This is not
+  hypothetical: it is what put `relaying` on the pane over a link that served
+  "this link has expired" to everyone who opened it.
+
+### The four relay states
+
+`LinkStatusOut.state` carries four values and the pane renders all four, because
+collapsing them swaps one wrong chip for another:
+
+| state     | chip            | means                                              | the fix          |
+| --------- | --------------- | -------------------------------------------------- | ---------------- |
+| `live`    | `relaying`      | the relay is holding published media for this token | nothing          |
+| `idle`    | `no picture`    | the token is valid, nothing is arriving             | republish        |
+| `gone`    | `link dead`     | the relay answered and disowned the token           | mint a new link  |
+| `unknown` | `relay unknown` | we could not ask                                    | nothing yet      |
+
+The load-bearing distinction is **`gone` vs `unknown`**. Both look identical from
+the host's side — no picture is reaching viewers either way — but they call for
+opposite reactions, and a flaky hop between node and relay rendered as "your link
+is dead" sends the host off to re-mint and re-share a URL that was fine all
+along. `reconcileRelay` therefore leaves `relaying` **untouched** on `unknown`
+rather than clearing it, in both directions: it will not resurrect a link already
+known dead either. Same three-state rule the
+[hardware probe](hardware.mdx) and the audio providers follow — found it, looked
+and it is absent, and could not ask.
+
+`viewers` on this route is the **relay's** watcher count, deliberately not merged
+with `StreamState.peers` (fabric guests). They are different audiences and one
+number would misreport both.
+
+The mapping is a pure function in its own file (`relay-status.ts`) for the reason
+`net.ts` is: `stream.ts` owns a capture, a peer connection and the audio graph,
+so it cannot be imported in a unit test — and this mapping is precisely the part
+that was wrong.
 
 The relay URL is a setting (`share.relayUrl`, public — it is in every link); the
 relay **key** is env-only (`SHARE_RELAY_KEY`). A node with no relay configured is

@@ -17,6 +17,7 @@ from backend.modules.share.models import (
     Invitee,
     JoinIn,
     LinkOut,
+    LinkStatusOut,
     MintLinkIn,
     RestreamIn,
     RestreamOut,
@@ -134,6 +135,30 @@ async def revoke_link() -> ActionResult:
     """Kill the public link immediately. The session and its guests carry on."""
     await share_manager.revoke_link()
     return ActionResult(ok=True)
+
+
+@router.get("/link/status", response_model=LinkStatusOut)
+async def link_status() -> LinkStatusOut:
+    """Whether the relay still has the live link.
+
+    Polled by the host's pane while it is streaming, because nothing else can
+    notice a relay-side death: the relay's registry lives in one process's
+    memory, so a crash or a redeploy silently drops every token while the host's
+    peer connection sits there believing it is still publishing.
+
+    Answers `unknown` rather than a guess whenever the relay could not be asked —
+    see `LinkStatusOut`.
+    """
+    if not share_manager.link_token:
+        return LinkStatusOut(state="unknown", detail="No public link is minted.")
+    status = await link.stream_status(share_manager.link_token)
+    return LinkStatusOut(
+        state=str(status.get("state") or "unknown"),
+        live=bool(status.get("live")),
+        viewers=int(status.get("viewers") or 0),
+        expires_at=float(status.get("expires_at") or 0.0),
+        detail=str(status.get("detail") or ""),
+    )
 
 
 @router.get("/restream", response_model=RestreamOut)

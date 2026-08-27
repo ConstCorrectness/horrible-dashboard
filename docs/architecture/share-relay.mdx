@@ -145,14 +145,47 @@ link scales further than the fabric mesh.
 It is **not** a passthrough, and assuming it is will size a machine wrong.
 aiortc decodes every incoming stream in a `decoder_worker` thread, and every
 outgoing sender holds its own `Encoder` and re-encodes. The real cost is **one
-decode plus N encodes** — so the ceiling is CPU, not network.
+decode plus N encodes**.
+
+**The first ceiling is memory, not CPU** — measured, not assumed, and this file
+said CPU until it was. The host captures the desktop at its native resolution on
+purpose (`startCapture` sends no `width`/`height`; scaled text is an unreadable
+share), so every viewer adds a full-resolution encoder. On a 512 MB machine that
+was an OOM kill **16 seconds after the second viewer connected**: 403 MB RSS,
+one publisher and two viewers, no restream running. `fly.share.toml` now asks for
+2 GB, the `shared-cpu-1x` maximum.
+
+An OOM is worse than it sounds, because the registry is process memory: the kill
+takes **every token** with it. The link goes dead for everyone holding it, and
+the host's browser notices nothing at all — WebRTC to a departed peer does not
+raise. That is why the node polls
+[`GET /streams/{token}`](../modules/share.mdx#the-four-relay-states) while a
+share is running.
 
 That ceiling is real: **tens of concurrent viewers per small machine, not
-thousands**. `max_viewers_per_stream` (25 by default) refuses the next viewer
+thousands** — and at desktop capture resolution the honest number is far closer
+to "a handful" than to 25. `max_viewers_per_stream` (25 by default) refuses the next viewer
 with a 503 and a plain sentence, because accepting them and degrading the stream
 for everyone already watching is the worse failure. Write the number down rather
 than discovering it during a demo; an HLS branch is the answer when it matters
 (Phase 6).
+
+## The viewer page retries, but only once at a time
+
+A viewer arriving before the host starts gets **409**, not 404 — the link is
+real, the picture is not there yet — and the page retries every 4s.
+
+That retry holds its timer in `retryTimer` and every entry into `connect()`
+cancels it. Without that, each path into `connect()` (the initial call, the Retry
+button, an unlock) forked its own loop that nothing ever stopped, and the loops
+compounded: observed at roughly **one WHEP per second** against a relay that was
+being asked to wait.
+
+The noise is the smaller half. Each loop that eventually *succeeds* becomes a
+real viewer session, and a viewer session is a full-resolution encoder — so an
+uncapped retry storm is a memory leak on the relay wearing a network-noise
+costume, on a machine whose first ceiling is memory. A single page was seen
+taking **two** WHEP sessions this way minutes before the relay was OOM-killed.
 
 ## Restreaming to RTMP
 

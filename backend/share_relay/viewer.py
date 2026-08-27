@@ -119,6 +119,15 @@ const log = $('log');
 let pc = null;
 let passphrase = '';
 let attempts = 0;
+// The pending "not started yet" retry, so a second call to connect() cancels it
+// rather than racing it. Without this every path into connect() -- the initial
+// call, the Retry button, an unlock -- forks its own 4s loop that nothing ever
+// stops, and the loops compound: observed at roughly one WHEP per second against
+// a relay that was being asked to wait. Worse than the noise, each loop that
+// eventually succeeds becomes a REAL viewer session on the relay, and a viewer
+// session is a full-resolution encoder. A retry storm is a memory leak on the
+// relay wearing a network-noise costume.
+let retryTimer = null;
 
 function setStatus(text, live) {
   statusChip.className = 'chip ' + (live ? 'live' : 'off');
@@ -152,6 +161,7 @@ async function connect() {
   }
   attempts += 1;
   setStatus('connecting', false);
+  if (retryTimer !== null) { clearTimeout(retryTimer); retryTimer = null; }
   if (pc) { try { pc.close(); } catch (e) {} pc = null; }
 
   pc = new RTCPeerConnection({ iceServers: CFG.iceServers });
@@ -217,7 +227,7 @@ async function connect() {
   if (res.status === 409) {
     setStatus('waiting', false);
     showOverlay('Not started yet', 'The link works — the host has not started sharing. This page will keep checking.', false);
-    setTimeout(connect, 4000);
+    retryTimer = setTimeout(connect, 4000);
     return;
   }
   if (res.status === 503) {

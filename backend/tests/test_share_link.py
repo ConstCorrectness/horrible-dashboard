@@ -8,6 +8,8 @@ question is not "does minting work" but "can a guest ever see the ingest URL".
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -153,3 +155,126 @@ def test_an_unconfigured_relay_reports_a_fixable_error(manager, monkeypatch) -> 
     res = client.post("/api/share/link", json={})
     assert res.status_code == 200
     assert "relay" in res.json()["error"].lower()
+
+
+# --- the relay liveness poll -------------------------------------------------
+#
+# The bug this covers: the relay keeps its registry in one process's memory, so
+# an OOM kill or a redeploy drops every token while the host's peer connection
+# goes on believing it is publishing. Nothing on the media path raises. The pane
+# said "relaying" over a link that served an expired page to every viewer.
+#
+# The assertion that carries the weight is the `unknown` one: a relay we could
+# not reach must never be reported as a relay that disowned the token, because
+# those two call for opposite reactions from the host.
+
+
+class _FakeResponse:
+    def __init__(self, status_code: int, payload: dict | None = None) -> None:
+        self.status_code = status_code
+        self._payload = payload or {}
+
+    def json(self) -> dict:
+        return self._payload
+
+
+def _relay_answering(monkeypatch, response, *, url: str = "https://relay.example.com"):
+    """Point `link.stream_status` at a scripted relay. `response` may raise."""
+    monkeypatch.setattr(link_api, "relay_base", lambda: url)
+
+    class FakeClient:
+        def __init__(self, *a, **k) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a) -> None:
+            return None
+
+        async def get(self, *a, **k):
+            if isinstance(response, Exception):
+                raise response
+            return response
+
+    monkeypatch.setattr(link_api.httpx, "AsyncClient", FakeClient)
+
+
+def test_relay_holding_media_reads_as_live(monkeypatch) -> None:
+    _relay_answering(
+        monkeypatch, _FakeResponse(200, {"live": True, "viewers": 3, "expires_at": 1.0})
+    )
+    status = asyncio.run(link_api.stream_status("tok-abc"))
+    assert status["state"] == "live"
+    assert status["live"] is True
+    assert status["viewers"] == 3
+
+
+def test_a_valid_token_with_no_publisher_is_idle_not_gone(monkeypatch) -> None:
+    # The link still works; the picture is missing. Telling the host to mint a
+    # new one here would be advice that fixes nothing.
+    _relay_answering(monkeypatch, _FakeResponse(200, {"live": False, "viewers": 0}))
+    status = asyncio.run(link_api.stream_status("tok-abc"))
+    assert status["state"] == "idle"
+    assert status["live"] is False
+    assert status["detail"]
+
+
+def test_a_404_means_the_relay_disowned_the_token(monkeypatch) -> None:
+    # Exactly the OOM case: the relay is up and has never heard of this token.
+    _relay_answering(monkeypatch, _FakeResponse(404))
+    status = asyncio.run(link_api.stream_status("tok-abc"))
+    assert status["state"] == "gone"
+    assert "mint a new one" in status["detail"].lower()
+
+
+def test_an_unreachable_relay_is_unknown_and_never_gone(monkeypatch) -> None:
+    # THE test in this block. A flaky hop between node and relay must not be
+    # rendered as "your link is dead" -- that sends the host off to re-mint and
+    # re-share a URL that was fine all along.
+    _relay_answering(monkeypatch, link_api.httpx.ConnectError("no route"))
+    status = asyncio.run(link_api.stream_status("tok-abc"))
+    assert status["state"] == "unknown"
+    assert status["state"] != "gone"
+    assert status["live"] is False
+
+
+def test_a_rejected_key_is_unknown_too(monkeypatch) -> None:
+    # The relay declined to answer, which says nothing about the stream.
+    _relay_answering(monkeypatch, _FakeResponse(401))
+    status = asyncio.run(link_api.stream_status("tok-abc"))
+    assert status["state"] == "unknown"
+
+
+def test_no_relay_configured_is_unknown(monkeypatch) -> None:
+    monkeypatch.setattr(link_api, "relay_base", lambda: "")
+    status = asyncio.run(link_api.stream_status("tok-abc"))
+    assert status["state"] == "unknown"
+
+
+def test_the_status_route_reports_a_dead_link_to_the_pane(client, monkeypatch) -> None:
+    _start(client)
+    client.post("/api/share/link", json={})
+
+    async def fake_status(token):
+        assert token == "tok-abc"
+        return {
+            "state": "gone",
+            "live": False,
+            "viewers": 0,
+            "detail": "Mint a new one.",
+        }
+
+    monkeypatch.setattr(link_api, "stream_status", fake_status)
+    body = client.get("/api/share/link/status").json()
+    assert body["state"] == "gone"
+    assert body["live"] is False
+    assert body["detail"]
+
+
+def test_the_status_route_without_a_link_says_unknown(client) -> None:
+    # Not "gone": there is nothing to be gone. A session with no link minted is
+    # the ordinary fabric-only case and must not render as a fault.
+    _start(client)
+    body = client.get("/api/share/link/status").json()
+    assert body["state"] == "unknown"
