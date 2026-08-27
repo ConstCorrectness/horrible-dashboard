@@ -25,6 +25,15 @@ primary_region = 'iad'
   dockerfile = 'deploy/share-relay/Dockerfile'
 
 [env]
+  # Hand the TURN credential to the VIEWER page, not just to the relay's own peer
+  # connections. Without this a viewer gets STUN only, and anyone behind a
+  # symmetric or carrier-grade NAT cannot form a path at all -- they sit on a
+  # black rectangle while a viewer on a friendlier network watches happily, which
+  # is exactly how this was found. The cost is real and deliberate: this page is
+  # public, so the credential is public, and the operator's TURN bandwidth is
+  # usable by anyone holding a link. Rotate SHARE_RELAY_TURN_USER/PASS if that
+  # ever stops being an acceptable trade.
+  SHARE_RELAY_TURN_FOR_VIEWERS = '1'
   # The origin viewers reach this relay on. Baked in rather than a secret: it appears
   # verbatim in every link the relay mints, so it is public by construction.
   SHARE_RELAY_PUBLIC_URL = 'https://horrible-share.fly.dev'
@@ -76,20 +85,29 @@ primary_region = 'iad'
 # TURN credential to every stranger who opens a link, along with your bandwidth.
 
 [[vm]]
-  size = 'shared-cpu-1x'
-  # MEMORY is the ceiling, not CPU -- measured, not assumed. aiortc's `MediaRelay` is
-  # not a passthrough: it decodes the inbound stream once and re-encodes it per
-  # viewer, and the host captures the desktop at its native resolution on purpose
-  # (`startCapture` sends no width/height -- scaled text is an unreadable share). So
-  # every viewer adds a full-resolution encoder, and on 512mb the machine was
-  # OOM-killed 16s after the SECOND viewer connected -- 403mb RSS, one publisher and
-  # two viewers, no restream running. The kill takes the whole registry with it,
-  # since streams and rooms live in this process's memory: the link goes dead and
-  # the node still reports it live.
+  # A PERFORMANCE VM, not a shared one, and that is the whole point of this block.
   #
-  # 2gb is the shared-cpu-1x maximum. Watch memory before raising
-  # `max_viewers_per_stream` -- 25 is not a number this machine can honour at
-  # desktop resolution. Restreaming adds an ffmpeg process on top of all of it.
-  memory = '2gb'
-  cpus = 1
-  memory_mb = 2048
+  # aiortc's `MediaRelay` is not a passthrough: it decodes the inbound stream once
+  # in a `decoder_worker` thread and re-encodes it per viewer, in software, in
+  # Python. The host captures the desktop at its native resolution on purpose
+  # (`startCapture` sends no width/height -- scaled text is an unreadable share),
+  # so every viewer adds a full-resolution software encoder.
+  #
+  # On `shared-cpu-1x` that was visibly laggy with a single viewer. A shared vCPU
+  # is throttled to a fraction of a core under sustained load, which is exactly
+  # what a continuous encode is -- so the burst credits that make shared CPUs feel
+  # fine for HTTP are useless here. This is not a workload a shared vCPU can do.
+  size = 'performance-2x'
+  cpus = 2
+  # MEMORY was the first ceiling and is still a real one -- measured, not assumed.
+  # On 512mb the machine was OOM-killed 16s after the SECOND viewer connected:
+  # 403mb RSS, one publisher and two viewers, no restream running. The kill takes
+  # the whole registry with it, since streams and rooms live in this process's
+  # memory -- the link goes dead for everyone holding it and the host's browser
+  # notices nothing, because WebRTC to a departed peer does not raise.
+  memory = '4gb'
+  memory_mb = 4096
+
+  # Watch BOTH before raising `max_viewers_per_stream`: 25 is not a number this
+  # machine can honour at desktop resolution, on either axis. Restreaming adds an
+  # ffmpeg process on top of all of it.

@@ -118,7 +118,7 @@ export async function startCapture(): Promise<MediaStream> {
 
   const media = navigator.mediaDevices as MediaDevices & DisplayMediaCapable;
   try {
-    return await media.getDisplayMedia!({
+    const stream = await media.getDisplayMedia!({
       video: {
         frameRate: FRAME_RATE,
         // No width/height: constraining a display capture makes the browser
@@ -127,6 +127,8 @@ export async function startCapture(): Promise<MediaStream> {
       },
       audio: true,
     });
+    hintText(stream);
+    return stream;
   } catch (err) {
     const name = (err as { name?: string })?.name ?? '';
     const cancelled = name === 'NotAllowedError' || name === 'AbortError';
@@ -136,6 +138,25 @@ export async function startCapture(): Promise<MediaStream> {
         : `Screen capture failed: ${(err as Error)?.message || name || 'unknown error'}`,
       cancelled,
     );
+  }
+}
+
+/**
+ * Tell the encoder this is text, not video.
+ *
+ * The default `contentHint` of `''` leaves the encoder guessing, and its guess is
+ * tuned for camera footage: under pressure it protects *motion smoothness* by
+ * dropping resolution, which is precisely backwards for a dashboard. `'detail'`
+ * flips that trade — hold the pixels, drop the frame rate — so a stalled share
+ * degrades into a slideshow of readable text rather than smooth mush.
+ *
+ * Free: no constraint negotiation, no extra CPU, no round trip. Guarded with
+ * `in` because it is a hint on the track, and an engine that lacks it must not
+ * take the capture down with it.
+ */
+function hintText(stream: MediaStream): void {
+  for (const track of stream.getVideoTracks()) {
+    if ('contentHint' in track) track.contentHint = 'detail';
   }
 }
 

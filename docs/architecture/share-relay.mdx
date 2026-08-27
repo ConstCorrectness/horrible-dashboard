@@ -147,13 +147,23 @@ aiortc decodes every incoming stream in a `decoder_worker` thread, and every
 outgoing sender holds its own `Encoder` and re-encodes. The real cost is **one
 decode plus N encodes**.
 
-**The first ceiling is memory, not CPU** — measured, not assumed, and this file
-said CPU until it was. The host captures the desktop at its native resolution on
+**There are two ceilings and they bite differently.** Memory is what *crashes*
+the relay; CPU is what makes the stream *bad*. This file originally named only
+CPU, which missed the crash entirely; the correction then over-swung and called
+CPU a non-issue, which missed the lag. Both are real: The host captures the desktop at its native resolution on
 purpose (`startCapture` sends no `width`/`height`; scaled text is an unreadable
 share), so every viewer adds a full-resolution encoder. On a 512 MB machine that
 was an OOM kill **16 seconds after the second viewer connected**: 403 MB RSS,
 one publisher and two viewers, no restream running. `fly.share.toml` now asks for
-2 GB, the `shared-cpu-1x` maximum.
+2 GB, and the machine has since moved off shared CPU entirely (below), so the
+budget is 4 GB.
+
+**CPU is the quality ceiling.** The decode and every encode are software, in
+Python. A shared vCPU is throttled to a fraction of a core under sustained load,
+and a continuous encode is exactly that — the burst credits that make shared CPUs
+fine for HTTP buy nothing here. `shared-cpu-1x` was visibly laggy with a *single*
+viewer. The relay runs on `performance-2x`; this is not a workload a shared vCPU
+can do, and no amount of memory fixes it.
 
 An OOM is worse than it sounds, because the registry is process memory: the kill
 takes **every token** with it. The link goes dead for everyone holding it, and
@@ -169,6 +179,40 @@ with a 503 and a plain sentence, because accepting them and degrading the stream
 for everyone already watching is the worse failure. Write the number down rather
 than discovering it during a demo; an HLS branch is the answer when it matters
 (Phase 6).
+
+## Viewers need TURN too, and that costs something
+
+STUN alone gets a viewer a server-reflexive candidate, which is enough on most
+home networks and not enough behind a symmetric or carrier-grade NAT. The failure
+is asymmetric and therefore confusing: the host, on a friendly network, watches
+their own link perfectly while some of their audience sits on a black rectangle.
+That is how this was found.
+
+So `SHARE_RELAY_TURN_FOR_VIEWERS = '1'` is set in `fly.share.toml`. The trade is
+real and deliberate rather than an oversight: the viewer page is **public**, so a
+credential on it is public, and the operator's TURN bandwidth becomes usable by
+anyone holding a link. It lives in `[env]` and not in `fly secrets` because it is
+a flag, not the credential — `SHARE_RELAY_TURN_URL/USER/PASS` stay secrets.
+Rotate them if the exposure ever stops being acceptable.
+
+A viewer that still cannot form a path now **says so** rather than showing black
+— see below.
+
+## A viewer says 'live' only when a path exists
+
+The page used to call itself live the moment the relay's SDP answer arrived. An
+answer means the relay agreed to send; it says nothing about whether a path
+between the two ends exists. A viewer whose ICE never completed therefore got a
+hidden overlay, a green `live` chip and a black rectangle — indistinguishable
+from a host who really was sharing a black screen, and the single most confusing
+state this page can produce.
+
+`live` now comes only from `connectionstatechange`. Between the answer and a real
+connection the chip reads `negotiated` and the overlay says what is happening. A
+12s deadline then reports "could not reach the stream" with the likely cause,
+because ICE can sit in `checking` for a long time and may settle on
+`disconnected` rather than `failed` — in which case the failure handler never
+runs at all and nothing would ever be said.
 
 ## The viewer page retries, but only once at a time
 
@@ -280,7 +324,7 @@ Configuration is env-only, like everything else here:
 | `SHARE_RELAY_STUN` | `stun.l.google.com:19302` | `host:port`; the scheme is added. Empty disables STUN. |
 | `SHARE_RELAY_TURN_URL` | — | Full URL (`turn:host:3478`) |
 | `SHARE_RELAY_TURN_USER` / `_PASS` | — | Both required; an incomplete TURN entry is dropped rather than offered, because a malformed entry can take the whole configuration down with it |
-| `SHARE_RELAY_TURN_FOR_VIEWERS` | off | Whether the **viewer page** also gets the TURN credential |
+| `SHARE_RELAY_TURN_FOR_VIEWERS` | off (**on** in `fly.share.toml`) | Whether the **viewer page** also gets the TURN credential |
 
 The semantics match `buildIceConfig` on the frontend and `_ice_servers` in
 `network/transport/webrtc.py` — STUN is a bare `host:port`, TURN is a full URL.

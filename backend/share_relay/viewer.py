@@ -128,6 +128,9 @@ let attempts = 0;
 // session is a full-resolution encoder. A retry storm is a memory leak on the
 // relay wearing a network-noise costume.
 let retryTimer = null;
+// How long to wait for a path after the relay has answered, before saying so.
+const CONNECT_TIMEOUT_MS = 12000;
+let connectDeadline = null;
 
 function setStatus(text, live) {
   statusChip.className = 'chip ' + (live ? 'live' : 'off');
@@ -162,6 +165,7 @@ async function connect() {
   attempts += 1;
   setStatus('connecting', false);
   if (retryTimer !== null) { clearTimeout(retryTimer); retryTimer = null; }
+  if (connectDeadline !== null) { clearTimeout(connectDeadline); connectDeadline = null; }
   if (pc) { try { pc.close(); } catch (e) {} pc = null; }
 
   pc = new RTCPeerConnection({ iceServers: CFG.iceServers });
@@ -183,7 +187,11 @@ async function connect() {
     });
   };
   pc.onconnectionstatechange = () => {
-    if (pc.connectionState === 'connected') { hideOverlay(); setStatus('live', true); }
+    if (pc.connectionState === 'connected') {
+      if (connectDeadline !== null) { clearTimeout(connectDeadline); connectDeadline = null; }
+      hideOverlay();
+      setStatus('live', true);
+    }
     if (pc.connectionState === 'failed') {
       setStatus('disconnected', false);
       showOverlay('Connection lost', 'The stream dropped. It may come back on its own.', false);
@@ -243,8 +251,33 @@ async function connect() {
 
   const answer = await res.text();
   await pc.setRemoteDescription({ type: 'answer', sdp: answer });
-  setStatus('live', true);
-  hideOverlay();
+
+  // NOT 'live' yet. An SDP answer means the relay agreed to send; it says
+  // nothing about whether a path between us exists. Declaring victory here (and
+  // hiding the overlay) is what turned a viewer whose ICE never completed into a
+  // silent black rectangle with a green 'live' chip -- the single most confusing
+  // state this page can be in, and indistinguishable from a host sharing a black
+  // screen. `onconnectionstatechange` promotes us to 'live' when a path actually
+  // forms; until then the overlay stays up and says what is happening.
+  setStatus('negotiated', false);
+  overlayTitle.textContent = 'Connecting';
+  overlayText.textContent = 'The relay answered. Finding a network path…';
+
+  // ICE can sit in 'checking' for a long time and may settle on 'disconnected'
+  // rather than 'failed', in which case the failure handler never runs at all.
+  // So the page gives up on its own schedule and says something actionable.
+  if (connectDeadline !== null) clearTimeout(connectDeadline);
+  connectDeadline = setTimeout(() => {
+    if (pc && pc.connectionState === 'connected') return;
+    setStatus('no path', false);
+    showOverlay(
+      'Could not reach the stream',
+      'The relay answered but no connection formed — usually a restrictive ' +
+      'network on one end. Try another network, or ask the host to enable TURN ' +
+      'for viewers.',
+      false,
+    );
+  }, CONNECT_TIMEOUT_MS);
 }
 
 retryBtn.addEventListener('click', () => {

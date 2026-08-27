@@ -483,7 +483,7 @@ silently published a screen to the open internet because somebody was looking fo
 a link would be the most surprising thing this module could do. The pane puts it
 on its own row with its own button, and an optional passphrase beside it.
 
-Five things about the link are worth knowing:
+Six things about the link are worth knowing:
 
 - **The view URL is public; the ingest URL is authority.** The session model
   carries only the first, because that model is broadcast verbatim to every
@@ -504,6 +504,12 @@ Five things about the link are worth knowing:
   share-then-mint produced a link nobody could ever watch. The host saw
   `relaying`; every viewer sat on an endless 409 "not started yet". `makeLink`
   now calls `attachRelay()`, which is a no-op when nothing is being captured.
+- **The capture is hinted as `detail`.** A video track's default `contentHint`
+  leaves the encoder guessing, and its guess is tuned for camera footage: under
+  pressure it protects motion smoothness by dropping resolution — exactly
+  backwards for a dashboard. `'detail'` flips the trade, so a strained share
+  degrades into a slideshow of readable text rather than smooth mush. Free: no
+  constraint negotiation, no extra CPU.
 - **The relay is polled, because nothing else reports it dying.** A successful
   WHIP POST proves the relay accepted us *once*; it is not a subscription. The
   relay keeps its registry in **one process's memory**, so a crash, an OOM kill
