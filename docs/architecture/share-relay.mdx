@@ -198,6 +198,36 @@ Rotate them if the exposure ever stops being acceptable.
 A viewer that still cannot form a path now **says so** rather than showing black
 — see below.
 
+## One connect attempt at a time
+
+`connect()` awaits five times — offer, ICE gathering, the WHEP fetch, the body,
+`setRemoteDescription` — and every one is a window in which the page can call it
+again: the Retry button, an unlock, the 409 timer.
+
+It used to read and write the module-level `pc` throughout. So a second attempt
+replaced `pc` while the first was still in its fetch, the first then applied
+**its** answer to the second attempt's connection, and the second's own
+`setRemoteDescription` found the thing already `stable`:
+
+```
+InvalidStateError: Failed to set remote answer sdp: Called in wrong state: stable
+```
+
+The attempt died there, as an unhandled promise rejection, and the viewer got a
+black rectangle.
+
+Each attempt now takes a **generation** and its own `self` reference. The shared
+`pc` exists only so the next attempt can close the previous one; every other line
+uses `self`, every await is followed by a staleness check, and the event handlers
+return early when superseded — a dead connection must not overwrite the live
+one's status. `setRemoteDescription` is wrapped, because a rejection there is
+invisible except as black video.
+
+`backend/tests/test_share_relay_viewer.py` pins these structurally: this page is
+JavaScript inside a Python string, with no compiler, linter or type checker
+between writing it and a stranger watching through it, so `node --check` is the
+only build step it will ever get.
+
 ## A viewer says 'live' only when a path exists
 
 The page used to call itself live the moment the relay's SDP answer arrived. An

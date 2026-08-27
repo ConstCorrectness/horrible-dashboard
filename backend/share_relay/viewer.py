@@ -131,6 +131,9 @@ let retryTimer = null;
 // How long to wait for a path after the relay has answered, before saying so.
 const CONNECT_TIMEOUT_MS = 12000;
 let connectDeadline = null;
+// Bumped by every connect() attempt. An attempt whose generation is no longer
+// current has been superseded and must touch neither `pc` nor the UI.
+let generation = 0;
 
 function setStatus(text, live) {
   statusChip.className = 'chip ' + (live ? 'live' : 'off');
@@ -168,15 +171,34 @@ async function connect() {
   if (connectDeadline !== null) { clearTimeout(connectDeadline); connectDeadline = null; }
   if (pc) { try { pc.close(); } catch (e) {} pc = null; }
 
-  pc = new RTCPeerConnection({ iceServers: CFG.iceServers });
+  // This function awaits five times, and every one of them is a window in which
+  // it can be called again -- the Retry button, an unlock, the 409 timer. It used
+  // to read and write the module-level `pc` throughout, so a second attempt would
+  // replace `pc` while the first was still in its fetch; the first then applied
+  // ITS answer to the second attempt's connection, and the second's own
+  // setRemoteDescription found the thing already stable and threw
+  // `InvalidStateError: Called in wrong state: stable`. The attempt died there,
+  // leaving a black rectangle.
+  //
+  // So each attempt takes a generation and its OWN reference. `self` is what
+  // every line below touches; `pc` exists only so the next attempt can close the
+  // previous one. A superseded attempt closes its own connection and returns
+  // without touching a pixel of UI that now belongs to somebody else.
+  const gen = ++generation;
+  const self = new RTCPeerConnection({ iceServers: CFG.iceServers });
+  pc = self;
+  const stale = () => gen !== generation;
+  const abandon = () => { try { self.close(); } catch (e) {} };
+
   // Receive-only, both kinds. Declared up front rather than waiting for tracks:
   // the offer has to advertise what we are willing to receive, and an offer with
   // no media sections gets an answer with no media sections.
-  pc.addTransceiver('video', { direction: 'recvonly' });
-  pc.addTransceiver('audio', { direction: 'recvonly' });
+  self.addTransceiver('video', { direction: 'recvonly' });
+  self.addTransceiver('audio', { direction: 'recvonly' });
 
   const inbound = new MediaStream();
-  pc.ontrack = (e) => {
+  self.ontrack = (e) => {
+    if (stale()) return;
     inbound.addTrack(e.track);
     video.srcObject = inbound;
     video.play().catch(() => {
@@ -186,46 +208,54 @@ async function connect() {
       retryBtn.textContent = 'Play';
     });
   };
-  pc.onconnectionstatechange = () => {
-    if (pc.connectionState === 'connected') {
+  self.onconnectionstatechange = () => {
+    // A superseded attempt still fires these as it tears down. Reporting them
+    // would let a dead connection overwrite the live one's status.
+    if (stale()) return;
+    if (self.connectionState === 'connected') {
       if (connectDeadline !== null) { clearTimeout(connectDeadline); connectDeadline = null; }
       hideOverlay();
       setStatus('live', true);
     }
-    if (pc.connectionState === 'failed') {
+    if (self.connectionState === 'failed') {
       setStatus('disconnected', false);
       showOverlay('Connection lost', 'The stream dropped. It may come back on its own.', false);
     }
   };
 
-  await pc.setLocalDescription(await pc.createOffer());
+  await self.setLocalDescription(await self.createOffer());
+  if (stale()) return abandon();
+
   await new Promise((resolve) => {
     // Wait for ICE gathering: this is a one-shot HTTP exchange with no trickle
     // channel, so an offer sent before gathering finishes carries no candidates
     // and connects only in the luckiest network conditions.
-    if (pc.iceGatheringState === 'complete') return resolve();
+    if (self.iceGatheringState === 'complete') return resolve();
     const check = () => {
-      if (pc.iceGatheringState === 'complete') {
-        pc.removeEventListener('icegatheringstatechange', check);
+      if (self.iceGatheringState === 'complete') {
+        self.removeEventListener('icegatheringstatechange', check);
         resolve();
       }
     };
-    pc.addEventListener('icegatheringstatechange', check);
+    self.addEventListener('icegatheringstatechange', check);
     setTimeout(resolve, 2500);
   });
+  if (stale()) return abandon();
 
   let res;
   try {
     res = await fetch('/whep/' + CFG.token, {
       method: 'POST',
       headers: { 'Content-Type': 'application/sdp', 'X-Share-Passphrase': passphrase },
-      body: pc.localDescription.sdp,
+      body: self.localDescription.sdp,
     });
   } catch (err) {
+    if (stale()) return abandon();
     setStatus('offline', false);
     showOverlay('Cannot reach the relay', String(err), false);
     return;
   }
+  if (stale()) return abandon();
 
   if (res.status === 403) {
     setStatus('locked', false);
@@ -250,7 +280,19 @@ async function connect() {
   }
 
   const answer = await res.text();
-  await pc.setRemoteDescription({ type: 'answer', sdp: answer });
+  if (stale()) return abandon();
+
+  try {
+    await self.setRemoteDescription({ type: 'answer', sdp: answer });
+  } catch (err) {
+    // Reachable if this attempt was superseded between the check above and here.
+    // Surfaced rather than left as an unhandled rejection, which is what a black
+    // screen with an angry-looking console used to be made of.
+    if (stale()) return abandon();
+    setStatus('failed', false);
+    showOverlay('Could not start playback', String(err), false);
+    return;
+  }
 
   // NOT 'live' yet. An SDP answer means the relay agreed to send; it says
   // nothing about whether a path between us exists. Declaring victory here (and
@@ -268,7 +310,8 @@ async function connect() {
   // So the page gives up on its own schedule and says something actionable.
   if (connectDeadline !== null) clearTimeout(connectDeadline);
   connectDeadline = setTimeout(() => {
-    if (pc && pc.connectionState === 'connected') return;
+    if (stale()) return;
+    if (self.connectionState === 'connected') return;
     setStatus('no path', false);
     showOverlay(
       'Could not reach the stream',
