@@ -160,3 +160,117 @@ def test_the_title_is_escaped() -> None:
     )
     assert "<img src=x" not in html
     assert "&lt;img" in html
+
+
+# --- the page must fit the window, always ------------------------------------
+
+
+def test_the_page_is_exactly_one_viewport_tall() -> None:
+    """`min-height: 100vh` let the page grow past the window.
+
+    Both columns inside can grow without bound -- the chat log and the
+    diagnostics panel -- and with `min-height` the first long conversation
+    pushed the stage off the bottom. A shared screen you have to scroll to is a
+    shared screen you cannot watch.
+    """
+    html = viewer.render(
+        token="tok", title="x", found=True, needs_passphrase=False, live=False
+    )
+    body_rule = re.search(r"\nbody \{(.*?)\}", html, re.S)
+    assert body_rule, "no body rule in the page style"
+    css = body_rule.group(1)
+    assert "min-height: 100vh" not in css, (
+        "body uses min-height, so any tall child grows the page past the window"
+    )
+    assert "height: 100vh" in css and "height: 100dvh" in css, (
+        "body must be pinned to the viewport, with dvh for mobile URL bars"
+    )
+    assert "overflow: hidden" in css
+
+
+def test_every_scrolling_column_can_actually_shrink() -> None:
+    """A flex item defaults to `min-height: auto` and refuses to shrink.
+
+    That is the mechanism by which a child's content, not the child's own
+    styling, breaks a fixed layout -- so the containers that hold growing
+    content have to say otherwise explicitly.
+    """
+    html = viewer.render(
+        token="tok", title="x", found=True, needs_passphrase=False, live=False
+    )
+    for selector in ("main {", ".stage {", "aside {"):
+        rule = re.search(re.escape(selector) + r"(.*?)\}", html, re.S)
+        assert rule, f"no rule for {selector}"
+        assert "min-height: 0" in rule.group(1), (
+            f"{selector.strip(' {')} cannot shrink below its content, so a tall "
+            "child will push the page past the viewport"
+        )
+
+
+# --- progress and diagnostics ------------------------------------------------
+
+
+def test_the_viewer_is_shown_connection_progress() -> None:
+    """Someone waiting should see which of the six steps is being waited on."""
+    script = _script()
+    assert "PHASES" in script
+    for phase in ("offer", "gather", "relay", "negotiate", "path", "live"):
+        assert f"'{phase}'" in script, f"phase {phase} is not reported"
+    html = viewer.render(
+        token="tok", title="x", found=True, needs_passphrase=False, live=False
+    )
+    assert "role='progressbar'" in html
+    assert "aria-valuenow" in html
+
+
+def test_waiting_for_the_host_does_not_pretend_to_be_progress() -> None:
+    """A bar creeping toward 100% would be a lie about something not started.
+
+    The host may never start. So that state sweeps and counts down instead of
+    advancing, and the countdown is what stops the page looking abandoned.
+    """
+    script = _script()
+    assert "setWaiting(" in script
+    assert "countdown(" in script
+    assert "retrying in " in script
+
+
+def test_the_page_keeps_a_diagnostic_log() -> None:
+    """Diagnosing this used to mean reading the relay's Fly logs.
+
+    The relay sees requests. It cannot see ICE failing, a track arriving, or
+    autoplay being blocked -- which is where every real failure has been.
+    """
+    script = _script()
+    assert "diagLine(" in script
+    assert "DIAG_MAX" in script, "the log must be bounded; viewers watch for hours"
+    assert "getStats" in script, "no quality sampling, so 'laggy' stays an adjective"
+    for event in ("oniceconnectionstatechange", "onicegatheringstatechange", "ontrack"):
+        assert event in script, f"{event} is not logged"
+
+
+def test_the_diagnostic_log_does_not_leak_the_viewer_s_addresses() -> None:
+    """The panel exists to be copied to somebody else.
+
+    A full ICE candidate line carries the viewer's own IP addresses, so only the
+    type and protocol are recorded.
+    """
+    script = _script()
+    candidate_log = re.search(r"onicecandidate[^}]*?diagLine\((.*?)\);", script, re.S)
+    assert candidate_log, "candidates are not logged at all"
+    logged = candidate_log.group(1)
+    assert "e.candidate.type" in logged
+    assert "e.candidate.candidate" not in logged, (
+        "the raw candidate line carries the viewer's addresses"
+    )
+
+
+def test_closing_the_tab_releases_the_relay_slot() -> None:
+    """A slot is a full-resolution encoder on a memory-bound machine.
+
+    Without this the relay holds it until ICE consent expires ~30s later.
+    """
+    script = _script()
+    assert "pagehide" in script
+    hook = script[script.index("pagehide") :]
+    assert "pc.close()" in hook[:400]

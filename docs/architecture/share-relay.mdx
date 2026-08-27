@@ -198,6 +198,55 @@ Rotate them if the exposure ever stops being acceptable.
 A viewer that still cannot form a path now **says so** rather than showing black
 — see below.
 
+## The viewer page is one viewport, never two
+
+`body` is pinned with `height: 100vh` **and** `height: 100dvh` (the second for
+mobile browsers, so it measures the visible viewport rather than the one hiding
+behind the URL bar) with `overflow: hidden`. Everything that can grow — the chat
+log, the diagnostics panel — scrolls inside its own column.
+
+It used to be `min-height: 100vh`, which is the same thing right up until a
+child gets tall, and then the page grows and the stage slides off the bottom. A
+shared screen you have to scroll to is a shared screen you cannot watch. The
+matching half is `min-height: 0` on `main`, `.stage` and `aside`: a flex item
+defaults to `min-height: auto` and refuses to shrink below its content, which is
+the actual mechanism by which a long conversation breaks a fixed layout.
+
+## Progress, not a spinner
+
+A viewer waiting on a connection is shown which of six steps is in progress —
+offer, gather, relay, negotiate, path, live — as a bar and a label. A spinner
+says "alive"; this says *which thing* is being waited on, which is also the first
+question worth asking about a viewer that never starts.
+
+Waiting on the **host** is deliberately not drawn as progress. The host may never
+start sharing, so a bar creeping toward 100% would be a lie; that state sweeps
+instead and counts the retry down out loud (`retrying in 3s`), which is what
+keeps the page from looking abandoned.
+
+## The page carries its own diagnostics
+
+A `Diagnostics` panel logs every phase, ICE state change, candidate type, track
+arrival, autoplay block and connection transition, timestamped, with a **Copy**
+button — plus a `getStats` sample every 10s once live: resolution, frame rate,
+frames dropped, freezes, packets lost, jitter, jitter-buffer delay, round trip,
+and which candidate pair won.
+
+This exists because diagnosing this service meant reading the relay's Fly logs,
+and **the relay can only see requests**. It cannot see ICE failing, a track
+arriving, or autoplay being blocked — which is where every real failure has
+actually been. A viewer who says "it is black" can now copy the whole story.
+
+Two constraints on it: the buffer is **bounded** (people watch for hours), and
+candidates are logged as `type/protocol` only — a raw candidate line carries the
+viewer's own IP addresses, and this panel is meant to be handed to someone else.
+
+## Closing a tab releases the slot
+
+The page closes its peer connection on `pagehide`. Without that the relay holds
+the viewer until ICE consent expires about 30 seconds later, and a viewer slot is
+a full-resolution encoder on a machine whose first ceiling is memory.
+
 ## One connect attempt at a time
 
 `connect()` awaits five times — offer, ICE gathering, the WHEP fetch, the body,
