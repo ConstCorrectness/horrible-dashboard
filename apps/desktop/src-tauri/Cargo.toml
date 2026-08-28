@@ -1,6 +1,6 @@
 [package]
 name = "horrible-dashboard-desktop"
-version = "0.2.0"
+version = "0.3.0"
 description = "Desktop layout shell for horrible-dashboard"
 edition = "2021"
 
